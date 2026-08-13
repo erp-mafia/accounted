@@ -896,7 +896,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             </DialogDescription>
           </DialogHeader>
           {approveOverride && approveOverride.length > 0 && (
-            <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
+            <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
               <ul className="space-y-1">
                 {approveOverride.map((reason, i) => (

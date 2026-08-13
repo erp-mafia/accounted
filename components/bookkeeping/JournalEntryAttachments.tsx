@@ -307,7 +307,7 @@ export default function JournalEntryAttachments({
             const isReplacing = replacingDocId === doc.id
             return (
               <div key={doc.id}>
-                <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50">
+                <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
                   {isPreviewable(doc.mime_type) ? (
                     <button
                       onClick={() => handlePreviewToggle(doc)}

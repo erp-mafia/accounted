@@ -842,7 +842,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                             <button
                               type="button"
                               onClick={() => setRetagLine(line as unknown as RetagLine)}
-                              className="p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
+                              className="p-1 rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
                               aria-label="Ändra dimensioner"
                               title="Ändra dimensioner (påverkar endast internredovisningen)"
                             >
@@ -932,7 +932,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                         <button
                           type="button"
                           onClick={() => setRetagLine(line as unknown as RetagLine)}
-                          className="p-1 rounded text-muted-foreground/50 hover:text-foreground transition-colors"
+                          className="p-1 rounded-sm text-muted-foreground/50 hover:text-foreground transition-colors"
                           aria-label="Ändra dimensioner"
                         >
                           <Pencil className="h-3.5 w-3.5" />
@@ -996,7 +996,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   <li key={`${ref.type}-${ref.id}`}>
                     <Link
                       href={ref.type === 'invoice' ? `/invoices/${ref.id}` : `/supplier-invoices/${ref.id}`}
-                      className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50 hover:bg-secondary/60 transition-colors"
+                      className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50 hover:bg-secondary/60 transition-colors"
                     >
                       <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                       <span className="truncate">

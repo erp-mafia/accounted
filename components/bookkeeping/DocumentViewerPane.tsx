@@ -140,7 +140,7 @@ export default function DocumentViewerPane({
       <div className="min-h-0 flex-1 overflow-auto bg-background">
         {loadingMeta ? (
           <div className="p-3">
-            <Skeleton className="h-full min-h-[40vh] w-full rounded-md" />
+            <Skeleton className="h-full min-h-[40vh] w-full" />
           </div>
         ) : showAsPdf ? (
           <object

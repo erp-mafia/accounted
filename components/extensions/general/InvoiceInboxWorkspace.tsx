@@ -1793,7 +1793,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             />
           )}
           {isDragging && (
-            <div className="absolute inset-0 bg-primary/5 border-2 border-dashed border-primary rounded-md m-4 flex items-center justify-center pointer-events-none">
+            <div className="absolute inset-0 bg-primary/5 border-2 border-dashed border-primary rounded-lg m-4 flex items-center justify-center pointer-events-none">
               <p className="text-sm font-medium text-primary">Släpp filen för att ladda upp</p>
             </div>
           )}
@@ -2235,7 +2235,7 @@ export function DocumentPreview({
     <div className="h-full w-full p-4 flex items-start justify-center overflow-hidden">
       {docMime?.startsWith('image/') ? (
         // Image: frame hugs the image, capped at the parent's visible box.
-        <div className="max-h-full max-w-3xl bg-background rounded-md border overflow-hidden flex">
+        <div className="max-h-full max-w-3xl bg-background rounded-lg border overflow-hidden flex">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={docUrl}
@@ -2248,7 +2248,7 @@ export function DocumentPreview({
         // with no tokens = opaque origin, no scripts, no forms, no popups.
         // bg-white because mail HTML assumes a white canvas and would render
         // transparent (unreadable in dark mode) otherwise.
-        <div className="h-full w-full max-w-3xl bg-background rounded-md border overflow-hidden">
+        <div className="h-full w-full max-w-3xl bg-background rounded-lg border overflow-hidden">
           <iframe
             src={docUrl}
             sandbox=""
@@ -2258,7 +2258,7 @@ export function DocumentPreview({
         </div>
       ) : (
         // PDF: iframe needs explicit height, frame fills the available pane.
-        <div className="h-full w-full max-w-3xl bg-background rounded-md border overflow-hidden">
+        <div className="h-full w-full max-w-3xl bg-background rounded-lg border overflow-hidden">
           <iframe src={docUrl} className="w-full h-full border-0" title="Underlag" />
         </div>
       )}

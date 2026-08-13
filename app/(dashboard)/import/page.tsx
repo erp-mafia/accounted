@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import {
   Dialog,
   DialogContent,
@@ -2048,7 +2049,7 @@ function CSVDataImportWizard() {
                 onClick={() => setEntity(opt.value)}
                 aria-pressed={selected}
                 className={cn(
-                  'relative h-9 rounded-md border px-4 text-sm font-medium transition-colors',
+                  'relative h-9 rounded-lg border px-4 text-sm font-medium transition-colors',
                   selected
                     ? 'border-foreground bg-foreground text-background'
                     : 'border-border bg-card text-foreground hover:border-foreground/30 hover:bg-muted',
@@ -2203,29 +2204,14 @@ export default function ImportPage() {
           {isSandbox && <AttnLine>{t('sandbox_disabled')}</AttnLine>}
 
           {/* Importera / Exportera as separate tabs (house seg), like before */}
-          <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-            {(
-              [
-                { key: 'import', label: t('tab_import') },
-                { key: 'export', label: t('tab_export') },
-              ] as const
-            ).map(({ key, label }) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={view === key}
-                onClick={() => handleViewChange(key)}
-                className={`rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
-                  view === key
-                    ? 'border border-border bg-card font-medium text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            value={view}
+            onChange={handleViewChange}
+            options={[
+              { value: 'import', label: t('tab_import') },
+              { value: 'export', label: t('tab_export') },
+            ]}
+          />
 
           {view === 'import' ? (
             <div>
@@ -2370,7 +2356,7 @@ export default function ImportPage() {
                 <label className="flex cursor-pointer items-start gap-2 text-sm text-muted-foreground">
                   <input
                     type="checkbox"
-                    className="mt-0.5 h-4 w-4 rounded border-border"
+                    className="mt-0.5 h-4 w-4 rounded-sm border-border"
                     checked={exportExcludeClosing}
                     onChange={(e) => setExportExcludeClosing(e.target.checked)}
                   />
@@ -2551,7 +2537,7 @@ function ImportRow({
 // with the inverse lift in dark mode.
 function LogoChip({ src, name, mono = false }: { src: string; name: string; mono?: boolean }) {
   return (
-    <span className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1">
+    <span className="flex items-center gap-2 rounded-sm border border-border bg-muted/30 px-2 py-1">
       <img
         src={src}
         alt=""

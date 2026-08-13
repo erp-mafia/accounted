@@ -329,7 +329,7 @@ export function LedgerGraph({ deep, companyName }: { deep: DeepLedgerContext; co
           <button
             type="button"
             onClick={() => setRunKey((k) => k + 1)}
-            className="inline-flex shrink-0 items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors"
+            className="inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors"
             style={{ borderColor: HAIR_STRONG, color: MUTED }}
           >
             <RotateCw className="h-3.5 w-3.5" />

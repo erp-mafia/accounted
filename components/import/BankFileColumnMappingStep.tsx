@@ -186,7 +186,7 @@ export default function BankFileColumnMappingStep({
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Header row toggle */}
-          <div className="flex items-center justify-between rounded-md border p-4">
+          <div className="flex items-center justify-between rounded-lg border p-4">
             <div className="space-y-0.5">
               <Label htmlFor="has-header">Har filen rubrikrad?</Label>
               <p className="text-xs text-muted-foreground">
@@ -382,7 +382,7 @@ export default function BankFileColumnMappingStep({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="rounded-md border max-h-64 overflow-x-auto overflow-y-auto">
+            <div className="rounded-lg border max-h-64 overflow-x-auto overflow-y-auto">
               <Table>
                 <TableHeader>
                   <TableRow>

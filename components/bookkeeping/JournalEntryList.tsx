@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/data-list'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
@@ -990,51 +992,24 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
       <div className="flex flex-wrap items-center gap-2">
         {/* Verifikat vs Utkast. Drafts live in their own view with a count badge so
             they don't sink to the last page of the committed list. */}
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={listMode === 'committed'}
-            onClick={() => switchMode('committed')}
-            className={cn(
-              'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-              listMode === 'committed'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t('mode_vouchers')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={listMode === 'drafts'}
-            onClick={() => switchMode('drafts')}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-              listMode === 'drafts'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t('mode_drafts')}
-            {draftCount > 0 && (
-              <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                {draftCount}
-              </span>
-            )}
-          </button>
-        </div>
+        <SegmentedControl
+          value={listMode}
+          onChange={switchMode}
+          options={[
+            { value: 'committed', label: t('mode_vouchers') },
+            { value: 'drafts', label: t('mode_drafts'), count: draftCount },
+          ]}
+        />
         <div className="relative flex-1 sm:flex-none sm:w-[280px]">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-          <Input
+          <ToolbarSearch
             type="text"
             inputMode="search"
             placeholder={t('search_placeholder')}
             aria-label={t('search_placeholder')}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            className="h-8 pl-8 pr-7 text-xs"
+            containerClassName="min-w-0 max-w-none"
+            className="pr-7"
           />
           {searchInput && (
             <button
@@ -1506,7 +1481,7 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
                                 e.stopPropagation()
                                 setPreviewEntryId(entry.id)
                               }}
-                              className="inline-flex items-center gap-0.5 rounded text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                              className="inline-flex items-center gap-0.5 rounded-sm text-muted-foreground transition-colors duration-150 hover:text-foreground"
                             >
                               <Paperclip className="h-3.5 w-3.5" />
                               <span className="text-xs tabular-nums">{attachmentCounts[entry.id]}</span>
@@ -1553,7 +1528,7 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
                                 // p-2 grows the tap target to 30px without
                                 // changing row height (the row is ~40px from
                                 // the description cell).
-                                'inline-flex items-center rounded p-2 text-muted-foreground transition-opacity duration-150 hover:text-foreground',
+                                'inline-flex items-center rounded-sm p-2 text-muted-foreground transition-opacity duration-150 hover:text-foreground',
                                 // Quiet at rest on desktop, but the table has no
                                 // mobile card to fall back on, so touch keeps the
                                 // icon visible.

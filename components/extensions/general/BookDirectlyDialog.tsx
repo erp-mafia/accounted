@@ -763,7 +763,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   disabled={isSubmitting}
                 />
               </div>
-              <div className="max-h-56 overflow-y-auto rounded-md border">
+              <div className="max-h-56 overflow-y-auto rounded-lg border">
                 {isLoadingTransactions ? (
                   <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Laddar…

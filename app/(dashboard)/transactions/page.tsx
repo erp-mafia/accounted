@@ -14,10 +14,11 @@ import { ToastAction } from '@/components/ui/toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { DataList, DataListEmpty } from '@/components/ui/data-list'
-import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { Loader2, Search } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
@@ -3177,71 +3178,25 @@ export default function TransactionsPage() {
       {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök] [Välj flera]
           ... [source ContextPicker far right] */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'inbox'}
-            onClick={() => setMode('inbox')}
-            className={`inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
-              mode === 'inbox'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {t('mode_inbox')}
-            {inboxBadgeCount > 0 && (
-              <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                {inboxBadgeCount}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'history'}
-            onClick={() => setMode('history')}
-            className={`rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
-              mode === 'history'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {t('mode_all')}
-          </button>
-          {/* Review tab exists only while suggestions do (or while the user is
-              standing in it after emptying the list): a permanent third tab
-              would advertise a migrator surface most companies never need. */}
-          {(suggestionItems.length > 0 || mode === 'review') && (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'review'}
-              onClick={() => setMode('review')}
-              className={`inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
-                mode === 'review'
-                  ? 'border border-border bg-card font-medium text-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t('mode_review')}
-              {suggestionItems.length > 0 && (
-                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                  {suggestionItems.length}
-                </span>
-              )}
-            </button>
-          )}
-        </div>
-        <div className="relative min-w-[220px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Sök transaktioner…"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="h-9 pl-10"
-          />
-        </div>
+        <SegmentedControl
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'inbox', label: t('mode_inbox'), count: inboxBadgeCount },
+            { value: 'history', label: t('mode_all') },
+            // Review tab exists only while suggestions do (or while the user is
+            // standing in it after emptying the list): a permanent third tab
+            // would advertise a migrator surface most companies never need.
+            ...(suggestionItems.length > 0 || mode === 'review'
+              ? [{ value: 'review' as const, label: t('mode_review'), count: suggestionItems.length }]
+              : []),
+          ]}
+        />
+        <ToolbarSearch
+          placeholder="Sök transaktioner…"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
         {/* Far-right context group, shared by both view modes: period scope
             (rakenskapsar chip) and the account chooser (concept scene 10).
             Approved deviation from convention 8's single chip: booking is
@@ -3276,12 +3231,12 @@ export default function TransactionsPage() {
         <DataList className="stagger-enter">
           {[1, 2, 3].map((i) => (
             <div key={i} className="flex items-center gap-3 px-4 py-3">
-              <Skeleton className="h-5 w-5 rounded" />
+              <Skeleton className="h-5 w-5" />
               <div className="flex-1 space-y-2">
-                <Skeleton className="h-4 w-48 rounded" />
-                <Skeleton className="h-3 w-24 rounded" />
+                <Skeleton className="h-4 w-48" />
+                <Skeleton className="h-3 w-24" />
               </div>
-              <Skeleton className="h-5 w-20 rounded" />
+              <Skeleton className="h-5 w-20" />
             </div>
           ))}
         </DataList>
@@ -3857,7 +3812,7 @@ export default function TransactionsPage() {
               fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars skapas en
               dubblerad verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
-            <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
               {siMatchSuggestion?.candidates.map((c) => (
                 <div key={c.supplier_invoice_id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
@@ -3915,7 +3870,7 @@ export default function TransactionsPage() {
               istället för att bokföra direkt mot kundfordringskontot, annars skapas en dubblerad
               verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
-            <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
               {ciMatchSuggestion?.candidates.map((c) => (
                 <div key={c.invoice_id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">

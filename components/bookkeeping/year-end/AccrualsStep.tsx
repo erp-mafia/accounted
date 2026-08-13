@@ -302,7 +302,7 @@ function ManualEntryEditor({
   onRemove: () => void
 }) {
   return (
-    <div className="rounded-md border border-border p-3 space-y-3">
+    <div className="rounded-lg border border-border p-3 space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">
           {entry.kind === 'audit_fee' && 'Revisions-/bokslutsarvode'}
@@ -329,7 +329,7 @@ function ManualEntryEditor({
           <div className="space-y-1">
             <Label className="text-xs">Konto</Label>
             <select
-              className="border border-border rounded-md h-8 text-sm px-2 w-full bg-background"
+              className="border border-border rounded-lg h-8 text-sm px-2 w-full bg-background"
               value={entry.liabilityAccount}
               onChange={(e) =>
                 onChange({ liabilityAccount: e.target.value as '2991' | '2992' })

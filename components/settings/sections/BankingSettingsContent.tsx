@@ -115,7 +115,7 @@ export function BankingSettingsContent() {
               setIsAccessDenied(false)
               setShowHbPoaHint(false)
             }}
-            className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors duration-150 hover:text-foreground"
+            className="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors duration-150 hover:text-foreground"
             aria-label={t('dismiss_aria')}
           >
             <span className="text-lg leading-none">&times;</span>

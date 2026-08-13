@@ -1580,7 +1580,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         return (
                           <li
                             key={p.id}
-                            className="flex items-center justify-between gap-3 px-2 py-2 text-sm transition-colors hover:bg-secondary/60 rounded"
+                            className="flex items-center justify-between gap-3 px-2 py-2 text-sm transition-colors hover:bg-secondary/60 rounded-sm"
                           >
                             <span className="tabular-nums text-muted-foreground">
                               {formatDate(p.payment_date)}

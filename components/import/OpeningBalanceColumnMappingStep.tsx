@@ -195,7 +195,7 @@ export default function OpeningBalanceColumnMappingStep({
         {previewRows.length > 0 && (
           <div className="space-y-2">
             <Label className="text-muted-foreground">Förhandsgranskning (5 första raderna)</Label>
-            <div className="overflow-x-auto rounded-md border">
+            <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-sm">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b">

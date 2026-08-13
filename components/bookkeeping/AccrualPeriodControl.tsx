@@ -108,7 +108,7 @@ export default function AccrualPeriodControl({
   const showK2Hint = shouldShowK2AccrualHint({ amount, currency, exchangeRate })
 
   return (
-    <div className="rounded-md border bg-muted/30 p-3 space-y-3">
+    <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           {t('panel_title')}

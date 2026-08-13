@@ -1724,7 +1724,7 @@ export default function NewSupplierInvoiceForm({
             {/* Eget utlägg-toggle. När den är på bokas verifikatet direkt mot
                 skuld till ägare (2893/2018) istället för leverantörsskuld (2440),
                 och fakturan får status "Betalad" direkt. */}
-            <div className="flex items-start gap-3 p-3 rounded-md border bg-muted/30">
+            <div className="flex items-start gap-3 p-3 rounded-lg border bg-muted/30">
               <Controller
                 name="paid_with_private_funds"
                 control={control}
@@ -2302,17 +2302,17 @@ export default function NewSupplierInvoiceForm({
               <div className="mt-4 pt-4 border-t flex flex-wrap gap-2 text-xs">
                 <span className="text-muted-foreground">{t('ai_totals_label')}</span>
                 {extractedData.totals.subtotal != null && (
-                  <span className="px-2 py-1 rounded bg-muted tabular-nums">
+                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
                     {t('ai_net', { amount: formatAmount(extractedData.totals.subtotal) })}
                   </span>
                 )}
                 {extractedData.totals.vatAmount != null && (
-                  <span className="px-2 py-1 rounded bg-muted tabular-nums">
+                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
                     {t('ai_vat', { amount: formatAmount(extractedData.totals.vatAmount) })}
                   </span>
                 )}
                 {extractedData.totals.total != null && (
-                  <span className="px-2 py-1 rounded bg-muted tabular-nums">
+                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
                     {t('ai_total', { amount: formatAmount(extractedData.totals.total) })}
                   </span>
                 )}

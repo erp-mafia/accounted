@@ -1113,7 +1113,7 @@ function OptionsStep({
               {/* Years whose provider export failed: must be visible before
                   the user proceeds, otherwise an IB/UB gap slips through. */}
               {failedYears.length > 0 && (
-                <div className="rounded-md border border-amber-500/30 bg-amber-50/50 p-3 dark:bg-amber-950/20">
+                <div className="rounded-lg border border-amber-500/30 bg-amber-50/50 p-3 dark:bg-amber-950/20">
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
                     <div className="space-y-1">
@@ -1263,7 +1263,7 @@ function OptionsStep({
           </div>
 
           {options.importSIEData && yearsToReplace.length > 0 && (
-            <div className="rounded-md border border-amber-500/30 bg-amber-50/50 p-3 dark:bg-amber-950/20">
+            <div className="rounded-lg border border-amber-500/30 bg-amber-50/50 p-3 dark:bg-amber-950/20">
               <div className="flex items-start gap-2">
                 <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
                 <div className="space-y-1">
@@ -1435,7 +1435,7 @@ function FiscalYearResult({ result, index }: { result: ImportResult; index: numb
         <div className="border-t border-border px-4 pb-4 pt-3 space-y-3">
           {/* Errors: shown prominently */}
           {result.errors.length > 0 && (
-            <div className="rounded-md border border-destructive/20 bg-destructive/5 p-3">
+            <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
               <div className="flex items-start gap-2">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
                 <div className="space-y-1.5">
@@ -1452,7 +1452,7 @@ function FiscalYearResult({ result, index }: { result: ImportResult; index: numb
 
           {/* Opening balance adjustment */}
           {d?.openingBalance && (
-            <div className="rounded-md border border-border bg-muted/30 p-3">
+            <div className="rounded-lg border border-border bg-muted/30 p-3">
               <div className="flex items-start gap-2">
                 <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 <div>
@@ -1493,7 +1493,7 @@ function FiscalYearResult({ result, index }: { result: ImportResult; index: numb
 
           {/* Skipped vouchers breakdown */}
           {d?.skippedVouchers && d.skippedVouchers.total > 0 && (
-            <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
+            <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                 <div>
@@ -1537,7 +1537,7 @@ function FiscalYearResult({ result, index }: { result: ImportResult; index: numb
 
           {/* Migration adjustment info */}
           {d?.migrationAdjustment?.created && (
-            <div className="rounded-md border border-border bg-muted/30 p-3">
+            <div className="rounded-lg border border-border bg-muted/30 p-3">
               <div className="flex items-start gap-2">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 <div>
@@ -1554,7 +1554,7 @@ function FiscalYearResult({ result, index }: { result: ImportResult; index: numb
 
           {/* Untransferred prior-year results — omföring av årets resultat saknas */}
           {d?.untransferredResults && d.untransferredResults.length > 0 && (
-            <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
+            <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
               <div className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                 <div>
@@ -1591,7 +1591,7 @@ function FiscalYearResult({ result, index }: { result: ImportResult; index: numb
             )
             if (remainingWarnings.length === 0) return null
             return (
-              <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
+              <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                   <div className="space-y-1.5">

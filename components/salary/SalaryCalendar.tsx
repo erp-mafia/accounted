@@ -353,7 +353,7 @@ export function SalaryCalendar({
   }
 
   return (
-    <div className="rounded-md border bg-card">
+    <div className="rounded-lg border bg-card">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="flex items-center gap-2">
@@ -727,7 +727,7 @@ function BulkWorkedDialog({
           </div>
 
           {conflicts.length > 0 && (
-            <div className="space-y-1 rounded-md border border-border bg-muted/30 p-2 text-xs">
+            <div className="space-y-1 rounded-lg border border-border bg-muted/30 p-2 text-xs">
               <div className="font-medium text-attn">
                 {t('conflicts_worked', { count: conflicts.length })}
               </div>
@@ -738,7 +738,7 @@ function BulkWorkedDialog({
           )}
 
           {error && (
-            <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
+            <div className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
           )}
         </div>
 
@@ -880,7 +880,7 @@ function BulkAbsenceDialog({
           </div>
 
           {conflicts.length > 0 && (
-            <div className="space-y-1 rounded-md border border-border bg-muted/30 p-2 text-xs">
+            <div className="space-y-1 rounded-lg border border-border bg-muted/30 p-2 text-xs">
               <div className="font-medium text-attn">
                 {t('conflicts_absence', { count: conflicts.length })}
               </div>
@@ -891,7 +891,7 @@ function BulkAbsenceDialog({
           )}
 
           {error && (
-            <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
+            <div className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
           )}
         </div>
 
@@ -995,7 +995,7 @@ function DayInspectorDialog({
 
         <div className="space-y-2">
           {isHourly && worked && (
-            <div className="flex items-center justify-between rounded-md border bg-secondary/50 px-3 py-2">
+            <div className="flex items-center justify-between rounded-lg border bg-secondary/50 px-3 py-2">
               <div className="flex items-center gap-2 text-sm">
                 <Clock className="h-4 w-4 text-muted-foreground" />
                 <div>
@@ -1020,7 +1020,7 @@ function DayInspectorDialog({
             const meta = TYPE_META[a.absence_type]
             const Icon = meta.icon
             return (
-              <div key={a.id} className={cn('flex items-center justify-between rounded-md border px-3 py-2', meta.pillClass)}>
+              <div key={a.id} className={cn('flex items-center justify-between rounded-lg border px-3 py-2', meta.pillClass)}>
                 <div className="flex items-center gap-2 text-sm">
                   <Icon className="h-4 w-4" />
                   <div>
@@ -1049,7 +1049,7 @@ function DayInspectorDialog({
           )}
 
           {error && (
-            <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
+            <div className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
           )}
         </div>
 

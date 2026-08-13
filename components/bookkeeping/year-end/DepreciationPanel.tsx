@@ -584,7 +584,7 @@ function TaxDepreciationCard({
         </div>
 
         {dirty && !preview && (
-          <p className="rounded-md border border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+          <p className="rounded-lg border border-border bg-muted/20 p-3 text-sm text-muted-foreground">
             Inställningarna är ändrade. Beräkna förslaget för att se rätt gränsbelopp innan du
             sparar.
           </p>
@@ -592,7 +592,7 @@ function TaxDepreciationCard({
 
         {result && (
           <>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-md border border-border bg-muted/20 p-4 text-sm sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg border border-border bg-muted/20 p-4 text-sm sm:grid-cols-3">
               <TaxValue label="Ingående värde" value={result.openingTaxValue} />
               <TaxValue label="Årets anskaffningar" value={result.additions} />
               <TaxValue label="Årets avyttringar" value={-result.disposals} />
@@ -639,7 +639,7 @@ function TaxDepreciationCard({
               </div>
             )}
             {dirty && method === 'rakenskapsenlig' && (
-              <div className="flex items-start gap-2 rounded-md border border-border p-3">
+              <div className="flex items-start gap-2 rounded-lg border border-border p-3">
                 <Checkbox
                   id="tax-book-conformity"
                   checked={bookConformityConfirmed}

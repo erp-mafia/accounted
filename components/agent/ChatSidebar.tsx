@@ -81,7 +81,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
         onClick={toggleCollapsed}
         aria-label="Visa konversationer"
         title="Visa konversationer"
-        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
       >
         <PanelLeftOpen className="h-4 w-4" />
       </button>
@@ -91,7 +91,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
         onClick={() => openAgentSheet({ intentId: 'general.help' })}
         aria-label="Ny konversation"
         title="Ny konversation"
-        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors text-lg"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors text-lg"
       >
         +
       </button>
@@ -123,7 +123,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
             onClick={toggleCollapsed}
             aria-label="Dölj konversationer"
             title="Dölj konversationer"
-            className="hidden md:inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+            className="hidden md:inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
           >
             <PanelLeftClose className="h-4 w-4" />
           </button>
@@ -141,14 +141,14 @@ export default function ChatSidebar({ initialConversations }: Props) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Sök…"
-            className="w-full rounded-md border border-border bg-background pl-8 pr-7 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full rounded-lg border border-border bg-background pl-8 pr-7 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           {query.length > 0 && (
             <button
               type="button"
               onClick={() => setQuery('')}
               aria-label="Rensa sökning"
-              className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
+              className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
             >
               <X className="h-3 w-3" />
             </button>
@@ -191,7 +191,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                           placeholder="Namnge konversationen…"
                           maxLength={200}
                           aria-label="Nytt namn på konversationen"
-                          className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                          className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                         />
                       </div>
                     ) : (
@@ -230,7 +230,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                             }}
                             title="Byt namn"
                             aria-label="Byt namn på konversation"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
                           >
                             <Pencil className="h-3 w-3" />
                           </button>
@@ -243,7 +243,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                             title={c.pinned ? 'Avfäst' : 'Fäst'}
                             aria-label={c.pinned ? 'Avfäst konversation' : 'Fäst konversation'}
                             className={cn(
-                              'inline-flex h-8 w-8 items-center justify-center rounded transition-colors',
+                              'inline-flex h-8 w-8 items-center justify-center rounded-sm transition-colors',
                               c.pinned
                                 ? 'text-foreground'
                                 : 'text-muted-foreground/50 hover:text-foreground hover:bg-secondary',
@@ -263,7 +263,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                             }}
                             title="Arkivera"
                             aria-label="Arkivera konversation"
-                            className="inline-flex h-8 w-8 items-center justify-center rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary transition-colors"
                           >
                             <Archive className="h-3 w-3" />
                           </button>

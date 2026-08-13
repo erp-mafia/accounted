@@ -237,7 +237,7 @@ export function TemplateForm({
           {lines.map((line, i) => {
             const showRatioInput = showRatio && line.type === 'business'
             return (
-            <div key={i} className="rounded-md border border-border p-2 space-y-1.5">
+            <div key={i} className="rounded-lg border border-border p-2 space-y-1.5">
               <div className="flex items-center gap-2">
                 <Input
                   value={line.account}

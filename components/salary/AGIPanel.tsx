@@ -841,7 +841,7 @@ export function AGIPanel(props: AGIPanelProps) {
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
             <p>
               {t('disabled_before')}
-              <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">SKATTEVERKET_ENABLED</code>
+              <code className="mx-1 rounded-sm bg-muted px-1 py-0.5 text-xs">SKATTEVERKET_ENABLED</code>
               {t('disabled_after')}
             </p>
           </div>
@@ -923,7 +923,7 @@ export function AGIPanel(props: AGIPanelProps) {
                 type="button"
                 onClick={handleDisconnect}
                 disabled={actionLoading === 'disconnect' || connecting}
-                className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
                 title={t('disconnect_title')}
               >
                 {actionLoading === 'disconnect' ? (
@@ -945,7 +945,7 @@ export function AGIPanel(props: AGIPanelProps) {
             receipt a later correction has replaced) still gets the card, just
             without a number: better than showing another declaration's. */}
         {isSigned && (
-          <div className="rounded-md border border-border bg-muted/30 p-4">
+          <div className="rounded-lg border border-border bg-muted/30 p-4">
             <div className="flex items-start gap-3">
               <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
               <div className="space-y-1">
@@ -979,7 +979,7 @@ export function AGIPanel(props: AGIPanelProps) {
             refresh token or has burned through its 10-refresh budget. The
             only fix is a fresh BankID round-trip. */}
         {(status?.expired === true || status?.canRefresh === false) && !readOnly && (
-          <div className="rounded-md border border-border bg-muted/30 p-3">
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">{t('expired_banner_title')}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               {t('expired_banner_description')}
@@ -996,7 +996,7 @@ export function AGIPanel(props: AGIPanelProps) {
             after some users had already connected, so their stored token
             grants moms/skattekonto but not AGI. */}
         {missingAgdScope && !readOnly && (
-          <div className="rounded-md border border-border bg-muted/30 p-3">
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">
               {t('missing_scope_title')}
             </p>
@@ -1046,7 +1046,7 @@ export function AGIPanel(props: AGIPanelProps) {
             treatment so the user understands they must fix errors before
             BankID signing is even possible. */}
         {submission?.signeringslank && awaitingSigning && !draftIsStale && (
-          <div className="rounded-md border border-border bg-muted/30 p-3">
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">
               <InfoTooltip variant="help" content={t('granskningsunderlag_gloss')}>
                 {t('draft_locked_title')}
@@ -1072,7 +1072,7 @@ export function AGIPanel(props: AGIPanelProps) {
             it would file the old amounts. The "Lås upp" button below releases
             the SKV lock; the user then re-submits the freshly generated XML. */}
         {awaitingSigning && draftIsStale && (
-          <div className="rounded-md border border-border bg-muted/30 p-3">
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">{t('stale_draft_title')}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t('stale_draft_description', {
@@ -1096,7 +1096,7 @@ export function AGIPanel(props: AGIPanelProps) {
             link would be permanently unreachable even though the extension
             persisted it. */}
         {submission?.signeringslank && underlagRejected && (
-          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3">
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3">
             <p className="text-sm font-medium text-destructive">
               {t('incorrect_data_title')}
             </p>
@@ -1115,7 +1115,7 @@ export function AGIPanel(props: AGIPanelProps) {
         )}
 
         {kontroller.length > 0 && (
-          <div className="space-y-1 rounded-md border bg-muted/30 p-3">
+          <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
             {kontroller.map((k, i) => (
               <div
                 key={i}
@@ -1144,7 +1144,7 @@ export function AGIPanel(props: AGIPanelProps) {
             status?.expired === true ||
             status?.canRefresh === false
           return (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
               <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
               {error}
               {sessionExpired && !readOnly && (
@@ -1159,7 +1159,7 @@ export function AGIPanel(props: AGIPanelProps) {
           )
         })()}
         {success && !error && (
-          <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
             <CheckCircle2 className="mr-1 inline h-3.5 w-3.5 text-success" />
             {success}
           </div>
@@ -1204,7 +1204,7 @@ export function AGIPanel(props: AGIPanelProps) {
             </div>
 
             {chain && (
-              <ol className="space-y-1.5 rounded-md border border-border bg-muted/30 p-3">
+              <ol className="space-y-1.5 rounded-lg border border-border bg-muted/30 p-3">
                 {CHAIN_STEPS.map(step => {
                   const state = chainStepState(step)
                   return (

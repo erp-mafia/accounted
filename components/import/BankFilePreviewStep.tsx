@@ -163,7 +163,7 @@ export default function BankFilePreviewStep({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="rounded-md border max-h-96 overflow-x-auto overflow-y-auto">
+          <div className="rounded-lg border max-h-96 overflow-x-auto overflow-y-auto">
             <Table>
               <TableHeader>
                 <TableRow>

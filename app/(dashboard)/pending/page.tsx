@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   SlideOver,
@@ -229,7 +230,7 @@ function useAccountNamesSource(): Record<string, string> {
 function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
   const lockedThrough = period.lock_date ? formatDate(period.lock_date) : null
   return (
-    <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
+    <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
       <Lock className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
       <div className="flex-1">
         <p className="font-medium text-destructive">
@@ -704,7 +705,7 @@ export default function PendingOperationsPage() {
       </div>
 
       {conversationFilter && (
-        <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2 text-sm">
+        <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
           <div className="flex items-center gap-2">
             <MessageSquare className="h-4 w-4 text-muted-foreground" />
             <span>
@@ -733,30 +734,15 @@ export default function PendingOperationsPage() {
       {/* Toolbar (concept): status seg left, source picker (convention 8)
           far right. The count chip rides only on Väntar: it is the queue. */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          {SEG_TABS.map(({ tab, labelKey }) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab}
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-                activeTab === tab
-                  ? 'border border-border bg-card font-medium text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t(labelKey)}
-              {tab === 'pending' && (pendingCount ?? 0) > 0 && (
-                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                  {pendingCount}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          value={activeTab}
+          onChange={setActiveTab}
+          options={SEG_TABS.map(({ tab, labelKey }) => ({
+            value: tab,
+            label: t(labelKey),
+            count: tab === 'pending' ? pendingCount ?? 0 : undefined,
+          }))}
+        />
         <div className="ml-auto">
           <ContextPicker
             value={sourceFilter}
@@ -1190,7 +1176,7 @@ export default function PendingOperationsPage() {
       >
         <div className="space-y-3 text-sm">
           <p>{t('bulk_confirm_intro')}</p>
-          <ul className="space-y-1 rounded-md border bg-muted/30 px-3 py-2">
+          <ul className="space-y-1 rounded-lg border bg-muted/30 px-3 py-2">
             {selectedBreakdown.map(({ type, count }) => (
               <li key={type} className="flex justify-between font-mono tabular-nums">
                 <span className="font-sans">{bulkActionLabel(type, count, t)}</span>

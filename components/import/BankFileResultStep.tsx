@@ -58,7 +58,7 @@ export default function BankFileResultStep({
         </CardHeader>
         {!isSuccess && result.first_error && (
           <CardContent>
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
               <p className="font-medium text-destructive">Databasfel</p>
               <p className="mt-1 font-mono text-xs text-muted-foreground break-all">
                 {result.first_error.message}

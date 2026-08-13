@@ -441,7 +441,7 @@ export default function RotRutPayoutDialog({
               )}
 
               {visibleCandidates.length > MAX_CASES_PER_FILE && (
-                <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-attn" />
                   <span>{t('rot_rut_max_cases_help', { count: MAX_CASES_PER_FILE })}</span>
                 </div>
