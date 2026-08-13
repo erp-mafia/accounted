@@ -257,6 +257,12 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
   // original). Toggled off via the filter dialog to reveal the full chain.
   const [collapseCorrections, setCollapseCorrections] = useState(true)
   const [draftCount, setDraftCount] = useState(0)
+  // All-years emptiness, resolved only when the scoped list comes back empty:
+  // the pristine start card must key on "this ledger has never had an entry",
+  // not "the selected fiscal year is empty" (the default year selection used
+  // to make the pristine state unreachable on brand-new companies). null =
+  // not yet known; the pristine gate requires an explicit false.
+  const [ledgerHasAnyEntry, setLedgerHasAnyEntry] = useState<boolean | null>(null)
   const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
   const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
   const showingAll = pageSizeChoice === 'all'
@@ -537,8 +543,15 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
       // count BEFORE clearing loading so the toggle doesn't flash out for a frame on
       // a stale count of 0. Every other case refreshes the badge in the background.
       if (loadedEntries.length === 0 && listMode === 'committed') {
-        await fetchDraftCount()
+        const unscopedQuery = !periodId && !dateFrom && !dateTo && seriesFilter === 'all' && !search
+        await Promise.all([
+          fetchDraftCount(),
+          unscopedQuery
+            ? Promise.resolve(setLedgerHasAnyEntry((total || 0) > 0))
+            : fetchLedgerHasAnyEntry(),
+        ])
       } else {
+        if (listMode === 'committed' && loadedEntries.length > 0) setLedgerHasAnyEntry(true)
         fetchDraftCount()
       }
       if (!isCurrent()) return
@@ -559,6 +572,20 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
       toast({ title: t('load_failed_title'), variant: 'destructive' })
     } finally {
       if (isCurrent()) setLoading(false)
+    }
+  }
+
+  // Cheap count-only probe across ALL years and filters: does this ledger
+  // hold any committed entry at all? Distinguishes "pristine ledger" from
+  // "the selected scope is empty" for the start-card gate below.
+  async function fetchLedgerHasAnyEntry() {
+    try {
+      const res = await fetch('/api/bookkeeping/journal-entries?exclude_draft=true&limit=1')
+      if (!res.ok) return
+      const { count: total } = await res.json()
+      setLedgerHasAnyEntry((total || 0) > 0)
+    } catch {
+      // Non-fatal: an unknown probe keeps the pristine card hidden.
     }
   }
 
@@ -926,12 +953,18 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
     })
   }
 
-  // Pristine, untouched ledger: nothing posted, no drafts, no filters, and we're
-  // on the committed view. ONLY this genuinely-empty case may short-circuit the
-  // whole component: every other empty state (a draft exists, or we're in the
-  // drafts view) must fall through to the main render below so the
+  // Pristine, untouched ledger: nothing posted in ANY year, no drafts, no
+  // search or dialog filters, and we're on the committed view. The fiscal-year
+  // scope deliberately does NOT count here: every company has a period
+  // selected by default, and requiring "no scope" made this state unreachable
+  // (the empty current year fell through to "inga träffar" on brand-new
+  // ledgers). ledgerHasAnyEntry must be an explicit false: while the
+  // all-years probe is in flight we show the filtered-empty state, never a
+  // flash of the start card. ONLY this genuinely-empty case may short-circuit
+  // the whole component: every other empty state (a draft exists, or we're in
+  // the drafts view) must fall through to the main render below so the
   // Verifikat/Utkast toggle stays reachable.
-  if (!loading && entries.length === 0 && !loadFailed && !hasActiveFilters && listMode === 'committed' && draftCount === 0) {
+  if (!loading && entries.length === 0 && !loadFailed && !search && dialogFilterCount === 0 && ledgerHasAnyEntry === false && listMode === 'committed' && draftCount === 0) {
     if (pristineSlot) {
       return <>{pristineSlot}</>
     }

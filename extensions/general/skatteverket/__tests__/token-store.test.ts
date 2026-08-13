@@ -20,13 +20,15 @@ beforeEach(() => {
 
 async function mockSelectReturning(row: unknown) {
   const { createClient } = await import('@supabase/supabase-js')
+  // getTokens chains .eq('user_id', …).eq('company_id', …).maybeSingle():
+  // a self-referencing eq keeps the chain length out of the mock's contract.
+  const eqChain: { eq: ReturnType<typeof vi.fn>; maybeSingle: ReturnType<typeof vi.fn> } = {
+    eq: vi.fn(() => eqChain),
+    maybeSingle: vi.fn(async () => row),
+  }
   ;(createClient as unknown as { mockReturnValue: (v: unknown) => void }).mockReturnValue({
     from: vi.fn(() => ({
-      select: vi.fn(() => ({
-        eq: vi.fn(() => ({
-          single: vi.fn(async () => row),
-        })),
-      })),
+      select: vi.fn(() => eqChain),
     })),
   })
 }
@@ -38,7 +40,7 @@ describe('getTokens', () => {
     // mock changes. Use vitest's resetModules to force re-import.
     vi.resetModules()
     const { getTokens: fresh } = await import('../lib/token-store')
-    const result = await fresh(fakeSupabase, 'user-1')
+    const result = await fresh(fakeSupabase, 'user-1', 'comp-1')
     expect(result).toBeNull()
   })
 
@@ -61,7 +63,7 @@ describe('getTokens', () => {
     const { getTokens: fresh } = await import('../lib/token-store')
 
     try {
-      await fresh(fakeSupabase, 'user-1')
+      await fresh(fakeSupabase, 'user-1', 'comp-1')
       expect.fail('expected throw')
     } catch (e) {
       const err = e as { name: string; code: string; message: string }

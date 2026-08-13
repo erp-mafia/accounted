@@ -136,7 +136,7 @@ export async function syncSkattekonto(
   // Defaults to the ctx user's personal token: the interactive manual-sync
   // route keeps its exact pre-hybrid behavior. The cron passes system auth
   // for companies with a verified lasombud grant.
-  auth: SkvAuth = { mode: 'user', supabase: ctx.supabase, userId: ctx.userId },
+  auth: SkvAuth = { mode: 'user', supabase: ctx.supabase, userId: ctx.userId, companyId: ctx.companyId },
 ): Promise<SkattekontoSyncResult> {
   const omfragad = await resolveOmfragad(ctx.supabase, ctx.companyId)
 

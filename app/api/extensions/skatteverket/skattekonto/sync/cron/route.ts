@@ -213,7 +213,7 @@ export async function GET(request: Request) {
 
       const ctx = createExtensionContext(supabase, userId, companyId, 'skatteverket')
       const auth: SkvAuth =
-        source === 'system' ? { mode: 'system' } : { mode: 'user', supabase, userId }
+        source === 'system' ? { mode: 'system' } : { mode: 'user', supabase, userId, companyId }
       const syncResult = await syncSkattekonto(ctx, auth)
 
       // Drift check: compare the fresh SKV saldo against GL 1630 sum. Emits
@@ -271,7 +271,7 @@ export async function GET(request: Request) {
         err instanceof SkatteverketAuthError &&
         (RECONSENT_ERROR_CODES as readonly string[]).includes(err.code)
       ) {
-        await markNeedsReconsent(supabase, userId, err.code)
+        await markNeedsReconsent(supabase, userId, companyId, err.code)
         results.push({ userId, companyId, source, status: 'expired', error: err.code })
         continue
       }

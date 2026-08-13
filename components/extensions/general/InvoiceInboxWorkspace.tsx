@@ -56,7 +56,7 @@ import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt
 import { createClient } from '@/lib/supabase/client'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
-import { useCapability } from '@/contexts/CompanyContext'
+import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
@@ -320,6 +320,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
   const t = useTranslations('inbox_workspace')
   const tStart = useTranslations('start_cards')
+  const dismissKeyCompanyId = useCompanyOptional()?.company?.id ?? null
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // Its own input: sharing the header's would upload without the purchase.
   const purchaseFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -486,26 +487,36 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   }, [fetchItems])
 
   // Read the onboarding-dismissed flag from localStorage after mount
-  // (SSR-safe: no window access during initial render).
+  // (SSR-safe: no window access during initial render). Scoped per company:
+  // dismissing the card on one company must not hide it on the user's other
+  // companies. The legacy unscoped key is honored as "dismissed everywhere"
+  // so users who dismissed before the scoping do not get the card back.
   useEffect(() => {
     if (typeof window === 'undefined') return
     try {
-      setOnboardingDismissed(
-        window.localStorage.getItem('gnubok.inbox.onboarding.dismissed') === '1'
-      )
+      const legacy = window.localStorage.getItem('gnubok.inbox.onboarding.dismissed') === '1'
+      const scoped = dismissKeyCompanyId
+        ? window.localStorage.getItem(`gnubok.inbox.onboarding.dismissed:${dismissKeyCompanyId}`) === '1'
+        : false
+      setOnboardingDismissed(legacy || scoped)
     } catch {
       // private browsing: keep default (show card)
     }
-  }, [])
+  }, [dismissKeyCompanyId])
 
   const handleDismissOnboarding = useCallback(() => {
     try {
-      window.localStorage.setItem('gnubok.inbox.onboarding.dismissed', '1')
+      window.localStorage.setItem(
+        dismissKeyCompanyId
+          ? `gnubok.inbox.onboarding.dismissed:${dismissKeyCompanyId}`
+          : 'gnubok.inbox.onboarding.dismissed',
+        '1',
+      )
     } catch {
       // ignore; in-memory state is enough for this session
     }
     setOnboardingDismissed(true)
-  }, [])
+  }, [dismissKeyCompanyId])
 
   // Onboarding card visibility: derived from real progress so a user who
   // already has a working inbox flow never sees the guide. Once they finish

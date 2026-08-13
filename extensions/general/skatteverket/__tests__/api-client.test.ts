@@ -47,7 +47,7 @@ describe('skvRequest: error mapping', () => {
   it('maps empty 401 → ACCESS_DENIED (likely missing APIGW subscription)', async () => {
     mockFetchStatus(401)
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -59,7 +59,7 @@ describe('skvRequest: error mapping', () => {
   it('maps 401 with body text → SESSION_EXPIRED with a clean Swedish message (no body leak)', async () => {
     mockFetchStatus(401, 'token expired')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -75,13 +75,13 @@ describe('skvRequest: error mapping', () => {
     deleteTokensMock.mockClear()
     mockFetchStatus(401, '{"error":"Token has been revoked."}')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
       expect((e as SkatteverketAuthError).code).toBe('TOKEN_REVOKED')
       expect((e as SkatteverketAuthError).message).toMatch(/återkallat/i)
-      expect(deleteTokensMock).toHaveBeenCalledWith(fakeSupabase, 'user-1')
+      expect(deleteTokensMock).toHaveBeenCalledWith(fakeSupabase, 'user-1', 'comp-1')
     }
   })
 
@@ -90,7 +90,7 @@ describe('skvRequest: error mapping', () => {
       'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="agd"',
     })
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -101,7 +101,7 @@ describe('skvRequest: error mapping', () => {
   it('maps 403 with Behörighet body → BEHORIGHET_SAKNAS', async () => {
     mockFetchStatus(403, 'Behörighet saknas för aktören')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -118,7 +118,7 @@ describe('skvRequest: error mapping', () => {
   it('maps the APIGW "required scopes are not authorized" 403 → ACCESS_DENIED, not MISSING_SCOPE', async () => {
     mockFetchStatus(403, '{"error": "The required scopes are not authorized"}')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
@@ -133,7 +133,7 @@ describe('skvRequest: error mapping', () => {
       '{"error":"invalid_scope","description":"The required scope agd has been requested for that access token."}',
     )
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('MISSING_SCOPE')
@@ -143,7 +143,7 @@ describe('skvRequest: error mapping', () => {
   it('maps the SKV scope sentence alone (no invalid_scope code) → MISSING_SCOPE', async () => {
     mockFetchStatus(403, 'The required scope agd has been requested for that access token.')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('MISSING_SCOPE')
@@ -158,7 +158,7 @@ describe('skvRequest: error mapping', () => {
       'WWW-Authenticate': 'Bearer error="invalid_scope"',
     })
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
@@ -168,7 +168,7 @@ describe('skvRequest: error mapping', () => {
   it('maps generic 403 → ACCESS_DENIED', async () => {
     mockFetchStatus(403, 'Forbidden')
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -179,7 +179,7 @@ describe('skvRequest: error mapping', () => {
   it('maps 429 → RATE_LIMITED (new behavior)', async () => {
     mockFetchStatus(429)
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
       expect.fail('expected throw')
     } catch (e) {
       expect(e).toBeInstanceOf(SkatteverketAuthError)
@@ -192,13 +192,13 @@ describe('skvRequest: error mapping', () => {
 
   it('returns the response for 5xx (caller decides retry)', async () => {
     mockFetchStatus(503, 'Service Unavailable')
-    const res = await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+    const res = await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
     expect(res.status).toBe(503)
   })
 
   it('returns the response for success', async () => {
     mockFetchStatus(200, '{"ok":true}')
-    const res = await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+    const res = await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json).toEqual({ ok: true })

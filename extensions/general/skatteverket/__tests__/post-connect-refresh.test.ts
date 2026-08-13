@@ -152,7 +152,7 @@ describe('runPostConnectRefresh', () => {
     const result = await runPostConnectRefresh(supabase, USER, COMPANY)
 
     expect(result.synced).toBe(false)
-    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(supabase, USER, 'MISSING_SCOPE')
+    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(supabase, USER, COMPANY, 'MISSING_SCOPE')
   })
 
   it('does not persist needs_reconsent for non-terminal auth error codes', async () => {

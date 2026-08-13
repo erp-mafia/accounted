@@ -169,7 +169,7 @@ describe('gnubok_vat_declaration_validate', () => {
     expect(result.completeness_ok).toBe(true)
     expect(result.completeness_checks).toEqual([])
     expect(mockSkvRequest).toHaveBeenCalledTimes(1)
-    expect(mockSkvRequest.mock.calls[0][3]).toMatch(/^\/kontrollera\//)
+    expect(mockSkvRequest.mock.calls[0][4]).toMatch(/^\/kontrollera\//)
   })
 
   // The masking case: rutor 30-32 are compared against 2645/2647, so ordinary

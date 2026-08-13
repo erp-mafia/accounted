@@ -16,7 +16,7 @@ import type { SkatteverketTokens } from '../types'
  *            Used by background reads; carries no user session at all.
  */
 export type SkvAuth =
-  | { mode: 'user'; supabase: SupabaseClient; userId: string }
+  | { mode: 'user'; supabase: SupabaseClient; userId: string; companyId: string }
   | { mode: 'system' }
 
 const log = createLogger('skatteverket-api-client')
@@ -123,9 +123,10 @@ const refreshInFlight = new Map<string, Promise<string>>()
  */
 async function getValidToken(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  companyId: string
 ): Promise<string> {
-  const tokens = await getTokens(supabase, userId)
+  const tokens = await getTokens(supabase, userId, companyId)
   if (!tokens) {
     throw new SkatteverketAuthError(
       'Inte ansluten till Skatteverket. Anslut med BankID först.',
@@ -138,24 +139,26 @@ async function getValidToken(
     return tokens.access_token
   }
 
-  // Need refresh: coalesce concurrent attempts.
-  const inFlight = refreshInFlight.get(userId)
+  // Need refresh: coalesce concurrent attempts per (user, company) row.
+  const flightKey = `${userId}:${companyId}`
+  const inFlight = refreshInFlight.get(flightKey)
   if (inFlight) return inFlight
 
-  const promise = refreshTokenForUser(supabase, userId)
-    .finally(() => refreshInFlight.delete(userId))
-  refreshInFlight.set(userId, promise)
+  const promise = refreshTokenForUser(supabase, userId, companyId)
+    .finally(() => refreshInFlight.delete(flightKey))
+  refreshInFlight.set(flightKey, promise)
   return promise
 }
 
 async function refreshTokenForUser(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
 ): Promise<string> {
   // Re-read after entering the critical section. Another process may have
   // refreshed while we were waiting; if so, the row now has a new
   // refresh_token and a future expiry: just hand it back.
-  const tokens = await getTokens(supabase, userId)
+  const tokens = await getTokens(supabase, userId, companyId)
   if (!tokens) {
     throw new SkatteverketAuthError(
       'Inte ansluten till Skatteverket. Anslut med BankID först.',
@@ -212,7 +215,7 @@ async function refreshTokenForUser(
     ...refreshed,
     scope: tokens.scope,
   }
-  await storeTokens(supabase, userId, updatedTokens)
+  await storeTokens(supabase, userId, updatedTokens, companyId)
   return updatedTokens.access_token
 }
 
@@ -260,12 +263,13 @@ function isTokenScopeRejection(body: string): boolean {
 export async function skvRequest(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   method: string,
   path: string,
   body?: unknown,
   options?: { baseUrl?: string; contentType?: string }
 ): Promise<Response> {
-  return skvRequestWithAuth({ mode: 'user', supabase, userId }, method, path, body, options)
+  return skvRequestWithAuth({ mode: 'user', supabase, userId, companyId }, method, path, body, options)
 }
 
 /**
@@ -299,7 +303,7 @@ export async function skvRequestWithAuth(
 
   let accessToken: string
   if (auth.mode === 'user') {
-    accessToken = await getValidToken(auth.supabase, auth.userId)
+    accessToken = await getValidToken(auth.supabase, auth.userId, auth.companyId)
   } else {
     try {
       accessToken = await getSystemAccessToken()
@@ -437,7 +441,7 @@ export async function skvRequestWithAuth(
     // primary auth error to the user.
     if (lower.includes('revoked') || lower.includes('token has been revoked')) {
       try {
-        await deleteTokens(auth.supabase, auth.userId)
+        await deleteTokens(auth.supabase, auth.userId, auth.companyId)
       } catch (cleanupErr) {
         log.error('failed to clear revoked token row', cleanupErr as Error, { userId: auth.userId })
       }
