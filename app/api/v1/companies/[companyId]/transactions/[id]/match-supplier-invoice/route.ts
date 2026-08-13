@@ -524,7 +524,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         is_business: true,
         // The supplier-invoice match supersedes any prior reconciliation link
         // (deferred detach, see the priorReconciliationLink block above).
-        ...(priorReconciliationLink ? { reconciliation_method: null } : {}),
+        // Unconditional literal on purpose: null is already the value on every
+        // non-reconciliation-linked row, and a literal payload keeps the
+        // phantom-column scanner able to verify the column set.
+        reconciliation_method: null,
       })
       .eq('id', txId)
       .eq('company_id', ctx.companyId!)

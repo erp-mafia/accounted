@@ -750,7 +750,10 @@ export const POST = withRouteContext(
         // The invoice match supersedes any prior reconciliation link: the
         // stale method label must not survive the re-pointed journal_entry_id
         // (deferred detach, see the priorReconciliationLink block above).
-        ...(priorReconciliationLink ? { reconciliation_method: null } : {}),
+        // Unconditional literal on purpose: null is already the value on every
+        // non-reconciliation-linked row, and a literal payload keeps the
+        // phantom-column scanner able to verify the column set.
+        reconciliation_method: null,
       })
       .eq('id', transactionId)
 

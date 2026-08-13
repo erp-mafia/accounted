@@ -776,11 +776,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       potential_invoice_id: null,
       journal_entry_id: journalEntryId,
       is_business: true,
+      // The invoice match supersedes any prior reconciliation link (deferred
+      // detach, see the priorReconciliationLink block above). Unconditional:
+      // null is already the value on every non-reconciliation-linked row.
+      reconciliation_method: null,
     }
     if (existingTxCategory) txUpdate.category = existingTxCategory
-    // The invoice match supersedes any prior reconciliation link (deferred
-    // detach, see the priorReconciliationLink block above).
-    if (priorReconciliationLink) txUpdate.reconciliation_method = null
 
     const { error: updateTxErr } = await ctx.supabase
       .from('transactions')
