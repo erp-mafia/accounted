@@ -581,7 +581,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // invoice. No-op when it is already anchored. Never throws.
     await anchorSupplierInvoiceDocument(ctx.supabase, ctx.companyId!, supplier_invoice_id)
 
-    logMatchEvent(ctx.supabase, ctx.userId, txId, 'matched', {
+    await logMatchEvent(ctx.supabase, ctx.userId, txId, 'matched', {
       supplierInvoiceId: supplier_invoice_id,
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',
