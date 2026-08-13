@@ -18,6 +18,8 @@ import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
@@ -824,6 +826,9 @@ async function categorizeTransactionCore(
   // Underlag's actual VAT when it differs from rate × belopp (e.g. dricks on
   // a restaurant receipt carries no moms). Replaces the computed VAT line.
   vatAmount: number | undefined,
+  // Explicit business-side account replacing the category default (v1 REST
+  // account_override semantics): must exist active in chart_of_accounts.
+  accountOverride: string | undefined,
   userId: string,
   companyId: string,
   supabase: SupabaseClient,
@@ -959,6 +964,22 @@ async function categorizeTransactionCore(
     log,
   )
   mappingResult = applySettlementAccount(mappingResult, settlementAccount)
+
+  // Applied at staging so the agent gets the tight rejection (unknown or
+  // inactive account) BEFORE anything is queued for approval, and the staged
+  // preview shows the account that will actually be posted. The commit path
+  // (categorizeMatchedTransaction) re-validates independently.
+  if (accountOverride) {
+    if (!isBusiness) {
+      throw new Error('account_override kan inte kombineras med category "private".')
+    }
+    mappingResult = await applyAccountOverride(
+      supabase, companyId, accountOverride, transaction.amount, mappingResult,
+      // Explicit VAT intent: a stated treatment or an underlag vat_amount.
+      // Without it the override books gross (see applyAccountOverride).
+      vatTreatment != null || vatAmount != null,
+    )
+  }
 
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
     throw new Error(
@@ -4172,7 +4193,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_categorize_transaction',
     title: 'Categorize Bank Transaction',
-    description: 'Categorize a bank transaction. Stages the verifikat: cost line NET of moms, bank line gross; dimensions bag tags the cost line. vat_amount overrides computed moms; reverse_charge rejected when the underlag shows seller VAT. Commit via gnubok_approve_pending_operation.',
+    description: 'Categorize a bank transaction. Stages the verifikat: cost line NET of moms, bank line gross; dimensions bag tags the cost line. account_override books the business side on any active kontoplan account (custom incl.). Commit via gnubok_approve_pending_operation.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4181,6 +4202,7 @@ export const tools: McpTool[] = [
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
         vat_treatment: { type: 'string', description: 'VAT treatment override. Defaults to standard_25 for business expenses. Set reverse_charge ONLY when the underlag confirms the seller did NOT charge VAT (omvänd skattskyldighet). An invoice with foreign VAT already debited is NOT reverse charge.', enum: [...VALID_VAT_TREATMENTS] },
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp: e.g. dricks carries no VAT. Requires a rate-based vat_treatment. Swedish moms only: foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
+        account_override: { type: 'string', pattern: '^\\d{4}$', description: 'Books the business side (debit when money goes out, credit when money comes in) on this kontoplan account instead of the category default: the ONLY way to reach company-custom accounts (e.g. VMB). Must exist and be active (gnubok_list_accounts; create via gnubok_create_account). VMB purchases/sales carry no deductible moms: use vat_treatment "exempt". Without an explicit vat_treatment (or vat_amount) the override books GROSS with no auto-VAT line: a moms leg is never guessed onto a custom account. Class-2 overrides outside 2610-2649 always drop auto-VAT. Not valid with category "private". State the actual affärshändelse in notes (BFL 5 kap).' },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
         dimensions: {
           type: 'object',
@@ -4208,12 +4230,20 @@ export const tools: McpTool[] = [
       // categorization preview runs. Resolution happens right before staging.
       const inputDimensions = parseDimensionsArg(args.dimensions, 'dimensions')
 
+      // Runtime guard (hosts don't always enforce inputSchema patterns).
+      const accountOverride =
+        args.account_override === undefined ? undefined : String(args.account_override).trim()
+      if (accountOverride !== undefined && !ACCOUNT_NUMBER_RE.test(accountOverride)) {
+        throw new Error('account_override must be exactly 4 digits, e.g. "4020".')
+      }
+
       // Compute the preview (accounts, amounts, VAT lines)
       const result = await categorizeTransactionCore(
         args.transaction_id as string,
         args.category as TransactionCategory,
         args.vat_treatment as VatTreatment | undefined,
         vatAmount,
+        accountOverride,
         userId,
         companyId,
         supabase,
@@ -4296,6 +4326,7 @@ export const tools: McpTool[] = [
           category: args.category,
           vat_treatment: args.vat_treatment || null,
           vat_amount: vatAmount ?? null,
+          account_override: accountOverride ?? null,
           notes: typeof args.notes === 'string' && args.notes.trim().length > 0
             ? (args.notes as string).trim()
             : null,
@@ -4305,6 +4336,7 @@ export const tools: McpTool[] = [
         {
           debit_account: result.debit_account,
           credit_account: result.credit_account,
+          ...(accountOverride ? { account_override: accountOverride } : {}),
           amount: result.amount,
           currency: result.currency,
           // Exact journal lines the approval will post (net cost line, VAT
@@ -6457,7 +6489,7 @@ export const tools: McpTool[] = [
         { ...params, source: ref ? 'bas_2026' : 'custom' },
         actor,
         {
-          description: 'Once approved, the account is active and can carry voucher lines via gnubok_create_voucher or gnubok_categorize_transaction.',
+          description: 'Once approved, the account is active and bookable via gnubok_create_voucher, gnubok_bulk_book_transactions, or gnubok_categorize_transaction with account_override.',
           tool: 'gnubok_list_accounts',
         },
         {
@@ -14542,9 +14574,13 @@ export const tools: McpTool[] = [
 
       // Resolve account names for the preview so the approver reads
       // "1010 Balanserade utgifter / 2440 Leverantörsskulder" rather than
-      // bare numbers. Also gate: refuse to stage when any line references an
-      // unknown or inactive account so the approver isn't shown a voucher
-      // that would fail at commit time anyway.
+      // bare numbers. Also gate: refuse to stage when a line references an
+      // account the ENGINE could not resolve either (same semantics as
+      // findUnresolvableAccounts): a BAS 2026 number merely absent from the
+      // chart passes, because createDraftEntry seeds it at commit; only
+      // numbers outside both the chart and the BAS catalog, plus rows a user
+      // deliberately deactivated (the backfill never resurrects those), are
+      // rejected here.
       const accountNumbers = [...new Set(lines.map((l) => l.account_number))]
       const { data: accounts } = await supabase
         .from('chart_of_accounts')
@@ -14559,26 +14595,33 @@ export const tools: McpTool[] = [
         })
       }
       const unknownAccounts = accountNumbers.filter((n) => !accountInfo.has(n))
+      const unseedableAccounts = unknownAccounts.filter((n) => !getBASReference(n))
+      const seedableAccounts = unknownAccounts.filter((n) => Boolean(getBASReference(n)))
       const inactiveAccounts = accountNumbers.filter(
         (n) => accountInfo.has(n) && !accountInfo.get(n)!.active,
       )
-      if (unknownAccounts.length > 0 || inactiveAccounts.length > 0) {
+      if (unseedableAccounts.length > 0 || inactiveAccounts.length > 0) {
         const parts: string[] = []
-        if (unknownAccounts.length > 0) {
-          parts.push(`saknas i kontoplanen: ${unknownAccounts.join(', ')}`)
+        if (unseedableAccounts.length > 0) {
+          parts.push(`saknas i kontoplanen och finns inte i BAS 2026: ${unseedableAccounts.join(', ')}`)
         }
         if (inactiveAccounts.length > 0) {
           parts.push(`inaktiva: ${inactiveAccounts.join(', ')}`)
         }
         throw new Error(
           `Kan inte skapa verifikation. Konton ${parts.join('; ')}. ` +
-          'Aktivera dem i kontoplanen eller välj andra konton.'
+          'Skapa kontot med gnubok_create_account, aktivera det med gnubok_update_account, eller välj andra konton.'
         )
       }
 
       const previewLines = lines.map((l) => ({
         account_number: l.account_number,
-        account_name: accountInfo.get(l.account_number)?.name ?? null,
+        // Fallback to the BAS catalog name for a seedable account that is not
+        // in the chart yet, so the approver still reads a named line.
+        account_name:
+          accountInfo.get(l.account_number)?.name ??
+          getBASReference(l.account_number)?.account_name ??
+          null,
         debit_amount: l.debit_amount,
         credit_amount: l.credit_amount,
         line_description: l.line_description ?? null,
@@ -14648,6 +14691,9 @@ export const tools: McpTool[] = [
           total_credit: balance.totalCredit,
           line_count: lines.length,
           lines: previewLines,
+          // BAS accounts not yet in the chart: the engine activates them at
+          // commit. Surfaced so the approver sees the side-effect up front.
+          ...(seedableAccounts.length > 0 ? { will_activate_accounts: seedableAccounts } : {}),
           // Echoed for every non-exact dimension resolution (resolve-don't-
           // select) so the agent can verify what a name attached to.
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
