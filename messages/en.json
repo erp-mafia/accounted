@@ -3060,7 +3060,19 @@
     "revoke_note": "Your documents in Accounted are not affected.",
     "revoke_confirm": "Disconnect your WhatsApp number? You can link it again at any time with a new code.",
     "revoked_toast": "The number is disconnected.",
-    "revoke_failed": "Could not disconnect the number."
+    "revoke_failed": "Could not disconnect the number.",
+    "last_event_label": "Latest message",
+    "last_event_filed": "the receipt is in Underlag",
+    "last_event_handled": "handled",
+    "last_event_processing": "being processed",
+    "last_event_awaiting_company": "waiting for a company choice in the chat",
+    "last_event_duplicate": "skipped: the same file already exists",
+    "last_event_rate_limited": "skipped: too many files",
+    "last_event_unsupported": "unsupported file type",
+    "last_event_muted": "ignored: the chat is paused",
+    "last_event_declined": "not answered",
+    "last_event_failed": "could not be received",
+    "last_reply_failed": "Our latest reply could not be delivered in WhatsApp. Check that the number can receive messages from Accounted."
   },
   "inbox_bulk_book": {
     "total_label": "Total for the documents: {amount}",

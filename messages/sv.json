@@ -3060,7 +3060,19 @@
     "revoke_note": "Dina underlag i Accounted påverkas inte.",
     "revoke_confirm": "Vill du koppla från ditt WhatsApp-nummer? Du kan koppla det igen när som helst med en ny kod.",
     "revoked_toast": "Numret är frånkopplat.",
-    "revoke_failed": "Kunde inte koppla från numret."
+    "revoke_failed": "Kunde inte koppla från numret.",
+    "last_event_label": "Senaste meddelande",
+    "last_event_filed": "kvittot ligger i Underlag",
+    "last_event_handled": "hanterat",
+    "last_event_processing": "behandlas",
+    "last_event_awaiting_company": "väntar på företagsval i chatten",
+    "last_event_duplicate": "hoppades över: samma fil finns redan",
+    "last_event_rate_limited": "hoppades över: för många filer",
+    "last_event_unsupported": "filtypen stöds inte",
+    "last_event_muted": "ignorerades: chatten är pausad",
+    "last_event_declined": "besvarades inte",
+    "last_event_failed": "kunde inte tas emot",
+    "last_reply_failed": "Vårt senaste svar kunde inte levereras i WhatsApp. Kontrollera att numret kan ta emot meddelanden från Accounted."
   },
   "inbox_bulk_book": {
     "total_label": "Underlagens summa: {amount}",

@@ -49,6 +49,7 @@ import {
   extractRecipient,
   getContext,
   getOrCreateConversation,
+  greetingThrottled,
   hasLivePin,
   loadConversation,
   markRecentQuestion,
@@ -393,6 +394,16 @@ async function processMediaMessage(
       await markStatus(supabase, row.id, 'error', {
         errorMessage: 'Message row is missing link or media reference',
       })
+      // Not policy silence (#1552): a linked sender whose row lost its media
+      // reference gets the failure owned out loud, when a reply address can
+      // still be resolved through the link.
+      if (row.phone_link_id) {
+        const link = await loadLink(supabase, row.phone_link_id)
+        const fallbackTo = link && !link.revoked_at ? resolveRecipient(row, link) : null
+        if (fallbackTo) {
+          await sendErrorNoticeOnce(supabase, { to: fallbackTo, ...replyBase })
+        }
+      }
       return { kind: 'none' }
     }
 
@@ -403,6 +414,23 @@ async function processMediaMessage(
       await markStatus(supabase, row.id, 'skipped', {
         errorMessage: 'Phone link revoked before processing',
       })
+      // Revoked between arrival and processing is a failure to own, not
+      // policy silence (#1552). The number is unlinked NOW, so the accurate
+      // reply is the M1 "not linked" copy, throttled exactly like the
+      // unknown-sender greeting so a revoked-mid-burst sender gets one.
+      const fallbackTo = link ? resolveRecipient(row, link) : extractRecipient(row)
+      if (
+        fallbackTo &&
+        row.sender_phone_hash &&
+        !(await greetingThrottled(supabase, row.sender_phone_hash))
+      ) {
+        await sendText(supabase, {
+          to: fallbackTo,
+          body: copy.m1Unlinked(),
+          template: TEMPLATE.m1Unlinked,
+          ...replyBase,
+        })
+      }
       return { kind: 'none' }
     }
     to = resolveRecipient(row, link)

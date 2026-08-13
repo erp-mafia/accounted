@@ -14,9 +14,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Loader2, ExternalLink } from 'lucide-react'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useFormat } from '@/lib/hooks/use-format'
 import {
   SettingsGroup,
   SettingsRow,
@@ -26,11 +28,28 @@ import {
 
 const BASE = '/api/extensions/ext/whatsapp-inbox'
 
+/** Closed enum from the server (lib/last-event.ts); translated here. */
+const LAST_EVENT_KINDS = new Set([
+  'filed',
+  'handled',
+  'processing',
+  'awaiting_company',
+  'duplicate',
+  'rate_limited',
+  'unsupported',
+  'muted',
+  'declined',
+  'failed',
+])
+
 interface LinkStatus {
   linked: boolean
   phoneMasked?: string
   defaultCompanyId?: string | null
   muted?: boolean
+  lastInboundAt?: string | null
+  lastInboundEvent?: string | null
+  lastReplyFailed?: boolean
 }
 
 interface MintedCode {
@@ -43,6 +62,7 @@ export function WhatsAppLinkPanel() {
   const t = useTranslations('settings_whatsapp')
   const { toast } = useToast()
   const { companies } = useCompany()
+  const { locale, formatDateLong } = useFormat()
 
   const [isLoading, setIsLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -164,6 +184,27 @@ export function WhatsAppLinkPanel() {
         {status.muted ? (
           <SettingsRow label={t('muted_label')}>
             <SettingsRowNote>{t('muted_hint')}</SettingsRowNote>
+          </SettingsRow>
+        ) : null}
+
+        {status.lastInboundAt ? (
+          <SettingsRow label={t('last_event_label')}>
+            <div className="space-y-1">
+              <span className="text-sm">
+                {formatDateLong(status.lastInboundAt)}{' '}
+                {new Date(status.lastInboundAt).toLocaleTimeString(
+                  locale === 'en' ? 'en-GB' : 'sv-SE',
+                  { hour: '2-digit', minute: '2-digit' },
+                )}
+                {' · '}
+                {t(
+                  status.lastInboundEvent && LAST_EVENT_KINDS.has(status.lastInboundEvent)
+                    ? `last_event_${status.lastInboundEvent}`
+                    : 'last_event_handled',
+                )}
+              </span>
+              {status.lastReplyFailed ? <AttnLine>{t('last_reply_failed')}</AttnLine> : null}
+            </div>
           </SettingsRow>
         ) : null}
 
