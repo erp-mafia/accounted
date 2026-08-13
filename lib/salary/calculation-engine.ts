@@ -621,15 +621,17 @@ export function calculateSalary(
     output: vacationAccrualAvgifter,
   })
 
-  const totalEmployerCost = r(grossSalary + avgifterAmount + vacationAccrual + vacationAccrualAvgifter + netRounding)
+  // totalEmployerCost deliberately EXCLUDES netRounding: payslip summary,
+  // run KPI cards and the lönejournal all recompute this figure as
+  // gross + avgifter + semester + avgifter-på-semester from stored columns,
+  // so including the rounding only here would print two different totals on
+  // the same payslip. The öre cost is still real and lives in the ledger as
+  // the 3740 debit.
+  const totalEmployerCost = r(grossSalary + avgifterAmount + vacationAccrual + vacationAccrualAvgifter)
   steps.push({
     label: 'Total arbetsgivarkostnad',
-    formula: netRounding > 0
-      ? 'bruttolön + avgifter + semesteravsättning + avgifter på semester + öresavrundning'
-      : 'bruttolön + avgifter + semesteravsättning + avgifter på semester',
-    input: netRounding > 0
-      ? { gross: grossSalary, avgifter: avgifterAmount, vacation_accrual: vacationAccrual, vacation_avgifter: vacationAccrualAvgifter, rounding: netRounding }
-      : { gross: grossSalary, avgifter: avgifterAmount, vacation_accrual: vacationAccrual, vacation_avgifter: vacationAccrualAvgifter },
+    formula: 'bruttolön + avgifter + semesteravsättning + avgifter på semester',
+    input: { gross: grossSalary, avgifter: avgifterAmount, vacation_accrual: vacationAccrual, vacation_avgifter: vacationAccrualAvgifter },
     output: totalEmployerCost,
   })
 

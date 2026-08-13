@@ -1440,7 +1440,11 @@ describe('öresavrundning (roundNetToWholeKrona)', () => {
     expect(result.netRounding).toBe(0)
   })
 
-  it('counts the rounding into total employer cost', () => {
+  it('keeps total employer cost on the shared definition (rounding excluded)', () => {
+    // Payslip summary, KPI cards and lönejournal all recompute employer cost
+    // as gross + avgifter + semester + avgifter-på-semester; the engine must
+    // match or the same payslip would print two different totals. The öre
+    // cost is carried by the 3740 ledger line instead.
     const result = calculateSalary(
       makeBasicInput({ lineItems: [bonus(0.3)], roundNetToWholeKrona: true }),
       config2026,
@@ -1452,8 +1456,7 @@ describe('öresavrundning (roundNetToWholeKrona)', () => {
         result.grossSalary +
           result.avgifterAmount +
           result.vacationAccrual +
-          result.vacationAccrualAvgifter +
-          result.netRounding,
+          result.vacationAccrualAvgifter,
       ),
     )
   })

@@ -2815,3 +2815,22 @@ describe('CreateRecurringScheduleSchema interval_months', () => {
     expect(CreateRecurringScheduleSchema.safeParse({ ...base, interval_months: 1.5 }).success).toBe(false)
   })
 })
+
+describe('CreateSalaryLineItemSchema: derived-only item types', () => {
+  it("rejects manual 'oresavrundning' lines (only the calculator may write them)", async () => {
+    const { CreateSalaryLineItemSchema, UpdateSalaryLineItemSchema } = await import('../schemas')
+    const base = {
+      salary_run_employee_id: '3f0a2f60-0000-4000-8000-000000000001',
+      description: 'Öresavrundning',
+      amount: 0.4,
+    }
+    expect(
+      CreateSalaryLineItemSchema.safeParse({ ...base, item_type: 'oresavrundning' }).success,
+    ).toBe(false)
+    expect(
+      CreateSalaryLineItemSchema.safeParse({ ...base, item_type: 'bonus' }).success,
+    ).toBe(true)
+    expect(UpdateSalaryLineItemSchema.safeParse({ item_type: 'oresavrundning' }).success).toBe(false)
+    expect(UpdateSalaryLineItemSchema.safeParse({ item_type: 'bonus' }).success).toBe(true)
+  })
+})

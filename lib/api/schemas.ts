@@ -2897,7 +2897,13 @@ export const AddEmployeeToRunSchema = z.object({
 
 export const CreateSalaryLineItemSchema = z.object({
   salary_run_employee_id: uuid,
-  item_type: SalaryLineItemTypeSchema,
+  // 'oresavrundning' is derived-only: the calculator writes it from the
+  // engine's netRounding and the booking excludes it from the gross
+  // reconciliation, so a manually created row would unbalance the salary
+  // verifikat by exactly its amount (the DB balance trigger then rejects the
+  // booking). Every other derived type is absorbed by the base remainder and
+  // stays harmless to create by hand.
+  item_type: SalaryLineItemTypeSchema.exclude(['oresavrundning']),
   description: z.string().min(1).max(500),
   quantity: z.number().optional(),
   unit_price: z.number().optional(),
