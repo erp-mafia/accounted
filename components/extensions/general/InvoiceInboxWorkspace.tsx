@@ -39,18 +39,16 @@ import {
   ExternalLink,
   FileQuestion,
   Search,
-  Circle,
-  X,
   ChevronDown,
   ChevronRight,
   Sparkles,
-  MessageCircle,
   Maximize2,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
+import { StartCard } from '@/components/dashboard/StartCard'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
 import InvoiceInboxSkeleton from '@/components/extensions/general/InvoiceInboxSkeleton'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
@@ -313,6 +311,7 @@ const WorkspaceSkeleton = InvoiceInboxSkeleton
 export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
   const t = useTranslations('inbox_workspace')
+  const tStart = useTranslations('start_cards')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // Its own input: sharing the header's would upload without the purchase.
   const purchaseFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -1572,16 +1571,20 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             // So: compact card on mobile only, quiet empty state on desktop.
             showOnboarding ? (
               <>
-                <div className="xl:hidden">
-                  <OnboardingCard
-                    hasInboxAddress={hasInboxAddress}
-                    hasAnyItem={hasAnyItem}
-                    hasResolvedItem={hasResolvedItem}
-                    onActivateInbox={handleRotateAddress}
-                    onUploadClick={() => fileInputRef.current?.click()}
+                <div className="xl:hidden p-3">
+                  <StartCard
+                    card="geese"
+                    layout="bleed-left"
+                    dense
+                    title={tStart('inbox_title')}
+                    body={tStart('inbox_body')}
+                    primary={{ label: tStart('inbox_primary'), href: '/settings/mail' }}
+                    secondary={{
+                      label: tStart('inbox_secondary'),
+                      onClick: () => fileInputRef.current?.click(),
+                    }}
                     onDismiss={handleDismissOnboarding}
-                    isActivating={isRotating}
-                    compact
+                    dismissLabel={tStart('inbox_dismiss')}
                   />
                 </div>
                 <div className="hidden xl:block p-6 text-center text-sm text-muted-foreground">
@@ -1721,16 +1724,27 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               onRetry={() => { void loadDocument(selected.id, selected.document_id) }}
             />
           ) : showOnboarding ? (
-            <div className="h-full flex items-center justify-center px-4 py-6">
-              <OnboardingCard
-                hasInboxAddress={hasInboxAddress}
-                hasAnyItem={hasAnyItem}
-                hasResolvedItem={hasResolvedItem}
-                onActivateInbox={handleRotateAddress}
-                onUploadClick={() => fileInputRef.current?.click()}
-                onDismiss={handleDismissOnboarding}
-                isActivating={isRotating}
-              />
+            <div className="h-full flex flex-col justify-center px-4 py-6">
+              <div className="animate-fade-in">
+                <StartCard
+                  card="geese"
+                  layout="bleed-left"
+                  dense
+                  floatIcons
+                  title={tStart('inbox_title')}
+                  body={tStart('inbox_body')}
+                  primary={{ label: tStart('inbox_primary'), href: '/settings/mail' }}
+                  secondary={{
+                    label: tStart('inbox_secondary'),
+                    onClick: () => fileInputRef.current?.click(),
+                  }}
+                  onDismiss={handleDismissOnboarding}
+                  dismissLabel={tStart('inbox_dismiss')}
+                />
+                <p className="mt-4 text-center text-xs text-muted-foreground">
+                  {t('drop_anywhere_hint')}
+                </p>
+              </div>
             </div>
           ) : (
             <EmptyPreview
@@ -2206,186 +2220,6 @@ export function DocumentPreview({
 
 // ── Empty preview state ──────────────────────────────────────
 
-// ── Onboarding card ──────────────────────────────────────────
-
-interface OnboardingCardProps {
-  hasInboxAddress: boolean
-  hasAnyItem: boolean
-  hasResolvedItem: boolean
-  onActivateInbox: () => void
-  onUploadClick: () => void
-  onDismiss: () => void
-  isActivating: boolean
-  compact?: boolean
-}
-
-function OnboardingCard({
-  hasInboxAddress,
-  hasAnyItem,
-  hasResolvedItem,
-  onActivateInbox,
-  onUploadClick,
-  onDismiss,
-  isActivating,
-  compact = false,
-}: OnboardingCardProps) {
-  // The card described the page as it was before the underlag rebuild: three
-  // steps ending at "matcha eller bokför", with no mention that the page now
-  // searches the mailboxes itself, lists the purchases that are missing a
-  // receipt, or proposes the kontering. It also carried a Beta badge it had
-  // outgrown.
-  const steps = [
-    {
-      done: hasInboxAddress,
-      title: 'Aktivera din inkorgsadress',
-      hint: 'En egen adress som leverantörer kan fakturera direkt, och som du kan vidarebefordra kvitton till.',
-    },
-    {
-      done: hasAnyItem,
-      title: 'Koppla en brevlåda, maila in, eller ladda upp',
-      hint: 'Med en kopplad brevlåda letar Kvittojakten själv upp kvitton till köp som saknar underlag. Utan den fyller du på för hand.',
-    },
-    {
-      done: hasResolvedItem,
-      title: 'Godkänn konteringen',
-      hint: 'Matchade underlag får ett förslag på hur de bokförs, utifrån hur du bokfört samma leverantör förut. Du granskar och bokför.',
-    },
-  ]
-  // First incomplete step drives the active CTA. Falls back to -1 if all done
-  // (the parent should have hidden the card by then, but guard anyway).
-  const currentStep = steps.findIndex((s) => !s.done)
-
-  return (
-    <div
-      className={cn(
-        'relative rounded-lg border bg-card',
-        compact ? 'mx-3 my-3 p-4 text-xs' : 'max-w-md mx-auto p-6'
-      )}
-    >
-      <button
-        type="button"
-        onClick={onDismiss}
-        aria-label="Dölj guide"
-        className="absolute top-2 right-2 h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
-
-      <div className={cn('space-y-1', compact ? 'pr-6' : 'pr-8')}>
-        <div className="flex items-center gap-2 flex-wrap">
-          <h2
-            className={cn(
-              'font-display tracking-tight',
-              compact ? 'text-sm' : 'text-lg'
-            )}
-          >
-            Så funkar Underlag
-          </h2>
-        </div>
-        <p className={cn('text-muted-foreground', compact ? 'text-[11px]' : 'text-xs')}>
-          Här samlas underlagen, och här syns köpen som saknar ett. Kvittojakten
-          söker igenom kopplade brevlådor efter kvitton du inte fått in, och
-          matchade underlag får ett förslag på kontering att godkänna. Att samla
-          underlag är alltid gratis; AI-tolkning och kvittojakt ingår i
-          abonnemanget.
-        </p>
-      </div>
-
-      <ol className={cn('space-y-2.5', compact ? 'mt-3' : 'mt-5')}>
-        {steps.map((step, i) => {
-          const isDone = step.done
-          const isCurrent = !isDone && i === currentStep
-          return (
-            <li
-              key={step.title}
-              className={cn('flex items-start gap-2.5', compact && 'gap-2')}
-            >
-              <span className="shrink-0 mt-0.5">
-                {isDone ? (
-                  <Check className={cn('text-success', compact ? 'h-3.5 w-3.5' : 'h-4 w-4')} />
-                ) : isCurrent ? (
-                  <span
-                    className={cn(
-                      'inline-flex items-center justify-center rounded-full bg-primary text-primary-foreground font-medium',
-                      compact ? 'h-3.5 w-3.5 text-[9px]' : 'h-4 w-4 text-[10px]'
-                    )}
-                  >
-                    {i + 1}
-                  </span>
-                ) : (
-                  <Circle className={cn('text-muted-foreground/40', compact ? 'h-3.5 w-3.5' : 'h-4 w-4')} />
-                )}
-              </span>
-              <div className="min-w-0">
-                <p
-                  className={cn(
-                    'font-medium',
-                    isDone ? 'text-muted-foreground line-through decoration-muted-foreground/40' : 'text-foreground',
-                    compact ? 'text-xs' : 'text-sm'
-                  )}
-                >
-                  {step.title}
-                </p>
-                {!isDone && (
-                  <p
-                    className={cn(
-                      'text-muted-foreground mt-0.5',
-                      compact ? 'text-[11px]' : 'text-xs'
-                    )}
-                  >
-                    {step.hint}
-                  </p>
-                )}
-              </div>
-            </li>
-          )
-        })}
-      </ol>
-
-      {/* CTA matches the current step. No CTA for step 3: it requires the user to pick a row. */}
-      {currentStep === 0 && (
-        <Button
-          size={compact ? 'sm' : 'default'}
-          className={cn('w-full mt-4', compact && 'h-8 text-xs')}
-          onClick={onActivateInbox}
-          disabled={isActivating}
-        >
-          {isActivating ? (
-            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-          ) : (
-            <Mail className="h-3.5 w-3.5 mr-1.5" />
-          )}
-          Aktivera inkorgsadress
-        </Button>
-      )}
-      {currentStep === 1 && (
-        <div className={cn('mt-4 space-y-2', compact && 'mt-3')}>
-          <Button
-            size={compact ? 'sm' : 'default'}
-            className={cn('w-full', compact && 'h-8 text-xs')}
-            onClick={onUploadClick}
-          >
-            <Upload className="h-3.5 w-3.5 mr-1.5" />
-            Ladda upp en fil
-          </Button>
-          <p className={cn('text-center text-muted-foreground', compact ? 'text-[10px]' : 'text-[11px]')}>
-            …eller maila underlagen till din inkorgsadress.
-          </p>
-        </div>
-      )}
-      {currentStep === 2 && (
-        <p
-          className={cn(
-            'mt-4 text-center italic text-muted-foreground',
-            compact ? 'text-[11px]' : 'text-xs'
-          )}
-        >
-          Välj en post i listan för att matcha eller bokföra.
-        </p>
-      )}
-    </div>
-  )
-}
 
 function EmptyPreview({
   onUploadClick,
