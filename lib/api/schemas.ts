@@ -16,6 +16,7 @@ import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
 import type { AuditAction } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
+import { isVatTreatmentValidForAccountClass } from '@/lib/vat/account-vat-treatment'
 
 // ============================================================
 // Shared primitives
@@ -2130,6 +2131,20 @@ export const CreateAccountSchema = z.object({
   default_vat_rate: defaultVatRate,
   default_vat_treatment: defaultVatTreatment,
   sru_code: z.string().nullable().optional(),
+}).superRefine((value, ctx) => {
+  if (
+    value.default_vat_treatment &&
+    !isVatTreatmentValidForAccountClass(
+      value.default_vat_treatment,
+      Number(value.account_number.charAt(0)),
+    )
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['default_vat_treatment'],
+      message: 'VAT treatment is not valid for the account class',
+    })
+  }
 })
 
 export const UpdateAccountSchema = z.object({

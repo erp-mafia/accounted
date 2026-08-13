@@ -414,6 +414,17 @@ describe('PUT /api/bookkeeping/accounts/[number]', () => {
     expect(updateArg.default_vat_treatment).toBe('standard_25')
   })
 
+  it('rejects a VAT treatment that does not apply to the account class', async () => {
+    const { supabase, calls } = createCapturingSupabase([])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/5010', {
+      method: 'PUT',
+      body: { default_vat_treatment: 'standard_25' },
+    })
+    expect((await PUT(req, numberParams)).status).toBe(400)
+    expect(calls.some((call) => call.method === 'update')).toBe(false)
+  })
+
   // The body is spread straight into .update(), so the write set must be
   // exactly what the caller named. UpdateAccountSchema carries no .default()
   // today; these two lock the property in so adding one cannot turn a rename

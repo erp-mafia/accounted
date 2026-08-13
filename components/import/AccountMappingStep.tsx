@@ -33,8 +33,8 @@ import type { AccountMapping } from '@/lib/import/types'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
-  ACCOUNT_VAT_TREATMENTS,
   defaultRateForVatTreatment,
+  vatTreatmentsForAccountClass,
   type AccountVatTreatment,
 } from '@/lib/vat/account-vat-treatment'
 
@@ -135,7 +135,7 @@ export default function AccountMappingStep({
     return { unmapped, lowConfidence, manual, vatReview }
   }, [mappings])
 
-  const canContinue = stats.unmapped === 0
+  const canContinue = stats.unmapped === 0 && stats.vatReview === 0
 
   // Group BAS accounts by class for the dropdown
   const accountsByClass = useMemo(() => {
@@ -238,8 +238,8 @@ export default function AccountMappingStep({
                   <TableHead className="w-36">Källkonto</TableHead>
                   <TableHead>Källnamn</TableHead>
                   <TableHead className="w-12"></TableHead>
-                  <TableHead className="w-64">Målkonto</TableHead>
                   <TableHead className="min-w-72">{t('vat_treatment_column')}</TableHead>
+                  <TableHead className="w-64">Målkonto</TableHead>
                   <TableHead className="w-24">Konfidens</TableHead>
                 </TableRow>
               </TableHeader>
@@ -277,7 +277,9 @@ export default function AccountMappingStep({
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="none">{t('vat_treatment_none')}</SelectItem>
-                              {ACCOUNT_VAT_TREATMENTS.map((treatment) => (
+                              {vatTreatmentsForAccountClass(
+                                Number(mapping.sourceAccount.charAt(0)),
+                              ).map((treatment) => (
                                 <SelectItem key={treatment} value={treatment}>
                                   {t(`vat_treatment_${treatment}`)}
                                 </SelectItem>
@@ -373,7 +375,7 @@ export default function AccountMappingStep({
                 ))}
                 {paginatedMappings.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                       Inga konton matchar filtret
                     </TableCell>
                   </TableRow>

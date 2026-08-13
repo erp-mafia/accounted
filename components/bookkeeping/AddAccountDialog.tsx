@@ -170,6 +170,7 @@ export function AddAccountDialog({
       setAccountName('')
       setDescription('')
       setDefaultVatRate('none')
+      setDefaultVatTreatment('none')
       setSruCode('')
       onCreated({ account_number: accountNumber })
       onOpenChange(false)

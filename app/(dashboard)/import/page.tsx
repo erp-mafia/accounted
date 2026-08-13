@@ -732,11 +732,17 @@ function SIEImportWizard() {
   }, [])
 
   const confirmVatReview = useCallback(() => {
+    if (mappings.some((mapping) =>
+      mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
+    )) {
+      setError('Granska momshanteringen för alla markerade konton innan du fortsätter.')
+      return
+    }
     setStep('review')
     setError(null)
     setValidationErrors([])
     setValidationWarnings([])
-  }, [])
+  }, [mappings])
 
   const missingAccounts = mappings
     .filter((m) => !m.targetAccount)
@@ -765,11 +771,11 @@ function SIEImportWizard() {
 
       // Optimistically update mappings: mark created accounts as self-mapped
       const createdSet = new Set(missingAccounts.map(a => a.number))
-      setMappings(prev => prev.map(m =>
+      setMappings(prev => enrichAccountMappingsWithVat(prev.map(m =>
         !m.targetAccount && createdSet.has(m.sourceAccount)
           ? { ...m, targetAccount: m.sourceAccount, targetName: m.sourceName, confidence: 1.0 }
           : m
-      ))
+      ), basAccounts))
       setPreview(prev => {
         if (!prev) return prev
         const newMapped = prev.mappingStatus.mapped + createdSet.size
@@ -787,14 +793,16 @@ function SIEImportWizard() {
       const accountsRes = await fetch('/api/bookkeeping/accounts')
       if (accountsRes.ok) {
         const accountsData = await accountsRes.json()
-        setBasAccounts(accountsData.data || [])
+        const accounts = accountsData.data || []
+        setBasAccounts(accounts)
+        setMappings(prev => enrichAccountMappingsWithVat(prev, accounts))
       }
     } catch (err) {
       toast({ title: 'Kunde inte skapa konton', description: err instanceof Error ? getErrorMessage(err) : 'Försök igen.', variant: 'destructive' })
     } finally {
       setIsCreatingAccounts(false)
     }
-  }, [missingAccounts, toast])
+  }, [basAccounts, missingAccounts, toast])
 
   const handleExecuteImport = useCallback(async (options: ImportExecuteOptions) => {
     if (!file) { setError('No file selected'); return }
@@ -932,7 +940,7 @@ function SIEImportWizard() {
           unresolvedVatAccountCount={mappings.filter((mapping) =>
             mapping.sourceAccount === mapping.targetAccount &&
             ['3', '4', '5', '6'].includes(mapping.sourceAccount.charAt(0)) &&
-            (!mapping.defaultVatTreatment || !mapping.vatTreatmentReviewed)
+            !mapping.vatTreatmentReviewed
           ).length} />
       )}
     </div>

@@ -3,7 +3,10 @@
 import { useTranslations } from 'next-intl'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { ACCOUNT_VAT_TREATMENTS, type AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
+import {
+  vatTreatmentsForAccountClass,
+  type AccountVatTreatment,
+} from '@/lib/vat/account-vat-treatment'
 
 interface AccountVatTreatmentSelectProps {
   value: AccountVatTreatment | 'none'
@@ -19,6 +22,7 @@ export function AccountVatTreatmentSelect({
   const t = useTranslations('chart_of_accounts')
   const isRelevant = accountClass === 3 ||
     (accountClass !== null && accountClass >= 4 && accountClass <= 6)
+  const treatments = accountClass === null ? [] : vatTreatmentsForAccountClass(accountClass)
 
   return (
     <div className="space-y-2">
@@ -33,7 +37,7 @@ export function AccountVatTreatmentSelect({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="none">{t('vat_treatment_none')}</SelectItem>
-          {ACCOUNT_VAT_TREATMENTS.map((treatment) => (
+          {treatments.map((treatment) => (
             <SelectItem key={treatment} value={treatment}>
               {t(`vat_treatment_${treatment}`)}
             </SelectItem>

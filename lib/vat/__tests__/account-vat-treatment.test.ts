@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   defaultRateForVatTreatment,
+  isVatTreatmentValidForAccountClass,
   resolveVatTreatmentRuta,
   suggestVatTreatment,
+  vatTreatmentsForAccountClass,
 } from '../account-vat-treatment'
 
 describe('resolveVatTreatmentRuta', () => {
@@ -26,6 +28,15 @@ describe('resolveVatTreatmentRuta', () => {
     expect(resolveVatTreatmentRuta('reverse_charge_domestic', 5)).toEqual({ box: 'ruta24', side: 'debit' })
     expect(resolveVatTreatmentRuta('export_goods', 4)).toEqual({ box: 'ruta50', side: 'debit' })
     expect(resolveVatTreatmentRuta('exempt', 4)).toBeNull()
+  })
+})
+
+describe('vat treatment applicability', () => {
+  it('exposes only treatments that resolve for the account class', () => {
+    expect(vatTreatmentsForAccountClass(3)).toContain('vmb')
+    expect(vatTreatmentsForAccountClass(5)).not.toContain('vmb')
+    expect(isVatTreatmentValidForAccountClass('reverse_charge_eu_services', 5)).toBe(true)
+    expect(isVatTreatmentValidForAccountClass('standard_25', 5)).toBe(false)
   })
 })
 

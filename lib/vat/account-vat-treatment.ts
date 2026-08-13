@@ -59,6 +59,19 @@ export function isAccountVatTreatment(value: unknown): value is AccountVatTreatm
     (ACCOUNT_VAT_TREATMENTS as readonly string[]).includes(value)
 }
 
+export function vatTreatmentsForAccountClass(accountClass: number): AccountVatTreatment[] {
+  return ACCOUNT_VAT_TREATMENTS.filter(
+    (treatment) => resolveVatTreatmentRuta(treatment, accountClass) !== null,
+  )
+}
+
+export function isVatTreatmentValidForAccountClass(
+  treatment: AccountVatTreatment,
+  accountClass: number,
+): boolean {
+  return resolveVatTreatmentRuta(treatment, accountClass) !== null
+}
+
 export interface SuggestedVatTreatment {
   treatment: AccountVatTreatment
   rate: number | null
