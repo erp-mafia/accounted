@@ -11,8 +11,13 @@
 -- are untouched, so AGI/KU are unaffected. Off by default: existing companies
 -- keep exact-öre payouts.
 --
--- pg-test: skip (plain column addition + CHECK list extension, no
--- trigger/RPC/RLS)
+-- pg-test: skip (column addition + CHECK list extension, no trigger/RPC/RLS).
+-- The re-added CHECK is NOT VALID here and validated in 20260813143001 so the
+-- existing-row scan runs under SHARE UPDATE EXCLUSIVE instead of the ADD's
+-- ACCESS EXCLUSIVE lock (house pattern per DECISIONS.md 2026-07-13; VALIDATE
+-- in the same transaction as ADD would be a no-op since the stronger lock is
+-- held until commit). The new list is a strict superset of the previous one,
+-- so validation cannot fail.
 
 ALTER TABLE public.company_settings
   ADD COLUMN salary_net_rounding boolean NOT NULL DEFAULT false;
@@ -45,6 +50,6 @@ ALTER TABLE public.salary_line_items
     'net_deduction_benefit_payment', 'net_deduction_other',
     'oresavrundning',
     'correction', 'other'
-  ));
+  )) NOT VALID;
 
 NOTIFY pgrst, 'reload schema';
