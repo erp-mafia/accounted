@@ -49,6 +49,16 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
 })
 // category mapping is real: gives the route real BAS accounts to validate.
 
+// Underlag propagation: mocked to assert the wiring (called once per item
+// that actually booked); behavior is unit-tested in
+// lib/transactions/__tests__/inbox-underlag.test.ts.
+const { propagateUnderlagMock } = vi.hoisted(() => ({
+  propagateUnderlagMock: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/transactions/inbox-underlag', () => ({
+  propagateUnderlagForBookedTransaction: propagateUnderlagMock,
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST } from '../route'
 
@@ -166,6 +176,59 @@ describe('POST batch-categorize', () => {
       'user-1',
       expect.objectContaining({ id: TX_A, cash_account_id: 'cash-1' }),
       expect.objectContaining({ credit_account: '1931' }),
+    )
+  })
+
+  it('propagates underlag once per item that actually booked, not for already-booked items', async () => {
+    const txRow = (id: string, journalEntryId: string | null) => ({
+      data: {
+        id,
+        company_id: COMPANY_ID,
+        date: '2026-05-12',
+        amount: -100,
+        currency: 'SEK',
+        merchant_name: 'ICA',
+        cash_account_id: null,
+        journal_entry_id: journalEntryId,
+      },
+      error: null,
+    })
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [
+          txRow(TX_A, null), // item A fetch: unbooked
+          { data: [{ id: TX_A }], error: null }, // item A CAS update: owned
+          txRow(TX_B, 'je-old'), // item B fetch: already booked
+          { data: null, error: null }, // item B flags-flip update
+        ],
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      }).supabase,
+    )
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [
+            { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+            { transaction_id: TX_B, categorization: { is_business: true, category: 'expense_office' } },
+          ],
+        },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    // Only the item whose CAS write this batch owns gets the propagation;
+    // the already-booked item was consumed by whatever booked it earlier.
+    expect(propagateUnderlagMock).toHaveBeenCalledTimes(1)
+    expect(propagateUnderlagMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      TX_A,
+      'je-fresh',
     )
   })
 

@@ -334,7 +334,7 @@ export default function UserMenu({
                 <Settings className="h-4 w-4 flex-shrink-0" />
                 {tNav('settings')}
               </Link>
-              <Link href="/settings/team" onClick={close} className={menuRow}>
+              <Link href="/settings/company#members" onClick={close} className={menuRow}>
                 <Users className="h-4 w-4 flex-shrink-0" />
                 {tNav('members_roles')}
               </Link>
