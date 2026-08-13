@@ -178,9 +178,11 @@ async function bookLoadedRun(
         // amount Skatteverket computes from the underlag (declared-avgifter.ts).
         // Deliberately the UN-overridden basis: a basis override never
         // reaches the filed IU fields, so Skatteverket computes from these
-        // values regardless. An amount override is flagged instead: the
-        // split then mirrors the AGI's override path.
-        avgifter_basis: sre.avgifter_basis as number,
+        // values regardless. Zeroed for F-skatt rows (the AGI's isFSkattRow
+        // invariant: their pay forms no underlag). An amount override is
+        // flagged instead: the split then mirrors the AGI's override path.
+        avgifter_basis:
+          sre.employee?.f_skatt_status === 'f_skatt' ? 0 : (sre.avgifter_basis as number),
         avgifter_category: (sre.avgifter_category as string | null) ?? null,
         avgifter_amount_overridden:
           sre.employee?.f_skatt_status !== 'f_skatt' &&

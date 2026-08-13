@@ -78,6 +78,29 @@ describe('GET /api/salary/runs/[id]/preview', () => {
     expect(response.status).toBe(404)
   })
 
+  it('returns 400 when the run has no calculated employees', async () => {
+    enqueue({ data: CALCULATED_RUN }) // salary_runs
+    enqueue({ data: [] }) // salary_run_employees: nothing calculated yet
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/preview'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    expect(response.status).toBe(400)
+  })
+
+  it('returns 500 when the posted-voucher lookup fails for a booked run', async () => {
+    enqueue({
+      data: { ...CALCULATED_RUN, status: 'booked', salary_entry_id: 'je-1' },
+    }) // salary_runs
+    enqueue({ data: null, error: { message: 'rls denied' } }) // journal_entries
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/preview'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    // A failed lookup must not masquerade as "booked run with no vouchers".
+    expect(response.status).toBe(500)
+  })
+
   it('previews the whole-krona 2731/3740 split for a calculated run', async () => {
     enqueue({ data: CALCULATED_RUN }) // salary_runs
     enqueue({ data: [EMPLOYEE_ROW] }) // salary_run_employees

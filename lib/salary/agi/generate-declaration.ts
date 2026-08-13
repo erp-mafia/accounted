@@ -33,9 +33,7 @@ import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator
 import { eventBus } from '@/lib/events'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
-  computeDeclaredAvgifter,
-  declaredAvgifterByCategory,
-  reportingCategory,
+  computeDeclaredAvgifterWithOverrides,
   resolveDeclaredAvgifterParams,
 } from '../declared-avgifter'
 import type { Logger } from '@/lib/logger'
@@ -419,63 +417,36 @@ export async function generateAgiDeclaration(
   const effectiveBasis = (sre: SalaryRunEmployeeRow): number =>
     isFSkattRow(sre) ? 0 : (sre.avgifter_basis_override ?? sre.avgifter_basis) || 0
 
-  // Per-employee avgifter_amount overrides (FoU-avdrag and other manual
-  // adjustments) deliberately bypass the underlag computation, so the
-  // declared total honors them instead: per category, truncated per category
-  // so the breakdown still cross-foots (the salary booking's override path
-  // mirrors this exact computation on 2731). A basis-only override does NOT
-  // route here: it never reaches the filed IU fields (FK011 + benefits are
-  // serialised un-overridden), so Skatteverket computes from the filed
-  // underlag regardless, and letting the override steer FK487 or the payment
-  // would file an FK487 contradicting the declaration's own IUs and underpay
-  // the skattekonto by the override delta. Without amount overrides, the
-  // declared computation from the filed underlag is authoritative.
-  const hasAmountOverride = activeEmployees.some(
-    (sre) => !isFSkattRow(sre) && sre.avgifter_amount_override != null,
-  )
-
-  let avgifterByCategory: AGITotals['avgifterByCategory']
-  let totalAvgifterAmount: number
-  let totalAvgifterBasis: number
-  if (hasAmountOverride) {
-    const oreByCategory: Record<string, { basis: number; amount: number }> = {}
-    for (const sre of activeEmployees) {
-      const category = reportingCategory({
+  // One computation for every roster shape (computeDeclaredAvgifterWithOverrides):
+  // rows WITHOUT an avgifter_amount_override run Skatteverket's underlag
+  // computation on the FILED basis (never basis overrides: those don't reach
+  // the IU fields, so Skatteverket computes from the filed underlag
+  // regardless, and letting them steer FK487 or the payment would file an
+  // FK487 contradicting the declaration's own IUs and underpay the
+  // skattekonto). Rows WITH an amount override (FoU-avdrag and other manual
+  // adjustments) contribute their manual amounts per category instead: a
+  // manual adjustment on one employee must not cost the colleagues their
+  // SKV-exact declared amounts. The salary booking's split runs the same
+  // function, so booked 2731 == filed FK487 == stored == paid.
+  const declared = computeDeclaredAvgifterWithOverrides(
+    activeEmployees.map((sre) => {
+      const overridden = !isFSkattRow(sre) && sre.avgifter_amount_override != null
+      return {
+        // Overridden rows report their effective (override-coalesced) basis;
+        // computing rows use the FILED basis.
+        basis: overridden ? effectiveBasis(sre) : isFSkattRow(sre) ? 0 : sre.avgifter_basis || 0,
         rate: sre.avgifter_rate,
         category: sre.avgifter_category ?? null,
-      })
-      const cat = oreByCategory[category] || { basis: 0, amount: 0 }
-      cat.basis += effectiveBasis(sre)
-      cat.amount += isFSkattRow(sre) ? 0 : (sre.avgifter_amount_override ?? sre.avgifter_amount) || 0
-      oreByCategory[category] = cat
-    }
-    const folded: Record<string, { basis: number; amount: number }> = {}
-    for (const [category, cat] of Object.entries(oreByCategory)) {
-      folded[category] = {
-        basis: truncateToWholeKronor(cat.basis),
-        amount: truncateToWholeKronor(cat.amount),
+        overrideAmount: overridden ? sre.avgifter_amount_override : null,
       }
-    }
-    avgifterByCategory = folded as AGITotals['avgifterByCategory']
-    totalAvgifterAmount = Object.values(folded).reduce((s, c) => s + c.amount, 0)
-    totalAvgifterBasis = Object.values(folded).reduce((s, c) => s + c.basis, 0)
-  } else {
-    // The FILED underlag (never basis overrides: those don't reach the IUs)
-    // is what Skatteverket computes IK587 from.
-    const declared = computeDeclaredAvgifter(
-      activeEmployees.map((sre) => ({
-        basis: isFSkattRow(sre) ? 0 : sre.avgifter_basis || 0,
-        rate: sre.avgifter_rate,
-        category: sre.avgifter_category ?? null,
-      })),
-      resolveDeclaredAvgifterParams(
-        (run.calculation_params as Record<string, unknown> | null) ?? null,
-      ),
-    )
-    avgifterByCategory = declaredAvgifterByCategory(declared)
-    totalAvgifterAmount = declared.totalAmount
-    totalAvgifterBasis = declared.totalUnderlag
-  }
+    }),
+    resolveDeclaredAvgifterParams(
+      (run.calculation_params as Record<string, unknown> | null) ?? null,
+    ),
+  )
+  const avgifterByCategory = declared.byCategory as AGITotals['avgifterByCategory']
+  const totalAvgifterAmount = declared.totalAmount
+  const totalAvgifterBasis = declared.totalUnderlag
 
   // FK499 sjuklönekostnad: sum of paid sjuklön (days 2-14) across all
   // employees. Day 1 is karens (unpaid); day 15+ is Försäkringskassan.

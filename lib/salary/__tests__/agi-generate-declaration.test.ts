@@ -349,6 +349,32 @@ describe('generateAgiDeclaration: whole-krona amounts (öretal bortfaller)', () 
     })
   })
 
+  it('keeps colleagues SKV-exact when one employee carries an amount override', async () => {
+    // FoU-style override on E1 must not cost E2 its per-sats declared
+    // amount: E2 declares trunc(30 000 × 31,42 %) = 9 426 from its filed
+    // underlag while E1 contributes its manual 7 855.
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [
+      { ...ORE_ROW_1, avgifter_amount_override: 7855 },
+      { ...ORE_ROW_2, gross_salary: 30000.99, avgifter_basis: 30000.99, avgifter_amount: 9426.51 },
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    expect(result.totals.totalAvgifterAmount).toBe(7855 + 9426)
+    expect(result.xml).toContain(
+      `<gem:SummaArbAvgSlf faltkod="487">${7855 + 9426}</gem:SummaArbAvgSlf>`,
+    )
+    const catSum = Object.values(result.totals.avgifterByCategory).reduce(
+      (s, c) => s + (c?.amount ?? 0),
+      0,
+    )
+    expect(catSum).toBe(result.totals.totalAvgifterAmount)
+  })
+
   it('a basis-only override is inert on FK487 and the stored totals (filed underlag rules)', async () => {
     // An avgifter_basis_override never reaches the filed IU fields: FK011
     // stays the un-overridden gross, and Skatteverket computes IK587 from

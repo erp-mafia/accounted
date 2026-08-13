@@ -111,6 +111,10 @@ export function reportingCategory(row: Pick<DeclaredAvgifterRow, 'rate' | 'categ
       return 'youth'
     case 'vaxa_stod':
     case 'standard':
+    // Exempt rows (born 1937 or earlier) carry rate 0 and never produce an
+    // avgift; the explicit case only keeps the bucket label independent of
+    // the rate heuristic.
+    case 'exempt':
       return 'standard'
     default:
       return row.rate <= 0.1022 ? 'reduced65plus' : row.rate <= 0.2082 ? 'youth' : 'standard'
@@ -155,9 +159,12 @@ export function computeDeclaredAvgifter(
     // remainder is charged at the full sats: mirrors the engine's
     // youth/växa-stöd blend (calculation-engine.ts step 8), applied on the
     // declared whole-krona underlag the way Skatteverket applies it.
+    // The youth cap keys on the RESOLVED category so a legacy null-category
+    // row classified as youth by the rate heuristic still gets capped; växa
+    // keys on the raw category (it resolves to 'standard' for reporting).
     const category = reportingCategory(row)
     const cap =
-      row.category === 'youth' && params.youthCap !== null
+      category === 'youth' && params.youthCap !== null
         ? Math.trunc(params.youthCap)
         : row.category === 'vaxa_stod' && params.vaxaCap !== null
           ? Math.trunc(params.vaxaCap)
@@ -199,4 +206,68 @@ export function declaredAvgifterByCategory(declared: DeclaredAvgifter): Partial<
     byCategory[cell.category] = entry
   }
   return byCategory
+}
+
+export interface DeclaredAvgifterHybridRow extends DeclaredAvgifterRow {
+  /**
+   * Öre-exact manual avgifter amount (avgifter_amount_override). When set,
+   * this row bypasses the underlag computation entirely: the operator's
+   * number is declared, booked and paid. Rows without it compute from
+   * `basis` (the FILED underlag) like computeDeclaredAvgifter.
+   */
+  overrideAmount?: number | null
+}
+
+export interface DeclaredAvgifterWithOverrides {
+  /** Whole kronor. What is filed as FK487, booked on 2731, and paid. */
+  totalAmount: number
+  /** Whole kronor. */
+  totalUnderlag: number
+  byCategory: Partial<Record<DeclaredAvgifterCategory, { basis: number; amount: number }>>
+}
+
+/**
+ * The single declared-avgifter computation both the AGI generator and the
+ * salary booking use, so the filed FK487, the stored declaration totals, the
+ * booked 2731 liability and the payment are ONE number by construction.
+ *
+ * Rows without an override run Skatteverket's underlag computation
+ * (computeDeclaredAvgifter): a manual adjustment on one employee must not
+ * cost the rest of the roster its SKV-exact declared amount. Overridden rows
+ * contribute their manual amounts summed per reporting category and
+ * truncated per category. The category breakdown cross-foots exactly against
+ * the total on every path.
+ */
+export function computeDeclaredAvgifterWithOverrides(
+  rows: DeclaredAvgifterHybridRow[],
+  params: DeclaredAvgifterParams,
+): DeclaredAvgifterWithOverrides {
+  const declared = computeDeclaredAvgifter(
+    rows.filter((r) => r.overrideAmount == null),
+    params,
+  )
+  const byCategory = declaredAvgifterByCategory(declared)
+  let totalAmount = declared.totalAmount
+  let totalUnderlag = declared.totalUnderlag
+
+  const oreAmount = new Map<DeclaredAvgifterCategory, number>()
+  const oreBasis = new Map<DeclaredAvgifterCategory, number>()
+  for (const row of rows) {
+    if (row.overrideAmount == null) continue
+    const category = reportingCategory(row)
+    oreAmount.set(category, (oreAmount.get(category) ?? 0) + row.overrideAmount)
+    oreBasis.set(category, (oreBasis.get(category) ?? 0) + row.basis)
+  }
+  for (const [category, amountSum] of oreAmount) {
+    const amount = truncateToWholeKronor(amountSum)
+    const basis = truncateToWholeKronor(oreBasis.get(category) ?? 0)
+    const entry = byCategory[category] ?? { basis: 0, amount: 0 }
+    entry.amount += amount
+    entry.basis += basis
+    byCategory[category] = entry
+    totalAmount += amount
+    totalUnderlag += basis
+  }
+
+  return { totalAmount, totalUnderlag, byCategory }
 }

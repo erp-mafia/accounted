@@ -6,11 +6,10 @@ import {
   type LineDimensions,
 } from '@/lib/bookkeeping/dimension-resolver'
 import { createLogger } from '@/lib/logger'
-import { roundOre, truncateToWholeKronor } from '@/lib/money'
+import { roundOre } from '@/lib/money'
 import { SALARY_ACCOUNTS, getLineItemAccount } from './account-mapping'
 import {
-  computeDeclaredAvgifter,
-  reportingCategory,
+  computeDeclaredAvgifterWithOverrides,
   resolveDeclaredAvgifterParams,
 } from './declared-avgifter'
 import { calculateLoneVaxlingPensionProvision } from './lonevaxling'
@@ -389,11 +388,12 @@ function bucketByEmployeeDimensions(
  *
  * Manual avgifter_amount overrides (flagged EXPLICITLY: a small override
  * inside the magnitude band would otherwise book the operator's deliberate
- * adjustment as rounding income on 3740) switch to the override mirror:
- * per-reporting-category truncation of the öre-exact amounts, the same
- * computation the AGI's override path stores and the payment file pays, so
- * the booked 2731, the declaration and the payment stay one number. Only the
- * sub-krona truncation remainder books as utjämning.
+ * adjustment as rounding income on 3740) contribute their manual amounts per
+ * category instead of the underlag computation: the identical hybrid the AGI
+ * generator files and the payment file pays
+ * (computeDeclaredAvgifterWithOverrides), so the booked 2731, the
+ * declaration and the payment stay one number, and colleagues of an
+ * overridden employee keep their SKV-exact declared amounts.
  *
  * Exported so the journal preview route computes the identical split.
  */
@@ -416,41 +416,31 @@ export function splitAvgifterLiability(
   if (roundedAvgifter <= 0) {
     return { liabilityAvgifter: roundedAvgifter, oresutjamning: 0 }
   }
-  const hasAmountOverride = run.employees.some((e) => e.avgifter_amount_overridden === true)
-  if (hasAmountOverride) {
-    const oreByCategory = new Map<string, number>()
-    for (const e of run.employees) {
-      const category = reportingCategory({
-        rate: e.avgifter_rate,
-        category: e.avgifter_category ?? null,
-      })
-      oreByCategory.set(category, (oreByCategory.get(category) ?? 0) + e.avgifter_amount)
-    }
-    const liability = [...oreByCategory.values()].reduce(
-      (s, v) => s + truncateToWholeKronor(roundOre(v)),
-      0,
-    )
-    const remainder = roundOre(roundedAvgifter - liability)
-    // Belt: negative correction shapes or unexpected drift keep legacy form.
-    if (remainder < 0 || remainder >= oreByCategory.size + 1) {
-      return { liabilityAvgifter: roundedAvgifter, oresutjamning: 0 }
-    }
-    return { liabilityAvgifter: liability, oresutjamning: remainder }
-  }
-  const haveBasis = run.employees.every((e) => typeof e.avgifter_basis === 'number')
-  if (!haveBasis) {
+  // Non-overridden rows need the underlag; overridden rows carry their own
+  // amount. A roster from a legacy caller without basis columns falls back.
+  const haveInputs = run.employees.every(
+    (e) => e.avgifter_amount_overridden === true || typeof e.avgifter_basis === 'number',
+  )
+  if (!haveInputs) {
     return { liabilityAvgifter: roundedAvgifter, oresutjamning: 0 }
   }
-  const declared = computeDeclaredAvgifter(
+  const declared = computeDeclaredAvgifterWithOverrides(
     run.employees.map((e) => ({
-      basis: e.avgifter_basis as number,
+      basis: e.avgifter_basis ?? 0,
       rate: e.avgifter_rate,
       category: e.avgifter_category ?? null,
+      overrideAmount: e.avgifter_amount_overridden === true ? e.avgifter_amount : null,
     })),
     resolveDeclaredAvgifterParams(run.calculation_params),
   )
   const remainder = roundOre(roundedAvgifter - declared.totalAmount)
-  if (remainder < 0 || remainder >= run.employees.length + 2) {
+  // Per-IU truncation loses under 1 kr per employee and each truncation cell
+  // strictly under 1 kr more; a remainder outside this band means the
+  // roster's stored amounts diverge from its underlag (corrupt or legacy
+  // data), and the entry keeps the öre-exact liability rather than
+  // manufacturing a fake utjämning.
+  const maxTruncationDrift = run.employees.length + 2
+  if (remainder < 0 || remainder >= maxTruncationDrift) {
     return { liabilityAvgifter: roundedAvgifter, oresutjamning: 0 }
   }
   return { liabilityAvgifter: declared.totalAmount, oresutjamning: remainder }

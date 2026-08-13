@@ -508,9 +508,10 @@ describe('salary entries: dimensions propagation (PR8)', () => {
 
   it('mixes an overridden employee with computed colleagues without stranding öre (FoU case)', async () => {
     // Downward FoU-avdrag override 7 855 next to a colleague's computed
-    // 16 073,84: category sum 23 928,84 → 2731 = 23 928 (what the AGI
-    // stores and the payment pays), 84 öre to 3740. Booking, declaration
-    // and payment stay one number.
+    // 16 073,84: the colleague keeps the SKV-exact declared amount
+    // (trunc(51 158 × 31,42 %) = 16 073) and the override contributes 7 855
+    // → 2731 = 23 928 (what the AGI stores and the payment pays), 84 öre to
+    // 3740. Booking, declaration and payment stay one number.
     const run = makeRun([
       makeEmployee({
         employee_id: 'a',

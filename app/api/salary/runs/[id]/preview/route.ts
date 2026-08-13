@@ -36,7 +36,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // response shape, entries keyed by the run's entry ids, voucher labels
     // folded into the description.
     if (run.status === 'booked' || run.status === 'corrected') {
-      const { data: posted } = await supabase
+      const { data: posted, error: postedError } = await supabase
         .from('journal_entries')
         .select(
           'id, description, voucher_series, voucher_number, lines:journal_entry_lines(account_number, line_description, debit_amount, credit_amount)',
@@ -44,6 +44,14 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         .eq('company_id', companyId)
         .eq('source_type', 'salary_payment')
         .eq('source_id', id)
+
+      // A failed lookup must not masquerade as "booked run with no vouchers".
+      if (postedError) {
+        return NextResponse.json(
+          { error: 'Kunde inte läsa lönekörningens bokförda verifikat' },
+          { status: 500 },
+        )
+      }
 
       const byId = new Map(
         ((posted ?? []) as Array<{ id: string }>).map((e) => [e.id, e] as const),
@@ -92,7 +100,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Load employees with line items
     const { data: employees } = await supabase
       .from('salary_run_employees')
-      .select('*, employee:employees(employment_type), line_items:salary_line_items(*)')
+      .select('*, employee:employees(employment_type, f_skatt_status), line_items:salary_line_items(*)')
       .eq('salary_run_id', id)
 
     if (!employees || employees.length === 0) {
@@ -169,9 +177,16 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // posts an all-zero 7510/2731 voucher (see book/route.ts nollkörning path),
     // so previewing one would falsely imply a verifikat that is never created.
     // Override-coalesced, like the booking (book-run.ts): the preview must
-    // project the voucher that would actually post.
+    // project the voucher that would actually post. F-skatt rows ignore
+    // avgifter overrides and carry no underlag, matching book-run and the
+    // AGI's isFSkattRow invariant.
+    const isFSkattRow = (e: { employee?: { f_skatt_status?: string | null } | null }) =>
+      e.employee?.f_skatt_status === 'f_skatt'
     const totalAvgifter = employees.reduce(
-      (sum, e) => sum + ((e.avgifter_amount_override ?? e.avgifter_amount) || 0),
+      (sum, e) =>
+        sum +
+        ((isFSkattRow(e) ? e.avgifter_amount : e.avgifter_amount_override ?? e.avgifter_amount) ||
+          0),
       0,
     )
     const roundedAvgifter = roundOre(totalAvgifter)
@@ -180,15 +195,21 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // remainder goes to 3740; the 7510 cost side stays exact.
     const { liabilityAvgifter, oresutjamning } = splitAvgifterLiability(
       {
-        employees: (employees as Array<Record<string, unknown>>).map((sre) => ({
-          avgifter_amount:
-            ((sre.avgifter_amount_override as number | null) ??
-              (sre.avgifter_amount as number)) || 0,
-          avgifter_basis: sre.avgifter_basis as number | undefined,
-          avgifter_rate: sre.avgifter_rate as number,
-          avgifter_category: (sre.avgifter_category as string | null) ?? null,
-          avgifter_amount_overridden: (sre.avgifter_amount_override as number | null) != null,
-        })),
+        employees: (employees as Array<Record<string, unknown>>).map((sre) => {
+          const fSkatt = isFSkattRow(sre as never)
+          return {
+            avgifter_amount:
+              ((fSkatt
+                ? (sre.avgifter_amount as number)
+                : (sre.avgifter_amount_override as number | null) ??
+                  (sre.avgifter_amount as number)) || 0),
+            avgifter_basis: fSkatt ? 0 : (sre.avgifter_basis as number | undefined),
+            avgifter_rate: sre.avgifter_rate as number,
+            avgifter_category: (sre.avgifter_category as string | null) ?? null,
+            avgifter_amount_overridden:
+              !fSkatt && (sre.avgifter_amount_override as number | null) != null,
+          }
+        }),
         calculation_params: run.calculation_params as Record<string, unknown> | null,
       },
       roundedAvgifter,

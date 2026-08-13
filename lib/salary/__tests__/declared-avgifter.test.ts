@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeDeclaredAvgifter,
+  computeDeclaredAvgifterWithOverrides,
   declaredAvgifterByCategory,
   reportingCategory,
   resolveDeclaredAvgifterParams,
@@ -52,6 +53,18 @@ describe('computeDeclaredAvgifter', () => {
     })
   })
 
+  it('caps a legacy null-category row that the rate heuristic classifies as youth', () => {
+    // Legacy rows predate the avgifter_category column: the rate heuristic
+    // resolves them, and the youth cap must key on that RESOLVED category or
+    // a legacy youth above the cap gets the reduced sats on the full
+    // underlag (1 041 kr too little declared on this fixture).
+    const declared = computeDeclaredAvgifter(
+      [{ basis: 30000, rate: 0.2081, category: null }],
+      PARAMS,
+    )
+    expect(declared.totalAmount).toBe(5202 + 1571)
+  })
+
   it('applies no cap split when the cap is null or the category is uncapped', () => {
     const noCaps = computeDeclaredAvgifter(
       [{ basis: 30000, rate: 0.2081, category: 'youth' }],
@@ -100,6 +113,49 @@ describe('computeDeclaredAvgifter', () => {
     expect(basisSum).toBe(declared.totalUnderlag)
     expect(Number.isInteger(declared.totalAmount)).toBe(true)
     expect(Number.isInteger(declared.totalUnderlag)).toBe(true)
+  })
+})
+
+describe('computeDeclaredAvgifterWithOverrides', () => {
+  it('keeps colleagues SKV-exact when one employee carries an amount override', () => {
+    // FoU-avdrag override 7 855 on E1; E2+E3 are ordinary öre-wage rows.
+    // The colleagues must still declare trunc(60 000 × 31,42 %) = 18 852
+    // (per-sats on summed whole-krona underlag), NOT a truncation of their
+    // öre-exact charges: total = 18 852 + 7 855.
+    const declared = computeDeclaredAvgifterWithOverrides(
+      [
+        { basis: 51158, rate: 0.3142, category: 'standard', overrideAmount: 7855 },
+        { basis: 30000.99, rate: 0.3142, category: 'standard' },
+        { basis: 30000.99, rate: 0.3142, category: 'standard' },
+      ],
+      PARAMS,
+    )
+    expect(declared.totalAmount).toBe(18852 + 7855)
+    const catSum = Object.values(declared.byCategory).reduce((s, c) => s + (c?.amount ?? 0), 0)
+    expect(catSum).toBe(declared.totalAmount)
+  })
+
+  it('degenerates to the pure underlag computation when nothing is overridden', () => {
+    const rows = [
+      { basis: 30000.99, rate: 0.3142, category: 'standard' },
+      { basis: 28000, rate: 0.2081, category: 'youth' },
+    ]
+    const hybrid = computeDeclaredAvgifterWithOverrides(rows, PARAMS)
+    const pure = computeDeclaredAvgifter(rows, PARAMS)
+    expect(hybrid.totalAmount).toBe(pure.totalAmount)
+    expect(hybrid.totalUnderlag).toBe(pure.totalUnderlag)
+  })
+
+  it('truncates override amounts per category and cross-foots', () => {
+    const declared = computeDeclaredAvgifterWithOverrides(
+      [
+        { basis: 51158, rate: 0.3142, category: 'standard', overrideAmount: 16075.9 },
+      ],
+      PARAMS,
+    )
+    expect(declared.totalAmount).toBe(16075)
+    expect(declared.byCategory.standard?.amount).toBe(16075)
+    expect(declared.byCategory.standard?.basis).toBe(51158)
   })
 })
 

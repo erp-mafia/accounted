@@ -270,7 +270,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           avgifter_rate: sre.avgifter_rate,
           // Declared-avgifter inputs: 2731 books the whole-krona amount
           // Skatteverket computes from the underlag (declared-avgifter.ts).
-          avgifter_basis: sre.avgifter_basis,
+          // Zeroed for F-skatt rows, matching book-run and the AGI's
+          // isFSkattRow invariant.
+          avgifter_basis:
+            sre.employee?.f_skatt_status === 'f_skatt' ? 0 : sre.avgifter_basis,
           avgifter_category: sre.avgifter_category ?? null,
           avgifter_amount_overridden:
             sre.employee?.f_skatt_status !== 'f_skatt' && sre.avgifter_amount_override != null,

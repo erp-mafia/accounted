@@ -94,7 +94,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         void fetch(`/api/skatteverket/tax-payments/${period}`)
           .then(async (txRes) => (txRes.ok ? txRes.json() : null))
           .then((tx) => {
-            if (tx) setTaxPayment(tx.data)
+            // Clear on failure too: a stale record from a prior period must
+            // not keep feeding the panel outdated declared totals.
+            setTaxPayment(tx?.data ?? null)
           })
           .catch(() => setTaxPayment(null))
           .finally(() => setTaxPaymentLoading(false))
