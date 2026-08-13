@@ -30,9 +30,35 @@ async function setTreatment(companyId: string, accountNumber: string, treatment:
   )
 }
 
+async function insertAccount(
+  companyId: string,
+  userId: string,
+  accountNumber: string,
+  accountClass: number,
+) {
+  await getPool().query(
+    `INSERT INTO public.chart_of_accounts
+       (user_id, company_id, account_number, account_name, account_class,
+        account_group, account_type, normal_balance, plan_type, is_system_account)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'full_bas', false)`,
+    [
+      userId,
+      companyId,
+      accountNumber,
+      `Test account ${accountNumber}`,
+      accountClass,
+      accountNumber.slice(0, 2),
+      accountClass === 3 ? 'revenue' : 'expense',
+      accountClass === 3 ? 'credit' : 'debit',
+    ],
+  )
+}
+
 describe('chart_of_accounts.default_vat_treatment', () => {
   it('accepts every supported treatment and NULL', async () => {
-    const { companyId } = await seedCompany()
+    const { companyId, userId } = await seedCompany()
+    await insertAccount(companyId, userId, '3001', 3)
+    await insertAccount(companyId, userId, '4010', 4)
     const revenueTreatments = [
       'standard_25', 'reduced_12', 'reduced_6', 'exempt',
       'reverse_charge_domestic', 'reverse_charge_eu_goods',
@@ -52,17 +78,23 @@ describe('chart_of_accounts.default_vat_treatment', () => {
   })
 
   it('rejects unknown treatments', async () => {
-    const { companyId } = await seedCompany()
+    const { companyId, userId } = await seedCompany()
+    await insertAccount(companyId, userId, '3001', 3)
     await expect(setTreatment(companyId, '3001', 'unknown')).rejects.toThrow()
   })
 
   it('rejects a treatment that is incompatible with the account class', async () => {
-    const { companyId } = await seedCompany()
+    const { companyId, userId } = await seedCompany()
+    await insertAccount(companyId, userId, '4010', 4)
     await expect(setTreatment(companyId, '4010', 'standard_25')).rejects.toThrow()
   })
 
   it('normalizes values accepted by the predecessor before enforcing classes', async () => {
-    const { companyId } = await seedCompany()
+    const { companyId, userId } = await seedCompany()
+    await insertAccount(companyId, userId, '1010', 1)
+    await insertAccount(companyId, userId, '4010', 4)
+    await insertAccount(companyId, userId, '4011', 4)
+    await insertAccount(companyId, userId, '4012', 4)
     const client = await getPool().connect()
     try {
       await client.query('BEGIN')

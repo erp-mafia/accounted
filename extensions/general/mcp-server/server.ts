@@ -1519,8 +1519,7 @@ export async function computeVatReportWithRutor(
   }
 
   function creditBalance(acc: string): number {
-    const t = accountTotals.get(acc)
-    return t ? Math.round((t.credit - t.debit) * 100) / 100 : 0
+    return -debitBalance(acc)
   }
 
   const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
@@ -1529,7 +1528,7 @@ export async function computeVatReportWithRutor(
     ruta10, ruta11, ruta12, ruta30, ruta31, ruta32,
     ruta35, ruta39, ruta40, ruta48, ruta49, ruta60, ruta61, ruta62,
   } = declarationRutor
-  const reportRuta05Accounts = new Set(
+  const reportRuta05Accounts = new Set<string>(
     RUTA_05_COMPATIBILITY_ACCOUNTS.filter(
       (account) => !dynamicVatAccounts.explicitAccounts.has(account),
     ),
