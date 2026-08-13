@@ -240,8 +240,20 @@ function BankFileImportWizard() {
           description: `${txCount} transaktioner hittades`,
         })
       } else {
-        // Format detected but no transactions parsed: parser couldn't extract rows
-        setBankError('Filen kunde läsas men inga transaktioner hittades. Kontrollera att filen innehåller transaktionsdata och inte bara rubriker.')
+        // Format detected but no transactions parsed: surface the parser's
+        // real issues when it produced any, so the user sees WHY (wrong
+        // columns, invalid dates, ...) instead of only a generic hint.
+        const parseIssues: BankFileParseResult['issues'] = data.data.parse_result.issues ?? []
+        if (parseIssues.length > 0) {
+          setBankError(
+            parseIssues
+              .slice(0, 5)
+              .map((issue) => (issue.row > 0 ? `Rad ${issue.row}: ${issue.message}` : issue.message))
+              .join(' ')
+          )
+        } else {
+          setBankError('Filen kunde läsas men inga transaktioner hittades. Kontrollera att filen innehåller transaktionsdata och inte bara rubriker.')
+        }
       }
     } catch (err) {
       setBankError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')

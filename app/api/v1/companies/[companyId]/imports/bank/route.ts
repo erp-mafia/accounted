@@ -36,6 +36,7 @@ import {
   generateExternalId,
 } from '@/lib/import/bank-file/parser'
 import { ingestTransactions, type RawTransaction } from '@/lib/transactions/ingest'
+import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -158,13 +159,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       formatOverride = parsed.data
     }
 
-    // Decode the file. Bank files are typically Windows-1252 or UTF-8; we
-    // try UTF-8 first and fall back if invalid replacement chars appear.
+    // Decode the file with the shared importer decode (BOM-aware UTF-8 /
+    // UTF-16 / Windows-1252): one decode implementation for every path.
     const buffer = await file.arrayBuffer()
-    const utf8 = new TextDecoder('utf-8').decode(buffer)
-    const content = utf8.includes('�')
-      ? new TextDecoder('windows-1252').decode(buffer)
-      : utf8
+    const content = decodeFileContent(buffer)
 
     const fileHash = await generateFileHash(content)
 
@@ -178,6 +176,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     const parseResult = parseBankFile(content, file.name, format)
+    // parseBankFile may fall back to a detected sibling format when an
+    // explicit override parses 0 transactions. Everything downstream (external
+    // ids, import_source, stored file_format) must use the format the result
+    // actually carries so ids equal what the auto-detect path would produce.
+    const effectiveFormat = parseResult.format
     const blockingIssues = parseResult.issues.filter((issue) => issue.severity === 'error')
     if (blockingIssues.length > 0) {
       // Cap the reported rows so a large malformed file cannot balloon the
@@ -195,7 +198,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (parseResult.transactions.length === 0) {
       return v1ErrorResponseFromCode('BANK_FILE_NO_TRANSACTIONS', ctx.log, {
         requestId: ctx.requestId,
-        details: { format, filename: file.name },
+        details: { format: effectiveFormat, filename: file.name },
       })
     }
 
@@ -208,7 +211,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         params: {
           filename: file.name,
           file_size: file.size,
-          format,
+          format: effectiveFormat,
           file_hash: fileHash,
           transaction_count: parseResult.transactions.length,
         },
@@ -232,7 +235,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
             company_id: ctx.companyId!,
             filename: file.name,
             file_hash: fileHash,
-            file_format: format,
+            file_format: effectiveFormat,
             transaction_count: parseResult.transactions.length,
             status: 'processing',
             date_from: parseResult.date_from,
@@ -271,13 +274,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // shared ingest contract, not in this route alone.
       const raw: RawTransaction[] = parseResult.transactions.map(
         (t, idx): RawTransaction => ({
-          external_id: generateExternalId(t, format, idx),
+          external_id: generateExternalId(t, effectiveFormat, idx),
           date: t.date,
           amount: t.amount,
           currency: t.currency || 'SEK',
           description: t.description,
           reference: t.reference ?? null,
-          import_source: format === 'camt053' ? 'camt053' : `csv_${format}`,
+          import_source: effectiveFormat === 'camt053' ? 'camt053' : `csv_${effectiveFormat}`,
         }),
       )
 
@@ -329,7 +332,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         {
           id: op.id,
           result: {
-            format,
+            format: effectiveFormat,
             file_hash: fileHash,
             transactions_imported: ingestResult.imported,
             transactions_duplicates: ingestResult.duplicates,

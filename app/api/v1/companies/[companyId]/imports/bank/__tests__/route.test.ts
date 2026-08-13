@@ -278,6 +278,25 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     }
   })
 
+  it('stamps ids and provenance with the fallback format when an explicit override parses nothing', async () => {
+    // Swedbank file forced as `seb`: the parser falls back to the detected
+    // format, and external ids / import_source must follow the format the
+    // result carries so they equal what the auto-detect path would produce.
+    const swedbankCsv = [
+      'Kontouppgifter',
+      'Clearingnummer,Kontonummer,Datum,Text,Belopp,Saldo',
+      '8123,12345678,2024-01-15,SPOTIFY AB,-99.00,12345.67',
+    ].join('\n')
+
+    const res = await callRoute({ fileContent: swedbankCsv, search: '?format=seb' })
+    expect(res.status).toBe(202)
+
+    const rows = ingestedRows()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].import_source).toBe('csv_swedbank')
+    expect(rows[0].external_id).toMatch(/^swedbank_/)
+  })
+
   it('never sends keys RawTransaction does not have (`source`, `counterparty`)', async () => {
     await callRoute()
 
