@@ -4400,15 +4400,24 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(_args, companyId, userId, supabase) {
-      const { data, error } = await supabase
-        .from('customers')
-        .select('id, name, customer_type, email, org_number, vat_number, default_payment_terms, city, country')
-        .eq('company_id', companyId)
-        .order('name')
+      // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
+      // 1000 rows. Page on the unique id, then re-sort by name for display.
+      let customers: { id: string; name: string }[]
+      try {
+        customers = await fetchAllRows<{ id: string; name: string }>(({ from, to }) =>
+          supabase
+            .from('customers')
+            .select('id, name, customer_type, email, org_number, vat_number, default_payment_terms, city, country')
+            .eq('company_id', companyId)
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      } catch (error) {
+        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+      customers.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
-      if (error) throw new Error(`Database error: ${error.message}`)
-
-      return { customers: data, count: data?.length ?? 0 }
+      return { customers, count: customers.length }
     },
   },
 
@@ -4645,24 +4654,33 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(args, companyId, userId, supabase) {
-      let q = supabase
-        .from('articles')
-        .select('id, article_number, name, name_en, type, unit, price_excl_vat, vat_rate, revenue_account, housework_type, active')
-        .eq('company_id', companyId)
-      if (!args.include_inactive) q = q.eq('active', true)
-
       // Strip PostgREST filter metacharacters before interpolating into .or():
       // commas/parens would otherwise let a query inject extra or-conditions, and
       // the ILIKE wildcards % and _ would turn a stray char into a match-all.
       const raw = typeof args.query === 'string' ? args.query : ''
       const safe = raw.replace(/[%_,()\\*]/g, ' ').trim()
-      if (safe) {
-        q = q.or(`name.ilike.%${safe}%,article_number.ilike.%${safe}%`)
-      }
 
-      const { data, error } = await q.order('name')
-      if (error) throw new Error(`Database error: ${error.message}`)
-      return { articles: data, count: data?.length ?? 0 }
+      // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
+      // 1000 rows. Page on the unique id, then re-sort by name for display.
+      let articles: { id: string; name: string }[]
+      try {
+        articles = await fetchAllRows<{ id: string; name: string }>(({ from, to }) => {
+          let q = supabase
+            .from('articles')
+            .select('id, article_number, name, name_en, type, unit, price_excl_vat, vat_rate, revenue_account, housework_type, active')
+            .eq('company_id', companyId)
+          if (!args.include_inactive) q = q.eq('active', true)
+          if (safe) {
+            q = q.or(`name.ilike.%${safe}%,article_number.ilike.%${safe}%`)
+          }
+          return q.order('id', { ascending: true }).range(from, to)
+        })
+      } catch (error) {
+        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+      articles.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
+
+      return { articles, count: articles.length }
     },
   },
 
@@ -5859,15 +5877,24 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(_args, companyId, userId, supabase) {
-      const { data, error } = await supabase
-        .from('suppliers')
-        .select('id, name, supplier_type, email, phone, org_number, vat_number, default_expense_account, default_payment_terms, default_currency, city, country')
-        .eq('company_id', companyId)
-        .order('name', { ascending: true })
+      // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
+      // 1000 rows. Page on the unique id, then re-sort by name for display.
+      let suppliers: { id: string; name: string }[]
+      try {
+        suppliers = await fetchAllRows<{ id: string; name: string }>(({ from, to }) =>
+          supabase
+            .from('suppliers')
+            .select('id, name, supplier_type, email, phone, org_number, vat_number, default_expense_account, default_payment_terms, default_currency, city, country')
+            .eq('company_id', companyId)
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      } catch (error) {
+        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+      suppliers.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
-      if (error) throw new Error(`Database error: ${error.message}`)
-
-      return { suppliers: data ?? [], count: data?.length ?? 0 }
+      return { suppliers, count: suppliers.length }
     },
   },
 
@@ -6270,20 +6297,47 @@ export const tools: McpTool[] = [
       const activeOnly = args.active_only !== false
       const accountClass = args.account_class as number | undefined
 
-      let query = supabase
-        .from('chart_of_accounts')
-        .select('account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description')
-        .eq('company_id', companyId)
-        .order('sort_order')
+      // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
+      // 1000 rows and a full BAS 2026 chart holds ~1290 accounts. Paging is on
+      // the unique account_number (fetchAllRows ordering invariant); sort_order
+      // is fetched only to restore the BAS canonical display order afterwards,
+      // then stripped so the row shape stays unchanged.
+      interface ChartAccountRow {
+        account_number: string
+        account_name: string
+        account_class: number
+        account_group: string
+        account_type: string
+        normal_balance: string
+        is_active: boolean
+        description: string | null
+        sort_order: number | null
+      }
+      let rows: ChartAccountRow[]
+      try {
+        rows = await fetchAllRows<ChartAccountRow>(({ from, to }) => {
+          let query = supabase
+            .from('chart_of_accounts')
+            .select('account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description, sort_order')
+            .eq('company_id', companyId)
+          if (activeOnly) query = query.eq('is_active', true)
+          if (accountClass !== undefined) query = query.eq('account_class', accountClass)
+          return query.order('account_number', { ascending: true }).range(from, to)
+        })
+      } catch (error) {
+        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
 
-      if (activeOnly) query = query.eq('is_active', true)
-      if (accountClass !== undefined) query = query.eq('account_class', accountClass)
+      // Postgres ordered by sort_order ascending with nulls last; keep that
+      // visible order, tie-breaking on account_number for determinism.
+      rows.sort(
+        (a, b) =>
+          (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER) ||
+          a.account_number.localeCompare(b.account_number)
+      )
+      const accounts = rows.map(({ sort_order: _sortOrder, ...rest }) => rest)
 
-      const { data, error } = await query
-
-      if (error) throw new Error(`Database error: ${error.message}`)
-
-      return { accounts: data ?? [], count: data?.length ?? 0 }
+      return { accounts, count: accounts.length }
     },
   },
 
@@ -12926,14 +12980,14 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_audit_package',
     title: 'Generate Audit Package',
-    description: "Single-call audit package for a fiscal period: SIE-4 + reports (trial balance, income statement, balance sheet, general ledger, journal, VAT) + receipts + audit log + voucher gaps, zipped. 1-hour signed URL.",
+    description: "Single-call audit package for a fiscal period: SIE-4 + reports (trial balance, income statement, balance sheet, general ledger, journal, VAT) + receipts + audit log + voucher gaps, zipped.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period to package' },
-        include_documents: { type: 'boolean', description: 'Include receipts/document binaries in the zip (default true)' },
-        estimate_only: { type: 'boolean', description: 'Return size estimate without generating (default false)' },
+        fiscal_period_id: { type: 'string', description: 'Fiscal period UUID' },
+        include_documents: { type: 'boolean', description: 'Include receipt/document binaries (default true)' },
+        estimate_only: { type: 'boolean', description: 'Size estimate only, no zip (default false)' },
       },
       required: ['fiscal_period_id'],
     },
@@ -12941,7 +12995,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        download_url: { type: ['string', 'null'], description: 'Signed Supabase Storage URL valid for 1 hour. Null when estimate_only=true.' },
+        download_url: { type: ['string', 'null'], description: 'Signed Supabase Storage URL, valid 1 hour; null when estimate_only=true. Restricted-egress proxies may 403; needs a network with Supabase egress.' },
         storage_path: { type: ['string', 'null'] },
         file_name: { type: 'string' },
         size_bytes: { type: 'number' },
