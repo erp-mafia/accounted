@@ -3,6 +3,7 @@ import type {
   VatCheckAccountTotals,
 } from './vat-declaration-checks'
 import type { VatDeclarationRutor } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /**
  * The filing gate for the momsdeklaration: ONE derived value that the
@@ -128,7 +129,7 @@ export function rcBasisTotalsByRate(
     const total = totals.get(account)
     if (!total) continue
     const key = rate === 0.25 ? 'r25' : rate === 0.12 ? 'r12' : 'r6'
-    result[key] = Math.round((result[key] + total.debit - total.credit) * 100) / 100
+    result[key] = roundOre(result[key] + total.debit - total.credit)
   }
   return result
 }
