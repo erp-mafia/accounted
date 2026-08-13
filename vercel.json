@@ -82,6 +82,10 @@
       "schedule": "15 4 * * *"
     },
     {
+      "path": "/api/extensions/invoice-inbox/sweep/cron",
+      "schedule": "*/2 * * * *"
+    },
+    {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
     },

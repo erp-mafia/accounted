@@ -143,7 +143,10 @@ function reportUploadFailure(report: {
 
 interface InboxItem {
   id: string
-  status: 'received' | 'error'
+  // 'processing' is the staged-upload in-flight state: the row exists (the
+  // instant receipt ack) but the deferred AI extraction has not landed;
+  // extracted_data is null until the realtime flip to 'received'.
+  status: 'received' | 'processing' | 'error'
   source: 'email' | 'upload' | 'whatsapp'
   created_at: string
   email_from: string | null
@@ -292,11 +295,16 @@ function countExtractedFields(data: InvoiceExtractionResult | null): number {
 // payment still needs booking (a document attached to a transaction is not
 // the same as a booked one). An extraction failure is "error"; everything
 // else needs a first action.
-type InboxStatus = 'needs_action' | 'linked' | 'booked' | 'error'
+type InboxStatus = 'needs_action' | 'processing' | 'linked' | 'booked' | 'error'
 
 function deriveInboxStatus(item: InboxItem): InboxStatus {
   if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
   if (item.matched_transaction_journal_entry_id) return 'booked'
+  // Staged upload mid-extraction. Outranks 'linked': a transaction-anchored
+  // upload is matched from birth, but offering the booking bridge before the
+  // fields exist would book from empty data. Transient (seconds): stays in
+  // "Att göra" via the todo bucket rather than earning its own pill.
+  if (item.status === 'processing') return 'processing'
   if (item.matched_transaction_id) return 'linked'
   if (item.status === 'error') return 'error'
   return 'needs_action'
@@ -783,6 +791,18 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }
   }, [toast, loadDocument])
 
+  // The detail pane renders from its own fetched snapshot (`selected`), so
+  // the realtime refetch updates the list row but would leave a selected
+  // staged upload stuck on the in-flight skeleton after the processing ->
+  // received flip. Re-read the detail when the list shows the flip landed.
+  useEffect(() => {
+    if (!selected || selected.isPlaceholder || selected.status !== 'processing') return
+    const listRow = items.find((it) => it.id === selected.id)
+    if (listRow && listRow.status !== 'processing') {
+      void handleSelect(selected.id)
+    }
+  }, [items, selected, handleSelect])
+
   // ── Upload ─────────────────────────────────────────────────
 
   // `autoSelect`: jump the detail pane to the new placeholder/row. Useful
@@ -1202,11 +1222,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {/* No image/heic or image/heif here on purpose: when HEIC is absent
+              from accept, iOS Safari transcodes photo-library picks to JPEG,
+              which AI extraction can read. The server allowlist still accepts
+              HEIC for drag-drop and the email/WhatsApp channels. */}
           <input
             ref={fileInputRef}
             type="file"
             multiple
-            accept="application/pdf,image/jpeg,image/png,image/heic,image/heif,image/webp"
+            accept="application/pdf,image/jpeg,image/png,image/webp"
             className="hidden"
             onChange={handleFileInputChange}
           />
@@ -1673,11 +1697,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   </Button>
                 )}
 
+                {/* Same accept list as the header input: HEIC left out so iOS
+                    delivers JPEG from the photo library. */}
                 <input
                   ref={purchaseFileInputRef}
                   type="file"
                   className="hidden"
-                  accept="application/pdf,image/jpeg,image/png,image/heic,image/heif,image/webp"
+                  accept="application/pdf,image/jpeg,image/png,image/webp"
                   onChange={async (e) => {
                     const files = Array.from(e.target.files ?? [])
                     if (files.length > 0) await uploadForPurchase(files, selectedPurchase.id)
@@ -2000,6 +2026,9 @@ function InboxRow({
   const isErrored = status === 'error'
   const isBooked = status === 'booked'
   const isLinkedToTransaction = status === 'linked'
+  // Staged upload: the row is real (that IS the "mottaget" ack) but the
+  // deferred AI extraction is still in flight. The realtime refetch flips it.
+  const isExtracting = status === 'processing'
   // A chat question the sender never answered (48h TTL hit): the missing
   // info should be completed here instead. Quiet hint, not a status: the
   // item still books normally. Booked items drop the reminder.
@@ -2084,6 +2113,14 @@ function InboxRow({
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           {isPlaceholder ? (
             <span className="italic">Tolkar dokument med AI…</span>
+          ) : isExtracting ? (
+            <span className="flex items-center gap-1.5 min-w-0">
+              <Badge variant="outline" className="font-normal">
+                <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+                {t('processing_chip')}
+              </Badge>
+              {receivedMeta}
+            </span>
           ) : item.extraction_skipped || hasUnansweredQuestion ? (
             <span className="flex items-center gap-1.5 min-w-0">
               {item.extraction_skipped && (
@@ -2797,6 +2834,11 @@ function FieldsRail({
   // is not resolved, it's the prerequisite for booking against that tx.
   const isLinkedToTransaction = !isProcessed && !isBookedDirectly && !!item.matched_transaction_id
   const isResolved = isProcessed || isBookedDirectly
+  // Staged upload mid-extraction: a real row whose deferred AI extraction has
+  // not landed yet. Same disabled treatment as the optimistic placeholder
+  // (skeleton fields, no actions); the realtime flip re-enables everything.
+  const isExtracting = !item.isPlaceholder && item.status === 'processing'
+  const inFlight = !!item.isPlaceholder || isExtracting
   const [isUnmatchingTx, setIsUnmatchingTx] = useState(false)
   const [isRetrying, setIsRetrying] = useState(false)
   // Larger edit surface for the extracted fields (the rail is deliberately
@@ -3035,12 +3077,47 @@ function FieldsRail({
           </div>
         )}
 
+      {/* Extraction produced nothing (a crashed deferred worker swept back to
+          'received', a swallowed failure, or a skipped run): offer the AI
+          re-run right where the empty fields are. Mirrors the error-state
+          retry above, which only renders when error_message is set. HEIC is
+          excluded: Bedrock cannot read it, so a retry cannot succeed. */}
+      {!inFlight &&
+        !isResolved &&
+        !item.error_message &&
+        hasAi &&
+        !!item.document_id &&
+        !hasAnyExtractedField(data) &&
+        docMime !== 'image/heic' &&
+        docMime !== 'image/heif' && (
+          <div className="border-b px-4 py-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full h-7 text-xs"
+              onClick={handleRetry}
+              disabled={isRetrying}
+            >
+              {isRetrying ? (
+                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+              ) : (
+                <RotateCcw className="h-3 w-3 mr-1.5" />
+              )}
+              {t('retry_extraction')}
+            </Button>
+          </div>
+        )}
+
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
         {/* The proposed kontering comes first: it is the decision. The fields
             are the evidence you check when the decision looks wrong, so they
             fold. Reading order used to be the other way round, which meant
-            scrolling past nine values to reach the one thing to approve. */}
-        {isLinkedToTransaction && <ProposedBooking itemId={item.id} onLoaded={setProposal} />}
+            scrolling past nine values to reach the one thing to approve.
+            Suppressed while extraction is in flight: a proposal computed from
+            empty fields would be an invitation to book nothing. */}
+        {isLinkedToTransaction && !inFlight && (
+          <ProposedBooking itemId={item.id} onLoaded={setProposal} />
+        )}
 
         <details className="group" open={!isLinkedToTransaction}>
           <summary className="flex items-center gap-1.5 cursor-pointer list-none text-xs uppercase tracking-wide text-muted-foreground font-medium hover:text-foreground">
@@ -3049,7 +3126,7 @@ function FieldsRail({
             {/* A count, not a score. "5 av 12" read as a bad extraction even
                 when a kvitto had given up everything a kvitto has: half those
                 twelve fields only exist on an invoice. */}
-            {!item.isPlaceholder && countExtractedFields(data) > 0 && (
+            {!inFlight && countExtractedFields(data) > 0 && (
               <span className="tabular-nums normal-case tracking-normal">
                 {t('fields_filled', { count: countExtractedFields(data) })}
               </span>
@@ -3057,7 +3134,7 @@ function FieldsRail({
             {/* Kept from main: the fields are readable at rail width but not
                 comfortable, so the expand still earns its place inside the
                 fold. stopPropagation, or the summary would toggle under it. */}
-            {!item.isPlaceholder && (hasAnyExtractedField(data) || hasAi) && (
+            {!inFlight && (hasAnyExtractedField(data) || hasAi) && (
               <span
                 role="button"
                 tabIndex={0}
@@ -3076,7 +3153,7 @@ function FieldsRail({
             )}
           </summary>
           <div className="pt-3">
-        {item.isPlaceholder ? (
+        {inFlight ? (
           <div className="space-y-2">
             <div className="text-xs text-muted-foreground italic flex items-center gap-2 mb-2">
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -3116,8 +3193,9 @@ function FieldsRail({
         </details>
       </div>
 
-      {/* Actions: hidden while AI extraction is in flight */}
-      {!item.isPlaceholder && (
+      {/* Actions: hidden while AI extraction is in flight (optimistic
+          placeholder AND staged 'processing' rows alike). */}
+      {!inFlight && (
       <div className="border-t px-4 py-3 space-y-2">
         {isProcessed && item.created_supplier_invoice_id ? (
           <Link href={`/supplier-invoices/${item.created_supplier_invoice_id}`} className="block">

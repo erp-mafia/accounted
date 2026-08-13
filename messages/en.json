@@ -3049,7 +3049,10 @@
     "code_expired": "The code has expired. Create a new one.",
     "linked_number_label": "Linked number",
     "muted_label": "Paused",
-    "muted_hint": "You paused the chat with stopp. Send start in WhatsApp to activate it again.",
+    "muted_hint": "You paused the chat with stopp. Reactivate here or send start in WhatsApp. After reactivating here, just send your next receipt as usual: we cannot send a confirmation in WhatsApp until you write again.",
+    "unmute_button": "Reactivate",
+    "unmuted_toast": "The chat is active again.",
+    "unmute_failed": "Could not reactivate the chat.",
     "default_company_label": "Default company",
     "default_company_help": "If you belong to several companies, this controls which company's Underlag your receipts land in.",
     "default_company_none": "None selected",
@@ -3072,7 +3075,8 @@
     "last_event_muted": "ignored: the chat is paused",
     "last_event_declined": "not answered",
     "last_event_failed": "could not be received",
-    "last_reply_failed": "Our latest reply could not be delivered in WhatsApp. Check that the number can receive messages from Accounted."
+    "last_reply_failed": "Our latest reply could not be delivered in WhatsApp. Check that the number can receive messages from Accounted.",
+    "health_warning": "{count, plural, one {1 message could not be delivered or processed in the last week.} other {# messages could not be delivered or processed in the last week.}} Check the link or contact support."
   },
   "inbox_bulk_book": {
     "total_label": "Total for the documents: {amount}",
@@ -3165,6 +3169,8 @@
     "heic_hint": "HEIC images cannot be AI-extracted yet. Upload the receipt as JPEG or PDF, or fill in the fields manually.",
     "skipped_hint": "AI extraction did not run for this document. You can link the document to a transaction or create a supplier invoice manually.",
     "retry_overwrite_confirm": "Re-running extraction overwrites the fields, including your own edits. Continue?",
+    "processing_chip": "Reading with AI…",
+    "retry_extraction": "Read with AI again",
     "expand_fields": "Open the fields in a larger view",
     "wa_block_title": "From WhatsApp",
     "wa_caption_label": "Message",

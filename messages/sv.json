@@ -3049,7 +3049,10 @@
     "code_expired": "Koden har gått ut. Skapa en ny.",
     "linked_number_label": "Kopplat nummer",
     "muted_label": "Pausad",
-    "muted_hint": "Du har pausat chatten med stopp. Skicka start i WhatsApp för att aktivera den igen.",
+    "muted_hint": "Du har pausat chatten med stopp. Återaktivera här eller skicka start i WhatsApp. Efter återaktivering här skickar du bara nästa kvitto som vanligt: vi kan inte skicka någon bekräftelse i WhatsApp innan du själv skriver igen.",
+    "unmute_button": "Återaktivera",
+    "unmuted_toast": "Chatten är aktiv igen.",
+    "unmute_failed": "Kunde inte återaktivera chatten.",
     "default_company_label": "Standardföretag",
     "default_company_help": "Är du med i flera företag styr valet vilket företags Underlag dina kvitton hamnar i.",
     "default_company_none": "Inget valt",
@@ -3072,7 +3075,8 @@
     "last_event_muted": "ignorerades: chatten är pausad",
     "last_event_declined": "besvarades inte",
     "last_event_failed": "kunde inte tas emot",
-    "last_reply_failed": "Vårt senaste svar kunde inte levereras i WhatsApp. Kontrollera att numret kan ta emot meddelanden från Accounted."
+    "last_reply_failed": "Vårt senaste svar kunde inte levereras i WhatsApp. Kontrollera att numret kan ta emot meddelanden från Accounted.",
+    "health_warning": "{count, plural, one {1 meddelande kunde inte levereras eller behandlas den senaste veckan.} other {# meddelanden kunde inte levereras eller behandlas den senaste veckan.}} Kontrollera kopplingen eller kontakta support."
   },
   "inbox_bulk_book": {
     "total_label": "Underlagens summa: {amount}",
@@ -3165,6 +3169,8 @@
     "heic_hint": "HEIC-bilder kan inte AI-tolkas ännu. Ladda upp kvittot som JPEG eller PDF, eller fyll i fälten manuellt.",
     "skipped_hint": "AI-tolkning kördes inte för det här dokumentet. Du kan koppla dokumentet till en transaktion eller skapa leverantörsfaktura manuellt.",
     "retry_overwrite_confirm": "Ny tolkning skriver över fälten, även ändringar du gjort själv. Fortsätta?",
+    "processing_chip": "Tolkar med AI…",
+    "retry_extraction": "Tolka med AI igen",
     "expand_fields": "Öppna fälten i större vy",
     "wa_block_title": "Från WhatsApp",
     "wa_caption_label": "Meddelande",
