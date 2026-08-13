@@ -5274,7 +5274,6 @@
     "no_search_results": "Inga transaktioner matchar din sökning.",
     "source_empty": "Den valda källan har inga transaktioner. Välj Alla för att visa övriga källor.",
     "period_empty": "Den valda perioden har inga transaktioner. Välj Alla räkenskapsår för att visa allt.",
-    "period_quarter_group": "Räkenskapsårets kvartal (inte kalenderkvartal)",
     "period_pending_outside": "{count, plural, one {# transaktion att bokföra utanför vald period.} other {# transaktioner att bokföra utanför vald period.}}",
     "period_show_all": "Visa alla",
     "skv_reconnect_title": "Anslutningen till Skatteverket behöver förnyas",

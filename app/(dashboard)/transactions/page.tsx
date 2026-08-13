@@ -65,13 +65,7 @@ import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, Su
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
-import {
-  QUARTERS,
-  isWithinBounds,
-  quarterBounds,
-  resolvePeriodBounds,
-  type Quarter,
-} from '@/lib/transactions/period-filter'
+import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
 import type { FiscalPeriod } from '@/types'
 
 function InlineDialogContentLoading() {
@@ -451,30 +445,19 @@ export default function TransactionsPage() {
     }
   }, [])
 
-  // Period filter (rakenskapsar + optional quarter within it). Quarters
-  // follow the fiscal year, so a brutet rakenskapsar (July-June) gets
-  // Q1 = Jul-Sep. FyPicker owns the persistence under the page-local key;
-  // the quarter is session-only.
+  // Period filter (rakenskapsar). FyPicker owns the persistence under the
+  // page-local key. Quarter chips existed briefly (#1545) but were dropped:
+  // they crowded the filter row, and on a brutet rakenskapsar they were not
+  // momsdeklaration quarters, which made them misleading rather than useful.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
   const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
-  const [fyQuarter, setFyQuarter] = useState<Quarter | null>(null)
-  const periodBounds = useMemo(
-    () => resolvePeriodBounds(fyPeriod, fyQuarter),
-    [fyPeriod, fyQuarter],
-  )
+  const periodBounds = useMemo(() => resolvePeriodBounds(fyPeriod, null), [fyPeriod])
 
   const handlePeriodChange = useCallback((periodId: string | null, period?: FiscalPeriod | null) => {
     setFyPeriodId(periodId)
     setFyPeriod(period ?? null)
-    setFyQuarter(null)
     // Batch selections may reference rows the new scope hides; every batch
     // action operates on "what you see", so drop them.
-    setSelectedIds(new Set())
-    setSkvSelectedIds(new Set())
-  }, [])
-
-  const handleQuarterChange = useCallback((quarter: Quarter | null) => {
-    setFyQuarter(quarter)
     setSelectedIds(new Set())
     setSkvSelectedIds(new Set())
   }, [])
@@ -484,7 +467,6 @@ export default function TransactionsPage() {
   const clearPeriodFilter = useCallback(() => {
     setFyPeriodId(null)
     setFyPeriod(null)
-    setFyQuarter(null)
     setSelectedIds(new Set())
     setSkvSelectedIds(new Set())
     if (companyId) {
@@ -2926,49 +2908,19 @@ export default function TransactionsPage() {
           />
         </div>
         {/* Far-right context group, shared by both view modes: period scope
-            (rakenskapsar chip + quarter chips once a year is chosen) and the
-            account chooser (concept scene 10). Approved deviation from
-            convention 8's single chip: booking is period work, so the period
-            scope earns the second chip (user request 2026-08-12). */}
+            (rakenskapsar chip) and the account chooser (concept scene 10).
+            Approved deviation from convention 8's single chip: booking is
+            period work, so the period scope earns the second chip (user
+            request 2026-08-12). The Q1-Q4 chips that briefly rendered here
+            (#1545) were removed: they crowded the row into a second line,
+            and on a brutet rakenskapsar they were not momsdeklaration
+            quarters, so they misled more than they scoped. */}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <FyPicker
             value={fyPeriodId}
             onChange={handlePeriodChange}
             storageKeyPrefix={PERIOD_FILTER_STORAGE_PREFIX}
           />
-          {fyPeriod && (
-            <div
-              className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]"
-              role="group"
-              // Quarters follow the rakenskapsar, NOT the calendar: on a
-              // brutet rakenskapsar these are not momsdeklaration quarters.
-              // The label says so to keep VAT reconciliation off this chip.
-              aria-label={t('period_quarter_group')}
-              title={t('period_quarter_group')}
-            >
-              {QUARTERS.map((quarter) => {
-                const bounds = quarterBounds(fyPeriod, quarter)
-                const active = fyQuarter === quarter
-                return (
-                  <button
-                    key={quarter}
-                    type="button"
-                    disabled={!bounds}
-                    aria-pressed={active}
-                    // Clicking the active quarter widens back to the full year.
-                    onClick={() => handleQuarterChange(active ? null : quarter)}
-                    className={`rounded-md px-3 py-[5px] text-[12.5px] tabular-nums transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 ${
-                      active
-                        ? 'border border-border bg-card font-medium text-foreground'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    {`Q${quarter}`}
-                  </button>
-                )
-              })}
-            </div>
-          )}
           {sourceItems.length > 1 && (
             <ContextPicker
               value={sourceFilter}

@@ -5274,7 +5274,6 @@
     "no_search_results": "No transactions match your search.",
     "source_empty": "The selected source has no transactions. Choose All to show the other sources.",
     "period_empty": "The selected period has no transactions. Choose All fiscal years to show everything.",
-    "period_quarter_group": "Quarter of the fiscal year (not calendar quarter)",
     "period_pending_outside": "{count, plural, one {# transaction to record outside the selected period.} other {# transactions to record outside the selected period.}}",
     "period_show_all": "Show all",
     "skv_reconnect_title": "The Skatteverket connection needs to be renewed",
