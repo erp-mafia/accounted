@@ -13,6 +13,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 
 const mockDetectDup = vi.fn()
 vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
@@ -59,6 +60,7 @@ const settingsRow = { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  eventBus.clear()
   mockDetectDup.mockResolvedValue(null)
 })
 

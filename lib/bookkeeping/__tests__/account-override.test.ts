@@ -8,8 +8,11 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createMockSupabase } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 import { applyAccountOverride } from '../account-override'
-import type { MappingResult } from '@/types'
+import { buildMappingResultFromCategory } from '../category-mapping'
+import { buildTransactionEntryLines } from '../transaction-entries'
+import type { MappingResult, Transaction } from '@/types'
 
 const mapping = (over: Partial<MappingResult> = {}): MappingResult =>
   ({
@@ -36,6 +39,7 @@ const chartRow = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  eventBus.clear()
 })
 
 describe('applyAccountOverride', () => {
@@ -99,6 +103,36 @@ describe('applyAccountOverride', () => {
 
     expect(result.debit_account).toBe('2641')
     expect(result.vat_lines).toHaveLength(1)
+  })
+
+  it('keeps the entry balanced at GROSS when a class-2 override clears the VAT lines', async () => {
+    // The Swedish compliance review asked for this invariant explicitly: the
+    // business-line amount is derived from vat_lines inside
+    // buildTransactionEntryLines, so clearing them books gross, never an
+    // unbalanced net + missing VAT leg (BFL 5 kap balanced-entry requirement).
+    const { supabase, mockResult } = createMockSupabase()
+    mockResult({ data: chartRow({ account_number: '2894', account_class: 2 }) })
+
+    const tx = {
+      id: 'tx-1',
+      company_id: 'company-1',
+      date: '2026-07-10',
+      amount: -479,
+      currency: 'SEK',
+      description: 'Second hand',
+    } as Transaction
+
+    let mr = buildMappingResultFromCategory('expense_other', tx, true, 'aktiebolag', 'standard_25')
+    expect(mr.vat_lines).toHaveLength(1)
+    mr = await applyAccountOverride(supabase as never, 'company-1', '2894', tx.amount, mr)
+
+    const lines = buildTransactionEntryLines(tx, mr)
+    const totalDebit = lines.reduce((s, l) => s + (l.debit_amount ?? 0), 0)
+    const totalCredit = lines.reduce((s, l) => s + (l.credit_amount ?? 0), 0)
+    expect(totalDebit).toBe(479)
+    expect(totalCredit).toBe(479)
+    expect(lines.find((l) => l.account_number === '2894')?.debit_amount).toBe(479)
+    expect(lines.some((l) => l.account_number === '2641')).toBe(false)
   })
 
   it('refuses a degenerate entry where both sides land on the same account', async () => {

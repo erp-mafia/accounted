@@ -227,12 +227,15 @@ export function getSuggestedCategories(
  */
 function accountToCategory(account: string, amount: number): string | null {
   if (amount > 0) {
-    // Income
+    // Income. Unknown accounts return null (not a blanket 'income_other') so
+    // the caller can tell a mapped account from a custom one and attach the
+    // custom-account diagnostic; the caller's fallback still lands on
+    // income_other, so the surfaced category is unchanged.
     const incomeMap: Record<string, string> = {
       '3001': 'income_services',
       '3900': 'income_other',
     }
-    return incomeMap[account] || 'income_other'
+    return incomeMap[account] || null
   }
 
   // Expense

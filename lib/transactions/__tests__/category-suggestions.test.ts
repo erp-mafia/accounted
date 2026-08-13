@@ -121,6 +121,32 @@ describe('getSuggestedCategories: mapping rules on custom accounts', () => {
     expect(result[0].match_reason).toMatch(/konto 4020/)
   })
 
+  it('surfaces an unmapped INCOME account with the custom-account diagnostic', async () => {
+    const result = getSuggestedCategories(
+      tx({ amount: 100, merchant_name: 'Myrorna', description: 'SWISH MYRORNA' }),
+      [rule({ debit_account: '3020' })],
+      {},
+    )
+    expect(result.length).toBe(1)
+    expect(result[0]).toMatchObject({
+      category: 'income_other',
+      account: '3020',
+      source: 'mapping_rule',
+    })
+    expect(result[0].match_reason).toMatch(/konto 3020/)
+  })
+
+  it('accumulates the user_description reason with the custom-account reason', async () => {
+    const result = getSuggestedCategories(
+      tx({ merchant_name: 'Myrorna', description: 'MYRORNA BUTIK 1' }),
+      [rule({ source: 'user_description', user_description: 'Second hand-inköp till butiken' })],
+      {},
+    )
+    expect(result.length).toBe(1)
+    expect(result[0].match_reason).toMatch(/Matchad på din beskrivning: Second hand-inköp till butiken/)
+    expect(result[0].match_reason).toMatch(/konto 4020/)
+  })
+
   it('keeps the exact category for rules on accounts inside the fixed maps', async () => {
     const result = getSuggestedCategories(
       tx({ merchant_name: 'Anthropic', description: 'ANTHROPIC* CLAUDE' }),
