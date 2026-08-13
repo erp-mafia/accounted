@@ -374,6 +374,17 @@ describe('getErrorMessage: API response body vs new Error(body.error)', () => {
     expect(msg).not.toBe('Något gick fel. Försök igen.')
   })
 
+  // A body the platform rejects never reaches a route, and the 413 it answers
+  // with is plain text: the status is the only thing left to translate.
+  it('a payload-too-large rejection says so, with no body to read', () => {
+    expect(getErrorMessage(null, { statusCode: 413 })).toBe(
+      'Filen är för stor för att skickas. Försök igen med en mindre fil.',
+    )
+    expect(getErrorMessage(null, { statusCode: 413, locale: 'en' })).toBe(
+      'The file is too large to send. Try again with a smaller file.',
+    )
+  })
+
   it('new Error(body.error) stringifies the envelope to "[object Object]"', () => {
     // The defect in one line: the Error constructor calls String() on the object.
     expect(new Error(envelope.error as unknown as string).message).toBe('[object Object]')

@@ -75,6 +75,8 @@ import {
   getResponseErrorMessage,
 } from '@/lib/errors/get-error-message'
 import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
+import { exceedsHostedUploadLimit, tooLargeMessage } from '@/lib/documents/upload-size'
+import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 
 type AccountingMethod = 'accrual' | 'cash'
 
@@ -831,9 +833,31 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // for a one-off drop (user expects to see what just landed). Harmful in
   // a multi-file queue (selection yanks around as each file processes).
   const uploadFile = useCallback(async (
-    file: File,
+    original: File,
     options: { autoSelect: boolean } = { autoSelect: true },
   ) => {
+    // A phone photo is routinely larger than the request body the platform
+    // will carry, and it rejects the upload itself, before the route can say
+    // anything useful about it. Shrink what can be shrunk, and refuse the rest
+    // here, where we can name the size instead of letting the transfer fail.
+    const file = exceedsHostedUploadLimit(original.size)
+      ? await shrinkImageForUpload(original)
+      : original
+    if (exceedsHostedUploadLimit(file.size)) {
+      reportUploadFailure({
+        status: 0,
+        size: file.size,
+        type: file.type || 'unknown',
+        reason: 'over hosted body limit, refused client-side',
+      })
+      toast({
+        title: 'Uppladdning misslyckades',
+        description: tooLargeMessage(file.size),
+        variant: 'destructive',
+      })
+      return undefined
+    }
+
     // Optimistic placeholder: gives the user an immediate visual response
     // for the 3-8s while extraction runs. Removed once the real row arrives.
     const tempId = `temp-${crypto.randomUUID()}`

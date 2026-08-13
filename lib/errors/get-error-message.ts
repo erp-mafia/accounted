@@ -69,6 +69,10 @@ const HTTP_STATUS_MAP: Record<number, Bilingual> = {
   403: { sv: 'Du har inte behörighet att utföra denna åtgärd.', en: 'You do not have permission to perform this action.' },
   404: { sv: 'Resursen kunde inte hittas.', en: 'The resource could not be found.' },
   409: { sv: 'En konflikt uppstod. Ladda om sidan och försök igen.', en: 'A conflict occurred. Reload the page and try again.' },
+  // 413 is answered by the hosting platform, before any route runs, with a
+  // plain-text body: the status is the only thing a caller has to go on.
+  413: { sv: 'Filen är för stor för att skickas. Försök igen med en mindre fil.', en: 'The file is too large to send. Try again with a smaller file.' },
+  415: { sv: 'Filtypen stöds inte.', en: 'That file type is not supported.' },
   422: { sv: 'Uppgifterna kunde inte bearbetas. Kontrollera fälten och försök igen.', en: 'The data could not be processed. Check the fields and try again.' },
   429: { sv: 'För många förfrågningar. Vänta en stund och försök igen.', en: 'Too many requests. Wait a moment and try again.' },
   500: { sv: 'Ett oväntat serverfel uppstod. Försök igen senare.', en: 'An unexpected server error occurred. Please try again later.' },
