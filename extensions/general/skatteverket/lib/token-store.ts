@@ -1,5 +1,6 @@
 import crypto from 'crypto'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { type SupabaseClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { createLogger } from '@/lib/logger'
 import type { SkatteverketTokens } from '../types'
 import { SkatteverketAuthError } from './api-client'
@@ -32,7 +33,7 @@ function getServiceClient(): SupabaseClient {
   if (!url || !key) {
     throw new Error('skatteverket token-store requires NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY')
   }
-  _serviceClient = createClient(url, key, { auth: { persistSession: false } })
+  _serviceClient = createServiceRoleClient(url, key)
   return _serviceClient
 }
 

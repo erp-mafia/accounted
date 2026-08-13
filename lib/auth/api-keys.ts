@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 
 const KEY_PREFIX = 'gnubok_sk_'
 const REFRESH_TOKEN_PREFIX = 'gnubok_rt_'
@@ -363,7 +363,7 @@ export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
  * Used for API key validation (MCP, webhooks) where there's no browser session.
  */
 export function createServiceClientNoCookies() {
-  return createClient(
+  return createServiceRoleClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )

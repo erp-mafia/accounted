@@ -34,7 +34,8 @@
  *   })
  */
 
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { type SupabaseClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import {
@@ -149,7 +150,7 @@ function createAnonClient(): SupabaseClient {
       '[api/v1] NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY must be set to serve public-scope v1 endpoints',
     )
   }
-  return createClient(url, key)
+  return createServiceRoleClient(url, key)
 }
 
 /**

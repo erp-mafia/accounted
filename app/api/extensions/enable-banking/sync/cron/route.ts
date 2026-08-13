@@ -1,4 +1,5 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { type SupabaseClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { syncAccountTransactions } from '@/extensions/general/enable-banking/lib/sync'
 import {
@@ -52,7 +53,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   // Clean up stale pending connections (older than 1 hour)
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()

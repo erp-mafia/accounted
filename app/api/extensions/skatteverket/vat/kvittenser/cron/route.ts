@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { verifyCronSecret } from '@/lib/auth/cron'
@@ -48,7 +48,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Missing Supabase configuration' }, { status: 500 })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   // AGI submission state uses the distinct `agi_submission_` prefix, so the
   // `submission_` filter below cannot match AGI rows.
