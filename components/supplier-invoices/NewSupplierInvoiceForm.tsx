@@ -1837,7 +1837,6 @@ export default function NewSupplierInvoiceForm({
                   <Paperclip className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                   <div>
                     <Label>{t('document_label')}</Label>
-                    <p className="text-xs text-muted-foreground">{t('document_help')}</p>
                   </div>
                 </div>
                 <DocumentUploadZone
@@ -1862,7 +1861,6 @@ export default function NewSupplierInvoiceForm({
                     inputClassName="h-9"
                   />
                 </div>
-                <p className="text-xs text-muted-foreground">{t('dimensions_default_hint')}</p>
               </div>
             )}
 

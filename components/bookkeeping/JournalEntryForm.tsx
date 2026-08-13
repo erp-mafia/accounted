@@ -204,6 +204,10 @@ export default function JournalEntryForm({
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const saveAsDraftRef = useRef(false)
   const [showNoDocWarning, setShowNoDocWarning] = useState(false)
+  // The what's-missing lines render only after a submit attempt (error-on-
+  // submit), never as standing chrome on an empty form. The buttons stay
+  // enabled so the attempt can happen; the handlers gate on validity.
+  const [showValidationHints, setShowValidationHints] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [accounts, setAccounts] = useState<BASAccount[]>([])
   // Full BAS catalogue (static reference data, fetched once per session). Lets
@@ -809,7 +813,11 @@ export default function JournalEntryForm({
   }
 
   const handleReview = () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) return
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+      setShowValidationHints(true)
+      return
+    }
+    setShowValidationHints(false)
     const hasDocuments = uploadedFiles.some((f) => f.status === 'uploaded')
     if (!embedded && !bare && !hasDocuments) {
       setShowNoDocWarning(true)
@@ -818,17 +826,24 @@ export default function JournalEntryForm({
     setShowReview(true)
   }
 
-  // Whether an Enter should open the review: mirrors the review button's
-  // enable gate exactly, so Enter never submits something the button wouldn't.
+  // Nothing in flight and the user may write: the buttons' enable gate.
+  // Validity is deliberately NOT part of it; an attempt on an incomplete
+  // form is what surfaces the validation hints.
+  const processReady = () =>
+    !isUploading &&
+    canWrite &&
+    !isSubmitting &&
+    !isSavingDraft
+
+  // Whether the entry is actually submittable. The Enter-to-advance handlers
+  // below key off this: navigation fires while the entry is incomplete, and
+  // once it balances Enter falls through to the review instead.
   const canSubmitReview = () =>
     isBalanced &&
     !!description &&
     !!selectedPeriod &&
     !periodMismatch &&
-    !isUploading &&
-    canWrite &&
-    !isSubmitting &&
-    !isSavingDraft
+    processReady()
 
   // Enter anywhere in the form = "Granska & skapa": opens the review exactly as
   // the button does, from any field. Navigation is Tab's job. Two Enter
@@ -840,7 +855,7 @@ export default function JournalEntryForm({
     if (e.defaultPrevented || showReview) return
     if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
     e.preventDefault()
-    if (canSubmitReview()) handleReview()
+    if (processReady()) handleReview()
   }
 
   // Enter-to-advance inside the konteringsrader: konto → debet → kredit →
@@ -1132,7 +1147,11 @@ export default function JournalEntryForm({
   }
 
   const handleSaveDraft = async () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) return
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+      setShowValidationHints(true)
+      return
+    }
+    setShowValidationHints(false)
     setIsSavingDraft(true)
     saveAsDraftRef.current = true
     try {
@@ -1198,7 +1217,11 @@ export default function JournalEntryForm({
   // editEntryId URL) and keep it a draft. No field reset: the host dialog
   // closes on success via onUpdated.
   const handleSaveEdit = async () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) return
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+      setShowValidationHints(true)
+      return
+    }
+    setShowValidationHints(false)
     setIsSavingDraft(true)
     try {
       await runSubmit()
@@ -1483,7 +1506,6 @@ export default function JournalEntryForm({
               onChange={setHeaderDimension}
               inputClassName="h-8"
             />
-            <p className="text-xs text-muted-foreground">{t('dimensions_apply_all_hint')}</p>
           </div>
         )}
 
@@ -1880,7 +1902,7 @@ export default function JournalEntryForm({
           {editEntryId ? (
             <Button
               onClick={handleSaveEdit}
-              disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
+              disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
               title={!canWrite ? t('read_only_tooltip') : undefined}
             >
               {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -1907,7 +1929,7 @@ export default function JournalEntryForm({
                 <Button
                   variant="outline"
                   onClick={handleSaveDraft}
-                  disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
+                  disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
                   title={!canWrite ? t('read_only_tooltip') : t('save_draft_tooltip')}
                 >
                   {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -1916,7 +1938,7 @@ export default function JournalEntryForm({
               )}
               <Button
                 onClick={handleReview}
-                disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
+                disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
                 title={!canWrite ? t('read_only_tooltip') : undefined}
               >
                 {!canWrite && <Lock className="mr-2 h-4 w-4" />}
@@ -1925,8 +1947,8 @@ export default function JournalEntryForm({
             </>
           )}
         </div>
-        {(!description || !selectedPeriod || isUploading || periodMismatch || incompleteLineCount > 0 || (!isBalanced && submittableLines.length < 2)) && (
-          <div className="text-xs text-muted-foreground space-y-0.5 text-right">
+        {showValidationHints && (!description || !selectedPeriod || isUploading || periodMismatch || incompleteLineCount > 0 || (!isBalanced && submittableLines.length < 2)) && (
+          <div className="text-xs text-destructive space-y-0.5 text-right">
             {!description && <p>{t('validation_description')}</p>}
             {!selectedPeriod && <p>{t('validation_period')}</p>}
             {periodMismatch === 'no_period' && <p>{t('validation_no_matching_period')}</p>}

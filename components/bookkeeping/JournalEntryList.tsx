@@ -1064,7 +1064,6 @@ export default function JournalEntryList() {
                     <SelectItem value="description_desc">{t('sort_description_desc')}</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{t('sort_stack_hint')}</p>
               </div>
 
               {/* Verifikationsserie */}

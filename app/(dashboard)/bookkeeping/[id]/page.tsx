@@ -945,7 +945,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             <div className="mb-4 space-y-2">
               <div>
                 <h4 className="text-sm font-medium">{t('references_title')}</h4>
-                <p className="text-xs text-muted-foreground">{t('references_subtitle')}</p>
               </div>
               <ul className="space-y-1">
                 {references.map((ref) => (

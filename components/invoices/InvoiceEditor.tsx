@@ -1571,7 +1571,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             <Card>
               <CardHeader>
                 <CardTitle>{t('items_card_title')}</CardTitle>
-              <CardDescription>{t('items_card_description')}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
@@ -2392,9 +2391,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           onChange={setDefaultDimension}
                           inputClassName="h-9"
                         />
-                        <p className="text-xs text-muted-foreground">
-                          {t('dimensions_default_hint')}
-                        </p>
                       </div>
                     </>
                   )}
