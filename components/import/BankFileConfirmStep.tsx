@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -19,7 +20,7 @@ import { formatCurrency } from '@/lib/utils'
 import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
-import type { BankFileParseResult } from '@/lib/import/bank-file/types'
+import type { BankFileParseResult, BankFileDuplicateInfo } from '@/lib/import/bank-file/types'
 
 interface BankAccount {
   account_number: string
@@ -28,6 +29,7 @@ interface BankAccount {
 
 interface BankFileConfirmStepProps {
   parseResult: BankFileParseResult
+  duplicateInfo?: BankFileDuplicateInfo | null
   onExecute: (options: { skip_duplicates: boolean; auto_categorize: boolean; settlement_account?: string }) => void
   onBack: () => void
   isLoading: boolean
@@ -35,16 +37,22 @@ interface BankFileConfirmStepProps {
 
 export default function BankFileConfirmStep({
   parseResult,
+  duplicateInfo,
   onExecute,
   onBack,
   isLoading,
 }: BankFileConfirmStepProps) {
+  const t = useTranslations('transactions')
   const { transactions, stats, date_from, date_to, issues } = parseResult
-  const refsCount = transactions.filter((t) => t.reference).length
+  const refsCount = transactions.filter((tx) => tx.reference).length
   const warnings = issues.filter((i) => i.severity === 'warning')
   // Same per-currency grouping as the preview step: parser-level totals sum
   // across currencies, which misleads on Wise/camt.053 multi-currency files.
   const currencyTotals = summarizeByCurrency(transactions)
+  // Advisory: clamp so a stale preview can never produce a negative CTA
+  // count. Execute stays authoritative; the copy says rows are skipped
+  // automatically rather than promising an exact final number.
+  const duplicateCount = Math.min(Math.max(duplicateInfo?.duplicate_count ?? 0, 0), stats.parsed_rows)
 
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
   const [selectedAccount, setSelectedAccount] = useState('1930')
@@ -188,6 +196,23 @@ export default function BankFileConfirmStep({
         </CardContent>
       </Card>
 
+      {/* Duplicate rows: repeated here because the generic_csv path skips the
+          preview step where the same card is shown. Advisory: ingest skips
+          them automatically at execute. */}
+      {duplicateCount > 0 && (
+        <Card>
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm flex items-center gap-2 text-warning">
+              <AlertTriangle className="h-4 w-4" />
+              {t('import_duplicate_rows_title', { count: duplicateCount })}
+            </CardTitle>
+            <CardDescription>
+              {t('import_duplicate_rows_body')}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
       {/* Skipped rows: surfaced here because the manual-mapping path skips the
           preview step where these warnings would otherwise be shown. */}
       {warnings.length > 0 && (
@@ -241,7 +266,7 @@ export default function BankFileConfirmStep({
           ) : (
             <>
               <Play className="mr-2 h-4 w-4" />
-              Importera {stats.parsed_rows} transaktioner
+              Importera {stats.parsed_rows - duplicateCount} transaktioner
             </>
           )}
         </Button>

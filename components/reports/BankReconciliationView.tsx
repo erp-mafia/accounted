@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -14,11 +15,13 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { AccountNumber } from '@/components/ui/account-number'
-import { AlertCircle, ChevronDown, ChevronRight, Landmark, Link2, Unlink, Play, Eye, EyeOff, PiggyBank, MoreHorizontal } from 'lucide-react'
+import { AlertCircle, ArrowRightLeft, ChevronDown, ChevronRight, Landmark, Link2, Unlink, Play, Eye, EyeOff, PiggyBank, MoreHorizontal } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { CashAccountSelector } from '@/components/common/CashAccountSelector'
 import { MatchVerifikationPicker, type UnlinkedGLLine } from '@/components/reconciliation/MatchVerifikationPicker'
+import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
+import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -173,9 +176,17 @@ interface BankReconciliationViewProps {
   periodId: string
   /** period_start / period_end of that period; seeds the date window (#751). */
   periodBounds: { start: string; end: string } | null
+  /**
+   * Deep-link bridge (?autorun=1, e.g. from the transactions inbox banner):
+   * runs the dry-run preview automatically ONCE, only after the first load has
+   * recorded appliedDates and while the typed dates still match it, so the
+   * preview can never cover a different window than the on-screen lists.
+   */
+  autoRun?: boolean
 }
 
-export function BankReconciliationView({ periodId, periodBounds }: BankReconciliationViewProps) {
+export function BankReconciliationView({ periodId, periodBounds, autoRun }: BankReconciliationViewProps) {
+  const t = useTranslations('reports')
   const [status, setStatus] = useState<ReconciliationStatus | null>(null)
   const [unmatchedTx, setUnmatchedTx] = useState<UnmatchedTransaction[]>([])
   const [glLines, setGlLines] = useState<UnlinkedGLLine[]>([])
@@ -232,6 +243,15 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
   // Per-verifikat loading for the "Märk som ingående balans" re-tag action.
   const [markLoading, setMarkLoading] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE) fired
+  // for a quick-book: opened as the shared match/ignore/book-anyway dialog
+  // instead of a dead-end toast; this page's whole purpose is matching.
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    transactionId: string
+    retry: () => Promise<void>
+    candidate: BookedDuplicateCandidate
+  } | null>(null)
+  const [duplicateProcessing, setDuplicateProcessing] = useState(false)
 
   // Opt-in: also surface vouchers already matched to a bank transaction as
   // candidates, so a second/third transaction can be attached to the same
@@ -286,6 +306,24 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
   // the preview covered the window they typed.
   const datesDirty =
     appliedDates !== null && (appliedDates.from !== dateFrom || appliedDates.to !== dateTo)
+
+  // Promote the preview flow while there is unmatched work and no preview has
+  // run yet: an attention line above the toolbar plus the Förhandsgranska
+  // button in the default (filled) variant. Suppressed while datesDirty: that
+  // state owns the page's single attention line and disables the button anyway.
+  const previewPromoted = unmatchedTx.length > 0 && dryRunResults === null && !datesDirty
+
+  // Every ticked preview pair is a strong match (>= the Stark badge floor):
+  // the apply button relabels to "Matcha X starka träffar" and the apply
+  // request carries confidence_threshold so the server re-run enforces the
+  // same floor. Manually ticked weaker pairs drop back to the plain label and
+  // an unthresholded apply.
+  const allSelectedStrong =
+    dryRunResults !== null &&
+    selectedPairs.size > 0 &&
+    dryRunResults
+      .filter((m) => selectedPairs.has(matchKey(m.transaction_id, m.journal_entry_id)))
+      .every((m) => m.confidence >= PRESELECT_CONFIDENCE)
 
   useEffect(() => {
     let cancelled = false
@@ -501,6 +539,23 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
     }
   }
 
+  // One-shot autorun bridge (?autorun=1): trigger the same dry-run the
+  // Förhandsgranska button runs, exactly once, and only once the first load
+  // has recorded appliedDates with the typed dates still matching it
+  // (datesDirty false). Firing earlier could preview a different window than
+  // the on-screen lists. Consumed even when there is nothing to preview, so a
+  // later data refresh never surprises the user with an unprompted run.
+  const autoRunConsumedRef = useRef(false)
+  useEffect(() => {
+    if (!autoRun || autoRunConsumedRef.current) return
+    if (loading || !appliedDates || datesDirty) return
+    autoRunConsumedRef.current = true
+    if (unmatchedTx.length > 0) void handleDryRun()
+    // handleDryRun is recreated every render; the consumed-ref guarantees the
+    // single run, so depending on it would only add noise.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, loading, appliedDates, datesDirty, unmatchedTx.length])
+
   const toggleMatchSelection = (key: string) => {
     setSelectedPairs((prev) => {
       const next = new Set(prev)
@@ -543,6 +598,11 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
               transaction_id: m.transaction_id,
               journal_entry_id: m.journal_entry_id,
             })),
+            // Strong-only apply: when every ticked pair is >= the Stark floor,
+            // ask the server to enforce that floor on its fresh re-run too. A
+            // mixed selection omits it so manually ticked weaker pairs still
+            // apply (the intersection guard still protects them).
+            ...(allSelectedStrong ? { confidence_threshold: PRESELECT_CONFIDENCE } : {}),
           }),
         })
         const result = await res.json()
@@ -748,7 +808,13 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
    * leg to the transaction's actual settlement account, so this is correct on
    * any cash account.
    */
-  const handleQuickBook = async (transactionId: string, templateId: string) => {
+  const handleQuickBook = async (
+    transactionId: string,
+    templateId: string,
+    // Set after the user confirmed the duplicate warning: force is bound to
+    // the reviewed candidate's voucher and re-detected server-side.
+    forceOpts?: { expectedDuplicateJournalEntryId: string },
+  ) => {
     setActionLoading(transactionId)
     try {
       const res = await fetch(`/api/transactions/${transactionId}/categorize`, {
@@ -758,10 +824,29 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
           is_business: true,
           template_id: templateId,
           confirm_no_match: true,
+          ...(forceOpts
+            ? { force: true, expected_duplicate_journal_entry_id: forceOpts.expectedDuplicateJournalEntryId }
+            : {}),
         }),
       })
       const result = await res.json()
       if (!res.ok || result.error) {
+        const candidate = result?.error?.details?.candidate as BookedDuplicateCandidate | undefined
+        if (result?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' && candidate) {
+          // The affärshändelse already looks booked. On the reconciliation
+          // page the right resolutions (match the voucher, ignore a duplicate
+          // import, or book anyway) all live in the shared dialog: never
+          // dead-end in a toast with no way forward.
+          setDuplicateWarning({
+            transactionId,
+            retry: () =>
+              handleQuickBook(transactionId, templateId, {
+                expectedDuplicateJournalEntryId: candidate.journal_entry_id,
+              }),
+            candidate,
+          })
+          return
+        }
         toast({
           variant: 'destructive',
           title: 'Kunde inte bokföra transaktionen',
@@ -781,6 +866,47 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       await fetchAll({ silent: true })
     } catch {
       toast({ variant: 'destructive', title: 'Kunde inte bokföra transaktionen' })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  /**
+   * Move a transaction to another of the company's cash accounts (PATCH
+   * /api/transactions/[id]/cash-account). The row then leaves THIS account's
+   * unmatched list and surfaces on the target account's reconciliation, which
+   * is the fix for rows stuck under the wrong (or the primary) account:
+   * cross-account matching is deliberately blocked, so the row must move to
+   * where its verifikat lives. Server-side gating rejects booked/matched rows.
+   */
+  const handleMoveToAccount = async (tx: UnmatchedTransaction, target: CashAccount) => {
+    setActionLoading(tx.id)
+    try {
+      const res = await fetch(`/api/transactions/${tx.id}/cash-account`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_number: target.ledger_account }),
+      })
+      const result = await res.json()
+      if (!res.ok || result.error) {
+        toast({
+          variant: 'destructive',
+          title: 'Kunde inte flytta transaktionen',
+          description:
+            getUserErrorMessage(result.error) ||
+            (typeof result.error === 'string' ? result.error : undefined),
+        })
+        return
+      }
+      toast({
+        variant: 'success',
+        title: `Transaktionen flyttades till ${target.name || `Bankkonto ${target.currency}`} (${target.ledger_account})`,
+      })
+      // Both accounts' totals change (the row leaves this report and joins the
+      // target's), so refresh the whole view, status card included.
+      await fetchAll({ silent: true })
+    } catch {
+      toast({ variant: 'destructive', title: 'Kunde inte flytta transaktionen' })
     } finally {
       setActionLoading(null)
     }
@@ -965,6 +1091,11 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
 
       {/* Toolbar: flat on the panel, no box (UI-migration language) */}
       <div className="space-y-3">
+        {/* Promote the bulk flow before the first preview: many users never
+            found Förhandsgranska and matched a whole migration row by row. */}
+        {previewPromoted && !runLoading && (
+          <AttnLine>{t('recon_unmatched_attn', { count: unmatchedTx.length })}</AttnLine>
+        )}
         <div className="flex flex-wrap items-end gap-4">
           <CashAccountSelector
             value={accountNumber}
@@ -992,7 +1123,11 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
             Filtrera
           </Button>
           <div className="flex-1" />
-          <Button onClick={handleDryRun} disabled={runLoading || datesDirty} variant="outline">
+          <Button
+            onClick={handleDryRun}
+            disabled={runLoading || datesDirty}
+            variant={previewPromoted ? 'default' : 'outline'}
+          >
             <Eye className="h-4 w-4 mr-2" />
             {runLoading ? 'Analyserar...' : 'Förhandsgranska'}
           </Button>
@@ -1001,7 +1136,9 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
               <Play className="h-4 w-4 mr-2" />
               {applyLoading
                 ? 'Tillämpar...'
-                : `Tillämpa ${selectedPairs.size} ${selectedPairs.size === 1 ? 'matchning' : 'matchningar'}`}
+                : allSelectedStrong
+                  ? t('recon_apply_strong', { count: selectedPairs.size })
+                  : `Tillämpa ${selectedPairs.size} ${selectedPairs.size === 1 ? 'matchning' : 'matchningar'}`}
             </Button>
           )}
         </div>
@@ -1121,6 +1258,15 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
               const quickBooks = QUICK_BOOK_TEMPLATES.filter((t) =>
                 isPositive ? t.direction === 'income' : t.direction === 'expense',
               )
+              // Other enabled cash accounts this row could move to. Same
+              // currency only: the server hard-rejects a cross-currency move
+              // (the row would vanish from every report's currency scope).
+              const moveTargets = cashAccounts.filter(
+                (a) =>
+                  a.enabled &&
+                  a.ledger_account !== accountNumber &&
+                  a.currency.toUpperCase() === tx.currency.toUpperCase(),
+              )
               return (
                 <div
                   key={tx.id}
@@ -1192,6 +1338,31 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                                   </DropdownMenuItem>
                                 )
                               })}
+                              <DropdownMenuSeparator />
+                            </>
+                          )}
+                          {moveTargets.length > 0 && (
+                            <>
+                              <DropdownMenuLabel className="text-[11px] font-normal uppercase tracking-wider text-muted-foreground">
+                                Flytta till annat konto
+                              </DropdownMenuLabel>
+                              {moveTargets.map((account) => (
+                                <DropdownMenuItem
+                                  key={account.id}
+                                  onClick={() => handleMoveToAccount(tx, account)}
+                                  disabled={actionLoading === tx.id}
+                                >
+                                  <ArrowRightLeft className="h-4 w-4" />
+                                  <div className="flex flex-col">
+                                    <span>
+                                      Flytta till {account.name || `Bankkonto ${account.currency}`}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground tabular-nums">
+                                      {account.ledger_account}
+                                    </span>
+                                  </div>
+                                </DropdownMenuItem>
+                              ))}
                               <DropdownMenuSeparator />
                             </>
                           )}
@@ -1464,6 +1635,43 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
           icon={Landmark}
           title="Inget att stämma av"
           description="Det finns inga banktransaktioner eller verifikationer i den valda perioden. Importera eller synka banktransaktioner så visas de här."
+        />
+      )}
+
+      {duplicateWarning && (
+        <DuplicateBookingDialog
+          candidate={duplicateWarning.candidate}
+          processing={duplicateProcessing}
+          onCancel={() => setDuplicateWarning(null)}
+          matchTransaction={{
+            id: duplicateWarning.transactionId,
+            // The view is scoped to one ledger account; resolve its cash
+            // account so the match links on the account being reconciled.
+            cash_account_id: cashAccounts.find((a) => a.ledger_account === accountNumber)?.id ?? null,
+            currency:
+              unmatchedTx.find((t) => t.id === duplicateWarning.transactionId)?.currency ??
+              accountCurrency,
+          }}
+          onMatched={async () => {
+            setDuplicateWarning(null)
+            toast({ variant: 'success', title: 'Transaktionen matchades mot verifikatet' })
+            await fetchAll({ silent: true })
+          }}
+          onIgnored={async () => {
+            setDuplicateWarning(null)
+            toast({ variant: 'success', title: 'Transaktionen ignorerad' })
+            await fetchAll({ silent: true })
+          }}
+          onBookAnyway={async () => {
+            const retry = duplicateWarning?.retry
+            setDuplicateProcessing(true)
+            try {
+              setDuplicateWarning(null)
+              if (retry) await retry()
+            } finally {
+              setDuplicateProcessing(false)
+            }
+          }}
         />
       )}
 

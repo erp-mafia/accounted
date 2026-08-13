@@ -720,10 +720,13 @@ export default function SupplierInvoiceDetailPage() {
           <CardTitle className="text-base">{t('rows_title')}</CardTitle>
         </CardHeader>
         <CardContent>
-          {/* Desktop table */}
+          {/* Desktop table. The cells carry no horizontal padding of their
+              own, so every column after the first gets a pl-4 gutter: without
+              it a right-aligned column runs flush into the next left-aligned
+              one ("8 985 kr5010", "ANTALENHET"). */}
           <div className="hidden sm:block">
             <table className="w-full text-sm">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground [&_th:not(:first-child)]:pl-4">
                 <tr className="border-b text-left">
                   <th className="pb-2">{t('col_description')}</th>
                   <th className="pb-2 w-16 text-right">{t('col_quantity')}</th>
@@ -735,7 +738,7 @@ export default function SupplierInvoiceDetailPage() {
                   <th className="pb-2 w-24 text-right">{t('col_vat')}</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="[&_td:not(:first-child)]:pl-4">
                 {items.map((item) => (
                   <tr key={item.id} className="border-b last:border-0">
                     <td className="py-2">
@@ -803,10 +806,11 @@ export default function SupplierInvoiceDetailPage() {
             <CardTitle className="text-base">{t('payment_history_title')}</CardTitle>
           </CardHeader>
           <CardContent>
-            {/* Desktop table */}
+            {/* Desktop table: same non-first-column gutter as the line-item
+                table above ("11 231 krb9da9d7c" otherwise). */}
             <div className="hidden sm:block">
               <table className="w-full text-sm">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground [&_th:not(:first-child)]:pl-4">
                   <tr className="border-b text-left">
                     <th className="pb-2">{t('col_date')}</th>
                     <th className="pb-2 text-right">{t('col_amount_short')}</th>
@@ -814,7 +818,7 @@ export default function SupplierInvoiceDetailPage() {
                     <th className="pb-2">{t('col_note')}</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="[&_td:not(:first-child)]:pl-4">
                   {payments.map((p) => (
                     <tr key={p.id} className="border-b last:border-0">
                       <td className="py-2 tabular-nums">{formatDate(p.payment_date)}</td>
