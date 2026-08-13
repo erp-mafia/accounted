@@ -1422,14 +1422,27 @@ export const enableBankingExtension: Extension = {
             const totalImported = results.reduce((sum, r) => sum + r.imported, 0)
             const totalDuplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
 
+            // Min/max booking date across all synced accounts
+            const minDates = results.map(r => r.returnedMinBookingDate).filter((d): d is string => !!d)
+            const maxDates = results.map(r => r.returnedMaxBookingDate).filter((d): d is string => !!d)
+            const returnedMin = minDates.length > 0 ? minDates.reduce((a, b) => (a < b ? a : b)) : null
+            const returnedMax = maxDates.length > 0 ? maxDates.reduce((a, b) => (a > b ? a : b)) : null
+
             // Post-backfill reconciliation sweep, mirroring the manual /sync
             // route: link just-imported rows to the verifikat that already
             // describe them so a re-released period does not resurface as
             // hundreds of "ohanterade" transactions. Unlike the /sync and cron
             // sweeps this runs once per enabled ledger account with a resolved
             // cash-account scope: the pooled unscoped form can cross-link
-            // accounts (#1290/#1298). A scope resolution failure skips that
-            // account's sweep instead of widening it.
+            // accounts (#1290/#1298). Both a thrown scope resolution AND an
+            // unresolved cash-account row (found: false) skip that account's
+            // sweep instead of widening to the pooled form.
+            //
+            // The window opens at the OLDEST booking date the bank actually
+            // returned when that is older than the requested fromDate: some
+            // ASPSPs over-return history, and rows outside the requested window
+            // would otherwise be ingested but never swept.
+            const sweepDateFrom = returnedMin && returnedMin < fromDate ? returnedMin : fromDate
             let totalAutoMatched = 0
             if (sieOverlap && totalImported > 0 && !isViewer) {
               const ledgerAccounts = Array.from(
@@ -1438,8 +1451,15 @@ export const enableBankingExtension: Extension = {
               for (const ledgerAccount of ledgerAccounts) {
                 try {
                   const scope = await resolveCashAccountScope(supabase, companyId, ledgerAccount)
+                  if (!scope.found) {
+                    log.warn('[enable-banking] No cash_accounts row for ledger account; skipping its reconciliation sweep', {
+                      connectionId: connection.id,
+                      ledgerAccount,
+                    })
+                    continue
+                  }
                   const reconResult = await runReconciliation(supabase, companyId, user.id, {
-                    dateFrom: fromDate,
+                    dateFrom: sweepDateFrom,
                     dateTo: toDate,
                     accountNumber: scope.accountNumber,
                     currency: scope.currency,
@@ -1464,12 +1484,6 @@ export const enableBankingExtension: Extension = {
                 }
               }
             }
-
-            // Min/max booking date across all synced accounts
-            const minDates = results.map(r => r.returnedMinBookingDate).filter((d): d is string => !!d)
-            const maxDates = results.map(r => r.returnedMaxBookingDate).filter((d): d is string => !!d)
-            const returnedMin = minDates.length > 0 ? minDates.reduce((a, b) => (a < b ? a : b)) : null
-            const returnedMax = maxDates.length > 0 ? maxDates.reduce((a, b) => (a > b ? a : b)) : null
 
             const completedAt = new Date().toISOString()
             // Don't re-write accounts_data here: the first update already wrote it.

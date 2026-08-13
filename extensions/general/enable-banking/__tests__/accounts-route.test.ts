@@ -646,7 +646,10 @@ describe('PATCH /accounts (enable-banking)', () => {
           cashAccountId: 'ca-1930',
           includeUnassigned: false,
           confidenceThreshold: 0.9,
-          dateFrom: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+          // The bank over-returned history: the sweep window opens at the
+          // oldest returned booking date, not the requested 90-day fromDate,
+          // so over-returned rows are swept too.
+          dateFrom: '2026-01-05',
           dateTo: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
         })
       )
@@ -738,6 +741,49 @@ describe('PATCH /accounts (enable-banking)', () => {
         { strategy: 'longest', skipAutoCategorization: true, rawInsertOnly: true }
       )
       expect(mockRunReconciliation).not.toHaveBeenCalled()
+    })
+
+    it('skips the sweep for an account whose cash_accounts row did not resolve instead of widening to the pooled form', async () => {
+      mockedSync.mockResolvedValue({
+        imported: 6,
+        duplicates: 0,
+        errors: 0,
+        returnedMinBookingDate: '2026-05-01',
+        returnedMaxBookingDate: '2026-05-13',
+      })
+      // found: false = no cash_accounts row (e.g. the mirror upsert failed
+      // earlier in the request). Running anyway would sweep currency-only
+      // across every same-currency account (#1290 write shape).
+      mockResolveCashAccountScope.mockResolvedValue({
+        accountNumber: '1930',
+        currency: 'SEK',
+        cashAccountId: undefined,
+        includeUnassigned: true,
+        found: false,
+      })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' }] as StoredAccount[],
+        },
+        sieImportRow: { id: 'sie-1' },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 90 }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(mockResolveCashAccountScope).toHaveBeenCalled()
+      expect(mockRunReconciliation).not.toHaveBeenCalled()
+      expect(body.initial_sync.auto_matched).toBe(0)
     })
 
     it('keeps the backfill successful when the reconciliation sweep throws (non-critical)', async () => {

@@ -57,9 +57,9 @@ describe('resolveGapFillStart', () => {
   })
 
   it('rolls over month and year boundaries', () => {
-    const today = new Date('2030-01-01T12:00:00Z')
-    expect(resolveGapFillStart('2026-01-03', today)?.suggestedStartDate).toBe('2025-12-27')
-    expect(resolveGapFillStart('2026-03-04', today)?.suggestedStartDate).toBe('2026-02-25')
+    // Todays within the 365-day floor of each case so only the 7-day overlap acts.
+    expect(resolveGapFillStart('2026-01-03', new Date('2026-01-15T12:00:00Z'))?.suggestedStartDate).toBe('2025-12-27')
+    expect(resolveGapFillStart('2026-03-04', new Date('2026-03-10T12:00:00Z'))?.suggestedStartDate).toBe('2026-02-25')
   })
 
   it('clamps to today when bank data claims a future date (backend rejects non-past dates)', () => {
@@ -67,6 +67,16 @@ describe('resolveGapFillStart', () => {
     expect(resolveGapFillStart('2026-09-20', today)).toEqual({
       latestImportedDate: '2026-09-20',
       suggestedStartDate: '2026-08-13',
+    })
+  })
+
+  it('clamps a stale renewal to the backend 365-day lookback floor so the shown date matches the actual backfill', () => {
+    const today = new Date('2026-08-13T12:00:00Z')
+    // Newest import 2025-01-10; minus 7d = 2025-01-03, older than the 365-day
+    // floor (2025-08-13), which the backend would silently clamp to anyway.
+    expect(resolveGapFillStart('2025-01-10', today)).toEqual({
+      latestImportedDate: '2025-01-10',
+      suggestedStartDate: '2025-08-13',
     })
   })
 

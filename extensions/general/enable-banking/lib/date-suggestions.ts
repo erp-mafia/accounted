@@ -80,7 +80,15 @@ export function resolveGapFillStart(
   const d = new Date(latestImportedDate + 'T00:00:00Z')
   if (!Number.isFinite(d.getTime())) return null
   d.setUTCDate(d.getUTCDate() - GAP_FILL_OVERLAP_DAYS)
-  const start = d.toISOString().split('T')[0]
+  let start = d.toISOString().split('T')[0]
+  // The backend clamps every lookback to 365 days. A renewal staler than that
+  // must show the date the backfill will actually start from, not promise a
+  // gap it cannot fill (the >90-day helper already points at SIE/file import
+  // for older history).
+  const floor = new Date(today.getTime())
+  floor.setUTCDate(floor.getUTCDate() - 365)
+  const floorUtc = floor.toISOString().split('T')[0]
+  if (start < floorUtc) start = floorUtc
   // The backend PATCH handler rejects initial_lookback_from_date unless it is
   // strictly in the past; today (UTC) is the newest value it accepts. A
   // latestImportedDate in the future can only come from bad bank data: clamp

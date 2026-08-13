@@ -105,10 +105,12 @@ export function AccountPickerDialog({
   const [lookbackMode, setLookbackMode] = useState<LookbackMode>('fiscal-year')
   const [customSubMode, setCustomSubMode] = useState<CustomSubMode>('date')
   const [customDate, setCustomDate] = useState<string>('')
-  // Newest transaction date this CONNECTION has already imported (null on a
-  // first connect). Presence means this is a renewal, where the default must
-  // be "fill the gap", not a fresh long lookback over bookkept periods.
-  const [latestImportedDate, setLatestImportedDate] = useState<string | null>(null)
+  // Newest transaction date this CONNECTION has already imported (date null on
+  // a first connect). A date means this is a renewal, where the default must be
+  // "fill the gap", not a fresh long lookback over bookkept periods. Keyed by
+  // connectionId so a stale value can never render into another connection's
+  // dialog between open and probe: the gapFill memo ignores mismatched keys.
+  const [latestImported, setLatestImported] = useState<{ connectionId: string; date: string | null } | null>(null)
   // Ref, not state: only the async default below reads it, and putting it in
   // the effect's deps would re-fire the query on the first radio click.
   const lookbackTouched = useRef(false)
@@ -134,7 +136,6 @@ export function AccountPickerDialog({
       setLookbackMode('fiscal-year')
       setCustomSubMode('date')
       setCustomDate('')
-      setLatestImportedDate(null)
       lookbackTouched.current = false
 
       // Pre-populate ledger picks from existing StoredAccount values, falling
@@ -231,9 +232,13 @@ export function AccountPickerDialog({
   // flood), so a renewal defaults to gap-fill instead, unless the user has
   // already picked a mode by the time the query lands.
   useEffect(() => {
-    // No stale-value reset needed here: the open-reset effect above clears
-    // latestImportedDate on every open.
-    if (!open || !isInitialSelection || !company?.id) return
+    // `accounts` is deliberately a dep even though only its length is read: the
+    // reset effect above re-runs on every accounts identity change (the panel's
+    // visibility refetch produces a fresh array mid-open, e.g. returning from a
+    // BankID app switch) and resets the lookback default. Re-probing on the
+    // same trigger re-establishes the gap-fill default; without it the reset
+    // would silently strand a renewal back on the fiscal-year default.
+    if (!open || !isInitialSelection || !company?.id || accounts.length === 0) return
     let cancelled = false
     ;(async () => {
       const { data } = await supabase
@@ -246,11 +251,11 @@ export function AccountPickerDialog({
         .maybeSingle()
       if (cancelled) return
       const date = (data as { date?: string } | null)?.date || null
-      setLatestImportedDate(date)
+      setLatestImported({ connectionId, date })
       if (date && !lookbackTouched.current) setLookbackMode('gap-fill')
     })()
     return () => { cancelled = true }
-  }, [open, isInitialSelection, company?.id, connectionId, supabase])
+  }, [open, isInitialSelection, company?.id, connectionId, supabase, accounts])
 
   // Load 19xx accounts from the chart for the per-account ledger combobox.
   // Class 19 = bank/cash on the BAS chart.
@@ -458,8 +463,10 @@ export function AccountPickerDialog({
   )
 
   const gapFill = useMemo(
-    () => resolveGapFillStart(latestImportedDate),
-    [latestImportedDate],
+    () => (latestImported?.connectionId === connectionId
+      ? resolveGapFillStart(latestImported.date)
+      : null),
+    [latestImported, connectionId],
   )
 
   const fiscalYearStart = useMemo(
