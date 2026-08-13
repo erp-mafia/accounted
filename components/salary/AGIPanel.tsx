@@ -884,12 +884,18 @@ export function AGIPanel(props: AGIPanelProps) {
     )
   }
 
-  // Tokens issued before the agd scope was added to DEFAULT_SCOPES will
-  // 403 with invalid_scope at submission time: surface that proactively
-  // so the user reconnects before hitting the deadline rather than at it.
+  // Tokens issued before an AGI scope was added to DEFAULT_SCOPES will 403 at
+  // submission time: surface that proactively so the user reconnects before
+  // hitting the deadline rather than at it. Both scopes are checked because
+  // they back different steps: `agd` fails at submit, while a token missing
+  // `agdredovisningperiod` sails through submit and signing and only dies on
+  // "Hämta kvittens", the worst possible moment to discover it.
   const missingAgdScope =
     typeof status?.scope === 'string' &&
-    !status.scope.split(/\s+/).filter(Boolean).includes('agd')
+    (() => {
+      const granted = status.scope.split(/\s+/).filter(Boolean)
+      return !granted.includes('agd') || !granted.includes('agdredovisningperiod')
+    })()
 
   // Recovery states expose the advanced actions on their own: the stale-draft
   // and error-report guidance below reference them by name.
