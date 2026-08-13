@@ -34,6 +34,17 @@ export interface BankFileParseResult {
   }
 }
 
+/**
+ * Advisory duplicate preview from POST /api/import/bank-file/check-duplicates:
+ * rows that already exist and that execute-side ingest will skip. Never a
+ * promise of the exact final count; ingest's own result stays authoritative.
+ */
+export interface BankFileDuplicateInfo {
+  /** Indexes into the parsed transactions array, ascending. */
+  duplicate_row_indexes: number[]
+  duplicate_count: number
+}
+
 /** Issue encountered during parsing */
 export interface BankFileParseIssue {
   row: number
