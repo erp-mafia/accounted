@@ -18,6 +18,12 @@ import type { StoredAccount } from '../types'
 export interface SyncProgressSummary {
   imported: number
   duplicates: number
+  /**
+   * Rows the post-backfill reconciliation sweep linked to existing verifikat
+   * (renewal over an already-bookkept period). Optional: responses from before
+   * the sweep existed omit it.
+   */
+  auto_matched?: number
   requested_from: string
   returned_min_date: string | null
   returned_max_date: string | null
@@ -250,6 +256,11 @@ function DoneBody({
           {summary.returned_min_date && summary.returned_max_date && (
             <p className="text-xs text-muted-foreground">
               Datum: {summary.returned_min_date} → {summary.returned_max_date}
+            </p>
+          )}
+          {(summary.auto_matched ?? 0) > 0 && (
+            <p className="text-xs text-muted-foreground tabular-nums">
+              {summary.auto_matched} kopplades automatiskt till redan bokförda verifikat.
             </p>
           )}
           {workCounts && workCounts.book > 0 && (

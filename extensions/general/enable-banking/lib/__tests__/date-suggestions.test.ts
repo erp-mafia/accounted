@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { resolveBookedCoverage, resolveFiscalYearStart } from '../date-suggestions'
+import {
+  resolveBookedCoverage,
+  resolveFiscalYearStart,
+  resolveGapFillStart,
+} from '../date-suggestions'
 
 describe('resolveBookedCoverage', () => {
   it('suggests the day after the last posted verifikat date', () => {
@@ -40,6 +44,40 @@ describe('resolveBookedCoverage', () => {
     expect(resolveBookedCoverage(null)).toBeNull()
     expect(resolveBookedCoverage(undefined)).toBeNull()
     expect(resolveBookedCoverage('')).toBeNull()
+  })
+})
+
+describe('resolveGapFillStart', () => {
+  it('suggests one week of overlap before the newest imported transaction', () => {
+    const today = new Date('2026-08-13T12:00:00Z')
+    expect(resolveGapFillStart('2026-08-06', today)).toEqual({
+      latestImportedDate: '2026-08-06',
+      suggestedStartDate: '2026-07-30',
+    })
+  })
+
+  it('rolls over month and year boundaries', () => {
+    const today = new Date('2030-01-01T12:00:00Z')
+    expect(resolveGapFillStart('2026-01-03', today)?.suggestedStartDate).toBe('2025-12-27')
+    expect(resolveGapFillStart('2026-03-04', today)?.suggestedStartDate).toBe('2026-02-25')
+  })
+
+  it('clamps to today when bank data claims a future date (backend rejects non-past dates)', () => {
+    const today = new Date('2026-08-13T12:00:00Z')
+    expect(resolveGapFillStart('2026-09-20', today)).toEqual({
+      latestImportedDate: '2026-09-20',
+      suggestedStartDate: '2026-08-13',
+    })
+  })
+
+  it('returns null when the connection has never imported anything (first connect has no gap)', () => {
+    expect(resolveGapFillStart(null)).toBeNull()
+    expect(resolveGapFillStart(undefined)).toBeNull()
+    expect(resolveGapFillStart('')).toBeNull()
+  })
+
+  it('returns null for an unparsable date', () => {
+    expect(resolveGapFillStart('not-a-date')).toBeNull()
   })
 })
 

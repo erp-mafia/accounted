@@ -17,6 +17,7 @@ import {
   runReconciliation,
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
 } from '@/lib/reconciliation/bank-reconciliation'
+import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -1336,6 +1337,7 @@ export const enableBankingExtension: Extension = {
         let initialSyncSummary: {
           imported: number
           duplicates: number
+          auto_matched: number
           requested_from: string
           returned_min_date: string | null
           returned_max_date: string | null
@@ -1349,12 +1351,37 @@ export const enableBankingExtension: Extension = {
             .toISOString()
             .split('T')[0]
 
+          // Same guard the manual /sync route and the cron apply. This path also
+          // runs on RENEWAL (reconnect resets status to pending_selection), and a
+          // fresh consent often makes the bank release history the first connect
+          // never delivered, straight over an already-bookkept period. Without
+          // the guard those rows would be auto-categorized into brand-new
+          // verifikat (double-booking) instead of being linked to the ones that
+          // already describe them.
+          const { data: sieOverlap } = await supabase
+            .from('sie_imports')
+            .select('id')
+            .eq('company_id', companyId)
+            .eq('status', 'completed')
+            .gte('fiscal_year_end', fromDate)
+            .limit(1)
+            .maybeSingle()
+
+          const { data: membership } = await supabase
+            .from('company_members')
+            .select('role')
+            .eq('company_id', companyId)
+            .eq('user_id', user.id)
+            .maybeSingle()
+          const isViewer = membership?.role === 'viewer'
+
           log.info('[enable-banking] Starting inline initial backfill', {
             connectionId: connection.id,
             accountCount: accountsToSync.length,
             lookbackDays: initialLookbackDays,
             fromDate,
             toDate,
+            sieOverlap: Boolean(sieOverlap),
           })
 
           let timeoutHandle: ReturnType<typeof setTimeout> | undefined
@@ -1370,7 +1397,11 @@ export const enableBankingExtension: Extension = {
                 fromDate,
                 toDate,
                 ingestFn,
-                { strategy: 'longest' }
+                {
+                  strategy: 'longest',
+                  ...(sieOverlap ? { skipAutoCategorization: true } : {}),
+                  ...(isViewer ? { rawInsertOnly: true } : {}),
+                }
               ))
             )
             // If the timeout wins the race, the underlying Promise.all keeps
@@ -1390,6 +1421,49 @@ export const enableBankingExtension: Extension = {
 
             const totalImported = results.reduce((sum, r) => sum + r.imported, 0)
             const totalDuplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
+
+            // Post-backfill reconciliation sweep, mirroring the manual /sync
+            // route: link just-imported rows to the verifikat that already
+            // describe them so a re-released period does not resurface as
+            // hundreds of "ohanterade" transactions. Unlike the /sync and cron
+            // sweeps this runs once per enabled ledger account with a resolved
+            // cash-account scope: the pooled unscoped form can cross-link
+            // accounts (#1290/#1298). A scope resolution failure skips that
+            // account's sweep instead of widening it.
+            let totalAutoMatched = 0
+            if (sieOverlap && totalImported > 0 && !isViewer) {
+              const ledgerAccounts = Array.from(
+                new Set(accountsToSync.map(a => a.ledger_account ?? undefined))
+              )
+              for (const ledgerAccount of ledgerAccounts) {
+                try {
+                  const scope = await resolveCashAccountScope(supabase, companyId, ledgerAccount)
+                  const reconResult = await runReconciliation(supabase, companyId, user.id, {
+                    dateFrom: fromDate,
+                    dateTo: toDate,
+                    accountNumber: scope.accountNumber,
+                    currency: scope.currency,
+                    cashAccountId: scope.cashAccountId,
+                    includeUnassigned: scope.includeUnassigned,
+                    // Unattended run: nobody reviews a dry-run first, so never
+                    // commit low-confidence (fuzzy / date-range) matches.
+                    confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
+                  })
+                  totalAutoMatched += reconResult.applied
+                  if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {
+                    log.info('[enable-banking] Post-backfill reconciliation linked imported rows to existing verifikat', {
+                      connectionId: connection.id,
+                      accountNumber: scope.accountNumber,
+                      applied: reconResult.applied,
+                      skippedBelowThreshold: reconResult.skippedBelowThreshold,
+                      total: reconResult.matches.length,
+                    })
+                  }
+                } catch {
+                  // Non-critical: rows stay unmatched for manual review.
+                }
+              }
+            }
 
             // Min/max booking date across all synced accounts
             const minDates = results.map(r => r.returnedMinBookingDate).filter((d): d is string => !!d)
@@ -1432,6 +1506,7 @@ export const enableBankingExtension: Extension = {
               initialSyncSummary = {
                 imported: totalImported,
                 duplicates: totalDuplicates,
+                auto_matched: totalAutoMatched,
                 requested_from: fromDate,
                 returned_min_date: returnedMin,
                 returned_max_date: returnedMax,

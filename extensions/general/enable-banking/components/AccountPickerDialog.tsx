@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   Dialog,
@@ -31,6 +31,7 @@ import {
 import {
   resolveBookedCoverage,
   resolveFiscalYearStart,
+  resolveGapFillStart,
 } from '../lib/date-suggestions'
 import type { CompanySettings } from '@/types'
 import type { StoredAccount } from '../types'
@@ -57,7 +58,7 @@ interface ChartAccount {
   account_name: string
 }
 
-type LookbackMode = 'fast' | 'fiscal-year' | 'custom'
+type LookbackMode = 'gap-fill' | 'fast' | 'fiscal-year' | 'custom'
 type CustomSubMode = 'date' | 'previous-fiscal-year'
 
 // Suggested BAS account per currency. The mapping engine falls back to 1930
@@ -104,6 +105,13 @@ export function AccountPickerDialog({
   const [lookbackMode, setLookbackMode] = useState<LookbackMode>('fiscal-year')
   const [customSubMode, setCustomSubMode] = useState<CustomSubMode>('date')
   const [customDate, setCustomDate] = useState<string>('')
+  // Newest transaction date this CONNECTION has already imported (null on a
+  // first connect). Presence means this is a renewal, where the default must
+  // be "fill the gap", not a fresh long lookback over bookkept periods.
+  const [latestImportedDate, setLatestImportedDate] = useState<string | null>(null)
+  // Ref, not state: only the async default below reads it, and putting it in
+  // the effect's deps would re-fire the query on the first radio click.
+  const lookbackTouched = useRef(false)
 
   const [progressOpen, setProgressOpen] = useState(false)
   const [progressState, setProgressState] = useState<SyncProgressState>({ kind: 'syncing' })
@@ -126,6 +134,8 @@ export function AccountPickerDialog({
       setLookbackMode('fiscal-year')
       setCustomSubMode('date')
       setCustomDate('')
+      setLatestImportedDate(null)
+      lookbackTouched.current = false
 
       // Pre-populate ledger picks from existing StoredAccount values, falling
       // back to currency-based suggestions for accounts the user hasn't mapped
@@ -212,6 +222,35 @@ export function AccountPickerDialog({
     })()
     return () => { cancelled = true }
   }, [open, isInitialSelection, company?.id, supabase])
+
+  // Fetch the newest transaction this connection has already imported. Any row
+  // means this pending_selection is a RENEWAL: the flow re-runs the initial
+  // backfill, and a fresh consent often makes the bank release history the
+  // first connect never delivered. Defaulting to the fiscal-year lookback then
+  // re-imports whole bookkept periods as "ohanterade" (the 2026-08 renewal
+  // flood), so a renewal defaults to gap-fill instead, unless the user has
+  // already picked a mode by the time the query lands.
+  useEffect(() => {
+    // No stale-value reset needed here: the open-reset effect above clears
+    // latestImportedDate on every open.
+    if (!open || !isInitialSelection || !company?.id) return
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('transactions')
+        .select('date')
+        .eq('company_id', company.id)
+        .eq('bank_connection_id', connectionId)
+        .order('date', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (cancelled) return
+      const date = (data as { date?: string } | null)?.date || null
+      setLatestImportedDate(date)
+      if (date && !lookbackTouched.current) setLookbackMode('gap-fill')
+    })()
+    return () => { cancelled = true }
+  }, [open, isInitialSelection, company?.id, connectionId, supabase])
 
   // Load 19xx accounts from the chart for the per-account ledger combobox.
   // Class 19 = bank/cash on the BAS chart.
@@ -301,13 +340,13 @@ export function AccountPickerDialog({
       return
     }
 
-    // Block save when the user picked "Anpassat datum" but left the date blank.
-    // Without this guard, lookback.body is null and the PATCH would silently
-    // fall back to the backend's 120-day default, not what the user asked for.
+    // Block save when the chosen mode resolved to no request body: a blank
+    // custom date, or gap-fill whose suggestion vanished. Without this guard,
+    // lookback.body is null and the PATCH would silently fall back to the
+    // backend's 120-day default, not what the user asked for.
     if (
       isInitialSelection &&
-      lookbackMode === 'custom' &&
-      customSubMode === 'date' &&
+      ((lookbackMode === 'custom' && customSubMode === 'date') || lookbackMode === 'gap-fill') &&
       !lookback.body
     ) {
       toast({
@@ -418,6 +457,11 @@ export function AccountPickerDialog({
     [lastBookedDate],
   )
 
+  const gapFill = useMemo(
+    () => resolveGapFillStart(latestImportedDate),
+    [latestImportedDate],
+  )
+
   const fiscalYearStart = useMemo(
     () => resolveFiscalYearStart(currentPeriodStart, companySettings),
     [currentPeriodStart, companySettings],
@@ -430,6 +474,19 @@ export function AccountPickerDialog({
 
   // Resolve mode → concrete request payload and a "resolved from-date" for display.
   const lookback = useMemo(() => {
+    if (lookbackMode === 'gap-fill') {
+      // The gap-fill radio only renders when gapFill resolved, but guard the
+      // body anyway: a null body falls into the same save-block as a blank
+      // custom date instead of silently syncing the server's 120-day default.
+      if (gapFill) {
+        return {
+          body: { initial_lookback_from_date: gapFill.suggestedStartDate },
+          fromDate: gapFill.suggestedStartDate,
+          days: daysBetween(gapFill.suggestedStartDate),
+        }
+      }
+      return { body: null as Record<string, string | number> | null, fromDate: null as string | null, days: 0 }
+    }
     if (lookbackMode === 'fast') {
       return { body: { initial_lookback_days: 90 }, fromDate: null as string | null, days: 90 }
     }
@@ -442,9 +499,20 @@ export function AccountPickerDialog({
       return { body: { initial_lookback_from_date: date }, fromDate: date, days: daysBetween(date) }
     }
     return { body: null as Record<string, string | number> | null, fromDate: null as string | null, days: 0 }
-  }, [lookbackMode, customSubMode, customDate, fiscalYearStart, previousFiscalYearStart])
+  }, [lookbackMode, customSubMode, customDate, fiscalYearStart, previousFiscalYearStart, gapFill])
 
   const showLongRangeHelper = lookback.days > 90
+
+  // On a renewal, a lookback reaching past what the connection already
+  // delivered re-imports periods that may already be bookkept: with a fresh
+  // consent the bank often releases history the first connect never returned.
+  const reimportsFetchedPeriod = Boolean(
+    gapFill &&
+    lookbackMode !== 'gap-fill' &&
+    (lookback.fromDate
+      ? lookback.fromDate < gapFill.latestImportedDate
+      : lookback.days > daysBetween(gapFill.latestImportedDate)),
+  )
 
   return (
     <>
@@ -526,6 +594,7 @@ export function AccountPickerDialog({
                   type="button"
                   className="shrink-0 text-xs text-foreground underline underline-offset-2"
                   onClick={() => {
+                    lookbackTouched.current = true
                     setLookbackMode('custom')
                     setCustomSubMode('date')
                     setCustomDate(bookedCoverage.suggestedStartDate)
@@ -538,13 +607,33 @@ export function AccountPickerDialog({
             )}
 
             <div className="space-y-2">
+              {gapFill && (
+                <label className="flex cursor-pointer items-start gap-2">
+                  <input
+                    type="radio"
+                    name="lookback-mode"
+                    value="gap-fill"
+                    checked={lookbackMode === 'gap-fill'}
+                    onChange={() => { lookbackTouched.current = true; setLookbackMode('gap-fill') }}
+                    disabled={isSaving}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="block">Fortsätt där förra hämtningen slutade <span className="text-muted-foreground">(rekommenderas)</span></span>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      från {gapFill.suggestedStartDate}; redan hämtade transaktioner hoppas över automatiskt
+                    </span>
+                  </span>
+                </label>
+              )}
+
               <label className="flex cursor-pointer items-start gap-2">
                 <input
                   type="radio"
                   name="lookback-mode"
                   value="fast"
                   checked={lookbackMode === 'fast'}
-                  onChange={() => setLookbackMode('fast')}
+                  onChange={() => { lookbackTouched.current = true; setLookbackMode('fast') }}
                   disabled={isSaving}
                   className="mt-1"
                 />
@@ -559,7 +648,7 @@ export function AccountPickerDialog({
                   name="lookback-mode"
                   value="fiscal-year"
                   checked={lookbackMode === 'fiscal-year'}
-                  onChange={() => setLookbackMode('fiscal-year')}
+                  onChange={() => { lookbackTouched.current = true; setLookbackMode('fiscal-year') }}
                   disabled={isSaving}
                   className="mt-1"
                 />
@@ -577,7 +666,7 @@ export function AccountPickerDialog({
                   name="lookback-mode"
                   value="custom"
                   checked={lookbackMode === 'custom'}
-                  onChange={() => setLookbackMode('custom')}
+                  onChange={() => { lookbackTouched.current = true; setLookbackMode('custom') }}
                   disabled={isSaving}
                   className="mt-1"
                 />
@@ -616,6 +705,14 @@ export function AccountPickerDialog({
                 </span>
               </label>
             </div>
+
+            {reimportsFetchedPeriod && gapFill && (
+              <p className="attn text-[12.5px]">
+                Du har redan hämtat transaktioner till och med {gapFill.latestImportedDate}. Ett
+                tidigare startdatum kan hämta mer historik från banken, och dagar som redan är
+                bokförda kan då dyka upp som ohanterade.
+              </p>
+            )}
 
             {showLongRangeHelper && (
               <p className="text-xs text-muted-foreground">
