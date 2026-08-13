@@ -105,6 +105,10 @@ const EditTransactionTitleDialog = dynamic(
   () => import('@/components/transactions/EditTransactionTitleDialog'),
   { loading: DialogLoadingSkeleton },
 )
+const MoveTransactionCashAccountDialog = dynamic(
+  () => import('@/components/transactions/MoveTransactionCashAccountDialog'),
+  { loading: DialogLoadingSkeleton },
+)
 const SkattekontoMatchDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoMatchDialog').then((module) => module.SkattekontoMatchDialog),
   { loading: DialogLoadingSkeleton },
@@ -503,6 +507,8 @@ export default function TransactionsPage() {
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
   // Bank transaction whose title is being edited (null = dialog closed).
   const [editTitleTarget, setEditTitleTarget] = useState<TransactionWithInvoice | null>(null)
+  // Bank transaction being moved to another cash account (null = dialog closed).
+  const [moveAccountTarget, setMoveAccountTarget] = useState<TransactionWithInvoice | null>(null)
   const supabase = useRealtimeSupabase()
   const searchParams = useSearchParams()
   const highlightId = searchParams.get('highlight')
@@ -2161,6 +2167,46 @@ export default function TransactionsPage() {
     setEditTitleTarget(transaction)
   }
 
+  function openMoveAccountDialog(transaction: TransactionWithInvoice) {
+    setMoveAccountTarget(transaction)
+  }
+
+  // Persist a cash-account move via PATCH. Returns true on success so the
+  // dialog can close; refetches the list because the account chooser and the
+  // per-account scoping key off cash_account_id.
+  async function handleMoveCashAccount(accountNumber: string): Promise<boolean> {
+    const target = moveAccountTarget
+    if (!target) return false
+    try {
+      const response = await fetch(`/api/transactions/${target.id}/cash-account`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_number: accountNumber }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: t('move_account_failed'),
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        return false
+      }
+      const moved = result.data as { cash_account_id: string }
+      setTransactions((prev) =>
+        prev.map((tx) =>
+          tx.id === target.id ? { ...tx, cash_account_id: moved.cash_account_id } : tx,
+        ),
+      )
+      toast({ title: t('move_account_saved') })
+      void refreshTransactions()
+      return true
+    } catch {
+      toast({ title: t('move_account_failed'), variant: 'destructive' })
+      return false
+    }
+  }
+
   // Persist a new title via PATCH. Returns true on success so the dialog can
   // close; updates the local list optimistically (description + edited tag).
   async function handleSaveTitle(description: string): Promise<boolean> {
@@ -3135,6 +3181,8 @@ export default function TransactionsPage() {
                         onDelete={handleDeleteTransaction}
                         onIgnore={handleIgnoreTransaction}
                         onEditTitle={openEditTitleDialog}
+                        onMoveCashAccount={openMoveAccountDialog}
+                        cashAccounts={cashAccounts}
                         onToggleSelect={toggleBatchSelect}
                       />
                     ) : (
@@ -3437,6 +3485,19 @@ export default function TransactionsPage() {
           currentTitle={editTitleTarget.description ?? ''}
           originalTitle={editTitleTarget.original_description ?? null}
           onSave={handleSaveTitle}
+        />
+      )}
+
+      {moveAccountTarget && (
+        <MoveTransactionCashAccountDialog
+          open
+          onOpenChange={(v) => {
+            if (!v) setMoveAccountTarget(null)
+          }}
+          cashAccounts={cashAccounts}
+          currentCashAccountId={moveAccountTarget.cash_account_id}
+          currency={moveAccountTarget.currency}
+          onMove={handleMoveCashAccount}
         />
       )}
 

@@ -382,6 +382,25 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_en:
       'Cannot edit the title of a booked or matched transaction. Posted vouchers are corrected with storno.',
   },
+  TRANSACTION_MOVE_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är bokförd eller kopplad till en verifikation och kan inte flyttas till ett annat konto. Koppla bort den under Rapporter → Bankavstämning, eller storna verifikationen först.',
+    message_en:
+      'The transaction is booked or linked to a voucher and cannot be moved to another account. Unlink it under Reports → Bank reconciliation, or reverse (storno) the voucher first.',
+  },
+  TRANSACTION_MOVE_UNKNOWN_ACCOUNT: {
+    httpStatus: 404,
+    message_sv: 'Kontot finns inte bland företagets registrerade bankkonton.',
+    message_en: "The account is not one of the company's registered cash accounts.",
+  },
+  TRANSACTION_MOVE_CURRENCY_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Transaktionens valuta stämmer inte med kontots valuta. En transaktion kan bara flyttas till ett konto i samma valuta.',
+    message_en:
+      'The transaction currency does not match the target account currency. A transaction can only be moved to an account in the same currency.',
+  },
   TX_CATEGORIZE_INVALID_ACCOUNT: {
     httpStatus: 400,
     message_sv: 'Det valda kontot finns inte i kontoplanen.',

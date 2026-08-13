@@ -2710,6 +2710,13 @@
     "edit_title_restore": "Återställ",
     "edit_title_cancel": "Avbryt",
     "edit_title_save": "Spara",
+    "move_account_btn": "Flytta till annat konto",
+    "move_account_dialog_title": "Flytta till annat bankkonto",
+    "move_account_dialog_description": "Välj vilket bankkonto transaktionen hör till. Flytten avgör vilken bankavstämning transaktionen räknas med i.",
+    "move_account_current": "Nuvarande konto",
+    "move_account_currency_mismatch": "Annan valuta ({currency})",
+    "move_account_cancel": "Avbryt",
+    "move_account_save": "Flytta",
     "method_line": "Betalsätt: {method}"
   },
   "tx_method": {
@@ -5324,6 +5331,8 @@
     "delete_failed_description": "Transaktionen kunde inte tas bort. Försök igen.",
     "edit_title_saved": "Titeln uppdaterad",
     "edit_title_failed": "Kunde inte uppdatera titeln",
+    "move_account_saved": "Transaktionen flyttades",
+    "move_account_failed": "Kunde inte flytta transaktionen",
     "review_in_bookkeeping_description": "Granska och bokför verifikatet i Bokföring.",
     "bank_sync_attention_one": "1 bankanslutning behöver förnyas",
     "bank_sync_attention_many": "{count} bankanslutningar behöver förnyas",

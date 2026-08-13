@@ -14,7 +14,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { AccountNumber } from '@/components/ui/account-number'
-import { AlertCircle, ChevronDown, ChevronRight, Landmark, Link2, Unlink, Play, Eye, EyeOff, PiggyBank, MoreHorizontal } from 'lucide-react'
+import { AlertCircle, ArrowRightLeft, ChevronDown, ChevronRight, Landmark, Link2, Unlink, Play, Eye, EyeOff, PiggyBank, MoreHorizontal } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { CashAccountSelector } from '@/components/common/CashAccountSelector'
@@ -786,6 +786,47 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
     }
   }
 
+  /**
+   * Move a transaction to another of the company's cash accounts (PATCH
+   * /api/transactions/[id]/cash-account). The row then leaves THIS account's
+   * unmatched list and surfaces on the target account's reconciliation, which
+   * is the fix for rows stuck under the wrong (or the primary) account:
+   * cross-account matching is deliberately blocked, so the row must move to
+   * where its verifikat lives. Server-side gating rejects booked/matched rows.
+   */
+  const handleMoveToAccount = async (tx: UnmatchedTransaction, target: CashAccount) => {
+    setActionLoading(tx.id)
+    try {
+      const res = await fetch(`/api/transactions/${tx.id}/cash-account`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_number: target.ledger_account }),
+      })
+      const result = await res.json()
+      if (!res.ok || result.error) {
+        toast({
+          variant: 'destructive',
+          title: 'Kunde inte flytta transaktionen',
+          description:
+            getUserErrorMessage(result.error) ||
+            (typeof result.error === 'string' ? result.error : undefined),
+        })
+        return
+      }
+      toast({
+        variant: 'success',
+        title: `Transaktionen flyttades till ${target.name || `Bankkonto ${target.currency}`} (${target.ledger_account})`,
+      })
+      // Both accounts' totals change (the row leaves this report and joins the
+      // target's), so refresh the whole view, status card included.
+      await fetchAll({ silent: true })
+    } catch {
+      toast({ variant: 'destructive', title: 'Kunde inte flytta transaktionen' })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   const handleIgnore = async (tx: UnmatchedTransaction) => {
     // Even though Ignorera is fully reversible, it's still a state change the
     // user could miss after a misclick: the row vanishes from the unmatched
@@ -1121,6 +1162,15 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
               const quickBooks = QUICK_BOOK_TEMPLATES.filter((t) =>
                 isPositive ? t.direction === 'income' : t.direction === 'expense',
               )
+              // Other enabled cash accounts this row could move to. Same
+              // currency only: the server hard-rejects a cross-currency move
+              // (the row would vanish from every report's currency scope).
+              const moveTargets = cashAccounts.filter(
+                (a) =>
+                  a.enabled &&
+                  a.ledger_account !== accountNumber &&
+                  a.currency.toUpperCase() === tx.currency.toUpperCase(),
+              )
               return (
                 <div
                   key={tx.id}
@@ -1192,6 +1242,31 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
                                   </DropdownMenuItem>
                                 )
                               })}
+                              <DropdownMenuSeparator />
+                            </>
+                          )}
+                          {moveTargets.length > 0 && (
+                            <>
+                              <DropdownMenuLabel className="text-[11px] font-normal uppercase tracking-wider text-muted-foreground">
+                                Flytta till annat konto
+                              </DropdownMenuLabel>
+                              {moveTargets.map((account) => (
+                                <DropdownMenuItem
+                                  key={account.id}
+                                  onClick={() => handleMoveToAccount(tx, account)}
+                                  disabled={actionLoading === tx.id}
+                                >
+                                  <ArrowRightLeft className="h-4 w-4" />
+                                  <div className="flex flex-col">
+                                    <span>
+                                      Flytta till {account.name || `Bankkonto ${account.currency}`}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground tabular-nums">
+                                      {account.ledger_account}
+                                    </span>
+                                  </div>
+                                </DropdownMenuItem>
+                              ))}
                               <DropdownMenuSeparator />
                             </>
                           )}

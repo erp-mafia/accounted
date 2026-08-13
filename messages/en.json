@@ -2710,6 +2710,13 @@
     "edit_title_restore": "Restore",
     "edit_title_cancel": "Cancel",
     "edit_title_save": "Save",
+    "move_account_btn": "Move to another account",
+    "move_account_dialog_title": "Move to another bank account",
+    "move_account_dialog_description": "Choose which bank account the transaction belongs to. The move decides which bank reconciliation the transaction is counted in.",
+    "move_account_current": "Current account",
+    "move_account_currency_mismatch": "Different currency ({currency})",
+    "move_account_cancel": "Cancel",
+    "move_account_save": "Move",
     "method_line": "Payment method: {method}"
   },
   "tx_method": {
@@ -5324,6 +5331,8 @@
     "delete_failed_description": "The transaction could not be deleted. Please try again.",
     "edit_title_saved": "Title updated",
     "edit_title_failed": "Could not update the title",
+    "move_account_saved": "Transaction moved",
+    "move_account_failed": "Could not move the transaction",
     "review_in_bookkeeping_description": "Review and post the journal entry in Bookkeeping.",
     "bank_sync_attention_one": "1 bank connection needs renewal",
     "bank_sync_attention_many": "{count} bank connections need renewal",

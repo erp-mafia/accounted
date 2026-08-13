@@ -1479,6 +1479,18 @@ export const UpdateTransactionTitleSchema = z.object({
   description: z.string().trim().min(1, 'Title cannot be empty').max(500),
 })
 
+/**
+ * Move an unbooked bank transaction to another of the company's cash accounts,
+ * addressed by the target's BAS 19xx ledger account. Deliberately no null
+ * variant: unassigning a row would just re-strand it under the primary
+ * account's report (the exact symptom the move action exists to fix).
+ */
+export const MoveTransactionCashAccountSchema = z.object({
+  account_number: z
+    .string()
+    .regex(/^19\d{2}$/, 'Expected a BAS 19xx bank account number'),
+})
+
 export const BookInboxItemDirectlySchema = z.object({
   fiscal_period_id: uuid,
   entry_date: isoDate,
