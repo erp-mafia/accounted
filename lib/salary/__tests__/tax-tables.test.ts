@@ -99,8 +99,18 @@ describe('calculateJamkningTax', () => {
     expect(calculateJamkningTax(40000, 20)).toBe(8000)
   })
 
-  it('rounds to 2 decimal places', () => {
-    expect(calculateJamkningTax(33333, 15.5)).toBe(5166.62)
+  it('drops öre so the withheld amount is whole kronor (SFF 22 kap. 1 §)', () => {
+    // 33 333 × 15.5 % = 5 166.615 → 5 166, not 5 166.62
+    expect(calculateJamkningTax(33333, 15.5)).toBe(5166)
+    // 41 999.99 × 25 % = 10 499.9975 → 10 499: öre are dropped, never rounded up
+    expect(calculateJamkningTax(41999.99, 25)).toBe(10499)
+  })
+
+  it('is immune to float noise on exact-krona results', () => {
+    // 1000 × 0.007 === 6.999999999999999 in floats: a naive Math.floor on the
+    // raw product would withhold 6 kr where the exact result is 7 kr
+    expect(calculateJamkningTax(1000, 0.7)).toBe(7)
+    expect(calculateJamkningTax(5000, 0.7)).toBe(35)
   })
 })
 
@@ -109,8 +119,15 @@ describe('calculateSidoinkomstTax', () => {
     expect(calculateSidoinkomstTax(40000)).toBe(12000)
   })
 
-  it('rounds to 2 decimal places', () => {
-    expect(calculateSidoinkomstTax(33333)).toBe(9999.90)
+  it('drops öre so the withheld amount is whole kronor (SFF 22 kap. 1 §)', () => {
+    // 33 333 × 30 % = 9 999.90 → 9 999, not 9 999.90
+    expect(calculateSidoinkomstTax(33333)).toBe(9999)
+    // 30 123.45 × 30 % = 9 037.035 → 9 037
+    expect(calculateSidoinkomstTax(30123.45)).toBe(9037)
+  })
+
+  it('returns exact whole kronor when the product is a whole-krona amount', () => {
+    expect(calculateSidoinkomstTax(41300)).toBe(12390)
   })
 })
 

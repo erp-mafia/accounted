@@ -521,17 +521,32 @@ function normalizeKommunName(raw: string): string {
 // ── Legacy compatibility (used by calculation-engine.ts) ──
 
 /**
+ * Percentage-based skatteavdrag stated in whole kronor with öretal dropped
+ * (the whole-krona rule in SFF 2011:1261 22 kap. 1 §), same rule as
+ * taxForRate above. Computed in integer öre and hundredths of a percent:
+ * flooring the raw float product would lose a whole krona when float noise
+ * lands an exact result just below an integer
+ * (1000 × 0.007 === 6.999999999999999, so 0.7 % jämkning of 1 000 kr would
+ * floor to 6 kr instead of 7 kr).
+ */
+function wholeKronaPercentageTax(monthlyIncome: number, percentage: number): number {
+  const incomeOre = Math.round(monthlyIncome * 100)
+  const percentageHundredths = Math.round(percentage * 100)
+  return Math.floor((incomeOre * percentageHundredths) / 1_000_000)
+}
+
+/**
  * Calculate tax using jämkning (custom percentage from Skatteverket decision).
  */
 export function calculateJamkningTax(monthlyIncome: number, jamkningPercentage: number): number {
-  return Math.round(monthlyIncome * (jamkningPercentage / 100) * 100) / 100
+  return wholeKronaPercentageTax(monthlyIncome, jamkningPercentage)
 }
 
 /**
  * Calculate tax for sidoinkomst (flat 30%).
  */
 export function calculateSidoinkomstTax(monthlyIncome: number): number {
-  return Math.round(monthlyIncome * 0.30 * 100) / 100
+  return wholeKronaPercentageTax(monthlyIncome, 30)
 }
 
 /**
