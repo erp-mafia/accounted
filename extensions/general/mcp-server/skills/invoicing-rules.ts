@@ -79,7 +79,7 @@ Returns staged operation. User approves in web app → invoice number is allocat
 
 \`gnubok_send_invoice(invoice_id)\`: emails the PDF to the customer. Requires email service configured (Resend) and customer email on file.
 
-If the user delivered the invoice manually (printed, e-faktura via Peppol, etc.), use \`gnubok_mark_invoice_as_sent\` instead: same booking effect, no email.
+If the user delivered the invoice manually (printed or sent through an external e-invoice provider), use \`gnubok_mark_invoice_as_sent\` instead: same booking effect, no email.
 
 ### Step 5: Record payment
 
@@ -110,9 +110,9 @@ For consumer-targeted services (RUT: städning, RUT) or construction (ROT):
 
 This data goes on the invoice; Accounted's invoice template renders it automatically when set on the customer.
 
-## Peppol / e-invoicing (B2G)
+## External e-invoicing (including B2G)
 
-Swedish authorities require e-invoices via Peppol BIS Billing 3.0 (Lag 2018:1277). For private B2B, the buyer's preference governs but Peppol is preferred. Accounted renders an EN 16931-compliant XML on demand.
+Accounted currently creates PDF invoices and can send them by email. It does not generate e-invoice XML or deliver invoices through Peppol. If the customer requires an e-invoice, deliver it through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record the delivery and apply the same booking effect without sending another email.
 
 ## Critical rules
 
@@ -142,7 +142,7 @@ Swedish authorities require e-invoices via Peppol BIS Billing 3.0 (Lag 2018:1277
 export const invoicingRulesSkill: Skill = {
   slug: 'invoicing-rules',
   name: 'Invoicing Rules',
-  summary: 'Mandatory invoice fields (ML 17 kap. 24 §), VAT treatment per customer type, ROT/RUT, Peppol, kreditfaktura.',
+  summary: 'Mandatory invoice fields (ML 17 kap. 24 §), VAT treatment, ROT/RUT, external e-invoicing, kreditfaktura.',
   tags: ['invoicing', 'vat', 'compliance', 'eu', 'rot-rut'],
   body,
   tier: 'workflow',
