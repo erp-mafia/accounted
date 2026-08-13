@@ -15,6 +15,12 @@
 -- reconciliation_method = 'manual' joined against the absence of a matching
 -- payment_match_log row; left as an ops follow-up, not a migration concern.
 
+-- NOT VALID + VALIDATE: the plain ADD CONSTRAINT would scan the table under
+-- an ACCESS EXCLUSIVE lock. NOT VALID makes both ALTERs brief metadata-only
+-- locks, and VALIDATE scans under SHARE UPDATE EXCLUSIVE, which does not
+-- block concurrent match-log inserts. The new set is a strict superset of the
+-- old CHECK, so validation cannot fail on existing rows.
+
 ALTER TABLE public.payment_match_log
   DROP CONSTRAINT payment_match_log_action_check;
 
@@ -26,6 +32,9 @@ ALTER TABLE public.payment_match_log
     'suggestion_cleared',
     'storno_conflict_resolved',
     'linked_to_existing_voucher'
-  ));
+  )) NOT VALID;
+
+ALTER TABLE public.payment_match_log
+  VALIDATE CONSTRAINT payment_match_log_action_check;
 
 NOTIFY pgrst, 'reload schema';

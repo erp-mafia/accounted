@@ -628,6 +628,9 @@ export function AccountPickerDialog({
                     type="button"
                     className="shrink-0 text-xs text-foreground underline underline-offset-2"
                     onClick={() => {
+                      // Explicit choice: the async gap-fill probe must not
+                      // override it if it resolves after this click.
+                      lookbackTouched.current = true
                       setLookbackMode('custom')
                       setCustomSubMode('date')
                       setCustomDate(sieCoverageStart)
@@ -652,6 +655,7 @@ export function AccountPickerDialog({
                       type="button"
                       className="text-foreground underline underline-offset-2"
                       onClick={() => {
+                        lookbackTouched.current = true
                         setLookbackMode('custom')
                         setCustomSubMode('date')
                         setCustomDate(bookedCoverage.suggestedStartDate)

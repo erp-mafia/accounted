@@ -14,6 +14,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { validateBody } from '@/lib/api/validate'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { unlinkReconciliation } from '@/lib/reconciliation/bank-reconciliation'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
@@ -332,6 +333,21 @@ export const POST = withRouteContext(
         // surfaced in the pre-flight UI.
         dismissedJournalEntryId: dismissedCandidateId,
       })
+    }
+
+    // A RECONCILIATION link (reconciliation_method set) is not a conflicting
+    // booking: the entry it points at is an independent verifikat (SIE import,
+    // salary run, manual booking) that may evidence OTHER affärshändelser, and
+    // reversing it wholesale as a side effect of matching one payment would be
+    // an over-broad rättelse (BFL 5 kap 5 §: a correction is scoped to the
+    // actual error). Detach the soft pointer and leave the verifikat intact.
+    if (transaction.journal_entry_id && transaction.reconciliation_method) {
+      const unlink = await unlinkReconciliation(supabase, companyId, transactionId, user.id)
+      if (!unlink.success) {
+        txLog.error('failed to detach reconciliation link before invoice match', new Error(unlink.error))
+        return errorResponse(new Error(unlink.error ?? 'unlink failed'), txLog, { requestId })
+      }
+      transaction.journal_entry_id = null
     }
 
     // Storno conflicting auto-categorization JE before any other state change.

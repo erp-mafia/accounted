@@ -24,6 +24,7 @@ import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { unlinkReconciliation } from '@/lib/reconciliation/bank-reconciliation'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
@@ -244,6 +245,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // 2440/1930 supplier-invoice payment entry: two verifikationer for
     // one affärshändelse violates BFL 5 kap 6 §. If storno fails, abort
     // before any further state change.
+    // A RECONCILIATION link (reconciliation_method set) is not a conflicting
+    // booking: the entry is an independent verifikat that may evidence OTHER
+    // affärshändelser; reversing it wholesale would be an over-broad rättelse
+    // (BFL 5 kap 5 §). Detach the soft pointer and leave the verifikat intact.
+    if (transaction.journal_entry_id && transaction.reconciliation_method) {
+      const unlink = await unlinkReconciliation(ctx.supabase, ctx.companyId!, txId, ctx.userId)
+      if (!unlink.success) {
+        txLog.error(
+          'failed to detach reconciliation link before supplier-invoice match',
+          new Error(unlink.error),
+        )
+        return v1ErrorResponse(new Error(unlink.error ?? 'unlink failed'), txLog, {
+          requestId: ctx.requestId,
+        })
+      }
+      transaction.journal_entry_id = null
+    }
+
     if (transaction.journal_entry_id) {
       try {
         await reverseEntry(

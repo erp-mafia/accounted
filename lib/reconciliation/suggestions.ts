@@ -202,7 +202,10 @@ export async function confirmJournalEntrySuggestions(
     }
 
     result.confirmed.push(transactionId)
-    logMatchEvent(supabase, userId, transactionId, 'linked_to_existing_voucher', {
+    // Awaited: on serverless an unawaited promise can be frozen when the
+    // response returns, silently dropping the audit row. logMatchEvent itself
+    // never throws.
+    await logMatchEvent(supabase, userId, transactionId, 'linked_to_existing_voucher', {
       matchMethod: tx.potential_match_method ?? undefined,
       matchConfidence:
         tx.potential_match_confidence !== null
@@ -254,7 +257,7 @@ export async function rejectJournalEntrySuggestions(
     }
 
     result.rejected.push(transactionId)
-    logMatchEvent(supabase, userId, transactionId, 'suggestion_cleared', {
+    await logMatchEvent(supabase, userId, transactionId, 'suggestion_cleared', {
       previousState: {
         potential_journal_entry_id: tx.potential_journal_entry_id,
         potential_match_method: tx.potential_match_method,

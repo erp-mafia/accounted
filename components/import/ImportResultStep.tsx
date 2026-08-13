@@ -117,17 +117,21 @@ export default function ImportResultStep({
                     {/* Both migrator paths: PSD2 covers recent history (banks
                         cap the window around 90 days), CSV upload reaches the
                         older period the SIE file covers. Either way the
-                        overlap is matched against the imported verifikat. */}
+                        overlap is matched against the imported verifikat.
+                        Sandbox hides only the live bank connection; file-based
+                        import works there and its CTA stays. */}
                     {!isSandbox && hasBanking && (
                       <Button asChild size="sm">
                         <Link href="/import?mode=psd2">{t('reveal_cta_bank')}</Link>
                       </Button>
                     )}
-                    {!isSandbox && (
-                      <Button asChild size="sm" variant={hasBanking ? 'outline' : 'default'}>
-                        <Link href="/import?mode=bank">{t('reveal_cta_csv')}</Link>
-                      </Button>
-                    )}
+                    <Button
+                      asChild
+                      size="sm"
+                      variant={!isSandbox && hasBanking ? 'outline' : 'default'}
+                    >
+                      <Link href="/import?mode=bank">{t('reveal_cta_csv')}</Link>
+                    </Button>
                     <Link
                       href="/"
                       className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
@@ -433,18 +437,22 @@ export default function ImportResultStep({
             <CardDescription>{t('next_steps_match_copy')}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {!isSandbox && (
-              <div className="flex flex-wrap items-center gap-3">
-                {hasBanking && (
-                  <Button asChild size="sm">
-                    <Link href="/import?mode=psd2">{t('next_steps_cta_bank')}</Link>
-                  </Button>
-                )}
-                <Button asChild size="sm" variant={hasBanking ? 'outline' : 'default'}>
-                  <Link href="/import?mode=bank">{t('next_steps_cta_csv')}</Link>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Sandbox hides only the live bank connection; file-based
+                  import works there and its CTA stays. */}
+              {!isSandbox && hasBanking && (
+                <Button asChild size="sm">
+                  <Link href="/import?mode=psd2">{t('next_steps_cta_bank')}</Link>
                 </Button>
-              </div>
-            )}
+              )}
+              <Button
+                asChild
+                size="sm"
+                variant={!isSandbox && hasBanking ? 'outline' : 'default'}
+              >
+                <Link href="/import?mode=bank">{t('next_steps_cta_csv')}</Link>
+              </Button>
+            </div>
             <p className="text-sm text-muted-foreground">{t('next_steps_window_hint')}</p>
           </CardContent>
         </Card>

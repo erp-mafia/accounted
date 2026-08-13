@@ -1503,6 +1503,9 @@ export const enableBankingExtension: Extension = {
                     // Unattended run: nobody reviews a dry-run first, so never
                     // commit low-confidence (fuzzy / date-range) matches.
                     confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
+                    // ...but don't DROP them either: the 0.75-0.89 band feeds
+                    // the "Granska förslag" review surface.
+                    persistSuggestions: true,
                   })
                   totalAutoMatched += reconResult.applied
                   if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {

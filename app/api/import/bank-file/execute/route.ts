@@ -169,7 +169,7 @@ export const POST = withRouteContext(
             dateFrom: fileDateFrom,
             dateTo: fileDateTo,
           })
-          await supabase
+          const { error: stampError } = await supabase
             .from('bank_file_imports')
             .update({
               sie_sweep: toSweepSummary(sweepResult, {
@@ -178,6 +178,11 @@ export const POST = withRouteContext(
               }),
             })
             .eq('id', importRecord.id)
+          if (stampError) {
+            // The links/suggestions are already written; only the UI summary
+            // is missing. Say so instead of letting the sweep look unrun.
+            opLog.warn('failed to stamp sie_sweep summary on bank_file_imports', stampError)
+          }
           if (sweepResult.applied > 0 || sweepResult.suggested > 0) {
             opLog.info('post-import SIE reconciliation sweep', {
               applied: sweepResult.applied,

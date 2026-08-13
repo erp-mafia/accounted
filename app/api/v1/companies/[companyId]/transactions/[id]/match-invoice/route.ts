@@ -39,6 +39,7 @@ import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookke
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { unlinkReconciliation } from '@/lib/reconciliation/bank-reconciliation'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
@@ -411,6 +412,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
     const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
+
+    // A RECONCILIATION link (reconciliation_method set) is not a conflicting
+    // booking: the entry is an independent verifikat that may evidence OTHER
+    // affärshändelser; reversing it wholesale would be an over-broad rättelse
+    // (BFL 5 kap 5 §). Detach the soft pointer and leave the verifikat intact.
+    if (transaction.journal_entry_id && transaction.reconciliation_method) {
+      const unlink = await unlinkReconciliation(ctx.supabase, ctx.companyId!, txId, ctx.userId)
+      if (!unlink.success) {
+        txLog.error('failed to detach reconciliation link before invoice match', new Error(unlink.error))
+        return v1ErrorResponse(new Error(unlink.error ?? 'unlink failed'), txLog, {
+          requestId: ctx.requestId,
+        })
+      }
+      transaction.journal_entry_id = null
+    }
 
     if (transaction.journal_entry_id) {
       try {

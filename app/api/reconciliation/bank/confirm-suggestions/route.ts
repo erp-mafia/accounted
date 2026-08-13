@@ -10,6 +10,11 @@ import {
 
 ensureInitialized()
 
+// A full 500-item batch runs sequentially with several queries per pair
+// (revalidation is the point), which can exceed the platform's default
+// function budget. Same 5-minute allowance as the bank-file and SIE imports.
+export const maxDuration = 300
+
 /**
  * POST /api/reconciliation/bank/confirm-suggestions
  *
