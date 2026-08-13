@@ -6443,6 +6443,7 @@
     "remove_employee_title": "Ta bort från lönekörningen",
     "calculation_details_title": "Beräkningsdetaljer",
     "journal_preview_title": "Förhandsgranskning — verifikationer",
+    "journal_booked_title": "Bokförda verifikationer",
     "journal_preview_nollkorning": "Nollkörning — inga verifikat bokförs för den här körningen. Kontrollera att övriga lönekörningar för perioden täcker arbetsgivardeklarationen till Skatteverket.",
     "journal_th_account": "Konto",
     "journal_th_description": "Beskrivning",

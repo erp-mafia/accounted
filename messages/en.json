@@ -6443,6 +6443,7 @@
     "remove_employee_title": "Remove from the payroll run",
     "calculation_details_title": "Calculation details",
     "journal_preview_title": "Preview — vouchers",
+    "journal_booked_title": "Booked vouchers",
     "journal_preview_nollkorning": "Zero run — no vouchers are posted for this run. Verify that other payroll runs for the period cover the employer declaration to Skatteverket.",
     "journal_th_account": "Account",
     "journal_th_description": "Description",

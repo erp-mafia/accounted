@@ -156,7 +156,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // 3. Load run + employees + line items for the engine.
     const { data: employees, error: empErr } = await ctx.supabase
       .from('salary_run_employees')
-      .select('*, employee:employees(employment_type, default_dimensions), line_items:salary_line_items(*)')
+      .select('*, employee:employees(employment_type, default_dimensions, f_skatt_status), line_items:salary_line_items(*)')
       .eq('salary_run_id', salaryRunId)
     if (empErr) {
       return v1ErrorResponse(empErr, ctx.log, { requestId: ctx.requestId })
@@ -210,12 +210,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // 4. Engine call. Strict-mode: any throw aborts before status flip.
     type EmpRow = {
       employee_id: string
-      employee: { employment_type: string; default_dimensions?: Record<string, string> } | null
+      employee: {
+        employment_type: string
+        default_dimensions?: Record<string, string>
+        f_skatt_status?: string | null
+      } | null
       gross_salary: number
       tax_withheld: number
+      tax_withheld_override: number | null
       net_salary: number
       avgifter_amount: number
+      avgifter_amount_override: number | null
       avgifter_rate: number
+      avgifter_basis: number
+      avgifter_category: string | null
       vacation_accrual: number
       vacation_accrual_avgifter: number
       line_items: Array<{
@@ -247,10 +255,25 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           employee_id: sre.employee_id,
           employment_type: sre.employee?.employment_type || 'employee',
           gross_salary: sre.gross_salary,
-          tax_withheld: sre.tax_withheld,
-          net_salary: sre.net_salary,
-          avgifter_amount: sre.avgifter_amount,
+          // Override parity with book-run.ts: review overrides must reach
+          // the ledger identically no matter which surface books the run,
+          // or the booked 2731/2710 diverge from the AGI totals by the full
+          // override delta. F-skatt rows ignore avgifter overrides (the AGI
+          // hard-excludes them via isFSkattRow).
+          tax_withheld: sre.tax_withheld_override ?? sre.tax_withheld,
+          net_salary:
+            sre.net_salary + (sre.tax_withheld - (sre.tax_withheld_override ?? sre.tax_withheld)),
+          avgifter_amount:
+            sre.employee?.f_skatt_status === 'f_skatt'
+              ? sre.avgifter_amount
+              : sre.avgifter_amount_override ?? sre.avgifter_amount,
           avgifter_rate: sre.avgifter_rate,
+          // Declared-avgifter inputs: 2731 books the whole-krona amount
+          // Skatteverket computes from the underlag (declared-avgifter.ts).
+          avgifter_basis: sre.avgifter_basis,
+          avgifter_category: sre.avgifter_category ?? null,
+          avgifter_amount_overridden:
+            sre.employee?.f_skatt_status !== 'f_skatt' && sre.avgifter_amount_override != null,
           vacation_accrual: sre.vacation_accrual,
           vacation_accrual_avgifter: sre.vacation_accrual_avgifter,
           // Dimensions PR8: read-at-book from the employee row.

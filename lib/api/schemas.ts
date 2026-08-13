@@ -3266,7 +3266,17 @@ export const SalaryEmployeeOverrideSchema = z
     // override: it sets the base the engine uses for this month only and does
     // not require a reason. The route gates this field to `draft` status.
     monthly_salary: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).optional(),
-    tax_withheld_override: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).nullable().optional(),
+    // Skatteavdrag is stated in whole kronor (öretal bortfaller, SFF
+    // 2011:1261 22 kap. 1 §) and the engine's own values already are: an
+    // öre-bearing override would book 2710 with öre that the whole-krona
+    // skattekonto draw never clears.
+    tax_withheld_override: z
+      .number()
+      .int('Skatteavdrag anges i hela kronor (öretal bortfaller)')
+      .nonnegative()
+      .max(SALARY_OVERRIDE_MAX)
+      .nullable()
+      .optional(),
     avgifter_amount_override: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).nullable().optional(),
     avgifter_basis_override: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).nullable().optional(),
     reason: z.string().min(1).max(500).nullable().optional(),

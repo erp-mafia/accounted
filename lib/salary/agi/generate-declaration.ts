@@ -31,6 +31,13 @@ import {
 } from './xml-generator'
 import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
 import { eventBus } from '@/lib/events'
+import { truncateToWholeKronor } from '@/lib/money'
+import {
+  computeDeclaredAvgifter,
+  declaredAvgifterByCategory,
+  reportingCategory,
+  resolveDeclaredAvgifterParams,
+} from '../declared-avgifter'
 import type { Logger } from '@/lib/logger'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
@@ -397,37 +404,78 @@ export async function generateAgiDeclaration(
         (e.absenceEvents?.length ?? 0) > 0,
     )
 
-  // 5. Build totals: avgifter by category (with rate-heuristic fallback for legacy runs).
+  // 5. Build totals: whole-krona declared avgifter (öretal bortfaller, SFF
+  // 2011:1261 22 kap. 1 §). Skatteverket does not use the filed FK487 for
+  // the beslut: it recomputes the avgift from the declared per-IU underlag,
+  // per sats on the whole-krona sums (IK587, kontroll B_006), and draws that
+  // amount from the skattekonto. computeDeclaredAvgifter mirrors the
+  // computation, and the category map folds from the same cells so the
+  // breakdown always cross-foots exactly against the total.
   // Removed-from-AGI rows (FK205 borttag) are tombstones: they must not
   // contribute to FK497/FK487/FK499 because the prior submission's amounts
   // remain on file at Skatteverket; the borttag just removes the IU itself.
   const activeEmployees = parsedRows.filter((sre) => !sre.removed_from_agi)
-  const avgifterByCategory: AGITotals['avgifterByCategory'] = {}
-  for (const sre of activeEmployees) {
-    const dbCategory = sre.avgifter_category ?? null
-    const category = dbCategory
-      ? dbCategory === 'reduced_65plus'
-        ? 'reduced65plus'
-        : dbCategory === 'vaxa_stod'
-          ? 'standard'
-          : dbCategory
-      : sre.avgifter_rate <= 0.1022
-        ? 'reduced65plus'
-        : sre.avgifter_rate <= 0.2082
-          ? 'youth'
-          : 'standard'
-    const cat = (avgifterByCategory as Record<string, { basis: number; amount: number }>)[
-      category
-    ] || { basis: 0, amount: 0 }
-    // F-skatt rows contribute 0 regardless of overrides (see isFSkattRow).
-    cat.basis += isFSkattRow(sre) ? 0 : sre.avgifter_basis_override ?? sre.avgifter_basis
-    cat.amount += isFSkattRow(sre) ? 0 : sre.avgifter_amount_override ?? sre.avgifter_amount
-    ;(avgifterByCategory as Record<string, { basis: number; amount: number }>)[category] = cat
-  }
-  const totalAvgifterAmount = Object.values(avgifterByCategory).reduce(
-    (sum, cat) => sum + (cat?.amount ?? 0),
-    0,
+  // F-skatt rows contribute 0 regardless of overrides (see isFSkattRow).
+  const effectiveBasis = (sre: SalaryRunEmployeeRow): number =>
+    isFSkattRow(sre) ? 0 : (sre.avgifter_basis_override ?? sre.avgifter_basis) || 0
+
+  // Per-employee avgifter_amount overrides (FoU-avdrag and other manual
+  // adjustments) deliberately bypass the underlag computation, so the
+  // declared total honors them instead: per category, truncated per category
+  // so the breakdown still cross-foots (the salary booking's override path
+  // mirrors this exact computation on 2731). A basis-only override does NOT
+  // route here: it never reaches the filed IU fields (FK011 + benefits are
+  // serialised un-overridden), so Skatteverket computes from the filed
+  // underlag regardless, and letting the override steer FK487 or the payment
+  // would file an FK487 contradicting the declaration's own IUs and underpay
+  // the skattekonto by the override delta. Without amount overrides, the
+  // declared computation from the filed underlag is authoritative.
+  const hasAmountOverride = activeEmployees.some(
+    (sre) => !isFSkattRow(sre) && sre.avgifter_amount_override != null,
   )
+
+  let avgifterByCategory: AGITotals['avgifterByCategory']
+  let totalAvgifterAmount: number
+  let totalAvgifterBasis: number
+  if (hasAmountOverride) {
+    const oreByCategory: Record<string, { basis: number; amount: number }> = {}
+    for (const sre of activeEmployees) {
+      const category = reportingCategory({
+        rate: sre.avgifter_rate,
+        category: sre.avgifter_category ?? null,
+      })
+      const cat = oreByCategory[category] || { basis: 0, amount: 0 }
+      cat.basis += effectiveBasis(sre)
+      cat.amount += isFSkattRow(sre) ? 0 : (sre.avgifter_amount_override ?? sre.avgifter_amount) || 0
+      oreByCategory[category] = cat
+    }
+    const folded: Record<string, { basis: number; amount: number }> = {}
+    for (const [category, cat] of Object.entries(oreByCategory)) {
+      folded[category] = {
+        basis: truncateToWholeKronor(cat.basis),
+        amount: truncateToWholeKronor(cat.amount),
+      }
+    }
+    avgifterByCategory = folded as AGITotals['avgifterByCategory']
+    totalAvgifterAmount = Object.values(folded).reduce((s, c) => s + c.amount, 0)
+    totalAvgifterBasis = Object.values(folded).reduce((s, c) => s + c.basis, 0)
+  } else {
+    // The FILED underlag (never basis overrides: those don't reach the IUs)
+    // is what Skatteverket computes IK587 from.
+    const declared = computeDeclaredAvgifter(
+      activeEmployees.map((sre) => ({
+        basis: isFSkattRow(sre) ? 0 : sre.avgifter_basis || 0,
+        rate: sre.avgifter_rate,
+        category: sre.avgifter_category ?? null,
+      })),
+      resolveDeclaredAvgifterParams(
+        (run.calculation_params as Record<string, unknown> | null) ?? null,
+      ),
+    )
+    avgifterByCategory = declaredAvgifterByCategory(declared)
+    totalAvgifterAmount = declared.totalAmount
+    totalAvgifterBasis = declared.totalUnderlag
+  }
 
   // FK499 sjuklönekostnad: sum of paid sjuklön (days 2-14) across all
   // employees. Day 1 is karens (unpaid); day 15+ is Försäkringskassan.
@@ -454,20 +502,22 @@ export async function generateAgiDeclaration(
   // run.total_tax, which includes removed rows). Same for FK487.
   // Coalesce override → computed so manual jämkning/FoU adjustments flow
   // into the filed declaration.
+  //
+  // AGI amounts are whole kronor (öretal bortfaller, SFF 2011:1261
+  // 22 kap. 1 §). Each IU serialises FK001 truncated, so the HU total must
+  // be the sum of the per-IU truncated values: truncating the öre-exact sum
+  // instead could land 1 kr above what the IUs actually declare.
   const totalTax = activeEmployees.reduce(
-    (sum, sre) => sum + ((sre.tax_withheld_override ?? sre.tax_withheld) || 0),
+    (sum, sre) =>
+      sum + truncateToWholeKronor((sre.tax_withheld_override ?? sre.tax_withheld) || 0),
     0,
   )
 
   const totals: AGITotals = {
-    totalTax: Math.round(totalTax * 100) / 100,
-    // F-skatt rows contribute 0 regardless of overrides (see isFSkattRow).
-    totalAvgifterBasis: activeEmployees.reduce(
-      (s, e) => s + (isFSkattRow(e) ? 0 : (e.avgifter_basis_override ?? e.avgifter_basis) || 0),
-      0,
-    ),
-    totalAvgifterAmount: Math.round(totalAvgifterAmount * 100) / 100,
-    totalSjuklonekostnad: Math.round(totalSjuklonekostnad * 100) / 100,
+    totalTax,
+    totalAvgifterBasis,
+    totalAvgifterAmount,
+    totalSjuklonekostnad: truncateToWholeKronor(totalSjuklonekostnad),
     avgifterByCategory,
   }
 
@@ -549,13 +599,14 @@ export async function generateAgiDeclaration(
         xml_content: xml,
         individuppgifter,
         total_gross: run.total_gross,
-        total_tax: run.total_tax,
+        // Declared whole-krona totals, exactly as serialised into the XML
+        // (FK497/FK487): the amounts Skatteverket computes from the declared
+        // underlag and draws from the skattekonto (modulo the two documented
+        // krona-scale approximations in declared-avgifter.ts). This is what
+        // agi-tax-settlement matches the draw against. run.total_tax would
+        // drift: it keeps öre and includes removed rows.
+        total_tax: totals.totalTax,
         total_avgifter_basis: totals.totalAvgifterBasis,
-        // Use the per-category sum that drives the XML rather than the
-        // run-level denormalised total. Both should agree, but a
-        // round-then-sum vs sum-then-round can produce öre drift; the
-        // agi_declarations row should align with what was actually
-        // serialised into the XML (which Skatteverket sees).
         total_avgifter: totals.totalAvgifterAmount,
         employee_count: employeeData.length,
         is_correction: true,
@@ -578,13 +629,9 @@ export async function generateAgiDeclaration(
         xml_content: xml,
         individuppgifter,
         total_gross: run.total_gross,
-        total_tax: run.total_tax,
+        // Declared whole-krona totals: see the update branch above.
+        total_tax: totals.totalTax,
         total_avgifter_basis: totals.totalAvgifterBasis,
-        // Use the per-category sum that drives the XML rather than the
-        // run-level denormalised total. Both should agree, but a
-        // round-then-sum vs sum-then-round can produce öre drift; the
-        // agi_declarations row should align with what was actually
-        // serialised into the XML (which Skatteverket sees).
         total_avgifter: totals.totalAvgifterAmount,
         employee_count: employeeData.length,
       })
@@ -616,14 +663,10 @@ export async function generateAgiDeclaration(
             xml_content: xml,
             individuppgifter,
             total_gross: run.total_gross,
-            total_tax: run.total_tax,
+            // Declared whole-krona totals: see the update branch above.
+            total_tax: totals.totalTax,
             total_avgifter_basis: totals.totalAvgifterBasis,
-            // Use the per-category sum that drives the XML rather than the
-        // run-level denormalised total. Both should agree, but a
-        // round-then-sum vs sum-then-round can produce öre drift; the
-        // agi_declarations row should align with what was actually
-        // serialised into the XML (which Skatteverket sees).
-        total_avgifter: totals.totalAvgifterAmount,
+            total_avgifter: totals.totalAvgifterAmount,
             employee_count: employeeData.length,
             is_correction: true,
             salary_run_id: run.id,
