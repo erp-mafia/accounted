@@ -29,6 +29,12 @@ interface NewUserChecklistProps {
   hasAgentBuilt?: boolean
   /** Personalized VAT-deadline line for the Skatteverket step (null = say nothing). */
   vatLine?: VatDeadlineLine
+  /** Latest SIE reconciliation-sweep outcome: surfaces "X matchade, Y att
+   *  granska" on the bank step so a migrator sees what the sweep did with
+   *  their history. Null = no sweep has run, say nothing. A sweep with
+   *  errors > 0 was incomplete (a whole account may have been skipped), so it
+   *  also says nothing rather than presenting partial numbers as the result. */
+  sieSweep?: { auto_linked: number; suggested: number; unmatched: number; errors: number } | null
 }
 
 /**
@@ -69,6 +75,7 @@ export default function NewUserChecklist({
   hasInboxItems = false,
   hasAgentBuilt = false,
   vatLine = null,
+  sieSweep = null,
 }: NewUserChecklistProps) {
   const t = useTranslations('initial_setup')
   const router = useRouter()
@@ -292,6 +299,22 @@ export default function NewUserChecklist({
               <LogoMark src="/logos/enable-banking-icon.png" name="Enable Banking" mono />
             ) : undefined
           }
+          doneNote={
+            step2Done &&
+            sieSweep &&
+            sieSweep.errors === 0 &&
+            (sieSweep.auto_linked > 0 || sieSweep.suggested > 0) ? (
+              <Link
+                href="/transactions"
+                className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+              >
+                {t('step_bank_sweep_note', {
+                  matched: sieSweep.auto_linked,
+                  toReview: sieSweep.suggested,
+                })}
+              </Link>
+            ) : undefined
+          }
         >
           {t('step_bank_description')}
         </Step>
@@ -398,6 +421,7 @@ function Step({
   badge,
   action,
   marks,
+  doneNote,
   last = false,
   children,
 }: {
@@ -408,6 +432,10 @@ function Step({
   badge?: string
   action?: (variant: 'default' | 'outline') => React.ReactNode
   marks?: React.ReactNode
+  /** Small note rendered next to the title once the step is DONE: the one
+   *  exception to "done steps collapse to their title" (e.g. the bank step's
+   *  sweep outcome, which is the payoff the migrator is waiting for). */
+  doneNote?: React.ReactNode
   last?: boolean
   children: React.ReactNode
 }) {
@@ -455,6 +483,9 @@ function Step({
             )}
           </div>
           {!done && action?.(open ? 'default' : 'outline')}
+          {done && doneNote && (
+            <span className="text-xs tabular-nums text-muted-foreground">{doneNote}</span>
+          )}
         </div>
         {open && (
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-2">

@@ -42,7 +42,9 @@ import type {
   ViewMode,
   SourceFilter,
   CategorizeHandler,
+  PotentialVoucher,
 } from '@/components/transactions/transaction-types'
+import { SuggestionReviewList } from '@/components/transactions/SuggestionReviewList'
 import type {
   SkattekontoBatchResult,
   SkattekontoBatchRowResult,
@@ -184,13 +186,20 @@ function buildSupplierInvoiceMap(
 // prod schema cache (see DECISIONS.md 2026-07-06).
 async function fetchPotentialMatches(
   supabase: SupabaseClient,
-  rows: { potential_invoice_id: string | null; potential_supplier_invoice_id: string | null }[],
+  rows: {
+    potential_invoice_id: string | null
+    potential_supplier_invoice_id: string | null
+    potential_journal_entry_id?: string | null
+  }[],
 ) {
   const potentialInvoiceIds = Array.from(
     new Set(rows.flatMap((t) => (t.potential_invoice_id ? [t.potential_invoice_id] : []))),
   )
   const potentialSupplierInvoiceIds = Array.from(
     new Set(rows.flatMap((t) => (t.potential_supplier_invoice_id ? [t.potential_supplier_invoice_id] : []))),
+  )
+  const potentialJournalEntryIds = Array.from(
+    new Set(rows.flatMap((t) => (t.potential_journal_entry_id ? [t.potential_journal_entry_id] : []))),
   )
 
   // Chunked .in() lists (PostgREST .in() URL-length convention, same 150 as
@@ -208,7 +217,7 @@ async function fetchPotentialMatches(
   // an unmatchable candidate must not reach the row or the match dialog, which
   // would otherwise compare the transaction against a 0 kr remaining balance
   // and call it a partial payment.
-  const [invoiceResults, supplierInvoiceResults] = await Promise.all([
+  const [invoiceResults, supplierInvoiceResults, voucherResults] = await Promise.all([
     Promise.all(
       chunks(potentialInvoiceIds).map((ids) =>
         supabase
@@ -229,6 +238,19 @@ async function fetchPotentialMatches(
           .gt('remaining_amount', 0),
       ),
     ),
+    // Journal-entry match suggestions (the sweep's 0.75-0.89 band). DB
+    // triggers clear the pointer when the entry is consumed or reversed, but
+    // the posted-status filter revalidates anyway: a suggestion that no
+    // longer resolves to a live verifikat must not reach the review surface.
+    Promise.all(
+      chunks(potentialJournalEntryIds).map((ids) =>
+        supabase
+          .from('journal_entries')
+          .select('id, voucher_series, voucher_number, entry_date, description')
+          .in('id', ids)
+          .eq('status', 'posted'),
+      ),
+    ),
   ])
 
   // Non-fatal: the transaction list still renders without match hints, but
@@ -239,10 +261,31 @@ async function fetchPotentialMatches(
   for (const r of supplierInvoiceResults) {
     if (r.error) console.error('[fetchPotentialMatches] supplier_invoices query failed', r.error)
   }
+  for (const r of voucherResults) {
+    if (r.error) console.error('[fetchPotentialMatches] journal_entries query failed', r.error)
+  }
+
+  const voucherMap: Record<string, PotentialVoucher> = {}
+  for (const je of voucherResults.flatMap((r) => (r.data ?? []) as Array<{
+    id: string
+    voucher_series: string
+    voucher_number: number
+    entry_date: string
+    description: string | null
+  }>)) {
+    voucherMap[je.id] = {
+      journal_entry_id: je.id,
+      voucher_series: je.voucher_series,
+      voucher_number: je.voucher_number,
+      entry_date: je.entry_date,
+      description: je.description,
+    }
+  }
 
   return {
     invoiceMap: buildInvoiceMap(invoiceResults.flatMap((r) => r.data ?? [])),
     supplierInvoiceMap: buildSupplierInvoiceMap(supplierInvoiceResults.flatMap((r) => r.data ?? [])),
+    voucherMap,
   }
 }
 
@@ -512,6 +555,39 @@ export default function TransactionsPage() {
   const refreshTransactionsInFlightRef = useRef(false)
   const refreshTransactionsQueuedRef = useRef(false)
 
+  // "Kör matchning igen" in the review surface.
+  const [rerunningMatch, setRerunningMatch] = useState(false)
+
+  // End of the company's completed SIE-import coverage (latest
+  // fiscal_year_end). Drives the quiet "från perioden före din migrering"
+  // marker on inbox rows: period-based on purpose, it labels which period a
+  // row belongs to, it never suggests a sync skip date (that was #917).
+  const [sieCoverageEnd, setSieCoverageEnd] = useState<string | null>(null)
+  useEffect(() => {
+    if (!companyId) {
+      setSieCoverageEnd(null)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('sie_imports')
+        .select('fiscal_year_end')
+        .eq('company_id', companyId)
+        .eq('status', 'completed')
+        .not('fiscal_year_end', 'is', null)
+        .order('fiscal_year_end', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (!cancelled) {
+        setSieCoverageEnd((data as { fiscal_year_end?: string } | null)?.fiscal_year_end || null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [companyId, supabase])
+
   // Computed lists
   const uncategorizedTransactions = useMemo(
     () => transactions
@@ -522,6 +598,18 @@ export default function TransactionsPage() {
         if (aHasMatch !== bHasMatch) return bHasMatch - aHasMatch
         return b.date.localeCompare(a.date)
       }),
+    [exitingIds, transactions],
+  )
+
+  // Journal-entry match suggestions awaiting review (the migrator surface).
+  // potential_voucher is already revalidated (posted-only) at enrichment time,
+  // and DB triggers clear consumed/reversed suggestions, so this list is
+  // honest without extra queries.
+  const suggestionItems = useMemo(
+    () =>
+      transactions.filter(
+        (t) => t.potential_voucher && !t.journal_entry_id && !t.is_ignored && !exitingIds.has(t.id),
+      ),
     [exitingIds, transactions],
   )
 
@@ -903,7 +991,7 @@ export default function TransactionsPage() {
       const windowIds = new Set(rows.map((r) => r.id))
       const olderPending = (pendingRows ?? []).filter((r) => !windowIds.has(r.id))
       const allRows = [...rows, ...olderPending].sort((a, b) => b.date.localeCompare(a.date))
-      const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, allRows)
+      const { invoiceMap, supplierInvoiceMap, voucherMap } = await fetchPotentialMatches(supabase, allRows)
 
       // Re-check after the second await: a scope change during the match
       // enrichment must also discard this response.
@@ -914,6 +1002,9 @@ export default function TransactionsPage() {
         potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
         potential_supplier_invoice: t.potential_supplier_invoice_id
           ? supplierInvoiceMap[t.potential_supplier_invoice_id]
+          : undefined,
+        potential_voucher: t.potential_journal_entry_id
+          ? voucherMap[t.potential_journal_entry_id]
           : undefined,
       }))
 
@@ -985,7 +1076,7 @@ export default function TransactionsPage() {
     setPagedThroughDate(txData.length >= PAGE_SIZE ? txData[txData.length - 1].date : null)
     setHasMore(txData.length >= PAGE_SIZE)
 
-    const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, txData)
+    const { invoiceMap, supplierInvoiceMap, voucherMap } = await fetchPotentialMatches(supabase, txData)
 
     // Same staleness rule after the enrichment await: the offsets above were
     // written under this generation, but a newer fetch has already reset them.
@@ -999,6 +1090,9 @@ export default function TransactionsPage() {
       potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
       potential_supplier_invoice: t.potential_supplier_invoice_id
         ? supplierInvoiceMap[t.potential_supplier_invoice_id]
+        : undefined,
+      potential_voucher: t.potential_journal_entry_id
+        ? voucherMap[t.potential_journal_entry_id]
         : undefined,
     }))
 
@@ -1951,6 +2045,132 @@ export default function TransactionsPage() {
     }, 350)
   }
 
+  // "Granska migrerad historik": confirm/reject persisted journal-entry match
+  // suggestions through the server-side revalidating bulk endpoint. Stale
+  // pairs come back as skipped, never as a failed batch: the toast reports
+  // both numbers honestly and the refresh re-derives the list from DB truth.
+  // Chunked at the schema's 500-id cap (same as BankReconciliationView's
+  // apply): a migrator's review list can exceed it, and one unchunked POST
+  // would 400 with zero progress on exactly the flagship bulk action.
+  const SUGGESTION_CHUNK_SIZE = 500
+
+  const confirmSuggestions = useCallback(
+    async (transactionIds: string[]) => {
+      let confirmed = 0
+      let skipped = 0
+      try {
+        for (let i = 0; i < transactionIds.length; i += SUGGESTION_CHUNK_SIZE) {
+          const chunk = transactionIds.slice(i, i + SUGGESTION_CHUNK_SIZE)
+          const response = await fetch('/api/reconciliation/bank/confirm-suggestions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transaction_ids: chunk, action: 'confirm' }),
+          })
+          const payload = await response.json()
+          if (!response.ok) {
+            // Report the partial progress alongside the failure: chunks that
+            // already committed stay committed.
+            toast({
+              title: t('review_confirm_failed'),
+              description: getErrorMessage(payload, { context: 'transaction' }),
+              variant: 'destructive',
+            })
+            return
+          }
+          confirmed += (payload.data?.confirmed ?? []).length
+          skipped += (payload.data?.skipped ?? []).length
+        }
+        toast({
+          title: t('review_confirm_done_title', { count: confirmed }),
+          description:
+            skipped > 0
+              ? t('review_confirm_done_skipped', { count: skipped })
+              : t('review_confirm_done_description'),
+        })
+      } catch (error) {
+        toast({
+          title: t('review_confirm_failed'),
+          description: getErrorMessage(error, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+      } finally {
+        await refreshTransactions()
+      }
+    },
+    [refreshTransactions, t, toast],
+  )
+
+  const rejectSuggestions = useCallback(
+    async (transactionIds: string[]) => {
+      try {
+        for (let i = 0; i < transactionIds.length; i += SUGGESTION_CHUNK_SIZE) {
+          const chunk = transactionIds.slice(i, i + SUGGESTION_CHUNK_SIZE)
+          const response = await fetch('/api/reconciliation/bank/confirm-suggestions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transaction_ids: chunk, action: 'reject' }),
+          })
+          if (!response.ok) {
+            const payload = await response.json()
+            toast({
+              title: t('review_reject_failed'),
+              description: getErrorMessage(payload, { context: 'transaction' }),
+              variant: 'destructive',
+            })
+            return
+          }
+        }
+      } catch (error) {
+        toast({
+          title: t('review_reject_failed'),
+          description: getErrorMessage(error, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+      } finally {
+        await refreshTransactions()
+      }
+    },
+    [refreshTransactions, t, toast],
+  )
+
+  // "Kör matchning igen": full per-account sweep over all history. New >= 0.9
+  // matches auto-link; the review band lands back here as fresh suggestions.
+  const rerunMatching = useCallback(async () => {
+    setRerunningMatch(true)
+    try {
+      const response = await fetch('/api/reconciliation/bank/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all_accounts: true }),
+      })
+      const payload = await response.json()
+      if (!response.ok) {
+        toast({
+          title: t('review_rerun_failed'),
+          description: getErrorMessage(payload, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({
+        title: t('review_rerun_done_title'),
+        description: t('review_rerun_done_description', {
+          applied: payload.data?.applied ?? 0,
+          suggested: payload.data?.suggested ?? 0,
+        }),
+      })
+    } catch (error) {
+      toast({
+        title: t('review_rerun_failed'),
+        description: getErrorMessage(error, { context: 'transaction' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setRerunningMatch(false)
+      await refreshTransactions()
+    }
+  }, [refreshTransactions, t, toast])
+
   async function handleMatchInvoice(transactionId: string, invoiceId: string): Promise<boolean> {
     try {
       const response = await fetch(`/api/transactions/${transactionId}/match-invoice`, {
@@ -2874,11 +3094,19 @@ export default function TransactionsPage() {
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
 
-      {skvNeedsReconnect && (
+      {skvNeedsReconnect ? (
         <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/tax' }}>
           {t('skv_reconnect_body')}
         </AttnLine>
-      )}
+      ) : suggestionItems.length > 0 && mode !== 'review' ? (
+        // Migrated-history review nudge. Max one attn line per page
+        // (convention 6): the SKV reconnect line wins when both apply.
+        <AttnLine
+          action={{ label: t('review_attn_cta'), onClick: () => setMode('review') }}
+        >
+          {t('review_attn_body', { count: suggestionItems.length })}
+        </AttnLine>
+      ) : null}
 
       {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök] [Välj flera]
           ... [source ContextPicker far right] */}
@@ -2915,6 +3143,29 @@ export default function TransactionsPage() {
           >
             {t('mode_all')}
           </button>
+          {/* Review tab exists only while suggestions do (or while the user is
+              standing in it after emptying the list): a permanent third tab
+              would advertise a migrator surface most companies never need. */}
+          {(suggestionItems.length > 0 || mode === 'review') && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'review'}
+              onClick={() => setMode('review')}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
+                mode === 'review'
+                  ? 'border border-border bg-card font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {t('mode_review')}
+              {suggestionItems.length > 0 && (
+                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
+                  {suggestionItems.length}
+                </span>
+              )}
+            </button>
+          )}
         </div>
         <div className="relative min-w-[220px] max-w-xs flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -2998,6 +3249,15 @@ export default function TransactionsPage() {
             </div>
           ))}
         </DataList>
+      ) : mode === 'review' ? (
+        <SuggestionReviewList
+          items={suggestionItems}
+          onConfirm={confirmSuggestions}
+          onReject={rejectSuggestions}
+          onOpenMatchVoucher={openMatchVoucherDialog}
+          onRerunMatching={rerunMatching}
+          rerunning={rerunningMatch}
+        />
       ) : mode === 'inbox' ? (
         inboxItems.length === 0 ? (
           searchTerm || sourceFilter !== 'all' || periodBounds ? (
@@ -3136,6 +3396,7 @@ export default function TransactionsPage() {
                         onIgnore={handleIgnoreTransaction}
                         onEditTitle={openEditTitleDialog}
                         onToggleSelect={toggleBatchSelect}
+                        preMigrationCutoff={sieCoverageEnd}
                       />
                     ) : (
                       <SkattekontoInboxCard

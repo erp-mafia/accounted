@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
+import {
+  runReconciliation,
+  DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
+} from '@/lib/reconciliation/bank-reconciliation'
+import { runUnattendedReconciliationSweep } from '@/lib/reconciliation/unattended-sweep'
 import { validateBody } from '@/lib/api/validate'
 import { RunReconciliationSchema } from '@/lib/api/schemas'
 
@@ -12,7 +16,43 @@ export const POST = withRouteContext(
   async (request, { supabase, user, companyId }) => {
     const validation = await validateBody(request, RunReconciliationSchema)
     if (!validation.success) return validation.response
-    const { date_from, date_to, account_number, dry_run, selected_matches } = validation.data
+    const { date_from, date_to, account_number, dry_run, selected_matches, all_accounts } =
+      validation.data
+
+    // "Kör matchning igen": the per-account sweep across every enabled cash
+    // account, exactly what the unattended post-sync path runs. New >= 0.9
+    // matches auto-link; the 0.75-0.89 band persists as suggestions.
+    //
+    // The sweep ALWAYS writes: there is no dry-run form of it, and silently
+    // ignoring dry_run here would turn a requested preview into applied links
+    // (the documented dry-run-gotcha P0 class). Enforce the mutual exclusion
+    // instead of just documenting it.
+    if (all_accounts && (dry_run !== undefined || account_number || selected_matches)) {
+      return NextResponse.json(
+        { error: 'all_accounts kan inte kombineras med dry_run, account_number eller selected_matches' },
+        { status: 400 },
+      )
+    }
+    if (all_accounts) {
+      const sweep = await runUnattendedReconciliationSweep(supabase, companyId, user.id, {
+        dateFrom: date_from,
+        dateTo: date_to,
+      })
+      return NextResponse.json({
+        data: {
+          applied: sweep.applied,
+          errors: sweep.errors,
+          suggested: sweep.suggested,
+          unmatched: sweep.unmatched,
+          skipped_below_threshold: sweep.skippedBelowThreshold,
+          accounts: sweep.accounts.map((a) => ({
+            account_number: a.accountNumber,
+            applied: a.applied,
+            suggested: a.suggested,
+          })),
+        },
+      })
+    }
 
     const accountNumber = account_number ?? '1930'
 
@@ -51,6 +91,17 @@ export const POST = withRouteContext(
         transactionId: m.transaction_id,
         journalEntryId: m.journal_entry_id,
       })),
+      // "Kör matchning igen": apply runs from this route persist the
+      // 0.75-0.89 band as reviewable suggestions instead of dropping it, so a
+      // migrator who connected their bank before the sweep existed can trigger
+      // matching retroactively. Ignored on dry runs. applyOnly runs keep the
+      // legacy no-threshold behavior (the user already reviewed the pairs).
+      ...(selected_matches
+        ? {}
+        : {
+            confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
+            persistSuggestions: true,
+          }),
     })
 
     return NextResponse.json({
@@ -70,6 +121,8 @@ export const POST = withRouteContext(
         })),
         applied: result.applied,
         errors: result.errors,
+        suggested: result.suggested,
+        skipped_below_threshold: result.skippedBelowThreshold,
         dry_run: dry_run ?? false,
       },
     })
