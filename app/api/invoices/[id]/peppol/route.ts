@@ -10,6 +10,13 @@ import { getPeppolTransportAvailability } from '@/lib/invoices/peppol-transport'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
 const paramsSchema = z.object({ id: z.uuid() })
+type GeneratedPeppolInvoice = Extract<
+  ReturnType<typeof generatePeppolBisBillingInvoice>,
+  { ok: true }
+>
+type LoadPeppolDocumentResult =
+  | { ok: true; document: GeneratedPeppolInvoice }
+  | { ok: false; response: NextResponse }
 
 function privateNoStore(response: NextResponse): NextResponse {
   response.headers.set('Cache-Control', 'private, no-store')
@@ -22,7 +29,7 @@ async function loadPeppolDocument(args: {
   invoiceId: string
   log: Parameters<typeof errorResponseFromCode>[1]
   requestId: string
-}) {
+}): Promise<LoadPeppolDocumentResult> {
   const { data: invoice, error: invoiceError } = await args.supabase
     .from('invoices')
     .select(`
@@ -36,6 +43,7 @@ async function loadPeppolDocument(args: {
 
   if (invoiceError || !invoice) {
     return {
+      ok: false,
       response: privateNoStore(errorResponseFromCode(
         'INVOICE_NOT_FOUND',
         args.log,
@@ -52,6 +60,7 @@ async function loadPeppolDocument(args: {
 
   if (companyError || !company) {
     return {
+      ok: false,
       response: privateNoStore(errorResponseFromCode(
         'INVOICE_SEND_COMPANY_SETTINGS_MISSING',
         args.log,
@@ -63,6 +72,7 @@ async function loadPeppolDocument(args: {
   const typedInvoice = invoice as Invoice & { customer?: Customer; items?: InvoiceItem[] }
   if (!typedInvoice.customer) {
     return {
+      ok: false,
       response: privateNoStore(errorResponseFromCode('VALIDATION_ERROR', args.log, {
         requestId: args.requestId,
         messageSv: 'Fakturan saknar en kund som kan användas för Peppol-export.',
@@ -81,6 +91,7 @@ async function loadPeppolDocument(args: {
   if (!document.ok) {
     const first = document.issues[0]
     return {
+      ok: false,
       response: privateNoStore(errorResponseFromCode('VALIDATION_ERROR', args.log, {
         requestId: args.requestId,
         messageSv: first?.messageSv,
@@ -97,7 +108,7 @@ async function loadPeppolDocument(args: {
     }
   }
 
-  return { document }
+  return { ok: true, document }
 }
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -113,7 +124,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { id } = parsedParams.data
 
     const loaded = await loadPeppolDocument({ supabase, companyId, invoiceId: id, log, requestId })
-    if ('response' in loaded) return loaded.response
+    if (!loaded.ok) return loaded.response
     const result = loaded.document
 
     return new NextResponse(result.xml, {
@@ -147,7 +158,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       log,
       requestId,
     })
-    if ('response' in loaded) return loaded.response
+    if (!loaded.ok) return loaded.response
 
     try {
       const delivery = await stagePeppolDelivery({
