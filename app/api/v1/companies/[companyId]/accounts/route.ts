@@ -23,6 +23,8 @@ const Account = z.object({
   is_active: z.boolean(),
   description: z.string().nullable(),
   default_vat_code: z.string().nullable(),
+  default_vat_rate: z.number().nullable(),
+  default_vat_treatment: z.string().nullable(),
   sru_code: z.string().nullable(),
   sort_order: z.number().int(),
 })
@@ -32,7 +34,7 @@ const AccountsResponse = dataEnvelope(z.object({ accounts: z.array(Account) }))
 const ACCOUNT_COLUMNS =
   'account_number, account_name, account_class, account_group, account_type, ' +
   'normal_balance, is_system_account, is_active, description, default_vat_code, ' +
-  'sru_code, sort_order'
+  'default_vat_rate, default_vat_treatment, sru_code, sort_order'
 
 registerEndpoint({
   operation: 'accounts.list',

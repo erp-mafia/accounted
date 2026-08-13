@@ -162,9 +162,12 @@ describe('tools/list payload size guard', () => {
     //     upload_id/upload_url/expires_at (method, size cap and echo fields
     //     moved to description prose) and mime_type made optional on complete;
     //     the ~360-token remainder is the two tools' wire contract.
+    //   * 59K to 59.2K with account VAT treatments: create_account and
+    //     update_account both expose the 12-value treatment vocabulary. The
+    //     descriptions are minimal; the enum values are the wire contract.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(59_000)
+    expect(approxTokens).toBeLessThan(59_200)
   })
 })

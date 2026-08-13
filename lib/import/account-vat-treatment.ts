@@ -19,7 +19,16 @@ export function enrichAccountMappingsWithVat(
   )
 
   return mappings.map((mapping) => {
-    if (!mapping.targetAccount || mapping.sourceAccount !== mapping.targetAccount) return mapping
+    if (!mapping.targetAccount || mapping.sourceAccount !== mapping.targetAccount) {
+      return {
+        ...mapping,
+        defaultVatTreatment: null,
+        defaultVatRate: null,
+        vatTreatmentSuggested: false,
+        vatTreatmentReviewed: true,
+        requiresVatTreatmentReview: false,
+      }
+    }
     const accountClass = Number(mapping.sourceAccount.charAt(0))
     if (accountClass < 3 || accountClass > 6) return mapping
 
@@ -39,10 +48,10 @@ export function enrichAccountMappingsWithVat(
     return {
       ...mapping,
       defaultVatTreatment: suggestion?.treatment ?? null,
-      defaultVatRate: suggestion?.rate ?? existing?.default_vat_rate ?? null,
+      defaultVatRate: existing?.default_vat_rate ?? suggestion?.rate ?? null,
       vatTreatmentSuggested: Boolean(suggestion),
       vatTreatmentReviewed: false,
-      requiresVatTreatmentReview: accountClass >= 3 && accountClass <= 6,
+      requiresVatTreatmentReview: accountClass === 3 || accountClass === 4 || Boolean(suggestion),
     }
   })
 }
@@ -62,6 +71,18 @@ export function applyVatTreatmentReview(
           vatTreatmentSuggested: false,
           vatTreatmentReviewed: true,
         }
+      : mapping
+  )
+}
+
+export function enrichChangedAccountMappingWithVat(
+  mappings: AccountMapping[],
+  sourceAccount: string,
+  existingAccounts: BASAccount[],
+): AccountMapping[] {
+  return mappings.map((mapping) =>
+    mapping.sourceAccount === sourceAccount
+      ? enrichAccountMappingsWithVat([mapping], existingAccounts)[0]
       : mapping
   )
 }

@@ -42,7 +42,7 @@ interface AccountMappingStepProps {
   mappings: AccountMapping[]
   basAccounts: BASAccount[]
   onMappingChange: (sourceAccount: string, targetAccount: string, targetName: string) => void
-  onVatTreatmentChange?: (
+  onVatTreatmentChange: (
     sourceAccount: string,
     treatment: AccountVatTreatment | null,
     rate: number | null,
@@ -238,8 +238,8 @@ export default function AccountMappingStep({
                   <TableHead className="w-36">Källkonto</TableHead>
                   <TableHead>Källnamn</TableHead>
                   <TableHead className="w-12"></TableHead>
-                  <TableHead className="min-w-72">{t('vat_treatment_column')}</TableHead>
                   <TableHead className="w-64">Målkonto</TableHead>
+                  <TableHead className="min-w-72">{t('vat_treatment_column')}</TableHead>
                   <TableHead className="w-24">Konfidens</TableHead>
                 </TableRow>
               </TableHeader>
@@ -255,8 +255,43 @@ export default function AccountMappingStep({
                       <ArrowRight className="h-4 w-4 text-muted-foreground" />
                     </TableCell>
                     <TableCell>
-                      {onVatTreatmentChange &&
-                      mapping.sourceAccount === mapping.targetAccount &&
+                      <Select
+                        value={mapping.targetAccount || 'none'}
+                        onValueChange={(value) => {
+                          const account = basAccounts.find((a) => a.account_number === value)
+                          onMappingChange(
+                            mapping.sourceAccount,
+                            value === 'none' ? '' : value,
+                            account?.account_name || ''
+                          )
+                        }}
+                      >
+                        <SelectTrigger className={!mapping.targetAccount ? 'border-destructive' : ''}>
+                          <SelectValue placeholder="Välj konto..." />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-80">
+                          <SelectItem value="none">-- Välj konto --</SelectItem>
+                          {Object.entries(accountsByClass).map(([className, accounts]) => (
+                            <div key={className}>
+                              <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted">
+                                {className}
+                              </div>
+                              {accounts.map((account) => (
+                                <SelectItem
+                                  key={account.account_number}
+                                  value={account.account_number}
+                                >
+                                  <span className="font-mono mr-2">{account.account_number}</span>
+                                  {account.account_name}
+                                </SelectItem>
+                              ))}
+                            </div>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      {mapping.sourceAccount === mapping.targetAccount &&
                       ['3', '4', '5', '6'].includes(mapping.sourceAccount.charAt(0)) ? (
                         <div className="flex min-w-72 gap-2">
                           <Select
@@ -267,8 +302,10 @@ export default function AccountMappingStep({
                                 : value as AccountVatTreatment
                               const accountClass = Number(mapping.sourceAccount.charAt(0))
                               const rate = treatment
-                                ? defaultRateForVatTreatment(treatment, accountClass)
-                                : null
+                                ? mapping.defaultVatRate == null || mapping.vatTreatmentSuggested
+                                  ? defaultRateForVatTreatment(treatment, accountClass)
+                                  : mapping.defaultVatRate
+                                : mapping.defaultVatRate ?? null
                               onVatTreatmentChange(mapping.sourceAccount, treatment, rate)
                             }}
                           >
@@ -278,7 +315,7 @@ export default function AccountMappingStep({
                             <SelectContent>
                               <SelectItem value="none">{t('vat_treatment_none')}</SelectItem>
                               {vatTreatmentsForAccountClass(
-                                Number(mapping.sourceAccount.charAt(0)),
+                                Number(mapping.sourceAccount.charAt(0))
                               ).map((treatment) => (
                                 <SelectItem key={treatment} value={treatment}>
                                   {t(`vat_treatment_${treatment}`)}
@@ -325,42 +362,6 @@ export default function AccountMappingStep({
                       ) : (
                         <span className="text-muted-foreground">-</span>
                       )}
-                    </TableCell>
-                    <TableCell>
-                      <Select
-                        value={mapping.targetAccount || 'none'}
-                        onValueChange={(value) => {
-                          const account = basAccounts.find((a) => a.account_number === value)
-                          onMappingChange(
-                            mapping.sourceAccount,
-                            value === 'none' ? '' : value,
-                            account?.account_name || ''
-                          )
-                        }}
-                      >
-                        <SelectTrigger className={!mapping.targetAccount ? 'border-destructive' : ''}>
-                          <SelectValue placeholder="Välj konto..." />
-                        </SelectTrigger>
-                        <SelectContent className="max-h-80">
-                          <SelectItem value="none">-- Välj konto --</SelectItem>
-                          {Object.entries(accountsByClass).map(([className, accounts]) => (
-                            <div key={className}>
-                              <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted">
-                                {className}
-                              </div>
-                              {accounts.map((account) => (
-                                <SelectItem
-                                  key={account.account_number}
-                                  value={account.account_number}
-                                >
-                                  <span className="font-mono mr-2">{account.account_number}</span>
-                                  {account.account_name}
-                                </SelectItem>
-                              ))}
-                            </div>
-                          ))}
-                        </SelectContent>
-                      </Select>
                     </TableCell>
                     <TableCell>
                       {mapping.targetAccount && (
@@ -422,7 +423,11 @@ export default function AccountMappingStep({
           Tillbaka
         </Button>
         <Button className="min-h-11" onClick={onContinue} disabled={!canContinue}>
-          {canContinue ? 'Fortsätt till granskning' : `${stats.unmapped} konton saknar mappning`}
+          {canContinue
+            ? 'Fortsätt till granskning'
+            : stats.unmapped > 0
+              ? `${stats.unmapped} konton saknar mappning`
+              : `${stats.vatReview} momskoder återstår att bekräfta`}
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>

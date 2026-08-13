@@ -392,4 +392,38 @@ describe('gnubok_update_account', () => {
     expect(result.preview.current.account_name).toBe('Förbrukningsinventarier')
     expect(result.preview.changes).toEqual({ account_name: 'Verktyg', is_active: false })
   })
+
+  it('preserves an existing booking rate when only treatment changes', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '4056', account_name: 'EU-varor', default_vat_rate: 0.12,
+        default_vat_treatment: null, is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '4056', default_vat_treatment: 'reverse_charge_eu_goods', dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+
+    expect(result.preview.changes).toEqual({
+      default_vat_treatment: 'reverse_charge_eu_goods',
+    })
+  })
+
+  it('can clear a treatment to restore BAS fallback', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '3041', account_name: 'Försäljning', default_vat_rate: 0.25,
+        default_vat_treatment: 'standard_25', is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '3041', default_vat_treatment: null, dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+
+    expect(result.preview.changes).toEqual({ default_vat_treatment: null })
+  })
 })

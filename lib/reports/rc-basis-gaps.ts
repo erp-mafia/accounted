@@ -150,8 +150,9 @@ export async function findRcBasisGaps(
 
   const basisByEntryAndRate = new Map<string, number>()
   for (const line of siblingLines) {
-    const rate = STATIC_RC_BASIS_RATE.get(line.account_number) ??
-      dynamicVatAccounts.rcBasisRateByAccount.get(line.account_number)
+    const rate = dynamicVatAccounts.explicitAccounts.has(line.account_number)
+      ? dynamicVatAccounts.rcBasisRateByAccount.get(line.account_number)
+      : STATIC_RC_BASIS_RATE.get(line.account_number)
     if (rate) {
       const key = `${line.journal_entry_id}:${rate}`
       const prev = basisByEntryAndRate.get(key) || 0

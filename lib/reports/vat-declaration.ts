@@ -436,6 +436,7 @@ export function rutorFromTotals(
   }
 
   for (const [account, mapping] of Object.entries(ACCOUNT_RUTA)) {
+    if (dynamic?.explicitAccounts.has(account)) continue
     const t = totals.get(account)
     if (!t) continue
     const balance = mapping.side === 'credit'
@@ -445,7 +446,6 @@ export function rutorFromTotals(
   }
 
   for (const [account, mapping] of dynamic?.mappingByAccount ?? []) {
-    if (ACCOUNT_RUTA[account]) continue
     const t = totals.get(account)
     if (!t) continue
     const balance = mapping.side === 'credit' ? t.credit - t.debit : t.debit - t.credit
@@ -561,6 +561,7 @@ export async function calculateVatDeclaration(
   }
   const RATE_BUCKET = { 0.25: 'base25', 0.12: 'base12', 0.06: 'base6' } as const
   for (const [account, rate] of [['3001', 'base25'], ['3002', 'base12'], ['3003', 'base6']] as const) {
+    if (dynamicVatAccounts.explicitAccounts.has(account)) continue
     const t = totals.get(account)
     if (t) revenueByRate[rate] = round(t.credit - t.debit)
   }
