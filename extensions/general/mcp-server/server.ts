@@ -1343,6 +1343,18 @@ const SKV_AGI_STATUS_OUTPUT_SCHEMA = {
 // (the original sale's VAT silently disappears) and over-credit Period N+M
 // (a reversal with no original), incorrect per ML 2023:200.
 
+// Keep the MCP report's historical ruta 05 widening for accounts that do not
+// have an explicit treatment. The effective resolver adds custom ruta 05
+// accounts and removes any of these when the company overrides their treatment.
+const RUTA_05_COMPATIBILITY_ACCOUNTS = [
+  '3000',
+  '3001', '3002', '3003', '3005', '3006', '3007', '3008',
+  '3106',
+  '3041', '3042', '3043', '3044', '3045', '3046', '3047', '3048',
+  '3051', '3052', '3053', '3054', '3055', '3056', '3057', '3058',
+  '3071', '3072', '3073', '3074', '3075', '3076', '3077', '3078',
+] as const
+
 export interface VatReportResult {
   period: { type: string; year: number; period: number; start: string; end: string }
   period_label: string
@@ -1506,12 +1518,27 @@ export async function computeVatReportWithRutor(
     return t ? Math.round((t.debit - t.credit) * 100) / 100 : 0
   }
 
+  function creditBalance(acc: string): number {
+    const t = accountTotals.get(acc)
+    return t ? Math.round((t.credit - t.debit) * 100) / 100 : 0
+  }
+
   const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
   const declarationRutor = rutorFromTotals(accountTotals, dynamicVatAccounts)
   const {
-    ruta05, ruta10, ruta11, ruta12, ruta30, ruta31, ruta32,
+    ruta10, ruta11, ruta12, ruta30, ruta31, ruta32,
     ruta35, ruta39, ruta40, ruta48, ruta49, ruta60, ruta61, ruta62,
   } = declarationRutor
+  const reportRuta05Accounts = new Set(
+    RUTA_05_COMPATIBILITY_ACCOUNTS.filter(
+      (account) => !dynamicVatAccounts.explicitAccounts.has(account),
+    ),
+  )
+  for (const [account, mapping] of dynamicVatAccounts.mappingByAccount) {
+    if (mapping.box === 'ruta05') reportRuta05Accounts.add(account)
+  }
+  const ruta05 = [...reportRuta05Accounts]
+    .reduce((sum, account) => sum + creditBalance(account), 0)
   // Import VAT (since 2015 declared via momsdeklaration, not Tullverket): the
   // importer books output VAT to 2615/2625/2635 (ruta 60/61/62) and the
   // matching deductible input to 2645 (rolls into ruta 48 below).
