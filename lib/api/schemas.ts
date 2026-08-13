@@ -2110,6 +2110,15 @@ const defaultVatRate = z
   .nullable()
   .optional()
 
+export const AccountVatTreatmentSchema = z.enum([
+  'standard_25', 'reduced_12', 'reduced_6', 'exempt',
+  'reverse_charge_domestic', 'reverse_charge_eu_goods',
+  'reverse_charge_eu_services', 'export_goods', 'export_services',
+  'vmb', 'rental_voluntary',
+])
+
+const defaultVatTreatment = AccountVatTreatmentSchema.nullable().optional()
+
 export const CreateAccountSchema = z.object({
   account_number: accountNumber,
   account_name: z.string().min(1, 'Account name is required'),
@@ -2119,6 +2128,7 @@ export const CreateAccountSchema = z.object({
   description: z.string().nullable().optional(),
   default_vat_code: z.string().nullable().optional(),
   default_vat_rate: defaultVatRate,
+  default_vat_treatment: defaultVatTreatment,
   sru_code: z.string().nullable().optional(),
 })
 
@@ -2128,6 +2138,7 @@ export const UpdateAccountSchema = z.object({
   description: z.string().nullable().optional(),
   default_vat_code: z.string().nullable().optional(),
   default_vat_rate: defaultVatRate,
+  default_vat_treatment: defaultVatTreatment,
   sru_code: z.string().nullable().optional(),
 })
 

@@ -95,7 +95,7 @@ export const PUT = withRouteContext(
     // .default() today, so sparsePatchBody is a no-op here: it is the
     // structural guarantee that adding one later cannot make a PUT that
     // renames an account also rewrite its VAT code or SRU mapping. An
-    // explicit null (clearing sru_code, default_vat_code, default_vat_rate)
+    // explicit null (clearing sru_code, VAT defaults, or descriptions)
     // still survives.
     const validation = await validateBody(request, sparsePatchBody(UpdateAccountSchema), {
       log,

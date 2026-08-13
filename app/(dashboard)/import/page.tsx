@@ -62,6 +62,8 @@ import type {
   ImportResult,
   ParseIssue,
 } from '@/lib/import/types'
+import { enrichAccountMappingsWithVat } from '@/lib/import/account-vat-treatment'
+import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
 import type { TheaterModel } from '@/lib/import/theater-model'
 
 /** Above this size the client-side theater parse is skipped (main-thread
@@ -513,7 +515,11 @@ function SIEImportWizard() {
 
   // Skip the mapping step when all accounts are already mapped
   const hasUnmapped = mappings.some((m) => !m.targetAccount)
-  const sieSteps: ImportWizardStep[] = hasUnmapped
+  const needsVatReview = mappings.some((m) =>
+    m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
+  )
+  const showMappingStep = hasUnmapped || needsVatReview
+  const sieSteps: ImportWizardStep[] = showMappingStep
     ? ['upload', 'preview', 'mapping', 'review', 'result']
     : ['upload', 'preview', 'review', 'result']
 
@@ -589,7 +595,6 @@ function SIEImportWizard() {
         issues: data.parsed.issues,
         stats: data.parsed.stats,
       })
-      setMappings(data.mappings)
       setPreview(data.preview)
       setIssues(data.parsed.issues)
       setSieAccounts(data.parsed.accounts)
@@ -597,7 +602,11 @@ function SIEImportWizard() {
       const accountsRes = await fetch('/api/bookkeeping/accounts')
       if (accountsRes.ok) {
         const accountsData = await accountsRes.json()
-        setBasAccounts(accountsData.data || [])
+        const accounts = accountsData.data || []
+        setBasAccounts(accounts)
+        setMappings(enrichAccountMappingsWithVat(data.mappings, accounts))
+      } else {
+        setMappings(enrichAccountMappingsWithVat(data.mappings, []))
       }
 
       setStep('preview')
@@ -710,6 +719,35 @@ function SIEImportWizard() {
       }
     })
   }, [mappings])
+
+  const handleVatTreatmentChange = useCallback((
+    sourceAccount: string,
+    treatment: AccountVatTreatment | null,
+    rate: number | null,
+  ) => {
+    setMappings((prev) => prev.map((mapping) =>
+      mapping.sourceAccount === sourceAccount
+        ? {
+            ...mapping,
+            defaultVatTreatment: treatment,
+            defaultVatRate: rate,
+            vatTreatmentSuggested: false,
+          }
+        : mapping
+    ))
+  }, [])
+
+  const confirmVatReview = useCallback(() => {
+    setMappings((prev) => prev.map((mapping) =>
+      mapping.requiresVatTreatmentReview
+        ? { ...mapping, vatTreatmentReviewed: true }
+        : mapping
+    ))
+    setStep('review')
+    setError(null)
+    setValidationErrors([])
+    setValidationWarnings([])
+  }, [])
 
   const missingAccounts = mappings
     .filter((m) => !m.targetAccount)
@@ -887,11 +925,12 @@ function SIEImportWizard() {
       {step === 'preview' && preview && (
         <SIEPreviewStep preview={preview} issues={issues} missingAccounts={missingAccounts}
           onCreateAccounts={handleCreateAccounts} isCreatingAccounts={isCreatingAccounts}
-          onContinue={() => goToStep(hasUnmapped ? 'mapping' : 'review')} onBack={goBack} />
+          onContinue={() => goToStep(showMappingStep ? 'mapping' : 'review')} onBack={goBack} />
       )}
       {step === 'mapping' && (
         <AccountMappingStep mappings={mappings} basAccounts={basAccounts}
-          onMappingChange={handleMappingChange} onContinue={() => goToStep('review')} onBack={goBack} />
+          onMappingChange={handleMappingChange} onVatTreatmentChange={handleVatTreatmentChange}
+          onContinue={confirmVatReview} onBack={goBack} />
       )}
       {step === 'review' && preview && (
         <ImportReviewStep preview={preview} mappings={mappings}
@@ -900,7 +939,12 @@ function SIEImportWizard() {
       )}
       {step === 'result' && importResult && (
         <ImportResultStep result={importResult} onNewImport={handleNewImport} onUndo={handleUndo}
-          preview={preview} theaterModel={theaterModel} />
+          preview={preview} theaterModel={theaterModel}
+          unresolvedVatAccountCount={mappings.filter((mapping) =>
+            mapping.sourceAccount === mapping.targetAccount &&
+            ['3', '4'].includes(mapping.sourceAccount.charAt(0)) &&
+            !mapping.defaultVatTreatment
+          ).length} />
       )}
     </div>
   )

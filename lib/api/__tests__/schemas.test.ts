@@ -2305,6 +2305,14 @@ describe('UpdateAccountSchema', () => {
       default_vat_rate: 0.5,
     }).success).toBe(false)
   })
+
+  it('accepts supported account VAT treatments and rejects unknown values', () => {
+    expect(UpdateAccountSchema.safeParse({
+      default_vat_treatment: 'reverse_charge_eu_goods',
+    }).success).toBe(true)
+    expect(UpdateAccountSchema.safeParse({ default_vat_treatment: null }).success).toBe(true)
+    expect(UpdateAccountSchema.safeParse({ default_vat_treatment: 'eu_purchase' }).success).toBe(false)
+  })
 })
 
 // ============================================================

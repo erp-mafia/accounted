@@ -1734,6 +1734,7 @@ export interface BASAccount {
   // Per-account default VAT rate for booking lines (0/0.06/0.12/0.25).
   // null = no default (line keeps its own rate). Öresavrundning (3740) = 0.
   default_vat_rate: number | null
+  default_vat_treatment: import('@/lib/vat/account-vat-treatment').AccountVatTreatment | null
   description: string | null
   sru_code: string | null
   k2_excluded: boolean
