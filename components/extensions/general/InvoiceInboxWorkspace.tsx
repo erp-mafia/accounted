@@ -52,6 +52,7 @@ import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
+import InvoiceInboxSkeleton from '@/components/extensions/general/InvoiceInboxSkeleton'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
 import { createClient } from '@/lib/supabase/client'
@@ -70,9 +71,73 @@ import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDi
 // INBOX_CUSTOM_DOMAINS_ENABLED in extensions/general/invoice-inbox/index.ts.
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  getErrorMessage as getUserErrorMessage,
+  getResponseErrorMessage,
+} from '@/lib/errors/get-error-message'
+import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
+import { exceedsHostedUploadLimit, tooLargeMessage } from '@/lib/documents/upload-size'
+import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 
 type AccountingMethod = 'accrual' | 'cash'
+
+/**
+ * A failure whose message is already the sentence to show the user, resolved
+ * where the response was still in hand.
+ *
+ * The old `throw new Error(json.error ?? '…')` lost two things. A body that
+ * is not JSON (an HTML error page, an empty 502, a request rejected before it
+ * reached the route) made `res.json()` itself throw, and `error` is an object
+ * on the structured envelope, which stringified to "[object Object]". Both
+ * ended at the generic "Något gick fel. Försök igen." An expired session on a
+ * mobile tab is exactly the second shape, so the one failure the user could
+ * have fixed in a tap was also the one that said the least.
+ */
+class ResolvedFailure extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
+/**
+ * Read a failed response into a displayable message, and let the session
+ * controller know if the reason was an expired session (it redirects to
+ * /login; the toast below is what the user sees on the way there).
+ */
+async function resolveFailure(response: Response): Promise<ResolvedFailure> {
+  notifySessionExpired(response)
+  return new ResolvedFailure(await getResponseErrorMessage(response), response.status)
+}
+
+function failureText(err: unknown): string {
+  return err instanceof ResolvedFailure ? err.message : getUserErrorMessage(err)
+}
+
+/**
+ * Leave a server-side trace when an upload fails.
+ *
+ * A request the middleware or the platform answers before the route runs
+ * leaves nothing behind in the function logs, so "uploading from my phone
+ * just fails" was untraceable: the successful uploads were all we could see.
+ * /api/log is the existing rate-limited, PII-redacting client sink, and it is
+ * the one API path exempt from the session-timeout gate, so it still records
+ * the report when an expired session is the very thing being reported.
+ * Metadata only, never the document.
+ */
+function reportUploadFailure(report: {
+  status: number
+  size: number
+  type: string
+  reason: string
+}): void {
+  void fetch('/api/log', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message: 'underlag upload failed', extra: report }),
+  }).catch(() => {
+    // Reporting the failure must never become a second failure.
+  })
+}
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -95,6 +160,12 @@ interface InboxItem {
   matched_transaction_id: string | null
   created_supplier_invoice_id: string | null
   created_journal_entry_id: string | null
+  // The verifikat that anchors the matched transaction when it is already
+  // booked (directly or via a bulk-book samlingsverifikat). Server-derived by
+  // GET /items: created_journal_entry_id is UNIQUE per verifikat, so on a
+  // samlingsverifikat only one of N items can carry the stamp; this field is
+  // what lets the rest read as booked. Absent on client-side placeholders.
+  matched_transaction_journal_entry_id?: string | null
   error_message: string | null
   // True when AI extraction was skipped: either because the upload caller
   // passed skip_extraction=true (MCP/agent path) or because the server's
@@ -158,6 +229,10 @@ function pickSupplierName(item: InboxItem): string | null {
   return item.extracted_data?.supplier?.name ?? null
 }
 
+function pickInvoiceDate(item: InboxItem): string | null {
+  return item.extracted_data?.invoice?.invoiceDate ?? null
+}
+
 // True when extraction produced at least one usable field. Distinguishes a
 // deterministically-parsed underlag (fields present: render the editable
 // list) from an item whose extracted_data is null/empty (AI never ran, or ran
@@ -210,71 +285,28 @@ function countExtractedFields(data: InvoiceExtractionResult | null): number {
 // Lifecycle stage of an inbox item. Single source of truth shared by the list
 // filter, the count pills, and the row icons so they never drift apart.
 //
-// Precedence mirrors the FieldsRail: a booked item (supplier invoice OR a
-// direct journal entry) is done and drops out of the active inbox. A
-// matched-but-unbooked item is "linked": it STAYS in the inbox as its own
-// category because the bank payment still needs booking (a document attached
-// to a transaction is not the same as a booked one). An extraction failure is
-// "error"; everything else needs a first action.
+// Precedence mirrors the FieldsRail: a booked item (supplier invoice, a
+// direct journal entry, OR a matched transaction that is itself booked) is
+// done and drops out of the active inbox. A matched-but-unbooked item is
+// "linked": it STAYS in the inbox as its own category because the bank
+// payment still needs booking (a document attached to a transaction is not
+// the same as a booked one). An extraction failure is "error"; everything
+// else needs a first action.
 type InboxStatus = 'needs_action' | 'linked' | 'booked' | 'error'
 
 function deriveInboxStatus(item: InboxItem): InboxStatus {
   if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
+  if (item.matched_transaction_journal_entry_id) return 'booked'
   if (item.matched_transaction_id) return 'linked'
   if (item.status === 'error') return 'error'
   return 'needs_action'
 }
 
 // ── Skeleton ─────────────────────────────────────────────────
-// Mirrors the live layout (top bar + 3-pane card) so the transition from
-// the route-level loading.tsx to data-loaded content has no visible reflow.
-// Keep in sync with app/(dashboard)/e/[sector]/[slug]/loading.tsx.
+// Shared with app/(dashboard)/e/[sector]/[slug]/loading.tsx so the route
+// fallback and this client-fetch shell are one silhouette with no reflow.
 
-function WorkspaceSkeleton() {
-  return (
-    <div className="h-[calc(100vh-1px)] md:h-full">
-      <div className="h-full flex flex-col overflow-hidden">
-        <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5">
-          <div className="flex items-center gap-2 min-w-0">
-            <Skeleton className="h-4 w-4 shrink-0" />
-            <Skeleton className="h-4 w-32 shrink-0" />
-            <Skeleton className="hidden md:block h-3 w-56" />
-          </div>
-          <Skeleton className="h-8 w-28 shrink-0" />
-        </header>
-        <div className="flex-1 grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_340px] min-h-0">
-          <aside className="border-b xl:border-b-0 xl:border-r overflow-hidden bg-muted/20 pt-3">
-            <div className="px-3 pb-3 space-y-2 border-b">
-              <Skeleton className="h-8 w-full" />
-              <div className="flex flex-wrap gap-1">
-                <Skeleton className="h-5 w-10 rounded-full" />
-                <Skeleton className="h-5 w-24 rounded-full" />
-                <Skeleton className="h-5 w-20 rounded-full" />
-                <Skeleton className="h-5 w-8 rounded-full" />
-              </div>
-            </div>
-            <ul>
-              {Array.from({ length: 7 }).map((_, i) => (
-                <li key={i} className="border-b px-3 py-2 flex flex-col gap-1.5">
-                  <div className="flex items-center gap-2">
-                    <Skeleton className="h-3 w-3 shrink-0" />
-                    <Skeleton className="h-3.5 flex-1 max-w-[180px]" />
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <Skeleton className="h-3 w-16" />
-                    <Skeleton className="h-3 w-12" />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </aside>
-          <main className="overflow-hidden bg-muted/10 hidden xl:block" />
-          <aside className="border-l overflow-hidden hidden xl:block" />
-        </div>
-      </div>
-    </div>
-  )
-}
+const WorkspaceSkeleton = InvoiceInboxSkeleton
 
 // ── Main component ───────────────────────────────────────────
 
@@ -737,15 +769,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
     try {
       const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${id}`)
+      if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Kunde inte hämta posten')
       const item = json.data as InboxItem
       setSelected(item)
       await loadDocument(id, item.document_id)
     } catch (err) {
       toast({
         title: 'Kunde inte ladda dokumentet',
-        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
+        description: failureText(err),
         variant: 'destructive',
       })
     }
@@ -757,9 +789,31 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // for a one-off drop (user expects to see what just landed). Harmful in
   // a multi-file queue (selection yanks around as each file processes).
   const uploadFile = useCallback(async (
-    file: File,
+    original: File,
     options: { autoSelect: boolean } = { autoSelect: true },
   ) => {
+    // A phone photo is routinely larger than the request body the platform
+    // will carry, and it rejects the upload itself, before the route can say
+    // anything useful about it. Shrink what can be shrunk, and refuse the rest
+    // here, where we can name the size instead of letting the transfer fail.
+    const file = exceedsHostedUploadLimit(original.size)
+      ? await shrinkImageForUpload(original)
+      : original
+    if (exceedsHostedUploadLimit(file.size)) {
+      reportUploadFailure({
+        status: 0,
+        size: file.size,
+        type: file.type || 'unknown',
+        reason: 'over hosted body limit, refused client-side',
+      })
+      toast({
+        title: 'Uppladdning misslyckades',
+        description: tooLargeMessage(file.size),
+        variant: 'destructive',
+      })
+      return undefined
+    }
+
     // Optimistic placeholder: gives the user an immediate visual response
     // for the 3-8s while extraction runs. Removed once the real row arrives.
     const tempId = `temp-${crypto.randomUUID()}`
@@ -796,8 +850,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         method: 'POST',
         body: fd,
       })
+      if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Uppladdning misslyckades')
       if (json.data?.extraction_skipped) {
         const pages = json.data?.page_count
         toast({
@@ -821,9 +875,16 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         setSelectedId((prev) => (prev === tempId ? null : prev))
         setSelected((prev) => (prev?.id === tempId ? null : prev))
       }
+      const reason = failureText(err)
+      reportUploadFailure({
+        status: err instanceof ResolvedFailure ? err.status : 0,
+        size: file.size,
+        type: file.type || 'unknown',
+        reason,
+      })
       toast({
         title: 'Uppladdning misslyckades',
-        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
+        description: reason,
         variant: 'destructive',
       })
     } finally {
@@ -863,19 +924,21 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           body: JSON.stringify({ transaction_id: transactionId }),
         },
       )
-      if (!res.ok) throw new Error(String(res.status))
+      if (!res.ok) throw await resolveFailure(res)
       toast({
         title: 'Underlag kopplat',
         description: rest.length ? `${file.name}. ${rest.length} till lades i inkorgen.` : file.name,
       })
       setSelectedPurchaseId(null)
       await Promise.all([fetchItems(), fetchPurchases()])
-    } catch {
+    } catch (err) {
       // The document is safely filed either way; only the link failed, and
       // the user can still make it by hand from the inbox.
       toast({
         title: 'Uppladdat, men inte kopplat',
-        description: 'Dokumentet ligger i inkorgen. Koppla det till köpet därifrån.',
+        description: err instanceof ResolvedFailure
+          ? `${failureText(err)} Dokumentet ligger i inkorgen, koppla det till köpet därifrån.`
+          : 'Dokumentet ligger i inkorgen. Koppla det till köpet därifrån.',
         variant: 'destructive',
       })
       await fetchItems()
@@ -932,8 +995,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${id}`, {
         method: 'DELETE',
       })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Kunde inte ta bort')
+      if (!res.ok) throw await resolveFailure(res)
       toast({ title: 'Borttagen' })
       if (selectedId === id) {
         setSelectedId(null)
@@ -943,7 +1005,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } catch (err) {
       toast({
         title: 'Kunde inte ta bort',
-        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
+        description: failureText(err),
         variant: 'destructive',
       })
     } finally {
@@ -972,7 +1034,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const bookableSelectedCount = useMemo(
     () =>
       selectedItems.filter(
-        (it) => it.matched_transaction_id && !it.created_journal_entry_id && !it.created_supplier_invoice_id,
+        (it) =>
+          it.matched_transaction_id &&
+          !it.created_journal_entry_id &&
+          !it.created_supplier_invoice_id &&
+          // A matched transaction that is already booked has nothing left to
+          // bulk-book: the server would only skip it with a 409.
+          !it.matched_transaction_journal_entry_id,
       ).length,
     [selectedItems],
   )
@@ -1039,15 +1107,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const res = await fetch('/api/extensions/ext/invoice-inbox/inbox/rotate', {
         method: 'POST',
       })
+      if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Rotation misslyckades')
       setInboxAddress(json.data)
       setAddressLoadFailed(false)
       toast({ title: 'Ny adress skapad', description: json.data.address })
     } catch (err) {
       toast({
         title: 'Rotation misslyckades',
-        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
+        description: failureText(err),
         variant: 'destructive',
       })
     } finally {
@@ -1078,7 +1146,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <Inbox className="h-4 w-4 text-muted-foreground shrink-0" />
-          <h1 className="font-medium text-sm shrink-0">Dokumentinkorg</h1>
+          <h1 className="text-sm shrink-0">Dokumentinkorg</h1>
           {/* Where the page's contents come from, behind one chip. The detail
               (which mailbox, when it was last read) is a thing people look up
               when something seems wrong, not something they read every visit.
@@ -1926,6 +1994,7 @@ function InboxRow({
   const t = useTranslations('inbox_workspace')
   const amount = pickAmount(item)
   const supplierName = pickSupplierName(item)
+  const invoiceDate = pickInvoiceDate(item)
   const isPlaceholder = !!item.isPlaceholder
   const status = deriveInboxStatus(item)
   const isErrored = status === 'error'
@@ -1936,6 +2005,15 @@ function InboxRow({
   // item still books normally. Booked items drop the reminder.
   const hasUnansweredQuestion =
     !isBooked && item.channel_context?.pending_question?.status === 'moved_to_app'
+
+  const receivedMeta = (
+    <span className="truncate">
+      {timeAgo(item.email_received_at ?? item.created_at)}
+      {invoiceDate && (
+        <> · <span className="tabular-nums">{formatDate(invoiceDate)}</span></>
+      )}
+    </span>
+  )
 
   return (
     <li
@@ -2016,10 +2094,10 @@ function InboxRow({
                   {t('wa_question_badge')}
                 </Badge>
               )}
-              <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+              {receivedMeta}
             </span>
           ) : (
-            <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+            receivedMeta
           )}
           {!isPlaceholder && amount != null && (
             <span className="tabular-nums shrink-0">
@@ -2428,7 +2506,7 @@ function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
   return (
     <div className="p-4 space-y-4">
       <div>
-        <h3 className="text-sm font-medium">
+        <h3 className="text-sm">
           {purchase.merchant_name || purchase.description || t('purchase_unknown')}
         </h3>
         <p className="text-xs text-muted-foreground mt-0.5">{t('purchase_kind')}</p>
@@ -2509,6 +2587,13 @@ type SuggestedBooking = {
   description?: string
   rule_name?: string | null
   entry_date?: string
+  /** Skeleton rows seeded from the matched bank transaction when `lines` is
+      empty: the amount in SEK against the settlement account, cost side left
+      blank. Editor prefill only; never rendered as a proposal. */
+  fallback_lines?: { account_number: string; debit_amount: number; credit_amount: number; description: string }[]
+  /** The matched bank row's SEK amount and date, present on empty proposals
+      so the dialog can still show the kronor figure. */
+  transaction?: { amount_sek: number; date: string } | null
 }
 
 const SUGGESTION_SOURCE_LABEL: Record<string, string> = {
@@ -2591,7 +2676,7 @@ function ProposedBooking({
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-xs font-medium">{t('proposal_title')}</h3>
+        <h3 className="text-xs">{t('proposal_title')}</h3>
         {data.entry_date && (
           <span className="text-[11px] text-muted-foreground tabular-nums">
             Bokförs {formatDate(data.entry_date)}
@@ -2703,7 +2788,11 @@ function FieldsRail({
   }, [item.id])
 
   const isProcessed = !!item.created_supplier_invoice_id
-  const isBookedDirectly = !isProcessed && !!item.created_journal_entry_id
+  // The verifikat this item resolved into: its own stamp, or the entry that
+  // anchors its matched (and already booked) transaction. See InboxItem.
+  const bookedEntryId =
+    item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? null
+  const isBookedDirectly = !isProcessed && !!bookedEntryId
   // "Resolved" now means a journal entry exists: matched_transaction_id alone
   // is not resolved, it's the prerequisite for booking against that tx.
   const isLinkedToTransaction = !isProcessed && !isBookedDirectly && !!item.matched_transaction_id
@@ -2757,11 +2846,10 @@ function FieldsRail({
         `/api/extensions/ext/invoice-inbox/items/${item.id}/retry-extraction`,
         { method: 'POST' },
       )
-      const json = await res.json().catch(() => ({}))
       if (!res.ok) {
         toast({
           title: 'Tolkning misslyckades',
-          description: json.error || 'Försök igen om en stund.',
+          description: (await resolveFailure(res)).message,
           variant: 'destructive',
         })
         return
@@ -2802,7 +2890,7 @@ function FieldsRail({
       {/* WhatsApp chat context (see waCtx derivation above). */}
       {showWaBlock && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
-          <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-2">
+          <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
             {t('wa_block_title')}
           </h3>
           {waCaption && (
@@ -2903,7 +2991,7 @@ function FieldsRail({
           the code can be copied out. */}
       {item.source === 'email' && !item.document_id && (
         <div className="border-b px-4 py-3">
-          <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-2">
+          <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
             {t('email_body_label')}
           </h3>
           {item.email_body_text?.trim() ? (
@@ -3038,8 +3126,8 @@ function FieldsRail({
               Öppna leverantörsfaktura
             </Button>
           </Link>
-        ) : isBookedDirectly && item.created_journal_entry_id ? (
-          <Link href={`/bookkeeping/${item.created_journal_entry_id}`} className="block">
+        ) : isBookedDirectly && bookedEntryId ? (
+          <Link href={`/bookkeeping/${bookedEntryId}`} className="block">
             <Button variant="default" size="sm" className="w-full">
               <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
               Öppna verifikation
@@ -3217,7 +3305,12 @@ function FieldsRail({
           new Date().toISOString().slice(0, 10)
         }
         description={data?.supplier?.name ?? item.email_subject ?? 'Underlag'}
-        lines={proposal?.lines ?? []}
+        // No proposal is not the same as no amount: the matched bank row still
+        // knows what left the account and where. The fallback skeleton keeps
+        // the kronor figure in the form (regression report 2026-08-12: match,
+        // "Bokför manuellt", and the amount no longer followed along).
+        lines={proposal?.lines.length ? proposal.lines : (proposal?.fallback_lines ?? [])}
+        matchedTransaction={proposal?.transaction ?? null}
         onBooked={() => {
           setEditOpen(false)
           // Realtime refreshes the list, but this rail renders from the
@@ -3427,21 +3520,21 @@ export function EditableFieldsList({
             body: JSON.stringify(body),
           }
         )
-        const json = await res.json()
         if (!res.ok) {
           // 409 means the item is already linked to a supplier invoice and
-          // the server has rejected the edit. Surface the specific Swedish
-          // message ("Posten är redan kopplad…") instead of the generic
-          // fallback so the user understands why the field locked.
-          const isConflict = res.status === 409
+          // the server has rejected the edit. Name that in the title; the
+          // description carries the specific Swedish message ("Posten är
+          // redan kopplad…") for every status.
+          const failure = await resolveFailure(res)
           toast({
             variant: 'destructive',
-            title: isConflict ? 'Posten är låst' : 'Kunde inte spara',
-            description: json.error ?? 'Försök igen',
+            title: res.status === 409 ? 'Posten är låst' : 'Kunde inte spara',
+            description: failure.message,
           })
           setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
           return
         }
+        const json = await res.json()
         if (json.data?.extracted_data) {
           onUpdated(json.data.extracted_data as InvoiceExtractionResult)
         }

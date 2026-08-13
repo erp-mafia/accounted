@@ -115,7 +115,7 @@ export default function OpeningBalancePeriodStep({
               Hämtar perioder...
             </div>
           ) : periods.length === 0 ? (
-            <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+            <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
               <AlertCircle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
               <p className="text-sm text-warning">
                 Inga räkenskapsperioder hittades. Skapa en räkenskapsperiod under Bokföring först.
@@ -142,7 +142,7 @@ export default function OpeningBalancePeriodStep({
 
         {/* Replace notice: selecting a period that already has IB corrects it */}
         {periodHasOB && !periodIsClosed && !periodIsLocked && (
-          <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
             <AlertCircle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
             <p className="text-sm text-warning">
               Denna period har redan ingående balanser. Om du fortsätter makuleras (stornas) den

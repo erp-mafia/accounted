@@ -384,7 +384,7 @@ function RegisterPageContent() {
 
   if (duplicateEmail) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
             <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
@@ -393,7 +393,7 @@ function RegisterPageContent() {
           </div>
 
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-medium tracking-tight">{t('duplicate_title')}</h1>
+            <h1 className="text-2xl tracking-tight">{t('duplicate_title')}</h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
               {t('duplicate_body_prefix')}{' '}
               <span className="font-medium text-foreground">{duplicateEmail}</span>.
@@ -437,7 +437,7 @@ function RegisterPageContent() {
     const webmailHint = detectWebmailHint(email, branding.authEmailFrom)
 
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
             <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
@@ -446,7 +446,7 @@ function RegisterPageContent() {
           </div>
 
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-medium tracking-tight">{t('confirm_email_title')}</h1>
+            <h1 className="text-2xl tracking-tight">{t('confirm_email_title')}</h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
               {t.rich('confirm_email_body', {
                 email,
@@ -485,7 +485,7 @@ function RegisterPageContent() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <header className="text-center mb-8">
           <h1 className="sr-only">{t('create_account')}</h1>

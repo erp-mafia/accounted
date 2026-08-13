@@ -187,7 +187,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         </div>
 
         <div>
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">
             {t('opening_balances_ytd_heading')}
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -210,7 +210,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         </div>
 
         <div>
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">
             {t('opening_balances_vacation_heading')}
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -239,7 +239,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         </div>
 
         <div>
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">
             {t('opening_balances_saved_heading')}
           </h2>
           <p className="text-xs text-muted-foreground mb-3">{t('opening_balances_saved_hint')}</p>

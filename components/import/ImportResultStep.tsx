@@ -179,7 +179,7 @@ export default function ImportResultStep({
       )}
 
       {result.success && result.nextPeriodIBResyncSkipped && (
-        <Card className="border-warning/50">
+        <Card className="border-border">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base text-warning">
               <AlertCircle className="h-5 w-5" />
@@ -347,7 +347,7 @@ export default function ImportResultStep({
 
       {/* Untransferred prior-year results — the year-end omföring is missing */}
       {untransferred && untransferred.length > 0 && (
-        <Card className="border-warning/50">
+        <Card className="border-border">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-warning">
               <AlertCircle className="h-5 w-5" />
@@ -376,7 +376,7 @@ export default function ImportResultStep({
 
       {/* Other warnings (filtered) */}
       {otherWarnings.length > 0 && (
-        <Card className="border-warning/50">
+        <Card className="border-border">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-warning">
               <AlertCircle className="h-5 w-5" />

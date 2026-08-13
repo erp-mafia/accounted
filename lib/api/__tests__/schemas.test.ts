@@ -927,6 +927,23 @@ describe('CreateSupplierInvoiceItemSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts apply_slp as an optional boolean (särskild löneskatt opt-in)', () => {
+    const flagged = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({ account_number: '7412', vat_rate: 0, apply_slp: true })
+    )
+    expect(flagged.success).toBe(true)
+
+    const omitted = CreateSupplierInvoiceItemSchema.safeParse(validSupplierInvoiceItem())
+    expect(omitted.success).toBe(true)
+  })
+
+  it('rejects non-boolean apply_slp', () => {
+    const result = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({ apply_slp: 'yes' })
+    )
+    expect(result.success).toBe(false)
+  })
+
   it('works with quantity * unit_price line total', () => {
     const overByABit = CreateSupplierInvoiceItemSchema.safeParse(
       validSupplierInvoiceItem({

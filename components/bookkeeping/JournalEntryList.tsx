@@ -56,6 +56,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import type { FiscalPeriod, JournalEntry, JournalEntryLine } from '@/types'
 
 const NEEDS_ATTACHMENT = new Set([
@@ -149,10 +150,12 @@ function SortableHeader({
       className={cn(TH_CLASS, className)}
       aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
     >
+      {/* Preflight sets text-transform: none on buttons, which would drop the
+          TH_CLASS uppercase idiom inside the sort control. */}
       <button
         type="button"
         className={cn(
-          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
           align === 'right' && 'ml-auto justify-end',
         )}
         aria-label={sortLabel}
@@ -799,6 +802,14 @@ export default function JournalEntryList() {
       )
     : entries
 
+  // Detail-pager context: the loaded page as rendered, written when the user
+  // opens a verifikat. Server-paginated, so prev/next spans this page only.
+  const rememberListContext = () => {
+    writeListContext(listContextKey('bookkeeping', company?.id), {
+      ids: filteredEntries.map((e) => e.id),
+    })
+  }
+
   // Count of active dialog filters, shown as a badge on the Filtrera button so
   // the user can tell the list is scoped without opening the dialog. Sort order
   // is a view preference (always set), not a filter, so it is excluded.
@@ -1055,7 +1066,6 @@ export default function JournalEntryList() {
                     <SelectItem value="description_desc">{t('sort_description_desc')}</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{t('sort_stack_hint')}</p>
               </div>
 
               {/* Verifikationsserie */}
@@ -1399,7 +1409,10 @@ export default function JournalEntryList() {
                               'font-mono text-[13px] tabular-nums hover:underline',
                               struckCell,
                             )}
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              rememberListContext()
+                            }}
                             // The row's Enter/Space handler calls
                             // preventDefault(), so without this the voucher
                             // link expands the row instead of opening it.
@@ -1631,7 +1644,11 @@ export default function JournalEntryList() {
                                     {t('post')}
                                   </Button>
                                 )}
-                                <Link href={`/bookkeeping/${entry.id}`} className={QUIET_LINK_CLASS}>
+                                <Link
+                                  href={`/bookkeeping/${entry.id}`}
+                                  className={QUIET_LINK_CLASS}
+                                  onClick={rememberListContext}
+                                >
                                   {t('show_details')}
                                 </Link>
                                 {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (

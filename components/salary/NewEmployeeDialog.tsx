@@ -415,7 +415,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
             </Field>
           </div>
           {showChecksumWarning && (
-            <p className="text-xs text-warning-foreground">{BANK_CHECKSUM_WARNING_SV}</p>
+            <p className="text-xs text-attn">{BANK_CHECKSUM_WARNING_SV}</p>
           )}
         </section>
         </div>

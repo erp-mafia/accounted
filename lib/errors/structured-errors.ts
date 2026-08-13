@@ -919,6 +919,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Vid kontantmetoden bokförs fakturan när den betalas.',
     message_en: 'Under the cash method the invoice is booked when it is paid.',
   },
+  // Bulk Bokför on a DRAFT when the company defers invoice booking (#967):
+  // issuing the draft would consume an F-number and mark it sent without
+  // booking anything, so the item is rejected before any side effect.
+  INVOICE_BOOK_DEFERRED_DRAFT: {
+    httpStatus: 400,
+    message_sv:
+      'Företaget bokför fakturor i ett separat steg. Skicka eller markera utkastet som skickat först, bokför sedan.',
+    message_en:
+      'This company books invoices in a separate step. Send or mark the draft as sent first, then book it.',
+  },
   INVOICE_BOOK_NO_FISCAL_PERIOD: {
     httpStatus: 400,
     message_sv: 'Inget öppet räkenskapsår täcker fakturadatumet. Skapa räkenskapsåret först.',
@@ -1880,6 +1890,13 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte importera underlag från leverantören.',
     message_en: 'Failed to import documents from provider.',
   },
+  PROVIDER_DOCUMENT_SCOPES_REQUIRED: {
+    httpStatus: 403,
+    message_sv:
+      'Fortnox-anslutningen saknar behörighet till Arkiv och Koppla fil. Koppla om Fortnox och godkänn behörigheterna för att importera underlag.',
+    message_en:
+      'The Fortnox connection lacks Archive and Connect file access. Reconnect Fortnox and approve those permissions to import documents.',
+  },
   PROVIDER_DISCONNECT_FAILED: {
     httpStatus: 500,
     message_sv: 'Frånkoppling från leverantören misslyckades.',
@@ -2137,6 +2154,20 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
       'Periodisering kan inte kombineras med omvänd skattskyldighet. Kostnadsraden utgör momsunderlaget i momsdeklarationen (ruta 20-32), så nettobeloppet kan inte skjutas upp till ett interimskonto.',
     message_en:
       'Periodisering cannot be combined with reverse charge. The expense line carries the VAT base for the VAT declaration (boxes 20-32), so the net amount cannot be deferred to an interim account.',
+  },
+  SI_CREATE_SLP_INVALID_ACCOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Särskild löneskatt kan bara läggas till på rader med pensionskonto 7410-7419 (t.ex. 7412 Premier för tjänstepensioner). Byt konto på raden eller ta bort löneskatten.',
+    message_en:
+      'Särskild löneskatt (payroll tax on pension costs) can only be added on lines booked to a pension account 7410-7419 (e.g. 7412 occupational pension premiums). Change the line account or remove the flag.',
+  },
+  SI_CREATE_SLP_ACCRUAL: {
+    httpStatus: 400,
+    message_sv:
+      'Särskild löneskatt kan inte kombineras med periodisering på samma rad. Löneskatten (7533/2514) beräknas på hela radbeloppet vid registrering och kan inte skjutas upp.',
+    message_en:
+      'Särskild löneskatt cannot be combined with periodisering on the same line. The payroll tax (7533/2514) is computed on the full line amount at registration and cannot be deferred.',
   },
   SI_DELETE_HAS_BOOKING: {
     httpStatus: 400,

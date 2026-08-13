@@ -57,7 +57,7 @@ export function EmptyState({
           </div>
         </div>
       )}
-      <h3 className="text-lg font-medium mb-2">{title}</h3>
+      <h3 className="text-lg mb-2">{title}</h3>
       <p className="text-sm text-muted-foreground max-w-sm mb-6 text-balance">{description}</p>
 
       {supportHint && (

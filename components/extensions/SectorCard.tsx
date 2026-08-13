@@ -24,7 +24,7 @@ export default async function SectorCard({ sector }: { sector: Sector }) {
               <Icon className="h-5 w-5 text-foreground" />
             </div>
             <div>
-              <h3 className="text-sm font-medium">
+              <h3 className="text-sm">
                 {name}
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{description}</p>

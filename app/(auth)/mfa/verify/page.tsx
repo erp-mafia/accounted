@@ -170,7 +170,7 @@ function MfaVerifyContent() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-10">
           <div className="flex justify-center mb-4">
@@ -178,7 +178,7 @@ function MfaVerifyContent() {
               <ShieldCheck className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-medium tracking-tight">{t('verify_title')}</h1>
+          <h1 className="text-2xl tracking-tight">{t('verify_title')}</h1>
           <p className="text-muted-foreground text-sm mt-2">
             {t('verify_subtitle_full')}
           </p>

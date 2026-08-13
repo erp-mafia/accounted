@@ -27,6 +27,9 @@ interface BulkBookInboxItem {
   matched_transaction_id: string | null
   created_journal_entry_id: string | null
   created_supplier_invoice_id: string | null
+  // Server-derived: the verifikat anchoring an already-booked matched
+  // transaction (see InvoiceInboxWorkspace's InboxItem).
+  matched_transaction_journal_entry_id?: string | null
   extracted_data: InvoiceExtractionResult | null
 }
 
@@ -85,7 +88,14 @@ const VAT_OPTIONS: { value: VatTreatment | 'auto'; label: string }[] = [
 ]
 
 function isBookable(it: BulkBookInboxItem): boolean {
-  return Boolean(it.matched_transaction_id) && !it.created_journal_entry_id && !it.created_supplier_invoice_id
+  return (
+    Boolean(it.matched_transaction_id) &&
+    !it.created_journal_entry_id &&
+    !it.created_supplier_invoice_id &&
+    // A matched transaction that is already booked has nothing left to book:
+    // the server would only skip it as already_booked_or_duplicate.
+    !it.matched_transaction_journal_entry_id
+  )
 }
 
 export default function BulkBookInboxDialog({ open, onOpenChange, items, onSuccess }: Props) {
@@ -101,7 +111,13 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
     [items],
   )
   const alreadyBooked = useMemo(
-    () => items.filter((it) => it.created_journal_entry_id || it.created_supplier_invoice_id).length,
+    () =>
+      items.filter(
+        (it) =>
+          it.created_journal_entry_id ||
+          it.created_supplier_invoice_id ||
+          it.matched_transaction_journal_entry_id,
+      ).length,
     [items],
   )
 

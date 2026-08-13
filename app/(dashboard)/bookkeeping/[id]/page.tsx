@@ -27,7 +27,6 @@ import StrikeLinesDialog from '@/components/bookkeeping/StrikeLinesDialog'
 import CorrectMetadataDialog from '@/components/bookkeeping/CorrectMetadataDialog'
 import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -37,6 +36,9 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { fetchDimensions, type DimensionDto } from '@/components/dimensions/types'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 
@@ -67,6 +69,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const { id } = use(params)
   const router = useRouter()
   const { canWrite } = useCanWrite()
+  const company = useCompanyOptional()?.company ?? null
   const { toast } = useToast()
   const t = useTranslations('journal_detail')
   const sourceTypeLabels = useSourceTypeLabels()
@@ -409,14 +412,25 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
   return (
     <div className="space-y-8">
-      {/* Back link */}
-      <Link
-        href="/bookkeeping"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        {t('back')}
-      </Link>
+      {/* Back link + prev/next record pager */}
+      <div className="flex items-center justify-between gap-4">
+        <Link
+          href="/bookkeeping"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('back')}
+        </Link>
+        <DetailPager
+          contextKey={listContextKey('bookkeeping', company?.id)}
+          basePath="/bookkeeping"
+          currentId={id}
+          // Arrow paging unmounts the page and would destroy an unsaved notes
+          // draft; the textarea only guards arrows while it has focus, so gate
+          // the keyboard bindings on the editing state itself.
+          keyboard={!editingNotes}
+        />
+      </div>
 
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -437,14 +451,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
         {(entry.status === 'posted' || entry.status === 'draft') && (
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-            {entry.status === 'draft' && (
-              <AgentSparkleButton
-                intentId="verifikation.draft"
-                intentArgs={{ journal_entry_id: id }}
-                contextRef={`verifikation:${id}`}
-                className="w-full sm:w-auto"
-              />
-            )}
             {entry.status === 'draft' && (
               <Button
                 variant="outline"
@@ -675,7 +681,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <CardContent className="text-sm">
             {attachmentCount === 0 && references.length === 0 ? (
               <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-warning-foreground" />
+                <AlertTriangle className="h-4 w-4 text-attn" />
                 <span className="text-muted-foreground">{t('no_attachments')}</span>
               </div>
             ) : (
@@ -930,7 +936,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             <div className="mb-4 space-y-2">
               <div>
                 <h4 className="text-sm font-medium">{t('references_title')}</h4>
-                <p className="text-xs text-muted-foreground">{t('references_subtitle')}</p>
               </div>
               <ul className="space-y-1">
                 {references.map((ref) => (

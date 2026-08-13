@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import {
   SESSION_TIMEOUT_CHANNEL,
+  SESSION_TIMEOUT_REASON_HEADER,
   type SessionTimeoutClientState,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
@@ -83,7 +84,7 @@ export function SessionTimeoutController() {
   }, [])
 
   const handleExpiredResponse = useCallback((response: Response) => {
-    const reason = response.headers.get('x-session-timeout-reason') === 'idle'
+    const reason = response.headers.get(SESSION_TIMEOUT_REASON_HEADER) === 'idle'
       ? 'idle'
       : 'absolute'
     void expire(reason)
@@ -161,11 +162,17 @@ export function SessionTimeoutController() {
     channelRef.current = channel
     if (channel) {
       channel.onmessage = (event: MessageEvent<{
-        type: 'activity' | 'heartbeat'
+        type: 'activity' | 'heartbeat' | 'expired'
         at?: number
+        reason?: SessionTimeoutReason
         state?: SessionTimeoutClientState
       }>) => {
-        if (event.data.type === 'heartbeat' && event.data.state) {
+        // 'expired' comes from notifySessionExpired(): a data request hit the
+        // middleware 401 before our own timers noticed, which is the normal
+        // order of events in a backgrounded tab where they are throttled.
+        if (event.data.type === 'expired') {
+          void expire(event.data.reason === 'idle' ? 'idle' : 'absolute')
+        } else if (event.data.type === 'heartbeat' && event.data.state) {
           applyServerState(event.data.state)
           lastHeartbeatAtRef.current = Date.now()
           warningOpenRef.current = false

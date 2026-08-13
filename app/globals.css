@@ -364,19 +364,69 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── Touch / mobile-web behavior ──
+   Hover styling is already safe: Tailwind 4 gates every hover: variant
+   behind @media (hover: hover), so no stuck-hover rules are needed here. */
 
-/* Display typography - Fraunces */
+/* Kill the gray/blue tap flash (inherited property, one declaration covers all) */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Stop pull-to-refresh from hijacking list scrolling and stop inner scrollers
+   from chaining into the document. `contain`, not `none`: none would also kill
+   iOS rubber-banding, which should stay. */
+html,
+body {
+  overscroll-behavior-y: contain;
+}
+
+/* Remove the double-tap-to-zoom wait on interactive elements so taps commit
+   immediately; pinch zoom and panning are unaffected. */
+a,
+button,
+label,
+summary,
+input,
+select,
+textarea,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+/* Long-press on a button must not enter text selection */
+button,
+summary,
+[role="button"] {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* iOS Safari zooms into any focused field whose font-size is under 16px.
+   Touch-primary devices get a 16px floor; desktop keeps text-sm form fields.
+   Unlayered on purpose so it also beats layered text-[13px]-style utilities
+   on bespoke inputs. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
+}
+
+/* Display typography - Hedvig Letters Serif */
 .font-display {
   font-family: var(--font-display);
   font-optical-sizing: auto;
 }
 
 /* Layered so utility classes (e.g. font-sans on a pane title) can override:
-   unlayered element rules would beat Tailwind's layered utilities. */
+   unlayered element rules would beat Tailwind's layered utilities.
+   Hedvig ships weight 400 only; anything heavier is browser-synthesized. */
 @layer base {
   h1, h2, h3 {
     font-family: var(--font-display);
-    font-weight: 500;
+    font-weight: 400;
     letter-spacing: -0.015em;
     font-optical-sizing: auto;
   }

@@ -45,7 +45,7 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
 
   return (
     <div className="space-y-3">
-      <h3 className="text-sm font-medium">{t('title')}</h3>
+      <h3 className="text-sm">{t('title')}</h3>
 
       <div className="rounded-lg bg-muted/50 border p-3 flex gap-2 text-sm text-muted-foreground">
         <Info className="h-4 w-4 shrink-0 mt-0.5" />

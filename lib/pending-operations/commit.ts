@@ -43,6 +43,7 @@ import {
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
+import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
@@ -68,6 +69,10 @@ import {
   type BatchAllocationResult,
 } from '@/lib/invoices/clear-settled-batch-allocations'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
+import {
+  completeInboxItemsForBookedTransaction,
+  resolveVoucherLinkedEntryIds,
+} from '@/lib/transactions/inbox-underlag'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import { executeSIEImport, undoSIEImport } from '@/lib/import/sie-import'
@@ -2941,13 +2946,18 @@ async function commitAttachDocumentToTransaction(
   // A document that already serves as underlag for a DIFFERENT verifikation
   // cannot be pinned here: propagating would either corrupt that link or be
   // blocked by the document-metadata immutability trigger. Same verifikation
-  // is fine (idempotent re-attach; propagation below becomes a no-op).
+  // is fine (idempotent re-attach; propagation below becomes a no-op). A
+  // bulk-booked tx keeps journal_entry_id null and is anchored through
+  // transaction_voucher_links, so that anchoring counts as "same" too.
   // Mirrors the REST route in app/api/transactions/[id]/attach-document.
   const docJournalEntryId = (doc.journal_entry_id as string | null) ?? null
   if (docJournalEntryId && docJournalEntryId !== tx.journal_entry_id) {
-    return {
-      error: 'Underlaget är redan kopplat till en annan verifikation.',
-      status: 409,
+    const voucherLinked = await resolveVoucherLinkedEntryIds(supabase, companyId, [txId])
+    if (docJournalEntryId !== voucherLinked.get(txId)) {
+      return {
+        error: 'Underlaget är redan kopplat till en annan verifikation.',
+        status: 409,
+      }
     }
   }
 
@@ -3041,6 +3051,20 @@ async function commitAttachDocumentToTransaction(
     }
   }
 
+  // The transaction may already be booked, directly or via a bulk-book
+  // samlingsverifikat (journal_entry_id null, anchored through
+  // transaction_voucher_links): complete the matched inbox items against the
+  // anchoring verifikat so an after-the-fact attach resolves them instead of
+  // stranding them as "linked" forever. Best-effort, logged inside. Returns
+  // the anchoring verifikat (the direct id when there is one), so the result
+  // and audit trail can report the voucher-linked case too.
+  const effectiveJournalEntryId = await completeInboxItemsForBookedTransaction(
+    supabase,
+    companyId,
+    txId,
+    { directJournalEntryId: journalEntryId },
+  )
+
   // Rättelse audit trail (BFL 5 kap 5 §): if we replaced a non-null doc, log
   // the swap to processing_history so the original is traceable. Best-effort:
   // a logging failure must not roll back the (compliant) attach.
@@ -3056,7 +3080,7 @@ async function commitAttachDocumentToTransaction(
           transaction_id: txId,
           previous_document_id: previousDocumentId,
           new_document_id: documentId,
-          journal_entry_id: journalEntryId,
+          journal_entry_id: effectiveJournalEntryId,
         },
         actor: { type: 'user', id: userId },
         occurredAt: new Date(),
@@ -3071,7 +3095,7 @@ async function commitAttachDocumentToTransaction(
       transaction_id: txId,
       document_id: documentId,
       previous_document_id: previousDocumentId,
-      journal_entry_id: journalEntryId,
+      journal_entry_id: effectiveJournalEntryId,
     },
   }
 }
@@ -3383,6 +3407,21 @@ async function commitCreateSupplierInvoiceFromInbox(
     return { error: 'exchange_rate must be a finite number when provided', status: 400 }
   }
 
+  // Särskild löneskatt (SLP): staged params must respect the same rule the
+  // create routes enforce; the 7533/2514 pair is only lawful on 741x pension
+  // premiums, so a flag on any other account is tampered or mis-staged.
+  const slpInvalid = rawItems.some(
+    (item) => item.apply_slp === true && !isSlpPensionAccount(String(item.account_number ?? '')),
+  )
+  if (slpInvalid) {
+    return {
+      error:
+        getErrorEntry('SI_CREATE_SLP_INVALID_ACCOUNT')?.message_sv ??
+        'Särskild löneskatt kan bara läggas till på rader med pensionskonto 7410-7419.',
+      status: 400,
+    }
+  }
+
   // Idempotency: a re-fired commit (e.g. retry, double-click on the approval
   // UI, racy MCP call) must not create a second leverantörsfaktura for the
   // same inbox row. The DB FK on invoice_inbox_items.created_supplier_invoice_id
@@ -3566,6 +3605,9 @@ async function commitCreateSupplierInvoiceFromInbox(
       reverse_charge_rate: reverseCharge
         ? ([0.06, 0.12, 0.25].includes(Number(item.reverse_charge_rate)) ? Number(item.reverse_charge_rate) : null)
         : null,
+      // Särskild löneskatt (SLP): booking injects the self-balancing
+      // 7533/2514 pair for this line. Validated above (741x accounts only).
+      apply_slp: item.apply_slp === true,
       dimensions: coerceDimensionsBag(item.dimensions) ?? {},
     }
   })

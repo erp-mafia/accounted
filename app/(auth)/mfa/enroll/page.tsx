@@ -175,7 +175,7 @@ function MfaEnrollContent() {
   // Step 1: Show enroll button
   if (!qrCode) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up">
           <div className="text-center mb-10">
             <div className="flex justify-center mb-4">
@@ -183,7 +183,7 @@ function MfaEnrollContent() {
                 <ShieldCheck className="h-7 w-7 text-primary" />
               </div>
             </div>
-            <h1 className="text-2xl font-medium tracking-tight">Aktivera tvåfaktorsautentisering</h1>
+            <h1 className="text-2xl tracking-tight">Aktivera tvåfaktorsautentisering</h1>
             <p className="text-muted-foreground text-sm mt-2">
               Skydda ditt konto med en autentiseringsapp som Google Authenticator eller Authy
             </p>
@@ -229,7 +229,7 @@ function MfaEnrollContent() {
 
   // Step 2: Show QR code and verification
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
@@ -237,7 +237,7 @@ function MfaEnrollContent() {
               <ShieldCheck className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-medium tracking-tight">Skanna QR-koden</h1>
+          <h1 className="text-2xl tracking-tight">Skanna QR-koden</h1>
           <p className="text-muted-foreground text-sm mt-2">
             Öppna din autentiseringsapp och skanna koden nedan
           </p>

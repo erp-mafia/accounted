@@ -237,7 +237,7 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
               </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="font-medium">{term.term}</h3>
+                  <h3>{term.term}</h3>
                   {term.simpleTerm && (
                     <span className="text-sm text-muted-foreground font-normal">
                       {term.simpleTerm}

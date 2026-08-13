@@ -154,7 +154,7 @@ export default function SupplierForm({
 
       {/* Business info */}
       <div className="space-y-4 pt-4 border-t">
-        <h3 className="font-medium">{t('business_section')}</h3>
+        <h3>{t('business_section')}</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="org_number">{t('org_number_label')}</Label>
@@ -177,7 +177,7 @@ export default function SupplierForm({
 
       {/* Address */}
       <div className="space-y-4 pt-4 border-t">
-        <h3 className="font-medium">{t('address_section')}</h3>
+        <h3>{t('address_section')}</h3>
         <div className="space-y-2">
           <Label htmlFor="address_line1">{t('street_label')}</Label>
           <Input
@@ -204,7 +204,7 @@ export default function SupplierForm({
 
       {/* Payment details */}
       <div className="space-y-4 pt-4 border-t">
-        <h3 className="font-medium">{t('payment_section')}</h3>
+        <h3>{t('payment_section')}</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="bankgiro">{t('bankgiro_label')}</Label>
