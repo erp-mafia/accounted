@@ -437,7 +437,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         if (clearErr) {
           txLog.warn('failed to clear journal_entry_id after storno', clearErr)
         }
-        logMatchEvent(ctx.supabase, ctx.userId, txId, 'storno_conflict_resolved', {
+        await logMatchEvent(ctx.supabase, ctx.userId, txId, 'storno_conflict_resolved', {
           invoiceId: invoice_id,
           previousState: { journal_entry_id: transaction.journal_entry_id },
           newState: { journal_entry_id: null },
@@ -808,7 +808,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    logMatchEvent(ctx.supabase, ctx.userId, txId, 'matched', {
+    await logMatchEvent(ctx.supabase, ctx.userId, txId, 'matched', {
       invoiceId: invoice_id,
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',

@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback, useRef } from 'react'
+import { Fragment, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -189,7 +189,7 @@ const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
 // Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
 const ALL_PAGE_SIZE = 100000
 
-export default function JournalEntryList() {
+export default function JournalEntryList({ pristineSlot }: { pristineSlot?: ReactNode } = {}) {
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -932,6 +932,9 @@ export default function JournalEntryList() {
   // drafts view) must fall through to the main render below so the
   // Verifikat/Utkast toggle stays reachable.
   if (!loading && entries.length === 0 && !loadFailed && !hasActiveFilters && listMode === 'committed' && draftCount === 0) {
+    if (pristineSlot) {
+      return <>{pristineSlot}</>
+    }
     return (
       <DataList className="stagger-enter">
         <DataListEmpty

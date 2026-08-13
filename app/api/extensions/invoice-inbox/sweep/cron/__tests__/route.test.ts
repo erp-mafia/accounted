@@ -15,8 +15,8 @@ vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: vi.fn().mockReturnValue({}),
 }))
 
-vi.mock('@/extensions/general/whatsapp-inbox/lib/sweep', () => ({
-  runSweep: vi.fn(),
+vi.mock('@/extensions/general/invoice-inbox/lib/sweep', () => ({
+  runInboxSweep: vi.fn(),
 }))
 
 vi.mock('@/lib/auth/cron', () => ({
@@ -26,15 +26,15 @@ vi.mock('@/lib/auth/cron', () => ({
 import { GET } from '../route'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { loadExtensions } from '@/lib/extensions/loader'
-import { runSweep } from '@/extensions/general/whatsapp-inbox/lib/sweep'
+import { runInboxSweep } from '@/extensions/general/invoice-inbox/lib/sweep'
 import { verifyCronSecret } from '@/lib/auth/cron'
 
 const mockRegistryGet = vi.mocked(extensionRegistry.get)
 const mockVerifyCronSecret = vi.mocked(verifyCronSecret)
-const mockRunSweep = vi.mocked(runSweep)
+const mockRunInboxSweep = vi.mocked(runInboxSweep)
 
 function makeRequest() {
-  return new Request('http://localhost/api/extensions/whatsapp-inbox/sweep/cron', {
+  return new Request('http://localhost/api/extensions/invoice-inbox/sweep/cron', {
     headers: { authorization: 'Bearer synthetic-cron-secret' },
   })
 }
@@ -44,7 +44,7 @@ beforeEach(() => {
   mockVerifyCronSecret.mockReturnValue(null)
 })
 
-describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
+describe('GET /api/extensions/invoice-inbox/sweep/cron', () => {
   it('returns 401 when the cron secret is rejected', async () => {
     mockVerifyCronSecret.mockReturnValue(
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
@@ -53,7 +53,7 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
     const response = await GET(makeRequest())
 
     expect(response.status).toBe(401)
-    expect(mockRunSweep).not.toHaveBeenCalled()
+    expect(mockRunInboxSweep).not.toHaveBeenCalled()
   })
 
   it('returns 503 EXTENSION_DISABLED when the extension is not in the registry', async () => {
@@ -67,35 +67,19 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
 
     expect(response.status).toBe(503)
     expect(body.code).toBe('EXTENSION_DISABLED')
-    expect(mockRunSweep).not.toHaveBeenCalled()
+    expect(mockRunInboxSweep).not.toHaveBeenCalled()
   })
 
   it('runs the sweep and returns its summary when enabled', async () => {
-    mockRegistryGet.mockReturnValue({ id: 'whatsapp-inbox' } as never)
-    mockRunSweep.mockResolvedValue({
-      reclaimedReceived: 2,
-      reclaimedProcessing: 1,
-      erroredMaxAttempts: 0,
-      finalizedAcks: 1,
-      expiredQuestions: 1,
-      clearedPins: 0,
-      outboundFailed24h: 3,
-    })
+    mockRegistryGet.mockReturnValue({ id: 'invoice-inbox' } as never)
+    mockRunInboxSweep.mockResolvedValue({ flipped: 3 })
 
     const response = await GET(makeRequest())
     const body = await response.json()
 
     expect(loadExtensions).toHaveBeenCalled()
-    expect(mockRegistryGet).toHaveBeenCalledWith('whatsapp-inbox')
+    expect(mockRegistryGet).toHaveBeenCalledWith('invoice-inbox')
     expect(response.status).toBe(200)
-    expect(body.data).toEqual({
-      reclaimedReceived: 2,
-      reclaimedProcessing: 1,
-      erroredMaxAttempts: 0,
-      finalizedAcks: 1,
-      expiredQuestions: 1,
-      clearedPins: 0,
-      outboundFailed24h: 3,
-    })
+    expect(body.data).toEqual({ flipped: 3 })
   })
 })

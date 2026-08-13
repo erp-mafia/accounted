@@ -20,7 +20,7 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/company-question', async () => 
   >('@/extensions/general/whatsapp-inbox/lib/company-question')
   return {
     ...actual,
-    askCompanyQuestion: vi.fn().mockResolvedValue(true),
+    askCompanyQuestion: vi.fn().mockResolvedValue('asked'),
   }
 })
 
@@ -142,7 +142,7 @@ describe('processInboundMessage (media intake)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
-    askCompanyQuestionMock.mockResolvedValue(true)
+    askCompanyQuestionMock.mockResolvedValue('asked')
     rateLimitMock.mockResolvedValue({ ok: true })
     downloadMediaMock.mockResolvedValue({
       buffer: new Uint8Array([1, 2, 3, 4]).buffer,
@@ -270,6 +270,48 @@ describe('processInboundMessage (media intake)', () => {
       to: '46701234567',
       stagedCount: 1,
     })
+  })
+
+  it('releases the row for retry when the membership query fails (transient, never parked)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() }) // load row
+    enqueue({ data: { id: 'msg-1' } }) // claim
+    enqueue({ data: makeLink() }) // load link
+    enqueue({ data: makeConversation() }) // load conversation
+    enqueue({ error: { message: 'connection reset' } }) // memberships query fails
+    enqueue({ data: null }) // release back to received
+
+    const outcome = await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    expect(outcome).toEqual({ kind: 'none' })
+    expect(askCompanyQuestionMock).not.toHaveBeenCalled()
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(downloadMediaMock).not.toHaveBeenCalled()
+    expect(uploadAndExtractMock).not.toHaveBeenCalled()
+    // The claim was released untouched: the sweep re-runs it within a minute
+    // and gives up through the normal MAX_ATTEMPTS -> M18 path.
+    const release = lastUpdate(findCalls)
+    expect(release.processing_status).toBe('received')
+  })
+
+  it('un-parks the staged row when the company question hits a transient options failure', async () => {
+    askCompanyQuestionMock.mockResolvedValue('transient_error')
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() })
+    enqueue({ data: { id: 'msg-1' } })
+    enqueue({ data: makeLink() })
+    enqueue({ data: makeConversation() })
+    enqueue({ data: [{ company_id: 'company-1' }, { company_id: 'company-2' }] }) // ask path
+    enqueue({ data: null }) // markStatus skipped (staged)
+    enqueue({ data: null, count: 1 }) // staged count
+    enqueue({ data: null }) // un-park release
+
+    const outcome = await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    expect(outcome).toEqual({ kind: 'none' })
+    const release = lastUpdate(findCalls)
+    expect(release.processing_status).toBe('received')
+    expect(release.error_message).toBeNull()
   })
 
   it('uses a live conversation pin over everything and stamps via=pin', async () => {
