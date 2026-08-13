@@ -8,7 +8,7 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
     markReadWithTyping: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn(),
   }
@@ -141,7 +141,7 @@ function lastUpdate(findCalls: (table: string, method: string) => unknown[][]): 
 describe('processInboundMessage (media intake)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT' })
+    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
     askCompanyQuestionMock.mockResolvedValue(true)
     rateLimitMock.mockResolvedValue({ ok: true })
     downloadMediaMock.mockResolvedValue({

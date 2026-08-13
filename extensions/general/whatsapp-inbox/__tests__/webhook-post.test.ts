@@ -12,7 +12,7 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
     markReadWithTyping: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn(),
     getDisplayPhoneNumber: vi.fn().mockResolvedValue(null),
@@ -109,7 +109,7 @@ describe('POST /webhook', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT' })
+    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
     process.env.WHATSAPP_APP_SECRET = SECRET
     process.env.WHATSAPP_PHONE_HASH_KEY = 'test-pepper'
     process.env.WHATSAPP_PHONE_ENCRYPTION_KEY = 'a'.repeat(64)

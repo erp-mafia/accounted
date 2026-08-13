@@ -18,9 +18,9 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
-    sendReplyButtons: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
-    sendList: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendReplyButtons: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendList: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
     markReadWithTyping: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn(),
   }
@@ -123,8 +123,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   process.env.WHATSAPP_PHONE_HASH_KEY = 'test-pepper'
   process.env.WHATSAPP_PHONE_ENCRYPTION_KEY = 'a'.repeat(64)
-  sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT' })
-  sendButtonsMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT' })
+  sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
+  sendButtonsMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
 })
 
 describe('company question is not one-shot when the send fails', () => {
@@ -140,7 +140,7 @@ describe('company question is not one-shot when the send fails', () => {
   }
 
   it('rolls the question back so the next receipt re-asks', async () => {
-    sendButtonsMock.mockResolvedValue({ ok: false, wamid: null })
+    sendButtonsMock.mockResolvedValue({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 500)' })
     const mock = createQueuedMockSupabase()
     enqueueAsk(mock)
     mock.enqueue({
@@ -254,7 +254,7 @@ describe('combined ack', () => {
   })
 
   it('leaves the rows unacked when the send failed so the sweep retries', async () => {
-    sendTextMock.mockResolvedValue({ ok: false, wamid: null })
+    sendTextMock.mockResolvedValue({ ok: false, wamid: null, errorDetail: 'Send failed (HTTP 500)' })
     const mock = createQueuedMockSupabase()
     enqueueBurst(mock, {
       documentKind: 'receipt',
