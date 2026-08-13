@@ -5412,7 +5412,6 @@
     "tab_accounts": "Chart of accounts",
     "new_entry_dialog_title": "New journal entry",
     "create_with_assistant": "Create with assistant",
-    "ask_assistant_handoff": "Let the assistant fill it in?",
     "loading_source_voucher": "Loading source voucher...",
     "copy_failed_title": "Could not copy journal entry",
     "copy_source_missing": "Source voucher not found.",

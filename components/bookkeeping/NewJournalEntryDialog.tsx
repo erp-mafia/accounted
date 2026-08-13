@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { Copy, Loader2, MessageCircle } from 'lucide-react'
+import { Copy, Loader2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -9,7 +9,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import JournalEntryForm, { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 
 export interface CopyPrefill {
   sourceId: string
@@ -43,7 +42,6 @@ export default function NewJournalEntryDialog({
   isLoading,
 }: Props) {
   const t = useTranslations('bookkeeping')
-  const { openAgentSheet, identity } = useAgentSheet()
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -62,24 +60,6 @@ export default function NewJournalEntryDialog({
         <DialogHeader>
           <DialogTitle>{t('new_entry_dialog_title')}</DialogTitle>
         </DialogHeader>
-
-        {identity.isVerified && !copyPrefill && (
-          // Hand off to the assistant: it reads the underlag (the figures the
-          // user often can't see), suggests accounts, and stages a balanced
-          // verifikat to approve: no copy-paste. Close the modal first so its
-          // focus trap doesn't fight the (non-modal) agent sheet.
-          <button
-            type="button"
-            onClick={() => {
-              onOpenChange(false)
-              openAgentSheet({ intentId: 'verifikation.draft', contextRef: 'verifikation:new' })
-            }}
-            className="inline-flex w-fit items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <MessageCircle className="h-3.5 w-3.5" />
-            {t('ask_assistant_handoff')}
-          </button>
-        )}
 
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">

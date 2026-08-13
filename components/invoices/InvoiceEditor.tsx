@@ -56,7 +56,6 @@ import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPr
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import {
   ROT_WORK_TYPES,
   RUT_WORK_TYPES,
@@ -1470,11 +1469,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           </Heading>
           {!bare && <p className="text-muted-foreground">{subtitleText}</p>}
         </div>
-        <AgentSparkleButton
-          intentId="invoice.draft"
-          intentArgs={{ customer_id: watchCustomerId ?? null }}
-          contextRef={watchCustomerId ? `customer:${watchCustomerId}` : 'invoice:new'}
-        />
       </div>
 
       {isCopyMode && copyInitial && (

@@ -27,7 +27,6 @@ import StrikeLinesDialog from '@/components/bookkeeping/StrikeLinesDialog'
 import CorrectMetadataDialog from '@/components/bookkeeping/CorrectMetadataDialog'
 import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -452,14 +451,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
         {(entry.status === 'posted' || entry.status === 'draft') && (
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-            {entry.status === 'draft' && (
-              <AgentSparkleButton
-                intentId="verifikation.draft"
-                intentArgs={{ journal_entry_id: id }}
-                contextRef={`verifikation:${id}`}
-                className="w-full sm:w-auto"
-              />
-            )}
             {entry.status === 'draft' && (
               <Button
                 variant="outline"

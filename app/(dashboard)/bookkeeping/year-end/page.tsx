@@ -7,7 +7,6 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { Skeleton } from '@/components/ui/skeleton'
 import { CalendarPlus, Check, Lock } from 'lucide-react'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -218,12 +217,6 @@ export default function YearEndPage() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="font-display text-2xl leading-8 tracking-tight">Årsbokslut</h1>
         <div className="flex items-center gap-2">
-          <AgentSparkleButton
-            intentId="bokslut.step"
-            intentArgs={{ step_id: null }}
-            contextRef="bokslut:overview"
-            size="default"
-          />
           {showWizard && periods && periods.length > 0 && step !== 'result' && (
             <ContextPicker
               items={periods.map((p) => ({

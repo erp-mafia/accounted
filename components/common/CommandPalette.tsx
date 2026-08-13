@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
 
 type Entry = {
@@ -93,6 +94,7 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const { capabilities } = useCompany()
+  const { identity } = useAgentSheet()
 
   // Drop entries that jump to a paywalled extension workspace the active
   // company can't reach (e.g. the AI-only Dokumentinkorg). The page itself is
@@ -143,27 +145,31 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
     return q ? visible.filter(e => matches(e, q)) : visible.slice(0, 6)
   }, [q, allowedByCapability])
 
-  const annaFallback: Entry | null = q && filteredActions.length === 0 && filteredPages.length === 0
-    ? {
-        id: 'anna-fallback',
-        label: `Fråga Anna: "${query.trim()}"`,
-        icon: Wand2,
-        href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
-      }
-    : q
+  // The hand-off-to-assistant entries use the agent name the user chose in
+  // /onboarding/agent, and hide entirely until that onboarding is done: the
+  // same gate as the nav entry and the FAB.
+  const assistantName = identity.displayName?.trim() || 'assistenten'
+  const assistantFallback: Entry | null = !identity.isVerified || !q
+    ? null
+    : filteredActions.length === 0 && filteredPages.length === 0
       ? {
-          id: 'anna-followup',
-          label: `Fråga Anna istället: "${query.trim()}"`,
+          id: 'assistant-fallback',
+          label: `Fråga ${assistantName}: "${query.trim()}"`,
           icon: Wand2,
           href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
         }
-      : null
+      : {
+          id: 'assistant-followup',
+          label: `Fråga ${assistantName} istället: "${query.trim()}"`,
+          icon: Wand2,
+          href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
+        }
 
   const flatEntries: Entry[] = [
-    ...(annaFallback && filteredActions.length === 0 && filteredPages.length === 0 ? [annaFallback] : []),
+    ...(assistantFallback && filteredActions.length === 0 && filteredPages.length === 0 ? [assistantFallback] : []),
     ...filteredActions,
     ...filteredPages,
-    ...(annaFallback && (filteredActions.length > 0 || filteredPages.length > 0) ? [annaFallback] : []),
+    ...(assistantFallback && (filteredActions.length > 0 || filteredPages.length > 0) ? [assistantFallback] : []),
   ]
 
   function commit(entry: Entry) {
@@ -244,13 +250,13 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
                 })}
               </Section>
             )}
-            {annaFallback && (
-              <Section title="Anna">
+            {assistantFallback && (
+              <Section title={assistantName}>
                 <Row
-                  entry={annaFallback}
-                  active={flatEntries.indexOf(annaFallback) === activeIndex}
-                  onSelect={() => commit(annaFallback)}
-                  onHover={() => setActiveIndex(flatEntries.indexOf(annaFallback))}
+                  entry={assistantFallback}
+                  active={flatEntries.indexOf(assistantFallback) === activeIndex}
+                  onSelect={() => commit(assistantFallback)}
+                  onHover={() => setActiveIndex(flatEntries.indexOf(assistantFallback))}
                 />
               </Section>
             )}
