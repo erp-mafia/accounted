@@ -115,6 +115,18 @@ describe('stage_peppol_delivery', () => {
       client.query(STAGE_SQL, [seeded.companyId, invoiceId, XML, 'b'.repeat(64)]),
     )).rejects.toThrow(/does not match the staged payload/)
   })
+
+  it('refuses to guess a retention date when the invoice has no fiscal period', async () => {
+    const seeded = await seedCompany()
+    await getPool().query('DELETE FROM public.fiscal_periods WHERE id = $1', [
+      seeded.fiscalPeriodId,
+    ])
+    const invoiceId = await insertInvoice(seeded.userId, seeded.companyId)
+
+    await expect(withUserContext(seeded.userId, (client) =>
+      client.query(STAGE_SQL, [seeded.companyId, invoiceId, XML, XML_SHA]),
+    )).rejects.toThrow(/requires a fiscal period retention basis/)
+  })
 })
 
 describe('Peppol delivery audit lifecycle', () => {
