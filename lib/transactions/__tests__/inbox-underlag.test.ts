@@ -65,6 +65,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
 
   it('links the document and stamps the matched item', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // tx pin lookup: nothing pinned
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] }) // matched items
     enqueue({ data: { journal_entry_id: null } }) // doc not yet anchored
     enqueue({ data: null }) // stamp update
@@ -83,6 +84,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
 
   it('skips the document write when it already points at the verifikat', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // tx pin lookup: nothing pinned
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] })
     enqueue({ data: { journal_entry_id: JE1 } }) // already anchored to JE1
     enqueue({ data: null }) // stamp update
@@ -106,6 +108,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
     // mismatch from every future run and from manual reconciliation
     // (BFL 5 kap 6-7 §).
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // tx pin lookup: nothing pinned
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] })
     enqueue({ data: { journal_entry_id: 'je-other' } })
 
@@ -122,6 +125,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
 
   it('stamps an item without a document (no document read)', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // tx pin lookup: nothing pinned
     enqueue({ data: [{ id: 'i1', document_id: null }] })
     enqueue({ data: null }) // stamp update
 
@@ -144,6 +148,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
     // items only the first stamp lands. The rest must resolve quietly: the
     // inbox list derives "booked" from the transaction's state for them.
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // tx pin lookup: nothing pinned
     enqueue({ data: [{ id: 'i1', document_id: null }] })
     enqueue({ data: null, error: { code: '23505', message: 'duplicate key value' } })
 
@@ -164,6 +169,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
     // and nothing left to surface or repair it.
     vi.mocked(linkToJournalEntry).mockRejectedValueOnce(new Error('period locked'))
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // tx pin lookup: nothing pinned
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] })
     enqueue({ data: { journal_entry_id: null } })
 
@@ -176,6 +182,102 @@ describe('propagateUnderlagForBookedTransaction', () => {
       ),
     ).resolves.toBeUndefined()
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+  })
+
+  // ── The transaction's own pinned document (transactions.document_id) ──
+  // A doc attached directly to the transaction has no inbox item to carry
+  // it, so the propagation must anchor it itself: this was the 2026-08-13
+  // "Underlag saknas" gap (attach-before-book via the manual booking dialog).
+
+  it('anchors the pinned document even when no inbox item exists', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: 'doc-pin' } }) // tx pin lookup
+    enqueue({ data: { journal_entry_id: null } }) // pinned doc not yet anchored
+    enqueue({ data: [] }) // no matched inbox items
+
+    await propagateUnderlagForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      JE1,
+    )
+
+    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE1)
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+  })
+
+  it('leaves a pinned document that already points at this verifikat alone', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: 'doc-pin' } })
+    enqueue({ data: { journal_entry_id: JE1 } }) // already anchored here
+    enqueue({ data: [] })
+
+    await propagateUnderlagForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      JE1,
+    )
+
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('never steals a pinned document anchored to another verifikat', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: 'doc-pin' } })
+    enqueue({ data: { journal_entry_id: 'je-other' } })
+    enqueue({ data: [] })
+
+    await propagateUnderlagForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      JE1,
+    )
+
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('still processes inbox items when the pinned-document link fails', async () => {
+    vi.mocked(linkToJournalEntry).mockRejectedValueOnce(new Error('period locked'))
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: 'doc-pin' } })
+    enqueue({ data: { journal_entry_id: null } }) // pinned doc; link will throw
+    enqueue({ data: [{ id: 'i1', document_id: null }] }) // docless matched item
+    enqueue({ data: null }) // stamp update
+
+    await expect(
+      propagateUnderlagForBookedTransaction(
+        supabase as unknown as SupabaseClient,
+        COMPANY,
+        TX1,
+        JE1,
+      ),
+    ).resolves.toBeUndefined()
+    expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
+      { created_journal_entry_id: JE1 },
+    ])
+  })
+
+  it('links a document shared by the pin and a matched item only once', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: 'doc-1' } }) // pin points at the same doc
+    enqueue({ data: { journal_entry_id: null } }) // pin leg links it
+    enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] }) // matched item, same doc
+    enqueue({ data: { journal_entry_id: JE1 } }) // item leg finds it anchored
+    enqueue({ data: null }) // stamp update
+
+    await propagateUnderlagForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      JE1,
+    )
+
+    expect(linkToJournalEntry).toHaveBeenCalledTimes(1)
+    expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
+      { created_journal_entry_id: JE1 },
+    ])
   })
 })
 
@@ -196,8 +298,9 @@ describe('completeInboxItemsForBookedTransaction', () => {
     expect(findCalls('invoice_inbox_items', 'select').length).toBe(0)
   })
 
-  it('skips the transaction fetch when the caller passes the direct id', async () => {
+  it('skips the resolution fetch when the caller passes the direct id', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // tx pin lookup inside propagate
     enqueue({ data: [] }) // matched items (none)
 
     const result = await completeInboxItemsForBookedTransaction(
@@ -207,12 +310,15 @@ describe('completeInboxItemsForBookedTransaction', () => {
       { directJournalEntryId: JE1 },
     )
     expect(result).toBe(JE1)
-    expect(findCalls('transactions', 'select').length).toBe(0)
+    // The only transactions read is the pin lookup inside the propagation:
+    // the id/journal_entry_id resolution query never runs.
+    expect(findCalls('transactions', 'select')).toEqual([['document_id']])
   })
 
   it('resolves the samlingsverifikat through voucher links when the direct id is null', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [{ transaction_id: TX1, journal_entry_id: JE2 }] }) // voucher links
+    enqueue({ data: { document_id: null } }) // tx pin lookup inside propagate
     enqueue({ data: [{ id: 'i1', document_id: null }] }) // matched items
     enqueue({ data: null }) // stamp update
 

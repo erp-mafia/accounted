@@ -16,9 +16,14 @@
  *    covering both direct journal_entry_id and the bulk-book
  *    transaction_voucher_links shape (see lib/transactions/is-booked.ts for
  *    why the column alone is not "booked").
- *  - propagateUnderlagForBookedTransaction: link matched items' documents to
+ *  - propagateUnderlagForBookedTransaction: anchor the transaction's pinned
+ *    document (transactions.document_id) and link matched items' documents to
  *    the verifikat (BFL 5 kap 6 §: the verifikation must reference its
- *    underlag) and stamp created_journal_entry_id.
+ *    underlag), stamping created_journal_entry_id on the items. The pinned-doc
+ *    leg matters because a document attached directly to a transaction has no
+ *    inbox item to carry it: without it, booking through the manual dialog
+ *    left document_attachments.journal_entry_id null and every underlag
+ *    surface read "Underlag saknas" (the 2026-08-13 user report).
  *  - completeInboxItemsForBookedTransaction: the attach-time entry point that
  *    resolves first and propagates only when the transaction is booked.
  *
@@ -116,18 +121,69 @@ export async function resolveVoucherLinkedEntryIds(
 }
 
 /**
- * Propagate the underlag from matched invoice-inbox items onto the verifikat
- * that booked their transaction. Without this, BFL 7 kap is violated: a
- * verifikation exists with no underlag attached even though the user
- * explicitly linked an inbox item (with a document) to this transaction. We:
- *   1. find the inbox item(s) where matched_transaction_id = txId that no
+ * Anchor one document to the verifikat, with the guard semantics every
+ * booking path shares: a document already pointing at THIS verifikat is a
+ * no-op (a same-value rewrite would trip the period-lock trigger), a document
+ * anchored to ANOTHER verifikat is never stolen, and a failed link is
+ * reported so the caller can withhold any consumed-stamp. Returns true when
+ * the document ends up referencing the verifikat.
+ */
+async function anchorDocumentToJournalEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentId: string,
+  journalEntryId: string,
+  logContext: Record<string, unknown>,
+): Promise<boolean> {
+  const { data: doc } = await supabase
+    .from('document_attachments')
+    .select('journal_entry_id')
+    .eq('id', documentId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const currentDocEntryId = (doc?.journal_entry_id as string | null) ?? null
+  if (currentDocEntryId === journalEntryId) return true
+  if (currentDocEntryId !== null) {
+    // Anchored to another verifikat: preserved, never stolen (BFL 5 kap 6-7 §).
+    log.warn('Document already anchored to another verifikat; leaving it', {
+      ...logContext,
+      document_id: documentId,
+      document_journal_entry_id: currentDocEntryId,
+      journal_entry_id: journalEntryId,
+    })
+    return false
+  }
+  try {
+    await linkToJournalEntry(supabase, companyId, documentId, journalEntryId)
+    return true
+  } catch (err) {
+    log.error('Failed to link document to journal entry', {
+      ...logContext,
+      document_id: documentId,
+      journal_entry_id: journalEntryId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return false
+  }
+}
+
+/**
+ * Propagate the underlag onto the verifikat that booked a transaction.
+ * Without this, BFL 7 kap is violated: a verifikation exists with no underlag
+ * attached even though the user explicitly linked a document (or an inbox
+ * item with a document) to this transaction. We:
+ *   1. anchor the transaction's own pinned document (transactions.document_id)
+ *      when it does not reference a verifikat yet: a document attached
+ *      directly to the transaction has no inbox item, so nothing else carries
+ *      it onto the verifikat
+ *   2. find the inbox item(s) where matched_transaction_id = txId that no
  *      journal entry or supplier invoice has consumed yet
- *   2. for each item with a document_id, set
+ *   3. for each item with a document_id, set
  *      document_attachments.journal_entry_id = journalEntryId, skipped when
  *      the document already points at a verifikat: a same-value rewrite would
  *      trip the period-lock trigger, and a different verifikat's underlag is
  *      never stolen
- *   3. stamp invoice_inbox_items.created_journal_entry_id so the inbox row
+ *   4. stamp invoice_inbox_items.created_journal_entry_id so the inbox row
  *      visibly moves to "Bokförda" and shows "Öppna verifikation"
  * Errors are logged but never fail the caller: the verifikation itself is
  * already posted, and the link can be repaired by re-running this step.
@@ -139,6 +195,24 @@ export async function propagateUnderlagForBookedTransaction(
   journalEntryId: string,
 ): Promise<void> {
   try {
+    // The pin is read fresh here (not passed in from the caller's pre-booking
+    // snapshot) so an attach that lands concurrently with the booking is
+    // still anchored. The bulk-book RPC already anchors pins atomically;
+    // there this read finds the doc pointing at the same verifikat and no-ops.
+    const { data: tx } = await supabase
+      .from('transactions')
+      .select('document_id')
+      .eq('id', txId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const pinnedDocumentId = (tx?.document_id as string | null) ?? null
+    if (pinnedDocumentId) {
+      await anchorDocumentToJournalEntry(supabase, companyId, pinnedDocumentId, journalEntryId, {
+        transaction_id: txId,
+        source: 'transaction_pin',
+      })
+    }
+
     const { data: matchedInboxItems } = await supabase
       .from('invoice_inbox_items')
       .select('id, document_id')
@@ -156,42 +230,18 @@ export async function propagateUnderlagForBookedTransaction(
       // (.is('created_journal_entry_id', null)), making the promised
       // "repaired by re-running" impossible and leaving a posted
       // verifikation with no underlag reference (BFL 5 kap 6-7 §) that
-      // nothing surfaces anymore.
+      // nothing surfaces anymore. Similarly, an item whose document is
+      // anchored to a DIFFERENT verifikat is not stamped: that would hide
+      // the very signal that the mismatch needs a human.
       let underlagSettled = true
       if (inbox.document_id) {
-        const { data: doc } = await supabase
-          .from('document_attachments')
-          .select('journal_entry_id')
-          .eq('id', inbox.document_id)
-          .eq('company_id', companyId)
-          .maybeSingle()
-        const currentDocEntryId = (doc?.journal_entry_id as string | null) ?? null
-        if (currentDocEntryId === null) {
-          try {
-            await linkToJournalEntry(supabase, companyId, inbox.document_id, journalEntryId)
-          } catch (err) {
-            underlagSettled = false
-            log.error('Failed to link inbox document to journal entry', {
-              inbox_item_id: inbox.id,
-              document_id: inbox.document_id,
-              journal_entry_id: journalEntryId,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        } else if (currentDocEntryId !== journalEntryId) {
-          // Anchored to another verifikat: preserved, never stolen. But the
-          // verifikat that booked THIS transaction then has no underlag
-          // reference from this item, so it must NOT be stamped consumed:
-          // stamping would hide the very signal that the mismatch needs a
-          // human (BFL 5 kap 6-7 §).
-          underlagSettled = false
-          log.warn('Inbox document already anchored to another verifikat; leaving it', {
-            inbox_item_id: inbox.id,
-            document_id: inbox.document_id,
-            document_journal_entry_id: currentDocEntryId,
-            journal_entry_id: journalEntryId,
-          })
-        }
+        underlagSettled = await anchorDocumentToJournalEntry(
+          supabase,
+          companyId,
+          inbox.document_id,
+          journalEntryId,
+          { inbox_item_id: inbox.id, source: 'inbox_match' },
+        )
       }
       if (!underlagSettled) continue
       // CAS on the null predicate so a concurrent stamp stays a no-op, and

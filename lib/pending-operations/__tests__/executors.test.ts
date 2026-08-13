@@ -1024,6 +1024,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { journal_entry_id: 'je-7' }, error: null }) // UPDATE returning post-state
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: null, error: null }) // doc propagation update
+    enqueue({ data: { document_id: null }, error: null }) // completion: tx pin lookup
     enqueue({ data: [], error: null }) // completion: matched inbox items (none)
     enqueue({ data: null, error: null }) // dispatcher commit update
 
@@ -1048,6 +1049,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning (still null)
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: [{ transaction_id: 'tx-1', journal_entry_id: 'je-9' }], error: null }) // voucher links
+    enqueue({ data: { document_id: null }, error: null }) // propagation: tx pin lookup
     enqueue({ data: [{ id: 'inbox-9', document_id: null }], error: null }) // matched inbox items
     enqueue({ data: null, error: null }) // created_journal_entry_id stamp
     enqueue({ data: null, error: null }) // dispatcher commit update
