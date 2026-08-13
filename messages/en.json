@@ -5397,7 +5397,9 @@
     "skv_err_commit_failed": "draft created, not posted",
     "skv_err_other": "failed",
     "mode_all": "All",
-    "footer_to_handle": "{count, plural, =0 {Nothing to handle} =1 {1 to handle} other {# to handle}}"
+    "footer_to_handle": "{count, plural, =0 {Nothing to handle} =1 {1 to handle} other {# to handle}}",
+    "recon_attn": "{count, plural, one {1 unbooked bank transaction: the bank reconciliation can find automatic matches against existing vouchers.} other {# unbooked bank transactions: the bank reconciliation can find automatic matches against existing vouchers.}}",
+    "recon_attn_action": "Preview matches"
   },
   "bookkeeping": {
     "toast_post_failed": "Could not post",
@@ -6098,6 +6100,8 @@
     "help_bank_reconciliation_preview": "The preview pre-selects strong matches. Approximate matches must be ticked manually after you have reviewed the voucher.",
     "help_bank_reconciliation_ib": "Is a manually booked or imported voucher actually an opening balance? Mark it as IB and it is excluded from the reconciliation and shown separately.",
     "help_bank_reconciliation_ignored": "Ignored transactions are hidden from the reconciliation without being booked. They do not affect the balance and can be restored at any time.",
+    "recon_unmatched_attn": "{count, plural, one {1 unmatched transaction: Preview finds automatic matches.} other {# unmatched transactions: Preview finds automatic matches.}}",
+    "recon_apply_strong": "{count, plural, one {Match 1 strong match} other {Match # strong matches}}",
     "switch_report": "Switch report",
     "calendar_badge": "Calendar",
     "group_payroll": "Payroll",

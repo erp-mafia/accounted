@@ -3019,6 +3019,22 @@ export default function TransactionsPage() {
           )
         ) : (
           <div>
+            {/* Bridge to the bulk-match flow: a backlog of unbooked bank rows
+                is usually a migration/import whose counterpart vouchers
+                already exist, and the only match affordance here is per-row.
+                Static text + count (no probe): the reconciliation preview is
+                the honest source of how many actually match. */}
+            {selectableInboxIds.length >= 5 && (
+              <AttnLine
+                className="px-1 pb-3"
+                action={{
+                  label: t('recon_attn_action'),
+                  href: '/reports/bank-reconciliation?autorun=1',
+                }}
+              >
+                {t('recon_attn', { count: selectableInboxIds.length })}
+              </AttnLine>
+            )}
             {/* Bulkbar (concept): hidden until at least one transaction is
                 selected via the hover checkboxes, then it pops in with the
                 count and the batch actions. */}

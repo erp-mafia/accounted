@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -173,9 +174,17 @@ interface BankReconciliationViewProps {
   periodId: string
   /** period_start / period_end of that period; seeds the date window (#751). */
   periodBounds: { start: string; end: string } | null
+  /**
+   * Deep-link bridge (?autorun=1, e.g. from the transactions inbox banner):
+   * runs the dry-run preview automatically ONCE, only after the first load has
+   * recorded appliedDates and while the typed dates still match it, so the
+   * preview can never cover a different window than the on-screen lists.
+   */
+  autoRun?: boolean
 }
 
-export function BankReconciliationView({ periodId, periodBounds }: BankReconciliationViewProps) {
+export function BankReconciliationView({ periodId, periodBounds, autoRun }: BankReconciliationViewProps) {
+  const t = useTranslations('reports')
   const [status, setStatus] = useState<ReconciliationStatus | null>(null)
   const [unmatchedTx, setUnmatchedTx] = useState<UnmatchedTransaction[]>([])
   const [glLines, setGlLines] = useState<UnlinkedGLLine[]>([])
@@ -286,6 +295,24 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
   // the preview covered the window they typed.
   const datesDirty =
     appliedDates !== null && (appliedDates.from !== dateFrom || appliedDates.to !== dateTo)
+
+  // Promote the preview flow while there is unmatched work and no preview has
+  // run yet: an attention line above the toolbar plus the Förhandsgranska
+  // button in the default (filled) variant. Suppressed while datesDirty: that
+  // state owns the page's single attention line and disables the button anyway.
+  const previewPromoted = unmatchedTx.length > 0 && dryRunResults === null && !datesDirty
+
+  // Every ticked preview pair is a strong match (>= the Stark badge floor):
+  // the apply button relabels to "Matcha X starka träffar" and the apply
+  // request carries confidence_threshold so the server re-run enforces the
+  // same floor. Manually ticked weaker pairs drop back to the plain label and
+  // an unthresholded apply.
+  const allSelectedStrong =
+    dryRunResults !== null &&
+    selectedPairs.size > 0 &&
+    dryRunResults
+      .filter((m) => selectedPairs.has(matchKey(m.transaction_id, m.journal_entry_id)))
+      .every((m) => m.confidence >= PRESELECT_CONFIDENCE)
 
   useEffect(() => {
     let cancelled = false
@@ -501,6 +528,23 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
     }
   }
 
+  // One-shot autorun bridge (?autorun=1): trigger the same dry-run the
+  // Förhandsgranska button runs, exactly once, and only once the first load
+  // has recorded appliedDates with the typed dates still matching it
+  // (datesDirty false). Firing earlier could preview a different window than
+  // the on-screen lists. Consumed even when there is nothing to preview, so a
+  // later data refresh never surprises the user with an unprompted run.
+  const autoRunConsumedRef = useRef(false)
+  useEffect(() => {
+    if (!autoRun || autoRunConsumedRef.current) return
+    if (loading || !appliedDates || datesDirty) return
+    autoRunConsumedRef.current = true
+    if (unmatchedTx.length > 0) void handleDryRun()
+    // handleDryRun is recreated every render; the consumed-ref guarantees the
+    // single run, so depending on it would only add noise.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, loading, appliedDates, datesDirty, unmatchedTx.length])
+
   const toggleMatchSelection = (key: string) => {
     setSelectedPairs((prev) => {
       const next = new Set(prev)
@@ -543,6 +587,11 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
               transaction_id: m.transaction_id,
               journal_entry_id: m.journal_entry_id,
             })),
+            // Strong-only apply: when every ticked pair is >= the Stark floor,
+            // ask the server to enforce that floor on its fresh re-run too. A
+            // mixed selection omits it so manually ticked weaker pairs still
+            // apply (the intersection guard still protects them).
+            ...(allSelectedStrong ? { confidence_threshold: PRESELECT_CONFIDENCE } : {}),
           }),
         })
         const result = await res.json()
@@ -965,6 +1014,11 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
 
       {/* Toolbar: flat on the panel, no box (UI-migration language) */}
       <div className="space-y-3">
+        {/* Promote the bulk flow before the first preview: many users never
+            found Förhandsgranska and matched a whole migration row by row. */}
+        {previewPromoted && !runLoading && (
+          <AttnLine>{t('recon_unmatched_attn', { count: unmatchedTx.length })}</AttnLine>
+        )}
         <div className="flex flex-wrap items-end gap-4">
           <CashAccountSelector
             value={accountNumber}
@@ -992,7 +1046,11 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
             Filtrera
           </Button>
           <div className="flex-1" />
-          <Button onClick={handleDryRun} disabled={runLoading || datesDirty} variant="outline">
+          <Button
+            onClick={handleDryRun}
+            disabled={runLoading || datesDirty}
+            variant={previewPromoted ? 'default' : 'outline'}
+          >
             <Eye className="h-4 w-4 mr-2" />
             {runLoading ? 'Analyserar...' : 'Förhandsgranska'}
           </Button>
@@ -1001,7 +1059,9 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
               <Play className="h-4 w-4 mr-2" />
               {applyLoading
                 ? 'Tillämpar...'
-                : `Tillämpa ${selectedPairs.size} ${selectedPairs.size === 1 ? 'matchning' : 'matchningar'}`}
+                : allSelectedStrong
+                  ? t('recon_apply_strong', { count: selectedPairs.size })
+                  : `Tillämpa ${selectedPairs.size} ${selectedPairs.size === 1 ? 'matchning' : 'matchningar'}`}
             </Button>
           )}
         </div>
