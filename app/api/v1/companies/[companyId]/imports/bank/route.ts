@@ -3,7 +3,8 @@
  *
  * Bank-file import. Multipart upload: the file is the request body. The
  * route:
- *   1. Decodes the file (UTF-8 / Windows-1252 auto-detected).
+ *   1. Decodes the file (UTF-8 / UTF-16 / Windows-1252 auto-detected;
+ *      BOMs handled at the byte level).
  *   2. Detects the bank file format (SEB / Swedbank / Nordea / Handelsbanken
  *      / Lansforsakringar / Lunar / ICA Banken / Skandia / CAMT053 /
  *      Nordea Business / Wise / generic CSV), or honors the optional `format`
@@ -55,7 +56,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/imports/bank',
   summary: 'Import a bank-file (CSV / XML / CAMT053).',
   description:
-    'Accepts a bank statement file (UTF-8 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, Wise transaction history, Wise balance statement, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
+    'Accepts a bank statement file (UTF-8 / UTF-16 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, Wise transaction history, Wise balance statement, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
   useWhen:
     'Importing a bank statement export for a period. Common with PSD2 bank connections that don\'t auto-sync, or for legacy bank accounts.',
   doNotUseFor:
