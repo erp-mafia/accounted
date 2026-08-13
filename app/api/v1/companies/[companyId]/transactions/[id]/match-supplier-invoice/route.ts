@@ -24,7 +24,6 @@ import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
-import { unlinkReconciliation } from '@/lib/reconciliation/bank-reconciliation'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
@@ -248,22 +247,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // A RECONCILIATION link (reconciliation_method set) is not a conflicting
     // booking: the entry is an independent verifikat that may evidence OTHER
     // affärshändelser; reversing it wholesale would be an over-broad rättelse
-    // (BFL 5 kap 5 §). Detach the soft pointer and leave the verifikat intact.
-    if (transaction.journal_entry_id && transaction.reconciliation_method) {
-      const unlink = await unlinkReconciliation(ctx.supabase, ctx.companyId!, txId, ctx.userId)
-      if (!unlink.success) {
-        txLog.error(
-          'failed to detach reconciliation link before supplier-invoice match',
-          new Error(unlink.error),
-        )
-        return v1ErrorResponse(new Error(unlink.error ?? 'unlink failed'), txLog, {
-          requestId: ctx.requestId,
-        })
-      }
-      transaction.journal_entry_id = null
-    }
+    // (BFL 5 kap 5 §). Nothing is detached here: the final transaction update
+    // overwrites the pointer and clears reconciliation_method in the same
+    // write, so a failure in between leaves the existing link intact.
+    const priorReconciliationLink =
+      transaction.journal_entry_id && transaction.reconciliation_method
+        ? {
+            journalEntryId: transaction.journal_entry_id as string,
+            method: transaction.reconciliation_method as string,
+          }
+        : null
 
-    if (transaction.journal_entry_id) {
+    if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
         await reverseEntry(
           ctx.supabase,
@@ -527,12 +522,28 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         potential_supplier_invoice_id: null,
         journal_entry_id: journalEntryId,
         is_business: true,
+        // The supplier-invoice match supersedes any prior reconciliation link
+        // (deferred detach, see the priorReconciliationLink block above).
+        ...(priorReconciliationLink ? { reconciliation_method: null } : {}),
       })
       .eq('id', txId)
       .eq('company_id', ctx.companyId!)
     if (updateTxErr) {
       return v1ErrorResponseFromCode('MATCH_SI_LINK_TX_FAILED', txLog, {
         requestId: ctx.requestId,
+      })
+    }
+
+    // Record the release of the prior reconciliation link now that the
+    // re-point has committed (behandlingshistorik, BFNAR 2013:2 kap 8).
+    if (priorReconciliationLink) {
+      await logMatchEvent(ctx.supabase, ctx.userId, txId, 'unmatched', {
+        supplierInvoiceId: supplier_invoice_id,
+        previousState: {
+          journal_entry_id: priorReconciliationLink.journalEntryId,
+          reconciliation_method: priorReconciliationLink.method,
+        },
+        newState: { journal_entry_id: journalEntryId, reconciliation_method: null },
       })
     }
 

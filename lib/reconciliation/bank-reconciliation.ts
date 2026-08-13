@@ -607,7 +607,9 @@ export async function runReconciliation(
 
         if (!error && suggestedRows && suggestedRows.length > 0) {
           suggested++
-          logMatchEvent(supabase, userId, match.transaction.id, 'auto_suggested', {
+          // Awaited: an unawaited promise can be frozen on serverless when the
+          // response returns, silently dropping the audit row.
+          await logMatchEvent(supabase, userId, match.transaction.id, 'auto_suggested', {
             matchConfidence: match.confidence,
             matchMethod: match.method,
             newState: { potential_journal_entry_id: match.glLine.journal_entry_id },

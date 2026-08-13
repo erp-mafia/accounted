@@ -14,7 +14,6 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { validateBody } from '@/lib/api/validate'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
-import { unlinkReconciliation } from '@/lib/reconciliation/bank-reconciliation'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
@@ -340,19 +339,21 @@ export const POST = withRouteContext(
     // salary run, manual booking) that may evidence OTHER affärshändelser, and
     // reversing it wholesale as a side effect of matching one payment would be
     // an over-broad rättelse (BFL 5 kap 5 §: a correction is scoped to the
-    // actual error). Detach the soft pointer and leave the verifikat intact.
-    if (transaction.journal_entry_id && transaction.reconciliation_method) {
-      const unlink = await unlinkReconciliation(supabase, companyId, transactionId, user.id)
-      if (!unlink.success) {
-        txLog.error('failed to detach reconciliation link before invoice match', new Error(unlink.error))
-        return errorResponse(new Error(unlink.error ?? 'unlink failed'), txLog, { requestId })
-      }
-      transaction.journal_entry_id = null
-    }
+    // actual error). Nothing is detached HERE: the final transaction update
+    // below overwrites the pointer and clears reconciliation_method in the
+    // same write, so a failure anywhere in between leaves the existing link
+    // fully intact instead of orphaning the row.
+    const priorReconciliationLink =
+      transaction.journal_entry_id && transaction.reconciliation_method
+        ? {
+            journalEntryId: transaction.journal_entry_id as string,
+            method: transaction.reconciliation_method as string,
+          }
+        : null
 
     // Storno conflicting auto-categorization JE before any other state change.
     // If storno fails, return immediately: nothing else has been modified.
-    if (transaction.journal_entry_id) {
+    if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
         await reverseEntry(supabase, companyId, user.id, transaction.journal_entry_id)
 
@@ -746,12 +747,30 @@ export const POST = withRouteContext(
         journal_entry_id: journalEntryId,
         is_business: true,
         category: 'income_services',
+        // The invoice match supersedes any prior reconciliation link: the
+        // stale method label must not survive the re-pointed journal_entry_id
+        // (deferred detach, see the priorReconciliationLink block above).
+        ...(priorReconciliationLink ? { reconciliation_method: null } : {}),
       })
       .eq('id', transactionId)
 
     if (updateTxError) {
       txLog.error('failed to link transaction to invoice', updateTxError)
       return errorResponseFromCode('MATCH_INVOICE_LINK_TX_FAILED', txLog, { requestId })
+    }
+
+    // The deferred detach committed with the update above: record the release
+    // of the prior reconciliation link so the append-only trail shows the full
+    // transition (behandlingshistorik, BFNAR 2013:2 kap 8).
+    if (priorReconciliationLink) {
+      await logMatchEvent(supabase, user.id, transactionId, 'unmatched', {
+        invoiceId: invoice_id,
+        previousState: {
+          journal_entry_id: priorReconciliationLink.journalEntryId,
+          reconciliation_method: priorReconciliationLink.method,
+        },
+        newState: { journal_entry_id: journalEntryId, reconciliation_method: null },
+      })
     }
 
     logMatchEvent(supabase, user.id, transactionId, 'matched', {
