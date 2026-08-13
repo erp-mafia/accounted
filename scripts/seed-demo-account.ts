@@ -1945,7 +1945,7 @@ async function seedInboxAndUncategorized(
   if (docErr) throw new Error(`document_attachments AWS: ${docErr.message}`)
 
   // status: the CHECK allows 'received' | 'processing' | 'error'
-  // (20260813180000_invoice_inbox_processing_status.sql; 'processing' is the
+  // (20260813213000_invoice_inbox_processing_status.sql; 'processing' is the
   // staged-upload in-flight state and never seeded). This item is an arrived,
   // extracted document with no supplier invoice created from it yet, which is
   // exactly what 'received' + created_supplier_invoice_id IS NULL means in the

@@ -1041,7 +1041,7 @@ export async function POST(request: Request) {
     // against invoice_inbox_items by inbox_item_id before it creates anything,
     // so the "Godkänn" path can only succeed if a real inbox row exists.
     // status is constrained to 'received' | 'processing' | 'error' (migration
-    // 20260813180000); seeded rows are always 'received'.
+    // 20260813213000); seeded rows are always 'received'.
     const { data: inboxRow, error: inboxError } = await supabase
       .from('invoice_inbox_items')
       .insert({

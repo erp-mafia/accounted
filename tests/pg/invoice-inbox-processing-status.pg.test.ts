@@ -3,7 +3,7 @@ import { getPool } from './setup'
 import { seedCompany } from './fixtures'
 
 /**
- * The staged-upload status CHECK (migration 20260813180000).
+ * The staged-upload status CHECK (migration 20260813213000).
  *
  * The web upload route inserts the inbox row before AI extraction runs and
  * flips it to 'received' from a deferred worker (or the sweep cron after a
