@@ -79,12 +79,15 @@ Read `review_priority` as an ordering aid only:
 | `high_hotel_counterparty_on_car_hire_account` | A `5820` line with a hotel-shaped counterparty. The strongest signal, still needs evidence. |
 | `medium_12pct_vat_on_car_hire_account` | `5820` with 12% VAT beside it. Car hire is 25%, so this is suggestive. |
 | `high_vat_is_25pct_of_6072_cost` | Representation whose input VAT is 25% of the cost leg. |
-| `manual_review_*` | No corroborating signal. Most likely legitimate. |
+| `manual_review_5820_no_corroborating_signal` | A `5820` entry with no hotel-shaped text or 12% VAT ratio. Most likely legitimate car hire. |
+| `manual_review_6072_with_vat` | A `6072` entry with `2641` VAT whose aggregate ratio is not exactly 25%. It may be correct or may be a mixed voucher masking the defective representation leg. |
 
 The classifier is verified against read-only probes: a hotel booked to `5820`
-ranks high, a genuine car hire on `5820` falls to manual review, a 25%
-representation ranks high, and a correct 12% representation does not appear at
-all. The representation probe also contains multiple `6072` and `2641` lines;
+ranks high, a genuine car hire on `5820` falls to manual review, and an exact
+25% representation signature ranks high. Correct 12% representation and mixed
+vouchers whose aggregate ratio is not 25% remain visible for manual review,
+because unrelated `2641` lines can otherwise hide a defective representation
+component. The representation probes include multiple `6072` and `2641` lines;
 the audit aggregates them per entry and returns one candidate instead of a
 many-to-many set of line pairs.
 

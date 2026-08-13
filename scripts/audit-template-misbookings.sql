@@ -128,7 +128,11 @@ representation_candidates as (
     round(vat.debit_amount / nullif(cost.debit_amount, 0), 6) as observed_vat_rate,
     0.12::numeric as expected_vat_rate,
     tx.transaction_description,
-    'high_vat_is_25pct_of_6072_cost'::text as review_priority
+    case
+      when abs(vat.debit_amount - cost.debit_amount * 0.25) < 0.02
+        then 'high_vat_is_25pct_of_6072_cost'
+      else 'manual_review_6072_with_vat'
+    end::text as review_priority
   from public.journal_entries je
   join debit_line_groups cost
     on cost.journal_entry_id = je.id and cost.account_number = '6072'
@@ -136,7 +140,6 @@ representation_candidates as (
     on vat.journal_entry_id = je.id and vat.account_number = '2641'
   left join transaction_context tx on tx.journal_entry_id = je.id
   where je.status = 'posted'
-    and abs(vat.debit_amount - cost.debit_amount * 0.25) < 0.02
 ),
 
 all_candidates as (
