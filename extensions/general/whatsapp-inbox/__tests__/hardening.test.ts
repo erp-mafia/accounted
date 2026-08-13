@@ -161,7 +161,7 @@ describe('company question is not one-shot when the send fails', () => {
       stagedCount: 3,
     })
 
-    expect(asked).toBe(false)
+    expect(asked).toBe('not_asked')
     const updates = mock
       .findCalls('whatsapp_conversations', 'update')
       .map((args) => args[0] as { state?: string; context?: Record<string, unknown> })
@@ -184,7 +184,7 @@ describe('company question is not one-shot when the send fails', () => {
       stagedCount: 1,
     })
 
-    expect(asked).toBe(true)
+    expect(asked).toBe('asked')
     expect(mock.findCalls('whatsapp_conversations', 'update')).toHaveLength(1)
   })
 })
