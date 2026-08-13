@@ -2172,6 +2172,12 @@ export const RunReconciliationSchema = z.object({
     )
     .max(500)
     .optional(),
+  // Server-side confidence floor for the apply path (0..1), mirroring the v1
+  // route. The UI sends 0.85 with a strong-only apply so a pair that scored
+  // lower on the fresh server re-run is never committed, even if a stale
+  // client still has it ticked. Omitted = legacy behavior: every selected
+  // match applies, including manually ticked fuzzy ones at 0.75.
+  confidence_threshold: z.number().min(0).max(1).optional(),
 })
 
 // ============================================================

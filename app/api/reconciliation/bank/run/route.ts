@@ -12,7 +12,8 @@ export const POST = withRouteContext(
   async (request, { supabase, user, companyId }) => {
     const validation = await validateBody(request, RunReconciliationSchema)
     if (!validation.success) return validation.response
-    const { date_from, date_to, account_number, dry_run, selected_matches } = validation.data
+    const { date_from, date_to, account_number, dry_run, selected_matches, confidence_threshold } =
+      validation.data
 
     const accountNumber = account_number ?? '1930'
 
@@ -51,6 +52,9 @@ export const POST = withRouteContext(
         transactionId: m.transaction_id,
         journalEntryId: m.journal_entry_id,
       })),
+      // Server-side floor on the apply path (mirrors the v1 route): pairs the
+      // fresh re-run scores below it are skipped, not applied.
+      confidenceThreshold: confidence_threshold,
     })
 
     return NextResponse.json({
