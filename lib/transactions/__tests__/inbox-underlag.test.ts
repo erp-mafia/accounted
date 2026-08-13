@@ -65,6 +65,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
 
   it('links the document and stamps the matched item', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // pin resolution: no pinned doc
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] }) // matched items
     enqueue({ data: { journal_entry_id: null } }) // doc not yet anchored
     enqueue({ data: null }) // stamp update
@@ -83,6 +84,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
 
   it('skips the document write when it already points at the verifikat', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // pin resolution: no pinned doc
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] })
     enqueue({ data: { journal_entry_id: JE1 } }) // already anchored to JE1
     enqueue({ data: null }) // stamp update
@@ -106,6 +108,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
     // mismatch from every future run and from manual reconciliation
     // (BFL 5 kap 6-7 §).
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // pin resolution: no pinned doc
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] })
     enqueue({ data: { journal_entry_id: 'je-other' } })
 
@@ -122,6 +125,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
 
   it('stamps an item without a document (no document read)', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // pin resolution: no pinned doc
     enqueue({ data: [{ id: 'i1', document_id: null }] })
     enqueue({ data: null }) // stamp update
 
@@ -144,6 +148,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
     // items only the first stamp lands. The rest must resolve quietly: the
     // inbox list derives "booked" from the transaction's state for them.
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // pin resolution: no pinned doc
     enqueue({ data: [{ id: 'i1', document_id: null }] })
     enqueue({ data: null, error: { code: '23505', message: 'duplicate key value' } })
 
@@ -164,6 +169,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
     // and nothing left to surface or repair it.
     vi.mocked(linkToJournalEntry).mockRejectedValueOnce(new Error('period locked'))
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // pin resolution: no pinned doc
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] })
     enqueue({ data: { journal_entry_id: null } })
 
@@ -176,6 +182,122 @@ describe('propagateUnderlagForBookedTransaction', () => {
       ),
     ).resolves.toBeUndefined()
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+  })
+})
+
+describe('propagateUnderlagForBookedTransaction: pinned transaction document', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('anchors the pinned doc passed by a caller that holds the transaction row', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { journal_entry_id: null } }) // pinned doc not yet anchored
+    enqueue({ data: [] }) // no matched inbox items
+
+    await propagateUnderlagForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      JE1,
+      { pinnedDocumentId: 'doc-pin' },
+    )
+
+    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE1)
+    // The caller supplied the pin: no transactions fetch needed.
+    expect(findCalls('transactions', 'select').length).toBe(0)
+  })
+
+  it('resolves the pin itself when the caller does not hold the transaction row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: 'doc-pin' } }) // pin resolution
+    enqueue({ data: { journal_entry_id: null } }) // pinned doc not yet anchored
+    enqueue({ data: [] }) // no matched inbox items
+
+    await propagateUnderlagForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      JE1,
+    )
+
+    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE1)
+  })
+
+  it('skips the pin leg entirely on pinnedDocumentId null (attach callers own it)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // no matched inbox items
+
+    await propagateUnderlagForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      JE1,
+      { pinnedDocumentId: null },
+    )
+
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+    expect(findCalls('transactions', 'select').length).toBe(0)
+    expect(findCalls('document_attachments', 'select').length).toBe(0)
+  })
+
+  it('never steals a pinned doc anchored to another verifikat', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { journal_entry_id: 'je-other' } }) // pinned doc is someone else's underlag
+    enqueue({ data: [] }) // no matched inbox items
+
+    await propagateUnderlagForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      JE1,
+      { pinnedDocumentId: 'doc-pin' },
+    )
+
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('links once when the pinned doc and the matched item share the document', async () => {
+    // Attach-before-book from the inbox: the SAME document is both the tx pin
+    // and the matched item's document. The pin leg links it; the inbox loop
+    // then sees it already pointing at the verifikat and only stamps.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { journal_entry_id: null } }) // pin leg: doc not yet anchored
+    enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] }) // matched items
+    enqueue({ data: { journal_entry_id: JE1 } }) // inbox loop: now anchored to JE1
+    enqueue({ data: null }) // stamp update
+
+    await propagateUnderlagForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      JE1,
+      { pinnedDocumentId: 'doc-1' },
+    )
+
+    expect(linkToJournalEntry).toHaveBeenCalledTimes(1)
+    expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
+      { created_journal_entry_id: JE1 },
+    ])
+  })
+
+  it('still propagates the inbox items when the pin leg fails', async () => {
+    vi.mocked(linkToJournalEntry).mockRejectedValueOnce(new Error('link failed'))
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { journal_entry_id: null } }) // pin leg: doc not yet anchored (link will fail)
+    enqueue({ data: [{ id: 'i1', document_id: null }] }) // matched items
+    enqueue({ data: null }) // stamp update
+
+    await expect(
+      propagateUnderlagForBookedTransaction(
+        supabase as unknown as SupabaseClient,
+        COMPANY,
+        TX1,
+        JE1,
+        { pinnedDocumentId: 'doc-pin' },
+      ),
+    ).resolves.toBeUndefined()
+    expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
+      { created_journal_entry_id: JE1 },
+    ])
   })
 })
 

@@ -18,7 +18,13 @@
  *    why the column alone is not "booked").
  *  - propagateUnderlagForBookedTransaction: link matched items' documents to
  *    the verifikat (BFL 5 kap 6 §: the verifikation must reference its
- *    underlag) and stamp created_journal_entry_id.
+ *    underlag) and stamp created_journal_entry_id. Also anchors the document
+ *    pinned directly on the transaction (transactions.document_id), which can
+ *    exist WITHOUT any inbox row: a doc linked from the documents page or a
+ *    staged MCP attach pins the transaction but creates no
+ *    invoice_inbox_items match, so the inbox loop alone never anchors it and
+ *    the verifikat ends up reporting "Underlag saknas" (the 2026-08-13 user
+ *    report: 72 such rows across 10 companies).
  *  - completeInboxItemsForBookedTransaction: the attach-time entry point that
  *    resolves first and propagates only when the transaction is booked.
  *
@@ -131,13 +137,21 @@ export async function resolveVoucherLinkedEntryIds(
  *      visibly moves to "Bokförda" and shows "Öppna verifikation"
  * Errors are logged but never fail the caller: the verifikation itself is
  * already posted, and the link can be repaired by re-running this step.
+ *
+ * `opts.pinnedDocumentId` is the transaction's own pinned document
+ * (transactions.document_id): pass the value when the transaction row is
+ * already in hand (null meaning "no pin", which skips the leg entirely),
+ * omit it to have the pin resolved here. Attach-time callers that propagate
+ * the pin themselves with surfaced errors pass null to opt out.
  */
 export async function propagateUnderlagForBookedTransaction(
   supabase: SupabaseClient,
   companyId: string,
   txId: string,
   journalEntryId: string,
+  opts?: { pinnedDocumentId?: string | null },
 ): Promise<void> {
+  await anchorPinnedTransactionDocument(supabase, companyId, txId, journalEntryId, opts?.pinnedDocumentId)
   try {
     const { data: matchedInboxItems } = await supabase
       .from('invoice_inbox_items')
@@ -218,6 +232,68 @@ export async function propagateUnderlagForBookedTransaction(
 }
 
 /**
+ * Anchor the document pinned directly on the transaction
+ * (transactions.document_id) to the verifikat that booked it. The pin can
+ * exist without any invoice_inbox_items row, so the inbox loop never sees it.
+ *
+ * `pinnedDocumentId` undefined means "not resolved yet": the pin is read
+ * here. Null means the caller knows there is no pin (or owns its
+ * propagation): the leg is skipped without a query. Same contract as the
+ * rest of the module: idempotent, never steals another verifikat's underlag,
+ * failures are logged and repaired by re-running.
+ */
+async function anchorPinnedTransactionDocument(
+  supabase: SupabaseClient,
+  companyId: string,
+  txId: string,
+  journalEntryId: string,
+  pinnedDocumentId: string | null | undefined,
+): Promise<void> {
+  try {
+    let documentId = pinnedDocumentId
+    if (documentId === undefined) {
+      const { data: tx } = await supabase
+        .from('transactions')
+        .select('document_id')
+        .eq('id', txId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      documentId = ((tx as { document_id?: string | null } | null)?.document_id ?? null)
+    }
+    if (!documentId) return
+
+    const { data: doc } = await supabase
+      .from('document_attachments')
+      .select('journal_entry_id')
+      .eq('id', documentId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const currentDocEntryId =
+      ((doc as { journal_entry_id?: string | null } | null)?.journal_entry_id ?? null)
+    if (currentDocEntryId === journalEntryId) return
+    if (currentDocEntryId !== null) {
+      // Anchored to another verifikat: preserved, never stolen (a same-value
+      // rewrite would also trip the period-lock trigger). The warn is the
+      // surface for the mismatch; nothing here may hide it.
+      log.warn('Pinned transaction document already anchored to another verifikat; leaving it', {
+        transaction_id: txId,
+        document_id: documentId,
+        document_journal_entry_id: currentDocEntryId,
+        journal_entry_id: journalEntryId,
+      })
+      return
+    }
+    await linkToJournalEntry(supabase, companyId, documentId, journalEntryId)
+  } catch (err) {
+    log.error('Failed to anchor pinned transaction document to journal entry', {
+      transaction_id: txId,
+      journal_entry_id: journalEntryId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+/**
  * Attach-time entry point: when a document lands on (or an item is matched to)
  * a transaction that is ALREADY booked, resolve the anchoring verifikat and
  * complete the matched inbox items against it. No-op for unbooked
@@ -248,6 +324,10 @@ export async function completeInboxItemsForBookedTransaction(
       (await resolveBookedJournalEntryIds(supabase, companyId, [txId])).get(txId) ?? null
   }
   if (!journalEntryId) return null
-  await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId)
+  // pinnedDocumentId: null — the attach routes propagate the pin themselves
+  // (they surface link errors to the user, which this best-effort path can't).
+  await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId, {
+    pinnedDocumentId: null,
+  })
   return journalEntryId
 }
