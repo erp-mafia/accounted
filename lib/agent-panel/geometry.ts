@@ -122,6 +122,28 @@ export function clampFloatRect(
   return { x, y, w, h }
 }
 
+/**
+ * Snap a floating rect fully inside the viewport. clampFloatRect above only
+ * guarantees FLOAT_KEEP_ON_SCREEN of the panel stays reachable (so a live
+ * drag may deliberately hang off an edge), which means a rect persisted at
+ * the edge, or on a larger monitor, legally renders as a 48px sliver on the
+ * next open. This is the open/resize-time validation: whole window visible.
+ * The output is always a fixpoint of clampFloatRect (w and h end up >= the
+ * minimums, x and y inside the reachability bounds), so the render clamp
+ * applied afterwards stays a no-op.
+ */
+export function containFloatRect(
+  rect: AgentPanelFloatRect,
+  viewportW: number,
+  viewportH: number,
+): AgentPanelFloatRect {
+  const w = Math.round(Math.min(Math.max(rect.w, FLOAT_MIN_W), Math.max(FLOAT_MIN_W, viewportW)))
+  const h = Math.round(Math.min(Math.max(rect.h, FLOAT_MIN_H), Math.max(FLOAT_MIN_H, viewportH)))
+  const x = Math.round(Math.min(Math.max(rect.x, 0), Math.max(0, viewportW - w)))
+  const y = Math.round(Math.min(Math.max(rect.y, 0), Math.max(0, viewportH - h)))
+  return { x, y, w, h }
+}
+
 /** First-undock placement: bottom-right, mirroring where the FAB lives. */
 export function defaultFloatRect(viewportW: number, viewportH: number): AgentPanelFloatRect {
   const w = Math.min(FLOAT_DEFAULT_W, Math.max(FLOAT_MIN_W, viewportW - 2 * FLOAT_SPAWN_MARGIN))
