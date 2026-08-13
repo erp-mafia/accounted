@@ -62,4 +62,12 @@ describe('suggestVatTreatment', () => {
       rate: null,
     })
   })
+
+  it('does not use a gross account rate for VMB', () => {
+    expect(defaultRateForVatTreatment('vmb', 3)).toBeNull()
+    expect(suggestVatTreatment('3021', 'Försäljning begagnat 25% VMB')).toEqual({
+      treatment: 'vmb',
+      rate: null,
+    })
+  })
 })

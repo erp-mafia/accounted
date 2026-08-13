@@ -267,8 +267,8 @@ export default function AccountMappingStep({
                                 : value as AccountVatTreatment
                               const accountClass = Number(mapping.sourceAccount.charAt(0))
                               const rate = treatment
-                                ? mapping.defaultVatRate ?? defaultRateForVatTreatment(treatment, accountClass)
-                                : mapping.defaultVatRate ?? null
+                                ? defaultRateForVatTreatment(treatment, accountClass)
+                                : null
                               onVatTreatmentChange(mapping.sourceAccount, treatment, rate)
                             }}
                           >

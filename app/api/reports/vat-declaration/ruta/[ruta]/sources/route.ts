@@ -42,15 +42,14 @@ export const GET = withRouteContext<{ params: Promise<{ ruta: string }> }>(
 
   const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
 
-  // Invert the effective mapping. Explicit account treatments replace the
-  // fixed BAS mapping and can move a standard account to another ruta.
+  // Invert the effective mapping. Fixed BAS mappings stay authoritative;
+  // explicit treatments add custom accounts only.
   const accountsForRuta = Object.entries(ACCOUNT_RUTA)
-    .filter(([account, m]) =>
-      m.box === rutaKey && !dynamicVatAccounts.explicitAccounts.has(account)
-    )
+    .filter(([, m]) => m.box === rutaKey)
     .map(([acc]) => acc)
 
   for (const [account, mapping] of dynamicVatAccounts.mappingByAccount) {
+    if (ACCOUNT_RUTA[account]) continue
     if (mapping.box === rutaKey) accountsForRuta.push(account)
   }
 

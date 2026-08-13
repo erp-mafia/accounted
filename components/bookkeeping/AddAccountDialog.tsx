@@ -273,9 +273,9 @@ export function AddAccountDialog({
             accountClass={derived ? Number(accountNumber.charAt(0)) : null}
             onValueChange={(treatment) => {
               setDefaultVatTreatment(treatment)
-              if (treatment !== 'none' && defaultVatRate === 'none') {
+              if (treatment !== 'none') {
                 const rate = defaultRateForVatTreatment(treatment, Number(accountNumber.charAt(0)))
-                if (rate !== null) setDefaultVatRate(String(rate))
+                setDefaultVatRate(rate === null ? 'none' : String(rate))
               }
             }}
           />

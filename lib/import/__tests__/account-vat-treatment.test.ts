@@ -32,6 +32,28 @@ describe('enrichAccountMappingsWithVat', () => {
     })
   })
 
+  it('requires review for suggested class 5 and 6 purchase treatments', () => {
+    const results = enrichAccountMappingsWithVat(
+      [
+        mapping('5010', 'Inköp tjänst EU'),
+        mapping('6010', 'Inköp tjänst utanför EU'),
+      ],
+      [],
+    )
+    expect(results).toEqual([
+      expect.objectContaining({
+        defaultVatTreatment: 'reverse_charge_eu_services',
+        requiresVatTreatmentReview: true,
+        vatTreatmentReviewed: false,
+      }),
+      expect.objectContaining({
+        defaultVatTreatment: 'export_services',
+        requiresVatTreatmentReview: true,
+        vatTreatmentReviewed: false,
+      }),
+    ])
+  })
+
   it('keeps an existing account treatment without asking again', () => {
     const [result] = enrichAccountMappingsWithVat(
       [mapping('3041', 'Försäljning tjänst 25% sv')],

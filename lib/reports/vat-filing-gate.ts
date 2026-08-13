@@ -114,7 +114,6 @@ export function rcBasisTotalsByRate(
   const sumGroup = (accounts: readonly string[]): number => {
     let sum = 0
     for (const account of accounts) {
-      if (dynamic?.explicitAccounts.has(account)) continue
       const t = totals.get(account)
       if (t) sum += t.debit - t.credit
     }
@@ -126,6 +125,7 @@ export function rcBasisTotalsByRate(
     r6: sumGroup(RC_BASIS_ACCOUNTS_BY_RATE.r6),
   }
   for (const [account, rate] of dynamic?.rcBasisRateByAccount ?? []) {
+    if (STATIC_RC_BASIS_RATE.has(account)) continue
     const total = totals.get(account)
     if (!total) continue
     const key = rate === 0.25 ? 'r25' : rate === 0.12 ? 'r12' : 'r6'

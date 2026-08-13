@@ -327,9 +327,9 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
             accountClass={account.account_class}
             onValueChange={(treatment) => {
               setDefaultVatTreatment(treatment)
-              if (treatment !== 'none' && defaultVatRate === 'none') {
+              if (treatment !== 'none') {
                 const rate = defaultRateForVatTreatment(treatment, account.account_class)
-                if (rate !== null) setDefaultVatRate(String(rate))
+                setDefaultVatRate(rate === null ? 'none' : String(rate))
               }
             }}
           />

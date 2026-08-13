@@ -436,7 +436,6 @@ export function rutorFromTotals(
   }
 
   for (const [account, mapping] of Object.entries(ACCOUNT_RUTA)) {
-    if (dynamic?.explicitAccounts.has(account)) continue
     const t = totals.get(account)
     if (!t) continue
     const balance = mapping.side === 'credit'
@@ -446,6 +445,7 @@ export function rutorFromTotals(
   }
 
   for (const [account, mapping] of dynamic?.mappingByAccount ?? []) {
+    if (ACCOUNT_RUTA[account]) continue
     const t = totals.get(account)
     if (!t) continue
     const balance = mapping.side === 'credit' ? t.credit - t.debit : t.debit - t.credit

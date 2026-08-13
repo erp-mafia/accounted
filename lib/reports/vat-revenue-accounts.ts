@@ -42,7 +42,7 @@ const emptyDynamicVatAccounts = (): DynamicVatAccounts => ({
   rcBasisRateByAccount: new Map(),
 })
 
-/** Explicit account treatments win; accounts without one keep BAS fallback. */
+/** Explicit treatments extend custom accounts; fixed BAS mappings stay authoritative. */
 export async function fetchDynamicVatAccounts(
   supabase: SupabaseClient,
   companyId: string,
@@ -70,15 +70,23 @@ export async function fetchDynamicVatAccounts(
     const configuredRate = row.default_vat_rate === null ? null : Number(row.default_vat_rate)
 
     if (isAccountVatTreatment(row.default_vat_treatment)) {
-      result.explicitAccounts.add(account)
+      if (ACCOUNT_TO_BOX[account]) {
+        if (
+          RUTA_05_STATIC_RATE_ACCOUNTS.has(account) &&
+          configuredRate !== null && TAXABLE_RATES.includes(configuredRate)
+        ) {
+          result.staticRateByAccount.set(account, configuredRate)
+        }
+        continue
+      }
       const mapping = resolveVatTreatmentRuta(row.default_vat_treatment, accountClass)
       if (!mapping) continue
+      result.explicitAccounts.add(account)
       result.mappingByAccount.set(account, mapping)
-      if (!ACCOUNT_TO_BOX[account]) result.accounts.push(account)
+      result.accounts.push(account)
       const rate = configuredRate ?? defaultRateForVatTreatment(row.default_vat_treatment, accountClass)
       if (mapping.box === 'ruta05' && rate !== null && TAXABLE_RATES.includes(rate)) {
-        const target = ACCOUNT_TO_BOX[account] ? result.staticRateByAccount : result.rateByAccount
-        target.set(account, rate)
+        result.rateByAccount.set(account, rate)
       }
       if (
         ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24'].includes(mapping.box) &&

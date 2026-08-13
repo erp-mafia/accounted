@@ -42,7 +42,7 @@ export function enrichAccountMappingsWithVat(
       defaultVatRate: suggestion?.rate ?? existing?.default_vat_rate ?? null,
       vatTreatmentSuggested: Boolean(suggestion),
       vatTreatmentReviewed: false,
-      requiresVatTreatmentReview: accountClass === 3 || accountClass === 4,
+      requiresVatTreatmentReview: accountClass >= 3 && accountClass <= 6,
     }
   })
 }

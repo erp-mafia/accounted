@@ -931,7 +931,7 @@ function SIEImportWizard() {
           preview={preview} theaterModel={theaterModel}
           unresolvedVatAccountCount={mappings.filter((mapping) =>
             mapping.sourceAccount === mapping.targetAccount &&
-            ['3', '4'].includes(mapping.sourceAccount.charAt(0)) &&
+            ['3', '4', '5', '6'].includes(mapping.sourceAccount.charAt(0)) &&
             (!mapping.defaultVatTreatment || !mapping.vatTreatmentReviewed)
           ).length} />
       )}
