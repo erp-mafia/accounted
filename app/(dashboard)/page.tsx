@@ -59,7 +59,7 @@ export default async function DashboardPage() {
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('bank_connections').select('id, status, consent_expires, bank_name').eq('company_id', companyId).eq('status', 'active'),
+    supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
     supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed'),
     // Skatteverket tokens are user-scoped (one BankID identity per user) but
     // carry the active company_id; either filter would work: we use user_id
@@ -158,6 +158,37 @@ export default async function DashboardPage() {
 
   const userFirstName = profile?.full_name?.trim().split(/\s+/)[0] ?? null
 
+  // Latest SIE reconciliation-sweep summary across both history sources
+  // (PSD2 sync stamps bank_connections.last_sie_sweep; a bank-file import
+  // stamps bank_file_imports.sie_sweep). Feeds the checklist's bank step with
+  // "X matchade, Y att granska" so a migrator sees the sweep outcome without
+  // hunting for it. Best-effort: absent rows just render no note.
+  type SieSweepSummaryLite = {
+    auto_linked?: number
+    suggested?: number
+    unmatched?: number
+    errors?: number
+    ran_at?: string
+  }
+  const { data: latestFileSweep } = await supabase
+    .from('bank_file_imports')
+    .select('sie_sweep')
+    .eq('company_id', companyId)
+    .not('sie_sweep', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const sweepCandidates: SieSweepSummaryLite[] = [
+    ...(bankConnections || [])
+      .map((c) => c.last_sie_sweep as SieSweepSummaryLite | null)
+      .filter((s): s is SieSweepSummaryLite => Boolean(s)),
+    ...(latestFileSweep?.sie_sweep ? [latestFileSweep.sie_sweep as SieSweepSummaryLite] : []),
+  ]
+  const sieSweep =
+    sweepCandidates.length > 0
+      ? sweepCandidates.reduce((a, b) => ((a.ran_at ?? '') >= (b.ran_at ?? '') ? a : b))
+      : null
+
   return (
     <DashboardContent
       companyId={companyId}
@@ -176,6 +207,16 @@ export default async function DashboardPage() {
       }}
       vatLine={vatLine}
       emptyLedger={emptyLedger}
+      sieSweep={
+        sieSweep
+          ? {
+              auto_linked: sieSweep.auto_linked ?? 0,
+              suggested: sieSweep.suggested ?? 0,
+              unmatched: sieSweep.unmatched ?? 0,
+              errors: sieSweep.errors ?? 0,
+            }
+          : null
+      }
     />
   )
 }

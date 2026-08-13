@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { EmptyState } from '@/components/ui/empty-state'
+import { StartCard } from '@/components/dashboard/StartCard'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   TH_CLASS,
@@ -42,8 +43,6 @@ import { rowsNeedingInterestDate } from '@/lib/skatteverket/interest-period'
 import {
   AlertCircle,
   Copy,
-  ExternalLink,
-  Landmark,
   RefreshCw,
 } from 'lucide-react'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -89,6 +88,7 @@ interface MatchCandidate {
 export default function SkattekontoPage() {
   const { toast } = useToast()
   const t = useTranslations('skattekonto')
+  const tStart = useTranslations('start_cards')
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const [showPayment, setShowPayment] = useState(false)
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
@@ -374,18 +374,15 @@ export default function SkattekontoPage() {
     return (
       <div className="space-y-8">
         <PageHeader title="Skattekonto" help={helpNode} />
-        <EmptyState
-          icon={Landmark}
-          title="Skatteverket är inte anslutet"
-          description="För att se saldo och transaktioner på skattekontot behöver du ansluta med BankID i inställningarna."
-        >
-          <Button asChild>
-            <Link href="/settings/tax">
-              <ExternalLink className="mr-2 h-4 w-4" />
-              Anslut Skatteverket
-            </Link>
-          </Button>
-        </EmptyState>
+        <div className="animate-fade-in">
+          <StartCard
+            card="abacus"
+            layout="side-right"
+            title={tStart('skattekonto_title')}
+            body={tStart('skattekonto_body')}
+            primary={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
+          />
+        </div>
       </div>
     )
   }

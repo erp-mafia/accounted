@@ -412,7 +412,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
     const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
-    if (transaction.journal_entry_id) {
+    // A RECONCILIATION link (reconciliation_method set) is not a conflicting
+    // booking: the entry is an independent verifikat that may evidence OTHER
+    // affärshändelser; reversing it wholesale would be an over-broad rättelse
+    // (BFL 5 kap 5 §). Nothing is detached here: the final transaction update
+    // overwrites the pointer and clears reconciliation_method in the same
+    // write, so a failure in between leaves the existing link intact.
+    const priorReconciliationLink =
+      transaction.journal_entry_id && transaction.reconciliation_method
+        ? {
+            journalEntryId: transaction.journal_entry_id as string,
+            method: transaction.reconciliation_method as string,
+          }
+        : null
+
+    if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
         await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, transaction.journal_entry_id)
         const { error: clearErr } = await ctx.supabase
@@ -762,6 +776,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       potential_invoice_id: null,
       journal_entry_id: journalEntryId,
       is_business: true,
+      // The invoice match supersedes any prior reconciliation link (deferred
+      // detach, see the priorReconciliationLink block above). Unconditional:
+      // null is already the value on every non-reconciliation-linked row.
+      reconciliation_method: null,
     }
     if (existingTxCategory) txUpdate.category = existingTxCategory
 
@@ -774,6 +792,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       txLog.error('failed to link transaction to invoice', updateTxErr)
       return v1ErrorResponseFromCode('MATCH_INVOICE_LINK_TX_FAILED', txLog, {
         requestId: ctx.requestId,
+      })
+    }
+
+    // Record the release of the prior reconciliation link now that the
+    // re-point has committed (behandlingshistorik, BFNAR 2013:2 kap 8).
+    if (priorReconciliationLink) {
+      await logMatchEvent(ctx.supabase, ctx.userId, txId, 'unmatched', {
+        invoiceId: invoice_id,
+        previousState: {
+          journal_entry_id: priorReconciliationLink.journalEntryId,
+          reconciliation_method: priorReconciliationLink.method,
+        },
+        newState: { journal_entry_id: journalEntryId, reconciliation_method: null },
       })
     }
 

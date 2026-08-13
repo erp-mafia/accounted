@@ -605,6 +605,59 @@ describe('runReconciliation', () => {
     expect(result.errors).toBe(0)
   })
 
+  it('persists the below-threshold band as suggestions when persistSuggestions is set', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // Fuzzy match: amount off by 1 öre on the exact date → 0.75 confidence,
+    // below the 0.9 unattended floor.
+    const tx = makeTransaction({ id: 'tx-1', amount: 1000.01, date: '2024-06-15', currency: 'SEK' })
+    const glLine: UnlinkedGLLine = makeGLLine({
+      line_id: 'line-1',
+      journal_entry_id: 'je-1',
+      debit_amount: 1000,
+      entry_date: '2024-06-15',
+    })
+
+    enqueue({ data: [glLine] }) // RPC: GL lines
+    enqueue({ data: [tx] }) // transactions
+    enqueue({ data: [{ id: 'tx-1' }] }) // suggestion update .select('id')
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      confidenceThreshold: 0.9,
+      persistSuggestions: true,
+    })
+
+    expect(result.applied).toBe(0)
+    expect(result.skippedBelowThreshold).toBe(1)
+    expect(result.suggested).toBe(1)
+    expect(result.candidates).toBe(1)
+  })
+
+  it('does not count a suggestion whose optimistic-lock update matched zero rows', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    const tx = makeTransaction({ id: 'tx-1', amount: 1000.01, date: '2024-06-15', currency: 'SEK' })
+    const glLine: UnlinkedGLLine = makeGLLine({
+      line_id: 'line-1',
+      journal_entry_id: 'je-1',
+      debit_amount: 1000,
+      entry_date: '2024-06-15',
+    })
+
+    enqueue({ data: [glLine] })
+    enqueue({ data: [tx] })
+    // A concurrent writer booked the row: .is('journal_entry_id', null) → 0 rows.
+    enqueue({ data: [] })
+
+    const result = await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      confidenceThreshold: 0.9,
+      persistSuggestions: true,
+    })
+
+    expect(result.suggested).toBe(0)
+    expect(result.skippedBelowThreshold).toBe(1)
+  })
+
   it('counts a conflicted apply (0 rows updated) as an error, not applied', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
 

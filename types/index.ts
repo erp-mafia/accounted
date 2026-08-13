@@ -625,6 +625,13 @@ export interface Transaction {
   // Potential supplier invoice match (suggested, not confirmed)
   potential_supplier_invoice_id: string | null
 
+  // Potential journal-entry match (suggested by the reconciliation sweep, not
+  // confirmed). All three set together, or all null; cleared by DB triggers
+  // when the row is booked/ignored or the entry is consumed/reversed.
+  potential_journal_entry_id?: string | null
+  potential_match_method?: string | null
+  potential_match_confidence?: number | null
+
   // Bookkeeping
   journal_entry_id: string | null
   mcc_code: number | null

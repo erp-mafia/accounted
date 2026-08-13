@@ -2207,6 +2207,13 @@ export const MarkOpeningBalanceSchema = z.object({
 export const RunReconciliationSchema = z.object({
   date_from: isoDate.optional(),
   date_to: isoDate.optional(),
+  // Run the per-cash-account unattended sweep over every enabled cash account
+  // ("Kör matchning igen" in the review surface) instead of one account. The
+  // sweep always applies at the unattended threshold and persists suggestions;
+  // there is no dry-run form. The route REJECTS (400) any combination with
+  // dry_run, account_number or selected_matches rather than silently ignoring
+  // them: a request that asked for a preview must never apply writes.
+  all_accounts: z.boolean().optional(),
   // BAS settlement account to reconcile against (e.g. '1930', '1932'). Defaults
   // to '1930' server-side so existing clients stay correct.
   account_number: accountNumber.optional(),
@@ -2229,6 +2236,14 @@ export const RunReconciliationSchema = z.object({
   // client still has it ticked. Omitted = legacy behavior: every selected
   // match applies, including manually ticked fuzzy ones at 0.75.
   confidence_threshold: z.number().min(0).max(1).optional(),
+})
+
+// Confirm or reject persisted journal-entry match suggestions
+// (transactions.potential_journal_entry_id). Each pair is revalidated
+// server-side at confirm time; stale pairs are skipped, never failing the batch.
+export const ConfirmJeSuggestionsSchema = z.object({
+  transaction_ids: z.array(uuid).min(1).max(500),
+  action: z.enum(['confirm', 'reject']),
 })
 
 // ============================================================

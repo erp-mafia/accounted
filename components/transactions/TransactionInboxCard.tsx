@@ -82,6 +82,11 @@ interface TransactionInboxCardProps {
    *  gates the move action, which is pointless with a single account. */
   cashAccounts?: CashAccount[]
   onToggleSelect: (id: string) => void
+  /** End date of the company's completed SIE-import coverage. Rows on or
+   *  before it are pre-migration history: they most likely correspond to an
+   *  already-imported verifikat, so the row carries a quiet marker steering
+   *  toward matching rather than re-booking. */
+  preMigrationCutoff?: string | null
 }
 
 /**
@@ -109,6 +114,7 @@ export default function TransactionInboxCard({
   onMoveCashAccount,
   cashAccounts,
   onToggleSelect,
+  preMigrationCutoff = null,
 }: TransactionInboxCardProps) {
   const t = useTranslations('tx_inbox_card')
   const tMethod = useTranslations('tx_method')
@@ -298,6 +304,13 @@ export default function TransactionInboxCard({
                 <AlertCircle className="h-3 w-3" />
                 Möjlig 1930↔1630
               </Badge>
+            )}
+            {/* Quiet pre-migration marker (muted text, not a chip: it is
+                context, not an exception state). ISO dates compare lexically. */}
+            {preMigrationCutoff && transaction.date <= preMigrationCutoff && (
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {t('pre_migration_marker')}
+              </span>
             )}
           </span>
         </td>
