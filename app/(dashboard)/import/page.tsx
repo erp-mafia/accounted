@@ -107,6 +107,7 @@ const SIEPreviewStep = dynamic(() => import('@/components/import/SIEPreviewStep'
 const AccountMappingStep = dynamic(() => import('@/components/import/AccountMappingStep'), { loading: ImportStepLoading })
 const ImportReviewStep = dynamic(() => import('@/components/import/ImportReviewStep'), { loading: ImportStepLoading })
 const ImportResultStep = dynamic(() => import('@/components/import/ImportResultStep'), { loading: ImportStepLoading })
+const SIEImportHistory = dynamic(() => import('@/components/import/SIEImportHistory'), { loading: ImportStepLoading })
 
 // ============================================================
 // Bank File Import Wizard Steps
@@ -2006,6 +2007,7 @@ export default function ImportPage() {
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
+  const [sieHistoryOpen, setSieHistoryOpen] = useState(false)
   const [userId, setUserId] = useState('')
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
   const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
@@ -2209,7 +2211,18 @@ export default function ImportPage() {
                   sub={t('sie_description')}
                   onClick={() => setMode('sie')}
                 />
+                <ImportRow
+                  title={t('sie_history_title')}
+                  sub={t('sie_history_description')}
+                  expanded={sieHistoryOpen}
+                  onClick={() => setSieHistoryOpen((v) => !v)}
+                />
               </div>
+              {sieHistoryOpen && (
+                <div className="mt-6">
+                  <SIEImportHistory />
+                </div>
+              )}
               <p className="mt-4 px-1 text-xs leading-5 text-muted-foreground">{t('pgnote')}</p>
             </div>
           ) : (
