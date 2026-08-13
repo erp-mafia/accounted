@@ -19,6 +19,8 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { CashAccountSelector } from '@/components/common/CashAccountSelector'
 import { MatchVerifikationPicker, type UnlinkedGLLine } from '@/components/reconciliation/MatchVerifikationPicker'
+import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
+import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -232,6 +234,15 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
   // Per-verifikat loading for the "Märk som ingående balans" re-tag action.
   const [markLoading, setMarkLoading] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE) fired
+  // for a quick-book: opened as the shared match/ignore/book-anyway dialog
+  // instead of a dead-end toast; this page's whole purpose is matching.
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    transactionId: string
+    retry: () => Promise<void>
+    candidate: BookedDuplicateCandidate
+  } | null>(null)
+  const [duplicateProcessing, setDuplicateProcessing] = useState(false)
 
   // Opt-in: also surface vouchers already matched to a bank transaction as
   // candidates, so a second/third transaction can be attached to the same
@@ -748,7 +759,13 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
    * leg to the transaction's actual settlement account, so this is correct on
    * any cash account.
    */
-  const handleQuickBook = async (transactionId: string, templateId: string) => {
+  const handleQuickBook = async (
+    transactionId: string,
+    templateId: string,
+    // Set after the user confirmed the duplicate warning: force is bound to
+    // the reviewed candidate's voucher and re-detected server-side.
+    forceOpts?: { expectedDuplicateJournalEntryId: string },
+  ) => {
     setActionLoading(transactionId)
     try {
       const res = await fetch(`/api/transactions/${transactionId}/categorize`, {
@@ -758,10 +775,29 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
           is_business: true,
           template_id: templateId,
           confirm_no_match: true,
+          ...(forceOpts
+            ? { force: true, expected_duplicate_journal_entry_id: forceOpts.expectedDuplicateJournalEntryId }
+            : {}),
         }),
       })
       const result = await res.json()
       if (!res.ok || result.error) {
+        const candidate = result?.error?.details?.candidate as BookedDuplicateCandidate | undefined
+        if (result?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' && candidate) {
+          // The affärshändelse already looks booked. On the reconciliation
+          // page the right resolutions (match the voucher, ignore a duplicate
+          // import, or book anyway) all live in the shared dialog: never
+          // dead-end in a toast with no way forward.
+          setDuplicateWarning({
+            transactionId,
+            retry: () =>
+              handleQuickBook(transactionId, templateId, {
+                expectedDuplicateJournalEntryId: candidate.journal_entry_id,
+              }),
+            candidate,
+          })
+          return
+        }
         toast({
           variant: 'destructive',
           title: 'Kunde inte bokföra transaktionen',
@@ -1464,6 +1500,43 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
           icon={Landmark}
           title="Inget att stämma av"
           description="Det finns inga banktransaktioner eller verifikationer i den valda perioden. Importera eller synka banktransaktioner så visas de här."
+        />
+      )}
+
+      {duplicateWarning && (
+        <DuplicateBookingDialog
+          candidate={duplicateWarning.candidate}
+          processing={duplicateProcessing}
+          onCancel={() => setDuplicateWarning(null)}
+          matchTransaction={{
+            id: duplicateWarning.transactionId,
+            // The view is scoped to one ledger account; resolve its cash
+            // account so the match links on the account being reconciled.
+            cash_account_id: cashAccounts.find((a) => a.ledger_account === accountNumber)?.id ?? null,
+            currency:
+              unmatchedTx.find((t) => t.id === duplicateWarning.transactionId)?.currency ??
+              accountCurrency,
+          }}
+          onMatched={async () => {
+            setDuplicateWarning(null)
+            toast({ variant: 'success', title: 'Transaktionen matchades mot verifikatet' })
+            await fetchAll({ silent: true })
+          }}
+          onIgnored={async () => {
+            setDuplicateWarning(null)
+            toast({ variant: 'success', title: 'Transaktionen ignorerad' })
+            await fetchAll({ silent: true })
+          }}
+          onBookAnyway={async () => {
+            const retry = duplicateWarning?.retry
+            setDuplicateProcessing(true)
+            try {
+              setDuplicateWarning(null)
+              if (retry) await retry()
+            } finally {
+              setDuplicateProcessing(false)
+            }
+          }}
         />
       )}
 

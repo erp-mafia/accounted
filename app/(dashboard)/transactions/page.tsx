@@ -2753,7 +2753,11 @@ export default function TransactionsPage() {
     let journalEntryId: string | null
     if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
       const cpTemplateId = extractCounterpartyId(quickReview.template.id)
-      const cpCategorize = async (): Promise<{ ok: boolean; journalEntryId: string | null; result: { error?: { code?: string; account_numbers?: string[]; details?: { account_numbers?: string[] } }; journal_entry_id?: string | null; journal_entry_created?: boolean; journal_entry_error?: string | null; category?: TransactionCategory }; status: number }> => {
+      const cpCategorize = async (
+        // Set after the user confirmed the duplicate warning: force is bound
+        // to the reviewed candidate's voucher, same contract as runCategorize.
+        forceOpts?: { expectedDuplicateJournalEntryId: string },
+      ): Promise<{ ok: boolean; journalEntryId: string | null; result: { error?: { code?: string; account_numbers?: string[]; details?: { account_numbers?: string[]; candidate?: BookedDuplicateCandidate } }; journal_entry_id?: string | null; journal_entry_created?: boolean; journal_entry_error?: string | null; category?: TransactionCategory }; status: number }> => {
         const r = await fetch(`/api/transactions/${id}/categorize`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2761,6 +2765,9 @@ export default function TransactionsPage() {
             is_business: true,
             counterparty_template_id: cpTemplateId,
             ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
+            ...(forceOpts
+              ? { force: true, expected_duplicate_journal_entry_id: forceOpts.expectedDuplicateJournalEntryId }
+              : {}),
           }),
         })
         const b = await r.json()
@@ -2829,11 +2836,42 @@ export default function TransactionsPage() {
               </ToastAction>
             ) : undefined,
           })
+        } else if (
+          result?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' &&
+          result.error.details?.candidate
+        ) {
+          // Booking-feedback parity with runCategorize: route the duplicate
+          // guard into the dialog (match / ignore / book anyway) instead of
+          // dead-ending it in a destructive toast that offers no way forward.
+          const candidate = result.error.details.candidate
+          setDuplicateWarning({
+            transactionId: id,
+            retry: async () => {
+              const retry = await cpCategorize({
+                expectedDuplicateJournalEntryId: candidate.journal_entry_id,
+              })
+              if (retry.ok) {
+                finishBooking({
+                  id,
+                  isBusiness: true,
+                  category: retry.result?.category,
+                  journalEntryId: retry.journalEntryId,
+                  journalEntryCreated: retry.result?.journal_entry_created,
+                  journalEntryError: retry.result?.journal_entry_error,
+                })
+                return retry.journalEntryId
+              }
+              toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
+              return null
+            },
+            candidate,
+          })
         } else {
           toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(result, { context: 'transaction', statusCode: cpStatus }), variant: 'destructive' })
         }
         // Close the review dialog on hard errors: the toast (with action if
         // ACCOUNTS_NOT_IN_CHART) carries the message and the recovery path.
+        // The duplicate branch closes it too: the duplicate dialog takes over.
         setQuickReviewOpen(false)
         setQuickReview(null)
         return null
@@ -3644,6 +3682,37 @@ export default function TransactionsPage() {
         onMatched={(transactionId, journalEntryId, voucherLabel) => {
           setDuplicateWarning(null)
           handleVoucherLinked(transactionId, journalEntryId, voucherLabel)
+        }}
+        // Sibling candidate resolved as a duplicate import: the dialog already
+        // ran POST /ignore; this is the same success tail as
+        // handleIgnoreTransaction (which additionally owns a pre-confirm the
+        // dialog context replaces).
+        onIgnored={(transactionId) => {
+          setDuplicateWarning(null)
+          const ignoredTx = transactions.find((t) => t.id === transactionId)
+          setExitingIds((prev) => new Set(prev).add(transactionId))
+          setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+          setTimeout(() => {
+            setTransactions((prev) =>
+              prev.map((t) => (t.id === transactionId ? { ...t, is_ignored: true } : t))
+            )
+            setExitingIds((prev) => {
+              const next = new Set(prev)
+              next.delete(transactionId)
+              return next
+            })
+          }, 350)
+          toast({
+            title: 'Transaktionen ignorerad',
+            description: ignoredTx
+              ? `${ignoredTx.description}, ${formatCurrency(ignoredTx.amount, ignoredTx.currency)}`
+              : undefined,
+            action: (
+              <ToastAction altText="Ångra ignorera" onClick={() => void handleUnignoreTransaction(transactionId)}>
+                Ångra
+              </ToastAction>
+            ),
+          })
         }}
         onBookAnyway={async () => {
           const retry = duplicateWarning?.retry

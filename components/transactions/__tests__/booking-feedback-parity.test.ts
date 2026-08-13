@@ -41,8 +41,9 @@ describe('transactions page booking feedback', () => {
 
   it('routes every successful booking through it', () => {
     // runCategorize (category / catalog template / library template), the
-    // counterparty-template booking, and the counterparty activate-and-retry.
-    expect(PAGE_SRC.match(/finishBooking\(\{/g) ?? []).toHaveLength(3)
+    // counterparty-template booking, the counterparty activate-and-retry, and
+    // the counterparty duplicate-warning "Bokför ändå" retry.
+    expect(PAGE_SRC.match(/finishBooking\(\{/g) ?? []).toHaveLength(4)
   })
 
   it('no longer ends the counterparty path on a bare exitingIds add', () => {
@@ -74,10 +75,11 @@ describe('transactions page booking feedback', () => {
 
   it('decrements the unbooked count on every path that removes a row', () => {
     // finishBooking, handleTransactionBooked (manual booking dialog / voucher
-    // match), and the three other single-row exits already on the page.
+    // match), the three other single-row exits already on the page, and the
+    // duplicate-dialog "Ignorera transaktionen" tail.
     expect(
       PAGE_SRC.match(/setTotalUncategorizedCount\(\(prev\) => Math\.max\(0, \(prev \?\? 1\) - 1\)\)/g) ?? [],
-    ).toHaveLength(5)
+    ).toHaveLength(6)
   })
 
   it('ships the undo strings it renders in both locales', () => {
@@ -94,5 +96,45 @@ describe('transactions page booking feedback', () => {
         expect(messages[key], `${locale}.transactions.${key}`).toBeTruthy()
       }
     }
+  })
+})
+
+/**
+ * Duplicate-guard feedback parity: every client of POST /categorize must route
+ * a TRANSACTION_BOOK_POSSIBLE_DUPLICATE 409 into DuplicateBookingDialog (which
+ * offers match / ignore / book-anyway), never into a destructive toast that
+ * names no way forward. Two clients used to dead-end: the counterparty-
+ * template branch of handleQuickReviewConfirm, and BankReconciliationView's
+ * quick-book.
+ */
+const BANK_RECON_SRC = fs.readFileSync(
+  path.resolve(__dirname, '../../reports/BankReconciliationView.tsx'),
+  'utf8',
+)
+
+describe('duplicate-guard 409 routing parity', () => {
+  it('handles the duplicate code on both booking paths of the transactions page', () => {
+    // runCategorize AND the counterparty-template branch.
+    expect(
+      PAGE_SRC.match(/error\?\.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE'/g) ?? [],
+    ).toHaveLength(2)
+  })
+
+  it('opens the dialog from the counterparty branch with a force-bound retry', () => {
+    // The branch must set the shared duplicateWarning state (the dialog) and
+    // bind the retry to the reviewed candidate's voucher.
+    expect(PAGE_SRC).toMatch(
+      /TRANSACTION_BOOK_POSSIBLE_DUPLICATE'[\s\S]{0,600}cpCategorize\(\{\s*\n?\s*expectedDuplicateJournalEntryId: candidate\.journal_entry_id,/,
+    )
+  })
+
+  it('routes the quick-book 409 on the reconciliation page into the shared dialog', () => {
+    expect(BANK_RECON_SRC).toContain("'TRANSACTION_BOOK_POSSIBLE_DUPLICATE'")
+    expect(BANK_RECON_SRC).toContain('<DuplicateBookingDialog')
+    expect(BANK_RECON_SRC).toMatch(/setDuplicateWarning\(\{/)
+    // The retry re-runs the quick-book with force bound to the candidate.
+    expect(BANK_RECON_SRC).toMatch(
+      /handleQuickBook\(transactionId, templateId, \{\s*\n?\s*expectedDuplicateJournalEntryId: candidate\.journal_entry_id,/,
+    )
   })
 })
