@@ -372,6 +372,24 @@ describe('fetchKommunTaxRates', () => {
     expect(result.find((r) => r.kommun === 'Stockholm')!.tableNumber).toBe(31) // 30.62 → 31
   })
 
+  it('picks the lower table at exactly ,50 and the higher from ,51 (Skatteverket rule)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        resultCount: 3,
+        results: [row('LÅGKÖPING', '32.49'), row('MITTKÖPING', '32.50'), row('HÖGKÖPING', '32.51')],
+      }),
+    } as Response)
+    globalThis.fetch = fetchSpy
+
+    const result = await fetchKommunTaxRates(2026)
+
+    expect(result.find((r) => r.kommun === 'Lågköping')!.tableNumber).toBe(32)
+    // Skatteverket's own example: 32,50 belongs to table 32, not 33
+    expect(result.find((r) => r.kommun === 'Mittköping')!.tableNumber).toBe(32)
+    expect(result.find((r) => r.kommun === 'Högköping')!.tableNumber).toBe(33)
+  })
+
   it('normalizes Skatteverket uppercase names to title case', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,

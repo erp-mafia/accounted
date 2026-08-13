@@ -491,12 +491,16 @@ export async function fetchKommunTaxRates(year: number): Promise<Array<{
     if (typeof data.resultCount === 'number' && offset >= data.resultCount) break
   }
 
-  return Array.from(byKommun.entries()).map(([kommun, rate]) => ({
-    kommun,
-    totalRate: rate,
-    // Table number: round total rate. ≤0.50 rounds down, ≥0.51 rounds up
-    tableNumber: Math.round(rate),
-  }))
+  return Array.from(byKommun.entries()).map(([kommun, rate]) => {
+    // Table number per Skatteverket: a fractional part of at most 50 öre picks
+    // the lower table, 51 öre or more the higher (32,50 gives table 32 but
+    // 32,51 gives 33). Compare in hundredths so float noise cannot decide the
+    // boundary (32.51 * 100 === 3250.9999999999995 before rounding).
+    const hundredths = Math.round(rate * 100)
+    const tableNumber =
+      hundredths % 100 <= 50 ? Math.floor(hundredths / 100) : Math.ceil(hundredths / 100)
+    return { kommun, totalRate: rate, tableNumber }
+  })
 }
 
 /**
