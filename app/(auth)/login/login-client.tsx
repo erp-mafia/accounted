@@ -377,7 +377,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
           </div>
 
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-medium tracking-tight">{tAuth('email_sent_title')}</h1>
+            <h1 className="text-2xl tracking-tight">{tAuth('email_sent_title')}</h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
               {showResetPassword
                 ? tAuth.rich('email_sent_body_reset', {
@@ -436,7 +436,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                 <KeyRound className="h-7 w-7 text-primary" />
               </div>
             </div>
-            <h1 className="text-2xl font-medium tracking-tight">{tAuth('reset_title')}</h1>
+            <h1 className="text-2xl tracking-tight">{tAuth('reset_title')}</h1>
             <p className="text-muted-foreground text-sm mt-2">
               {tAuth('reset_subtitle')}
             </p>

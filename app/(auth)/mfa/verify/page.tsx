@@ -178,7 +178,7 @@ function MfaVerifyContent() {
               <ShieldCheck className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-medium tracking-tight">{t('verify_title')}</h1>
+          <h1 className="text-2xl tracking-tight">{t('verify_title')}</h1>
           <p className="text-muted-foreground text-sm mt-2">
             {t('verify_subtitle_full')}
           </p>

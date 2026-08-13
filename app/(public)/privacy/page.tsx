@@ -15,7 +15,7 @@ export default function PrivacyPolicyPage() {
     <div className="min-h-dvh bg-background py-12 px-4">
       <div className="max-w-3xl mx-auto space-y-6">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-foreground mb-2">
+          <h1 className="text-3xl text-foreground mb-2">
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">

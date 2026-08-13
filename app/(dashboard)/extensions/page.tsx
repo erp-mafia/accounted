@@ -25,7 +25,7 @@ export default async function ExtensionsPage() {
       {/* General extensions */}
       {generalSector && (
         <section>
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-4">
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-4">
             {generalSectorName}
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 stagger-enter">
@@ -39,7 +39,7 @@ export default async function ExtensionsPage() {
       {/* Industry sectors (hidden while no industry sector ships extensions) */}
       {industrySectors.length > 0 && (
         <section>
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-4">
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-4">
             {t('industry_tools')}
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 stagger-enter">

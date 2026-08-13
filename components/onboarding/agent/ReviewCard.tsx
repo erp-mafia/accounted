@@ -279,7 +279,7 @@ export default function ReviewCard({
                   check dry registry facts. */}
               <section>
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+                  <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
                     Så här har jag förstått dig
                   </h2>
                   {!editingSummary && summary && (
@@ -313,7 +313,7 @@ export default function ReviewCard({
                   "atoms/specialiteter" framing. */}
               {(horizontal.length > 0 || vertical.length > 0 || modifier.length > 0) && (
                 <section>
-                  <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-1">
+                  <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-1">
                     Vad jag kan hjälpa dig med
                   </h2>
                   <p className="text-xs text-muted-foreground mb-3">
@@ -338,7 +338,7 @@ export default function ReviewCard({
 
               {/* Inferred facts to confirm */}
               <section>
-                <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-4">
+                <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-4">
                   Uppgifter
                 </h2>
                 <dl className="divide-y divide-border">
@@ -403,7 +403,7 @@ export default function ReviewCard({
                   authoritative legal text. Hidden when TIC didn't return one. */}
               {fields.purpose && (
                 <section>
-                  <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+                  <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">
                     Verksamhet
                   </h2>
                   <p className="text-sm leading-6 text-muted-foreground italic">
@@ -416,7 +416,7 @@ export default function ReviewCard({
                   one thing than chat. The Phase C intake will draw the rest
                   out conversationally. */}
               <section>
-                <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-1">
+                <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-1">
                   Bra att veta
                 </h2>
                 <p className="text-xs text-muted-foreground mb-3">

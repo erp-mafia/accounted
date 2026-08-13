@@ -86,7 +86,7 @@ export default function SandboxPage() {
           </div>
 
           <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-            <h1 className="text-lg font-medium tracking-tight text-center mb-2">
+            <h1 className="text-lg tracking-tight text-center mb-2">
               Du är redan inloggad
             </h1>
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
@@ -111,7 +111,7 @@ export default function SandboxPage() {
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-10">
           <BrandWordmark size="hero" className="mb-2" />
-          <h1 className="text-xl font-medium tracking-tight mt-3">
+          <h1 className="text-xl tracking-tight mt-3">
             Testa {branding.appName.toLowerCase()} utan att registrera dig
           </h1>
           <p className="text-muted-foreground text-sm mt-2 leading-relaxed">

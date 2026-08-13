@@ -183,7 +183,7 @@ function MfaEnrollContent() {
                 <ShieldCheck className="h-7 w-7 text-primary" />
               </div>
             </div>
-            <h1 className="text-2xl font-medium tracking-tight">Aktivera tvåfaktorsautentisering</h1>
+            <h1 className="text-2xl tracking-tight">Aktivera tvåfaktorsautentisering</h1>
             <p className="text-muted-foreground text-sm mt-2">
               Skydda ditt konto med en autentiseringsapp som Google Authenticator eller Authy
             </p>
@@ -237,7 +237,7 @@ function MfaEnrollContent() {
               <ShieldCheck className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-medium tracking-tight">Skanna QR-koden</h1>
+          <h1 className="text-2xl tracking-tight">Skanna QR-koden</h1>
           <p className="text-muted-foreground text-sm mt-2">
             Öppna din autentiseringsapp och skanna koden nedan
           </p>

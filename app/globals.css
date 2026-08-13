@@ -414,18 +414,19 @@ summary,
   }
 }
 
-/* Display typography - Fraunces */
+/* Display typography - Hedvig Letters Serif */
 .font-display {
   font-family: var(--font-display);
   font-optical-sizing: auto;
 }
 
 /* Layered so utility classes (e.g. font-sans on a pane title) can override:
-   unlayered element rules would beat Tailwind's layered utilities. */
+   unlayered element rules would beat Tailwind's layered utilities.
+   Hedvig ships weight 400 only; anything heavier is browser-synthesized. */
 @layer base {
   h1, h2, h3 {
     font-family: var(--font-display);
-    font-weight: 500;
+    font-weight: 400;
     letter-spacing: -0.015em;
     font-optical-sizing: auto;
   }

@@ -65,7 +65,7 @@ export default function GlobalError({
         {phase === "fallback" ? (
           <div className="flex min-h-dvh items-center justify-center p-8">
             <div className="text-center space-y-4">
-              <h2 className="text-xl font-semibold">Något gick fel</h2>
+              <h2 className="text-xl">Något gick fel</h2>
               <p className="text-muted-foreground">
                 Ett oväntat fel inträffade. Försök igen eller{" "}
                 <a

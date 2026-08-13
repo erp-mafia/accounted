@@ -1968,7 +1968,7 @@ function ResultStep({
       {/* ── Per-fiscal-year SIE breakdown ── */}
       {sieResults.length > 0 && (
         <div className="space-y-2">
-          <h3 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <h3 className="flex items-center gap-2 text-sm text-muted-foreground">
             <Database className="h-4 w-4" />
             Bokföringsdata (SIE)
           </h3>
@@ -1993,7 +1993,7 @@ function ResultStep({
 
         return (
           <div className="space-y-2">
-            <h3 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <h3 className="flex items-center gap-2 text-sm text-muted-foreground">
               <FileText className="h-4 w-4" />
               Övriga data
             </h3>

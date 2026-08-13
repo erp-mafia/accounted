@@ -374,7 +374,7 @@ export default function RotRutPayoutDialog({
             <section className="space-y-3" aria-labelledby="rot-rut-candidates-title">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h2 id="rot-rut-candidates-title" className="text-sm font-medium">
+                  <h2 id="rot-rut-candidates-title" className="text-sm">
                     {t('rot_rut_eligible_title')}
                   </h2>
                   <p className="text-xs text-muted-foreground">
@@ -487,7 +487,7 @@ export default function RotRutPayoutDialog({
 
             <section className="space-y-3 border-t pt-5" aria-labelledby="rot-rut-history-title">
               <div>
-                <h2 id="rot-rut-history-title" className="text-sm font-medium">
+                <h2 id="rot-rut-history-title" className="text-sm">
                   {t('rot_rut_history_title')}
                 </h2>
                 <p className="text-xs text-muted-foreground">{t('rot_rut_upload_help')}</p>
