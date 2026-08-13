@@ -99,7 +99,7 @@ export default function ArticlesEditStep({
       <CardContent className="space-y-4">
         {/* Duplicate handling banner */}
         {liveDuplicateCount > 0 && (
-          <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
             <RefreshCw className="h-4 w-4 text-warning mt-0.5 shrink-0" />
             <div className="flex-1 space-y-2">
               <p className="text-sm">
@@ -129,7 +129,7 @@ export default function ArticlesEditStep({
 
         {/* VAT-adjustment notice: rows whose rate was snapped/defaulted */}
         {adjustedVatCount > 0 && (
-          <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
             <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
             <p className="text-sm">
               <span className="font-medium">{adjustedVatCount} rad{adjustedVatCount === 1 ? '' : 'er'}</span> fick
@@ -209,7 +209,7 @@ export default function ArticlesEditStep({
                         }
                       >
                         <SelectTrigger
-                          className={cn('h-8', row.vat_rate_adjusted && 'border-warning text-warning')}
+                          className={cn('h-8', row.vat_rate_adjusted && 'border-border text-warning')}
                         >
                           <SelectValue />
                         </SelectTrigger>
@@ -246,7 +246,7 @@ export default function ArticlesEditStep({
                           className={cn(
                             'text-[11px] font-medium px-1.5 py-0.5 rounded',
                             updateDuplicates
-                              ? 'bg-warning/15 text-warning'
+                              ? 'bg-muted text-warning'
                               : 'bg-muted text-muted-foreground',
                           )}
                           title={`Matchar ${row.duplicate_match.existing_name} (${row.duplicate_match.matched_by})`}
@@ -278,7 +278,7 @@ export default function ArticlesEditStep({
         </div>
 
         {hasErrors && (
-          <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
             <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
             <p className="text-sm text-warning">
               Vissa rader har valideringsfel (markerade i rött). Åtgärda eller ta bort dem

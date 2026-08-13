@@ -247,7 +247,7 @@ export default function RecurringInvoicesPage() {
                       )}
                       {s.last_run_warning && (
                         <AlertTriangle
-                          className="h-4 w-4 text-warning-foreground"
+                          className="h-4 w-4 text-attn"
                           aria-label={s.last_run_warning}
                         />
                       )}

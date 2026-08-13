@@ -17,7 +17,6 @@ import {
   FileSearch,
   Link2,
   Loader2,
-  MessageCircle,
   MoreHorizontal,
   Paperclip,
   Pencil,
@@ -39,7 +38,6 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 const HAS_AI_EXTRACTION = ENABLED_EXTENSION_IDS.has('document-extraction')
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
 
 interface TransactionInboxCardProps {
@@ -107,11 +105,6 @@ export default function TransactionInboxCard({
   // Attaching underlag is a write: hide the affordance from viewers so they
   // don't dead-end on a 403 (mirrors the gate in TransactionHistoryList).
   const { canWrite } = useCanWrite()
-  // The transaction-side entry point to the assistant ("Lena"). openAgentSheet
-  // hands this specific bank line to the transaction.categorization intent:
-  // the mirror of "Fråga assistenten" in Dokumentinkorgen, so the user can
-  // start a booking with the agent from the inbox they actually live in.
-  const { openAgentSheet, identity } = useAgentSheet()
   const isProcessing = processingId === transaction.id
   const isDisabled = processingId !== null && processingId !== transaction.id
   const isIncome = transaction.amount > 0
@@ -150,12 +143,6 @@ export default function TransactionInboxCard({
   // Unbooked rows are still actionable (match, split, edit, categorize): that
   // includes imported bank rows, which are the whole point of the inbox.
   const isUnbooked = !transaction.journal_entry_id
-  // "Fråga [namn]" hands the row to the assistant for categorization/booking.
-  // Only on unbooked rows (nothing to categorize once it's a verifikat) and
-  // only after the user has built their agent in /onboarding/agent
-  // (identity.isVerified): same gate as the FAB / AgentSparkleButton.
-  const assistantName = identity.displayName?.trim() || 'min assistent'
-  const showAskAssistant = isUnbooked && identity.isVerified
   // ...but only rows the USER created in the app may be deleted. Imported rows
   // (bank sync / CSV) are ignore-only: mirrors the server guard in
   // DELETE /api/transactions/[id]. See lib/transactions/origin.ts.
@@ -211,14 +198,7 @@ export default function TransactionInboxCard({
   const showIgnoreItem = isUnbooked && isImportedTransaction(transaction) && !!onIgnore
   const showDeleteItem = canDelete && !!onDelete
   const showOverflowMenu =
-    showInvoiceMatchButton || showAskAssistant || showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showIgnoreItem || showDeleteItem
-
-  const askAssistant = () =>
-    openAgentSheet({
-      intentId: 'transaction.categorization',
-      intentArgs: { transaction_id: transaction.id },
-      contextRef: `transaction:${transaction.id}`,
-    })
+    showInvoiceMatchButton || showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showIgnoreItem || showDeleteItem
 
   // The foldout carries row detail only (actions live on the row: pill + ⋯).
   // Rows with nothing to show don't expand at all; classified imported rows
@@ -358,17 +338,6 @@ export default function TransactionInboxCard({
                     >
                       <Link2 className="h-4 w-4" />
                       {invoiceMatchLabel}
-                    </DropdownMenuItem>
-                  )}
-                  {showAskAssistant && (
-                    <DropdownMenuItem
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        askAssistant()
-                      }}
-                    >
-                      <MessageCircle className="h-4 w-4" />
-                      {`Fråga ${assistantName}`}
                     </DropdownMenuItem>
                   )}
                   {showMatchVoucherItem && (

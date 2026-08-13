@@ -393,7 +393,7 @@ function RegisterPageContent() {
           </div>
 
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-medium tracking-tight">{t('duplicate_title')}</h1>
+            <h1 className="text-2xl tracking-tight">{t('duplicate_title')}</h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
               {t('duplicate_body_prefix')}{' '}
               <span className="font-medium text-foreground">{duplicateEmail}</span>.
@@ -446,7 +446,7 @@ function RegisterPageContent() {
           </div>
 
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-medium tracking-tight">{t('confirm_email_title')}</h1>
+            <h1 className="text-2xl tracking-tight">{t('confirm_email_title')}</h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
               {t.rich('confirm_email_body', {
                 email,

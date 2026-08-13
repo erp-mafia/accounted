@@ -216,7 +216,7 @@ function ResetPasswordInner() {
               <KeyRound className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-medium tracking-tight">{t('title')}</h1>
+          <h1 className="text-2xl tracking-tight">{t('title')}</h1>
           <p className="text-muted-foreground text-sm mt-2">{subtitle}</p>
         </div>
 

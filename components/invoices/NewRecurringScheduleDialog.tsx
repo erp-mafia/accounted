@@ -429,7 +429,7 @@ function NewRecurringScheduleForm({
                   {t('auto_send_description')}
                 </p>
                 {customerMissingEmail && (
-                  <p className="text-sm text-warning-foreground mt-1">
+                  <p className="text-sm text-attn mt-1">
                     {t('auto_send_missing_email')}
                   </p>
                 )}

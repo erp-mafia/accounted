@@ -347,7 +347,7 @@ export function KPIBreakdown({ report }: { report: KPIReport }) {
   return (
     <div>
       <div className="mb-1 flex items-center gap-3 px-1">
-        <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
           {t('costs_title')}
         </h2>
         <div className="h-px flex-1 bg-border/60" />

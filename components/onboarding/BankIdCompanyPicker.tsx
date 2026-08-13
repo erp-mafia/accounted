@@ -4,7 +4,8 @@ import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
-import { Loader2, AlertTriangle } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { switchCompany } from '@/lib/company/actions'
 import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
@@ -162,12 +163,7 @@ export default function BankIdCompanyPicker({
       )}
 
       {enrichmentStale && (
-        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/30">
-          <div className="flex items-start gap-2.5">
-            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
-            <p className="text-sm text-amber-800 dark:text-amber-200">{t('enrichment_stale')}</p>
-          </div>
-        </div>
+        <AttnLine className="mb-6">{t('enrichment_stale')}</AttnLine>
       )}
 
       <div className="jny-biginput jny-filter" style={{ margin: '0 auto' }}>

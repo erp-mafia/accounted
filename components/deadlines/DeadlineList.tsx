@@ -173,7 +173,7 @@ export function DeadlineList({
             {sections.map(({ key, label, items }) => (
               <section key={key}>
                 <div className="mb-1 flex items-center gap-3 px-1">
-                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
                     {label}
                   </h2>
                   <span className="text-xs tabular-nums text-muted-foreground/50">

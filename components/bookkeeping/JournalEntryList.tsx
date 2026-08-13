@@ -150,10 +150,12 @@ function SortableHeader({
       className={cn(TH_CLASS, className)}
       aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
     >
+      {/* Preflight sets text-transform: none on buttons, which would drop the
+          TH_CLASS uppercase idiom inside the sort control. */}
       <button
         type="button"
         className={cn(
-          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
           align === 'right' && 'ml-auto justify-end',
         )}
         aria-label={sortLabel}
@@ -1064,7 +1066,6 @@ export default function JournalEntryList() {
                     <SelectItem value="description_desc">{t('sort_description_desc')}</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{t('sort_stack_hint')}</p>
               </div>
 
               {/* Verifikationsserie */}

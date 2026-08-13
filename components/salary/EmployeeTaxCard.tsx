@@ -241,7 +241,7 @@ export default function EmployeeTaxCard({
                     {t('tax_column_suggested_under_66')}
                   </p>
                 ) : isSenior && !columnTouched ? (
-                  <p className="text-xs text-warning-foreground">
+                  <p className="text-xs text-attn">
                     {t('tax_column_senior_warning')}
                   </p>
                 ) : null}

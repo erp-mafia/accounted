@@ -52,6 +52,7 @@ import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
+import InvoiceInboxSkeleton from '@/components/extensions/general/InvoiceInboxSkeleton'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
 import { createClient } from '@/lib/supabase/client'
@@ -302,55 +303,10 @@ function deriveInboxStatus(item: InboxItem): InboxStatus {
 }
 
 // ── Skeleton ─────────────────────────────────────────────────
-// Mirrors the live layout (top bar + 3-pane card) so the transition from
-// the route-level loading.tsx to data-loaded content has no visible reflow.
-// Keep in sync with app/(dashboard)/e/[sector]/[slug]/loading.tsx.
+// Shared with app/(dashboard)/e/[sector]/[slug]/loading.tsx so the route
+// fallback and this client-fetch shell are one silhouette with no reflow.
 
-function WorkspaceSkeleton() {
-  return (
-    <div className="h-[calc(100vh-1px)] md:h-full">
-      <div className="h-full flex flex-col overflow-hidden">
-        <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5">
-          <div className="flex items-center gap-2 min-w-0">
-            <Skeleton className="h-4 w-4 shrink-0" />
-            <Skeleton className="h-4 w-32 shrink-0" />
-            <Skeleton className="hidden md:block h-3 w-56" />
-          </div>
-          <Skeleton className="h-8 w-28 shrink-0" />
-        </header>
-        <div className="flex-1 grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_340px] min-h-0">
-          <aside className="border-b xl:border-b-0 xl:border-r overflow-hidden bg-muted/20 pt-3">
-            <div className="px-3 pb-3 space-y-2 border-b">
-              <Skeleton className="h-8 w-full" />
-              <div className="flex flex-wrap gap-1">
-                <Skeleton className="h-5 w-10 rounded-full" />
-                <Skeleton className="h-5 w-24 rounded-full" />
-                <Skeleton className="h-5 w-20 rounded-full" />
-                <Skeleton className="h-5 w-8 rounded-full" />
-              </div>
-            </div>
-            <ul>
-              {Array.from({ length: 7 }).map((_, i) => (
-                <li key={i} className="border-b px-3 py-2 flex flex-col gap-1.5">
-                  <div className="flex items-center gap-2">
-                    <Skeleton className="h-3 w-3 shrink-0" />
-                    <Skeleton className="h-3.5 flex-1 max-w-[180px]" />
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <Skeleton className="h-3 w-16" />
-                    <Skeleton className="h-3 w-12" />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </aside>
-          <main className="overflow-hidden bg-muted/10 hidden xl:block" />
-          <aside className="border-l overflow-hidden hidden xl:block" />
-        </div>
-      </div>
-    </div>
-  )
-}
+const WorkspaceSkeleton = InvoiceInboxSkeleton
 
 // ── Main component ───────────────────────────────────────────
 
@@ -1190,7 +1146,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <Inbox className="h-4 w-4 text-muted-foreground shrink-0" />
-          <h1 className="font-medium text-sm shrink-0">Dokumentinkorg</h1>
+          <h1 className="text-sm shrink-0">Dokumentinkorg</h1>
           {/* Where the page's contents come from, behind one chip. The detail
               (which mailbox, when it was last read) is a thing people look up
               when something seems wrong, not something they read every visit.
@@ -2550,7 +2506,7 @@ function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
   return (
     <div className="p-4 space-y-4">
       <div>
-        <h3 className="text-sm font-medium">
+        <h3 className="text-sm">
           {purchase.merchant_name || purchase.description || t('purchase_unknown')}
         </h3>
         <p className="text-xs text-muted-foreground mt-0.5">{t('purchase_kind')}</p>
@@ -2720,7 +2676,7 @@ function ProposedBooking({
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-xs font-medium">{t('proposal_title')}</h3>
+        <h3 className="text-xs">{t('proposal_title')}</h3>
         {data.entry_date && (
           <span className="text-[11px] text-muted-foreground tabular-nums">
             Bokförs {formatDate(data.entry_date)}
@@ -2934,7 +2890,7 @@ function FieldsRail({
       {/* WhatsApp chat context (see waCtx derivation above). */}
       {showWaBlock && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
-          <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-2">
+          <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
             {t('wa_block_title')}
           </h3>
           {waCaption && (
@@ -3035,7 +2991,7 @@ function FieldsRail({
           the code can be copied out. */}
       {item.source === 'email' && !item.document_id && (
         <div className="border-b px-4 py-3">
-          <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-2">
+          <h3 className="text-xs uppercase tracking-wide text-muted-foreground mb-2">
             {t('email_body_label')}
           </h3>
           {item.email_body_text?.trim() ? (

@@ -56,7 +56,6 @@ import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPr
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import {
   ROT_WORK_TYPES,
   RUT_WORK_TYPES,
@@ -1470,11 +1469,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           </Heading>
           {!bare && <p className="text-muted-foreground">{subtitleText}</p>}
         </div>
-        <AgentSparkleButton
-          intentId="invoice.draft"
-          intentArgs={{ customer_id: watchCustomerId ?? null }}
-          contextRef={watchCustomerId ? `customer:${watchCustomerId}` : 'invoice:new'}
-        />
       </div>
 
       {isCopyMode && copyInitial && (
@@ -1571,7 +1565,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             <Card>
               <CardHeader>
                 <CardTitle>{t('items_card_title')}</CardTitle>
-              <CardDescription>{t('items_card_description')}</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
@@ -1959,7 +1952,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               30%/50% applies to the full line total: the seller
                               must ensure the line is 100% labor; material has
                               to be invoiced separately. */}
-                          <div className="mt-2 flex items-start gap-2 text-xs text-warning-foreground">
+                          <div className="mt-2 flex items-start gap-2 text-xs text-attn">
                             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 text-warning shrink-0" />
                             <p>{t('deduction_labor_only_warning')}</p>
                           </div>
@@ -2392,9 +2385,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           onChange={setDefaultDimension}
                           inputClassName="h-9"
                         />
-                        <p className="text-xs text-muted-foreground">
-                          {t('dimensions_default_hint')}
-                        </p>
                       </div>
                     </>
                   )}

@@ -481,7 +481,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               </div>
             </div>
             {showChecksumWarning && (
-              <p className="mt-2 text-xs text-warning-foreground">{t('bank_warn_checksum')}</p>
+              <p className="mt-2 text-xs text-attn">{t('bank_warn_checksum')}</p>
             )}
             <p className="text-xs text-muted-foreground mt-2">{t('form_bank_hint')}</p>
           </CardContent>

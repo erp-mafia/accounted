@@ -95,14 +95,14 @@ export default async function ExtensionDetailPage({
       {/* Details */}
       <div className="space-y-6">
         <div>
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-2">{t('description_heading')}</h2>
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-2">{t('description_heading')}</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
             {extensionLongDescription}
           </p>
         </div>
 
         <div>
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-2">{t('data_source_heading')}</h2>
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-2">{t('data_source_heading')}</h2>
           <p className="text-sm text-muted-foreground">
             {dataPatternLabels[definition.dataPattern]}
           </p>

@@ -117,7 +117,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
         <Card className="max-w-md w-full">
           <CardContent className="pt-6 text-center">
             <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
-            <h2 className="text-lg font-semibold mb-2">Ogiltig länk</h2>
+            <h2 className="text-lg mb-2">Ogiltig länk</h2>
             <p className="text-muted-foreground">{error}</p>
           </CardContent>
         </Card>
@@ -136,7 +136,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
         <Card className="max-w-md w-full">
           <CardContent className="pt-6 text-center">
             <CheckCircle className="h-12 w-12 text-success mx-auto mb-4" />
-            <h2 className="text-lg font-semibold mb-2">Tack för ditt svar!</h2>
+            <h2 className="text-lg mb-2">Tack för ditt svar!</h2>
             <p className="text-muted-foreground mb-4">
               {successMessage || (
                 invoice.previousResponse === 'marked_paid'
@@ -170,7 +170,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
       <div className="max-w-lg mx-auto">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-foreground mb-2">
+          <h1 className="text-2xl text-foreground mb-2">
             Betalningspåminnelse
           </h1>
           <p className="text-muted-foreground">

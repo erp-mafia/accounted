@@ -96,7 +96,7 @@ export function RunEmployeesTable({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
           {t('employees_title', { count: employees.length })}
         </h2>
         {isDraft && canWrite && notAdded.length > 0 && (

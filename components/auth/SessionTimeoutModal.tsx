@@ -35,7 +35,7 @@ export function SessionTimeoutModal({
         onInteractOutside={(event) => event.preventDefault()}
       >
         <DialogHeader>
-          <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+          <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-muted text-attn">
             <ShieldAlert className="h-5 w-5" aria-hidden="true" />
           </div>
           <DialogTitle>{t('warning_title')}</DialogTitle>

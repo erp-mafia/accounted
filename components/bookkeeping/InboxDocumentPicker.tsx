@@ -172,7 +172,6 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>{t('picker_title')}</DialogTitle>
-            <DialogDescription>{t('picker_description')}</DialogDescription>
           </DialogHeader>
 
           <div className="relative">

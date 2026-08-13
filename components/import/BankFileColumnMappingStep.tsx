@@ -243,7 +243,7 @@ export default function BankFileColumnMappingStep({
 
           {/* Required column mappings */}
           <div>
-            <h3 className="text-sm font-medium mb-3">Obligatoriska kolumner</h3>
+            <h3 className="text-sm mb-3">Obligatoriska kolumner</h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label>Datum *</Label>
@@ -306,7 +306,7 @@ export default function BankFileColumnMappingStep({
 
           {/* Optional column mappings */}
           <div>
-            <h3 className="text-sm font-medium mb-3">Valfria kolumner</h3>
+            <h3 className="text-sm mb-3">Valfria kolumner</h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label>Referens/OCR</Label>

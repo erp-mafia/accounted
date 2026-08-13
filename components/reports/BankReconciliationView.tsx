@@ -1016,7 +1016,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       {/* Dry Run Preview */}
       {dryRunResults && dryRunResults.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
             Förhandsgranskning ({dryRunResults.length})
           </h2>
           <div className="overflow-x-auto">
@@ -1087,7 +1087,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       {unmatchedTx.length > 0 && (
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+            <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
               Omatchade transaktioner ({unmatchedTx.length})
             </h2>
             <div className="flex items-center gap-3">
@@ -1264,7 +1264,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       {/* Unmatched GL Lines */}
       {unmatchedGlLines.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
             Omatchade verifikationer på <AccountNumber number={accountNumber} /> ({unmatchedGlLines.length})
           </h2>
           <div className="overflow-x-auto">

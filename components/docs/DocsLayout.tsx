@@ -61,7 +61,7 @@ export function DocsLayout({ currentPath, children }: DocsLayoutProps) {
           <div className="sticky top-24 space-y-8">
             {DOCS_NAV.map((section) => (
               <div key={section.label}>
-                <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mb-2 px-3">
+                <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2 px-3">
                   {section.label}
                 </h3>
                 <ul className="space-y-px">

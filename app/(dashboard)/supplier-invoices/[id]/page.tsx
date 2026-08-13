@@ -14,7 +14,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Pencil, Plus, CalendarClock, Paperclip } from 'lucide-react'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
@@ -526,12 +525,6 @@ export default function SupplierInvoiceDetailPage() {
 
         {/* Actions */}
         <div className="flex flex-wrap gap-2">
-          <AgentSparkleButton
-            intentId="supplier_invoice.review"
-            intentArgs={{ supplier_invoice_id: invoice.id }}
-            contextRef={`supplier_invoice:${invoice.id}`}
-            size="default"
-          />
           {/* Attest keys off approved_at, not the status: the overdue cron
               flips unbooked invoices to 'overdue' just by aging, and gating on
               'registered' alone left them with no way through attest (#1206). */}
