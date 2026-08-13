@@ -603,20 +603,29 @@ export default function AgentChat({
           })),
         )
         break
-      case 'stream_restart':
+      case 'stream_restart': {
         // The server's model stream died on a transient error and is being
         // retried. Nothing from the dead attempt was persisted: reset the
-        // in-progress bubble to the server's pre-attempt snapshot and drop
-        // tool chips that never completed (eager chips from the dead stream).
+        // in-progress bubble to the server's pre-attempt snapshot, drop tool
+        // chips that never completed (eager chips from the dead stream), and
+        // discard the dead attempt's reasoning so the retried attempt's
+        // thinking doesn't render twice. The post-tool paragraph break is
+        // re-armed only when restored text exists: the snapshot always ends
+        // at an iteration boundary (after tool results), so the retried
+        // continuation should open its own paragraph there.
         setRetryNotice(true)
+        const restored = typeof ev.assistant_text === 'string' ? ev.assistant_text : ''
+        breakBeforeNextTextRef.current = restored.length > 0
         setMessages((prev) =>
           updateLastAssistant(prev, (m) => ({
             ...m,
-            text: typeof ev.assistant_text === 'string' ? ev.assistant_text : '',
+            text: restored,
+            reasoning: undefined,
             toolCalls: m.toolCalls?.filter((tc) => tc.completed),
           })),
         )
         break
+      }
       case 'text_delta':
         setRetryNotice(false)
         // Insert a paragraph break ONCE when text resumes after a tool

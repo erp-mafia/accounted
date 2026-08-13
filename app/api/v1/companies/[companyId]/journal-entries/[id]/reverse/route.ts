@@ -6,7 +6,9 @@
  * the reversal carries `reverses_id` back to it and the original is annotated
  * with `reversed_by_id`. Both entries remain visible in the verifikationsserie.
  *
- * Optional body: `{ reversal_date?: ISO date }`. Defaults to today.
+ * Optional body: `{ reversal_date?: ISO date, allow_deep_chain?: boolean }`.
+ * reversal_date defaults to today; allow_deep_chain overrides the
+ * correction-chain depth guard (CORRECTION_CHAIN_TOO_DEEP at 3+ levels).
  *
  * Idempotent (mandatory Idempotency-Key).
  */
@@ -19,7 +21,8 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
+import { CorrectionChainTooDeepError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 
 const ReverseRequest = z
   .object({
@@ -129,7 +132,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Pre-flight: confirm the original exists, is posted, and not already reversed.
     const { data: original, error: fetchErr } = await ctx.supabase
       .from('journal_entries')
-      .select('id, status, reversed_by_id, voucher_series, voucher_number')
+      .select('id, status, reversed_by_id, voucher_series, voucher_number, correction_of_id, reverses_id')
       .eq('company_id', ctx.companyId!)
       .eq('id', entryId)
       .maybeSingle()
@@ -138,7 +141,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!original) {
       return v1ErrorResponseFromCode('JOURNAL_ENTRY_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
-    const typed = original as { id: string; status: string; reversed_by_id: string | null }
+    const typed = original as {
+      id: string
+      status: string
+      reversed_by_id: string | null
+      correction_of_id: string | null
+      reverses_id: string | null
+    }
     if (typed.status !== 'posted') {
       return v1ErrorResponseFromCode('CANNOT_REVERSE_NON_POSTED', ctx.log, {
         requestId: ctx.requestId,
@@ -150,6 +159,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
         details: { existing_reversal_id: typed.reversed_by_id },
       })
+    }
+
+    // Chain-depth guard BEFORE the dry-run return: a dry run must give the
+    // same verdict the real execution would. reverseEntry re-checks on the
+    // real path.
+    if (!bodyAllowDeepChain) {
+      const chain = await correctionChainDepth(ctx.supabase, ctx.companyId!, typed)
+      if (chain.depth >= CORRECTION_CHAIN_GUARD_DEPTH) {
+        return v1ErrorResponse(
+          new CorrectionChainTooDeepError(chain.depth, chain.rootVoucher),
+          ctx.log,
+          { requestId: ctx.requestId },
+        )
+      }
     }
 
     if (ctx.dryRun) {

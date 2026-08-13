@@ -101,6 +101,9 @@ describe('correctionChainDepth', () => {
       reverses_id: null,
     })
     expect(info.depth).toBe(1)
+    // The walk never reached a parentless node, so no voucher may be
+    // presented as the chain root.
+    expect(info.rootVoucher).toBeNull()
   })
 
   it('terminates on a cyclic chain instead of looping', async () => {
@@ -130,6 +133,8 @@ describe('correctionChainDepth', () => {
     })
     expect(info.depth).toBe(MAX_CHAIN_WALK)
     expect(fetchedIds).toHaveLength(MAX_CHAIN_WALK)
+    // Capped before reaching the root: the last node still has a parent.
+    expect(info.rootVoucher).toBeNull()
   })
 
   it('guard threshold is 3: original → rättelse → rättelse-av-rättelse stays allowed', () => {

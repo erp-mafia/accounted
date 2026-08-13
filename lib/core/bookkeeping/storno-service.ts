@@ -521,7 +521,15 @@ export async function recordateEntry(
   companyId: string,
   userId: string,
   originalEntryId: string,
-  newDate: string
+  newDate: string,
+  options?: {
+    /**
+     * Bypass the correction-chain depth guard (see correctEntry): a date
+     * move IS another storno+rättelse layer, so moving an entry already
+     * 3+ links deep needs the same explicit confirmation.
+     */
+    allowDeepChain?: boolean
+  }
 ): Promise<{ reversal: JournalEntry; corrected: JournalEntry }> {
   // Fetch original with lines
   const { data: original, error: fetchError } = await supabase
@@ -589,6 +597,7 @@ export async function recordateEntry(
       // Hand the entry we already fetched (with lines) to correctEntry so it
       // doesn't re-read the same row.
       preloadedOriginal: original as OriginalWithLines,
+      allowDeepChain: options?.allowDeepChain,
     }
   )
 

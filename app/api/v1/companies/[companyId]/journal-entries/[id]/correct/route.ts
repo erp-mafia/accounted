@@ -26,7 +26,8 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CorrectJournalEntrySchema } from '@/lib/api/schemas'
 import { validateBalance } from '@/lib/bookkeeping/engine'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
+import { CorrectionChainTooDeepError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 
 const JournalEntryCorrected = z.object({
   reversal_id: z.string().uuid(),
@@ -126,7 +127,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // CANNOT_CORRECT_NON_POSTED otherwise but we want the structured envelope).
     const { data: original, error: fetchErr } = await ctx.supabase
       .from('journal_entries')
-      .select('id, status, entry_date, voucher_series')
+      .select('id, status, entry_date, voucher_series, correction_of_id, reverses_id')
       .eq('company_id', ctx.companyId!)
       .eq('id', entryId)
       .maybeSingle()
@@ -135,12 +136,34 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!original) {
       return v1ErrorResponseFromCode('JOURNAL_ENTRY_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
-    const typed = original as { id: string; status: string; entry_date: string; voucher_series: string }
+    const typed = original as {
+      id: string
+      status: string
+      entry_date: string
+      voucher_series: string
+      correction_of_id: string | null
+      reverses_id: string | null
+    }
     if (typed.status !== 'posted') {
       return v1ErrorResponseFromCode('CANNOT_CORRECT_NON_POSTED', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: typed.status },
       })
+    }
+
+    // Chain-depth guard BEFORE the dry-run return: a dry run must give the
+    // same verdict the real execution would, so a depth-3 chain without the
+    // override reports CORRECTION_CHAIN_TOO_DEEP here too. correctEntry
+    // re-checks on the real path.
+    if (!allow_deep_chain) {
+      const chain = await correctionChainDepth(ctx.supabase, ctx.companyId!, typed)
+      if (chain.depth >= CORRECTION_CHAIN_GUARD_DEPTH) {
+        return v1ErrorResponse(
+          new CorrectionChainTooDeepError(chain.depth, chain.rootVoucher),
+          ctx.log,
+          { requestId: ctx.requestId },
+        )
+      }
     }
 
     // Period-lock pre-check on the INHERITED entry_date. /reverse already has

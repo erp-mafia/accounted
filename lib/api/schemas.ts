@@ -1360,6 +1360,9 @@ export const UpdateDimensionValueSchema = z
  */
 export const RecordateJournalEntrySchema = z.object({
   new_entry_date: isoDate,
+  // Explicit override of the correction-chain depth guard ("Flytta ändå"):
+  // a date move is another storno+rättelse layer, so it carries the guard too.
+  allow_deep_chain: z.boolean().optional(),
 })
 
 // ============================================================

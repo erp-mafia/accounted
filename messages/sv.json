@@ -4709,6 +4709,7 @@
     "deep_chain_cancel": "Avbryt",
     "deep_chain_correct_anyway": "Rätta ändå",
     "deep_chain_reverse_anyway": "Återför ändå",
+    "deep_chain_move_anyway": "Flytta ändå",
     "deep_chain_reverse_heading": "Återför {voucher} trots djup kedja",
     "deep_chain_reverse_body": "Stornot bokförs som vanligt och kedjan förblir spårbar, men ytterligare nivåer gör historiken svårare att läsa.",
     "details_title": "Verifikationsdetaljer",

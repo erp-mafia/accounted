@@ -4709,6 +4709,7 @@
     "deep_chain_cancel": "Cancel",
     "deep_chain_correct_anyway": "Correct anyway",
     "deep_chain_reverse_anyway": "Reverse anyway",
+    "deep_chain_move_anyway": "Move anyway",
     "deep_chain_reverse_heading": "Reverse {voucher} despite the deep chain",
     "deep_chain_reverse_body": "The storno is posted as usual and the chain stays traceable, but every extra level makes the history harder to read.",
     "details_title": "Journal entry details",

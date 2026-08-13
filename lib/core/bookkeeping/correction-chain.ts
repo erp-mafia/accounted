@@ -77,8 +77,12 @@ export async function correctionChainDepth(
     parentId = root.correction_of_id ?? root.reverses_id ?? null
   }
 
+  // Only a node with no backward link is the genuine chain root. When the
+  // walk stopped early (broken link, cycle, MAX_CHAIN_WALK), `root` is just
+  // the last node reached: presenting its voucher as the root would mislead.
+  const reachedRoot = (root.correction_of_id ?? root.reverses_id) == null
   const rootVoucher =
-    depth > 0 && root.voucher_series && root.voucher_number != null
+    depth > 0 && reachedRoot && root.voucher_series && root.voucher_number != null
       ? `${root.voucher_series}${root.voucher_number}`
       : null
 
