@@ -13272,6 +13272,10 @@ export const tools: McpTool[] = [
       idempotentHint: false,
       openWorldHint: false,
     },
+    // Specialized cash-method year-end step. The year-end readiness blocker
+    // and year-end skill name it exactly, while search-only visibility avoids
+    // charging every MCP session for a schema most companies never need.
+    catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -16989,7 +16993,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
             '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) opens the approval queue where the user approves/rejects with a click. All also return structured data; other clients ignore the UI and use the data.',
-            '• Year-end: gnubok_lock_period → gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each stages for human approval; closing is irreversible per BFL.',
+            '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each write stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',
             '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
             '',

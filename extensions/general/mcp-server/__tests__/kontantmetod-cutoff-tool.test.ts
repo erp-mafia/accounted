@@ -88,6 +88,7 @@ beforeEach(() => {
 describe('gnubok_post_kontantmetod_cutoff', () => {
   it('is a discoverable high-risk staged bookkeeping write with readiness preflight', () => {
     expect(tool).toBeDefined()
+    expect(tool.catalogVisibility).toBe('search')
     expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true })
     expect(TOOL_SCOPE_MAP.gnubok_post_kontantmetod_cutoff).toBe('bookkeeping:write')
     expect(deriveToolMeta(tool)).toMatchObject({
