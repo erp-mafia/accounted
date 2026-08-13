@@ -175,7 +175,7 @@ function MfaEnrollContent() {
   // Step 1: Show enroll button
   if (!qrCode) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up">
           <div className="text-center mb-10">
             <div className="flex justify-center mb-4">
@@ -229,7 +229,7 @@ function MfaEnrollContent() {
 
   // Step 2: Show QR code and verification
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">

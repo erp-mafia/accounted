@@ -39,7 +39,7 @@ const NO_COMPANY_ALLOWED_PATHS = ['/settings/account']
  * document flow with the bottom nav, exactly as before.
  */
 const MAIN_PANEL_CLASS =
-  'safe-area-main-padding md:!pb-0 relative bg-background min-h-screen ' +
+  'safe-area-main-padding md:!pb-0 relative bg-background min-h-dvh ' +
   'md:min-h-0 md:ml-[var(--nav-w)] md:mt-[10px] md:mr-[var(--agent-dock-w)] md:h-[calc(100vh-20px)] ' +
   'md:overflow-y-auto md:rounded-xl md:border md:border-border ' +
   'md:transition-[margin-left,margin-right] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)]'
@@ -112,7 +112,7 @@ export default async function DashboardLayout({
         <SessionTimeoutController />
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-screen bg-frame md:flex md:flex-col">
+          <div className="min-h-dvh bg-frame md:flex md:flex-col">
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -238,7 +238,7 @@ export default async function DashboardLayout({
         <SessionTimeoutController />
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-screen bg-frame md:flex md:flex-col">
+          <div className="min-h-dvh bg-frame md:flex md:flex-col">
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -332,7 +332,7 @@ export default async function DashboardLayout({
         <CompanyTabSync />
         <div
           id="dash-shell"
-          className="min-h-screen bg-frame md:flex md:flex-col"
+          className="min-h-dvh bg-frame md:flex md:flex-col"
           style={{ '--nav-w': navCollapsed ? '64px' : '248px' } as React.CSSProperties}
         >
           {/* Skip to content link for keyboard/screen reader users */}
