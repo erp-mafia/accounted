@@ -184,6 +184,11 @@ function findDirectJelInserts() {
 // is the wrapper that applies SERVER_AUTH_OPTIONS.
 const LEAKY_CLIENT_SANCTIONED = new Set(['lib/supabase/service-client.ts'])
 const SUPABASE_JS_IMPORT_RE = /import\s+(type\s+)?\{([^}]*)\}\s*from\s*['"]@supabase\/supabase-js['"]/g
+// A namespace import hands over the whole module, so `sb.createClient(...)` is
+// reachable without ever naming it in the import. Treat any value-namespace
+// import as leaky rather than trying to track member access.
+const SUPABASE_JS_NAMESPACE_RE =
+  /import\s+(type\s+)?\*\s+as\s+\w+\s+from\s*['"]@supabase\/supabase-js['"]/g
 
 /**
  * Files that import supabase-js's `createClient` as a VALUE instead of going
@@ -196,6 +201,9 @@ const SUPABASE_JS_IMPORT_RE = /import\s+(type\s+)?\{([^}]*)\}\s*from\s*['"]@supa
  * client plus the whole request scope around it. A self-hosted instance died of
  * heap exhaustion after 42 idle hours this way (2026-08-13), holding 445
  * request graphs and ~1050 Timeouts in the 30 000 ms bucket.
+ *
+ * Both named (`{ createClient }`) and namespace (`* as sb`) value imports count:
+ * the latter reaches createClient through member access without naming it.
  *
  * Type-only imports are fine; so is the browser client, which needs the ticker
  * and is built on @supabase/ssr's createBrowserClient anyway.
@@ -220,6 +228,9 @@ function findLeakySupabaseClients() {
           .map((b) => b.trim())
           .some((b) => b === 'createClient' || b.startsWith('createClient as'))
         if (bindsCreateClient) return true
+      }
+      for (const m of src.matchAll(SUPABASE_JS_NAMESPACE_RE)) {
+        if (!m[1]) return true
       }
       return false
     })
