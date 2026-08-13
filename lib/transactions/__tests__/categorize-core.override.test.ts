@@ -84,6 +84,30 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     expect(mappingArg.credit_account).toBe('1930')
   })
 
+  it('books GROSS with no auto-VAT line when the override has no explicit VAT intent', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: txRow() })
+    enqueue({ data: settingsRow })
+    enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } })
+    enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod
+    enqueue({ data: null }) // transactions update
+
+    const result = await categorizeMatchedTransaction(
+      supabase as never, 'user-1', 'company-1', TX_ID,
+      // No vatTreatment and no vatAmount: the category default standard_25
+      // must NOT ride along onto the custom account.
+      { category: 'expense_other', accountOverride: '4020' },
+    )
+
+    expect(result.error).toBeUndefined()
+    const mappingArg = mockCreateJE.mock.calls[0][4] as {
+      debit_account: string
+      vat_lines: unknown[]
+    }
+    expect(mappingArg.debit_account).toBe('4020')
+    expect(mappingArg.vat_lines).toEqual([])
+  })
+
   it('returns 400 (never posts) when the override was deactivated after staging', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })

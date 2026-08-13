@@ -47,7 +47,7 @@ describe('applyAccountOverride', () => {
     const { supabase, mockResult } = createMockSupabase()
     mockResult({ data: chartRow() })
 
-    const result = await applyAccountOverride(supabase as never, 'company-1', '4020', -479, mapping())
+    const result = await applyAccountOverride(supabase as never, 'company-1', '4020', -479, mapping(), true)
 
     expect(result.debit_account).toBe('4020')
     expect(result.credit_account).toBe('1930')
@@ -60,7 +60,7 @@ describe('applyAccountOverride', () => {
 
     const result = await applyAccountOverride(
       supabase as never, 'company-1', '3021', 479,
-      mapping({ debit_account: '1930', credit_account: '3001' }),
+      mapping({ debit_account: '1930', credit_account: '3001' }), true,
     )
 
     expect(result.debit_account).toBe('1930')
@@ -72,7 +72,7 @@ describe('applyAccountOverride', () => {
     mockResult({ data: null })
 
     await expect(
-      applyAccountOverride(supabase as never, 'company-1', '4020', -479, mapping()),
+      applyAccountOverride(supabase as never, 'company-1', '4020', -479, mapping(), true),
     ).rejects.toThrow(/finns inte i kontoplanen/)
   })
 
@@ -81,7 +81,7 @@ describe('applyAccountOverride', () => {
     mockResult({ data: chartRow({ is_active: false }) })
 
     await expect(
-      applyAccountOverride(supabase as never, 'company-1', '4020', -479, mapping()),
+      applyAccountOverride(supabase as never, 'company-1', '4020', -479, mapping(), true),
     ).rejects.toThrow(/inaktivt/)
   })
 
@@ -89,7 +89,7 @@ describe('applyAccountOverride', () => {
     const { supabase, mockResult } = createMockSupabase()
     mockResult({ data: chartRow({ account_number: '2894', account_class: 2 }) })
 
-    const result = await applyAccountOverride(supabase as never, 'company-1', '2894', -479, mapping())
+    const result = await applyAccountOverride(supabase as never, 'company-1', '2894', -479, mapping(), true)
 
     expect(result.debit_account).toBe('2894')
     expect(result.vat_lines).toEqual([])
@@ -99,10 +99,26 @@ describe('applyAccountOverride', () => {
     const { supabase, mockResult } = createMockSupabase()
     mockResult({ data: chartRow({ account_number: '2641', account_class: 2 }) })
 
-    const result = await applyAccountOverride(supabase as never, 'company-1', '2641', -479, mapping())
+    const result = await applyAccountOverride(supabase as never, 'company-1', '2641', -479, mapping(), true)
 
     expect(result.debit_account).toBe('2641')
     expect(result.vat_lines).toHaveLength(1)
+  })
+
+  it('drops auto-VAT for ANY override without explicit VAT intent (VMB class-3/4 hole)', async () => {
+    // Swedish compliance review finding: VMB accounts live in class 3/4, so
+    // the class-2 drop alone let a forgotten vat_treatment attach the
+    // category-default standard_25 moms leg to a margin-scheme account: an
+    // ingående-moms deduction the caller never asked for (ML 2023:200).
+    // Without explicit VAT intent the override must book gross: forgetting
+    // the flag under-deducts (lawful), never over-deducts.
+    const { supabase, mockResult } = createMockSupabase()
+    mockResult({ data: chartRow() }) // 4020, class 4
+
+    const result = await applyAccountOverride(supabase as never, 'company-1', '4020', -479, mapping(), false)
+
+    expect(result.debit_account).toBe('4020')
+    expect(result.vat_lines).toEqual([])
   })
 
   it('keeps the entry balanced at GROSS when a class-2 override clears the VAT lines', async () => {
@@ -124,7 +140,7 @@ describe('applyAccountOverride', () => {
 
     let mr = buildMappingResultFromCategory('expense_other', tx, true, 'aktiebolag', 'standard_25')
     expect(mr.vat_lines).toHaveLength(1)
-    mr = await applyAccountOverride(supabase as never, 'company-1', '2894', tx.amount, mr)
+    mr = await applyAccountOverride(supabase as never, 'company-1', '2894', tx.amount, mr, true)
 
     const lines = buildTransactionEntryLines(tx, mr)
     const totalDebit = lines.reduce((s, l) => s + (l.debit_amount ?? 0), 0)
@@ -140,7 +156,7 @@ describe('applyAccountOverride', () => {
     mockResult({ data: chartRow({ account_number: '1930', account_class: 1 }) })
 
     await expect(
-      applyAccountOverride(supabase as never, 'company-1', '1930', -479, mapping()),
+      applyAccountOverride(supabase as never, 'company-1', '1930', -479, mapping(), true),
     ).rejects.toThrow(/samma konto/)
   })
 })

@@ -975,6 +975,9 @@ async function categorizeTransactionCore(
     }
     mappingResult = await applyAccountOverride(
       supabase, companyId, accountOverride, transaction.amount, mappingResult,
+      // Explicit VAT intent: a stated treatment or an underlag vat_amount.
+      // Without it the override books gross (see applyAccountOverride).
+      vatTreatment != null || vatAmount != null,
     )
   }
 
@@ -4199,7 +4202,7 @@ export const tools: McpTool[] = [
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
         vat_treatment: { type: 'string', description: 'VAT treatment override. Defaults to standard_25 for business expenses. Set reverse_charge ONLY when the underlag confirms the seller did NOT charge VAT (omvänd skattskyldighet). An invoice with foreign VAT already debited is NOT reverse charge.', enum: [...VALID_VAT_TREATMENTS] },
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp: e.g. dricks carries no VAT. Requires a rate-based vat_treatment. Swedish moms only: foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
-        account_override: { type: 'string', pattern: '^\\d{4}$', description: 'Books the business side (debit when money goes out, credit when money comes in) on this kontoplan account instead of the category default: the ONLY way to reach company-custom accounts (e.g. VMB). Must exist and be active (gnubok_list_accounts; create via gnubok_create_account). VMB purchases/sales carry no deductible moms: pair the override with vat_treatment "exempt". Class-2 overrides outside 2610-2649 drop auto-VAT lines. Not valid with category "private". When overriding, state what the affärshändelse actually is in notes (BFL 5 kap: the category label alone may no longer describe it).' },
+        account_override: { type: 'string', pattern: '^\\d{4}$', description: 'Books the business side (debit when money goes out, credit when money comes in) on this kontoplan account instead of the category default: the ONLY way to reach company-custom accounts (e.g. VMB). Must exist and be active (gnubok_list_accounts; create via gnubok_create_account). VMB purchases/sales carry no deductible moms: use vat_treatment "exempt". Without an explicit vat_treatment (or vat_amount) the override books GROSS with no auto-VAT line: a moms leg is never guessed onto a custom account. Class-2 overrides outside 2610-2649 always drop auto-VAT. Not valid with category "private". State the actual affärshändelse in notes (BFL 5 kap).' },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
         dimensions: {
           type: 'object',

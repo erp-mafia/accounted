@@ -15,10 +15,19 @@ import type { MappingResult } from '@/types'
  * mapping's own account is the safe default when the override is wrong, so an
  * unknown number is a caller error, not a seeding opportunity.
  *
- * Overrides onto a balance-sheet class 2 account drop the auto-VAT lines,
- * EXCEPT the moms-line range 2610-2649 where posting VAT is the point (2650
- * momsredovisningskonto and 2690 diverse are class 2 but not moms-line
- * accounts; auto-VAT there would double-post).
+ * VAT lines survive an override only when the caller stated its VAT intent
+ * explicitly (`vatExplicit`: a vat_treatment or vat_amount was passed).
+ * Without it the override books GROSS with no auto-VAT line: the category
+ * default (standard_25) was derived for the category's default account, and
+ * carrying it onto an arbitrary override account fabricates a moms deduction
+ * the caller never asked for. The flagship case is margin-scheme (VMB)
+ * accounts in class 3/4, where input VAT is not deductible at all
+ * (ML 2023:200): forgetting the treatment must under-deduct, never
+ * over-deduct. Overrides onto a balance-sheet class 2 account drop the
+ * auto-VAT lines even when explicit, EXCEPT the moms-line range 2610-2649
+ * where posting VAT is the point (2650 momsredovisningskonto and 2690
+ * diverse are class 2 but not moms-line accounts; auto-VAT there would
+ * double-post).
  *
  * Throws on unknown/inactive account or a degenerate same-account entry; the
  * message is Swedish and actionable for both the agent and the approval UI.
@@ -29,6 +38,7 @@ export async function applyAccountOverride(
   accountOverride: string,
   transactionAmount: number,
   mappingResult: MappingResult,
+  vatExplicit: boolean,
 ): Promise<MappingResult> {
   const { data: account, error } = await supabase
     .from('chart_of_accounts')
@@ -68,7 +78,7 @@ export async function applyAccountOverride(
 
   const overrideNum = parseInt(accountOverride, 10)
   const isMomsLineAccount = overrideNum >= 2610 && overrideNum <= 2649
-  if (account.account_class === 2 && !isMomsLineAccount) {
+  if (!vatExplicit || (account.account_class === 2 && !isMomsLineAccount)) {
     mappingResult.vat_lines = []
   }
 

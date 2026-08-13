@@ -361,6 +361,9 @@ export async function categorizeMatchedTransaction(
     try {
       mappingResult = await applyAccountOverride(
         supabase, companyId, accountOverride, transaction.amount, mappingResult,
+        // Explicit VAT intent: a stated treatment or an underlag vat_amount.
+        // Without it the override books gross (see applyAccountOverride).
+        vatTreatment != null || vatAmount != null,
       )
     } catch (err) {
       return { error: err instanceof Error ? err.message : 'account_override failed', status: 400 }
