@@ -55,10 +55,10 @@ import {
 } from '@/lib/core/bookkeeping/year-end-service'
 import {
   assessKontantmetodCutoff,
-  cutoffCollectionsEqual,
+  cutoffPreviewFingerprint,
   hasIncompleteKontantmetodCutoffPair,
+  KontantmetodCutoffPartialError,
   postKontantmetodCutoff,
-  type CutoffCollection,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
 import {
@@ -3206,8 +3206,13 @@ async function commitPostKontantmetodCutoff(
 ): Promise<ExecutorResult> {
   const fiscalPeriodId = params.fiscal_period_id as string
   const nextFiscalPeriodId = params.next_fiscal_period_id as string
-  const stagedCollection = params.collection as CutoffCollection | undefined
-  if (!fiscalPeriodId || !nextFiscalPeriodId || !stagedCollection) {
+  const stagedPeriodEnd = params.period_end as string
+  const stagedEntityType = params.entity_type as EntityType
+  const stagedFingerprint = params.preview_fingerprint as string
+  if (
+    !fiscalPeriodId || !nextFiscalPeriodId ||
+    !stagedPeriodEnd || !stagedEntityType || !stagedFingerprint
+  ) {
     return { error: 'Invalid staged kontantmetod cut-off parameters', status: 400 }
   }
 
@@ -3228,6 +3233,12 @@ async function commitPostKontantmetodCutoff(
   if (!period) return { error: 'Fiscal period not found', status: 404 }
   if (period.is_closed || period.locked_at) {
     return { error: 'Räkenskapsperioden är stängd eller låst', status: 409 }
+  }
+  if (period.period_end >= getSwedishLocalDate()) {
+    return { error: 'Bokslutsavgränsningen kan bokföras först efter periodens slut', status: 409 }
+  }
+  if (period.period_end !== stagedPeriodEnd || settings?.entity_type !== stagedEntityType) {
+    return { error: 'Period- eller företagsuppgifter har ändrats sedan förhandsgranskningen', status: 409 }
   }
   if (settings?.accounting_method !== 'cash') {
     return { error: 'Företaget använder inte kontantmetoden', status: 409 }
@@ -3260,7 +3271,13 @@ async function commitPostKontantmetodCutoff(
         status: 409,
       }
     }
-    if (!cutoffCollectionsEqual(stagedCollection, assessment.collection)) {
+    const currentFingerprint = cutoffPreviewFingerprint({
+      collection: assessment.collection,
+      lines: assessment.lines,
+      entityType: settings.entity_type ?? 'aktiebolag',
+      periodEnd: period.period_end,
+    })
+    if (currentFingerprint !== stagedFingerprint) {
       return {
         error:
           'Reskontran har ändrats sedan förhandsgranskningen. Skapa en ny förhandsgranskning innan du bokför.',
@@ -3288,6 +3305,9 @@ async function commitPostKontantmetodCutoff(
       },
     }
   } catch (err) {
+    if (err instanceof KontantmetodCutoffPartialError) {
+      throw new PartialCommitError(err.message, err.postedIds, err.cause)
+    }
     if (isBookkeepingError(err)) throw err
     return {
       error: err instanceof Error ? err.message : 'Kontantmetodens bokslutsavgränsning misslyckades',

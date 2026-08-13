@@ -195,5 +195,6 @@ describe('bokslut.step prompt template', () => {
   it('exposes gnubok_list_fiscal_periods so the fail-closed instruction is actionable', () => {
     expect(bokslutStep.tools).toContain('gnubok_list_fiscal_periods')
     expect(bokslutStep.tools).toContain('gnubok_year_end_readiness')
+    expect(bokslutStep.tools).toContain('gnubok_post_kontantmetod_cutoff')
   })
 })

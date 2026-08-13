@@ -155,11 +155,12 @@ import {
   findMatchingVouchersForSupplierInvoice,
   validateVoucherForSupplierInvoiceLink,
 } from '@/lib/invoices/supplier-voucher-matching'
-import { findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { closePeriod, countUnbookedInPeriod, findNextPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
 import {
   assessKontantmetodCutoff,
+  cutoffPreviewFingerprint,
   hasIncompleteKontantmetodCutoffPair,
   KONTANTMETOD_CUTOFF_DESCRIPTIONS,
   nextDay,
@@ -13298,6 +13299,9 @@ export const tools: McpTool[] = [
       if (period.is_closed || period.locked_at) {
         throw new Error('Räkenskapsperioden är stängd eller låst')
       }
+      if (period.period_end >= getSwedishLocalDate()) {
+        throw new Error('Kontantmetodens bokslutsavgränsning kan bokföras först efter periodens slut')
+      }
       if (settings?.accounting_method !== 'cash') {
         throw new Error('Företaget använder inte kontantmetoden')
       }
@@ -13349,6 +13353,7 @@ export const tools: McpTool[] = [
       }
 
       const reversalDate = nextDay(period.period_end)
+      const entityType = (settings.entity_type ?? 'aktiebolag') as EntityType
       const entries = [
         ...(assessment.lines.receivableLines.length > 0 &&
         !assessment.postings.receivableEntryId &&
@@ -13405,7 +13410,14 @@ export const tools: McpTool[] = [
         {
           fiscal_period_id: fiscalPeriodId,
           next_fiscal_period_id: nextPeriod.id,
-          collection: assessment.collection,
+          period_end: period.period_end,
+          entity_type: entityType,
+          preview_fingerprint: cutoffPreviewFingerprint({
+            collection: assessment.collection,
+            lines: assessment.lines,
+            entityType,
+            periodEnd: period.period_end,
+          }),
         },
         {
           fiscal_period_id: fiscalPeriodId,

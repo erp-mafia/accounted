@@ -84,6 +84,7 @@ export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side
   '2645': { box: 'ruta48', side: 'debit' },   // Förvärv utlandet (EU/non-EU RC)
   '2646': { box: 'ruta48', side: 'debit' },   // Uthyrning
   '2647': { box: 'ruta48', side: 'debit' },   // Omvänd skattskyldighet i Sverige
+  '2648': { box: 'ruta48', side: 'debit' },   // Vilande ingående moms vid bokslut
   '2649': { box: 'ruta48', side: 'debit' },   // Blandad verksamhet
   // Import VAT (since 2015, via momsdeklaration) → ruta 60/61/62
   '2615': { box: 'ruta60', side: 'credit' },  // Import 25%

@@ -9,6 +9,7 @@ import {
   buildCutoffLines,
   buildCutoffNote,
   cutoffCollectionsEqual,
+  cutoffPreviewFingerprint,
   collectKontantmetodCutoff,
   distributeOre,
   inspectKontantmetodCutoffPostings,
@@ -64,6 +65,10 @@ describe('distributeOre', () => {
     expect(distributeOre(500, [])).toEqual([])
     expect(distributeOre(500, [7])).toEqual([500])
   })
+
+  it('preserves the sign of a credit amount', () => {
+    expect(distributeOre(-100, [1, 1, 1])).toEqual([-34, -33, -33])
+  })
 })
 
 describe('buildCutoffLines: fordringar', () => {
@@ -74,8 +79,8 @@ describe('buildCutoffLines: fordringar', () => {
     expect(debit?.account_number).toBe('1510')
     expect(debit?.debit_amount).toBe(1250)
 
-    // The whole point: moms parks on 2618, NOT 2611, so it stays out of the
-    // momsdeklaration until the invoice is actually paid.
+    // Year-end output VAT uses the dedicated BAS account. The final-period
+    // declaration maps 2618, while its day-one reversal is excluded.
     const vatLine = receivableLines.find((l) => l.account_number === '2618')
     expect(vatLine?.credit_amount).toBe(250)
     expect(receivableLines.some((l) => l.account_number === '2611')).toBe(false)
@@ -160,7 +165,8 @@ describe('buildCutoffLines: skulder', () => {
     expect(credit?.account_number).toBe('2440')
     expect(credit?.credit_amount).toBe(1250)
 
-    // 2648, not 2641: the deduction is not claimable until payment.
+    // Year-end input VAT uses the dedicated BAS account and is claimed in the
+    // final VAT period under bokslutsmetoden.
     expect(payableLines.find((l) => l.account_number === VILANDE_INPUT_VAT_ACCOUNT)?.debit_amount).toBe(250)
     expect(payableLines.some((l) => l.account_number === '2641')).toBe(false)
 
@@ -212,6 +218,31 @@ describe('buildCutoffLines: skulder', () => {
     expect(payableLines.find((l) => l.account_number === '6990')?.debit_amount).toBe(1000)
     const totals = sum(payableLines)
     expect(totals.debit).toBe(totals.credit)
+  })
+
+  it('books customer and supplier credit notes with opposite polarity', () => {
+    const lines = buildCutoffLines(
+      [receivable({ outstanding: -1250, vat: -250 })],
+      [payable({ outstanding: -1250, vat: -250 })],
+    )
+    expect(lines.receivableLines.find((line) => line.account_number === '1510')).toMatchObject({
+      debit_amount: 0,
+      credit_amount: 1250,
+    })
+    expect(lines.receivableLines.find((line) => line.account_number === '3001')).toMatchObject({
+      debit_amount: 1000,
+      credit_amount: 0,
+    })
+    expect(lines.payableLines.find((line) => line.account_number === '2440')).toMatchObject({
+      debit_amount: 1250,
+      credit_amount: 0,
+    })
+    expect(lines.payableLines.find((line) => line.account_number === '5410')).toMatchObject({
+      debit_amount: 0,
+      credit_amount: 1000,
+    })
+    expect(sum(lines.receivableLines)).toEqual({ debit: 1250, credit: 1250 })
+    expect(sum(lines.payableLines)).toEqual({ debit: 1250, credit: 1250 })
   })
 })
 
@@ -275,7 +306,13 @@ describe('cut-off snapshot and posting inspection', () => {
       query.select = () => query
       query.eq = () => query
       query.in = () => query
-      query.then = (resolve: (value: unknown) => unknown) => resolve({ data: rows, error })
+      query.then = (resolve: (value: unknown) => unknown) => resolve({
+        data: (rows as Array<Record<string, unknown>>).map((row) => ({
+          entry_date: row.fiscal_period_id === 'fp-2' ? '2027-01-01' : '2026-12-31',
+          ...row,
+        })),
+        error,
+      })
       return query
     },
   }) as never
@@ -298,6 +335,40 @@ describe('cut-off snapshot and posting inspection', () => {
         receivables: [receivable({ id: 'a', outstanding: 1300 }), receivable({ id: 'b' })],
       }),
     ).toBe(false)
+  })
+
+  it('fingerprints the exact preview and all derivation inputs canonically', () => {
+    const first = {
+      receivables: [receivable({ id: 'b' }), receivable({ id: 'a' })],
+      payables: [payable({ id: 'p' })],
+      unknownVatTreatment: [],
+      strayVatOnZeroRate: [],
+    }
+    const reordered = { ...first, receivables: [...first.receivables].reverse() }
+    const fingerprint = cutoffPreviewFingerprint({
+      collection: first,
+      lines: buildCutoffLines(first.receivables, first.payables, 'aktiebolag'),
+      entityType: 'aktiebolag',
+      periodEnd: '2026-12-31',
+    })
+    expect(cutoffPreviewFingerprint({
+      collection: reordered,
+      lines: buildCutoffLines(reordered.receivables, reordered.payables, 'aktiebolag'),
+      entityType: 'aktiebolag',
+      periodEnd: '2026-12-31',
+    })).toBe(fingerprint)
+    expect(cutoffPreviewFingerprint({
+      collection: first,
+      lines: buildCutoffLines(first.receivables, first.payables, 'enskild_firma'),
+      entityType: 'enskild_firma',
+      periodEnd: '2026-12-31',
+    })).not.toBe(fingerprint)
+    expect(cutoffPreviewFingerprint({
+      collection: first,
+      lines: buildCutoffLines(first.receivables, first.payables, 'aktiebolag'),
+      entityType: 'aktiebolag',
+      periodEnd: '2027-06-30',
+    })).not.toBe(fingerprint)
   })
 
   it('requires exact cut-off lines and exact next-period reversals', async () => {
@@ -326,7 +397,7 @@ describe('cut-off snapshot and posting inspection', () => {
     ]
 
     const status = await inspectKontantmetodCutoffPostings(
-      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', lines,
+      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
     )
     expect(status).toMatchObject({
       complete: true,
@@ -358,7 +429,24 @@ describe('cut-off snapshot and posting inspection', () => {
     ]
 
     const status = await inspectKontantmetodCutoffPostings(
-      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', lines,
+      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
+    )
+    expect(status.complete).toBe(false)
+    expect(status.missing).toContain('receivable')
+    expect(status.duplicates).toContain(KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable)
+  })
+
+  it('treats an otherwise exact marker on the wrong date as a conflict', async () => {
+    const lines = buildCutoffLines([receivable()], [])
+    const status = await inspectKontantmetodCutoffPostings(
+      makeJournalSupabase([{
+        id: 'ar',
+        fiscal_period_id: 'fp-1',
+        entry_date: '2026-12-30',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        lines: lines.receivableLines,
+      }]),
+      'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
     )
     expect(status.complete).toBe(false)
     expect(status.missing).toContain('receivable')
@@ -386,7 +474,7 @@ describe('cut-off snapshot and posting inspection', () => {
     ]
 
     const status = await inspectKontantmetodCutoffPostings(
-      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', lines,
+      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', '2026-12-31', lines,
     )
     expect(status.complete).toBe(false)
     expect(status.missing).toContain('receivable')
@@ -397,18 +485,37 @@ describe('cut-off snapshot and posting inspection', () => {
     await expect(
       inspectKontantmetodCutoffPostings(
         makeJournalSupabase([], { message: 'connection lost' }),
-        'co-1', 'fp-1', 'fp-2', buildCutoffLines([], []),
+        'co-1', 'fp-1', 'fp-2', '2026-12-31', buildCutoffLines([], []),
       ),
     ).rejects.toThrow(/kunde inte kontrolleras/i)
   })
 })
 
 describe('collectKontantmetodCutoff', () => {
+  function makePagedSupabase(rows: Record<string, Array<Record<string, unknown>>>) {
+    return {
+      from: (table: string) => {
+        let range = { from: 0, to: 999 }
+        const query: Record<string, unknown> = {}
+        for (const name of ['select', 'eq', 'lte', 'in', 'order']) query[name] = () => query
+        query.range = (from: number, to: number) => {
+          range = { from, to }
+          return query
+        }
+        query.then = (resolve: (value: unknown) => unknown) => resolve({
+          data: (rows[table] ?? []).slice(range.from, range.to + 1),
+          error: null,
+        })
+        return query
+      },
+    }
+  }
+
   it('fails closed when either reskontra query fails', async () => {
     const supabase = {
       from: (table: string) => {
         const query: Record<string, unknown> = {}
-        for (const name of ['select', 'eq', 'lte', 'in']) query[name] = () => query
+        for (const name of ['select', 'eq', 'lte', 'in', 'order', 'range']) query[name] = () => query
         query.then = (resolve: (value: unknown) => unknown) => resolve({
           data: table === 'supplier_invoices' ? [] : null,
           error: table === 'invoices' ? { message: 'read failed' } : null,
@@ -432,7 +539,7 @@ describe('collectKontantmetodCutoff', () => {
     const supabase = {
       from: (table: string) => {
         const query: Record<string, unknown> = {}
-        for (const name of ['select', 'eq', 'lte', 'in']) query[name] = () => query
+        for (const name of ['select', 'eq', 'lte', 'in', 'order', 'range']) query[name] = () => query
         query.then = (resolve: (value: unknown) => unknown) => resolve({
           data: rows[table] ?? [],
           error: table === 'invoice_payments' ? { message: 'payment read failed' } : null,
@@ -443,6 +550,124 @@ describe('collectKontantmetodCutoff', () => {
     await expect(
       collectKontantmetodCutoff(supabase as never, 'co-1', '2026-01-01', '2026-12-31'),
     ).rejects.toThrow(/kunde inte läsa betalningar/i)
+  })
+
+  it('keeps payments in invoice currency until the SEK balance is scaled', async () => {
+    const supabase = makePagedSupabase({
+      invoices: [{
+        id: 'inv-eur', invoice_number: 'F-EUR', invoice_date: '2026-12-01', status: 'partially_paid',
+        total: 1000, total_sek: 11500, vat_amount: 200, vat_amount_sek: 2300,
+        vat_treatment: 'standard_25', document_type: 'invoice', currency: 'EUR', exchange_rate: 11.5,
+      }],
+      invoice_payments: [{ id: 'ip-1', invoice_id: 'inv-eur', amount: 200, payment_date: '2026-12-15' }],
+      supplier_invoices: [{
+        id: 'si-eur', supplier_invoice_number: 'L-EUR', invoice_date: '2026-12-01', status: 'partially_paid',
+        total: 1000, total_sek: 11500, vat_amount: 200, vat_amount_sek: 2300,
+        reverse_charge: false, is_credit_note: false, currency: 'EUR', exchange_rate: 11.5,
+        items: [{ account_number: '5410', line_total: 800 }],
+      }],
+      supplier_invoice_payments: [{ id: 'sp-1', supplier_invoice_id: 'si-eur', amount: 200, payment_date: '2026-12-15' }],
+    })
+    const result = await collectKontantmetodCutoff(
+      supabase as never, 'co-1', '2026-01-01', '2026-12-31',
+    )
+    expect(result.receivables[0]).toMatchObject({ outstanding: 9200, vat: 1840 })
+    expect(result.payables[0]).toMatchObject({ outstanding: 9200, vat: 1840 })
+  })
+
+  it('collects reverse-charge rate, supplier type, and scaled declaration basis', async () => {
+    const result = await collectKontantmetodCutoff(makePagedSupabase({
+      supplier_invoices: [{
+        id: 'si-rc', supplier_invoice_number: 'L-RC', invoice_date: '2026-12-01',
+        status: 'partially_paid', total: 1000, total_sek: 11500,
+        vat_amount: 0, vat_amount_sek: 0, reverse_charge: true,
+        is_credit_note: false, currency: 'EUR', exchange_rate: 11.5,
+        supplier: { supplier_type: 'eu_business' },
+        items: [{
+          account_number: '6540', line_total: 1000, vat_rate: 0,
+          reverse_charge_rate: 0.12,
+        }],
+      }],
+      supplier_invoice_payments: [{
+        id: 'sp-rc', supplier_invoice_id: 'si-rc', amount: 200, payment_date: '2026-12-15',
+      }],
+    }) as never, 'co-1', '2026-01-01', '2026-12-31')
+    expect(result.payables[0]).toMatchObject({
+      outstanding: 9200,
+      vat: 0,
+      reverseCharge: true,
+      reverseChargeGroups: [{
+        rate: 0.12,
+        base: 9200,
+        nonBasisBase: 9200,
+        supplierType: 'eu_business',
+      }],
+    })
+    const lines = buildCutoffLines([], result.payables).payableLines
+    expect(lines.find((line) => line.account_number === '2624')?.credit_amount).toBe(1104)
+    expect(lines.find((line) => line.account_number === '2645')?.debit_amount).toBe(1104)
+    expect(lines.find((line) => line.account_number === '4536')?.debit_amount).toBe(9200)
+  })
+
+  it('reads every PostgREST page instead of silently stopping at 1000 rows', async () => {
+    const invoices = Array.from({ length: 1001 }, (_, index) => ({
+      id: `inv-${String(index).padStart(4, '0')}`,
+      invoice_number: `F-${index}`,
+      invoice_date: '2026-12-01',
+      status: 'sent',
+      total: 100,
+      total_sek: 100,
+      vat_amount: 0,
+      vat_amount_sek: 0,
+      vat_treatment: 'exempt',
+      document_type: 'invoice',
+      currency: 'SEK',
+      exchange_rate: 1,
+    }))
+    const result = await collectKontantmetodCutoff(
+      makePagedSupabase({ invoices }) as never,
+      'co-1', '2026-01-01', '2026-12-31',
+    )
+    expect(result.receivables).toHaveLength(1001)
+    expect(result.receivables.at(-1)?.id).toBe('inv-1000')
+  })
+
+  it('reconstructs customer and supplier credits as of period end', async () => {
+    const result = await collectKontantmetodCutoff(makePagedSupabase({
+      invoices: [
+        {
+          id: 'inv-original', invoice_number: 'F-1', invoice_date: '2026-11-01', status: 'credited',
+          total: 1250, total_sek: 1250, vat_amount: 250, vat_amount_sek: 250,
+          vat_treatment: 'standard_25', document_type: 'invoice', currency: 'SEK',
+        },
+        {
+          id: 'inv-credit', invoice_number: 'K-1', invoice_date: '2026-12-01', status: 'sent',
+          total: -1250, total_sek: -1250, vat_amount: -250, vat_amount_sek: -250,
+          vat_treatment: 'standard_25', document_type: 'invoice', currency: 'SEK',
+          credited_invoice_id: 'inv-original',
+        },
+      ],
+      supplier_invoices: [
+        {
+          id: 'si-original', supplier_invoice_number: 'L-1', invoice_date: '2026-11-01', status: 'credited',
+          total: 1250, total_sek: 1250, vat_amount: 250, vat_amount_sek: 250,
+          reverse_charge: false, is_credit_note: false, currency: 'SEK',
+          items: [{ account_number: '5410', line_total: 1000 }],
+        },
+        {
+          id: 'si-credit', supplier_invoice_number: 'LK-1', invoice_date: '2026-12-01', status: 'registered',
+          total: 1250, total_sek: 1250, vat_amount: 250, vat_amount_sek: 250,
+          reverse_charge: false, is_credit_note: true, currency: 'SEK',
+          credited_invoice_id: 'si-original',
+          items: [{ account_number: '5410', line_total: 1000 }],
+        },
+      ],
+    }) as never, 'co-1', '2026-01-01', '2026-12-31')
+    expect(result.receivables.map((item) => item.outstanding)).toEqual([1250, -1250])
+    expect(result.payables.map((item) => item.outstanding)).toEqual([1250, -1250])
+    const lines = buildCutoffLines(result.receivables, result.payables)
+    expect(lines.receivableLines).toEqual([])
+    expect(lines.payableLines).toEqual([])
   })
 })
 
@@ -466,7 +691,20 @@ describe('postKontantmetodCutoff', () => {
         error: table === 'fiscal_periods' && !next ? { message: 'x' } : null,
       })
       query.then = (resolve: (value: unknown) => unknown) =>
-        resolve({ data: table === 'journal_entries' ? journalRows : null, error: null })
+        resolve({
+          data: table === 'journal_entries'
+            ? journalRows.map((row) => {
+                const entry = row as Record<string, unknown>
+                return {
+                  ...entry,
+                  entry_date: entry.entry_date ?? (
+                    entry.fiscal_period_id === 'fp-next' ? '2027-01-01' : '2026-12-31'
+                  ),
+                }
+              })
+            : null,
+          error: null,
+        })
       return query
     },
   }) as never
@@ -617,14 +855,21 @@ describe('postKontantmetodCutoff', () => {
 
     await expect(
       postKontantmetodCutoff(makeSupabase(OPEN_NEXT), 'co-1', 'user-1', baseOpts),
-    ).rejects.toThrow('period locked')
+    ).rejects.toMatchObject({
+      name: 'KontantmetodCutoffPartialError',
+      postedIds: {
+        receivable_entry_id: 'je-cutoff',
+        receivable_storno_entry_id: 'je-storno',
+      },
+      cause: expect.objectContaining({ message: 'period locked' }),
+    })
 
     expect(vi.mocked(reverseEntry)).toHaveBeenCalledWith(
       expect.anything(), 'co-1', 'user-1', 'je-cutoff', '2026-12-31',
     )
   })
 
-  it('still rethrows the original error when the compensating storno also fails', async () => {
+  it('reports the immutable cut-off id when the compensating storno also fails', async () => {
     vi.mocked(createJournalEntry)
       .mockResolvedValueOnce({ id: 'je-cutoff' } as never)
       .mockRejectedValueOnce(new Error('period locked'))
@@ -632,7 +877,32 @@ describe('postKontantmetodCutoff', () => {
 
     await expect(
       postKontantmetodCutoff(makeSupabase(OPEN_NEXT), 'co-1', 'user-1', baseOpts),
-    ).rejects.toThrow('period locked')
+    ).rejects.toMatchObject({
+      name: 'KontantmetodCutoffPartialError',
+      postedIds: { receivable_entry_id: 'je-cutoff' },
+      cause: expect.objectContaining({ message: 'period locked' }),
+    })
+  })
+
+  it('reports the completed receivable pair when the payable phase fails', async () => {
+    vi.mocked(createJournalEntry)
+      .mockResolvedValueOnce({ id: 'ar' } as never)
+      .mockResolvedValueOnce({ id: 'ar-rev' } as never)
+      .mockRejectedValueOnce(new Error('payable failed'))
+
+    await expect(postKontantmetodCutoff(
+      makeSupabase(OPEN_NEXT),
+      'co-1',
+      'user-1',
+      { ...baseOpts, payables: [payable()] },
+    )).rejects.toMatchObject({
+      name: 'KontantmetodCutoffPartialError',
+      postedIds: {
+        receivable_entry_id: 'ar',
+        receivable_reversal_entry_id: 'ar-rev',
+      },
+      cause: expect.objectContaining({ message: 'payable failed' }),
+    })
   })
 
   it('posts nothing at all when there is nothing outstanding', async () => {
@@ -647,16 +917,28 @@ describe('postKontantmetodCutoff', () => {
 })
 
 describe('buildCutoffLines: omvänd betalningsskyldighet', () => {
-  it('never routes reverse-charge moms into the single vilande bucket', () => {
-    // A one-sided reverse charge is prohibited: the self-assessed output/input
-    // pair belongs to the payment entry, not to a deferred 2648 balance.
+  it('books the complete self-assessed pair and declaration basis at year end', () => {
     const { payableLines } = buildCutoffLines(
       [],
-      [payable({ outstanding: 1000, vat: 250, reverseCharge: true, netByAccount: [{ account: '4056', amount: 1000 }] })],
+      [payable({
+        outstanding: 1000,
+        vat: 0,
+        reverseCharge: true,
+        reverseChargeGroups: [{
+          rate: 0.25,
+          base: 1000,
+          nonBasisBase: 1000,
+          supplierType: 'eu_business',
+        }],
+        netByAccount: [{ account: '6540', amount: 1000 }],
+      })],
     )
     expect(payableLines.some((l) => l.account_number === VILANDE_INPUT_VAT_ACCOUNT)).toBe(false)
-    // The full outstanding is expense against 2440.
-    expect(payableLines.find((l) => l.account_number === '4056')?.debit_amount).toBe(1000)
+    expect(payableLines.find((l) => l.account_number === '2645')?.debit_amount).toBe(250)
+    expect(payableLines.find((l) => l.account_number === '2614')?.credit_amount).toBe(250)
+    expect(payableLines.find((l) => l.account_number === '4535')?.debit_amount).toBe(1000)
+    expect(payableLines.find((l) => l.account_number === '4598')?.credit_amount).toBe(1000)
+    expect(payableLines.find((l) => l.account_number === '6540')?.debit_amount).toBe(1000)
     expect(payableLines.find((l) => l.account_number === '2440')?.credit_amount).toBe(1000)
     const totals = sum(payableLines)
     expect(totals.debit).toBe(totals.credit)

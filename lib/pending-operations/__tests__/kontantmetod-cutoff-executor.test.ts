@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PendingOperation } from '@/types'
 
 vi.mock('@/lib/core/bookkeeping/kontantmetod-cutoff', async () => {
@@ -16,6 +16,8 @@ import { commitPendingOperation } from '../commit'
 import {
   assessKontantmetodCutoff,
   buildCutoffLines,
+  cutoffPreviewFingerprint,
+  KontantmetodCutoffPartialError,
   postKontantmetodCutoff,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 
@@ -30,10 +32,22 @@ const collection = {
 }
 
 function makePendingOp(overrides: Partial<PendingOperation> = {}): PendingOperation {
+  const lines = buildCutoffLines(collection.receivables, collection.payables)
   return {
     id: 'op-1', user_id: 'user-1', company_id: 'company-1',
     operation_type: 'post_kontantmetod_cutoff', status: 'pending', title: 'cut-off',
-    params: { fiscal_period_id: 'fp-1', next_fiscal_period_id: 'fp-2', collection },
+    params: {
+      fiscal_period_id: 'fp-1',
+      next_fiscal_period_id: 'fp-2',
+      period_end: '2026-12-31',
+      entity_type: 'aktiebolag',
+      preview_fingerprint: cutoffPreviewFingerprint({
+        collection,
+        lines,
+        entityType: 'aktiebolag',
+        periodEnd: '2026-12-31',
+      }),
+    },
     preview_data: {}, result_data: null, actor_type: 'api_key', actor_id: null,
     actor_label: null, risk_level: 'high', created_at: '2026-08-13T00:00:00Z',
     resolved_at: null, updated_at: '2026-08-13T00:00:00Z',
@@ -85,6 +99,8 @@ function makeSupabase(options: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2027-02-01T12:00:00Z'))
   vi.mocked(assessKontantmetodCutoff).mockResolvedValue({
     collection,
     lines: buildCutoffLines(collection.receivables, collection.payables),
@@ -100,6 +116,10 @@ beforeEach(() => {
     payableEntry: null,
     payableReversal: null,
   })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('commitPendingOperation: post_kontantmetod_cutoff', () => {
@@ -166,5 +186,67 @@ describe('commitPendingOperation: post_kontantmetod_cutoff', () => {
       makeSupabase({ nextPeriod: null }) as never,
       'user-1', 'company-1', makePendingOp(),
     )).resolves.toMatchObject({ status: 'rejected', http_status: 409 })
+  })
+
+  it('rejects preview-affecting settings or period drift', async () => {
+    await expect(commitPendingOperation(
+      makeSupabase({ settings: { accounting_method: 'cash', entity_type: 'enskild_firma' } }) as never,
+      'user-1', 'company-1', makePendingOp(),
+    )).resolves.toMatchObject({ status: 'rejected', http_status: 409 })
+    await expect(commitPendingOperation(
+      makeSupabase({
+        period: {
+          id: 'fp-1', period_start: '2026-01-01', period_end: '2026-11-30',
+          is_closed: false, locked_at: null,
+        },
+      }) as never,
+      'user-1', 'company-1', makePendingOp(),
+    )).resolves.toMatchObject({ status: 'rejected', http_status: 409 })
+    expect(postKontantmetodCutoff).not.toHaveBeenCalled()
+  })
+
+  it('refuses a future-dated cut-off even when it was staged earlier', async () => {
+    vi.setSystemTime(new Date('2026-12-01T12:00:00Z'))
+    await expect(commitPendingOperation(
+      makeSupabase() as never, 'user-1', 'company-1', makePendingOp(),
+    )).resolves.toMatchObject({ status: 'rejected', http_status: 409 })
+    expect(postKontantmetodCutoff).not.toHaveBeenCalled()
+  })
+
+  it('marks immutable partial work as failed_partial with posted ids', async () => {
+    vi.mocked(postKontantmetodCutoff).mockRejectedValueOnce(
+      new KontantmetodCutoffPartialError(
+        'payable reversal failed',
+        { receivable_entry_id: 'ar', receivable_reversal_entry_id: 'ar-rev' },
+        new Error('period locked'),
+      ),
+    )
+    const supabase = makeSupabase()
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(),
+    )
+    expect(result).toMatchObject({
+      status: 'failed',
+      http_status: 500,
+      code: 'partial_commit',
+      data: {
+        posted_ids: {
+          receivable_entry_id: 'ar',
+          receivable_reversal_entry_id: 'ar-rev',
+        },
+      },
+    })
+    expect(supabase.updates).toContainEqual({
+      table: 'pending_operations',
+      value: expect.objectContaining({
+        status: 'failed_partial',
+        result_data: expect.objectContaining({
+          posted_ids: {
+            receivable_entry_id: 'ar',
+            receivable_reversal_entry_id: 'ar-rev',
+          },
+        }),
+      }),
+    })
   })
 })

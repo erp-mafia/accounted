@@ -932,6 +932,14 @@ describe('calculateVatDeclaration: parent/summary accounts', () => {
     expect(result.rutor.ruta49).toBe(-200) // refund
   })
 
+  it('maps year-end input VAT on 2648 to ruta48', async () => {
+    seedLedger([{ account_number: '2648', debit_amount: 250, credit_amount: 0 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta48).toBe(250)
+  })
+
   it('reproduces the user-reported bug: 2610 balance now reaches ruta10', async () => {
     // Customer screenshot scenario (simplified): 3001 + 2610 booked with the
     // correct VAT amount on the parent account. Before the fix, ruta10 read 0

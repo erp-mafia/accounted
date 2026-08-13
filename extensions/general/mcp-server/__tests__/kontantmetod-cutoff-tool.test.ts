@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/core/bookkeeping/period-service', async () => {
   const actual = await vi.importActual<typeof import('@/lib/core/bookkeeping/period-service')>(
@@ -23,6 +23,7 @@ import {
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 
 const tool = tools.find((candidate) => candidate.name === 'gnubok_post_kontantmetod_cutoff')!
+const searchTool = tools.find((candidate) => candidate.name === 'gnubok_search_tools')!
 
 function makeSupabase(settings: Record<string, unknown> = {
   accounting_method: 'cash', entity_type: 'aktiebolag',
@@ -69,6 +70,8 @@ const collection = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2027-02-01T12:00:00Z'))
   vi.mocked(findNextPeriod).mockResolvedValue({
     id: 'fp-2', period_start: '2027-01-01', period_end: '2027-12-31',
     is_closed: false, locked_at: null,
@@ -85,6 +88,10 @@ beforeEach(() => {
   })
 })
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('gnubok_post_kontantmetod_cutoff', () => {
   it('is a discoverable high-risk staged bookkeeping write with readiness preflight', () => {
     expect(tool).toBeDefined()
@@ -96,6 +103,28 @@ describe('gnubok_post_kontantmetod_cutoff', () => {
       approve_tool: 'gnubok_approve_pending_operation',
       preflight: 'gnubok_year_end_readiness',
     })
+  })
+
+  it('is returned by full catalog search with its approval metadata', async () => {
+    const result = await searchTool.execute(
+      {
+        query: 'kontantmetod cutoff',
+        detail: 'full',
+        __keyScopes: ['bookkeeping:write'],
+      },
+      'company-1',
+      'user-1',
+      makeSupabase() as never,
+    ) as { tools: Array<Record<string, unknown>> }
+    expect(result.tools).toContainEqual(expect.objectContaining({
+      name: 'gnubok_post_kontantmetod_cutoff',
+      scope: 'bookkeeping:write',
+      _meta: expect.objectContaining({
+        requires_approval: true,
+        approve_tool: 'gnubok_approve_pending_operation',
+        preflight: 'gnubok_year_end_readiness',
+      }),
+    }))
   })
 
   it('stages the exact two cut-offs and two day-one reversals without posting', async () => {
@@ -116,7 +145,13 @@ describe('gnubok_post_kontantmetod_cutoff', () => {
     expect(supabase.inserts[0]).toMatchObject({
       operation_type: 'post_kontantmetod_cutoff',
       risk_level: 'high',
-      params: { fiscal_period_id: 'fp-1', next_fiscal_period_id: 'fp-2', collection },
+      params: {
+        fiscal_period_id: 'fp-1',
+        next_fiscal_period_id: 'fp-2',
+        period_end: '2026-12-31',
+        entity_type: 'aktiebolag',
+        preview_fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
     })
   })
 
@@ -157,5 +192,12 @@ describe('gnubok_post_kontantmetod_cutoff', () => {
     await expect(tool.execute(
       { fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', makeSupabase() as never,
     )).rejects.toThrow(/Inga obetalda/i)
+  })
+
+  it('refuses to stage before the fiscal period has ended', async () => {
+    vi.setSystemTime(new Date('2026-12-01T12:00:00Z'))
+    await expect(tool.execute(
+      { fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', makeSupabase() as never,
+    )).rejects.toThrow(/först efter periodens slut/i)
   })
 })

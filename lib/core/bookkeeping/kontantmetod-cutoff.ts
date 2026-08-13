@@ -7,14 +7,11 @@
  * räkenskapsårets utgång, so the year-end needs a cut-off entry that puts every
  * still-outstanding invoice onto the balance sheet.
  *
- * Moms is the part that is easy to get wrong. Under bokslutsmetoden moms is
- * reported at payment, so the cut-off must NOT push moms into the current
- * momsdeklaration. BAS provides "vilande" (dormant) moms accounts for exactly
- * this: 2618/2628/2638 for utgående and 2648 for ingående. They are absent from
- * ACCOUNT_RUTA / ACCOUNT_TO_BOX by design, so anything parked there stays out
- * of the declaration until the invoice is actually paid. Booking cut-off moms
- * to 2611/2641 instead would claim it a period early, which is the real error
- * this module exists to avoid.
+ * Moms is the part that is easy to get wrong. Under bokslutsmetoden, unpaid
+ * invoice moms must be included in the final VAT period of the year. BAS
+ * provides 2618/2628/2638 for year-end output VAT and 2648 for year-end input
+ * VAT. The VAT report maps those accounts for the cut-off date, while excluding
+ * the mechanical day-one reversal so it cannot undo the final declaration.
  *
  * Shape: two aggregate verifikat (one for fordringar, one for skulder), each
  * reversed on the first day of the following period. Deliberately NOT
@@ -33,6 +30,7 @@
  * basis before any new-year payment is booked.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createHash } from 'node:crypto'
 import type {
   CreateJournalEntryLineInput,
   EntityType,
@@ -40,9 +38,16 @@ import type {
   VatTreatment,
 } from '@/types'
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-entries'
+import {
+  generateReverseChargeBasisLines,
+  generateReverseChargeLines,
+  isReverseChargeBasisAccount,
+  resolveReverseChargeRate,
+} from '@/lib/bookkeeping/vat-entries'
 import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 const log = createLogger('kontantmetod-cutoff')
 
@@ -95,12 +100,17 @@ export interface CutoffPayable {
    * self-assesses output AND input moms on 2614/2624/2634 + 2645/2647, which
    * is a symmetric pair that must never be split. `vat` is 0 on every such row
    * by construction, and this flag forces it to 0 anyway: routing a stray
-   * amount into the single 2648 bucket would post a one-sided reverse charge,
-   * the exact error the swedish-vat reference calls out as prohibited.
-   * The self-assessed pair is handled by the payment entry after the vändning,
-   * unchanged by the cut-off.
+   * amount into the single 2648 bucket would post a one-sided reverse charge.
+   * The complete output/input pair and its declaration basis are included in
+   * the final VAT period through `reverseChargeGroups` below.
    */
   reverseCharge?: boolean
+  reverseChargeGroups?: Array<{
+    rate: number
+    base: number
+    nonBasisBase: number
+    supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business'
+  }>
   /**
    * Net expense split across BAS accounts, as weights. Only the ratios matter:
    * the net total is always derived as `outstanding - vat` so the verifikat
@@ -119,6 +129,7 @@ export interface CutoffLines {
 interface PostedCutoffEntry {
   id: string
   fiscal_period_id: string
+  entry_date: string
   description: string
   lines: Array<{
     account_number: string
@@ -166,14 +177,17 @@ export function distributeOre(totalOre: number, weights: number[]): number[] {
   if (weights.length === 0) return []
   if (weights.length === 1) return [totalOre]
 
+  const sign = totalOre < 0 ? -1 : 1
+  const absoluteTotal = Math.abs(totalOre)
+
   const weightSum = weights.reduce((sum, w) => sum + Math.abs(w), 0)
   // Degenerate input (all-zero weights): put everything on the first bucket
   // rather than emitting NaN.
   if (weightSum === 0) return weights.map((_, i) => (i === 0 ? totalOre : 0))
 
-  const exact = weights.map((w) => (Math.abs(w) / weightSum) * totalOre)
+  const exact = weights.map((w) => (Math.abs(w) / weightSum) * absoluteTotal)
   const floors = exact.map((value) => Math.floor(value))
-  let remainder = totalOre - floors.reduce((sum, value) => sum + value, 0)
+  let remainder = absoluteTotal - floors.reduce((sum, value) => sum + value, 0)
 
   // Hand the leftover öre to the largest fractional parts first.
   const order = exact
@@ -186,7 +200,24 @@ export function distributeOre(totalOre: number, weights: number[]): number[] {
     result[index] += 1
     remainder -= 1
   }
-  return result
+  return result.map((value) => value * sign)
+}
+
+function signedLine(
+  accountNumber: string,
+  normalSide: 'debit' | 'credit',
+  signedOre: number,
+  lineDescription: string,
+): CreateJournalEntryLineInput {
+  const normal = signedOre >= 0
+  const amount = toKronor(Math.abs(signedOre))
+  const debit = (normalSide === 'debit') === normal
+  return {
+    account_number: accountNumber,
+    debit_amount: debit ? amount : 0,
+    credit_amount: debit ? 0 : amount,
+    line_description: lineDescription,
+  }
 }
 
 /**
@@ -230,21 +261,21 @@ export function buildCutoffLines(
   }
 
   if (receivableOre !== 0) {
-    receivableLines.push({
-      account_number: RECEIVABLES_ACCOUNT,
-      debit_amount: toKronor(receivableOre),
-      credit_amount: 0,
-      line_description: 'Kundfordringar vid räkenskapsårets utgång (kontantmetoden)',
-    })
+    receivableLines.push(signedLine(
+      RECEIVABLES_ACCOUNT,
+      'debit',
+      receivableOre,
+      'Kundfordringar vid räkenskapsårets utgång (kontantmetoden)',
+    ))
 
     for (const [treatment, netOre] of revenueByTreatment) {
       if (netOre === 0) continue
-      receivableLines.push({
-        account_number: getRevenueAccount(treatment, entityType),
-        debit_amount: 0,
-        credit_amount: toKronor(netOre),
-        line_description: 'Obetalda kundfakturor vid bokslut',
-      })
+      receivableLines.push(signedLine(
+        getRevenueAccount(treatment, entityType),
+        'credit',
+        netOre,
+        'Obetalda kundfakturor vid bokslut',
+      ))
     }
 
     for (const [treatment, vatOre] of outputVatByTreatment) {
@@ -259,34 +290,40 @@ export function buildCutoffLines(
           treatment,
           ore: vatOre,
         })
-        receivableLines.push({
-          account_number: getRevenueAccount(treatment, entityType),
-          debit_amount: 0,
-          credit_amount: toKronor(vatOre),
-          line_description: 'Obetalda kundfakturor vid bokslut',
-        })
+        receivableLines.push(signedLine(
+          getRevenueAccount(treatment, entityType),
+          'credit',
+          vatOre,
+          'Obetalda kundfakturor vid bokslut',
+        ))
         continue
       }
-      receivableLines.push({
-        account_number: account,
-        debit_amount: 0,
-        credit_amount: toKronor(vatOre),
-        line_description: 'Vilande utgående moms, redovisas vid betalning',
-      })
+      receivableLines.push(signedLine(
+        account,
+        'credit',
+        vatOre,
+        'Utgående moms på obetald faktura vid bokslut',
+      ))
     }
   }
 
   // ---- Skulder ----------------------------------------------------------
   const expenseByAccount = new Map<string, number>()
+  const reverseChargeByGroup = new Map<string, {
+    rate: number
+    baseOre: number
+    nonBasisBaseOre: number
+    supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business'
+  }>()
   let payableOre = 0
   let inputVatOre = 0
 
   for (const row of payables) {
     const outstandingOre = toOre(row.outstanding)
     if (outstandingOre === 0) continue
-    // Reverse charge carries no deductible moms on the invoice itself: the
-    // self-assessed pair is booked by the payment entry, never split into the
-    // single vilande bucket. Forced to 0 rather than trusted from the row.
+    // Reverse charge carries no charged moms on the invoice itself. The
+    // self-assessed pair is built from its basis groups below, never split into
+    // the single vilande bucket. Force the invoice moms field to zero.
     const vatOre = row.reverseCharge ? 0 : toOre(row.vat)
     const netOre = outstandingOre - vatOre
 
@@ -305,41 +342,87 @@ export function buildCutoffLines(
       if (share === 0) return
       expenseByAccount.set(bucket.account, (expenseByAccount.get(bucket.account) ?? 0) + share)
     })
+    for (const group of row.reverseChargeGroups ?? []) {
+      const key = `${group.supplierType}:${group.rate}`
+      const current = reverseChargeByGroup.get(key) ?? {
+        rate: group.rate,
+        baseOre: 0,
+        nonBasisBaseOre: 0,
+        supplierType: group.supplierType,
+      }
+      current.baseOre += toOre(group.base)
+      current.nonBasisBaseOre += toOre(group.nonBasisBase)
+      reverseChargeByGroup.set(key, current)
+    }
   }
 
   if (payableOre !== 0) {
     for (const [account, netOre] of expenseByAccount) {
       if (netOre === 0) continue
-      payableLines.push({
-        account_number: account,
-        debit_amount: toKronor(netOre),
-        credit_amount: 0,
-        line_description: 'Obetalda leverantörsfakturor vid bokslut',
-      })
+      payableLines.push(signedLine(
+        account,
+        'debit',
+        netOre,
+        'Obetalda leverantörsfakturor vid bokslut',
+      ))
     }
 
     if (inputVatOre !== 0) {
-      payableLines.push({
-        account_number: VILANDE_INPUT_VAT_ACCOUNT,
-        debit_amount: toKronor(inputVatOre),
-        credit_amount: 0,
-        line_description: 'Vilande ingående moms, dras av vid betalning',
-      })
+      payableLines.push(signedLine(
+        VILANDE_INPUT_VAT_ACCOUNT,
+        'debit',
+        inputVatOre,
+        'Ingående moms på obetald faktura vid bokslut',
+      ))
     }
 
-    payableLines.push({
-      account_number: PAYABLES_ACCOUNT,
-      debit_amount: 0,
-      credit_amount: toKronor(payableOre),
-      line_description: 'Leverantörsskulder vid räkenskapsårets utgång (kontantmetoden)',
-    })
+    const appendReverseChargeLines = (
+      generated: CreateJournalEntryLineInput[],
+      sign: number,
+    ) => {
+      for (const line of generated) {
+        const normalSide = line.debit_amount > 0 ? 'debit' : 'credit'
+        const amount = line.debit_amount || line.credit_amount
+        payableLines.push(signedLine(
+          line.account_number,
+          normalSide,
+          toOre(amount) * sign,
+          line.line_description ?? 'Omvänd skattskyldighet vid bokslut',
+        ))
+      }
+    }
+    for (const group of reverseChargeByGroup.values()) {
+      if (group.baseOre === 0) continue
+      const sign = group.baseOre < 0 ? -1 : 1
+      const base = toKronor(Math.abs(group.baseOre))
+      const nonBasisBase = toKronor(Math.abs(group.nonBasisBaseOre))
+      appendReverseChargeLines(
+        generateReverseChargeLines(
+          base,
+          group.rate,
+          group.supplierType === 'swedish_business',
+        ),
+        sign,
+      )
+      appendReverseChargeLines(
+        generateReverseChargeBasisLines(nonBasisBase, group.rate, group.supplierType),
+        sign,
+      )
+    }
+
+    payableLines.push(signedLine(
+      PAYABLES_ACCOUNT,
+      'credit',
+      payableOre,
+      'Leverantörsskulder vid räkenskapsårets utgång (kontantmetoden)',
+    ))
   }
 
   return {
     receivableLines,
     payableLines,
-    receivableTotal: toKronor(receivableOre),
-    payableTotal: toKronor(payableOre),
+    receivableTotal: toKronor(Math.abs(receivableOre)),
+    payableTotal: toKronor(Math.abs(payableOre)),
   }
 }
 
@@ -384,12 +467,13 @@ export async function inspectKontantmetodCutoffPostings(
   companyId: string,
   fiscalPeriodId: string,
   nextFiscalPeriodId: string,
+  periodEnd: string,
   expected: CutoffLines,
 ): Promise<KontantmetodCutoffPostingStatus> {
   const { data, error } = await supabase
     .from('journal_entries')
     .select(
-      'id, fiscal_period_id, description, lines:journal_entry_lines(account_number, debit_amount, credit_amount)',
+      'id, fiscal_period_id, entry_date, description, lines:journal_entry_lines(account_number, debit_amount, credit_amount)',
     )
     .eq('company_id', companyId)
     .eq('source_type', 'year_end')
@@ -411,6 +495,7 @@ export async function inspectKontantmetodCutoffPostings(
     periodId: string,
     lines: CreateJournalEntryLineInput[],
     missingKind: KontantmetodCutoffPostingStatus['missing'][number],
+    expectedDate: string,
   ): string | null => {
     const candidates = rows.filter(
       (row) => row.description === description && row.fiscal_period_id === periodId,
@@ -421,7 +506,9 @@ export async function inspectKontantmetodCutoffPostings(
       return null
     }
 
-    const exact = candidates.filter((row) => cutoffLinesEqual(lines, row.lines ?? []))
+    const exact = candidates.filter(
+      (row) => row.entry_date === expectedDate && cutoffLinesEqual(lines, row.lines ?? []),
+    )
     if (candidates.length !== 1 || exact.length !== 1) {
       // Any marker with non-matching lines is a conflict, even when only one
       // exists. Treating it as merely missing could stage a second cut-off on
@@ -438,24 +525,28 @@ export async function inspectKontantmetodCutoffPostings(
     fiscalPeriodId,
     expected.receivableLines,
     'receivable',
+    periodEnd,
   )
   const receivableReversalId = matchOne(
     KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
     nextFiscalPeriodId,
     reverseLines(expected.receivableLines),
     'receivable_reversal',
+    nextDay(periodEnd),
   )
   const payableEntryId = matchOne(
     KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable,
     fiscalPeriodId,
     expected.payableLines,
     'payable',
+    periodEnd,
   )
   const payableReversalId = matchOne(
     KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal,
     nextFiscalPeriodId,
     reverseLines(expected.payableLines),
     'payable_reversal',
+    nextDay(periodEnd),
   )
 
   return {
@@ -515,7 +606,7 @@ export interface KontantmetodCutoffAssessment {
   postings: KontantmetodCutoffPostingStatus
 }
 
-function sortedCollection(collection: CutoffCollection): CutoffCollection {
+export function sortedCutoffCollection(collection: CutoffCollection): CutoffCollection {
   return {
     receivables: [...collection.receivables].sort((a, b) => a.id.localeCompare(b.id)),
     payables: [...collection.payables]
@@ -533,7 +624,35 @@ export function cutoffCollectionsEqual(
   left: CutoffCollection,
   right: CutoffCollection,
 ): boolean {
-  return JSON.stringify(sortedCollection(left)) === JSON.stringify(sortedCollection(right))
+  return JSON.stringify(sortedCutoffCollection(left)) === JSON.stringify(sortedCutoffCollection(right))
+}
+
+function canonicalLines(lines: CreateJournalEntryLineInput[]): string[] {
+  return lines
+    .map((line) => JSON.stringify({
+      account_number: line.account_number,
+      debit_amount: roundOre(line.debit_amount),
+      credit_amount: roundOre(line.credit_amount),
+      line_description: line.line_description ?? null,
+    }))
+    .sort()
+}
+
+export function cutoffPreviewFingerprint(args: {
+  collection: CutoffCollection
+  lines: CutoffLines
+  entityType: EntityType
+  periodEnd: string
+}): string {
+  const payload = JSON.stringify({
+    collection: sortedCutoffCollection(args.collection),
+    entity_type: args.entityType,
+    period_end: args.periodEnd,
+    reversal_date: nextDay(args.periodEnd),
+    receivable_lines: canonicalLines(args.lines.receivableLines),
+    payable_lines: canonicalLines(args.lines.payableLines),
+  })
+  return createHash('sha256').update(payload).digest('hex')
 }
 
 /**
@@ -558,6 +677,24 @@ export function buildCutoffNote(label: string, references: string[]): string {
     : `${label} (${named.length} st): ${shown}`
 }
 
+function resolveHeaderSek(
+  row: Record<string, unknown>,
+  amountKey: string,
+  sekKey: string,
+): number {
+  const amount = Number(row[amountKey] ?? 0)
+  const sekValue = row[sekKey]
+  const sek = sekValue == null ? null : Number(sekValue)
+  if (sek != null && Number.isFinite(sek) && (amount === 0 || sek !== 0)) return sek
+  const currency = String(row.currency ?? 'SEK').toUpperCase()
+  if (currency === 'SEK') return amount
+  const rate = Number(row.exchange_rate ?? 0)
+  if (Number.isFinite(rate) && rate > 0) return roundOre(amount * rate)
+  throw new Error(
+    `Faktura ${String(row.id ?? '')} i ${currency} saknar användbart SEK-belopp eller valutakurs`,
+  )
+}
+
 /**
  * Fetch every invoice still outstanding at `periodEnd`.
  *
@@ -573,69 +710,81 @@ export async function collectKontantmetodCutoff(
   periodStart: string,
   periodEnd: string,
 ): Promise<CutoffCollection> {
-  const [invoicesResult, supplierResult] = await Promise.all([
-    supabase
-      .from('invoices')
-      .select('id, invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, vat_treatment, credited_invoice_id, document_type')
-      .eq('company_id', companyId)
-      .lte('invoice_date', periodEnd)
-      .in('status', ['sent', 'overdue', 'partially_paid', 'paid']),
-    supabase
-      .from('supplier_invoices')
-      .select('id, supplier_invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, reverse_charge, is_credit_note, items:supplier_invoice_items(account_number, line_total)')
-      .eq('company_id', companyId)
-      .lte('invoice_date', periodEnd)
-      .in('status', ['registered', 'approved', 'partially_paid', 'paid']),
-  ])
-
-  if (invoicesResult.error || supplierResult.error) {
+  let invoices: Array<Record<string, unknown>>
+  let supplierInvoices: Array<Record<string, unknown>>
+  try {
+    [invoices, supplierInvoices] = await Promise.all([
+      fetchAllRows<Record<string, unknown>>(
+        ({ from, to }) => supabase
+          .from('invoices')
+          .select('id, invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, vat_treatment, credited_invoice_id, document_type, currency, exchange_rate')
+          .eq('company_id', companyId)
+          .lte('invoice_date', periodEnd)
+          .in('status', ['sent', 'overdue', 'partially_paid', 'paid', 'credited'])
+          .order('id', { ascending: true })
+          .range(from, to),
+        { dedupeBy: (row) => row.id as string },
+      ),
+      fetchAllRows<Record<string, unknown>>(
+        ({ from, to }) => supabase
+          .from('supplier_invoices')
+          .select('id, supplier_invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, reverse_charge, is_credit_note, credited_invoice_id, currency, exchange_rate, supplier:suppliers(supplier_type), items:supplier_invoice_items(account_number, line_total, vat_rate, reverse_charge_rate)')
+          .eq('company_id', companyId)
+          .lte('invoice_date', periodEnd)
+          .in('status', ['registered', 'approved', 'partially_paid', 'paid', 'credited'])
+          .order('id', { ascending: true })
+          .range(from, to),
+        { dedupeBy: (row) => row.id as string },
+      ),
+    ])
+  } catch (err) {
     throw new Error(
       'Kontantmetodens bokslutsavgränsning kunde inte läsa reskontran: ' +
-        (invoicesResult.error?.message ?? supplierResult.error?.message ?? 'okänt fel'),
+        (err instanceof Error ? err.message : 'okänt fel'),
     )
   }
 
-  const invoices = (invoicesResult.data ?? []) as Array<Record<string, unknown>>
-  const supplierInvoices = (supplierResult.data ?? []) as Array<Record<string, unknown>>
-
-  const invoiceIds = invoices.map((row) => row.id as string)
-  const supplierIds = supplierInvoices.map((row) => row.id as string)
-
   // Payments ON OR BEFORE period end reduce the outstanding balance; later
-  // ones must not.
-  const [invoicePayments, supplierPayments] = await Promise.all([
-    invoiceIds.length > 0
-      ? supabase
+  // ones must not. Amount is stored in the invoice's own currency.
+  let invoicePayments: Array<Record<string, unknown>>
+  let supplierPayments: Array<Record<string, unknown>>
+  try {
+    [invoicePayments, supplierPayments] = await Promise.all([
+      fetchAllRows<Record<string, unknown>>(
+        ({ from, to }) => supabase
           .from('invoice_payments')
-          .select('invoice_id, amount, payment_date')
+          .select('id, invoice_id, amount, payment_date')
           .eq('company_id', companyId)
           .lte('payment_date', periodEnd)
-          .in('invoice_id', invoiceIds)
-      : Promise.resolve({ data: [] as Array<Record<string, unknown>>, error: null }),
-    supplierIds.length > 0
-      ? supabase
+          .order('id', { ascending: true })
+          .range(from, to),
+        { dedupeBy: (row) => row.id as string },
+      ),
+      fetchAllRows<Record<string, unknown>>(
+        ({ from, to }) => supabase
           .from('supplier_invoice_payments')
-          .select('supplier_invoice_id, amount, payment_date')
+          .select('id, supplier_invoice_id, amount, payment_date')
           .eq('company_id', companyId)
           .lte('payment_date', periodEnd)
-          .in('supplier_invoice_id', supplierIds)
-      : Promise.resolve({ data: [] as Array<Record<string, unknown>>, error: null }),
-  ])
-
-  if (invoicePayments.error || supplierPayments.error) {
+          .order('id', { ascending: true })
+          .range(from, to),
+        { dedupeBy: (row) => row.id as string },
+      ),
+    ])
+  } catch (err) {
     throw new Error(
       'Kontantmetodens bokslutsavgränsning kunde inte läsa betalningar: ' +
-        (invoicePayments.error?.message ?? supplierPayments.error?.message ?? 'okänt fel'),
+        (err instanceof Error ? err.message : 'okänt fel'),
     )
   }
 
   const paidByInvoice = new Map<string, number>()
-  for (const row of (invoicePayments.data ?? []) as Array<Record<string, unknown>>) {
+  for (const row of invoicePayments) {
     const id = row.invoice_id as string
     paidByInvoice.set(id, (paidByInvoice.get(id) ?? 0) + Number(row.amount ?? 0))
   }
   const paidBySupplierInvoice = new Map<string, number>()
-  for (const row of (supplierPayments.data ?? []) as Array<Record<string, unknown>>) {
+  for (const row of supplierPayments) {
     const id = row.supplier_invoice_id as string
     paidBySupplierInvoice.set(id, (paidBySupplierInvoice.get(id) ?? 0) + Number(row.amount ?? 0))
   }
@@ -650,10 +799,12 @@ export async function collectKontantmetodCutoff(
     const documentType = row.document_type as string | null
     if (documentType && documentType !== 'invoice') continue
 
-    const total = Number(row.total_sek ?? row.total ?? 0)
-    const vat = Number(row.vat_amount_sek ?? row.vat_amount ?? 0)
+    const totalOwn = Number(row.total ?? 0)
+    const total = resolveHeaderSek(row, 'total', 'total_sek')
+    const vat = resolveHeaderSek(row, 'vat_amount', 'vat_amount_sek')
     const paid = paidByInvoice.get(row.id as string) ?? 0
-    const outstanding = roundOre(total - paid)
+    const outstandingOwn = roundOre(totalOwn - paid)
+    const outstanding = totalOwn === 0 ? 0 : roundOre(total * (outstandingOwn / totalOwn))
     if (Math.abs(outstanding) < ORE_TOLERANCE) continue
 
     // Never guess the treatment. Defaulting a 12 %/6 %/undantagen invoice to
@@ -669,7 +820,7 @@ export async function collectKontantmetodCutoff(
 
     // Scale the moms share to the part still outstanding: a half-paid invoice
     // carries half its moms into the cut-off.
-    const ratio = total === 0 ? 0 : outstanding / total
+    const ratio = totalOwn === 0 ? 0 : outstandingOwn / totalOwn
     const scaledVat = roundOre(vat * ratio)
 
     // Moms on a treatment that cannot carry Swedish output moms is a real
@@ -690,20 +841,58 @@ export async function collectKontantmetodCutoff(
 
   const payables: CutoffPayable[] = []
   for (const row of supplierInvoices) {
-    const total = Number(row.total_sek ?? row.total ?? 0)
-    const vat = Number(row.vat_amount_sek ?? row.vat_amount ?? 0)
+    const sign = row.is_credit_note ? -1 : 1
+    const totalOwn = Math.abs(Number(row.total ?? 0)) * sign
+    const total = Math.abs(resolveHeaderSek(row, 'total', 'total_sek')) * sign
+    const vat = Math.abs(resolveHeaderSek(row, 'vat_amount', 'vat_amount_sek')) * sign
     const paid = paidBySupplierInvoice.get(row.id as string) ?? 0
-    const outstanding = roundOre(total - paid)
+    const outstandingOwn = roundOre(totalOwn - (paid * sign))
+    const outstanding = totalOwn === 0 ? 0 : roundOre(total * (outstandingOwn / totalOwn))
     if (Math.abs(outstanding) < ORE_TOLERANCE) continue
 
-    const ratio = total === 0 ? 0 : outstanding / total
+    const ratio = totalOwn === 0 ? 0 : outstandingOwn / totalOwn
     const items = (row.items ?? []) as Array<Record<string, unknown>>
+    const supplierValue = Array.isArray(row.supplier) ? row.supplier[0] : row.supplier
+    const supplierType = (supplierValue as Record<string, unknown> | null)?.supplier_type
+    let reverseChargeGroups: CutoffPayable['reverseChargeGroups']
+    if (row.reverse_charge) {
+      if (!['eu_business', 'non_eu_business', 'swedish_business'].includes(String(supplierType))) {
+        throw new Error(
+          `Leverantörsfaktura ${String(row.supplier_invoice_number ?? row.id)} med omvänd skattskyldighet saknar giltig leverantörstyp`,
+        )
+      }
+      const groups = new Map<number, { base: number; nonBasisBase: number }>()
+      for (const item of items) {
+        const rate = resolveReverseChargeRate({
+          vat_rate: item.vat_rate == null ? null : Number(item.vat_rate),
+          reverse_charge_rate: item.reverse_charge_rate == null
+            ? null
+            : Number(item.reverse_charge_rate),
+        })
+        const itemBase = totalOwn === 0
+          ? 0
+          : roundOre(Math.abs(Number(item.line_total ?? 0)) * Math.abs(total / totalOwn) * ratio)
+        const current = groups.get(rate) ?? { base: 0, nonBasisBase: 0 }
+        current.base = roundOre(current.base + itemBase)
+        if (!isReverseChargeBasisAccount(String(item.account_number ?? ''))) {
+          current.nonBasisBase = roundOre(current.nonBasisBase + itemBase)
+        }
+        groups.set(rate, current)
+      }
+      reverseChargeGroups = [...groups.entries()].map(([rate, group]) => ({
+        rate,
+        base: group.base * sign,
+        nonBasisBase: group.nonBasisBase * sign,
+        supplierType: supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business',
+      }))
+    }
     payables.push({
       id: row.id as string,
       reference: (row.supplier_invoice_number as string) ?? '',
       outstanding,
       vat: roundOre(vat * ratio),
       reverseCharge: Boolean(row.reverse_charge),
+      reverseChargeGroups,
       netByAccount: items
         .filter((item) => item.account_number)
         .map((item) => ({
@@ -744,18 +933,19 @@ export async function assessKontantmetodCutoff(
   nextFiscalPeriodId: string,
   entityType: EntityType = 'aktiebolag',
 ): Promise<KontantmetodCutoffAssessment> {
-  const collection = await collectKontantmetodCutoff(
+  const collection = sortedCutoffCollection(await collectKontantmetodCutoff(
     supabase,
     companyId,
     period.period_start,
     period.period_end,
-  )
+  ))
   const lines = buildCutoffLines(collection.receivables, collection.payables, entityType)
   const postings = await inspectKontantmetodCutoffPostings(
     supabase,
     companyId,
     period.id,
     nextFiscalPeriodId,
+    period.period_end,
     lines,
   )
 
@@ -767,6 +957,18 @@ export interface PostCutoffResult {
   receivableReversal: JournalEntry | null
   payableEntry: JournalEntry | null
   payableReversal: JournalEntry | null
+}
+
+export class KontantmetodCutoffPartialError extends Error {
+  readonly postedIds: Record<string, string>
+  readonly cause: unknown
+
+  constructor(message: string, postedIds: Record<string, string>, cause: unknown) {
+    super(message)
+    this.name = 'KontantmetodCutoffPartialError'
+    this.postedIds = postedIds
+    this.cause = cause
+  }
 }
 
 /**
@@ -883,6 +1085,7 @@ export async function postKontantmetodCutoff(
     companyId,
     opts.fiscalPeriodId,
     opts.nextFiscalPeriodId,
+    opts.periodEnd,
     {
       receivableLines,
       payableLines,
@@ -949,10 +1152,12 @@ export async function postKontantmetodCutoff(
       return [entry, reversal]
     } catch (reversalError) {
       // Compensate: an un-reversed cut-off is worse than no cut-off at all.
+      let stornoId: string | null = null
       try {
         // Storno in the same period as the cut-off so the pair nets to zero
         // inside the year being closed.
-        await reverseEntry(supabase, companyId, userId, entry.id, opts.periodEnd)
+        const storno = await reverseEntry(supabase, companyId, userId, entry.id, opts.periodEnd)
+        stornoId = storno.id
       } catch (stornoError) {
         log.error(
           'cut-off reversal failed AND the compensating storno failed: 1510/2440 left inflated, manual correction required',
@@ -960,7 +1165,15 @@ export async function postKontantmetodCutoff(
           { companyId, entryId: entry.id },
         )
       }
-      throw reversalError
+      const key = label === 'Kundfordringar' ? 'receivable' : 'payable'
+      throw new KontantmetodCutoffPartialError(
+        `Vändningen för ${label.toLowerCase()} kunde inte bokföras`,
+        {
+          [`${key}_entry_id`]: entry.id,
+          ...(stornoId ? { [`${key}_storno_entry_id`]: stornoId } : {}),
+        },
+        reversalError,
+      )
     }
   }
 
@@ -975,13 +1188,35 @@ export async function postKontantmetodCutoff(
   }
 
   if (payableLines.length > 0 && !result.payableEntry) {
-    const [entry, reversal] = await postPair(
-      payableLines,
-      'Leverantörsskulder',
-      opts.payables.map((p) => p.reference),
-    )
-    result.payableEntry = entry
-    result.payableReversal = reversal
+    try {
+      const [entry, reversal] = await postPair(
+        payableLines,
+        'Leverantörsskulder',
+        opts.payables.map((p) => p.reference),
+      )
+      result.payableEntry = entry
+      result.payableReversal = reversal
+    } catch (err) {
+      const completedIds = {
+        ...(result.receivableEntry ? { receivable_entry_id: result.receivableEntry.id } : {}),
+        ...(result.receivableReversal
+          ? { receivable_reversal_entry_id: result.receivableReversal.id }
+          : {}),
+      }
+      if (Object.keys(completedIds).length === 0) throw err
+      if (err instanceof KontantmetodCutoffPartialError) {
+        throw new KontantmetodCutoffPartialError(
+          err.message,
+          { ...completedIds, ...err.postedIds },
+          err.cause,
+        )
+      }
+      throw new KontantmetodCutoffPartialError(
+        'Leverantörsskuldernas bokslutsavgränsning kunde inte slutföras',
+        completedIds,
+        err,
+      )
+    }
   }
 
   return result
