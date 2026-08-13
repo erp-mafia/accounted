@@ -452,6 +452,9 @@ export interface CompanySettings {
   preferred_payment_format: 'bg_lb' | 'pain001'
   salary_pay_day: number
   salary_default_bank: 'swedbank' | 'seb' | 'handelsbanken' | 'nordea' | 'other' | null
+  // Öresavrundning (migration 20260813143000): round each net payout up to
+  // whole kronor; the 0-99 öre diff books on 3740 via a derived line item.
+  salary_net_rounding: boolean
 
   // Sandbox
   is_sandbox: boolean
@@ -4235,6 +4238,7 @@ export type SalaryLineItemType =
   | 'mileage_taxfree' | 'mileage_taxable'
   | 'net_deduction_advance' | 'net_deduction_union' | 'net_deduction_benefit_payment'
   | 'net_deduction_other'
+  | 'oresavrundning'
   | 'correction' | 'other'
 
 export type ShiftPremiumItemType =

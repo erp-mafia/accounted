@@ -50,6 +50,7 @@ const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
   net_deduction_union: 'li_net_deduction_union',
   net_deduction_benefit_payment: 'li_net_deduction_benefit_payment',
   net_deduction_other: 'li_net_deduction_other',
+  oresavrundning: 'li_oresavrundning',
   correction: 'li_correction',
   other: 'li_other',
 }

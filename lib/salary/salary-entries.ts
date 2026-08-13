@@ -223,6 +223,16 @@ async function createSalaryEntry(
     const BENEFIT_TYPES = ['benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_bike', 'benefit_other']
     let lineItemTotal = 0
     for (const li of emp.line_items) {
+      // Öresavrundning: part of the payout (the 1930 credit uses the rounded
+      // net) but NOT part of gross salary, so it must stay out of
+      // lineItemTotal: the baseRemainder below reconciles line items against
+      // gross_salary, and counting the rounding there would shrink the base
+      // salary debit by the same amount and unbalance the entry.
+      if (li.item_type === 'oresavrundning') {
+        const account = li.account_number || getLineItemAccount('oresavrundning', emp.employment_type)
+        addExpense(account, dimensions, li.amount)
+        continue
+      }
       if (li.is_net_deduction) {
         const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
         netDeductionBuckets.set(account, (netDeductionBuckets.get(account) ?? 0) + li.amount)
@@ -666,6 +676,7 @@ function accountLabel(account: string): string {
     '1613': 'Övriga förskott',
     '2794': 'Fackföreningsavgifter',
     '2799': 'Övriga löneavdrag',
+    '3740': 'Öres- och kronutjämning',
   }
   return labels[account] || `Konto ${account}`
 }
