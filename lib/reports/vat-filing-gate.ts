@@ -94,6 +94,12 @@ export const RC_BASIS_ACCOUNTS_BY_RATE = {
   r6: ['4517', '4537', '4533', '4417', '4427'],
 } as const
 
+const STATIC_RC_BASIS_ACCOUNTS = new Set<string>([
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r25,
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r12,
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r6,
+])
+
 /** Net debit balance of the RC basis accounts, one figure per momssats. */
 export interface RcBasisTotalsByRate {
   r25: number
@@ -125,7 +131,7 @@ export function rcBasisTotalsByRate(
     r6: sumGroup(RC_BASIS_ACCOUNTS_BY_RATE.r6),
   }
   for (const [account, rate] of dynamic?.rcBasisRateByAccount ?? []) {
-    if (STATIC_RC_BASIS_RATE.has(account)) continue
+    if (STATIC_RC_BASIS_ACCOUNTS.has(account)) continue
     const total = totals.get(account)
     if (!total) continue
     const key = rate === 0.25 ? 'r25' : rate === 0.12 ? 'r12' : 'r6'
