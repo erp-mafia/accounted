@@ -1,16 +1,12 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { listPeppolDeliverySummaries } from '@/lib/invoices/peppol-delivery'
 import { getPeppolTransportAvailability } from '@/lib/invoices/peppol-transport'
 
 const paramsSchema = z.object({ id: z.uuid() })
-
-function privateNoStore(response: NextResponse): NextResponse {
-  response.headers.set('Cache-Control', 'private, no-store')
-  return response
-}
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.peppol.deliveries.list',

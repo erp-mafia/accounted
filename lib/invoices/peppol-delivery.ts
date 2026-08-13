@@ -55,9 +55,8 @@ export async function stagePeppolDelivery(args: {
     p_xml_sha256: sha256Hex(args.document.xml),
   })
 
-  if (error || !data) {
-    throw new Error(`Failed to stage Peppol delivery: ${error?.message ?? 'unknown error'}`)
-  }
+  if (error) throw error
+  if (!data) throw new Error('Failed to stage Peppol delivery: no data returned')
   return data as StagedPeppolDelivery
 }
 

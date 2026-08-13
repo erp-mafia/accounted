@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { eventBus } from '@/lib/events'
 import {
   getPeppolTransport,
   getPeppolTransportAvailability,
@@ -18,10 +19,21 @@ function makeTransport(provider: string): PeppolTransport {
 
 describe('Peppol transport registry', () => {
   const cleanups: Array<() => void> = []
+  const originalProvider = process.env.PEPPOL_TRANSPORT_PROVIDER
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    delete process.env.PEPPOL_TRANSPORT_PROVIDER
+  })
 
   afterEach(() => {
     while (cleanups.length > 0) cleanups.pop()?.()
-    delete process.env.PEPPOL_TRANSPORT_PROVIDER
+    if (originalProvider === undefined) {
+      delete process.env.PEPPOL_TRANSPORT_PROVIDER
+    } else {
+      process.env.PEPPOL_TRANSPORT_PROVIDER = originalProvider
+    }
   })
 
   it('stays truthfully unavailable until a provider is selected', () => {

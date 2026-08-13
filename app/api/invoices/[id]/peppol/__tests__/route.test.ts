@@ -248,4 +248,27 @@ describe('POST /api/invoices/[id]/peppol', () => {
       }),
     )
   })
+
+  it.each([
+    ['42501', 403, 'FORBIDDEN'],
+    ['P0002', 404, 'NOT_FOUND'],
+  ])('preserves staging SQLSTATE %s as an expected API response', async (
+    code,
+    expectedStatus,
+    expectedCode,
+  ) => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({ data: null, error: { code, message: 'staging rejected' } })
+
+    const response = await POST(
+      createMockRequest(`/api/invoices/${INVOICE_ID}/peppol`, { method: 'POST' }),
+      createMockRouteParams({ id: INVOICE_ID }),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(expectedStatus)
+    expect(body.error.code).toBe(expectedCode)
+    expect(body.error.details).toMatchObject({ pgCode: code })
+  })
 })

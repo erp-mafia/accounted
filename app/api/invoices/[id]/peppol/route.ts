@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { contentDisposition } from '@/lib/api/content-disposition'
+import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { generatePeppolBisBillingInvoice } from '@/lib/invoices/peppol-bis-billing'
@@ -17,11 +18,6 @@ type GeneratedPeppolInvoice = Extract<
 type LoadPeppolDocumentResult =
   | { ok: true; document: GeneratedPeppolInvoice }
   | { ok: false; response: NextResponse }
-
-function privateNoStore(response: NextResponse): NextResponse {
-  response.headers.set('Cache-Control', 'private, no-store')
-  return response
-}
 
 async function loadPeppolDocument(args: {
   supabase: SupabaseClient

@@ -290,6 +290,7 @@ function postgresCodeToStructured(code: string): string | null {
     case '42501':
       return 'FORBIDDEN'
     case '42P01':
+    case 'P0002':
       return 'NOT_FOUND'
     case '40001':
     case '40P01':
