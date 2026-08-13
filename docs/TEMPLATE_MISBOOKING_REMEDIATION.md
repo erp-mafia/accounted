@@ -27,14 +27,10 @@ them**. There is nothing to remediate.
 
 BFL 5 kap 5 §: a rättelse must leave both the original and the correction
 visible, and record when it was made and by whom. Silent overwriting is never
-permitted. Two tracks exist:
-
-1. **Särskild rättelsepost** (storno + correcting verifikation referencing the
-   original). Always allowed, and the **only** track once the period is
-   locked/closed or the bokföring has been relied upon (filed momsdeklaration,
-   bokslut).
-2. **Rättelse in the same verifikat** (strike-and-replace with the struck lines
-   still readable). Only in open, unlocked periods.
+permitted. A manual book may use a readable strike-and-replace correction while
+the bookkeeping is still open. This runbook is for Accounted's computerized
+bookkeeping and supports only a **särskild rättelsepost**: storno plus a
+correcting verifikation linked to the original through `gnubok_correct_entry`.
 
 There is **no numeric materiality threshold in BFL**. Materiality governs
 whether a historical correction is worth making, not whether the law permits a
@@ -52,8 +48,11 @@ anything.
   `gnubok_correct_entry`. Never `gnubok_reverse_journal_entry` alone: the
   business event remains valid, only its classification is wrong.
 - Do not write directly to `journal_entries` or `journal_entry_lines`.
-- Any `effective_lock_status` other than `open` is a hard stop for the ordinary
-  flow.
+- Any `effective_lock_status` other than `open` is a hard stop. The correction
+  path never bypasses a lock. Unlocking or reopening requires a separately
+  reviewed and explicitly approved workflow for the exact company and period.
+  If a declaration or closing has relied on the period, establish the required
+  omprövning or closing consequences before requesting that approval.
 - Never run a production correction without explicit approval for the exact
   company, vouchers and replacement lines.
 - No automated bulk mutation. Ever.
@@ -70,7 +69,8 @@ posted entry back to the template that produced it (`template_id` lives on
 signature, and both signatures have legitimate shapes:
 
 - `5820` is the **correct** account for actual car hire.
-- Representation at 25% is lawful when the underlag carries 25% VAT.
+- Representation at 25% is lawful only when the supply is actually subject to
+  25% VAT and the supplier invoice is correct.
 
 Read `review_priority` as an ordering aid only:
 
@@ -81,18 +81,23 @@ Read `review_priority` as an ordering aid only:
 | `high_vat_is_25pct_of_6072_cost` | Representation whose input VAT is 25% of the cost leg. |
 | `manual_review_*` | No corroborating signal. Most likely legitimate. |
 
-The classifier is verified against seeded probes: a hotel booked to `5820`
+The classifier is verified against read-only probes: a hotel booked to `5820`
 ranks high, a genuine car hire on `5820` falls to manual review, a 25%
 representation ranks high, and a correct 12% representation does not appear at
-all.
+all. The representation probe also contains multiple `6072` and `2641` lines;
+the audit aggregates them per entry and returns one candidate instead of a
+many-to-many set of line pairs.
 
 ## Review each candidate
 
 1. Open the underlag (kvitto/faktura) and confirm what was actually purchased.
    A hotel night and a rental car are both plausible on `5820`.
-2. For the VAT defect, confirm the rate the supplier actually charged. 12% is
-   the restaurang/servering rate; a supplier who charged 25% was right to, and
-   the entry is then correct.
+2. For the VAT defect, classify the actual supply and determine the legally
+   applicable rate; do not accept the invoice rate as proof. Restaurant and
+   catering supplies are normally 12%, while alcohol and some mixed supplies
+   can include 25%. If the supplier charged an inapplicable rate, request a
+   corrected invoice before treating any input VAT as deductible or clearing
+   the candidate.
 3. Fetch the entry and all lines. Stop if it was already reversed or corrected.
 4. Check `effective_lock_status`. Anything other than `open` is a hard stop.
 5. For the VAT defect, establish whether the period's momsdeklaration has been
@@ -109,16 +114,25 @@ reviewer identity together as the correction record.
 
 Follow the identical procedure in
 [`SETTLEMENT_ACCOUNT_REMEDIATION.md`](./SETTLEMENT_ACCOUNT_REMEDIATION.md#stage-the-correction):
-copy every original line, change only what is wrong, preserve all currency, tax
-and dimension metadata, verify the replacement balances, stage
+retain `original_lines`, copy every original line, change only what is wrong,
+verify the replacement balances, stage
 `gnubok_correct_entry`, and approve only with explicit authorisation.
 
 For the hotel defect, the only change is `account_number` on the cost line,
 `5820` to `5830`.
 
-For the VAT defect, both the cost leg and the VAT leg change, because the split
-of a fixed gross total moves: at 12% the cost is `total/1.12` and the VAT is the
-remainder. The gross and the settlement leg are unchanged.
+For the VAT defect, the cost and VAT amounts change while accounts `6072` and
+`2641`, the gross total, and the settlement leg remain unchanged. Calculate the
+deductible VAT from the corrected invoice and the representation rules,
+including the 300 SEK base per person and occasion. Do not blindly divide the
+gross by 1.12 when the receipt mixes rates or exceeds the deduction cap;
+non-deductible VAT remains on `6072`.
+
+Journal lines have no `vat_rate` field. `tax_code` is a free-text tag and does
+not drive the VAT return, but if it explicitly encodes the obsolete 25% rate,
+update or clear it so the corrected entry is not misleading. Preserve currency,
+`amount_in_currency`, `exchange_rate`, descriptions, dimensions, cost centers,
+projects, and unrelated tax metadata exactly as recorded.
 
 ## Verify after approval
 
