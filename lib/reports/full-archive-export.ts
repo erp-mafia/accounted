@@ -840,6 +840,15 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Delivery metadata proves which recipient received the archived PDF and
   // when, so it is räkenskapsinformation alongside the invoice itself.
   { name: 'invoice_deliveries', file: 'invoice_deliveries.json', orderBy: 'created_at' },
+  // Peppol archive evidence is split so the exact staged UBL, every verified
+  // asynchronous event, and provider evidence stay independently auditable.
+  { name: 'peppol_deliveries', file: 'peppol_deliveries.json', orderBy: 'created_at' },
+  { name: 'peppol_delivery_events', file: 'peppol_delivery_events.json', orderBy: 'created_at' },
+  {
+    name: 'peppol_delivery_evidence',
+    file: 'peppol_delivery_evidence.json',
+    orderBy: 'created_at',
+  },
   { name: 'recurring_invoice_schedules', file: 'recurring_invoice_schedules.json' },
   // Supplier invoicing
   { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },

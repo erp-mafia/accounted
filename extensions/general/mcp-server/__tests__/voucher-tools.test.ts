@@ -587,6 +587,94 @@ describe('gnubok_correct_entry: registration', () => {
   })
 })
 
+describe('gnubok_correct_entry / gnubok_reverse_journal_entry: chain-depth guard', () => {
+  // Base row for a posted correction that already sits 3 links deep:
+  // c3 → c2 → c1 → orig-0 (root, voucher A7).
+  const deepTarget = {
+    id: '22222222-2222-4222-8222-222222222222',
+    status: 'posted',
+    entry_date: '2026-05-12',
+    description: 'Rättelse: Rättelse: Rättelse: Köp',
+    voucher_number: 15,
+    voucher_series: 'A',
+    fiscal_period_id: 'fp-1',
+    correction_of_id: 'c2',
+    reverses_id: null,
+    fiscal_periods: { name: '2026', is_closed: false, locked_at: null },
+    lines: [
+      { account_number: '5420', debit_amount: 1000, credit_amount: 0, line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000, line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null },
+    ],
+  }
+  const walkerRows = [
+    { data: { id: 'c2', correction_of_id: 'c1', reverses_id: null, voucher_series: 'A', voucher_number: 12 }, error: null },
+    { data: { id: 'c1', correction_of_id: 'orig-0', reverses_id: null, voucher_series: 'A', voucher_number: 9 }, error: null },
+    { data: { id: 'orig-0', correction_of_id: null, reverses_id: null, voucher_series: 'A', voucher_number: 7 }, error: null },
+  ]
+
+  const replacementLines = [
+    { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+  ]
+
+  it('refuses to stage a correction on a chain 3 levels deep with an agent-actionable error', async () => {
+    const { supabase, enqueue, enqueueMany } = createQueuedMockSupabase()
+    // Lines carry no dimensions, so no dimension-registry query precedes the
+    // entry fetch.
+    enqueue({ data: deepTarget, error: null })
+    enqueueMany(walkerRows)
+
+    await expect(
+      correctEntry.execute(
+        { entry_id: deepTarget.id, lines: replacementLines },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({
+      code: 'CORRECTION_CHAIN_TOO_DEEP',
+      depth: 3,
+      chainRootVoucher: 'A7',
+    })
+  })
+
+  it('stages when allow_deep_chain=true and forwards the flag to the executor params', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: deepTarget, error: null })
+    // No walker queries: the guard is skipped entirely on explicit override.
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+    enqueue({ data: { id: 'op-deep-1' }, error: null })
+
+    await correctEntry.execute(
+      { entry_id: deepTarget.id, lines: replacementLines, allow_deep_chain: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    const insertArgs = findCall('pending_operations', 'insert')
+    expect(insertArgs).toBeDefined()
+    const payload = (insertArgs as unknown[])[0] as { params?: { allow_deep_chain?: boolean } }
+    expect(payload.params?.allow_deep_chain).toBe(true)
+  })
+
+  it('refuses to stage a storno on a chain 3 levels deep', async () => {
+    const { supabase, enqueue, enqueueMany } = createQueuedMockSupabase()
+    enqueue({ data: deepTarget, error: null })
+    enqueueMany(walkerRows)
+
+    await expect(
+      reverseEntry.execute(
+        { entry_id: deepTarget.id },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({ code: 'CORRECTION_CHAIN_TOO_DEEP', depth: 3 })
+  })
+})
+
 describe('gnubok_reverse_journal_entry: staging gates', () => {
   it('is registered with bookkeeping:write scope and is not read-only', async () => {
     const { TOOL_SCOPE_MAP } = await import('@/lib/auth/api-keys')

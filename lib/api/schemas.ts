@@ -1173,6 +1173,10 @@ export const CorrectJournalEntrySchema = z.object({
   // the user replace a header that echoed the wrong account's label (#1031).
   description: z.string().trim().min(1, 'Description cannot be empty').optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),
+  // Explicit override of the correction-chain depth guard (the "Rätta ändå"
+  // confirm in the UI). Without it, correcting an entry 3+ links deep in a
+  // rättelse chain returns CORRECTION_CHAIN_TOO_DEEP.
+  allow_deep_chain: z.boolean().optional(),
 })
 
 // ============================================================
@@ -1356,6 +1360,9 @@ export const UpdateDimensionValueSchema = z
  */
 export const RecordateJournalEntrySchema = z.object({
   new_entry_date: isoDate,
+  // Explicit override of the correction-chain depth guard ("Flytta ändå"):
+  // a date move is another storno+rättelse layer, so it carries the guard too.
+  allow_deep_chain: z.boolean().optional(),
 })
 
 // ============================================================

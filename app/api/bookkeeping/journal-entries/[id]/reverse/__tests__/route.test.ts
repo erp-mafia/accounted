@@ -74,7 +74,69 @@ describe('POST /api/bookkeeping/journal-entries/[id]/reverse', () => {
 
     expect(status).toBe(200)
     expect(body.data).toEqual(reversalEntry)
-    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1')
+    expect(mockReverseEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'entry-1',
+      undefined,
+      { allowDeepChain: false },
+    )
+  })
+
+  it('returns 400 for malformed JSON instead of silently reversing without the override', async () => {
+    // Raw Request: createMockRequest would JSON.stringify the body and turn
+    // the malformed payload into a valid JSON string literal.
+    const request = new Request('http://localhost:3000/api/bookkeeping/journal-entries/entry-1/reverse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{ allow_deep_chain: tru',
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a non-boolean allow_deep_chain', async () => {
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/reverse', {
+      method: 'POST',
+      body: { allow_deep_chain: 'yes' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+  })
+
+  it('forwards allow_deep_chain=true from the body (guard bypass)', async () => {
+    const reversalEntry = makeJournalEntry({
+      id: 'reversal-1',
+      reverses_id: 'entry-1',
+      source_type: 'storno',
+    })
+    mockReverseEntry.mockResolvedValue(reversalEntry)
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/reverse', {
+      method: 'POST',
+      body: { allow_deep_chain: true },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockReverseEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'entry-1',
+      undefined,
+      { allowDeepChain: true },
+    )
   })
 
   it('maps a typed concurrent-reversal error to the canonical envelope (409)', async () => {

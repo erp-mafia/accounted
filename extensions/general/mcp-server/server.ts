@@ -168,7 +168,8 @@ import {
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
-import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { bookkeepingErrorResponse, CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
+import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { buildDuplicateBookingClaim } from '@/lib/transactions/categorize-core'
@@ -14705,6 +14706,10 @@ export const tools: McpTool[] = [
             required: ['account_number'],
           },
         },
+        allow_deep_chain: {
+          type: 'boolean',
+          description: 'Override the chain-depth guard (refuses at 3+ rättelse levels: book ONE net-effect correction instead). True only when another layer is intended.',
+        },
       },
       required: ['entry_id', 'lines'],
     },
@@ -14713,6 +14718,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const entryRef = args.entry_id as string
       const rawLines = args.lines as Array<Record<string, unknown>> | undefined
+      const allowDeepChain = args.allow_deep_chain === true
 
       if (!entryRef || !Array.isArray(rawLines) || rawLines.length < 2) {
         throw new Error('entry_id and at least two lines are required')
@@ -14767,6 +14773,8 @@ export const tools: McpTool[] = [
         voucher_number: number
         voucher_series: string
         fiscal_period_id: string
+        correction_of_id: string | null
+        reverses_id: string | null
         fiscal_periods: { name?: string; is_closed?: boolean; locked_at?: string | null } | { name?: string; is_closed?: boolean; locked_at?: string | null }[] | null
         lines: Array<{
           account_number: string
@@ -14785,7 +14793,7 @@ export const tools: McpTool[] = [
       const { data, error: origErr } = await supabase
         .from('journal_entries')
         .select(
-          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, ' +
+          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, ' +
           'fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(name, is_closed, locked_at), ' +
           'lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, dimensions, cost_center, project)'
         )
@@ -14816,6 +14824,15 @@ export const tools: McpTool[] = [
         )
       }
 
+      // Chain-depth guard at staging time so the agent reconsiders NOW, not at
+      // approval. The executor (commitCorrectEntry → correctEntry) re-checks.
+      if (!allowDeepChain) {
+        const chain = await correctionChainDepth(supabase, companyId, original)
+        if (chain.depth >= CORRECTION_CHAIN_GUARD_DEPTH) {
+          throw new CorrectionChainTooDeepError(chain.depth, chain.rootVoucher)
+        }
+      }
+
       const originalLines = original.lines || []
 
       return stagePendingOperation(supabase, companyId, userId, 'correct_entry',
@@ -14823,6 +14840,7 @@ export const tools: McpTool[] = [
         {
           entry_id: entryId,
           lines,
+          ...(allowDeepChain ? { allow_deep_chain: true } : {}),
         },
         {
           original: {
@@ -14887,6 +14905,10 @@ export const tools: McpTool[] = [
         entry_id: { type: 'string', description: 'Journal entry UUID OR voucher ref like "A-113". Prefer voucher refs: UUIDs reused from earlier tool output are frequently hallucinated by LLM callers.' },
         reversal_date: { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$', description: 'Optional ISO yyyy-MM-dd date for the storno verifikation. Defaults to today (Swedish timezone). Period attribution always follows the original entry, regardless of this date.' },
         reason: { type: 'string', maxLength: 500, description: 'Optional human-readable reason: shown in pending_operations review. Not stored on the storno itself. Max 500 chars.' },
+        allow_deep_chain: {
+          type: 'boolean',
+          description: 'Override the chain-depth guard (refuses at 3+ rättelse levels: book ONE net-effect correction instead). True only when another storno layer is intended.',
+        },
       },
       required: ['entry_id'],
     },
@@ -14896,6 +14918,7 @@ export const tools: McpTool[] = [
       const entryRef = args.entry_id as string
       const reversalDate = typeof args.reversal_date === 'string' ? args.reversal_date : undefined
       const reason = typeof args.reason === 'string' ? args.reason : undefined
+      const allowDeepChain = args.allow_deep_chain === true
 
       if (!entryRef) {
         throw new Error('entry_id is required')
@@ -14926,6 +14949,8 @@ export const tools: McpTool[] = [
         voucher_number: number
         voucher_series: string
         fiscal_period_id: string
+        correction_of_id: string | null
+        reverses_id: string | null
         fiscal_periods: { name?: string; is_closed?: boolean; locked_at?: string | null } | { name?: string; is_closed?: boolean; locked_at?: string | null }[] | null
         lines: Array<{
           account_number: string
@@ -14937,7 +14962,7 @@ export const tools: McpTool[] = [
       const { data, error: origErr } = await supabase
         .from('journal_entries')
         .select(
-          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, ' +
+          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, ' +
           'fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(name, is_closed, locked_at), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
         )
         .eq('id', entryId)
@@ -14967,6 +14992,16 @@ export const tools: McpTool[] = [
         )
       }
 
+      // Chain-depth guard at staging time (mirrors gnubok_correct_entry): a
+      // storno on an entry already deep in a rättelse chain is almost always
+      // an agent reflexively cancelling its own correction.
+      if (!allowDeepChain) {
+        const chain = await correctionChainDepth(supabase, companyId, original)
+        if (chain.depth >= CORRECTION_CHAIN_GUARD_DEPTH) {
+          throw new CorrectionChainTooDeepError(chain.depth, chain.rootVoucher)
+        }
+      }
+
       const originalLines = original.lines || []
       const reversedPreviewLines = originalLines.map((l) => ({
         account_number: l.account_number,
@@ -14993,6 +15028,7 @@ export const tools: McpTool[] = [
         {
           entry_id: entryId,
           reversal_date: reversalDate,
+          ...(allowDeepChain ? { allow_deep_chain: true } : {}),
         },
         {
           original: {

@@ -283,6 +283,18 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Rättelsen motsvarar ingen ekonomisk händelse: det finns inget att rätta.',
     message_en: 'The correction represents no economic event: nothing to correct.',
   },
+  CORRECTION_CHAIN_TOO_DEEP: {
+    httpStatus: 409,
+    message_sv:
+      'Rättelsekedjan är redan flera nivåer djup. Räkna ut nettoeffekten av hela kedjan och gör EN rättelse istället, eller skicka allow_deep_chain=true för att rätta ändå.',
+    message_en:
+      'The correction chain is already several levels deep. Compute the net effect of the whole chain and book ONE correction instead, or pass allow_deep_chain=true to override.',
+    remediation: {
+      description:
+        'Read the full chain with gnubok_query_journal (follow correction_of_id/reverses_id to the chain root), compute the net effect across all entries, and stage ONE correction on the live entry that expresses it. Only pass allow_deep_chain=true if stacking another correction is genuinely intended.',
+      tool: 'gnubok_query_journal',
+    },
+  },
   NO_OPEN_PERIOD_FOR_DATE: {
     httpStatus: 400,
     message_sv:

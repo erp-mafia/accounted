@@ -38,7 +38,13 @@ export interface PeppolInvoiceInput {
 }
 
 export type PeppolInvoiceResult =
-  | { ok: true; xml: string; filename: string }
+  | {
+      ok: true
+      xml: string
+      filename: string
+      sender: { scheme: '0007'; identifier: string }
+      recipient: { scheme: '0007'; identifier: string }
+    }
   | { ok: false; issues: PeppolValidationIssue[] }
 
 interface PreparedParty {
@@ -621,5 +627,7 @@ export function generatePeppolBisBillingInvoice(input: PeppolInvoiceInput): Pepp
     ok: true,
     xml: renderInvoiceXml(input, validation.prepared),
     filename: `peppol-invoice-${filenameNumber}.xml`,
+    sender: { scheme: '0007', identifier: validation.prepared.supplier.orgNumber },
+    recipient: { scheme: '0007', identifier: validation.prepared.buyer.orgNumber },
   }
 }

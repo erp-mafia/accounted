@@ -256,6 +256,10 @@ export default function AgentChat({
     }
   }, [streaming, onStatus])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  // True between a stream_restart event and the retried stream's first sign of
+  // life: renders a discreet "Försöker igen…" line so the reset bubble doesn't
+  // read as the assistant silently going blank.
+  const [retryNotice, setRetryNotice] = useState(false)
   const scrollerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // Active turn's controller, kept in a ref (not state) so the stop button
@@ -377,6 +381,7 @@ export default function AgentChat({
 
     setStreaming(true)
     setErrorMessage(null)
+    setRetryNotice(false)
 
     let response: Response
     try {
@@ -598,7 +603,31 @@ export default function AgentChat({
           })),
         )
         break
+      case 'stream_restart': {
+        // The server's model stream died on a transient error and is being
+        // retried. Nothing from the dead attempt was persisted: reset the
+        // in-progress bubble to the server's pre-attempt snapshot, drop tool
+        // chips that never completed (eager chips from the dead stream), and
+        // discard the dead attempt's reasoning so the retried attempt's
+        // thinking doesn't render twice. The post-tool paragraph break is
+        // re-armed only when restored text exists: the snapshot always ends
+        // at an iteration boundary (after tool results), so the retried
+        // continuation should open its own paragraph there.
+        setRetryNotice(true)
+        const restored = typeof ev.assistant_text === 'string' ? ev.assistant_text : ''
+        breakBeforeNextTextRef.current = restored.length > 0
+        setMessages((prev) =>
+          updateLastAssistant(prev, (m) => ({
+            ...m,
+            text: restored,
+            reasoning: undefined,
+            toolCalls: m.toolCalls?.filter((tc) => tc.completed),
+          })),
+        )
+        break
+      }
       case 'text_delta':
+        setRetryNotice(false)
         // Insert a paragraph break ONCE when text resumes after a tool
         // call, so post-tool narration starts on its own line instead of
         // gluing onto the previous sentence ("kategoriseras.Inget historik").
@@ -706,9 +735,11 @@ export default function AgentChat({
         break
       }
       case 'error':
+        setRetryNotice(false)
         setErrorMessage(ev.message as string)
         break
       case 'turn_complete': {
+        setRetryNotice(false)
         if (!firstTurnFiredRef.current && conversationIdRef.current) {
           firstTurnFiredRef.current = true
           onFirstTurnComplete?.(conversationIdRef.current)
@@ -810,6 +841,12 @@ export default function AgentChat({
             />
           </div>
         ))}
+
+        {retryNotice && !errorMessage && (
+          <div className="text-xs text-muted-foreground px-1">
+            Anslutningen bröts, försöker igen…
+          </div>
+        )}
 
         {errorMessage && (
           <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">

@@ -4687,7 +4687,12 @@ async function commitCorrectEntry(
     // made in May 2026 for a December 2025 voucher correctly lands in 2025,
     // keeping that period's balances consistent. The is_closed pre-flight
     // above is what blocks corrections to already-locked periods.
-    const result = await correctEntry(supabase, companyId, userId, entryId, lines)
+    const result = await correctEntry(supabase, companyId, userId, entryId, lines, {
+      // Staged by the MCP tool when the agent explicitly overrode the
+      // chain-depth guard; the guard re-checks here so a stale approval of a
+      // chain that grew deeper in the meantime still stops.
+      allowDeepChain: params.allow_deep_chain === true,
+    })
     return {
       data: {
         original_entry_id: entryId,
@@ -4760,7 +4765,9 @@ async function commitReverseEntry(
   }
 
   try {
-    const reversal = await reverseEntry(supabase, companyId, userId, entryId, reversalDate)
+    const reversal = await reverseEntry(supabase, companyId, userId, entryId, reversalDate, {
+      allowDeepChain: params.allow_deep_chain === true,
+    })
     // Invariant per BFL 5 kap 5§: the storno must land in the same fiscal period
     // as the original entry. reverseEntry() at lib/bookkeeping/engine.ts:492 uses
     // original.fiscal_period_id, but assert it here so a future engine change that

@@ -115,6 +115,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReverseConfirm, setShowReverseConfirm] = useState(false)
   const [isReversing, setIsReversing] = useState(false)
+  // Non-null when the server refused the storno with CORRECTION_CHAIN_TOO_DEEP:
+  // holds the reported chain depth and opens the bypass confirm ("Återför ändå").
+  const [reverseDeepChainDepth, setReverseDeepChainDepth] = useState<number | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
   // Confirm-before-posting (convention 10). The list already gates this exact
@@ -285,10 +288,18 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // no replacement, per BFL 5 kap 5§. Distinct from "Rätta", which always books
   // a replacement entry. Routes through the engine's reverseEntry (storno +
   // reverses_id link; original → 'reversed', never deleted).
-  const handleReverse = useCallback(async () => {
+  const handleReverse = useCallback(async (allowDeepChain = false) => {
     setIsReversing(true)
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/reverse`, { method: 'POST' })
+      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/reverse`, {
+        method: 'POST',
+        ...(allowDeepChain
+          ? {
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ allow_deep_chain: true }),
+            }
+          : {}),
+      })
       const result = await res.json()
       if (res.ok) {
         const storno = result.data
@@ -297,7 +308,13 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           description: t('toast_reverse_done_description', { voucher: formatVoucher(storno ?? {}) }),
         })
         setShowReverseConfirm(false)
+        setReverseDeepChainDepth(null)
         await fetchData()
+      } else if (result?.error?.code === 'CORRECTION_CHAIN_TOO_DEEP') {
+        // Chain-depth guard: swap into the bypass confirm instead of a
+        // dead-end toast. "Återför ändå" resubmits with allow_deep_chain.
+        setShowReverseConfirm(false)
+        setReverseDeepChainDepth(result.error?.details?.depth ?? 3)
       } else {
         toast({ title: t('toast_reverse_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
       }
@@ -1243,7 +1260,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       <ConfirmationDialog
         open={showReverseConfirm}
         onOpenChange={setShowReverseConfirm}
-        onConfirm={handleReverse}
+        onConfirm={() => handleReverse()}
         isSubmitting={isReversing}
         title={t('reverse_confirm_title')}
         warningText={t('reverse_warning')}
@@ -1254,6 +1271,26 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <div className="text-sm">
             <p className="font-medium mb-1">{t('reverse_dialog_heading', { voucher: formatVoucher(entry) })}</p>
             <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
+          </div>
+        </div>
+      </ConfirmationDialog>
+
+      {/* Chain-depth guard confirm: the storno was refused because this entry
+          already sits deep in a rättelse chain. Advisory, never a dead end. */}
+      <ConfirmationDialog
+        open={reverseDeepChainDepth != null}
+        onOpenChange={(next) => { if (!next) setReverseDeepChainDepth(null) }}
+        onConfirm={() => handleReverse(true)}
+        isSubmitting={isReversing}
+        title={t('deep_chain_title')}
+        warningText={t('deep_chain_body', { depth: reverseDeepChainDepth ?? 3 })}
+        confirmLabel={t('deep_chain_reverse_anyway')}
+      >
+        <div className="flex items-start gap-3 rounded-lg border bg-muted/50 p-4">
+          <RotateCcw className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
+          <div className="text-sm">
+            <p className="font-medium mb-1">{t('deep_chain_reverse_heading', { voucher: formatVoucher(entry) })}</p>
+            <p className="text-muted-foreground">{t('deep_chain_reverse_body')}</p>
           </div>
         </div>
       </ConfirmationDialog>

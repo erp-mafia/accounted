@@ -31,6 +31,7 @@ import {
   ArrowLeft,
   Send,
   CheckCircle,
+  FileCheck2,
   FileText,
   Download,
   Eye,
@@ -160,6 +161,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isUpdating, setIsUpdating] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
   const [isDownloadingPeppol, setIsDownloadingPeppol] = useState(false)
+  const [isPreparingPeppol, setIsPreparingPeppol] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
@@ -628,6 +630,39 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  async function preparePeppolDelivery() {
+    if (!invoice) return
+    setIsPreparingPeppol(true)
+
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/peppol`, { method: 'POST' })
+      const body = await response.json().catch(() => null) as {
+        error?: { code?: string; message?: string; message_en?: string }
+      } | null
+      if (!response.ok) {
+        throw body?.error ?? new Error(t('peppol_prepare_failed_description'))
+      }
+
+      toast({
+        title: t('peppol_prepared_title'),
+        description: t('peppol_prepared_description'),
+      })
+    } catch (error) {
+      toast({
+        title: t('peppol_prepare_failed_title'),
+        description: error instanceof Error
+          ? getUserErrorMessage(error, { locale: locale.startsWith('sv') ? 'sv' : 'en' })
+          : getUserErrorMessage(error, {
+              context: 'invoice',
+              locale: locale.startsWith('sv') ? 'sv' : 'en',
+            }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsPreparingPeppol(false)
+    }
+  }
+
   /**
    * Show one specific document in the browser instead of saving it (#1190):
    * granskning should not require leaving the app for the Downloads folder.
@@ -1071,18 +1106,40 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </>
           )}
           {!isSelfBilled && isRealInvoice && !isCreditNote && invoice.invoice_number && (
-            <Button
-              variant="outline"
-              onClick={downloadPeppolXml}
-              disabled={isDownloadingPeppol}
-            >
-              {isDownloadingPeppol ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <FileText className="mr-2 h-4 w-4" />
-              )}
-              {t('download_peppol_xml')}
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                onClick={downloadPeppolXml}
+                disabled={isDownloadingPeppol}
+              >
+                {isDownloadingPeppol ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <FileText className="mr-2 h-4 w-4" />
+                )}
+                {t('download_peppol_xml')}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={preparePeppolDelivery}
+                disabled={isPreparingPeppol || !canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {isPreparingPeppol ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <FileCheck2 className="mr-2 h-4 w-4" />
+                )}
+                {t('prepare_peppol_delivery')}
+              </Button>
+              <span className="inline-flex" title={t('peppol_provider_required')}>
+                <Button variant="outline" disabled>
+                  <Send className="mr-2 h-4 w-4" />
+                  {t('send_via_peppol')}
+                </Button>
+                <span className="sr-only">{t('peppol_provider_required')}</span>
+              </span>
+            </>
           )}
         </div>
       </div>
