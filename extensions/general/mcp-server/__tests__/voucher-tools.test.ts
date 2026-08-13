@@ -142,7 +142,7 @@ describe('gnubok_create_voucher: staging gates', () => {
     ).rejects.toThrow(/utanför/i)
   })
 
-  it('rejects when a referenced account is missing from the chart', async () => {
+  it('rejects an account that is neither in the chart nor in BAS 2026', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: {
@@ -154,22 +154,81 @@ describe('gnubok_create_voucher: staging gates', () => {
       },
       error: null,
     })
-    // chart_of_accounts returns nothing: both accounts unknown
-    enqueue({ data: [], error: null })
+    // chart_of_accounts knows only 1930: 4020 is a custom number the company
+    // never created, and it is absent from the BAS 2026 catalog, so the
+    // engine could not seed it either.
+    enqueue({
+      data: [{ account_number: '1930', account_name: 'Företagskonto', is_active: true }],
+      error: null,
+    })
 
     await expect(
       createVoucher.execute(
         {
           entry_date: '2026-05-12',
-          description: 'unknown accounts',
+          description: 'custom account never created',
           fiscal_period_id: 'fp-1',
-          lines: balancedLines,
+          lines: [
+            { account_number: '4020', debit_amount: 250, credit_amount: 0 },
+            { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+          ],
         },
         'company-1',
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/saknas i kontoplanen/i)
+    ).rejects.toThrow(/saknas i kontoplanen och finns inte i BAS 2026: 4020/i)
+  })
+
+  it('stages when a BAS 2026 account is merely absent from the chart (engine seeds it)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'fp-1',
+        is_closed: false,
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        name: '2026',
+      },
+      error: null,
+    })
+    // 7690 (Övriga personalkostnader) is in BAS 2026 but not in this chart:
+    // the old gate rejected it even though createDraftEntry backfills it.
+    enqueue({
+      data: [{ account_number: '1930', account_name: 'Företagskonto', is_active: true }],
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+    enqueue({ data: { id: 'op-seedable' }, error: null }) // pending_operations insert
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-05-12',
+        description: 'Friskvård badhus',
+        fiscal_period_id: 'fp-1',
+        lines: [
+          { account_number: '7690', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      preview: {
+        will_activate_accounts?: string[]
+        lines: Array<{ account_number: string; account_name: string | null }>
+      }
+    }
+
+    expect(result.staged).toBe(true)
+    // The approver must see the activation side-effect and a named line
+    // (name from the BAS catalog, not a bare number).
+    expect(result.preview.will_activate_accounts).toEqual(['7690'])
+    const line7690 = result.preview.lines.find((l) => l.account_number === '7690')
+    expect(line7690?.account_name).toMatch(/personalkostnader/i)
   })
 
   it('rejects when a referenced account exists but is inactive', async () => {

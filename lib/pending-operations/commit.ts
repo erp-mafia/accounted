@@ -43,6 +43,7 @@ import {
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
@@ -314,6 +315,12 @@ async function commitCategorizeTransaction(
     allowDuplicate: params.allow_duplicate === true,
     // Dimensions PR7: resolved at staging; coerce is the drift/tamper gate.
     dimensions: coerceDimensionsBag(params.dimensions),
+    // Explicit business-side account (custom accounts incl.), validated
+    // against the chart both at staging and inside the core at commit.
+    accountOverride:
+      typeof params.account_override === 'string' && ACCOUNT_NUMBER_RE.test(params.account_override)
+        ? params.account_override
+        : undefined,
   })
 }
 
