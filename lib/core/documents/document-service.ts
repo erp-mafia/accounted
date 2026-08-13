@@ -249,8 +249,28 @@ export function detectFileMagic(bytes: Uint8Array): string | null {
     bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
     bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
   ) return 'image/webp'
+  // HEIC/HEIF (ISO-BMFF): bytes 4-7 spell 'ftyp'; the brand at bytes 8-11
+  // names the container flavor. Brands outside the two image families
+  // (mp4, mov, ...) stay undetected on purpose.
+  if (
+    bytes.length >= 12 &&
+    bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70
+  ) {
+    const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11])
+    if (HEIC_BRANDS.has(brand)) return 'image/heic'
+    if (HEIF_BRANDS.has(brand)) return 'image/heif'
+  }
   return null
 }
+
+// ISO-BMFF ftyp brands for still images. The HEVC-coded variants (single
+// image, image sequence, and their extended forms) all read as image/heic;
+// the codec-agnostic MIAF brands read as image/heif. iOS labels the same
+// capture with either declared type, so validateDocumentMagicBytes accepts
+// the two families interchangeably.
+const HEIC_BRANDS = new Set(['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs'])
+const HEIF_BRANDS = new Set(['mif1', 'msf1'])
+const HEIC_FAMILY = new Set(['image/heic', 'image/heif'])
 
 /**
  * XHTML/XML has no binary magic number. For the declared type
@@ -289,12 +309,12 @@ function looksLikeJson(bytes: Uint8Array): boolean {
 
 /**
  * Verify the buffer actually contains a file of the declared type.
- * Returns an error string or null if valid. HEIC has many ftyp brands so
- * we skip the check for now: the UI path doesn't allow HEIC anyway, only
- * the MCP upload tool does, and corrupted HEIC has not been observed.
+ * Returns an error string or null if valid. HEIC/HEIF are verified through
+ * the ISO-BMFF ftyp brand (detectFileMagic): a declared image/heic or
+ * image/heif accepts a detected member of either family, because iOS labels
+ * the same capture with either type. Everything else is an exact match.
  */
 export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType: string): string | null {
-  if (declaredMimeType === 'image/heic') return null
   if (declaredMimeType === 'application/xhtml+xml') {
     if (looksLikeXhtml(new Uint8Array(buffer))) return null
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XHTML/XML-dokument.`
@@ -315,6 +335,10 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar vara skadad eller inte en riktig binärfil: vid uppladdning via API, kontrollera att file_content_base64 är base64-kodade råbytes, inte en textrepresentation.`
   }
   if (detected !== declaredMimeType) {
+    // iOS labels the HEIC/HEIF container inconsistently: a file declared as
+    // one family member routinely detects as the other. Same ISO-BMFF image
+    // container either way, so the pair is interchangeable here.
+    if (HEIC_FAMILY.has(declaredMimeType) && HEIC_FAMILY.has(detected)) return null
     return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ${detected}).`
   }
   return null

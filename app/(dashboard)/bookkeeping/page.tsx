@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
+import { StartCard } from '@/components/dashboard/StartCard'
 import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { CopyPrefill } from '@/components/bookkeeping/NewJournalEntryDialog'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
@@ -54,6 +55,7 @@ export default function BookkeepingPage() {
   const [isLoadingCopy, setIsLoadingCopy] = useState(false)
   const [nextVoucher, setNextVoucher] = useState<NextVoucher | null>(null)
   const t = useTranslations('bookkeeping')
+  const tStart = useTranslations('start_cards')
   const { openAgentSheet } = useAgentSheet()
   const { uiState, loaded: uiStateLoaded } = useUiState()
 
@@ -186,7 +188,53 @@ export default function BookkeepingPage() {
         }
       />
 
-      <JournalEntryList key={refreshKey} />
+      <JournalEntryList
+        key={refreshKey}
+        pristineSlot={
+          <div className="animate-fade-in space-y-4">
+            <StartCard
+              card="ledger"
+              layout="bleed-left"
+              title={tStart('bookkeeping_title')}
+              body={tStart('bookkeeping_body')}
+              primary={{ label: tStart('bookkeeping_primary'), href: '/import?mode=migration' }}
+              secondary={{ label: tStart('bookkeeping_secondary'), href: '/import?mode=sie' }}
+            />
+            {/* The split button's three create modes, laid out as cards so the
+                pristine page shows what the ledger can do instead of a bare table. */}
+            <div className="grid gap-4 sm:grid-cols-3">
+              {(
+                [
+                  ['mall', () => setShowTemplateDialog(true)],
+                  [
+                    'assistent',
+                    () => openAgentSheet({ intentId: 'verifikation.draft', contextRef: 'verifikation:new' }),
+                  ],
+                  [
+                    'tomt',
+                    () => {
+                      setCopyPrefill(null)
+                      setShowNewEntry(true)
+                    },
+                  ],
+                ] as const
+              ).map(([mode, onClick]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={onClick}
+                  className="rounded-lg border border-border bg-background p-4 text-left transition-colors duration-150 hover:bg-secondary/35 active:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <div className="text-[13px] font-medium">{tStart(`bookkeeping_mini_${mode}_title`)}</div>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {tStart(`bookkeeping_mini_${mode}_body`)}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+        }
+      />
 
       {showTemplateDialog && (
         <TemplateBookDialog

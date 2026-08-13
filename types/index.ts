@@ -2811,7 +2811,10 @@ export interface SIEAccountMapping {
 // Invoice Inbox Types
 // ============================================================
 
-export type InboxItemStatus = 'received' | 'error'
+// 'processing' is the staged-upload in-flight state: the row exists (instant
+// receipt ack) but AI extraction has not landed yet; extracted_data is NULL
+// until the deferred worker (or the sweep cron) flips it to 'received'.
+export type InboxItemStatus = 'received' | 'processing' | 'error'
 export type InboxItemSource = 'email' | 'upload' | 'whatsapp'
 
 export type CompanyInboxStatus = 'active' | 'deprecated' | 'blocked'

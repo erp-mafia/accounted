@@ -1040,7 +1040,8 @@ export async function POST(request: Request) {
     // commitCreateSupplierInvoiceFromInbox does an idempotency + FK lookup
     // against invoice_inbox_items by inbox_item_id before it creates anything,
     // so the "Godkänn" path can only succeed if a real inbox row exists.
-    // status is constrained to 'received' | 'error' (migration 20260504180000).
+    // status is constrained to 'received' | 'processing' | 'error' (migration
+    // 20260813213000); seeded rows are always 'received'.
     const { data: inboxRow, error: inboxError } = await supabase
       .from('invoice_inbox_items')
       .insert({

@@ -1944,9 +1944,9 @@ async function seedInboxAndUncategorized(
     .single()
   if (docErr) throw new Error(`document_attachments AWS: ${docErr.message}`)
 
-  // status: the CHECK allows only 'received' | 'error'
-  // (20260504180000_invoice_inbox_remove_ai_columns.sql, which also collapsed
-  // every pre-existing 'ready' row to 'received'). This item is an arrived,
+  // status: the CHECK allows 'received' | 'processing' | 'error'
+  // (20260813213000_invoice_inbox_processing_status.sql; 'processing' is the
+  // staged-upload in-flight state and never seeded). This item is an arrived,
   // extracted document with no supplier invoice created from it yet, which is
   // exactly what 'received' + created_supplier_invoice_id IS NULL means in the
   // inbox UI. 'error' is the failure state and belongs with error_message.

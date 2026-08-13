@@ -6,8 +6,11 @@
  * Unlinked: mint a one-time code (10 min TTL) + wa.me deep link; the user
  * sends the code from their phone and the webhook binds the number.
  * Linked: masked phone, default-company select (multi-company routing),
- * revoke. Muted (user sent *stopp* in chat) shows a hint: unmuting happens
- * in the chat with *start*, not here.
+ * revoke. Muted (user sent *stopp* in chat) can be lifted here (or with
+ * *start* in the chat); no proactive confirmation is possible afterwards
+ * (24h service window, v1 sends no templates), so the hint says to just
+ * send the next receipt. A nonzero 7-day failure count from the health
+ * object renders as one attention line.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -50,6 +53,10 @@ interface LinkStatus {
   lastInboundAt?: string | null
   lastInboundEvent?: string | null
   lastReplyFailed?: boolean
+  health?: {
+    outboundFailed7d: number
+    parkedInbound7d: number
+  } | null
 }
 
 interface MintedCode {
@@ -154,6 +161,20 @@ export function WhatsAppLinkPanel() {
     }
   }
 
+  const unmute = async () => {
+    setIsSaving(true)
+    try {
+      const response = await fetch(`${BASE}/link/unmute`, { method: 'POST' })
+      if (!response.ok) throw new Error('unmute failed')
+      toast({ title: t('unmuted_toast') })
+      await fetchStatus()
+    } catch {
+      toast({ title: t('unmute_failed'), variant: 'destructive' })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 px-1 py-6 text-sm text-muted-foreground">
@@ -174,15 +195,33 @@ export function WhatsAppLinkPanel() {
     )
   }
 
+  const healthIssues =
+    (status?.health?.outboundFailed7d ?? 0) + (status?.health?.parkedInbound7d ?? 0)
+
   if (status?.linked) {
     return (
       <SettingsGroup label={t('group_label')}>
+        {healthIssues > 0 ? (
+          <div className="px-1 pt-3">
+            <AttnLine>{t('health_warning', { count: healthIssues })}</AttnLine>
+          </div>
+        ) : null}
+
         <SettingsRow label={t('linked_number_label')}>
           <span className="font-mono text-sm">{status.phoneMasked}</span>
         </SettingsRow>
 
         {status.muted ? (
           <SettingsRow label={t('muted_label')}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isSaving}
+              onClick={() => void unmute()}
+            >
+              {t('unmute_button')}
+            </Button>
             <SettingsRowNote>{t('muted_hint')}</SettingsRowNote>
           </SettingsRow>
         ) : null}

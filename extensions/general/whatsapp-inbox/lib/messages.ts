@@ -56,6 +56,7 @@ export const TEMPLATE = {
   m17RateLimited: 'm17_rate_limited',
   m17RateLimitedDay: 'm17_rate_limited_day',
   m18Error: 'm18_error',
+  m19NoCompany: 'm19_no_company',
 } as const
 
 export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
@@ -194,6 +195,13 @@ const SV = {
 
   m18Error: () =>
     'Något gick fel när jag tog emot filen. Försök igen om en stund, eller ladda upp kvittot direkt i appen under *Underlag*. Skriv *hjälp* om det fortsätter.',
+
+  // The company question could not even be asked: the linked user has fewer
+  // than 2 companies to choose between, so the receipt cannot be filed and
+  // nothing changes until they act in the app. Honest and actionable beats
+  // the old silent parking.
+  m19NoCompany: () =>
+    'Jag kunde inte koppla kvittot till något företag. Öppna Accounted och kontrollera WhatsApp-kopplingen under *Inställningar -> WhatsApp*, och skicka sedan kvittot igen.',
 }
 
 const EN: typeof SV = {
@@ -318,6 +326,9 @@ const EN: typeof SV = {
 
   m18Error: () =>
     'Something went wrong receiving the file. Try again in a moment, or upload the receipt directly in the app under *Underlag*. Type *hjälp* if it keeps happening.',
+
+  m19NoCompany: () =>
+    'I could not assign the receipt to any company. Open Accounted and check the WhatsApp linking under *Settings -> WhatsApp*, then send the receipt again.',
 }
 
 const COPY: Record<BotLocale, typeof SV> = { sv: SV, en: EN }
