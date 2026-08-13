@@ -465,14 +465,14 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
   if (status === 'service_unavailable') {
     return (
-      <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
+      <div className="rounded-lg border border-border bg-muted/30 p-4">
         <div className="flex items-start gap-3">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
           <div className="space-y-1.5">
-            <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+            <p className="text-sm font-medium">
               BankID är inte tillgängligt just nu
             </p>
-            <p className="text-sm text-amber-700 dark:text-amber-300">
+            <p className="text-sm text-muted-foreground">
               {mode === 'login'
                 ? 'Logga in med e-post och lösenord nedan, eller använd "Glömt lösenord?" för en inloggningslänk via e-post.'
                 : mode === 'signup'
@@ -483,7 +483,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
               onClick={startSession}
               variant="ghost"
               size="sm"
-              className="mt-1 h-auto px-0 py-0 text-xs text-amber-600 underline underline-offset-2 hover:text-amber-800 dark:text-amber-400"
+              className="mt-1 h-auto px-0 py-0 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
             >
               Försök med BankID igen
             </Button>

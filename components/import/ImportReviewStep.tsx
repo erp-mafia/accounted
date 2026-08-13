@@ -413,7 +413,7 @@ export default function ImportReviewStep({
 
       {/* Warnings */}
       {!preview.trialBalance.isBalanced && (
-        <Card className="border-warning/50 bg-warning/5">
+        <Card className="border-border bg-muted/30">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-warning">
               <AlertCircle className="h-5 w-5" />

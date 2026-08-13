@@ -323,8 +323,8 @@ export function TemplateForm({
       </div>
 
       {ratioSumOff && (
-        <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
-          <p className="text-xs text-warning-foreground leading-snug">
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+          <p className="text-xs text-attn leading-snug">
             {t('ratio_sum_warning')}
           </p>
         </div>
@@ -361,16 +361,16 @@ export function TemplateForm({
       )}
 
       {nameCollision && (
-        <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
-          <p className="text-xs text-warning-foreground leading-snug">
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+          <p className="text-xs text-attn leading-snug">
             {t('duplicate_name_warning')}
           </p>
         </div>
       )}
 
       {!isConvertible && (
-        <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
-          <p className="text-xs text-warning-foreground leading-snug">
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+          <p className="text-xs text-attn leading-snug">
             {t('unconvertible_hint')}
           </p>
         </div>

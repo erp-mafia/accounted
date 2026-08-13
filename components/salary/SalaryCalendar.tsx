@@ -97,8 +97,8 @@ interface AbsenceTypeMeta {
 //   neutral    = the rest (study, unpaid, other)
 const TYPE_META: Record<AbsenceType, AbsenceTypeMeta> = {
   sick:          { labelKey: 'type_sick',          shortLabelKey: 'type_sick_short',          icon: HeartPulse,   pillClass: 'bg-destructive/10 text-destructive' },
-  vab:           { labelKey: 'type_vab',           shortLabelKey: 'type_vab_short',           icon: Baby,         pillClass: 'bg-warning/15 text-warning-foreground' },
-  care_relative: { labelKey: 'type_care_relative', shortLabelKey: 'type_care_relative_short', icon: Heart,        pillClass: 'border border-warning/40 text-warning-foreground' },
+  vab:           { labelKey: 'type_vab',           shortLabelKey: 'type_vab_short',           icon: Baby,         pillClass: 'bg-muted text-attn' },
+  care_relative: { labelKey: 'type_care_relative', shortLabelKey: 'type_care_relative_short', icon: Heart,        pillClass: 'border border-border text-attn' },
   parental:      { labelKey: 'type_parental',      shortLabelKey: 'type_parental_short',      icon: Heart,        pillClass: 'bg-success/10 text-success' },
   pregnancy:     { labelKey: 'type_pregnancy',     shortLabelKey: 'type_pregnancy_short',     icon: Heart,        pillClass: 'border border-success/40 text-success' },
   study:         { labelKey: 'type_study',         shortLabelKey: 'type_study_short',         icon: Activity,     pillClass: 'bg-secondary text-secondary-foreground' },
@@ -727,11 +727,11 @@ function BulkWorkedDialog({
           </div>
 
           {conflicts.length > 0 && (
-            <div className="space-y-1 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs">
-              <div className="font-medium text-warning-foreground">
+            <div className="space-y-1 rounded-md border border-border bg-muted/30 p-2 text-xs">
+              <div className="font-medium text-attn">
                 {t('conflicts_worked', { count: conflicts.length })}
               </div>
-              <ul className="list-disc space-y-0.5 pl-4 text-warning-foreground tabular-nums">
+              <ul className="list-disc space-y-0.5 pl-4 text-attn tabular-nums">
                 {conflicts.map(c => <li key={c.date}>{c.date}</li>)}
               </ul>
             </div>
@@ -880,11 +880,11 @@ function BulkAbsenceDialog({
           </div>
 
           {conflicts.length > 0 && (
-            <div className="space-y-1 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs">
-              <div className="font-medium text-warning-foreground">
+            <div className="space-y-1 rounded-md border border-border bg-muted/30 p-2 text-xs">
+              <div className="font-medium text-attn">
                 {t('conflicts_absence', { count: conflicts.length })}
               </div>
-              <ul className="list-disc space-y-0.5 pl-4 text-warning-foreground tabular-nums">
+              <ul className="list-disc space-y-0.5 pl-4 text-attn tabular-nums">
                 {conflicts.map(c => <li key={c.date}>{c.date}</li>)}
               </ul>
             </div>

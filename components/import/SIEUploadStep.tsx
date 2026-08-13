@@ -168,7 +168,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
             <div className="mt-4 space-y-3">
               <div className={`p-4 rounded-lg flex gap-3 ${
                 errorType === 'duplicate' || errorType === 'duplicate_period'
-                  ? 'bg-warning/10 border border-warning/20'
+                  ? 'bg-muted/30 border border-border'
                   : 'bg-destructive/10 border border-destructive/20'
               }`}>
                 <AlertCircle className={`h-5 w-5 flex-shrink-0 mt-0.5 ${
@@ -200,7 +200,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                           <Button
                             variant="outline"
                             size="sm"
-                            className="border-warning/50 text-warning hover:bg-warning/10"
+                            className="border-border text-warning hover:bg-muted/30"
                             disabled={isReplacing}
                             onClick={(e) => {
                               e.stopPropagation()
@@ -246,7 +246,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
 
               {/* Validation warnings list */}
               {validationWarnings && validationWarnings.length > 0 && (
-                <div className="p-4 bg-warning/5 border border-warning/15 rounded-lg space-y-2">
+                <div className="p-4 bg-muted/30 border border-border rounded-lg space-y-2">
                   <p className="text-sm font-medium text-warning">Varningar ({validationWarnings.length})</p>
                   <div className="space-y-1.5 max-h-32 overflow-y-auto">
                     {validationWarnings.map((warn, i) => (

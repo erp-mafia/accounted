@@ -123,10 +123,12 @@ export default function BankSyncStatusChip() {
   }
 
   if (state.kind === 'stale') {
+    // Same neutral shape as the healthy chip: the ochre text is the signal,
+    // never an amber box (convention 12: status colors are data, not chrome).
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-md border border-warning/40 bg-warning/5 px-2.5 py-1 text-xs text-warning transition-colors hover:bg-warning/10"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
       >
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>
