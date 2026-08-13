@@ -15,6 +15,7 @@ import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipien
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
 import type { AuditAction } from '@/types'
+import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
 // ============================================================
 // Shared primitives
@@ -3339,3 +3340,56 @@ export const MileageSalaryPushSchema = z
   .refine((p) => p.from.slice(0, 4) === p.to.slice(0, 4), {
     message: 'Milersättning bokförs per kalenderår: dela upp perioden per år',
   })
+
+// ============================================================
+// Bank file import
+// ============================================================
+
+/**
+ * Known bank-file format ids, mirrored from `BankFileFormatId`
+ * (lib/import/bank-file/types.ts). `satisfies` pins every member to the union
+ * at compile time; a format id added to the union but not listed here only
+ * degrades the ADVISORY duplicate preview (400), never the import itself.
+ */
+const BANK_FILE_FORMAT_IDS = [
+  'nordea',
+  'nordea_business',
+  'seb',
+  'swedbank',
+  'handelsbanken',
+  'lansforsakringar',
+  'ica_banken',
+  'skandia',
+  'lunar',
+  'northmill',
+  'wise',
+  'wise_statement',
+  'generic_csv',
+  'camt053',
+] as const satisfies readonly BankFileFormatId[]
+
+/**
+ * POST /api/import/bank-file/check-duplicates
+ *
+ * The rows are client-supplied (the generic_csv path never round-trips through
+ * the parse route), so the array is hard-capped: the parse route caps files at
+ * 10 MB, and 20000 rows mirrors that ceiling so an oversized payload cannot
+ * drive the per-chunk dedup queries as a DoS vector. `raw_line` must pass
+ * through untouched: camt.053/Wise external_ids are derived from it, and the
+ * preview must compute byte-identical ids to execute.
+ */
+export const BankFileCheckDuplicatesSchema = z.object({
+  transactions: z
+    .array(
+      z.object({
+        date: isoDate,
+        description: z.string().max(1000),
+        amount: z.number().finite(),
+        currency: z.string().max(8).optional().nullable(),
+        raw_line: z.string().max(4000).optional().nullable(),
+      })
+    )
+    .min(1)
+    .max(20000),
+  format: z.enum(BANK_FILE_FORMAT_IDS),
+})
