@@ -57,8 +57,7 @@ export async function fetchDynamicVatAccounts(
     ({ from, to }) => supabase.from('chart_of_accounts')
       .select('account_number, account_name, account_class, default_vat_rate, default_vat_treatment')
       .eq('company_id', companyId)
-      .gte('account_class', 3)
-      .lte('account_class', 6)
+      .in('account_class', [3, 4, 5, 6])
       .not('is_active', 'is', false)
       .order('account_number', { ascending: true })
       .range(from, to),
@@ -67,15 +66,16 @@ export async function fetchDynamicVatAccounts(
   const result = emptyDynamicVatAccounts()
   for (const row of rows) {
     const account = row.account_number
+    const accountClass = Number(row.account_class ?? account.charAt(0))
     const configuredRate = row.default_vat_rate === null ? null : Number(row.default_vat_rate)
 
     if (isAccountVatTreatment(row.default_vat_treatment)) {
       result.explicitAccounts.add(account)
-      const mapping = resolveVatTreatmentRuta(row.default_vat_treatment, row.account_class)
+      const mapping = resolveVatTreatmentRuta(row.default_vat_treatment, accountClass)
       if (!mapping) continue
       result.mappingByAccount.set(account, mapping)
       if (!ACCOUNT_TO_BOX[account]) result.accounts.push(account)
-      const rate = configuredRate ?? defaultRateForVatTreatment(row.default_vat_treatment, row.account_class)
+      const rate = configuredRate ?? defaultRateForVatTreatment(row.default_vat_treatment, accountClass)
       if (mapping.box === 'ruta05' && rate !== null && TAXABLE_RATES.includes(rate)) {
         const target = ACCOUNT_TO_BOX[account] ? result.staticRateByAccount : result.rateByAccount
         target.set(account, rate)
@@ -89,7 +89,7 @@ export async function fetchDynamicVatAccounts(
       continue
     }
 
-    if (row.account_class !== 3) continue
+    if (accountClass !== 3) continue
     const rate = configuredRate ?? inferDomesticSalesRate(account, row.account_name)
     if (rate === null || !TAXABLE_RATES.includes(rate)) continue
     if (ACCOUNT_TO_BOX[account]) {
