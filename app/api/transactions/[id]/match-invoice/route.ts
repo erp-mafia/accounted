@@ -365,7 +365,7 @@ export const POST = withRouteContext(
           txLog.warn('failed to clear journal_entry_id after storno', clearJeError)
         }
 
-        logMatchEvent(supabase, user.id, transactionId, 'storno_conflict_resolved', {
+        await logMatchEvent(supabase, user.id, transactionId, 'storno_conflict_resolved', {
           invoiceId: invoice_id,
           previousState: { journal_entry_id: transaction.journal_entry_id },
           newState: { journal_entry_id: null },
@@ -776,7 +776,7 @@ export const POST = withRouteContext(
       })
     }
 
-    logMatchEvent(supabase, user.id, transactionId, 'matched', {
+    await logMatchEvent(supabase, user.id, transactionId, 'matched', {
       invoiceId: invoice_id,
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',

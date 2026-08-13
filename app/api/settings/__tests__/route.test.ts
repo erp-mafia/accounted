@@ -652,4 +652,35 @@ describe('PUT /api/settings', () => {
       'employee_vacation_balances',
     ])
   })
+
+  it('accepts the öresavrundning toggle', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } },                              // oldSettings
+      { data: { company_id: 'company-1', salary_net_rounding: true } },     // update result
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { salary_net_rounding: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { salary_net_rounding: boolean } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.salary_net_rounding).toBe(true)
+  })
+
+  it('rejects a non-boolean öresavrundning value', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } }, // oldSettings
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { salary_net_rounding: 'yes' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
+  })
 })

@@ -2014,6 +2014,9 @@ export const UpdateSettingsSchema = z.object({
     .enum(['swedbank', 'seb', 'handelsbanken', 'nordea', 'other'])
     .nullable()
     .optional(),
+  // Öresavrundning: round each net payout up to whole kronor (banks that
+  // reject öre in salary payment files). Diff books on 3740.
+  salary_net_rounding: z.boolean().optional(),
   // Vacation year basis (payroll gap-closure 3.1): sammanfallande calendar
   // year (default) or the statutory Apr 1 - Mar 31 split. The settings route
   // blocks changing this while open vacation-ledger rows exist.
@@ -2514,6 +2517,7 @@ export const SalaryLineItemTypeSchema = z.enum([
   'mileage_taxfree', 'mileage_taxable',
   'net_deduction_advance', 'net_deduction_union', 'net_deduction_benefit_payment',
   'net_deduction_other',
+  'oresavrundning',
   'correction', 'other',
 ])
 
@@ -2893,7 +2897,13 @@ export const AddEmployeeToRunSchema = z.object({
 
 export const CreateSalaryLineItemSchema = z.object({
   salary_run_employee_id: uuid,
-  item_type: SalaryLineItemTypeSchema,
+  // 'oresavrundning' is derived-only: the calculator writes it from the
+  // engine's netRounding and the booking excludes it from the gross
+  // reconciliation, so a manually created row would unbalance the salary
+  // verifikat by exactly its amount (the DB balance trigger then rejects the
+  // booking). Every other derived type is absorbed by the base remainder and
+  // stays harmless to create by hand.
+  item_type: SalaryLineItemTypeSchema.exclude(['oresavrundning']),
   description: z.string().min(1).max(500),
   quantity: z.number().optional(),
   unit_price: z.number().optional(),

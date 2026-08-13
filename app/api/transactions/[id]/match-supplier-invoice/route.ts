@@ -501,7 +501,7 @@ export const POST = withRouteContext(
     // it is already anchored, e.g. on the registration verifikat.
     await anchorSupplierInvoiceDocument(supabase, companyId, supplier_invoice_id)
 
-    logMatchEvent(supabase, user.id, transactionId, 'matched', {
+    await logMatchEvent(supabase, user.id, transactionId, 'matched', {
       supplierInvoiceId: supplier_invoice_id,
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',

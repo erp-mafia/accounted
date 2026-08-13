@@ -427,9 +427,9 @@ export interface BulkBookInboxResult {
 /**
  * Book each selected inbox item against its matched bank transaction with one
  * shared category + VAT treatment. Items without a matched transaction, already
- * booked, or already linked to a leverantörsfaktura are skipped: never an
- * error: so one bad underlag never blocks the rest ("Bokför valda hoppar
- * över"). A per-item throw (period locked, accounts not in chart) is caught and
+ * booked, already linked to a leverantörsfaktura, or still mid AI extraction
+ * (staged upload, status 'processing') are skipped: never an error: so one bad
+ * underlag never blocks the rest ("Bokför valda hoppar över"). A per-item throw (period locked, accounts not in chart) is caught and
  * recorded as a skip with the actionable message.
  *
  * Shared by the direct UI route (POST /items/bulk-book) and the
@@ -457,13 +457,21 @@ export async function bulkBookMatchedInboxItems(
   for (const itemId of item_ids) {
     const { data: item, error: itemError } = await supabase
       .from('invoice_inbox_items')
-      .select('id, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, channel_context')
+      .select('id, status, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, channel_context')
       .eq('id', itemId)
       .eq('company_id', companyId)
       .maybeSingle()
 
     if (itemError || !item) {
       skipped.push({ item_id: itemId, reason: 'not_found' })
+      continue
+    }
+    if ((item as { status?: string }).status === 'processing') {
+      // Staged upload: the row exists but its deferred AI extraction has not
+      // landed yet (extracted_data is NULL). Booking it now would mint a
+      // verifikat from an underlag nobody has read; the flip to 'received'
+      // arrives within seconds, so this is a "try again in a moment" skip.
+      skipped.push({ item_id: itemId, reason: 'extraction_in_progress' })
       continue
     }
     if (item.created_journal_entry_id) {
