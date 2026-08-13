@@ -138,20 +138,20 @@ export async function resolveVoucherLinkedEntryIds(
  * Errors are logged but never fail the caller: the verifikation itself is
  * already posted, and the link can be repaired by re-running this step.
  *
- * `opts.pinnedDocumentId` is the transaction's own pinned document
- * (transactions.document_id): pass the value when the transaction row is
- * already in hand (null meaning "no pin", which skips the leg entirely),
- * omit it to have the pin resolved here. Attach-time callers that propagate
- * the pin themselves with surfaced errors pass null to opt out.
+ * The pin is always re-read here, never taken from a caller's transaction
+ * row: a snapshot fetched before the booking committed misses a document
+ * attached in between (the attach side sees journal_entry_id still NULL at
+ * that point and skips its own propagation too, so a stale snapshot would
+ * lose the doc on both sides). One indexed select per booking buys the
+ * race-free read.
  */
 export async function propagateUnderlagForBookedTransaction(
   supabase: SupabaseClient,
   companyId: string,
   txId: string,
   journalEntryId: string,
-  opts?: { pinnedDocumentId?: string | null },
 ): Promise<void> {
-  await anchorPinnedTransactionDocument(supabase, companyId, txId, journalEntryId, opts?.pinnedDocumentId)
+  await anchorPinnedTransactionDocument(supabase, companyId, txId, journalEntryId)
   try {
     const { data: matchedInboxItems } = await supabase
       .from('invoice_inbox_items')
@@ -235,31 +235,28 @@ export async function propagateUnderlagForBookedTransaction(
  * Anchor the document pinned directly on the transaction
  * (transactions.document_id) to the verifikat that booked it. The pin can
  * exist without any invoice_inbox_items row, so the inbox loop never sees it.
- *
- * `pinnedDocumentId` undefined means "not resolved yet": the pin is read
- * here. Null means the caller knows there is no pin (or owns its
- * propagation): the leg is skipped without a query. Same contract as the
- * rest of the module: idempotent, never steals another verifikat's underlag,
- * failures are logged and repaired by re-running.
+ * When an attach route already anchored the doc (attach onto an
+ * already-booked transaction), the same-value check below makes this a
+ * no-op; when it could not (bulk-book leaves transactions.journal_entry_id
+ * NULL, so the attach side's propagation gate never fires), this leg is the
+ * one that anchors. Same contract as the rest of the module: idempotent,
+ * never steals another verifikat's underlag, failures are logged and
+ * repaired by re-running.
  */
 async function anchorPinnedTransactionDocument(
   supabase: SupabaseClient,
   companyId: string,
   txId: string,
   journalEntryId: string,
-  pinnedDocumentId: string | null | undefined,
 ): Promise<void> {
   try {
-    let documentId = pinnedDocumentId
-    if (documentId === undefined) {
-      const { data: tx } = await supabase
-        .from('transactions')
-        .select('document_id')
-        .eq('id', txId)
-        .eq('company_id', companyId)
-        .maybeSingle()
-      documentId = ((tx as { document_id?: string | null } | null)?.document_id ?? null)
-    }
+    const { data: tx } = await supabase
+      .from('transactions')
+      .select('document_id')
+      .eq('id', txId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    const documentId = ((tx as { document_id?: string | null } | null)?.document_id ?? null)
     if (!documentId) return
 
     const { data: doc } = await supabase
@@ -324,10 +321,6 @@ export async function completeInboxItemsForBookedTransaction(
       (await resolveBookedJournalEntryIds(supabase, companyId, [txId])).get(txId) ?? null
   }
   if (!journalEntryId) return null
-  // pinnedDocumentId: null — the attach routes propagate the pin themselves
-  // (they surface link errors to the user, which this best-effort path can't).
-  await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId, {
-    pinnedDocumentId: null,
-  })
+  await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId)
   return journalEntryId
 }

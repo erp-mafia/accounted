@@ -185,9 +185,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // A hunt- or hand-matched inbox item is consumed by this booking even
     // though the dialog never saw it: link its underlag to the verifikat and
     // stamp it so it leaves the active inbox (best-effort, logged inside).
-    await propagateUnderlagForBookedTransaction(supabase, companyId, id, journalEntry.id, {
-      pinnedDocumentId: (transaction.document_id as string | null) ?? null,
-    })
+    await propagateUnderlagForBookedTransaction(supabase, companyId, id, journalEntry.id)
 
     // Emit event (non-blocking)
     try {

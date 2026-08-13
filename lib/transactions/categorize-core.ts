@@ -380,10 +380,7 @@ export async function categorizeMatchedTransaction(
   // booking paths, see lib/transactions/inbox-underlag.ts. Best-effort: the
   // verifikation is already posted, so a failure is logged, never fatal.
   if (journalEntryId) {
-    await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId, {
-      pinnedDocumentId:
-        ((transaction as { document_id?: string | null }).document_id ?? null),
-    })
+    await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId)
   }
 
   try {

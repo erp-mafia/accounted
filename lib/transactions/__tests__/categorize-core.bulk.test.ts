@@ -519,13 +519,14 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
 })
 
 describe('bulkBookMatchedInboxItems: intra-batch duplicate handling', () => {
-  /** Six queued from() results for one successfully-booked item. */
+  /** Seven queued from() results for one successfully-booked item. */
   const bookableItem = (itemId: string, txId: string, amount: number) => [
     { data: { id: itemId, matched_transaction_id: txId, created_journal_entry_id: null, created_supplier_invoice_id: null } },
     { data: { id: txId, date: '2026-06-01', amount, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
     { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
     { data: [{ id: 'fp-1' }] },
     { error: null },
+    { data: { document_id: null } }, // pin resolution: no pinned doc
     { data: [] },
   ]
 

@@ -188,25 +188,9 @@ describe('propagateUnderlagForBookedTransaction', () => {
 describe('propagateUnderlagForBookedTransaction: pinned transaction document', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('anchors the pinned doc passed by a caller that holds the transaction row', async () => {
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: { journal_entry_id: null } }) // pinned doc not yet anchored
-    enqueue({ data: [] }) // no matched inbox items
-
-    await propagateUnderlagForBookedTransaction(
-      supabase as unknown as SupabaseClient,
-      COMPANY,
-      TX1,
-      JE1,
-      { pinnedDocumentId: 'doc-pin' },
-    )
-
-    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE1)
-    // The caller supplied the pin: no transactions fetch needed.
-    expect(findCalls('transactions', 'select').length).toBe(0)
-  })
-
-  it('resolves the pin itself when the caller does not hold the transaction row', async () => {
+  it('anchors the pin resolved from the transaction (no inbox row needed)', async () => {
+    // A doc linked from the documents page pins the transaction without any
+    // invoice_inbox_items match: the pin leg is what anchors it.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { document_id: 'doc-pin' } }) // pin resolution
     enqueue({ data: { journal_entry_id: null } }) // pinned doc not yet anchored
@@ -222,25 +206,9 @@ describe('propagateUnderlagForBookedTransaction: pinned transaction document', (
     expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE1)
   })
 
-  it('skips the pin leg entirely on pinnedDocumentId null (attach callers own it)', async () => {
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: [] }) // no matched inbox items
-
-    await propagateUnderlagForBookedTransaction(
-      supabase as unknown as SupabaseClient,
-      COMPANY,
-      TX1,
-      JE1,
-      { pinnedDocumentId: null },
-    )
-
-    expect(linkToJournalEntry).not.toHaveBeenCalled()
-    expect(findCalls('transactions', 'select').length).toBe(0)
-    expect(findCalls('document_attachments', 'select').length).toBe(0)
-  })
-
   it('never steals a pinned doc anchored to another verifikat', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: 'doc-pin' } }) // pin resolution
     enqueue({ data: { journal_entry_id: 'je-other' } }) // pinned doc is someone else's underlag
     enqueue({ data: [] }) // no matched inbox items
 
@@ -249,7 +217,6 @@ describe('propagateUnderlagForBookedTransaction: pinned transaction document', (
       COMPANY,
       TX1,
       JE1,
-      { pinnedDocumentId: 'doc-pin' },
     )
 
     expect(linkToJournalEntry).not.toHaveBeenCalled()
@@ -260,6 +227,7 @@ describe('propagateUnderlagForBookedTransaction: pinned transaction document', (
     // and the matched item's document. The pin leg links it; the inbox loop
     // then sees it already pointing at the verifikat and only stamps.
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: 'doc-1' } }) // pin resolution
     enqueue({ data: { journal_entry_id: null } }) // pin leg: doc not yet anchored
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] }) // matched items
     enqueue({ data: { journal_entry_id: JE1 } }) // inbox loop: now anchored to JE1
@@ -270,7 +238,6 @@ describe('propagateUnderlagForBookedTransaction: pinned transaction document', (
       COMPANY,
       TX1,
       JE1,
-      { pinnedDocumentId: 'doc-1' },
     )
 
     expect(linkToJournalEntry).toHaveBeenCalledTimes(1)
@@ -282,6 +249,7 @@ describe('propagateUnderlagForBookedTransaction: pinned transaction document', (
   it('still propagates the inbox items when the pin leg fails', async () => {
     vi.mocked(linkToJournalEntry).mockRejectedValueOnce(new Error('link failed'))
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: 'doc-pin' } }) // pin resolution
     enqueue({ data: { journal_entry_id: null } }) // pin leg: doc not yet anchored (link will fail)
     enqueue({ data: [{ id: 'i1', document_id: null }] }) // matched items
     enqueue({ data: null }) // stamp update
@@ -292,7 +260,6 @@ describe('propagateUnderlagForBookedTransaction: pinned transaction document', (
         COMPANY,
         TX1,
         JE1,
-        { pinnedDocumentId: 'doc-pin' },
       ),
     ).resolves.toBeUndefined()
     expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
@@ -318,8 +285,9 @@ describe('completeInboxItemsForBookedTransaction', () => {
     expect(findCalls('invoice_inbox_items', 'select').length).toBe(0)
   })
 
-  it('skips the transaction fetch when the caller passes the direct id', async () => {
+  it('skips the booked-state resolution fetch when the caller passes the direct id', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { document_id: null } }) // pin resolution (always runs, race-free read)
     enqueue({ data: [] }) // matched items (none)
 
     const result = await completeInboxItemsForBookedTransaction(
@@ -329,12 +297,15 @@ describe('completeInboxItemsForBookedTransaction', () => {
       { directJournalEntryId: JE1 },
     )
     expect(result).toBe(JE1)
-    expect(findCalls('transactions', 'select').length).toBe(0)
+    // Exactly one transactions read: the pin leg's document_id projection.
+    // The journal_entry_id resolution fetch is what the direct id skips.
+    expect(findCalls('transactions', 'select').length).toBe(1)
   })
 
   it('resolves the samlingsverifikat through voucher links when the direct id is null', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [{ transaction_id: TX1, journal_entry_id: JE2 }] }) // voucher links
+    enqueue({ data: { document_id: null } }) // pin resolution: no pinned doc
     enqueue({ data: [{ id: 'i1', document_id: null }] }) // matched items
     enqueue({ data: null }) // stamp update
 
@@ -348,5 +319,28 @@ describe('completeInboxItemsForBookedTransaction', () => {
     expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
       { created_journal_entry_id: JE2 },
     ])
+  })
+
+  it('anchors a pinned doc against the samlingsverifikat on attach-after-bulk-book', async () => {
+    // The skeptic-found gap: a doc from the documents page (no inbox row) is
+    // attached to a transaction ALREADY bulk-booked into a samlingsverifikat.
+    // transactions.journal_entry_id is NULL, so the attach route's own
+    // propagation gate never fires: this path is the only thing that anchors
+    // the doc, via voucher-link resolution + the pin leg.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ transaction_id: TX1, journal_entry_id: JE2 }] }) // voucher links
+    enqueue({ data: { document_id: 'doc-pin' } }) // pin resolution
+    enqueue({ data: { journal_entry_id: null } }) // pinned doc not yet anchored
+    enqueue({ data: [] }) // no matched inbox items
+
+    const result = await completeInboxItemsForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      { directJournalEntryId: null },
+    )
+    expect(result).toBe(JE2)
+    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE2)
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
   })
 })
