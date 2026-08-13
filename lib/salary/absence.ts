@@ -91,10 +91,22 @@ function mapInsertError(error: { code?: string; message?: string }): {
   code: string
   details?: Record<string, unknown>
 } {
-  // The 24h cap trigger raises check_violation when worked + absence > 24h
-  // for the same date.
-  if (error.code === '23514' || error.message?.includes('Total tid')) {
+  // Privilege/RLS denial (42501). Seen when a DB trigger writes to a
+  // protected table as SECURITY INVOKER (the franvaro audit-table bug fixed
+  // in migration 20260813120000): a server-side configuration error, kept
+  // distinct from INTERNAL_ERROR so the failure mode is diagnosable.
+  if (error.code === '42501') {
+    return { code: 'DB_PERMISSION_DENIED', details: { message: error.message } }
+  }
+  // The 24h cap trigger raises check_violation with 'Total tid' text when
+  // worked + absence hours exceed 24h for the same date.
+  if (error.message?.includes('Total tid')) {
     return { code: 'ABSENCE_HOURS_CONFLICT', details: { message: error.message } }
+  }
+  // Any other CHECK violation (hours range, absence_type enum) is invalid
+  // input, not an hours conflict.
+  if (error.code === '23514') {
+    return { code: 'VALIDATION_ERROR', details: { message: error.message } }
   }
   return { code: 'INTERNAL_ERROR', details: { message: error.message } }
 }

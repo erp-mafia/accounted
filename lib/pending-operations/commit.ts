@@ -4982,9 +4982,23 @@ async function commitRegisterAbsence(
       includeWeekends: (params.include_weekends as boolean | undefined) ?? false,
     })
     if (!result.ok) {
+      // The user-facing message is generic Swedish; without this log the
+      // underlying PG error (e.g. the franvaro audit-trigger RLS denial that
+      // caused five untraceable 500s, feedback 2026-08-13) leaves no trace.
+      // pgDetails, not details: `details` is the logger record's own field
+      // for non-object args and would be swallowed by the pretty emitter.
+      createLogger('commit/register_absence').error('register_absence commit failed', {
+        code: result.code,
+        pgDetails: result.details,
+        employeeId,
+        absenceType,
+        from,
+        to,
+      })
       const entry = getErrorEntry(result.code)
       return {
         error: entry?.message_sv ?? `Kunde inte registrera frånvaron: ${result.code}`,
+        errorCode: result.code,
         status: entry?.httpStatus ?? 500,
       }
     }
@@ -5081,9 +5095,19 @@ async function commitDeleteAbsence(
       absenceType: (params.absence_type as string | undefined) || undefined,
     })
     if (!result.ok) {
+      // Same diagnosability treatment as commitRegisterAbsence: keep the PG
+      // error in the logs and the registry code on the op row.
+      createLogger('commit/delete_absence').error('delete_absence commit failed', {
+        code: result.code,
+        pgDetails: result.details,
+        employeeId,
+        from,
+        to,
+      })
       const entry = getErrorEntry(result.code)
       return {
         error: entry?.message_sv ?? `Kunde inte ta bort frånvaron: ${result.code}`,
+        errorCode: result.code,
         status: entry?.httpStatus ?? 500,
       }
     }

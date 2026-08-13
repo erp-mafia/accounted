@@ -81,6 +81,16 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Du har inte behörighet att utföra denna åtgärd.',
     message_en: 'Insufficient permissions.',
   },
+  // A Postgres privilege/RLS denial (42501) on a write the application
+  // expected to succeed: a server-side configuration bug (e.g. a SECURITY
+  // INVOKER trigger writing to a policy-less RLS table), not a user-permission
+  // problem. Kept distinct from FORBIDDEN (which blames the user) and from
+  // INTERNAL_ERROR (which hides the failure mode from diagnostics).
+  DB_PERMISSION_DENIED: {
+    httpStatus: 500,
+    message_sv: 'Ett behörighetsfel i databasen stoppade åtgärden. Kontakta supporten om felet kvarstår.',
+    message_en: 'A database permission (RLS) denial blocked the write. This indicates a server-side misconfiguration.',
+  },
   NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Resursen kunde inte hittas.',
