@@ -31,7 +31,7 @@ const MIXED_CURRENCIES = Symbol('mixed-currencies')
  * `isImportFeed` drive the cross-channel mirror bridge (see
  * `consumeBridgingTwin`); `cashAccountId` is the cross-account guard.
  */
-type BucketEntry = {
+export type BucketEntry = {
   /** Row id of the stored transaction; used to persist hand-mirror adoption. */
   id: string | null
   desc: string
@@ -64,9 +64,9 @@ type BucketEntry = {
  * spliced out per deduped incoming row), so two genuinely-distinct
  * same-(date,amount) transactions are never collapsed.
  */
-type DescBucket = Map<string, BucketEntry[]>
+export type DescBucket = Map<string, BucketEntry[]>
 
-interface ExistingTransactionMaps {
+export interface ExistingTransactionMaps {
   /**
    * Booked transactions (any source): consumed by any incoming raw transaction.
    * Hand-entered rows (import_source manual/mcp/null, no bank connection) in
@@ -119,10 +119,43 @@ function addToBucket(
   else bucket.set(key, [entry])
 }
 
-async function buildExistingTransactionMaps(
+/**
+ * Row shape returned by the two map queries below. `amount` may arrive as a
+ * PostgREST numeric string; `contentBucketKey` normalizes it to öre.
+ */
+type StoredDedupRow = {
+  id: string | null
+  date: string
+  amount: number | string
+  original_description: string | null
+  description: string | null
+  cash_account_id: string | null
+  import_source: string | null
+  bank_connection_id: string | null
+  currency: string | null
+  external_id: string | null
+}
+
+/**
+ * Build the (date, öre)-bucketed maps of already-stored transactions in the
+ * batch's date range: the stored-row universe every content-dedup layer works
+ * against.
+ *
+ * Exported for the read-only duplicate PREVIEW
+ * (`lib/transactions/dedup-preview.ts`): the preview must see exactly the
+ * stored rows execute-side ingest will dedup against, so it reuses this
+ * function instead of a lookalike query.
+ *
+ * Both queries paginate via `fetchAllRows`: PostgREST silently caps a plain
+ * select at 1000 rows, so a re-import over a wide date range in an active
+ * company used to dedup against a TRUNCATED map and insert the remainder as
+ * duplicates. `.order('id')` supplies the stable total order `.range()`
+ * paging requires (see fetch-all.ts).
+ */
+export async function buildExistingTransactionMaps(
   supabase: SupabaseClient,
   companyId: string,
-  rawTransactions: RawTransaction[]
+  rawTransactions: Array<{ date: string }>
 ): Promise<ExistingTransactionMaps> {
   const booked: DescBucket = new Map()
   const unbookedImported: DescBucket = new Map()
@@ -133,33 +166,35 @@ async function buildExistingTransactionMaps(
   const dateTo = dates[dates.length - 1]
 
   try {
-    const { data: bookedRows } = await supabase
-      .from('transactions')
-      .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id')
-      .eq('company_id', companyId)
-      .not('journal_entry_id', 'is', null)
-      .gte('date', dateFrom)
-      .lte('date', dateTo)
+    const bookedRows = await fetchAllRows<StoredDedupRow>(({ from, to }) =>
+      supabase
+        .from('transactions')
+        .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id')
+        .eq('company_id', companyId)
+        .not('journal_entry_id', 'is', null)
+        .gte('date', dateFrom)
+        .lte('date', dateTo)
+        .order('id')
+        .range(from, to)
+    )
 
-    if (bookedRows) {
-      for (const tx of bookedRows) {
-        // Key off the immutable bank original, not the user-editable
-        // description: a title edit must never make the dedup bridge miss a
-        // genuine re-import. Falls back to description for rows predating the
-        // original_description column.
-        addToBucket(
-          booked,
-          tx.id ?? null,
-          tx.date,
-          tx.amount,
-          normalizeImportedDescription(tx.original_description ?? tx.description),
-          tx.cash_account_id ?? null,
-          tx.import_source ?? null,
-          isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
-          tx.currency ?? null,
-          tx.external_id ?? null,
-        )
-      }
+    for (const tx of bookedRows) {
+      // Key off the immutable bank original, not the user-editable
+      // description: a title edit must never make the dedup bridge miss a
+      // genuine re-import. Falls back to description for rows predating the
+      // original_description column.
+      addToBucket(
+        booked,
+        tx.id ?? null,
+        tx.date,
+        tx.amount,
+        normalizeImportedDescription(tx.original_description ?? tx.description),
+        tx.cash_account_id ?? null,
+        tx.import_source ?? null,
+        isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
+        tx.currency ?? null,
+        tx.external_id ?? null,
+      )
     }
   } catch {
     // Non-critical: content-based dedup will be skipped
@@ -171,34 +206,36 @@ async function buildExistingTransactionMaps(
     // PSD2 row must dedup an incoming CSV import. Feeds always set a non-null
     // import_source outside the user-created allowlist (manual/mcp); null /
     // manual / mcp are hand-entered and intentionally excluded.
-    const { data: unbookedRows } = await supabase
-      .from('transactions')
-      .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id')
-      .eq('company_id', companyId)
-      .is('journal_entry_id', null)
-      .not('import_source', 'is', null)
-      .neq('import_source', 'manual')
-      .neq('import_source', 'mcp')
-      .gte('date', dateFrom)
-      .lte('date', dateTo)
+    const unbookedRows = await fetchAllRows<StoredDedupRow>(({ from, to }) =>
+      supabase
+        .from('transactions')
+        .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id')
+        .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .not('import_source', 'is', null)
+        .neq('import_source', 'manual')
+        .neq('import_source', 'mcp')
+        .gte('date', dateFrom)
+        .lte('date', dateTo)
+        .order('id')
+        .range(from, to)
+    )
 
-    if (unbookedRows) {
-      for (const tx of unbookedRows) {
-        // See booked-map note: dedup on the immutable bank original so a
-        // user title edit cannot reopen the duplicate-import window.
-        addToBucket(
-          unbookedImported,
-          tx.id ?? null,
-          tx.date,
-          tx.amount,
-          normalizeImportedDescription(tx.original_description ?? tx.description),
-          tx.cash_account_id ?? null,
-          tx.import_source ?? null,
-          isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
-          tx.currency ?? null,
-          tx.external_id ?? null,
-        )
-      }
+    for (const tx of unbookedRows) {
+      // See booked-map note: dedup on the immutable bank original so a
+      // user title edit cannot reopen the duplicate-import window.
+      addToBucket(
+        unbookedImported,
+        tx.id ?? null,
+        tx.date,
+        tx.amount,
+        normalizeImportedDescription(tx.original_description ?? tx.description),
+        tx.cash_account_id ?? null,
+        tx.import_source ?? null,
+        isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
+        tx.currency ?? null,
+        tx.external_id ?? null,
+      )
     }
   } catch {
     // Non-critical: reconnect dedup will be skipped
