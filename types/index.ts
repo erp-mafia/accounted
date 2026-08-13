@@ -1789,6 +1789,13 @@ export interface JournalEntry {
   attachment_urls: string[] | null
   notes: string | null
   commit_method: string | null
+  // WHO relayed the commit; complements commit_method = HOW. Stamped at
+  // commit time since migration 20260619120000. actor_type is NULL or one of
+  // 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat'
+  // (the DB CHECK is the authority); actor_label is a credential snapshot
+  // (e.g. the API key name).
+  committed_actor_type: string | null
+  committed_actor_label: string | null
   rubric_version: string | null
   source_voucher_series: string | null
   source_voucher_number: number | null

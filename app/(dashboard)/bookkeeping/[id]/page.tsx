@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
 import { Textarea } from '@/components/ui/textarea'
-import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy, ChevronDown, CalendarClock, FileText, Link2, RotateCcw, Scissors, PenLine } from 'lucide-react'
+import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy, ChevronDown, CalendarClock, FileText, Link2, RotateCcw, Scissors, PenLine, Bot } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -63,6 +63,34 @@ type RattelseLogRow = {
   added_lines: StruckLineSnapshot[] | null
   actor: string | null
   created_at: string
+}
+
+/**
+ * Human "who committed this" line from the committed_actor_* snapshot
+ * (WHO relayed the commit; commit_method records HOW). The claude.ai MCP
+ * connector mints a gnubok_sk_ API key, so MCP traffic arrives as
+ * actor_type='api_key' with the key name as the label.
+ */
+function committedByLabel(
+  actorType: string,
+  actorLabel: string | null,
+  t: (key: string, values?: Record<string, string>) => string,
+): string {
+  switch (actorType) {
+    case 'user':
+      return actorLabel || t('committed_by_user')
+    case 'api_key':
+    case 'mcp_oauth':
+      return actorLabel ? t('committed_by_ai', { label: actorLabel }) : t('committed_by_ai_plain')
+    case 'agent_chat':
+      return t('committed_by_agent_chat')
+    case 'cron':
+      return t('committed_by_cron')
+    case 'system':
+      return t('committed_by_system')
+    default:
+      return actorType
+  }
 }
 
 export default function JournalEntryDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -578,6 +606,15 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('field_posted_at')}</span>
                 <span>{formatDate(entry.committed_at)}</span>
+              </div>
+            )}
+            {entry.committed_at && entry.committed_actor_type && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('field_committed_by')}</span>
+                <span className="flex items-center gap-1.5 text-right">
+                  {entry.committed_actor_type !== 'user' && <Bot className="h-3.5 w-3.5 shrink-0" />}
+                  {committedByLabel(entry.committed_actor_type, entry.committed_actor_label, t)}
+                </span>
               </div>
             )}
             <div className="flex justify-between">

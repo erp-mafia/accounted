@@ -887,6 +887,14 @@ export default function PendingOperationsPage() {
                       detailOpId === op.id ? 'bg-secondary/25' : 'hover:bg-secondary/35',
                     )}
                   >
+                    {/* Same actor mark as the pending rows, minus the curved
+                        op-thread (it points at an action row history lacks). */}
+                    <span
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground"
+                      aria-hidden
+                    >
+                      {isAgent ? <Bot className="h-3.5 w-3.5" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
+                    </span>
                     <Badge
                       variant={
                         isAutoExpired(op)

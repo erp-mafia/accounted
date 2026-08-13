@@ -77,9 +77,11 @@ export type StreamEvent =
       kind: 'staged_operation'
       tool_use_id: string
       tool_name: string
-      // The tool-use input: the same values the staging tool stored as
-      // pending_operations.params. Carried so chat previews that need
-      // params (e.g. attach_document's DocumentViewButton) work live.
+      // The tool-use input: a superset of what the staging tool stored as
+      // pending_operations.params (it may also carry transport fields such
+      // as idempotency_key/dry_run). Carried so chat previews that need
+      // params (e.g. attach_document's DocumentViewButton) work live;
+      // previews read only the fields they need.
       params: Record<string, unknown>
       staged: StagedOperationResult
     }

@@ -258,6 +258,8 @@ export function makeJournalEntry(overrides: Partial<JournalEntry> = {}): Journal
     attachment_urls: null,
     notes: null,
     commit_method: null,
+    committed_actor_type: null,
+    committed_actor_label: null,
     rubric_version: null,
     created_at: '2024-06-15T14:30:00Z',
     updated_at: '2024-06-15T14:30:00Z',
