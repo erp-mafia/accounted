@@ -22,6 +22,7 @@ import {
   isSessionAuthMethod,
   SESSION_AUTH_METHOD_HINT_COOKIE,
   SESSION_TIMEOUT_COOKIE,
+  SESSION_TIMEOUT_REASON_HEADER,
   type SessionAuthMethod,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
@@ -504,7 +505,7 @@ function sessionTimeoutResponse(
       },
       { status: 401 },
     )
-    response.headers.set('X-Session-Timeout-Reason', reason)
+    response.headers.set(SESSION_TIMEOUT_REASON_HEADER, reason)
     response.headers.set('Cache-Control', 'no-store')
     copyResponseCookies(authResponse, response)
     return response

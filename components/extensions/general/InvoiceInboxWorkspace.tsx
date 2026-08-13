@@ -70,9 +70,71 @@ import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDi
 // INBOX_CUSTOM_DOMAINS_ENABLED in extensions/general/invoice-inbox/index.ts.
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  getErrorMessage as getUserErrorMessage,
+  getResponseErrorMessage,
+} from '@/lib/errors/get-error-message'
+import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
 
 type AccountingMethod = 'accrual' | 'cash'
+
+/**
+ * A failure whose message is already the sentence to show the user, resolved
+ * where the response was still in hand.
+ *
+ * The old `throw new Error(json.error ?? '…')` lost two things. A body that
+ * is not JSON (an HTML error page, an empty 502, a request rejected before it
+ * reached the route) made `res.json()` itself throw, and `error` is an object
+ * on the structured envelope, which stringified to "[object Object]". Both
+ * ended at the generic "Något gick fel. Försök igen." An expired session on a
+ * mobile tab is exactly the second shape, so the one failure the user could
+ * have fixed in a tap was also the one that said the least.
+ */
+class ResolvedFailure extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+  }
+}
+
+/**
+ * Read a failed response into a displayable message, and let the session
+ * controller know if the reason was an expired session (it redirects to
+ * /login; the toast below is what the user sees on the way there).
+ */
+async function resolveFailure(response: Response): Promise<ResolvedFailure> {
+  notifySessionExpired(response)
+  return new ResolvedFailure(await getResponseErrorMessage(response), response.status)
+}
+
+function failureText(err: unknown): string {
+  return err instanceof ResolvedFailure ? err.message : getUserErrorMessage(err)
+}
+
+/**
+ * Leave a server-side trace when an upload fails.
+ *
+ * A request the middleware or the platform answers before the route runs
+ * leaves nothing behind in the function logs, so "uploading from my phone
+ * just fails" was untraceable: the successful uploads were all we could see.
+ * /api/log is the existing rate-limited, PII-redacting client sink, and it is
+ * the one API path exempt from the session-timeout gate, so it still records
+ * the report when an expired session is the very thing being reported.
+ * Metadata only, never the document.
+ */
+function reportUploadFailure(report: {
+  status: number
+  size: number
+  type: string
+  reason: string
+}): void {
+  void fetch('/api/log', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message: 'underlag upload failed', extra: report }),
+  }).catch(() => {
+    // Reporting the failure must never become a second failure.
+  })
+}
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -749,15 +811,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
     try {
       const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${id}`)
+      if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Kunde inte hämta posten')
       const item = json.data as InboxItem
       setSelected(item)
       await loadDocument(id, item.document_id)
     } catch (err) {
       toast({
         title: 'Kunde inte ladda dokumentet',
-        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
+        description: failureText(err),
         variant: 'destructive',
       })
     }
@@ -808,8 +870,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         method: 'POST',
         body: fd,
       })
+      if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Uppladdning misslyckades')
       if (json.data?.extraction_skipped) {
         const pages = json.data?.page_count
         toast({
@@ -833,9 +895,16 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         setSelectedId((prev) => (prev === tempId ? null : prev))
         setSelected((prev) => (prev?.id === tempId ? null : prev))
       }
+      const reason = failureText(err)
+      reportUploadFailure({
+        status: err instanceof ResolvedFailure ? err.status : 0,
+        size: file.size,
+        type: file.type || 'unknown',
+        reason,
+      })
       toast({
         title: 'Uppladdning misslyckades',
-        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
+        description: reason,
         variant: 'destructive',
       })
     } finally {
@@ -875,19 +944,21 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           body: JSON.stringify({ transaction_id: transactionId }),
         },
       )
-      if (!res.ok) throw new Error(String(res.status))
+      if (!res.ok) throw await resolveFailure(res)
       toast({
         title: 'Underlag kopplat',
         description: rest.length ? `${file.name}. ${rest.length} till lades i inkorgen.` : file.name,
       })
       setSelectedPurchaseId(null)
       await Promise.all([fetchItems(), fetchPurchases()])
-    } catch {
+    } catch (err) {
       // The document is safely filed either way; only the link failed, and
       // the user can still make it by hand from the inbox.
       toast({
         title: 'Uppladdat, men inte kopplat',
-        description: 'Dokumentet ligger i inkorgen. Koppla det till köpet därifrån.',
+        description: err instanceof ResolvedFailure
+          ? `${failureText(err)} Dokumentet ligger i inkorgen, koppla det till köpet därifrån.`
+          : 'Dokumentet ligger i inkorgen. Koppla det till köpet därifrån.',
         variant: 'destructive',
       })
       await fetchItems()
@@ -944,8 +1015,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${id}`, {
         method: 'DELETE',
       })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Kunde inte ta bort')
+      if (!res.ok) throw await resolveFailure(res)
       toast({ title: 'Borttagen' })
       if (selectedId === id) {
         setSelectedId(null)
@@ -955,7 +1025,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } catch (err) {
       toast({
         title: 'Kunde inte ta bort',
-        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
+        description: failureText(err),
         variant: 'destructive',
       })
     } finally {
@@ -1057,15 +1127,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const res = await fetch('/api/extensions/ext/invoice-inbox/inbox/rotate', {
         method: 'POST',
       })
+      if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Rotation misslyckades')
       setInboxAddress(json.data)
       setAddressLoadFailed(false)
       toast({ title: 'Ny adress skapad', description: json.data.address })
     } catch (err) {
       toast({
         title: 'Rotation misslyckades',
-        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
+        description: failureText(err),
         variant: 'destructive',
       })
     } finally {
@@ -2796,11 +2866,10 @@ function FieldsRail({
         `/api/extensions/ext/invoice-inbox/items/${item.id}/retry-extraction`,
         { method: 'POST' },
       )
-      const json = await res.json().catch(() => ({}))
       if (!res.ok) {
         toast({
           title: 'Tolkning misslyckades',
-          description: json.error || 'Försök igen om en stund.',
+          description: (await resolveFailure(res)).message,
           variant: 'destructive',
         })
         return
@@ -3471,21 +3540,21 @@ export function EditableFieldsList({
             body: JSON.stringify(body),
           }
         )
-        const json = await res.json()
         if (!res.ok) {
           // 409 means the item is already linked to a supplier invoice and
-          // the server has rejected the edit. Surface the specific Swedish
-          // message ("Posten är redan kopplad…") instead of the generic
-          // fallback so the user understands why the field locked.
-          const isConflict = res.status === 409
+          // the server has rejected the edit. Name that in the title; the
+          // description carries the specific Swedish message ("Posten är
+          // redan kopplad…") for every status.
+          const failure = await resolveFailure(res)
           toast({
             variant: 'destructive',
-            title: isConflict ? 'Posten är låst' : 'Kunde inte spara',
-            description: json.error ?? 'Försök igen',
+            title: res.status === 409 ? 'Posten är låst' : 'Kunde inte spara',
+            description: failure.message,
           })
           setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
           return
         }
+        const json = await res.json()
         if (json.data?.extracted_data) {
           onUpdated(json.data.extracted_data as InvoiceExtractionResult)
         }
