@@ -205,11 +205,11 @@ describe('Peppol delivery audit lifecycle', () => {
     await runAsServiceRole(async (client) => {
       await client.query(
         `SELECT public.record_peppol_delivery_event(
-          $1, $2, 'storecove', 'tenant-42', 'submission-guid', 'event-1',
+          $1, $2, 'storecove', 'tenant-42', 'submission-guid', $3,
           'submission_accepted', 'submission_accepted', false, NULL,
-          '{"event":"submission_accepted"}'::jsonb, $3, 'hmac-sha256', now()
+          '{"event":"submission_accepted"}'::jsonb, $4, 'hmac-sha256', now()
         )`,
-        [seeded.companyId, seeded.idempotencyKey, '5'.repeat(64)],
+        [seeded.companyId, seeded.idempotencyKey, randomUUID(), '5'.repeat(64)],
       )
       const evidenceSql = `SELECT public.record_peppol_delivery_evidence(
         $1, $2, 'storecove', 'access_point_evidence', '{"receipt":"ok"}'::jsonb,
@@ -243,11 +243,11 @@ describe('Peppol delivery audit lifecycle', () => {
     await runAsServiceRole(async (client) => {
       await client.query(
         `SELECT public.record_peppol_delivery_event(
-          $1, $2, 'storecove', 'tenant-42', 'submission-guid', 'event-1',
+          $1, $2, 'storecove', 'tenant-42', 'submission-guid', $3,
           'submission_accepted', 'submission_accepted', false, NULL,
-          '{"event":"submission_accepted"}'::jsonb, $3, 'hmac-sha256', now()
+          '{"event":"submission_accepted"}'::jsonb, $4, 'hmac-sha256', now()
         )`,
-        [seeded.companyId, seeded.idempotencyKey, '7'.repeat(64)],
+        [seeded.companyId, seeded.idempotencyKey, randomUUID(), '7'.repeat(64)],
       )
 
       await expect(client.query(
