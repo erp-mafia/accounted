@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { enrichAccountMappingsWithVat } from '../account-vat-treatment'
+import {
+  applyVatTreatmentReview,
+  enrichAccountMappingsWithVat,
+} from '../account-vat-treatment'
 import type { AccountMapping } from '../types'
 
 function mapping(account: string, name: string): AccountMapping {
@@ -44,5 +47,26 @@ describe('enrichAccountMappingsWithVat', () => {
       vatTreatmentReviewed: true,
       requiresVatTreatmentReview: false,
     })
+  })
+})
+
+describe('applyVatTreatmentReview', () => {
+  it('marks only the selected row reviewed, including class 5 and 6 accounts', () => {
+    const mappings = [
+      mapping('5010', 'Inköp tjänst EU'),
+      mapping('3041', 'Försäljning tjänst 25% sv'),
+    ]
+    const result = applyVatTreatmentReview(
+      mappings,
+      '5010',
+      'reverse_charge_eu_services',
+      0.25,
+    )
+    expect(result[0]).toMatchObject({
+      defaultVatTreatment: 'reverse_charge_eu_services',
+      defaultVatRate: 0.25,
+      vatTreatmentReviewed: true,
+    })
+    expect(result[1].vatTreatmentReviewed).toBeUndefined()
   })
 })

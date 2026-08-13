@@ -1,5 +1,8 @@
 import type { BASAccount } from '@/types'
-import { suggestVatTreatment } from '@/lib/vat/account-vat-treatment'
+import {
+  suggestVatTreatment,
+  type AccountVatTreatment,
+} from '@/lib/vat/account-vat-treatment'
 import type { AccountMapping } from './types'
 
 /**
@@ -42,4 +45,23 @@ export function enrichAccountMappingsWithVat(
       requiresVatTreatmentReview: accountClass === 3 || accountClass === 4,
     }
   })
+}
+
+export function applyVatTreatmentReview(
+  mappings: AccountMapping[],
+  sourceAccount: string,
+  treatment: AccountVatTreatment | null,
+  rate: number | null,
+): AccountMapping[] {
+  return mappings.map((mapping) =>
+    mapping.sourceAccount === sourceAccount
+      ? {
+          ...mapping,
+          defaultVatTreatment: treatment,
+          defaultVatRate: rate,
+          vatTreatmentSuggested: false,
+          vatTreatmentReviewed: true,
+        }
+      : mapping
+  )
 }

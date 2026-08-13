@@ -62,7 +62,10 @@ import type {
   ImportResult,
   ParseIssue,
 } from '@/lib/import/types'
-import { enrichAccountMappingsWithVat } from '@/lib/import/account-vat-treatment'
+import {
+  applyVatTreatmentReview,
+  enrichAccountMappingsWithVat,
+} from '@/lib/import/account-vat-treatment'
 import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
 import type { TheaterModel } from '@/lib/import/theater-model'
 
@@ -725,24 +728,10 @@ function SIEImportWizard() {
     treatment: AccountVatTreatment | null,
     rate: number | null,
   ) => {
-    setMappings((prev) => prev.map((mapping) =>
-      mapping.sourceAccount === sourceAccount
-        ? {
-            ...mapping,
-            defaultVatTreatment: treatment,
-            defaultVatRate: rate,
-            vatTreatmentSuggested: false,
-          }
-        : mapping
-    ))
+    setMappings((prev) => applyVatTreatmentReview(prev, sourceAccount, treatment, rate))
   }, [])
 
   const confirmVatReview = useCallback(() => {
-    setMappings((prev) => prev.map((mapping) =>
-      mapping.requiresVatTreatmentReview
-        ? { ...mapping, vatTreatmentReviewed: true }
-        : mapping
-    ))
     setStep('review')
     setError(null)
     setValidationErrors([])
@@ -943,7 +932,7 @@ function SIEImportWizard() {
           unresolvedVatAccountCount={mappings.filter((mapping) =>
             mapping.sourceAccount === mapping.targetAccount &&
             ['3', '4'].includes(mapping.sourceAccount.charAt(0)) &&
-            !mapping.defaultVatTreatment
+            (!mapping.defaultVatTreatment || !mapping.vatTreatmentReviewed)
           ).length} />
       )}
     </div>

@@ -42,7 +42,7 @@ interface AccountMappingStepProps {
   mappings: AccountMapping[]
   basAccounts: BASAccount[]
   onMappingChange: (sourceAccount: string, targetAccount: string, targetName: string) => void
-  onVatTreatmentChange: (
+  onVatTreatmentChange?: (
     sourceAccount: string,
     treatment: AccountVatTreatment | null,
     rate: number | null,
@@ -255,7 +255,8 @@ export default function AccountMappingStep({
                       <ArrowRight className="h-4 w-4 text-muted-foreground" />
                     </TableCell>
                     <TableCell>
-                      {mapping.sourceAccount === mapping.targetAccount &&
+                      {onVatTreatmentChange &&
+                      mapping.sourceAccount === mapping.targetAccount &&
                       ['3', '4', '5', '6'].includes(mapping.sourceAccount.charAt(0)) ? (
                         <div className="flex min-w-72 gap-2">
                           <Select
@@ -304,6 +305,20 @@ export default function AccountMappingStep({
                               <SelectItem value="0.06">6 %</SelectItem>
                             </SelectContent>
                           </Select>
+                          {mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => onVatTreatmentChange(
+                                mapping.sourceAccount,
+                                mapping.defaultVatTreatment ?? null,
+                                mapping.defaultVatRate ?? null,
+                              )}
+                            >
+                              {t('vat_treatment_confirm')}
+                            </Button>
+                          )}
                         </div>
                       ) : (
                         <span className="text-muted-foreground">-</span>

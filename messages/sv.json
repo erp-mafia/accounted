@@ -4931,7 +4931,8 @@
     "vat_rate_label": "Momssats",
     "vat_rate_none": "Ingen",
     "vat_review_filter": "{count} momskoder att granska",
-    "vat_treatment_column": "Momskod"
+    "vat_treatment_column": "Momskod",
+    "vat_treatment_confirm": "Bekräfta"
   },
   "dimensions": {
     "new_value": "Nytt värde",

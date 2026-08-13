@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { resolveVatTreatmentRuta, suggestVatTreatment } from '../account-vat-treatment'
+import {
+  defaultRateForVatTreatment,
+  resolveVatTreatmentRuta,
+  suggestVatTreatment,
+} from '../account-vat-treatment'
 
 describe('resolveVatTreatmentRuta', () => {
   it('maps revenue treatments to their momsdeklaration boxes', () => {
@@ -38,5 +42,24 @@ describe('suggestVatTreatment', () => {
   it('does not guess from an account number alone', () => {
     expect(suggestVatTreatment('3041', 'Projektintäkt')).toBeNull()
     expect(suggestVatTreatment('4056', 'Projektkostnad')).toBeNull()
+  })
+
+  it('matches EU as a term, not a substring inside another word', () => {
+    expect(suggestVatTreatment('4056', 'Reumatologiska varor 25%')).toBeNull()
+    expect(suggestVatTreatment('4056', 'Inköp EU-varor 25%')).toEqual({
+      treatment: 'reverse_charge_eu_goods',
+      rate: 0.25,
+    })
+  })
+
+  it('does not assume a purchase-side reverse-charge rate', () => {
+    expect(defaultRateForVatTreatment('reverse_charge_eu_goods', 4)).toBeNull()
+    expect(defaultRateForVatTreatment('reverse_charge_eu_services', 5)).toBeNull()
+    expect(defaultRateForVatTreatment('reverse_charge_domestic', 6)).toBeNull()
+    expect(defaultRateForVatTreatment('export_goods', 4)).toBeNull()
+    expect(suggestVatTreatment('4056', 'Inköp varor EU')).toEqual({
+      treatment: 'reverse_charge_eu_goods',
+      rate: null,
+    })
   })
 })

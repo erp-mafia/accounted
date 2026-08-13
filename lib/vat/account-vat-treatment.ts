@@ -50,7 +50,7 @@ export function defaultRateForVatTreatment(
   if (treatment === 'reduced_6') return 0.06
   if (treatment === 'exempt') return 0
   if (treatment === 'vmb' || treatment === 'rental_voluntary') return 0.25
-  return accountClass >= 4 && accountClass <= 6 ? 0.25 : 0
+  return accountClass >= 4 && accountClass <= 6 ? null : 0
 }
 
 export function isAccountVatTreatment(value: unknown): value is AccountVatTreatment {
@@ -60,7 +60,7 @@ export function isAccountVatTreatment(value: unknown): value is AccountVatTreatm
 
 export interface SuggestedVatTreatment {
   treatment: AccountVatTreatment
-  rate: number
+  rate: number | null
 }
 
 /**
@@ -76,15 +76,17 @@ export function suggestVatTreatment(
   if (accountClass < 3 || accountClass > 6) return null
   const name = accountName.toLocaleLowerCase('sv-SE')
   const percent = /\b(25|12|6)\s*%/.exec(name)
-  const rate = percent ? Number(percent[1]) / 100 : 0.25
+  const rate = percent ? Number(percent[1]) / 100 : null
 
   if (accountClass === 3) {
-    if (/vmb|vinstmarginal/.test(name)) return { treatment: 'vmb', rate }
-    if (/hyra|uthyrning/.test(name) && /frivillig/.test(name)) return { treatment: 'rental_voluntary', rate }
+    if (/vmb|vinstmarginal/.test(name)) return { treatment: 'vmb', rate: rate ?? 0.25 }
+    if (/hyra|uthyrning/.test(name) && /frivillig/.test(name)) {
+      return { treatment: 'rental_voluntary', rate: rate ?? 0.25 }
+    }
     if (/omvänd/.test(name)) return { treatment: 'reverse_charge_domestic', rate: 0 }
     if (/momsfri|utan moms/.test(name)) return { treatment: 'exempt', rate: 0 }
-    if (/eu/.test(name) && /var/.test(name)) return { treatment: 'reverse_charge_eu_goods', rate: 0 }
-    if (/eu/.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate: 0 }
+    if (/\beu\b/.test(name) && /var/.test(name)) return { treatment: 'reverse_charge_eu_goods', rate: 0 }
+    if (/\beu\b/.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate: 0 }
     if (/export|utanför eu/.test(name) && /var/.test(name)) return { treatment: 'export_goods', rate: 0 }
     if (/export|utanför eu/.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'export_services', rate: 0 }
     if (/försälj|forsalj|intäkt|intakt/.test(name) && percent) {
@@ -97,8 +99,8 @@ export function suggestVatTreatment(
   }
 
   if (/omvänd/.test(name) && /sverige|svensk|inrikes/.test(name)) return { treatment: 'reverse_charge_domestic', rate }
-  if (/eu/.test(name) && /var/.test(name)) return { treatment: 'reverse_charge_eu_goods', rate }
-  if (/eu/.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate }
+  if (/\beu\b/.test(name) && /var/.test(name)) return { treatment: 'reverse_charge_eu_goods', rate }
+  if (/\beu\b/.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'reverse_charge_eu_services', rate }
   if (/import|utanför eu/.test(name) && /var/.test(name)) return { treatment: 'export_goods', rate }
   if (/utanför eu/.test(name) && /tjänst|tjanst/.test(name)) return { treatment: 'export_services', rate }
   return null
