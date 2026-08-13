@@ -528,15 +528,19 @@ function normalizeKommunName(raw: string): string {
  * Percentage-based skatteavdrag stated in whole kronor with öretal dropped
  * (the whole-krona rule in SFF 2011:1261 22 kap. 1 §), same rule as
  * taxForRate above. Computed in integer öre and hundredths of a percent:
- * flooring the raw float product would lose a whole krona when float noise
+ * truncating the raw float product would lose a whole krona when float noise
  * lands an exact result just below an integer
  * (1000 × 0.007 === 6.999999999999999, so 0.7 % jämkning of 1 000 kr would
- * floor to 6 kr instead of 7 kr).
+ * come out as 6 kr instead of 7 kr).
  */
 function wholeKronaPercentageTax(monthlyIncome: number, percentage: number): number {
   const incomeOre = Math.round(monthlyIncome * 100)
   const percentageHundredths = Math.round(percentage * 100)
-  return Math.floor((incomeOre * percentageHundredths) / 1_000_000)
+  // Math.trunc, not Math.floor: dropping öre truncates toward zero, and a
+  // negative taxable income (deductions exceeding pay) must not gain an extra
+  // negative krona. Normalize the -0 that Math.trunc leaves on small negatives.
+  const wholeKronor = Math.trunc((incomeOre * percentageHundredths) / 1_000_000)
+  return wholeKronor === 0 ? 0 : wholeKronor
 }
 
 /**

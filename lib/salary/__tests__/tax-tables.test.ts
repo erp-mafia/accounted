@@ -112,6 +112,15 @@ describe('calculateJamkningTax', () => {
     expect(calculateJamkningTax(1000, 0.7)).toBe(7)
     expect(calculateJamkningTax(5000, 0.7)).toBe(35)
   })
+
+  it('truncates toward zero for negative taxable income (skeptic refutation case)', () => {
+    // Deductions exceeding pay make taxable income negative; dropping öre
+    // truncates toward zero, so Math.floor (which would give -543 and -1
+    // here) must not add an extra negative krona
+    expect(calculateJamkningTax(-3500.25, 15.5)).toBe(-542)
+    expect(calculateSidoinkomstTax(-100.01)).toBe(-30)
+    expect(calculateSidoinkomstTax(-0.01)).toBe(0)
+  })
 })
 
 describe('calculateSidoinkomstTax', () => {
