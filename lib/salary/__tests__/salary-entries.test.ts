@@ -221,6 +221,91 @@ describe('salary entries: net deductions', () => {
   })
 })
 
+describe('salary entries: öresavrundning', () => {
+  const roundingItem = (amount: number) => ({
+    item_type: 'oresavrundning',
+    amount,
+    account_number: '3740',
+    is_net_deduction: false,
+    is_gross_deduction: false,
+  })
+
+  it('debits 3740 for the rounding without shrinking the base salary line', async () => {
+    // net_salary is stored rounded (22999.70 → 23000); the line item carries
+    // the 0.30 diff. The 7210 debit must stay the full gross.
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 30000,
+        tax_withheld: 7000.3,
+        net_salary: 23000,
+        line_items: [roundingItem(0.3)],
+      }),
+    ])
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '3740')[0].debit_amount).toBe(0.3)
+    expect(linesOn(salary, '2710')[0].credit_amount).toBe(7000.3)
+    expect(linesOn(salary, '1930')[0].credit_amount).toBe(23000)
+    assertBalanced(salary)
+  })
+
+  it('keeps the base remainder correct next to other line items', async () => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 32000,
+        tax_withheld: 8000.55,
+        net_salary: 24000,
+        line_items: [
+          { item_type: 'overtime', amount: 2000, account_number: '7281', is_net_deduction: false, is_gross_deduction: false },
+          roundingItem(0.55),
+        ],
+      }),
+    ])
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+
+    expect(linesOn(salary, '7281')[0].debit_amount).toBe(2000)
+    // Remainder is gross - overtime, NOT gross - overtime - rounding.
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '3740')[0].debit_amount).toBe(0.55)
+    assertBalanced(salary)
+  })
+
+  it('tags the rounding line with the employee dimensions bag and aggregates per bag', async () => {
+    const run = makeRun([
+      makeEmployee({
+        employee_id: 'a',
+        gross_salary: 30000,
+        tax_withheld: 7000.3,
+        net_salary: 23000,
+        default_dimensions: { '1': 'KS01' },
+        line_items: [roundingItem(0.3)],
+      }),
+      makeEmployee({
+        employee_id: 'b',
+        gross_salary: 30000,
+        tax_withheld: 7000.6,
+        net_salary: 23000,
+        default_dimensions: { '1': 'KS01' },
+        line_items: [roundingItem(0.6)],
+      }),
+    ])
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+
+    const roundingLines = linesOn(salary, '3740')
+    expect(roundingLines).toHaveLength(1)
+    expect(roundingLines[0].debit_amount).toBe(0.9)
+    expect(roundingLines[0].dimensions).toEqual({ '1': 'KS01' })
+    assertBalanced(salary)
+  })
+})
+
 describe('salary entries: dimensions propagation (PR8)', () => {
   it('splits the salary expense per employee bag; tax and bank legs stay untagged', async () => {
     const run = makeRun([
