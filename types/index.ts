@@ -2302,6 +2302,7 @@ export type PendingOperationType =
   | 'unlock_period'
   | 'set_opening_balances'
   | 'run_year_end'
+  | 'post_kontantmetod_cutoff'
   | 'run_currency_revaluation'
   // Stream 1 Phase 1: SIE import (export is read-only)
   | 'import_sie'
@@ -3584,6 +3585,8 @@ export type YearEndBlockerCode =
   | 'TRIAL_BALANCE_UNBALANCED'
   | 'CONTINUITY_MISMATCH'
   | 'NEXT_PERIOD_HAS_IB'
+  | 'KONTANTMETOD_CUTOFF_REQUIRED'
+  | 'KONTANTMETOD_CUTOFF_CHECK_FAILED'
   | 'UNBOOKED_TRANSACTIONS'
   | 'UNBOOKED_CHECK_FAILED'
 

@@ -156,8 +156,15 @@ import {
   validateVoucherForSupplierInvoiceLink,
 } from '@/lib/invoices/supplier-voucher-matching'
 import { findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
-import { closePeriod, countUnbookedInPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { closePeriod, countUnbookedInPeriod, findNextPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
+import {
+  assessKontantmetodCutoff,
+  hasIncompleteKontantmetodCutoffPair,
+  KONTANTMETOD_CUTOFF_DESCRIPTIONS,
+  nextDay,
+  reverseLines,
+} from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
@@ -1144,6 +1151,7 @@ const STAGED_OPERATION_SCHEMA = {
  */
 const TOOL_PREFLIGHT_MAP: Record<string, string> = {
   gnubok_run_year_end: 'gnubok_year_end_readiness',
+  gnubok_post_kontantmetod_cutoff: 'gnubok_year_end_readiness',
   gnubok_vat_declaration_submit: 'gnubok_vat_declaration_validate',
   gnubok_post_annual_depreciation: 'gnubok_propose_annual_depreciation',
   gnubok_book_salary_run: 'gnubok_get_salary_run',
@@ -1761,6 +1769,8 @@ export const YEAR_END_BLOCKER_KIND: Record<YearEndBlockerCode, string> = {
   TRIAL_BALANCE_UNBALANCED: 'trial_balance_unbalanced',
   CONTINUITY_MISMATCH: 'opening_balance_continuity',
   NEXT_PERIOD_HAS_IB: 'next_period_ib_posted',
+  KONTANTMETOD_CUTOFF_REQUIRED: 'kontantmetod_cutoff_required',
+  KONTANTMETOD_CUTOFF_CHECK_FAILED: 'kontantmetod_cutoff_required',
   UNBOOKED_TRANSACTIONS: 'unbooked_transactions',
   UNBOOKED_CHECK_FAILED: 'unbooked_transactions',
 }
@@ -13132,7 +13142,7 @@ export const tools: McpTool[] = [
     // there, the period either is closable or is not. Open items in foreign
     // currency are warnings, never blockers, because executeYearEndClosing
     // revalues them in step 2 (lib/core/bookkeeping/year-end-service.ts).
-    description: "Pre-flight for irreversible gnubok_run_year_end. Blockers: unbooked_transactions (most common), draft_entries, unexplained_voucher_gap, sequence_mismatch, trial_balance_unbalanced, opening_balance_continuity, next_period_ib_posted, period-state. FX = warning, never blocker.",
+    description: 'run_year_end preflight. Blockers: kontantmetod_cutoff_required, unbooked_transactions (most common), draft_entries, unexplained_voucher_gap, sequence_mismatch, trial_balance_unbalanced, opening_balance_continuity, next_period_ib_posted, period-state. FX = warning, never blocker.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -13233,6 +13243,185 @@ export const tools: McpTool[] = [
         preview,
         summary,
       }
+    },
+  },
+
+  {
+    name: 'gnubok_post_kontantmetod_cutoff',
+    title: 'Post Cash-Method Year-End Cut-Off',
+    description: 'Stage the exact year-end receivable/payable cut-off and next-period reversals required for kontantmetoden. Review all proposed lines, then approve with confirmed=true.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        fiscal_period_id: {
+          type: 'string',
+          description: 'UUID of the cash-method fiscal period being closed',
+        },
+        idempotency_key: {
+          type: 'string',
+          description: 'Optional UUID to dedupe retries of the same preview and staged operation',
+        },
+      },
+      required: ['fiscal_period_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+
+      const [{ data: period }, { data: settings }] = await Promise.all([
+        supabase
+          .from('fiscal_periods')
+          .select('id, name, period_start, period_end, is_closed, locked_at')
+          .eq('id', fiscalPeriodId)
+          .eq('company_id', companyId)
+          .maybeSingle(),
+        supabase
+          .from('company_settings')
+          .select('accounting_method, entity_type')
+          .eq('company_id', companyId)
+          .maybeSingle(),
+      ])
+
+      if (!period) throw new Error('Fiscal period not found')
+      if (period.is_closed || period.locked_at) {
+        throw new Error('Räkenskapsperioden är stängd eller låst')
+      }
+      if (settings?.accounting_method !== 'cash') {
+        throw new Error('Företaget använder inte kontantmetoden')
+      }
+
+      const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
+      if (!nextPeriod) {
+        throw new Error(
+          'Kontantmetodens bokslutsavgränsning kräver att nästa räkenskapsår är upplagt: vändningarna bokas första dagen på det nya året.',
+        )
+      }
+      if (nextPeriod.is_closed || nextPeriod.locked_at) {
+        throw new Error(
+          'Nästa räkenskapsår är stängt eller låst: vändningarna kan inte bokföras. Lås upp perioden och försök igen.',
+        )
+      }
+
+      const assessment = await assessKontantmetodCutoff(
+        supabase,
+        companyId,
+        period,
+        nextPeriod.id,
+        (settings.entity_type ?? 'aktiebolag') as EntityType,
+      )
+      if (assessment.collection.unknownVatTreatment.length > 0) {
+        throw new Error(
+          `${assessment.collection.unknownVatTreatment.length} fakturor saknar momsinställning: ` +
+            `${assessment.collection.unknownVatTreatment.slice(0, 10).join(', ')}. Komplettera dem och försök igen.`,
+        )
+      }
+      if (assessment.collection.strayVatOnZeroRate.length > 0) {
+        throw new Error(
+          `${assessment.collection.strayVatOnZeroRate.length} fakturor har moms trots en momsfri momsinställning: ` +
+          `${assessment.collection.strayVatOnZeroRate.slice(0, 10).join(', ')}. Rätta dem och försök igen.`,
+        )
+      }
+      if (
+        assessment.lines.receivableLines.length === 0 &&
+        assessment.lines.payableLines.length === 0
+      ) {
+        throw new Error('Inga obetalda kund- eller leverantörsfakturor finns vid periodens slut')
+      }
+      if (
+        assessment.postings.complete ||
+        hasIncompleteKontantmetodCutoffPair(assessment.postings, assessment.lines)
+      ) {
+        throw new Error(
+          'Kontantmetodens bokslutsavgränsning är redan bokförd eller delvis bokförd för perioden. Kontrollera verifikaten innan du försöker igen.',
+        )
+      }
+
+      const reversalDate = nextDay(period.period_end)
+      const entries = [
+        ...(assessment.lines.receivableLines.length > 0 &&
+        !assessment.postings.receivableEntryId &&
+        !assessment.postings.receivableReversalId
+          ? [
+              {
+                kind: 'receivable_cutoff',
+                fiscal_period_id: fiscalPeriodId,
+                entry_date: period.period_end,
+                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+                total: assessment.lines.receivableTotal,
+                lines: assessment.lines.receivableLines,
+              },
+              {
+                kind: 'receivable_reversal',
+                fiscal_period_id: nextPeriod.id,
+                entry_date: reversalDate,
+                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+                total: assessment.lines.receivableTotal,
+                lines: reverseLines(assessment.lines.receivableLines),
+              },
+            ]
+          : []),
+        ...(assessment.lines.payableLines.length > 0 &&
+        !assessment.postings.payableEntryId &&
+        !assessment.postings.payableReversalId
+          ? [
+              {
+                kind: 'payable_cutoff',
+                fiscal_period_id: fiscalPeriodId,
+                entry_date: period.period_end,
+                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable,
+                total: assessment.lines.payableTotal,
+                lines: assessment.lines.payableLines,
+              },
+              {
+                kind: 'payable_reversal',
+                fiscal_period_id: nextPeriod.id,
+                entry_date: reversalDate,
+                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal,
+                total: assessment.lines.payableTotal,
+                lines: reverseLines(assessment.lines.payableLines),
+              },
+            ]
+          : []),
+      ]
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'post_kontantmetod_cutoff',
+        `Kontantmetodens bokslutsavgränsning: ${period.name}`,
+        {
+          fiscal_period_id: fiscalPeriodId,
+          next_fiscal_period_id: nextPeriod.id,
+          collection: assessment.collection,
+        },
+        {
+          fiscal_period_id: fiscalPeriodId,
+          next_fiscal_period_id: nextPeriod.id,
+          receivable_count: assessment.collection.receivables.length,
+          payable_count: assessment.collection.payables.length,
+          entries,
+        },
+        actor,
+        {
+          description: 'Re-run year-end readiness after the cut-off and all reversals are posted.',
+          tool: 'gnubok_year_end_readiness',
+          args: { fiscal_period_id: fiscalPeriodId },
+        },
+        {
+          idempotencyKey:
+            typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          dateForPeriodCheck: period.period_end,
+        },
+      )
     },
   },
 

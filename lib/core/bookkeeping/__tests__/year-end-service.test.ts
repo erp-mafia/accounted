@@ -34,6 +34,7 @@ interface SeededTables {
   supplier_invoices?: Row[]
   invoice_payments?: Row[]
   supplier_invoice_payments?: Row[]
+  company_settings?: Row[]
 }
 
 /**
@@ -236,6 +237,11 @@ import { validateYearEndReadiness, previewYearEndClosing } from '../year-end-ser
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { countUnbookedInPeriod, findNextPeriod } from '../period-service'
+import {
+  buildCutoffLines,
+  KONTANTMETOD_CUTOFF_DESCRIPTIONS,
+  reverseLines,
+} from '../kontantmetod-cutoff'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -659,6 +665,91 @@ describe('validateYearEndReadiness', () => {
     expect(result.ready).toBe(false)
     expect(result.errors.some((e: string) => e.includes('redan ingående balanser bokförda'))).toBe(true)
     expect(result.blockers.some((b) => b.code === 'NEXT_PERIOD_HAS_IB')).toBe(true)
+  })
+})
+
+describe('validateYearEndReadiness: kontantmetoden cut-off gate', () => {
+  const nextPeriod = {
+    id: 'fp-2', period_start: '2025-01-01', period_end: '2025-12-31',
+    is_closed: false, locked_at: null, opening_balance_entry_id: null,
+  }
+  const openInvoice = {
+    id: 'inv-1', company_id: 'company-1', invoice_number: 'F-1',
+    invoice_date: '2024-12-15', status: 'sent', total: 1250, total_sek: 1250,
+    vat_amount: 250, vat_amount_sek: 250, vat_treatment: 'standard_25',
+    credited_invoice_id: null, document_type: 'invoice',
+  }
+
+  beforeEach(() => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [], isBalanced: true, totalDebit: 10000, totalCredit: 10000,
+    } as never)
+    vi.mocked(findNextPeriod).mockResolvedValue(nextPeriod as never)
+  })
+
+  function cashTables(journalEntries: Row[] = []): SeededTables {
+    return {
+      ...fxBaseTables({ journal_entries: journalEntries }),
+      company_settings: [{
+        company_id: 'company-1', accounting_method: 'cash', entity_type: 'aktiebolag',
+      }],
+      invoices: [openInvoice],
+    }
+  }
+
+  it('blocks year-end when an outstanding invoice has no matching cut-off pair', async () => {
+    const result = await validateYearEndReadiness(
+      makeFilteringClient(cashTables()) as never,
+      'company-1', 'user-1', 'fp-1',
+    )
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers).toContainEqual(expect.objectContaining({
+      code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+    }))
+  })
+
+  it('clears only after the exact cut-off and next-period reversal are posted', async () => {
+    const expected = buildCutoffLines([{
+      id: 'inv-1', reference: 'F-1', vatTreatment: 'standard_25',
+      outstanding: 1250, vat: 250,
+    }], [])
+    const markers = [
+      {
+        id: 'cutoff', company_id: 'company-1', fiscal_period_id: 'fp-1',
+        voucher_series: 'A', voucher_number: 10, status: 'posted', source_type: 'year_end',
+        source_id: 'fp-1', entry_date: '2024-12-31',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        lines: expected.receivableLines,
+      },
+      {
+        id: 'reversal', company_id: 'company-1', fiscal_period_id: 'fp-2',
+        voucher_series: 'A', voucher_number: 1, status: 'posted', source_type: 'year_end',
+        source_id: 'fp-1', entry_date: '2025-01-01',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+        lines: reverseLines(expected.receivableLines),
+      },
+    ]
+
+    const result = await validateYearEndReadiness(
+      makeFilteringClient(cashTables(markers)) as never,
+      'company-1', 'user-1', 'fp-1',
+    )
+    expect(result.blockers.some((blocker) =>
+      blocker.code === 'KONTANTMETOD_CUTOFF_REQUIRED' ||
+      blocker.code === 'KONTANTMETOD_CUTOFF_CHECK_FAILED',
+    )).toBe(false)
+    expect(result.ready).toBe(true)
+  })
+
+  it('fails closed when the cut-off query cannot run', async () => {
+    const result = await validateYearEndReadiness(
+      makeFilteringClient(cashTables(), 'company_settings') as never,
+      'company-1', 'user-1', 'fp-1',
+    )
+    expect(result.blockers).toContainEqual(expect.objectContaining({
+      code: 'KONTANTMETOD_CUTOFF_CHECK_FAILED',
+    }))
   })
 })
 

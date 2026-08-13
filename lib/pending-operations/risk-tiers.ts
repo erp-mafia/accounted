@@ -110,6 +110,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   unlock_period: 'high',
   set_opening_balances: 'high',
   run_year_end: 'high',
+  post_kontantmetod_cutoff: 'high',
   run_currency_revaluation: 'high',
   // Planenlig avskrivning: one journal entry per asset, each independently
   // reversible (storno). Mid-stakes bokslut posting: staged and human-reviewed,

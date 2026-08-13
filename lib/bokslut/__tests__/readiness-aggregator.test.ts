@@ -20,16 +20,11 @@ vi.mock('@/lib/reports/supplier-reconciliation', () => ({
   generateReconciliation: vi.fn(),
 }))
 
-vi.mock('@/lib/core/bookkeeping/kontantmetod-cutoff', () => ({
-  collectKontantmetodCutoff: vi.fn(),
-}))
-
 import { buildBokslutReadinessReport } from '../readiness-aggregator'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
 import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
-import { collectKontantmetodCutoff } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 
 const CASH_ACCOUNT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 
@@ -350,7 +345,6 @@ describe('buildBokslutReadinessReport', () => {
     // only mislead.
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
-    vi.mocked(collectKontantmetodCutoff).mockResolvedValue({ receivables: [], payables: [], unknownVatTreatment: [], strayVatOnZeroRate: [] })
     const supabase = makeSupabase({
       period: { data: PERIOD, error: null },
       settings: { data: { entity_type: 'enskild_firma', accounting_method: 'cash' }, error: null },
@@ -380,17 +374,16 @@ describe('buildBokslutReadinessReport', () => {
     // The AP side still ran and reported clean independently of the AR failure.
     expect(vi.mocked(generateAPReconciliation)).toHaveBeenCalled()
   })
-  it('reminds kontantmetoden companies to book the year-end cut-off', async () => {
-    // BFL 5 kap 2 §: fordringar och skulder must be booked at räkenskapsårets
-    // utgång even though the year is otherwise kept on a cash basis.
-    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
-    vi.mocked(collectKontantmetodCutoff).mockResolvedValue({
-      receivables: [{ id: 'i1', reference: 'F-1', vatTreatment: 'standard_25', outstanding: 1250, vat: 250 }],
-      payables: [{ id: 's1', reference: 'L-1', outstanding: 500, vat: 100, netByAccount: [] }],
-      unknownVatTreatment: [],
-      strayVatOnZeroRate: [],
+  it('passes through the legal kontantmetoden cut-off blocker from core readiness', async () => {
+    const message =
+      '2 obetalda fakturor var utestående vid periodens slut. Förhandsgranska och bokför kontantmetodens bokslutsavgränsning.'
+    vi.mocked(validateYearEndReadiness).mockResolvedValue({
+      ...baseValidation(),
+      ready: false,
+      blockers: [{ code: 'KONTANTMETOD_CUTOFF_REQUIRED', message }],
+      errors: [message],
     })
+    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
     const supabase = makeSupabase({
       period: { data: PERIOD, error: null },
       settings: { data: { entity_type: 'enskild_firma', accounting_method: 'cash' }, error: null },
@@ -398,28 +391,13 @@ describe('buildBokslutReadinessReport', () => {
 
     const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
 
-    const cutoff = report.reminders.find((r) => r.code === 'kontantmetod_cutoff_required')
-    expect(cutoff?.severity).toBe('warning')
-    expect(cutoff?.message).toContain('2 obetalda fakturor')
-    expect(cutoff?.message).toContain('vilande')
-    // Advisory only: it must never flip readiness on its own.
-    expect(report.ready).toBe(true)
-  })
-
-  it('emits no cut-off reminder when nothing was outstanding at period end', async () => {
-    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
-    vi.mocked(collectKontantmetodCutoff).mockResolvedValue({ receivables: [], payables: [], unknownVatTreatment: [], strayVatOnZeroRate: [] })
-    const supabase = makeSupabase({
-      period: { data: PERIOD, error: null },
-      settings: { data: { entity_type: 'enskild_firma', accounting_method: 'cash' }, error: null },
+    expect(report.ready).toBe(false)
+    expect(report.blockerItems).toContainEqual({
+      code: 'KONTANTMETOD_CUTOFF_REQUIRED', message,
     })
-
-    const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
-    expect(report.reminders.find((r) => r.code === 'kontantmetod_cutoff_required')).toBeUndefined()
   })
 
-  it('never runs the cut-off check for faktureringsmetoden companies', async () => {
+  it('keeps faktureringsmetoden reconciliation behavior unchanged', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
     vi.mocked(generateARReconciliation).mockResolvedValue({ is_reconciled: true, difference: 0, unconverted_fx_count: 0 } as never)
@@ -430,20 +408,7 @@ describe('buildBokslutReadinessReport', () => {
     })
 
     await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
-    expect(vi.mocked(collectKontantmetodCutoff)).not.toHaveBeenCalled()
-  })
-
-  it('degrades gracefully when the cut-off check fails', async () => {
-    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
-    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
-    vi.mocked(collectKontantmetodCutoff).mockRejectedValue(new Error('boom'))
-    const supabase = makeSupabase({
-      period: { data: PERIOD, error: null },
-      settings: { data: { entity_type: 'enskild_firma', accounting_method: 'cash' }, error: null },
-    })
-
-    const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
-    expect(report.ready).toBe(true)
-    expect(report.reminders.find((r) => r.code === 'kontantmetod_cutoff_required')).toBeUndefined()
+    expect(vi.mocked(generateARReconciliation)).toHaveBeenCalled()
+    expect(vi.mocked(generateAPReconciliation)).toHaveBeenCalled()
   })
 })

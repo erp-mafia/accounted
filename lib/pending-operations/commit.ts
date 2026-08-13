@@ -53,6 +53,13 @@ import {
   executeYearEndClosing,
   generateOpeningBalances,
 } from '@/lib/core/bookkeeping/year-end-service'
+import {
+  assessKontantmetodCutoff,
+  cutoffCollectionsEqual,
+  hasIncompleteKontantmetodCutoffPair,
+  postKontantmetodCutoff,
+  type CutoffCollection,
+} from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
 import {
   createSupplierCreditNoteEntry,
@@ -3191,6 +3198,104 @@ async function commitRunYearEnd(
   }
 }
 
+async function commitPostKontantmetodCutoff(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  const fiscalPeriodId = params.fiscal_period_id as string
+  const nextFiscalPeriodId = params.next_fiscal_period_id as string
+  const stagedCollection = params.collection as CutoffCollection | undefined
+  if (!fiscalPeriodId || !nextFiscalPeriodId || !stagedCollection) {
+    return { error: 'Invalid staged kontantmetod cut-off parameters', status: 400 }
+  }
+
+  const [{ data: period }, { data: settings }] = await Promise.all([
+    supabase
+      .from('fiscal_periods')
+      .select('id, period_start, period_end, is_closed, locked_at')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    supabase
+      .from('company_settings')
+      .select('accounting_method, entity_type')
+      .eq('company_id', companyId)
+      .maybeSingle(),
+  ])
+
+  if (!period) return { error: 'Fiscal period not found', status: 404 }
+  if (period.is_closed || period.locked_at) {
+    return { error: 'Räkenskapsperioden är stängd eller låst', status: 409 }
+  }
+  if (settings?.accounting_method !== 'cash') {
+    return { error: 'Företaget använder inte kontantmetoden', status: 409 }
+  }
+
+  const { data: nextPeriod } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start, period_end, is_closed, locked_at')
+    .eq('id', nextFiscalPeriodId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (!nextPeriod) return { error: 'Nästa räkenskapsår hittades inte', status: 409 }
+
+  try {
+    const assessment = await assessKontantmetodCutoff(
+      supabase,
+      companyId,
+      period,
+      nextFiscalPeriodId,
+      settings.entity_type ?? 'aktiebolag',
+    )
+
+    if (assessment.postings.complete || hasIncompleteKontantmetodCutoffPair(
+      assessment.postings,
+      assessment.lines,
+    )) {
+      return {
+        error:
+          'Kontantmetodens bokslutsavgränsning är redan bokförd eller delvis bokförd för perioden',
+        status: 409,
+      }
+    }
+    if (!cutoffCollectionsEqual(stagedCollection, assessment.collection)) {
+      return {
+        error:
+          'Reskontran har ändrats sedan förhandsgranskningen. Skapa en ny förhandsgranskning innan du bokför.',
+        status: 409,
+      }
+    }
+
+    const result = await postKontantmetodCutoff(supabase, companyId, userId, {
+      fiscalPeriodId,
+      nextFiscalPeriodId,
+      periodEnd: period.period_end,
+      receivables: assessment.collection.receivables,
+      payables: assessment.collection.payables,
+      entityType: settings.entity_type ?? 'aktiebolag',
+      unknownVatTreatment: assessment.collection.unknownVatTreatment,
+      strayVatOnZeroRate: assessment.collection.strayVatOnZeroRate,
+    })
+
+    return {
+      data: {
+        receivable_entry_id: result.receivableEntry?.id ?? null,
+        receivable_reversal_entry_id: result.receivableReversal?.id ?? null,
+        payable_entry_id: result.payableEntry?.id ?? null,
+        payable_reversal_entry_id: result.payableReversal?.id ?? null,
+      },
+    }
+  } catch (err) {
+    if (isBookkeepingError(err)) throw err
+    return {
+      error: err instanceof Error ? err.message : 'Kontantmetodens bokslutsavgränsning misslyckades',
+      status: 400,
+    }
+  }
+}
+
 async function commitSetOpeningBalances(
   supabase: SupabaseClient,
   userId: string,
@@ -5692,6 +5797,14 @@ async function commitPendingOperationInner(
         break
       case 'run_year_end':
         result = await commitRunYearEnd(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'post_kontantmetod_cutoff':
+        result = await commitPostKontantmetodCutoff(
+          supabase,
+          userId,
+          companyId,
+          pendingOp.params,
+        )
         break
       case 'set_opening_balances':
         result = await commitSetOpeningBalances(supabase, userId, companyId, pendingOp.params)

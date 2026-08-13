@@ -63,6 +63,13 @@ export const VILANDE_INPUT_VAT_ACCOUNT = '2648'
 export const RECEIVABLES_ACCOUNT = '1510'
 export const PAYABLES_ACCOUNT = '2440'
 
+export const KONTANTMETOD_CUTOFF_DESCRIPTIONS = {
+  receivable: 'Kundfordringar vid bokslut (kontantmetoden)',
+  receivableReversal: 'Vändning kundfordringar bokslut (kontantmetoden)',
+  payable: 'Leverantörsskulder vid bokslut (kontantmetoden)',
+  payableReversal: 'Vändning leverantörsskulder bokslut (kontantmetoden)',
+} as const
+
 /** A customer invoice still outstanding at period end. Amounts are SEK. */
 export interface CutoffReceivable {
   id: string
@@ -107,6 +114,39 @@ export interface CutoffLines {
   payableLines: CreateJournalEntryLineInput[]
   receivableTotal: number
   payableTotal: number
+}
+
+interface PostedCutoffEntry {
+  id: string
+  fiscal_period_id: string
+  description: string
+  lines: Array<{
+    account_number: string
+    debit_amount: number | string | null
+    credit_amount: number | string | null
+  }>
+}
+
+export interface KontantmetodCutoffPostingStatus {
+  complete: boolean
+  hasAny: boolean
+  receivableEntryId: string | null
+  receivableReversalId: string | null
+  payableEntryId: string | null
+  payableReversalId: string | null
+  missing: Array<'receivable' | 'receivable_reversal' | 'payable' | 'payable_reversal'>
+  duplicates: string[]
+}
+
+export function hasIncompleteKontantmetodCutoffPair(
+  status: KontantmetodCutoffPostingStatus,
+  lines: CutoffLines,
+): boolean {
+  const receivablePartial = lines.receivableLines.length > 0 &&
+    Boolean(status.receivableEntryId) !== Boolean(status.receivableReversalId)
+  const payablePartial = lines.payableLines.length > 0 &&
+    Boolean(status.payableEntryId) !== Boolean(status.payableReversalId)
+  return status.duplicates.length > 0 || receivablePartial || payablePartial
 }
 
 // Go through roundOre first: Math.round(x * 100) alone mis-rounds exact-half
@@ -303,6 +343,133 @@ export function buildCutoffLines(
   }
 }
 
+function comparableLines(lines: Array<{
+  account_number: string
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+}>): string[] {
+  return lines
+    .map((line) =>
+      [
+        line.account_number,
+        roundOre(Number(line.debit_amount ?? 0)).toString(),
+        roundOre(Number(line.credit_amount ?? 0)).toString(),
+      ].join(':'),
+    )
+    .sort()
+}
+
+export function cutoffLinesEqual(
+  left: CreateJournalEntryLineInput[],
+  right: Array<{
+    account_number: string
+    debit_amount: number | string | null
+    credit_amount: number | string | null
+  }>,
+): boolean {
+  const normalizedLeft = comparableLines(left)
+  const normalizedRight = comparableLines(right)
+  return normalizedLeft.length === normalizedRight.length &&
+    normalizedLeft.every((line, index) => line === normalizedRight[index])
+}
+
+/**
+ * Inspect the immutable journal for a complete cut-off and its day-one
+ * reversals. Matching exact account totals, rather than only a description,
+ * makes a late invoice or payment reopen the blocker until a fresh cut-off is
+ * posted. `source_id` anchors all four entries to the year being closed.
+ */
+export async function inspectKontantmetodCutoffPostings(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  nextFiscalPeriodId: string,
+  expected: CutoffLines,
+): Promise<KontantmetodCutoffPostingStatus> {
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select(
+      'id, fiscal_period_id, description, lines:journal_entry_lines(account_number, debit_amount, credit_amount)',
+    )
+    .eq('company_id', companyId)
+    .eq('source_type', 'year_end')
+    .eq('source_id', fiscalPeriodId)
+    .eq('status', 'posted')
+    .in('fiscal_period_id', [fiscalPeriodId, nextFiscalPeriodId])
+    .in('description', Object.values(KONTANTMETOD_CUTOFF_DESCRIPTIONS))
+
+  if (error) {
+    throw new Error(`Kontantmetodens bokslutsavgränsning kunde inte kontrolleras: ${error.message}`)
+  }
+
+  const rows = (data ?? []) as PostedCutoffEntry[]
+  const missing: KontantmetodCutoffPostingStatus['missing'] = []
+  const duplicates: string[] = []
+
+  const matchOne = (
+    description: string,
+    periodId: string,
+    lines: CreateJournalEntryLineInput[],
+    missingKind: KontantmetodCutoffPostingStatus['missing'][number],
+  ): string | null => {
+    const candidates = rows.filter(
+      (row) => row.description === description && row.fiscal_period_id === periodId,
+    )
+
+    if (lines.length === 0) {
+      if (candidates.length > 0) duplicates.push(description)
+      return null
+    }
+
+    const exact = candidates.filter((row) => cutoffLinesEqual(lines, row.lines ?? []))
+    if (candidates.length !== 1 || exact.length !== 1) {
+      // Any marker with non-matching lines is a conflict, even when only one
+      // exists. Treating it as merely missing could stage a second cut-off on
+      // top of an immutable entry after the source reskontra changed.
+      if (candidates.length > 0) duplicates.push(description)
+      missing.push(missingKind)
+      return null
+    }
+    return exact[0]!.id
+  }
+
+  const receivableEntryId = matchOne(
+    KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+    fiscalPeriodId,
+    expected.receivableLines,
+    'receivable',
+  )
+  const receivableReversalId = matchOne(
+    KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+    nextFiscalPeriodId,
+    reverseLines(expected.receivableLines),
+    'receivable_reversal',
+  )
+  const payableEntryId = matchOne(
+    KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable,
+    fiscalPeriodId,
+    expected.payableLines,
+    'payable',
+  )
+  const payableReversalId = matchOne(
+    KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal,
+    nextFiscalPeriodId,
+    reverseLines(expected.payableLines),
+    'payable_reversal',
+  )
+
+  return {
+    complete: missing.length === 0 && duplicates.length === 0,
+    hasAny: rows.length > 0,
+    receivableEntryId,
+    receivableReversalId,
+    payableEntryId,
+    payableReversalId,
+    missing,
+    duplicates,
+  }
+}
+
 /** Swap every debit and credit: the vändning posted on day 1 of the new year. */
 export function reverseLines(
   lines: CreateJournalEntryLineInput[],
@@ -340,6 +507,33 @@ export interface CutoffCollection {
    * Excluded and refused on the same footing as a missing treatment.
    */
   strayVatOnZeroRate: string[]
+}
+
+export interface KontantmetodCutoffAssessment {
+  collection: CutoffCollection
+  lines: CutoffLines
+  postings: KontantmetodCutoffPostingStatus
+}
+
+function sortedCollection(collection: CutoffCollection): CutoffCollection {
+  return {
+    receivables: [...collection.receivables].sort((a, b) => a.id.localeCompare(b.id)),
+    payables: [...collection.payables]
+      .map((row) => ({
+        ...row,
+        netByAccount: [...row.netByAccount].sort((a, b) => a.account.localeCompare(b.account)),
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    unknownVatTreatment: [...collection.unknownVatTreatment].sort(),
+    strayVatOnZeroRate: [...collection.strayVatOnZeroRate].sort(),
+  }
+}
+
+export function cutoffCollectionsEqual(
+  left: CutoffCollection,
+  right: CutoffCollection,
+): boolean {
+  return JSON.stringify(sortedCollection(left)) === JSON.stringify(sortedCollection(right))
 }
 
 /**
@@ -394,6 +588,13 @@ export async function collectKontantmetodCutoff(
       .in('status', ['registered', 'approved', 'partially_paid', 'paid']),
   ])
 
+  if (invoicesResult.error || supplierResult.error) {
+    throw new Error(
+      'Kontantmetodens bokslutsavgränsning kunde inte läsa reskontran: ' +
+        (invoicesResult.error?.message ?? supplierResult.error?.message ?? 'okänt fel'),
+    )
+  }
+
   const invoices = (invoicesResult.data ?? []) as Array<Record<string, unknown>>
   const supplierInvoices = (supplierResult.data ?? []) as Array<Record<string, unknown>>
 
@@ -410,7 +611,7 @@ export async function collectKontantmetodCutoff(
           .eq('company_id', companyId)
           .lte('payment_date', periodEnd)
           .in('invoice_id', invoiceIds)
-      : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
+      : Promise.resolve({ data: [] as Array<Record<string, unknown>>, error: null }),
     supplierIds.length > 0
       ? supabase
           .from('supplier_invoice_payments')
@@ -418,8 +619,15 @@ export async function collectKontantmetodCutoff(
           .eq('company_id', companyId)
           .lte('payment_date', periodEnd)
           .in('supplier_invoice_id', supplierIds)
-      : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
+      : Promise.resolve({ data: [] as Array<Record<string, unknown>>, error: null }),
   ])
+
+  if (invoicePayments.error || supplierPayments.error) {
+    throw new Error(
+      'Kontantmetodens bokslutsavgränsning kunde inte läsa betalningar: ' +
+        (invoicePayments.error?.message ?? supplierPayments.error?.message ?? 'okänt fel'),
+    )
+  }
 
   const paidByInvoice = new Map<string, number>()
   for (const row of (invoicePayments.data ?? []) as Array<Record<string, unknown>>) {
@@ -527,6 +735,31 @@ export async function collectKontantmetodCutoff(
   }
 
   return { receivables, payables, unknownVatTreatment, strayVatOnZeroRate }
+}
+
+export async function assessKontantmetodCutoff(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: { id: string; period_start: string; period_end: string },
+  nextFiscalPeriodId: string,
+  entityType: EntityType = 'aktiebolag',
+): Promise<KontantmetodCutoffAssessment> {
+  const collection = await collectKontantmetodCutoff(
+    supabase,
+    companyId,
+    period.period_start,
+    period.period_end,
+  )
+  const lines = buildCutoffLines(collection.receivables, collection.payables, entityType)
+  const postings = await inspectKontantmetodCutoffPostings(
+    supabase,
+    companyId,
+    period.id,
+    nextFiscalPeriodId,
+    lines,
+  )
+
+  return { collection, lines, postings }
 }
 
 export interface PostCutoffResult {
@@ -645,6 +878,38 @@ export async function postKontantmetodCutoff(
 
   await assertReversalPeriodPostable(supabase, companyId, opts.nextFiscalPeriodId, reversalDate)
 
+  const existing = await inspectKontantmetodCutoffPostings(
+    supabase,
+    companyId,
+    opts.fiscalPeriodId,
+    opts.nextFiscalPeriodId,
+    {
+      receivableLines,
+      payableLines,
+      receivableTotal: receivableLines.reduce((sum, line) => sum + line.debit_amount, 0),
+      payableTotal: payableLines.reduce((sum, line) => sum + line.credit_amount, 0),
+    },
+  )
+  if (hasIncompleteKontantmetodCutoffPair(existing, {
+    receivableLines,
+    payableLines,
+    receivableTotal: receivableLines.reduce((sum, line) => sum + line.debit_amount, 0),
+    payableTotal: payableLines.reduce((sum, line) => sum + line.credit_amount, 0),
+  })) {
+    throw new Error(
+      'Kontantmetodens bokslutsavgränsning är delvis eller dubbelt bokförd för perioden. Kontrollera och rätta verifikaten innan du försöker igen.',
+    )
+  }
+
+  if (existing.receivableEntryId && existing.receivableReversalId) {
+    result.receivableEntry = { id: existing.receivableEntryId } as JournalEntry
+    result.receivableReversal = { id: existing.receivableReversalId } as JournalEntry
+  }
+  if (existing.payableEntryId && existing.payableReversalId) {
+    result.payableEntry = { id: existing.payableEntryId } as JournalEntry
+    result.payableReversal = { id: existing.payableReversalId } as JournalEntry
+  }
+
   /**
    * Post a cut-off/vändning pair. On reversal failure the cut-off is stornoed
    * so the pair is all-or-nothing from the ledger's point of view.
@@ -654,11 +919,19 @@ export async function postKontantmetodCutoff(
     label: string,
     references: string[],
   ): Promise<[JournalEntry, JournalEntry]> => {
+    const description = label === 'Kundfordringar'
+      ? KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable
+      : KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable
+    const reversalDescription = label === 'Kundfordringar'
+      ? KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal
+      : KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal
+
     const entry = await createJournalEntry(supabase, companyId, userId, {
       fiscal_period_id: opts.fiscalPeriodId,
       entry_date: opts.periodEnd,
-      description: `${label} vid bokslut (kontantmetoden)`,
+      description,
       source_type: 'year_end',
+      source_id: opts.fiscalPeriodId,
       notes: buildCutoffNote(label, references),
       lines,
     })
@@ -667,8 +940,9 @@ export async function postKontantmetodCutoff(
       const reversal = await createJournalEntry(supabase, companyId, userId, {
         fiscal_period_id: opts.nextFiscalPeriodId,
         entry_date: reversalDate,
-        description: `Vändning ${label.toLowerCase()} bokslut (kontantmetoden)`,
+        description: reversalDescription,
         source_type: 'year_end',
+        source_id: opts.fiscalPeriodId,
         notes: buildCutoffNote(`Vändning ${label.toLowerCase()}`, references),
         lines: reverseLines(lines),
       })
@@ -690,7 +964,7 @@ export async function postKontantmetodCutoff(
     }
   }
 
-  if (receivableLines.length > 0) {
+  if (receivableLines.length > 0 && !result.receivableEntry) {
     const [entry, reversal] = await postPair(
       receivableLines,
       'Kundfordringar',
@@ -700,7 +974,7 @@ export async function postKontantmetodCutoff(
     result.receivableReversal = reversal
   }
 
-  if (payableLines.length > 0) {
+  if (payableLines.length > 0 && !result.payableEntry) {
     const [entry, reversal] = await postPair(
       payableLines,
       'Leverantörsskulder',

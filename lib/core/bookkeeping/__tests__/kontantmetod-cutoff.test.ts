@@ -8,7 +8,11 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 import {
   buildCutoffLines,
   buildCutoffNote,
+  cutoffCollectionsEqual,
+  collectKontantmetodCutoff,
   distributeOre,
+  inspectKontantmetodCutoffPostings,
+  KONTANTMETOD_CUTOFF_DESCRIPTIONS,
   postKontantmetodCutoff,
   nextDay,
   reverseLines,
@@ -264,6 +268,184 @@ describe('buildCutoffNote (BFL 5 kap 6-7 §: traceability)', () => {
   })
 })
 
+describe('cut-off snapshot and posting inspection', () => {
+  const makeJournalSupabase = (rows: unknown[], error: { message: string } | null = null) => ({
+    from: () => {
+      const query: Record<string, unknown> = {}
+      query.select = () => query
+      query.eq = () => query
+      query.in = () => query
+      query.then = (resolve: (value: unknown) => unknown) => resolve({ data: rows, error })
+      return query
+    },
+  }) as never
+
+  it('treats collection order as irrelevant but catches changed source data', () => {
+    const first = {
+      receivables: [receivable({ id: 'b' }), receivable({ id: 'a' })],
+      payables: [payable({ id: 'p' })],
+      unknownVatTreatment: [],
+      strayVatOnZeroRate: [],
+    }
+    const reordered = {
+      ...first,
+      receivables: [...first.receivables].reverse(),
+    }
+    expect(cutoffCollectionsEqual(first, reordered)).toBe(true)
+    expect(
+      cutoffCollectionsEqual(first, {
+        ...reordered,
+        receivables: [receivable({ id: 'a', outstanding: 1300 }), receivable({ id: 'b' })],
+      }),
+    ).toBe(false)
+  })
+
+  it('requires exact cut-off lines and exact next-period reversals', async () => {
+    const lines = buildCutoffLines([receivable()], [payable()])
+    const rows = [
+      {
+        id: 'ar', fiscal_period_id: 'fp-1',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        lines: lines.receivableLines,
+      },
+      {
+        id: 'ar-rev', fiscal_period_id: 'fp-2',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+        lines: reverseLines(lines.receivableLines),
+      },
+      {
+        id: 'ap', fiscal_period_id: 'fp-1',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable,
+        lines: lines.payableLines,
+      },
+      {
+        id: 'ap-rev', fiscal_period_id: 'fp-2',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal,
+        lines: reverseLines(lines.payableLines),
+      },
+    ]
+
+    const status = await inspectKontantmetodCutoffPostings(
+      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', lines,
+    )
+    expect(status).toMatchObject({
+      complete: true,
+      hasAny: true,
+      receivableEntryId: 'ar',
+      receivableReversalId: 'ar-rev',
+      payableEntryId: 'ap',
+      payableReversalId: 'ap-rev',
+      missing: [],
+    })
+  })
+
+  it('treats a single stale immutable marker as a conflict', async () => {
+    const lines = buildCutoffLines([receivable()], [])
+    const stale = lines.receivableLines.map((line) =>
+      line.account_number === '1510' ? { ...line, debit_amount: 999 } : line,
+    )
+    const rows = [
+      {
+        id: 'ar', fiscal_period_id: 'fp-1',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        lines: stale,
+      },
+      {
+        id: 'ar-rev', fiscal_period_id: 'fp-2',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+        lines: reverseLines(lines.receivableLines),
+      },
+    ]
+
+    const status = await inspectKontantmetodCutoffPostings(
+      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', lines,
+    )
+    expect(status.complete).toBe(false)
+    expect(status.missing).toContain('receivable')
+    expect(status.duplicates).toContain(KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable)
+  })
+
+  it('treats multiple exact markers as a duplicate conflict', async () => {
+    const lines = buildCutoffLines([receivable()], [])
+    const rows = [
+      {
+        id: 'ar', fiscal_period_id: 'fp-1',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        lines: lines.receivableLines,
+      },
+      {
+        id: 'ar-duplicate', fiscal_period_id: 'fp-1',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        lines: lines.receivableLines,
+      },
+      {
+        id: 'ar-rev', fiscal_period_id: 'fp-2',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+        lines: reverseLines(lines.receivableLines),
+      },
+    ]
+
+    const status = await inspectKontantmetodCutoffPostings(
+      makeJournalSupabase(rows), 'co-1', 'fp-1', 'fp-2', lines,
+    )
+    expect(status.complete).toBe(false)
+    expect(status.missing).toContain('receivable')
+    expect(status.duplicates).toContain(KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable)
+  })
+
+  it('fails closed when the immutable journal cannot be inspected', async () => {
+    await expect(
+      inspectKontantmetodCutoffPostings(
+        makeJournalSupabase([], { message: 'connection lost' }),
+        'co-1', 'fp-1', 'fp-2', buildCutoffLines([], []),
+      ),
+    ).rejects.toThrow(/kunde inte kontrolleras/i)
+  })
+})
+
+describe('collectKontantmetodCutoff', () => {
+  it('fails closed when either reskontra query fails', async () => {
+    const supabase = {
+      from: (table: string) => {
+        const query: Record<string, unknown> = {}
+        for (const name of ['select', 'eq', 'lte', 'in']) query[name] = () => query
+        query.then = (resolve: (value: unknown) => unknown) => resolve({
+          data: table === 'supplier_invoices' ? [] : null,
+          error: table === 'invoices' ? { message: 'read failed' } : null,
+        })
+        return query
+      },
+    }
+    await expect(
+      collectKontantmetodCutoff(supabase as never, 'co-1', '2026-01-01', '2026-12-31'),
+    ).rejects.toThrow(/kunde inte läsa reskontran/i)
+  })
+
+  it('fails closed when payment history cannot be reconstructed', async () => {
+    const rows: Record<string, unknown[]> = {
+      invoices: [{
+        id: 'inv-1', invoice_number: 'F-1', invoice_date: '2026-12-01', status: 'sent',
+        total: 1250, vat_amount: 250, vat_treatment: 'standard_25', document_type: 'invoice',
+      }],
+      supplier_invoices: [],
+    }
+    const supabase = {
+      from: (table: string) => {
+        const query: Record<string, unknown> = {}
+        for (const name of ['select', 'eq', 'lte', 'in']) query[name] = () => query
+        query.then = (resolve: (value: unknown) => unknown) => resolve({
+          data: rows[table] ?? [],
+          error: table === 'invoice_payments' ? { message: 'payment read failed' } : null,
+        })
+        return query
+      },
+    }
+    await expect(
+      collectKontantmetodCutoff(supabase as never, 'co-1', '2026-01-01', '2026-12-31'),
+    ).rejects.toThrow(/kunde inte läsa betalningar/i)
+  })
+})
+
 describe('postKontantmetodCutoff', () => {
   const OPEN_NEXT = {
     id: 'fp-next',
@@ -273,14 +455,20 @@ describe('postKontantmetodCutoff', () => {
     locked_at: null,
   }
 
-  const makeSupabase = (next: Record<string, unknown> | null) => ({
-    from: () => ({
-      select: () => ({
-        eq: () => ({
-          eq: () => ({ maybeSingle: async () => ({ data: next, error: next ? null : { message: 'x' } }) }),
-        }),
-      }),
-    }),
+  const makeSupabase = (next: Record<string, unknown> | null, journalRows: unknown[] = []) => ({
+    from: (table: string) => {
+      const query: Record<string, unknown> = {}
+      query.select = () => query
+      query.eq = () => query
+      query.in = () => query
+      query.maybeSingle = async () => ({
+        data: table === 'fiscal_periods' ? next : null,
+        error: table === 'fiscal_periods' && !next ? { message: 'x' } : null,
+      })
+      query.then = (resolve: (value: unknown) => unknown) =>
+        resolve({ data: table === 'journal_entries' ? journalRows : null, error: null })
+      return query
+    },
   }) as never
 
   const baseOpts = {
@@ -364,6 +552,58 @@ describe('postKontantmetodCutoff', () => {
       }),
     ).rejects.toThrow(/saknar momsinställning/i)
     expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('refuses to post a second cut-off when an earlier marker exists', async () => {
+    await expect(
+      postKontantmetodCutoff(
+        makeSupabase(OPEN_NEXT, [{
+          id: 'existing',
+          fiscal_period_id: 'fp-1',
+          description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+          lines: buildCutoffLines([receivable()], []).receivableLines,
+        }]),
+        'co-1',
+        'user-1',
+        baseOpts,
+      ),
+    ).rejects.toThrow(/delvis eller dubbelt bokförd/i)
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('resumes with the missing payable pair after a prior receivable pair succeeded', async () => {
+    const receivableLines = buildCutoffLines([receivable()], []).receivableLines
+    const existingRows = [
+      {
+        id: 'ar', fiscal_period_id: 'fp-1',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+        lines: receivableLines,
+      },
+      {
+        id: 'ar-rev', fiscal_period_id: 'fp-next',
+        description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+        lines: reverseLines(receivableLines),
+      },
+    ]
+    vi.mocked(createJournalEntry)
+      .mockResolvedValueOnce({ id: 'ap' } as never)
+      .mockResolvedValueOnce({ id: 'ap-rev' } as never)
+
+    const result = await postKontantmetodCutoff(
+      makeSupabase(OPEN_NEXT, existingRows),
+      'co-1',
+      'user-1',
+      { ...baseOpts, payables: [payable()] },
+    )
+
+    expect(result.receivableEntry?.id).toBe('ar')
+    expect(result.receivableReversal?.id).toBe('ar-rev')
+    expect(result.payableEntry?.id).toBe('ap')
+    expect(result.payableReversal?.id).toBe('ap-rev')
+    expect(createJournalEntry).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(createJournalEntry).mock.calls[0]?.[3].description).toBe(
+      KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable,
+    )
   })
 
   it('stornoes the cut-off when its vändning fails, leaving no inflated 1510', async () => {
