@@ -101,6 +101,15 @@ describe('errorResponse', () => {
     expect(body.error.details).toMatchObject({ pgCode: '23505' })
   })
 
+  it('maps Postgres no-data-found to NOT_FOUND with pgCode', async () => {
+    const pgErr = Object.assign(new Error('invoice not found'), { code: 'P0002' })
+    const res = errorResponse(pgErr, noopLogger, { requestId: 'req_pg_not_found' })
+    expect(res.status).toBe(404)
+    const body = await readEnvelope(res)
+    expect(body.error.code).toBe('NOT_FOUND')
+    expect(body.error.details).toMatchObject({ pgCode: 'P0002' })
+  })
+
   it('falls back to INTERNAL_ERROR for unknown shapes', async () => {
     const res = errorResponse(new Error('boom'), noopLogger, { requestId: 'req_5' })
     expect(res.status).toBe(500)

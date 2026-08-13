@@ -95,6 +95,8 @@ export function AccountPickerDialog({
   // user must see why and be able to correct the picks.
   const [saveError, setSaveError] = useState<string | null>(null)
   const [lastBookedDate, setLastBookedDate] = useState<string | null>(null)
+  // Earliest completed SIE import coverage start: present = migrator flow.
+  const [sieCoverageStart, setSieCoverageStart] = useState<string | null>(null)
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [chartError, setChartError] = useState(false)
   const [ledgerByUid, setLedgerByUid] = useState<Record<string, string>>({})
@@ -203,23 +205,43 @@ export function AccountPickerDialog({
   // fiscal period's end, which can lie months past the last actually booked
   // transaction and would make the user skip everything unbooked in between.
   // Only matters on the initial activation flow: selection edits don't re-run sync.
+  //
+  // Alongside it: the earliest completed SIE import's coverage start. For a
+  // migrator the right move is the OPPOSITE of skipping the booked overlap:
+  // fetch the whole period and let the post-sync sweep match bank rows against
+  // the imported verifikat. The nudge below flips accordingly.
   useEffect(() => {
     if (!open || !isInitialSelection || !company?.id) {
       setLastBookedDate(null)
+      setSieCoverageStart(null)
       return
     }
     let cancelled = false
     ;(async () => {
-      const { data } = await supabase
-        .from('journal_entries')
-        .select('entry_date')
-        .eq('company_id', company.id)
-        .eq('status', 'posted')
-        .order('entry_date', { ascending: false })
-        .limit(1)
-        .maybeSingle()
+      const [entryRes, sieRes] = await Promise.all([
+        supabase
+          .from('journal_entries')
+          .select('entry_date')
+          .eq('company_id', company.id)
+          .eq('status', 'posted')
+          .order('entry_date', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('sie_imports')
+          .select('fiscal_year_start')
+          .eq('company_id', company.id)
+          .eq('status', 'completed')
+          .not('fiscal_year_start', 'is', null)
+          .order('fiscal_year_start', { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+      ])
       if (cancelled) return
-      setLastBookedDate((data as { entry_date?: string } | null)?.entry_date || null)
+      setLastBookedDate((entryRes.data as { entry_date?: string } | null)?.entry_date || null)
+      setSieCoverageStart(
+        (sieRes.data as { fiscal_year_start?: string } | null)?.fiscal_year_start || null,
+      )
     })()
     return () => { cancelled = true }
   }, [open, isInitialSelection, company?.id, supabase])
@@ -588,7 +610,65 @@ export function AccountPickerDialog({
               </p>
             </div>
 
-            {bookedCoverage && (
+            {sieCoverageStart ? (
+              <div className="space-y-2 rounded-md border border-border bg-background/60 p-3">
+                {/* Migrator flow: a completed SIE import exists, so the booked
+                    overlap is exactly what the post-sync sweep matches bank
+                    rows against. Pulling from the SIE year's start is the
+                    recommended move; skipping the overlap (the non-migrator
+                    nudge) would leave the imported verifikat unreconciled. */}
+                <div className="flex items-start justify-between gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    Du har importerat bokföring. Hämta bankhistorik från{' '}
+                    <span className="font-medium tabular-nums text-foreground">{sieCoverageStart}</span>{' '}
+                    (importens början) så matchar vi transaktionerna automatiskt mot din importerade
+                    bokföring i stället för att bokföra dem igen.
+                  </p>
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs text-foreground underline underline-offset-2"
+                    onClick={() => {
+                      // Explicit choice: the async gap-fill probe must not
+                      // override it if it resolves after this click.
+                      lookbackTouched.current = true
+                      setLookbackMode('custom')
+                      setCustomSubMode('date')
+                      setCustomDate(sieCoverageStart)
+                    }}
+                    disabled={isSaving}
+                  >
+                    Hämta från detta datum
+                  </button>
+                </div>
+                {daysBetween(sieCoverageStart) > 90 && (
+                  <p className="text-xs text-muted-foreground">
+                    De flesta banker lämnar bara ut ca 90 dagars historik via bankkopplingen. Når
+                    hämtningen inte hela vägen tillbaka kan du ladda upp kontoutdrag (CSV) under{' '}
+                    <span className="font-medium">Importera</span> för den äldre perioden, matchningen
+                    fungerar likadant.
+                  </p>
+                )}
+                {bookedCoverage && (
+                  <p className="text-xs text-muted-foreground">
+                    Vill du ändå hoppa över det som redan är bokfört kan du{' '}
+                    <button
+                      type="button"
+                      className="text-foreground underline underline-offset-2"
+                      onClick={() => {
+                        lookbackTouched.current = true
+                        setLookbackMode('custom')
+                        setCustomSubMode('date')
+                        setCustomDate(bookedCoverage.suggestedStartDate)
+                      }}
+                      disabled={isSaving}
+                    >
+                      börja från {bookedCoverage.suggestedStartDate}
+                    </button>{' '}
+                    i stället.
+                  </p>
+                )}
+              </div>
+            ) : bookedCoverage && (
               <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-background/60 p-3">
                 {/* Stated as a fact with an opt-in shortcut, not as "vi
                     föreslår": the selected default below is the fiscal-year

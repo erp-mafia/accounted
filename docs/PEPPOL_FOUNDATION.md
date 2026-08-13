@@ -5,11 +5,24 @@ Issue #546 requires two separable capabilities:
 1. Produce a correctly structured Peppol BIS Billing 3 invoice from Accounted data.
 2. Deliver and receive documents through the Peppol network.
 
-This change implements the first capability for a deliberately constrained Swedish invoice profile. It does not claim network delivery.
+The first slice implemented the invoice profile. The second slice adds an immutable staged-delivery and audit foundation. Neither slice claims network delivery.
 
 ## Implemented scope
 
 `GET /api/invoices/{id}/peppol` produces a UBL 2.1 invoice with the Peppol BIS Billing 3 CustomizationID and ProfileID. It is available to an authenticated member of the active company and applies the same explicit `company_id` isolation as other invoice routes.
+
+`POST /api/invoices/{id}/peppol` now stores the exact generated XML as an immutable staged delivery. Staging assigns a stable UUID idempotency key, stores the recipient, profile identifiers, filename, SHA-256, retention date, and an append-only local audit event. It explicitly returns `network_submitted: false`. Repeating the request for the same invoice and XML returns the existing staged record.
+
+`GET /api/invoices/{id}/peppol/deliveries` returns a minimized status timeline projection without exposing XML, raw webhooks, or provider evidence. The invoice page can prepare a delivery, but its network send control remains disabled with a provider-required explanation.
+
+The provider-neutral `PeppolTransport` boundary separates:
+
+- recipient lookup and advertised document/process capabilities;
+- idempotent submission and provider correlation;
+- cryptographically verified webhook normalization;
+- evidence retrieval, including an optional exact transmitted document.
+
+No adapter is registered by core and no environment value can make an absent adapter appear available.
 
 The export supports:
 
@@ -49,11 +62,13 @@ A provider adapter needs at least:
 - authenticated webhooks or polling for final transport status;
 - test and production environments with equivalent validation behavior.
 
-The existing email delivery model cannot honestly represent Peppol receipts. Provider selection should precede the database design because provider status vocabularies and webhook guarantees determine the durable state machine.
+The existing email delivery model cannot honestly represent Peppol receipts. The Peppol-specific model therefore records `staged`, recipient lookup, submission acceptance, Corner 3 transport success, recipient acknowledgement, and business acceptance or rejection separately. Every verified raw event remains append-only even when it is duplicated or arrives out of order. The latest normalized status is only a projection.
 
 ### Status and audit handling
 
-After provider selection, add a migration and pg-real tests for a Peppol-specific delivery record. It should preserve the exact submitted XML, its SHA-256 hash, recipient scheme and identifier, provider id, attempt timestamps, normalized status, raw receipt metadata, and immutable failure history. A successful API acceptance is not the same as network delivery.
+The Peppol-specific tables now preserve the exact staged XML, its SHA-256 hash, recipient scheme and identifier, provider and tenant correlation, attempt timestamps, normalized status, raw verified event metadata, immutable failure history, and retrieved evidence. A successful API acceptance is not the same as Corner 3 transport, and Corner 3 transport is not the same as buyer acknowledgement or business acceptance.
+
+Provider event and evidence RPCs are service-role only. Future webhook routes must first use the selected adapter to authenticate and normalize the provider payload, then persist the verified event. A public webhook endpoint is intentionally not exposed before its authentication contract is known.
 
 No invoice status should change merely because XML was generated or accepted by a provider. The send workflow must define exactly which provider receipt constitutes delivery, how retries preserve idempotency, and how a permanent rejection is shown without mutating the posted invoice.
 
@@ -63,11 +78,19 @@ Inbound invoices are a separate acceptance slice. It requires provider webhook a
 
 ### UI and API
 
-The current UI downloads a locally checked XML file and states that it was not sent. Once delivery exists, sending should be a distinct confirmation flow that performs recipient lookup, shows the discovered recipient, and records the resulting delivery timeline. The download should remain available for diagnosis and interoperability testing.
+The UI downloads a locally checked XML file and can prepare an immutable delivery snapshot. Both actions state that they did not send the invoice. Once an adapter exists, sending must be a distinct confirmation flow that performs recipient lookup, shows the discovered participant and capabilities, and records the resulting timeline. The download remains available for diagnosis and interoperability testing.
 
 ### Credentials and commercial decision
 
-Emil must choose and contract a certified access-point provider before full send or receive can be completed. The decision needs verified answers for:
+Emil must choose and contract a certified access-point provider before full send or receive can be completed.
+
+### Storecove versus Qvalia
+
+Storecove is the stronger fit for the lifecycle already modeled. Its official API documents recipient discovery, caller-supplied `idempotencyGuid`, a returned submission `guid`, tenant correlation, asynchronous sending webhooks, and a dedicated evidence endpoint. Its sandbox supports webhook simulation and the OpenPeppol test network. A Storecove adapter still requires a commercial contract and credentials; these public semantics do not prove Accounted's tenant is authorized or onboarded.
+
+Qvalia is a Swedish certified Access Point and SMP with an explicit partner and multi-tenant offering. Its public quick start documents production and sandbox endpoints, account registration numbers, and separate keys. Public material does not currently specify a Storecove-equivalent contract for idempotency, signed webhooks, event ordering, or exact transmitted-document evidence. Those points must be obtained from Qvalia Sales or Support before an adapter can be production quality.
+
+Inputs required for either selection:
 
 - multitenant or reseller authorization for Accounted customer companies;
 - setup, monthly, per-document, inbound, lookup, and support pricing;
@@ -76,6 +99,16 @@ Emil must choose and contract a certified access-point provider before full send
 - Swedish organization-number and optional GLN onboarding;
 - webhook signing, retention, service levels, and data-processing terms;
 - support for the mandatory May 2026 Peppol release.
+
+Additional API contract inputs required before implementation:
+
+- the external tenant, legal entity, and account identifiers for every Accounted company;
+- exact discovery request and response semantics for `0007` and `0088` participants;
+- idempotency retention, duplicate response behavior, and retry guarantees;
+- webhook signature or authentication scheme, secret rotation, replay window, event identifiers, retry policy, and ordering guarantees;
+- exact meanings of transport, acknowledgement, acceptance, rejection, and terminal events;
+- evidence endpoint response, retention, exact-document guarantees, and audit export format;
+- sandbox participant IDs, production onboarding checks, and agreed conformance acceptance tests.
 
 Provider credentials and prices are external operational inputs. They are not invented, stored in source, or represented by a fake provider in this change.
 
@@ -87,3 +120,7 @@ Provider credentials and prices are external operational inputs. They are not in
 - [European Commission EN 16931 validation artefacts](https://ec.europa.eu/digital-building-blocks/sites/display/DIGITAL/Registry+of+supporting+artefacts+to+implement+EN16931)
 - [SFTI Peppol BIS Billing 3 guidance](https://www.sfti.se/sfti/standarder/peppolbisochpeppolinfrastruktur/peppolbisbilling3.26609.html)
 - [Swedish authority guidance for connecting to Peppol](https://www.upphandlingsmyndigheten.se/inkopsprocessen/e-handel/peppol/anslut-till-peppol/)
+- [Storecove API documentation](https://www.storecove.com/docs/)
+- [Qvalia API quick start](https://api.qvalia.io/quick-start)
+- [Qvalia API environments and formats](https://api.qvalia.io/api-documentation/apis)
+- [Qvalia partner API and Peppol infrastructure](https://qvalia.com/help/overview-of-qvalias-partner-api-and-peppol-infrastructure/)

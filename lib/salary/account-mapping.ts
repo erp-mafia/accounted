@@ -57,6 +57,9 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   net_deduction_union: '2794',
   net_deduction_benefit_payment: '7385',
   net_deduction_other: '2799',
+  // Öresavrundning: net payout rounded up to whole kronor; the 0-99 öre diff
+  // debits the standard rounding account (same account the invoice flows use).
+  oresavrundning: '3740',
   // Other
   correction: '7210',
   other: '7210',

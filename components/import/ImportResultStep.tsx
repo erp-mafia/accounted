@@ -114,13 +114,24 @@ export default function ImportResultStep({
                       bridge quiets down to the plain way onward there. */}
                   {!isSandbox && <p className="font-display text-base">{t('reveal_bridge')}</p>}
                   <div className="mt-3 flex flex-wrap items-center gap-3">
-                    {!isSandbox && (
+                    {/* Both migrator paths: PSD2 covers recent history (banks
+                        cap the window around 90 days), CSV upload reaches the
+                        older period the SIE file covers. Either way the
+                        overlap is matched against the imported verifikat.
+                        Sandbox hides only the live bank connection; file-based
+                        import works there and its CTA stays. */}
+                    {!isSandbox && hasBanking && (
                       <Button asChild size="sm">
-                        <Link href={hasBanking ? '/import?mode=psd2' : '/import?mode=bank'}>
-                          {t('reveal_cta_bank')}
-                        </Link>
+                        <Link href="/import?mode=psd2">{t('reveal_cta_bank')}</Link>
                       </Button>
                     )}
+                    <Button
+                      asChild
+                      size="sm"
+                      variant={!isSandbox && hasBanking ? 'outline' : 'default'}
+                    >
+                      <Link href="/import?mode=bank">{t('reveal_cta_csv')}</Link>
+                    </Button>
                     <Link
                       href="/"
                       className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
@@ -415,46 +426,34 @@ export default function ImportResultStep({
         </Card>
       )}
 
-      {/* Next steps */}
-      {result.success && (
+      {/* Next steps: the migrator bridge. Not instructions to read, an action
+          to take: fetch the bank history so it can be matched against the
+          verifikat that were just imported, instead of landing as anonymous
+          "Att bokföra" rows. */}
+      {result.success && !showReveal && (
         <Card className="bg-muted/50">
           <CardHeader>
-            <CardTitle className="text-base">Nästa steg</CardTitle>
+            <CardTitle className="text-base">{t('next_steps_title')}</CardTitle>
+            <CardDescription>{t('next_steps_match_copy')}</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">
-                1
-              </div>
-              <div>
-                <p className="font-medium">Granska importerade verifikationer</p>
-                <p className="text-sm text-muted-foreground">
-                  Kontrollera att allt ser korrekt ut i bokföringslistan
-                </p>
-              </div>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Sandbox hides only the live bank connection; file-based
+                  import works there and its CTA stays. */}
+              {!isSandbox && hasBanking && (
+                <Button asChild size="sm">
+                  <Link href="/import?mode=psd2">{t('next_steps_cta_bank')}</Link>
+                </Button>
+              )}
+              <Button
+                asChild
+                size="sm"
+                variant={!isSandbox && hasBanking ? 'outline' : 'default'}
+              >
+                <Link href="/import?mode=bank">{t('next_steps_cta_csv')}</Link>
+              </Button>
             </div>
-            <div className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">
-                2
-              </div>
-              <div>
-                <p className="font-medium">Verifiera balanserna</p>
-                <p className="text-sm text-muted-foreground">
-                  Jämför huvudboken med din tidigare bokföring
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">
-                3
-              </div>
-              <div>
-                <p className="font-medium">Fortsätt med ny bokföring</p>
-                <p className="text-sm text-muted-foreground">
-                  Nu kan du börja lägga till nya transaktioner
-                </p>
-              </div>
-            </div>
+            <p className="text-sm text-muted-foreground">{t('next_steps_window_hint')}</p>
           </CardContent>
         </Card>
       )}

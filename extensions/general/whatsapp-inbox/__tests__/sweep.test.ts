@@ -75,6 +75,7 @@ describe('runSweep', () => {
     enqueue({ data: [] }) // unacked re-arm
     enqueue({ data: [] }) // TTL scan
     enqueue({ data: [] }) // pin scan
+    enqueue({ count: 2 }) // outbound failures, last 24h
 
     const summary = await runSweep(supabase as unknown as SupabaseClient)
 
@@ -84,6 +85,7 @@ describe('runSweep', () => {
     expect(summary.reclaimedReceived).toBe(1)
     expect(summary.erroredMaxAttempts).toBe(1)
     expect(summary.finalizedAcks).toBe(1)
+    expect(summary.outboundFailed24h).toBe(2)
 
     const errorPatch = findCalls('whatsapp_messages', 'update')[0][0] as Record<string, unknown>
     expect(errorPatch.processing_status).toBe('error')

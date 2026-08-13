@@ -1173,6 +1173,10 @@ export const CorrectJournalEntrySchema = z.object({
   // the user replace a header that echoed the wrong account's label (#1031).
   description: z.string().trim().min(1, 'Description cannot be empty').optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),
+  // Explicit override of the correction-chain depth guard (the "Rätta ändå"
+  // confirm in the UI). Without it, correcting an entry 3+ links deep in a
+  // rättelse chain returns CORRECTION_CHAIN_TOO_DEEP.
+  allow_deep_chain: z.boolean().optional(),
 })
 
 // ============================================================
@@ -1356,6 +1360,9 @@ export const UpdateDimensionValueSchema = z
  */
 export const RecordateJournalEntrySchema = z.object({
   new_entry_date: isoDate,
+  // Explicit override of the correction-chain depth guard ("Flytta ändå"):
+  // a date move is another storno+rättelse layer, so it carries the guard too.
+  allow_deep_chain: z.boolean().optional(),
 })
 
 // ============================================================
@@ -2007,6 +2014,9 @@ export const UpdateSettingsSchema = z.object({
     .enum(['swedbank', 'seb', 'handelsbanken', 'nordea', 'other'])
     .nullable()
     .optional(),
+  // Öresavrundning: round each net payout up to whole kronor (banks that
+  // reject öre in salary payment files). Diff books on 3740.
+  salary_net_rounding: z.boolean().optional(),
   // Vacation year basis (payroll gap-closure 3.1): sammanfallande calendar
   // year (default) or the statutory Apr 1 - Mar 31 split. The settings route
   // blocks changing this while open vacation-ledger rows exist.
@@ -2200,6 +2210,13 @@ export const MarkOpeningBalanceSchema = z.object({
 export const RunReconciliationSchema = z.object({
   date_from: isoDate.optional(),
   date_to: isoDate.optional(),
+  // Run the per-cash-account unattended sweep over every enabled cash account
+  // ("Kör matchning igen" in the review surface) instead of one account. The
+  // sweep always applies at the unattended threshold and persists suggestions;
+  // there is no dry-run form. The route REJECTS (400) any combination with
+  // dry_run, account_number or selected_matches rather than silently ignoring
+  // them: a request that asked for a preview must never apply writes.
+  all_accounts: z.boolean().optional(),
   // BAS settlement account to reconcile against (e.g. '1930', '1932'). Defaults
   // to '1930' server-side so existing clients stay correct.
   account_number: accountNumber.optional(),
@@ -2222,6 +2239,14 @@ export const RunReconciliationSchema = z.object({
   // client still has it ticked. Omitted = legacy behavior: every selected
   // match applies, including manually ticked fuzzy ones at 0.75.
   confidence_threshold: z.number().min(0).max(1).optional(),
+})
+
+// Confirm or reject persisted journal-entry match suggestions
+// (transactions.potential_journal_entry_id). Each pair is revalidated
+// server-side at confirm time; stale pairs are skipped, never failing the batch.
+export const ConfirmJeSuggestionsSchema = z.object({
+  transaction_ids: z.array(uuid).min(1).max(500),
+  action: z.enum(['confirm', 'reject']),
 })
 
 // ============================================================
@@ -2492,6 +2517,7 @@ export const SalaryLineItemTypeSchema = z.enum([
   'mileage_taxfree', 'mileage_taxable',
   'net_deduction_advance', 'net_deduction_union', 'net_deduction_benefit_payment',
   'net_deduction_other',
+  'oresavrundning',
   'correction', 'other',
 ])
 
@@ -2871,7 +2897,13 @@ export const AddEmployeeToRunSchema = z.object({
 
 export const CreateSalaryLineItemSchema = z.object({
   salary_run_employee_id: uuid,
-  item_type: SalaryLineItemTypeSchema,
+  // 'oresavrundning' is derived-only: the calculator writes it from the
+  // engine's netRounding and the booking excludes it from the gross
+  // reconciliation, so a manually created row would unbalance the salary
+  // verifikat by exactly its amount (the DB balance trigger then rejects the
+  // booking). Every other derived type is absorbed by the base remainder and
+  // stays harmless to create by hand.
+  item_type: SalaryLineItemTypeSchema.exclude(['oresavrundning']),
   description: z.string().min(1).max(500),
   quantity: z.number().optional(),
   unit_price: z.number().optional(),

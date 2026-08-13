@@ -45,7 +45,7 @@ import {
   FileInput,
   FileDown,
 } from 'lucide-react'
-import { EmptyInvoices } from '@/components/ui/empty-state'
+import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FiscalPeriod, Invoice } from '@/types'
@@ -223,6 +223,7 @@ export default function InvoicesPage() {
   const supabase = createClient()
   const t = useTranslations('invoices')
   const tCommon = useTranslations('common')
+  const tStart = useTranslations('start_cards')
   const { uiState, loaded: uiStateLoaded } = useUiState()
 
   // The "Ny faktura" modal is driven by the URL (?new=1) so every entry point
@@ -695,7 +696,16 @@ export default function InvoicesPage() {
             description={t('no_search_results_description', { term: searchTerm })}
           />
         ) : invoices.length === 0 ? (
-          <EmptyInvoices onAction={openNewInvoice} />
+          <div className="animate-fade-in">
+            <StartCard
+              card="venice"
+              layout="center"
+              title={tStart('invoices_title')}
+              body={tStart('invoices_body')}
+              primary={{ label: tStart('invoices_primary'), href: '/import?mode=migration' }}
+              secondary={{ label: tStart('invoices_secondary'), onClick: openNewInvoice }}
+            />
+          </div>
         ) : (
           <DataListEmpty
             icon={<ReceiptText className="h-6 w-6" />}

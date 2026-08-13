@@ -262,7 +262,11 @@ async function handleUnknownSender(
 
   // Anything else from an unknown number: the AI-disclosure greeting, hard
   // throttled per phone hash (EU AI Act Art 50 disclosure lives in M1).
-  if (await greetingThrottled(supabase, phoneHash)) {
+  // Media bypasses the hour rule (10-minute burst window instead, daily cap
+  // kept): a photo is a receipt someone expects to be handled, and pure
+  // silence taught senders their receipts were being filed when nothing was.
+  const carriesMedia = msg.type === 'image' || msg.type === 'document'
+  if (await greetingThrottled(supabase, phoneHash, { media: carriesMedia })) {
     await recordUnknownSenderMessage(
       supabase, msg, phoneHash, 'skipped', 'Unknown sender: greeting throttled, declined',
     )
@@ -859,6 +863,27 @@ export const whatsappInboxExtension: Extension = {
           .limit(1)
           .maybeSingle()
 
+        // Channel health for THIS link, 7-day window, head counts only: how
+        // many replies never reached the sender and how many inbound rows
+        // parked with a reason. The panel turns nonzero counts into one
+        // attention line; nothing else in the app reads delivery_status.
+        const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+        const { count: outboundFailed7d } = await serviceClient
+          .from('whatsapp_messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('phone_link_id', row.id)
+          .eq('direction', 'outbound')
+          .eq('delivery_status', 'failed')
+          .gte('created_at', weekAgo)
+        const { count: parkedInbound7d } = await serviceClient
+          .from('whatsapp_messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('phone_link_id', row.id)
+          .eq('direction', 'inbound')
+          .in('processing_status', ['skipped', 'error'])
+          .not('error_message', 'is', null)
+          .gte('created_at', weekAgo)
+
         const inboundRow = lastInbound as {
           created_at: string
           processing_status: string
@@ -877,6 +902,10 @@ export const whatsappInboxExtension: Extension = {
             lastReplyFailed:
               (lastOutbound as { delivery_status: string | null } | null)?.delivery_status ===
               'failed',
+            health: {
+              outboundFailed7d: outboundFailed7d ?? 0,
+              parkedInbound7d: parkedInbound7d ?? 0,
+            },
           },
         })
       },
@@ -893,6 +922,31 @@ export const whatsappInboxExtension: Extension = {
           .eq('user_id', ctx.userId)
           .is('revoked_at', null)
         return NextResponse.json({ data: { revoked: true } })
+      },
+    },
+
+    {
+      method: 'POST',
+      path: '/link/unmute',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        // Clears a stopp pause from the app (the in-chat counterpart is the
+        // literal text `start`). The user-scoped client is deliberate: RLS
+        // (whatsapp_phone_links_update_own) proves the caller owns the row.
+        // Idempotent on an unpaused link; only a missing active link 404s.
+        const { data } = await ctx.supabase
+          .from('whatsapp_phone_links')
+          .update({ muted_at: null })
+          .eq('user_id', ctx.userId)
+          .is('revoked_at', null)
+          .select('id')
+        if (!Array.isArray(data) || data.length === 0) {
+          return NextResponse.json(
+            { error: 'Ingen aktiv WhatsApp-koppling hittades.' },
+            { status: 404 },
+          )
+        }
+        return NextResponse.json({ data: { unmuted: true } })
       },
     },
 

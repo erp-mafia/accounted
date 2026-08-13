@@ -1,8 +1,11 @@
+import { after } from 'next/server'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { extractInvoiceFields, emptyResult } from './extract-invoice-fields'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import type { InvoiceExtractionResult } from '@/types'
 import { PDFDocument } from 'pdf-lib'
 import path from 'node:path'
 
@@ -199,6 +202,20 @@ export async function uploadAndExtract(
     /** Overrides the system actor id on the DocumentIngested history event.
      *  Omitted = today's behavior (resend-inbound for email, user otherwise). */
     actorId?: string
+    /**
+     * Staged upload (web route only). When true AND extraction would actually
+     * call Bedrock, the inbox row is inserted first (status 'processing',
+     * extracted_data NULL), the function returns immediately, and extraction
+     * runs after the response via a deferred worker that CAS-flips the row to
+     * 'received'. Verdicts that never reach Bedrock (no AI entitlement,
+     * sandbox, client opt-out) stay on the synchronous path: they are quick
+     * and their response contract (empty skeleton + skip_reason) is
+     * unchanged. skipExtraction in particular MUST stay synchronous: a
+     * BYO-extraction agent PUTs its fields right after upload, and a deferred
+     * flip would overwrite them. Default false = today's synchronous behavior
+     * (email and WhatsApp callers are untouched).
+     */
+    deferExtraction?: boolean
   } = {},
 ) {
   const correlationId = crypto.randomUUID()
@@ -319,27 +336,96 @@ export async function uploadAndExtract(
   // extraction path, so the document is still stored and can be filled in
   // manually. Highest priority (a hard paywall rule, not a heuristic).
   const hasAiEntitlement = await hasCapability(supabase, companyId, CAPABILITY.ai)
-  // Long PDFs are sliced to their first pages instead of skipped, but only
-  // when extraction would actually run: slicing after an entitlement/sandbox/
-  // opt-out verdict would be wasted CPU.
-  const slicedBuffer =
-    gatedByPageCount && hasAiEntitlement && !sandbox && !opts.skipExtraction
-      ? await slicePdfForExtraction(file.buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
-      : null
-  // Skip-reason priority: no-AI-entitlement > sandbox > client opt-out >
-  // page-count. Opt-out now outranks the page gate (an opted-out caller never
-  // extracts regardless of length), and too_many_pages only fires when the
-  // slice fallback also failed (encrypted/malformed PDF).
-  const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'client_opt_out' | 'sandbox' | null =
+  // The verdicts that avoid Bedrock entirely, in the established priority
+  // order: no-AI-entitlement > sandbox > client opt-out. All three are
+  // decidable without touching the PDF; too_many_pages is not (it only fires
+  // when the slice fallback fails) and is resolved below, on whichever path
+  // (sync or deferred) actually attempts the slice.
+  const syncSkipReason: 'no_ai_entitlement' | 'client_opt_out' | 'sandbox' | null =
     !hasAiEntitlement
       ? 'no_ai_entitlement'
       : sandbox
         ? 'sandbox'
         : opts.skipExtraction
           ? 'client_opt_out'
-          : gatedByPageCount && slicedBuffer == null
-            ? 'too_many_pages'
-            : null
+          : null
+
+  if (opts.deferExtraction && syncSkipReason === null) {
+    // Staged path: extraction WILL call Bedrock, so create the row now and
+    // let the response go. The deferred worker (or, after a crash, the sweep
+    // cron at /api/extensions/invoice-inbox/sweep/cron) flips the row to
+    // 'received'. extracted_data stays NULL until then: that is what keeps
+    // the MCP create-from-inbox guard ("re-run extraction first") holding
+    // for free on in-flight rows.
+    const { data: inbox, error: inboxError } = await supabase
+      .from('invoice_inbox_items')
+      .insert({
+        company_id: companyId,
+        user_id: userId,
+        status: 'processing',
+        source,
+        document_id: doc.id,
+        extracted_data: null,
+        extraction_skipped: false,
+        matched_supplier_id: null,
+        email_from: emailMeta?.from || null,
+        email_subject: emailMeta?.subject || null,
+        email_received_at: emailMeta?.receivedAt || null,
+        email_body_text: emailMeta?.bodyText || null,
+        resend_email_id: emailMeta?.resendEmailId || null,
+        resend_attachment_id: emailMeta?.resendAttachmentId || null,
+        raw_email_payload: emailMeta?.messageId
+          ? { messageId: emailMeta.messageId, filename: file.name }
+          : null,
+        correlation_id: correlationId,
+        matched_transaction_id: matchedTransactionId ?? null,
+        whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
+        channel_context: opts.channelMeta
+          ? { channel: 'whatsapp', caption: sanitiseCaption(opts.channelMeta.caption) }
+          : null,
+      })
+      .select('*')
+      .single()
+
+    if (inboxError) throw new Error(`Failed to create inbox item: ${inboxError.message}`)
+
+    scheduleDeferredExtraction({
+      itemId: inbox.id,
+      documentId: doc.id,
+      companyId,
+      correlationId,
+      file,
+      pageCount,
+      gatedByPageCount,
+    })
+
+    return {
+      document_id: doc.id,
+      inbox_item_id: inbox.id,
+      status: inbox.status,
+      extracted_data: null,
+      matched_supplier_id: inbox.matched_supplier_id,
+      matched_transaction_id: inbox.matched_transaction_id,
+      extraction_skipped: false,
+      skip_reason: null,
+      page_count: pageCount,
+    }
+  }
+
+  // Long PDFs are sliced to their first pages instead of skipped, but only
+  // when extraction would actually run: slicing after an entitlement/sandbox/
+  // opt-out verdict would be wasted CPU.
+  const slicedBuffer =
+    gatedByPageCount && syncSkipReason === null
+      ? await slicePdfForExtraction(file.buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
+      : null
+  // Skip-reason priority: no-AI-entitlement > sandbox > client opt-out >
+  // page-count. Opt-out outranks the page gate (an opted-out caller never
+  // extracts regardless of length), and too_many_pages only fires when the
+  // slice fallback also failed (encrypted/malformed PDF).
+  const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'client_opt_out' | 'sandbox' | null =
+    syncSkipReason ??
+    (gatedByPageCount && slicedBuffer == null ? 'too_many_pages' : null)
   const skipExtraction = skipReason !== null
 
   // Bring-your-own-extraction: skip the Bedrock call entirely and seed an
@@ -451,5 +537,157 @@ export async function uploadAndExtract(
     extraction_skipped: skipExtraction,
     skip_reason: skipReason,
     page_count: pageCount,
+  }
+}
+
+// ── Deferred extraction (staged web upload) ──────────────────
+
+interface DeferredExtractionJob {
+  itemId: string
+  documentId: string
+  companyId: string
+  correlationId: string
+  file: { name: string; buffer: ArrayBuffer; type: string }
+  pageCount: number | null
+  gatedByPageCount: boolean
+}
+
+/**
+ * Run extraction after the upload response is sent, then CAS-flip the
+ * 'processing' row to 'received'. Exact dispatch-kick idiom (whatsapp-inbox
+ * kickInboundProcessing): never awaited, never throws out, falls back to a
+ * microtask outside a request scope (tests). The request-scoped supabase
+ * client may be gone once the response is flushed, so the worker builds its
+ * own cookieless service client.
+ */
+function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
+  const run = async (): Promise<void> => {
+    try {
+      const supabase = createServiceClientNoCookies()
+
+      // Mirrors the synchronous path: extraction failures are swallowed into
+      // the empty skeleton (extractInvoiceFields does most of that itself);
+      // an unsliceable long PDF becomes the too_many_pages skip.
+      let extracted: InvoiceExtractionResult = emptyResult()
+      let rawText: string | null = null
+      let extractionSkipped = false
+      let skipReason: 'too_many_pages' | null = null
+      try {
+        const slicedBuffer = job.gatedByPageCount
+          ? await slicePdfForExtraction(job.file.buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
+          : null
+        if (job.gatedByPageCount && slicedBuffer == null) {
+          extractionSkipped = true
+          skipReason = 'too_many_pages'
+        } else {
+          const result = await extractInvoiceFields({
+            buffer: Buffer.from(slicedBuffer ?? job.file.buffer),
+            mimeType: job.file.type,
+            fileName: job.file.name,
+          })
+          extracted = result.data
+          rawText = result.rawText
+          if (slicedBuffer != null && job.pageCount != null) {
+            extracted.pages = { total: job.pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
+          }
+        }
+      } catch (err) {
+        // Persist the empty skeleton below, exactly like the sync path does
+        // on a swallowed failure: the row becomes a normal received item with
+        // empty fields, and the manual-edit / retry affordances take over.
+        console.error('[invoice-inbox] Deferred extraction failed:', err)
+      }
+
+      // Supplier match by org-nr, then case-insensitive name (no AI fuzz).
+      let matchedSupplierId: string | null = null
+      if (extracted.supplier.orgNumber) {
+        const { data: s } = await supabase
+          .from('suppliers')
+          .select('id')
+          .eq('company_id', job.companyId)
+          .eq('org_number', extracted.supplier.orgNumber)
+          .limit(1)
+          .maybeSingle()
+        if (s) matchedSupplierId = s.id
+      }
+      if (!matchedSupplierId && extracted.supplier.name) {
+        const { data: s } = await supabase
+          .from('suppliers')
+          .select('id')
+          .eq('company_id', job.companyId)
+          .ilike('name', extracted.supplier.name)
+          .limit(1)
+          .maybeSingle()
+        if (s) matchedSupplierId = s.id
+      }
+
+      // CAS: only the row still waiting on THIS worker flips. A user retry
+      // or the sweep cron may have claimed it first; their result wins.
+      const { data: claimed, error: updateError } = await supabase
+        .from('invoice_inbox_items')
+        .update({
+          status: 'received',
+          extracted_data: extracted as unknown as Record<string, unknown>,
+          extraction_skipped: extractionSkipped,
+          matched_supplier_id: matchedSupplierId,
+        })
+        .eq('id', job.itemId)
+        .eq('status', 'processing')
+        .select('id')
+      if (updateError) {
+        // The sweep cron flips the row to 'received' once it goes stale.
+        console.error('[invoice-inbox] Deferred extraction flip failed:', updateError)
+        return
+      }
+      if (!Array.isArray(claimed) || claimed.length === 0) return
+
+      try {
+        await appendProcessingHistory({
+          companyId: job.companyId,
+          correlationId: job.correlationId,
+          aggregateType: 'Document',
+          aggregateId: job.documentId,
+          eventType: 'DocumentExtractionAttempted',
+          payload: {
+            document_id: job.documentId,
+            inbox_item_id: job.itemId,
+            succeeded: rawText != null && rawText.length > 0,
+            extracted_total: extracted.totals.total,
+            has_org_number: extracted.supplier.orgNumber != null,
+            has_ocr: extracted.invoice.paymentReference != null,
+            skipped: extractionSkipped,
+            skip_reason: skipReason,
+            page_count: job.pageCount,
+          },
+          actor: { type: 'system', id: 'invoice-inbox-extract' },
+          occurredAt: new Date(),
+        })
+      } catch (err) {
+        console.error('[invoice-inbox] Failed to append DocumentExtractionAttempted:', err)
+      }
+    } catch (err) {
+      console.error('[invoice-inbox] Deferred extraction worker crashed:', err)
+      // Best-effort flip so the row does not sit in 'processing' until the
+      // sweep: same CAS, same empty skeleton the sync swallow persists.
+      try {
+        await createServiceClientNoCookies()
+          .from('invoice_inbox_items')
+          .update({
+            status: 'received',
+            extracted_data: emptyResult() as unknown as Record<string, unknown>,
+            extraction_skipped: false,
+          })
+          .eq('id', job.itemId)
+          .eq('status', 'processing')
+      } catch {
+        // The sweep cron is the recovery of last resort.
+      }
+    }
+  }
+
+  try {
+    after(() => run())
+  } catch {
+    queueMicrotask(() => void run())
   }
 }

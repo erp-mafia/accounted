@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -38,11 +39,15 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 export default function RecordateEntryDialog({ entry, open, onOpenChange, onMoved }: Props) {
   const { toast } = useToast()
   const router = useRouter()
+  const t = useTranslations('journal_detail')
   const [newDate, setNewDate] = useState(entry.entry_date)
   const [preview, setPreview] = useState<PeriodStatus | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Non-null when the server refused with CORRECTION_CHAIN_TOO_DEEP: holds the
+  // reported chain depth and opens the bypass confirm ("Flytta ändå").
+  const [deepChainDepth, setDeepChainDepth] = useState<number | null>(null)
 
   // Reset to the original date each time the dialog opens.
   useEffect(() => {
@@ -100,22 +105,33 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
   const canSubmit = dateChanged && targetOpen && !isSubmitting
 
-  async function handleSubmit() {
+  async function handleSubmit(allowDeepChain = false) {
     if (!canSubmit) return
     setIsSubmitting(true)
     try {
       const res = await fetch(`/api/bookkeeping/journal-entries/${entry.id}/recordate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ new_entry_date: newDate }),
+        body: JSON.stringify({
+          new_entry_date: newDate,
+          ...(allowDeepChain ? { allow_deep_chain: true } : {}),
+        }),
       })
       const result = await res.json()
       if (!res.ok) {
+        // Chain-depth guard: open the bypass confirm instead of a dead-end
+        // toast. "Flytta ändå" resubmits with allow_deep_chain=true.
+        const structured = (result as { error?: { code?: string; details?: { depth?: number } } })?.error
+        if (structured?.code === 'CORRECTION_CHAIN_TOO_DEEP') {
+          setDeepChainDepth(structured.details?.depth ?? 3)
+          return
+        }
         const error = new Error('Failed to move entry') as Error & { body?: unknown; status?: number }
         error.body = result
         error.status = res.status
         throw error
       }
+      setDeepChainDepth(null)
       const correctedId = result.data?.corrected?.id
       toast({
         title: 'Verifikationen flyttad',
@@ -238,10 +254,35 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             Avbryt
           </Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit}>
+          <Button onClick={() => handleSubmit()} disabled={!canSubmit}>
             {isSubmitting ? 'Flyttar…' : 'Flytta verifikationen'}
           </Button>
         </DialogFooter>
+
+        {/* Chain-depth guard confirm: the server refused because this entry
+            already sits deep in a rättelse chain. Advisory, never a dead end:
+            "Flytta ändå" resubmits with allow_deep_chain=true. */}
+        <Dialog open={deepChainDepth != null} onOpenChange={(next) => { if (!next) setDeepChainDepth(null) }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t('deep_chain_title')}</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              {t('deep_chain_body', { depth: deepChainDepth ?? 3 })}
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeepChainDepth(null)} disabled={isSubmitting}>
+                {t('deep_chain_cancel')}
+              </Button>
+              <Button
+                onClick={() => { setDeepChainDepth(null); void handleSubmit(true) }}
+                disabled={isSubmitting}
+              >
+                {t('deep_chain_move_anyway')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
     </Dialog>
   )
