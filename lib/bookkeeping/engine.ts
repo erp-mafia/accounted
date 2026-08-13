@@ -7,12 +7,17 @@ import {
   CannotEditNonDraftError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
+  CorrectionChainTooDeepError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   FiscalPeriodNotFoundError,
   JournalEntryNotBalancedError,
   JournalEntryNotFoundError,
 } from '@/lib/bookkeeping/errors'
+import {
+  correctionChainDepth,
+  CORRECTION_CHAIN_GUARD_DEPTH,
+} from '@/lib/core/bookkeeping/correction-chain'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   normalizeLineDimensions,
@@ -1039,7 +1044,15 @@ export async function reverseEntry(
   companyId: string,
   userId: string,
   entryId: string,
-  reversalDate?: string
+  reversalDate?: string,
+  options?: {
+    /**
+     * Bypass the correction-chain depth guard: reversing an entry that is
+     * already CORRECTION_CHAIN_GUARD_DEPTH+ links deep throws
+     * CorrectionChainTooDeepError unless set (see storno-service correctEntry).
+     */
+    allowDeepChain?: boolean
+  }
 ): Promise<JournalEntry> {
 
   // Fetch original entry with lines
@@ -1069,6 +1082,16 @@ export async function reverseEntry(
   // backstop against a direct API call.
   if (original.source_type === 'storno') {
     throw new CannotReverseStornoError(original.source_type)
+  }
+
+  // Chain-depth guard: a storno on an entry already deep in a rättelse chain
+  // is almost always an agent reflexively cancelling its own correction
+  // (Christoffer case 2026-08-11). Same guard and bypass as correctEntry.
+  if (!options?.allowDeepChain) {
+    const chain = await correctionChainDepth(supabase, companyId, original)
+    if (chain.depth >= CORRECTION_CHAIN_GUARD_DEPTH) {
+      throw new CorrectionChainTooDeepError(chain.depth, chain.rootVoucher)
+    }
   }
 
   const lines = (original.lines as JournalEntryLine[]) || []

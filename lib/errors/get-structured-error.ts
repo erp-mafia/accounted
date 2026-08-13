@@ -28,6 +28,7 @@ import {
   CannotCorrectNonPostedError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
+  CorrectionChainTooDeepError,
   DimensionValidationError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
@@ -441,6 +442,12 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   }
   if (err instanceof MeaninglessCorrectionError) {
     return { code: err.code, details: { reason: err.reason } }
+  }
+  if (err instanceof CorrectionChainTooDeepError) {
+    return {
+      code: err.code,
+      details: { depth: err.depth, chainRootVoucher: err.chainRootVoucher },
+    }
   }
   if (err instanceof DimensionValidationError) {
     return { code: err.code, details: { issues: err.issues } }

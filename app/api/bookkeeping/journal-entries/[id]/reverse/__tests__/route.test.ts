@@ -74,7 +74,40 @@ describe('POST /api/bookkeeping/journal-entries/[id]/reverse', () => {
 
     expect(status).toBe(200)
     expect(body.data).toEqual(reversalEntry)
-    expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1')
+    expect(mockReverseEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'entry-1',
+      undefined,
+      { allowDeepChain: false },
+    )
+  })
+
+  it('forwards allow_deep_chain=true from the body (guard bypass)', async () => {
+    const reversalEntry = makeJournalEntry({
+      id: 'reversal-1',
+      reverses_id: 'entry-1',
+      source_type: 'storno',
+    })
+    mockReverseEntry.mockResolvedValue(reversalEntry)
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/reverse', {
+      method: 'POST',
+      body: { allow_deep_chain: true },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockReverseEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'entry-1',
+      undefined,
+      { allowDeepChain: true },
+    )
   })
 
   it('maps a typed concurrent-reversal error to the canonical envelope (409)', async () => {
