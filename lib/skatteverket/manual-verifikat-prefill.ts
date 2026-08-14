@@ -13,6 +13,13 @@
  * linking is validated server-side by the match route (ownership,
  * ALREADY_BOOKED, ENTRY_ALREADY_LINKED), so a missing or tampered payload
  * can at worst degrade to the plain /bookkeeping list.
+ *
+ * Accepted residual risk (ISO A.8.12, decided 2026-08-14): the staged
+ * payload sits unencrypted in sessionStorage for the sub-second navigation
+ * window, readable by XSS. An attacker with script execution already reads
+ * the full ledger through the session's authenticated APIs, so a
+ * server-issued staging token would add a roundtrip without adding
+ * protection.
  */
 
 import { isIsoDateShaped } from '@/lib/invariants'
