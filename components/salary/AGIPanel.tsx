@@ -165,32 +165,36 @@ export function AGIPanel(props: AGIPanelProps) {
   // /authorize call overwrites the stored oauth_state + PKCE verifier, so a
   // parallel flow guarantees a CSRF failure for whichever tab finishes last.
   const [connecting, setConnecting] = useState(false)
-  // Dismissal for the kvittens-scope notice, keyed by the exact granted scope
-  // string: a reconnect that comes back with the same grant (the scope not yet
-  // registered on Skatteverket's application) keeps the dismissal, so the
-  // notice cannot become an un-clearable reconnect loop (#1010), while a new
-  // grant re-evaluates from scratch.
+  // Dismissal for the kvittens-scope notice, keyed by employer plus the exact
+  // granted scope string. The employer keeps dismissals from leaking across
+  // companies on a shared browser (tokens are per company, so each company's
+  // grant is its own question); the scope string means a reconnect that comes
+  // back with the same grant (the scope not yet registered on Skatteverket's
+  // application) keeps the dismissal, so the notice cannot become an
+  // un-clearable reconnect loop (#1010), while a new grant re-evaluates from
+  // scratch.
   const [kvittensNoticeDismissed, setKvittensNoticeDismissed] = useState(false)
   const grantedScopeString = typeof status?.scope === 'string' ? status.scope : null
+  const kvittensNoticeKey = grantedScopeString
+    ? `agi-kvittens-scope-notice:${arbetsgivare}:${grantedScopeString}`
+    : null
   useEffect(() => {
-    if (!grantedScopeString) return
+    if (!kvittensNoticeKey) return
     try {
-      setKvittensNoticeDismissed(
-        localStorage.getItem(`agi-kvittens-scope-notice:${grantedScopeString}`) === 'dismissed'
-      )
+      setKvittensNoticeDismissed(localStorage.getItem(kvittensNoticeKey) === 'dismissed')
     } catch {
       setKvittensNoticeDismissed(false)
     }
-  }, [grantedScopeString])
+  }, [kvittensNoticeKey])
   const dismissKvittensNotice = useCallback(() => {
     setKvittensNoticeDismissed(true)
-    if (!grantedScopeString) return
+    if (!kvittensNoticeKey) return
     try {
-      localStorage.setItem(`agi-kvittens-scope-notice:${grantedScopeString}`, 'dismissed')
+      localStorage.setItem(kvittensNoticeKey, 'dismissed')
     } catch {
       // Best effort: the state update alone hides it for this mount.
     }
-  }, [grantedScopeString])
+  }, [kvittensNoticeKey])
 
   // "2026-06" for user-facing copy; the period prop is compact YYYYMM.
   const prettyPeriod = `${period.slice(0, 4)}-${period.slice(4)}`
