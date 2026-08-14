@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { eventBus } from '@/lib/events'
 import {
   computeDeclaredAvgifter,
   computeDeclaredAvgifterWithOverrides,
@@ -8,6 +9,11 @@ import {
 } from '../declared-avgifter'
 
 const PARAMS = { standardRate: 0.3142, youthCap: 25000, vaxaCap: 35000 }
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  eventBus.clear()
+})
 
 describe('computeDeclaredAvgifter', () => {
   it('reproduces Skatteverket: per-sats on whole-krona underlag sums, not per-employee öre sums', () => {

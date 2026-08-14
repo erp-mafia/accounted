@@ -33,6 +33,17 @@ import { truncateToWholeKronor } from '@/lib/money'
  *    exactly against the total.
  */
 
+/**
+ * F-skatt payees receive no skatteavdrag and form no underlag for
+ * arbetsgivaravgifter (the AGI's isFSkattRow invariant). The single source
+ * for that check: every booking/preview surface keys the exclusion on this
+ * helper so the booked 2731/7510 split, the AGI's IU exclusion and the
+ * previewed voucher cannot silently diverge for F-skatt employees.
+ */
+export function isFSkattStatus(status: string | null | undefined): boolean {
+  return status === 'f_skatt'
+}
+
 /** One roster row, as stored on salary_run_employees. */
 export interface DeclaredAvgifterRow {
   /**

@@ -34,6 +34,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
+import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
@@ -264,7 +265,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           net_salary:
             sre.net_salary + (sre.tax_withheld - (sre.tax_withheld_override ?? sre.tax_withheld)),
           avgifter_amount:
-            sre.employee?.f_skatt_status === 'f_skatt'
+            isFSkattStatus(sre.employee?.f_skatt_status)
               ? sre.avgifter_amount
               : sre.avgifter_amount_override ?? sre.avgifter_amount,
           avgifter_rate: sre.avgifter_rate,
@@ -273,10 +274,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           // Zeroed for F-skatt rows, matching book-run and the AGI's
           // isFSkattRow invariant.
           avgifter_basis:
-            sre.employee?.f_skatt_status === 'f_skatt' ? 0 : sre.avgifter_basis,
+            isFSkattStatus(sre.employee?.f_skatt_status) ? 0 : sre.avgifter_basis,
           avgifter_category: sre.avgifter_category ?? null,
           avgifter_amount_overridden:
-            sre.employee?.f_skatt_status !== 'f_skatt' && sre.avgifter_amount_override != null,
+            !isFSkattStatus(sre.employee?.f_skatt_status) && sre.avgifter_amount_override != null,
           vacation_accrual: sre.vacation_accrual,
           vacation_accrual_avgifter: sre.vacation_accrual_avgifter,
           // Dimensions PR8: read-at-book from the employee row.

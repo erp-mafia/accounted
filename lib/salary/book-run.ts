@@ -25,6 +25,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
+import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
@@ -170,7 +171,7 @@ async function bookLoadedRun(
         // booking must too, or the ledger would carry social charges the
         // declaration provably excludes.
         avgifter_amount:
-          sre.employee?.f_skatt_status === 'f_skatt'
+          isFSkattStatus(sre.employee?.f_skatt_status)
             ? (sre.avgifter_amount as number)
             : (sre.avgifter_amount_override as number | null) ?? (sre.avgifter_amount as number),
         avgifter_rate: sre.avgifter_rate as number,
@@ -182,10 +183,10 @@ async function bookLoadedRun(
         // invariant: their pay forms no underlag). An amount override is
         // flagged instead: the split then mirrors the AGI's override path.
         avgifter_basis:
-          sre.employee?.f_skatt_status === 'f_skatt' ? 0 : (sre.avgifter_basis as number),
+          isFSkattStatus(sre.employee?.f_skatt_status) ? 0 : (sre.avgifter_basis as number),
         avgifter_category: (sre.avgifter_category as string | null) ?? null,
         avgifter_amount_overridden:
-          sre.employee?.f_skatt_status !== 'f_skatt' &&
+          !isFSkattStatus(sre.employee?.f_skatt_status) &&
           (sre.avgifter_amount_override as number | null) != null,
         vacation_accrual: sre.vacation_accrual as number,
         vacation_accrual_avgifter: sre.vacation_accrual_avgifter as number,

@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { SALARY_ACCOUNTS, getLineItemAccount } from '@/lib/salary/account-mapping'
 import { splitAvgifterLiability } from '@/lib/salary/salary-entries'
+import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput } from '@/types'
 
@@ -181,7 +182,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // avgifter overrides and carry no underlag, matching book-run and the
     // AGI's isFSkattRow invariant.
     const isFSkattRow = (e: { employee?: { f_skatt_status?: string | null } | null }) =>
-      e.employee?.f_skatt_status === 'f_skatt'
+      isFSkattStatus(e.employee?.f_skatt_status)
     const totalAvgifter = employees.reduce(
       (sum, e) =>
         sum +

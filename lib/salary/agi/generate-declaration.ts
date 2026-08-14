@@ -34,6 +34,7 @@ import { eventBus } from '@/lib/events'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
   computeDeclaredAvgifterWithOverrides,
+  isFSkattStatus,
   resolveDeclaredAvgifterParams,
 } from '../declared-avgifter'
 import type { Logger } from '@/lib/logger'
@@ -140,7 +141,7 @@ function sumLineItemAmounts(
 // override must not resurrect them, or the filing would claim social charges
 // on pay whose IU simultaneously asserts FK131 (not subject to them).
 function isFSkattRow(sre: SalaryRunEmployeeRow): boolean {
-  return sre.employee?.f_skatt_status === 'f_skatt'
+  return isFSkattStatus(sre.employee?.f_skatt_status)
 }
 
 export async function generateAgiDeclaration(
