@@ -745,7 +745,11 @@ export default function TransactionsPage() {
   )
 
   const sourceItems = useMemo<ContextPickerItem[]>(() => {
-    const showSkvSource = skvRows.length > 0
+    // Keep the Skatteverket source pickable while reconnect is needed even
+    // though the rows fetch fails then (401 -> skvRows []): the reconnect
+    // attn line only renders under this source, so dropping the option would
+    // hide the reconnect path exactly when it applies.
+    const showSkvSource = skvRows.length > 0 || skvNeedsReconnect
     const items: ContextPickerItem[] = [
       {
         id: 'all',
@@ -771,7 +775,7 @@ export default function TransactionsPage() {
       items.push({ id: 'skatteverket', label: t('source_skatteverket_label') })
     }
     return items
-  }, [cashAccounts, hasUnassignedBankRows, skvRows.length, t, totalSourceBalance])
+  }, [cashAccounts, hasUnassignedBankRows, skvNeedsReconnect, skvRows.length, t, totalSourceBalance])
 
   // A narrowed filter can go stale (account disabled, skv rows drained,
   // "övriga" bucket emptied): fall back to everything rather than filtering
@@ -3161,7 +3165,10 @@ export default function TransactionsPage() {
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
 
-      {skvNeedsReconnect ? (
+      {skvNeedsReconnect && sourceFilter === 'skatteverket' ? (
+        // Only when the user is actually looking at skattekonto rows: as a
+        // permanent page-wide line it read as noise (feedback 2026-08-14).
+        // The skattekonto page keeps its own reconnect line.
         <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/tax' }}>
           {t('skv_reconnect_body')}
         </AttnLine>
