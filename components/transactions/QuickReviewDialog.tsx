@@ -333,6 +333,13 @@ export default function QuickReviewDialog({
           // is invisible either way: the toast above, with its open-entry
           // action, is the user's actual pointer to the underlag that did not
           // attach. The early return just skips the redundant cleanup below.
+          //
+          // Picks are still dropped: the dialog instance is reused across rows,
+          // and a pick that DID link is already consumed, so carrying it into
+          // the next transaction would re-link a spent document. Nothing is lost
+          // by clearing, unlike uploadedFiles: an underlag that failed to link
+          // was never stamped, so it is still sitting in the inkorg to re-pick.
+          setPickedInboxDocs([])
           return
         }
       }
