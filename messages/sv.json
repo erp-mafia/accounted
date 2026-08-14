@@ -1623,6 +1623,7 @@
     "journey_note_vat_watch": "Vi bevakar 120 000-gränsen och säger till i god tid.",
     "journey_note_ceased": "Företaget är markerat som avregistrerat hos Bolagsverket.",
     "journey_open_app": "Öppna Accounted",
+    "journey_done_continue": "Fortsätt",
     "journey_done_source_title": "Var fanns bokföringen innan?",
     "journey_done_source_sub": "Historiken följer med hit, ner till sista öret.",
     "journey_done_source_sie": "SIE-fil",
