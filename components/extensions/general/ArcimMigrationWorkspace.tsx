@@ -382,10 +382,10 @@ interface ConnectionStatus {
   }
 }
 
-// WINT shows as a disabled "Kommer snart" card until the integration is
-// verified against a live WINT account. Launch = remove it here AND set
-// WINT_MIGRATION_ENABLED=true (the server-side /connect gate).
-const COMING_SOON_PROVIDERS = new Set<ArcimProvider>(['wint'])
+// Providers listed here render as a disabled "Kommer snart" card. WINT was
+// the last entry: it is released now, so the set is empty. WINT still depends
+// on WINT_MIGRATION_ENABLED=true, the server-side /connect gate.
+const COMING_SOON_PROVIDERS = new Set<ArcimProvider>([])
 
 const PROVIDER_LOGOS: Record<ArcimProvider, string> = {
   fortnox: '/logos/fortnox.svg',
