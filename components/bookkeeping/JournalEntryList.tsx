@@ -548,7 +548,7 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
           fetchDraftCount(),
           unscopedQuery
             ? Promise.resolve(setLedgerHasAnyEntry((total || 0) > 0))
-            : fetchLedgerHasAnyEntry(),
+            : fetchLedgerHasAnyEntry(isCurrent),
         ])
       } else {
         if (listMode === 'committed' && loadedEntries.length > 0) setLedgerHasAnyEntry(true)
@@ -578,12 +578,16 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
   // Cheap count-only probe across ALL years and filters: does this ledger
   // hold any committed entry at all? Distinguishes "pristine ledger" from
   // "the selected scope is empty" for the start-card gate below.
-  async function fetchLedgerHasAnyEntry() {
+  async function fetchLedgerHasAnyEntry(isCurrent: () => boolean) {
+    // Back to unknown while the probe is in flight: a failed probe must not
+    // leave a stale false behind, or the pristine card could render on data
+    // this scope change never confirmed.
+    if (isCurrent()) setLedgerHasAnyEntry(null)
     try {
       const res = await fetch('/api/bookkeeping/journal-entries?exclude_draft=true&limit=1')
-      if (!res.ok) return
+      if (!res.ok || !isCurrent()) return
       const { count: total } = await res.json()
-      setLedgerHasAnyEntry((total || 0) > 0)
+      if (isCurrent()) setLedgerHasAnyEntry((total || 0) > 0)
     } catch {
       // Non-fatal: an unknown probe keeps the pristine card hidden.
     }

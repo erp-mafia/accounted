@@ -82,7 +82,9 @@ export async function GET(request: Request) {
         .order('expires_at', { ascending: true })
         .order('user_id', { ascending: true })
         .range(from, to),
-      { dedupeBy: token => token.user_id },
+      // One row per (user, company) since tokens went per-company: deduping by
+      // user alone would drop every company but one for multi-company operators.
+      { dedupeBy: token => `${token.user_id}:${token.company_id}` },
     )
   } catch (error) {
     console.error('[skattekonto-sync-cron] Failed to fetch tokens', {
