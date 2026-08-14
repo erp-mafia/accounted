@@ -14,6 +14,10 @@ import {
 import { syncAccountTransactions } from './lib/sync'
 import { findReusableSessions, countLiveSiblings } from './lib/session-sharing'
 import {
+  runUnattendedReconciliationSweep,
+  toSweepSummary,
+} from '@/lib/reconciliation/unattended-sweep'
+import {
   runReconciliation,
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
 } from '@/lib/reconciliation/bank-reconciliation'
@@ -762,22 +766,38 @@ export const enableBankingExtension: Extension = {
           // When SIE overlap is detected, run a batch reconciliation sweep.
           // The greedy algorithm considers all candidates globally (highest-
           // confidence first) and catches matches the inline per-transaction
-          // pass may have missed due to processing order.
+          // pass may have missed due to processing order. One scoped run per
+          // enabled cash account (issue #1298): the pooled run could persist a
+          // cross-account journal_entry_id.
           // Skip for viewers: reconciliation updates transactions which viewers cannot do.
           if (sieOverlap && totalImported > 0 && !isViewer) {
             try {
-              const reconResult = await runReconciliation(supabase, companyId, user.id, {
-                dateFrom: fromDate,
-                dateTo: toDate,
-                // This sweep applies without a human reviewing a dry-run, so
-                // never commit low-confidence (fuzzy / date-range) matches.
-                confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
-              })
+              const reconResult = await runUnattendedReconciliationSweep(
+                supabase,
+                companyId,
+                user.id,
+                { dateFrom: fromDate, dateTo: toDate },
+              )
+              // Stamp the outcome so the UI can render "Vi matchade X av Y" and
+              // the review surface knows there is something to granska.
+              await supabase
+                .from('bank_connections')
+                .update({
+                  last_sie_sweep: toSweepSummary(reconResult, {
+                    dateFrom: fromDate,
+                    dateTo: toDate,
+                  }),
+                })
+                .eq('id', connection.id)
               if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {
                 log.info('Post-sync batch reconciliation matched additional transactions', {
                   applied: reconResult.applied,
                   skippedBelowThreshold: reconResult.skippedBelowThreshold,
-                  total: reconResult.matches.length,
+                  accounts: reconResult.accounts.map((a) => ({
+                    accountNumber: a.accountNumber,
+                    applied: a.applied,
+                    skippedBelowThreshold: a.skippedBelowThreshold,
+                  })),
                 })
               }
             } catch {
@@ -1483,6 +1503,9 @@ export const enableBankingExtension: Extension = {
                     // Unattended run: nobody reviews a dry-run first, so never
                     // commit low-confidence (fuzzy / date-range) matches.
                     confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
+                    // ...but don't DROP them either: the 0.75-0.89 band feeds
+                    // the "Granska förslag" review surface.
+                    persistSuggestions: true,
                   })
                   totalAutoMatched += reconResult.applied
                   if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {

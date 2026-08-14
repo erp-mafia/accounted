@@ -140,7 +140,7 @@ export default function ArticlesEditStep({
         )}
 
         {/* Table */}
-        <div className="overflow-x-auto rounded-md border">
+        <div className="overflow-x-auto rounded-lg border">
           <table className="w-full text-sm">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b">
@@ -244,7 +244,7 @@ export default function ArticlesEditStep({
                       {row.duplicate_match ? (
                         <span
                           className={cn(
-                            'text-[11px] font-medium px-1.5 py-0.5 rounded',
+                            'text-[11px] font-medium px-1.5 py-0.5 rounded-full',
                             updateDuplicates
                               ? 'bg-muted text-warning'
                               : 'bg-muted text-muted-foreground',
@@ -254,7 +254,7 @@ export default function ArticlesEditStep({
                           {updateDuplicates ? 'Uppdateras' : 'Hoppas över'}
                         </span>
                       ) : (
-                        <span className="text-[11px] font-medium px-1.5 py-0.5 rounded bg-success/15 text-success">
+                        <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-success/15 text-success">
                           Ny
                         </span>
                       )}

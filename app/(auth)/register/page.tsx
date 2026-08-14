@@ -387,7 +387,7 @@ function RegisterPageContent() {
       <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
+            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
               <Mail className="h-7 w-7 text-primary" />
             </div>
           </div>
@@ -440,7 +440,7 @@ function RegisterPageContent() {
       <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
+            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
               <Mail className="h-7 w-7 text-primary" />
             </div>
           </div>

@@ -1792,7 +1792,7 @@ export default function JournalEntryForm({
                         </Button>
                         {dimPopoverRow === index && (
                           <div
-                            className="absolute right-0 top-full z-50 mt-1 w-64 rounded-md border bg-card p-3 shadow-md"
+                            className="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border bg-card p-3 shadow-md"
                             onKeyDown={(e) => {
                               // The comboboxes preventDefault their own Escape
                               // (closing their dropdown): only an unhandled

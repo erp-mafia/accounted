@@ -628,6 +628,7 @@ export function makeCompanySettings(
     preferred_payment_format: 'pain001',
     salary_pay_day: 25,
     salary_default_bank: null,
+    salary_net_rounding: false,
     logo_url: null,
     onboarding_step: 6,
     onboarding_complete: true,

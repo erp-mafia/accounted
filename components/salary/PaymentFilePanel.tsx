@@ -154,14 +154,14 @@ export function PaymentFilePanel({
                 file downloads fine and only fails at upload, on the pay date.
                 Say the delivery precondition up front instead. */}
             {format === 'pain001' && (
-              <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
+              <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span className="text-muted-foreground">{t('pain001_agreement_warning')}</span>
               </div>
             )}
 
             {format === 'bg_lb' && (
-              <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
+              <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span className="text-muted-foreground">
                   {t('sunset_warning')}{' '}
@@ -197,7 +197,7 @@ export function PaymentFilePanel({
             </button>
 
             {showInstructions && (
-              <div className="space-y-2 rounded-md border bg-muted/30 p-3 text-xs">
+              <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-xs">
                 {sortedBanks.map((bank) => (
                   <div key={bank}>
                     <strong className="text-foreground">
@@ -215,7 +215,7 @@ export function PaymentFilePanel({
               </div>
             )}
 
-            <div className="flex items-start gap-2 rounded-md border border-dashed bg-muted/20 p-3 text-xs text-muted-foreground">
+            <div className="flex items-start gap-2 rounded-lg border border-dashed bg-muted/20 p-3 text-xs text-muted-foreground">
               <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <span>{t('open_payments_note')}</span>
             </div>

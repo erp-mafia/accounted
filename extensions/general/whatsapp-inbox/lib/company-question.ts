@@ -25,6 +25,7 @@ import {
 import { botCopy, TEMPLATE } from './messages'
 import {
   COMPANY_PIN_TTL_MS,
+  NO_COMPANY_OPTIONS,
   STAGED_AWAITING_COMPANY,
   getContext,
   updateConversation,
@@ -36,6 +37,11 @@ const log = createLogger('whatsapp-inbox/company-question')
 /** Defensive ceiling on the numbered text list (>10 companies). */
 const MAX_NUMBERED_OPTIONS = 30
 
+/** M19 (no company to file into) is sent at most once per this window per
+ *  conversation: every parked row of a burst walks through the no-options
+ *  branch, and five photos must not earn five identical replies. */
+const NO_OPTIONS_NOTICE_WINDOW_MS = 10 * 60 * 1000
+
 export type CompanyChoiceVia = 'button' | 'list' | 'numbered'
 
 export interface CompanyOption {
@@ -45,22 +51,33 @@ export interface CompanyOption {
 
 type ReplyBase = Omit<SendMessageBase, 'to' | 'template'>
 
-/** All companies the linked user belongs to, alphabetical (stable digits). */
+/** All companies the linked user belongs to, alphabetical (stable digits).
+ *  Returns null when a query FAILED: a transient DB error must read as
+ *  "unknown", never as "no memberships", or the caller parks receipts behind
+ *  a question that can never be asked. */
 export async function loadCompanyOptions(
   supabase: SupabaseClient,
   userId: string,
-): Promise<CompanyOption[]> {
-  const { data: memberships } = await supabase
+): Promise<CompanyOption[] | null> {
+  const { data: memberships, error: membershipsError } = await supabase
     .from('company_members')
     .select('company_id')
     .eq('user_id', userId)
+  if (membershipsError) {
+    log.warn('company options membership query failed', { error: membershipsError.message })
+    return null
+  }
   const companyIds = [...new Set((memberships ?? []).map((m) => m.company_id as string))]
   if (companyIds.length === 0) return []
 
-  const { data: companies } = await supabase
+  const { data: companies, error: companiesError } = await supabase
     .from('companies')
     .select('id, name')
     .in('id', companyIds)
+  if (companiesError) {
+    log.warn('company options company query failed', { error: companiesError.message })
+    return null
+  }
   const options = ((companies ?? []) as { id: string; name: string | null }[]).map((c) => ({
     id: c.id,
     name: c.name ?? 'Företag',
@@ -68,6 +85,17 @@ export async function loadCompanyOptions(
   options.sort((a, b) => a.name.localeCompare(b.name, 'sv'))
   return options.slice(0, MAX_NUMBERED_OPTIONS)
 }
+
+/** How an ask attempt ended.
+ *  - asked: this caller sent the question; rows stay staged for the answer.
+ *  - not_asked: lost the guarded transition or the send failed; the episode
+ *    is owned elsewhere (or re-triggers on the next receipt). Rows stay staged.
+ *  - no_options: fewer than 2 companies genuinely exist, so no question can
+ *    help; the staged rows were re-marked no_company_options and M19 told the
+ *    sender to fix the linking in the app. Terminal by design.
+ *  - transient_error: the options could not be LOADED (DB error): the caller
+ *    must release its row back to 'received' so the sweep retries it. */
+export type AskCompanyQuestionOutcome = 'asked' | 'not_asked' | 'no_options' | 'transient_error'
 
 /**
  * Ask the company question ONCE per open episode. The guarded state
@@ -79,8 +107,6 @@ export async function loadCompanyOptions(
  * the rollback an expired token or a Graph 5xx left the conversation parked on
  * a question the user never received, with the guard suppressing every later
  * ask and the 48h TTL eventually discarding the staged receipts.
- *
- * Returns true when this caller sent the question.
  */
 export async function askCompanyQuestion(
   supabase: SupabaseClient,
@@ -92,15 +118,44 @@ export async function askCompanyQuestion(
     /** How many receipts wait on the answer (question body wording). */
     stagedCount: number
   },
-): Promise<boolean> {
+): Promise<AskCompanyQuestionOutcome> {
   const options = await loadCompanyOptions(supabase, args.link.user_id)
+  if (options === null) return 'transient_error'
   if (options.length < 2) {
-    // Degenerate: resolution should have succeeded. Leave the rows staged;
-    // the sweep TTL cleans up if this persists.
+    // Genuinely degenerate (a real empty/1-length result, not a query error):
+    // the sender has nothing to choose between, so no question can help and
+    // nothing will change until they act in the app. The old behavior parked
+    // the rows silently forever; instead mark them with a terminal, greppable
+    // marker and say so in the chat.
     log.warn('company question requested with fewer than 2 options', {
       conversationId: args.conversation.id,
     })
-    return false
+    await supabase
+      .from('whatsapp_messages')
+      .update({ error_message: NO_COMPANY_OPTIONS })
+      .eq('conversation_id', args.conversation.id)
+      .eq('processing_status', 'skipped')
+      .eq('error_message', STAGED_AWAITING_COMPANY)
+    // One M19 per burst window (same idiom as the M17 rate-limit notice).
+    const since = new Date(Date.now() - NO_OPTIONS_NOTICE_WINDOW_MS).toISOString()
+    const { data: noticeSent } = await supabase
+      .from('whatsapp_messages')
+      .select('id')
+      .eq('direction', 'outbound')
+      .eq('conversation_id', args.conversation.id)
+      .eq('raw_payload->>template', TEMPLATE.m19NoCompany)
+      .gte('created_at', since)
+      .limit(1)
+      .maybeSingle()
+    if (!noticeSent) {
+      await sendText(supabase, {
+        to: args.to,
+        body: botCopy('sv').m19NoCompany(),
+        template: TEMPLATE.m19NoCompany,
+        ...args.replyBase,
+      })
+    }
+    return 'no_options'
   }
 
   const now = new Date()
@@ -119,7 +174,7 @@ export async function askCompanyQuestion(
     .eq('id', args.conversation.id)
     .neq('state', 'awaiting_company')
     .select('*')
-  if (!Array.isArray(won) || won.length === 0) return false
+  if (!Array.isArray(won) || won.length === 0) return 'not_asked'
   // Take updated_at (the revision guard) from the echoed row, but state and
   // context from what we just wrote: that is what a rollback must match.
   const committed: WhatsAppConversation = {
@@ -175,9 +230,9 @@ export async function askCompanyQuestion(
     log.warn('company question send failed; question rolled back', {
       conversationId: args.conversation.id,
     })
-    return false
+    return 'not_asked'
   }
-  return true
+  return 'asked'
 }
 
 export interface AppliedCompanyChoice {

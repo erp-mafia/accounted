@@ -879,7 +879,7 @@ export default function InvoiceMatchDialog({
                         {/* Side toggle: segmented control. Clicking either
                             button picks that side; the amount stays the
                             same. */}
-                        <div className="inline-flex rounded-md border bg-background overflow-hidden h-9">
+                        <div className="inline-flex rounded-lg border bg-background overflow-hidden h-9">
                           <button
                             type="button"
                             onClick={() => updateEditLine(i, { side: 'debit' })}

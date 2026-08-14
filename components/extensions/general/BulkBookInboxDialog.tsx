@@ -252,7 +252,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
             </Select>
 
             {vatTreatment === 'reverse_charge' && (
-              <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+              <div className="rounded-lg border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
                 <strong className="font-medium text-foreground">Kontrollera säljaren.</strong>{' '}
                 Omvänd skattskyldighet gäller bara köp från en <strong className="font-medium text-foreground">utländsk
                 säljare utan svenskt momsregistreringsnummer</strong>: t.ex. EU-tjänster, EU-varor,
@@ -272,7 +272,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
           )}
 
           {isMixedCurrency && (
-            <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+            <div className="rounded-lg border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
               <p className="font-medium text-foreground">{t('mixed_currency_totals_label')}</p>
               <ul className="mt-2 space-y-1">
                 {underlagTotals.map(({ currency, total }) => (

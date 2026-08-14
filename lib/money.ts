@@ -35,6 +35,27 @@ export function roundOre(n: number): number {
 }
 
 /**
+ * Truncate a SEK amount to whole kronor, dropping the öre (öretal bortfaller:
+ * the whole-krona rule in SFF 2011:1261 22 kap. 1 §).
+ *
+ * This is the amount rule for everything Skatteverket-bound: AGI XML fields,
+ * the declared totals stored on agi_declarations, the skattekonto payment,
+ * and the 2731 liability booked at salary time (whose öre remainder goes to
+ * 3740 Öres- och kronutjämning). Truncation, not rounding: 16 073,84 kr is
+ * declared and drawn as 16 073 kr.
+ *
+ * Runs through `roundOre` first so IEEE drift just below an integer
+ * (16 073,9999999… for a true 16 074,00) cannot lose a whole krona.
+ * Math.trunc, not Math.floor: dropping öre truncates toward zero, and a
+ * negative amount must not gain an extra negative krona. The -0 that
+ * Math.trunc leaves on small negatives is normalized to 0.
+ */
+export function truncateToWholeKronor(n: number): number {
+  const whole = Math.trunc(roundOre(n))
+  return whole === 0 ? 0 : whole
+}
+
+/**
  * Tolerance for comparing two öre-rounded amounts.
  *
  * Half an öre is the strictest meaningful threshold: any difference larger than

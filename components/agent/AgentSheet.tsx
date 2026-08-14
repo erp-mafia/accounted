@@ -617,7 +617,7 @@ export default function AgentSheet({
         >
           <button
             onClick={() => setView('chat')}
-            className="h-9 w-9 -ml-1 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            className="h-9 w-9 -ml-1 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             aria-label="Tillbaka"
             title="Tillbaka"
           >
@@ -626,7 +626,7 @@ export default function AgentSheet({
           <h2 className="font-display text-lg tracking-tight truncate">Konversationer</h2>
           <button
             onClick={onClose}
-            className="ml-auto h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            className="ml-auto h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             aria-label="Stäng"
             title="Avsluta sessionen"
           >
@@ -646,7 +646,7 @@ export default function AgentSheet({
           {!isSandbox && (
             <button
               onClick={() => setView('list')}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               aria-label="Tidigare konversationer"
               title="Tidigare konversationer"
             >
@@ -671,7 +671,7 @@ export default function AgentSheet({
             {!isSandbox && (
               <button
                 onClick={toggleFloating}
-                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                 aria-label={floating ? 'Docka mot högerkanten' : 'Frigör panelen'}
                 title={
                   floating
@@ -693,7 +693,7 @@ export default function AgentSheet({
             {!isSandbox && !floating && (
               <button
                 onClick={() => setExpanded((v) => !v)}
-                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                 aria-label={expanded ? 'Förminska' : 'Förstora'}
                 title={expanded ? 'Förminska' : 'Förstora'}
               >
@@ -706,7 +706,7 @@ export default function AgentSheet({
             {activeConversationId && !isSandbox && (
               <button
                 onClick={onRestart}
-                className="h-9 inline-flex items-center gap-2 rounded-md px-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="h-9 inline-flex items-center gap-2 rounded-sm px-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                 aria-label="Rensa: börja en ny konversation"
                 title="Rensa: börja en ny konversation"
               >
@@ -716,7 +716,7 @@ export default function AgentSheet({
             )}
             <button
               onClick={handleCollapse}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               aria-label="Minimera"
               title="Minimera: behåll sessionen"
             >
@@ -724,7 +724,7 @@ export default function AgentSheet({
             </button>
             <button
               onClick={onClose}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               aria-label="Stäng"
               title="Avsluta sessionen"
             >

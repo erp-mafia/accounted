@@ -216,7 +216,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                       onClick={() => void handlePick(it)}
                       disabled={!!linkingId}
                       className={cn(
-                        'flex-1 min-w-0 text-left flex items-center gap-3 py-3 px-2 -ml-2 rounded transition-colors hover:bg-secondary/60',
+                        'flex-1 min-w-0 text-left flex items-center gap-3 py-3 px-2 -ml-2 rounded-sm transition-colors hover:bg-secondary/60',
                         linkingId && !isLinking && 'opacity-50',
                       )}
                     >

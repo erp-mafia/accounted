@@ -79,6 +79,7 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
       finalizedAcks: 1,
       expiredQuestions: 1,
       clearedPins: 0,
+      outboundFailed24h: 3,
     })
 
     const response = await GET(makeRequest())
@@ -94,6 +95,7 @@ describe('GET /api/extensions/whatsapp-inbox/sweep/cron', () => {
       finalizedAcks: 1,
       expiredQuestions: 1,
       clearedPins: 0,
+      outboundFailed24h: 3,
     })
   })
 })

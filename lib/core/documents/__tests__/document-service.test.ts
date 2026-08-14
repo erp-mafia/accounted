@@ -63,6 +63,7 @@ import {
   createNewVersion,
   deleteDocument,
   verifyIntegrity,
+  detectFileMagic,
   validateDocumentMagicBytes,
   buildDocumentStoragePath,
   buildPendingDocumentStoragePath,
@@ -270,6 +271,59 @@ describe('validateDocumentMagicBytes: PDF header offset tolerance', () => {
     expect(validateDocumentMagicBytes(toArrayBuffer(png), 'image/png')).toMatch(
       /kunde inte verifieras/,
     )
+  })
+})
+
+describe('validateDocumentMagicBytes: HEIC/HEIF (ISO-BMFF ftyp brands)', () => {
+  // Minimal ISO-BMFF head: a 16-byte ftyp box whose major brand is `brand`.
+  // Real files carry compatible brands and media data after this, but the
+  // detector only reads the first 12 bytes.
+  const isoBmff = (brand: string): ArrayBuffer => {
+    const bytes = new Uint8Array(16)
+    bytes[3] = 16 // box size (big-endian 0x00000010)
+    bytes.set([0x66, 0x74, 0x79, 0x70], 4) // 'ftyp'
+    bytes.set(new TextEncoder().encode(brand), 8)
+    return bytes.buffer as ArrayBuffer
+  }
+  const jpegBytes = (): ArrayBuffer =>
+    new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]).buffer as ArrayBuffer
+
+  it('detects HEVC-coded brands as image/heic and MIAF brands as image/heif', () => {
+    for (const brand of ['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs']) {
+      expect(detectFileMagic(new Uint8Array(isoBmff(brand)))).toBe('image/heic')
+    }
+    for (const brand of ['mif1', 'msf1']) {
+      expect(detectFileMagic(new Uint8Array(isoBmff(brand)))).toBe('image/heif')
+    }
+    // Other ISO-BMFF brands (video containers) stay undetected.
+    expect(detectFileMagic(new Uint8Array(isoBmff('isom')))).toBeNull()
+    expect(detectFileMagic(new Uint8Array(isoBmff('qt  ')))).toBeNull()
+  })
+
+  it('accepts a heic-brand file under both declared family members', () => {
+    expect(validateDocumentMagicBytes(isoBmff('heic'), 'image/heic')).toBeNull()
+    expect(validateDocumentMagicBytes(isoBmff('heic'), 'image/heif')).toBeNull()
+  })
+
+  it('accepts a mif1-brand file under both declared family members', () => {
+    expect(validateDocumentMagicBytes(isoBmff('mif1'), 'image/heif')).toBeNull()
+    expect(validateDocumentMagicBytes(isoBmff('mif1'), 'image/heic')).toBeNull()
+  })
+
+  it('rejects garbage bytes declared image/heic (formerly blanket-exempted)', () => {
+    const garbage = new TextEncoder().encode('this is not an image at all')
+    const buffer = garbage.buffer.slice(garbage.byteOffset, garbage.byteOffset + garbage.byteLength) as ArrayBuffer
+    expect(validateDocumentMagicBytes(buffer, 'image/heic')).toMatch(/kunde inte verifieras/)
+    expect(validateDocumentMagicBytes(buffer, 'image/heif')).toMatch(/kunde inte verifieras/)
+  })
+
+  it('rejects JPEG bytes declared image/heic as a type mismatch', () => {
+    expect(validateDocumentMagicBytes(jpegBytes(), 'image/heic')).toMatch(/matchar inte/)
+  })
+
+  it('does not loosen validation for other declared types', () => {
+    // HEIC bytes declared as JPEG must still be rejected as a mismatch.
+    expect(validateDocumentMagicBytes(isoBmff('heic'), 'image/jpeg')).toMatch(/matchar inte/)
   })
 })
 

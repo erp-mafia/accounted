@@ -522,7 +522,7 @@ function VacationStep({
         </CardHeader>
         <CardContent>
           {proposal ? (
-            <div className="flex items-start justify-between gap-4 rounded-md border border-border p-4">
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-4">
               <div className="flex-1 space-y-2">
                 <p className="text-sm font-medium">{proposal.label}</p>
                 <p className="text-xs text-muted-foreground">{proposal.description}</p>
@@ -590,7 +590,7 @@ function AuditStep({
             </Label>
           </div>
           {state.enabled && (
-            <div className="grid grid-cols-2 gap-4 rounded-md border border-border p-4">
+            <div className="grid grid-cols-2 gap-4 rounded-lg border border-border p-4">
               <div className="space-y-1">
                 <Label className="text-xs">Belopp (kr)</Label>
                 <Input
@@ -605,7 +605,7 @@ function AuditStep({
               <div className="space-y-1">
                 <Label className="text-xs">Konto</Label>
                 <select
-                  className="border border-border rounded-md h-9 text-sm px-2 w-full bg-background"
+                  className="border border-border rounded-lg h-9 text-sm px-2 w-full bg-background"
                   value={state.liabilityAccount}
                   onChange={(e) =>
                     onChange({ ...state, liabilityAccount: e.target.value as '2991' | '2992' })
@@ -667,7 +667,7 @@ function AutoStep({
             return (
               <div
                 key={key}
-                className="flex items-start gap-3 rounded-md border border-border p-3"
+                className="flex items-start gap-3 rounded-lg border border-border p-3"
               >
                 <Checkbox
                   id={`auto-${key}`}
@@ -808,7 +808,7 @@ function ManualEntryEditor({
     template.side === 'deferred_revenue' ? 'Intäktskonto' : 'Kostnadskonto'
 
   return (
-    <div className="rounded-md border border-border p-3 space-y-3">
+    <div className="rounded-lg border border-border p-3 space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">{template.name}</p>
         <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 px-2" aria-label="Ta bort">
@@ -989,7 +989,7 @@ function ReviewStep({
 
 function ReviewLine({ label, amount, note }: { label: string; amount: number; note?: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-md border border-border px-3 py-2">
+    <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
       <div className="min-w-0">
         <p className="text-sm font-medium truncate">{label}</p>
         {note && <p className="text-xs text-muted-foreground">{note}</p>}

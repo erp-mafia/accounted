@@ -538,7 +538,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
           </div>
 
           {account.is_system_account && (
-            <p className="text-xs text-muted-foreground bg-muted rounded p-2">
+            <p className="text-xs text-muted-foreground bg-muted rounded-sm p-2">
               Detta är ett systemkonto och kan inte tas bort.
             </p>
           )}

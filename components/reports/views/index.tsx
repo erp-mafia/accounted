@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, FileText, Percent } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { EmptyState } from '@/components/ui/empty-state'
 import { FyPicker } from '@/components/common/FyPicker'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
@@ -209,36 +210,14 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
           <div className="flex items-center justify-between">
             <CardTitle>Saldobalans</CardTitle>
             <div className="flex items-center gap-3">
-              <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={viewMode === 'simplified'}
-                  onClick={() => setViewMode('simplified')}
-                  className={cn(
-                    'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-                    viewMode === 'simplified'
-                      ? 'border border-border bg-card font-medium text-foreground'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  Förenklad
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={viewMode === 'detailed'}
-                  onClick={() => setViewMode('detailed')}
-                  className={cn(
-                    'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-                    viewMode === 'detailed'
-                      ? 'border border-border bg-card font-medium text-foreground'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  Detaljerad
-                </button>
-              </div>
+              <SegmentedControl
+                value={viewMode}
+                onChange={setViewMode}
+                options={[
+                  { value: 'simplified', label: 'Förenklad' },
+                  { value: 'detailed', label: 'Detaljerad' },
+                ]}
+              />
               {data.isBalanced ? (
                 <span className="text-sm text-muted-foreground">Balanserad</span>
               ) : (
@@ -2374,7 +2353,7 @@ function VatRutaRow({
               <expansion.Toggle />
             </span>
           )}
-          <span className="font-mono text-xs bg-muted px-1 rounded mr-2">{ruta}</span>
+          <span className="font-mono text-xs bg-muted px-1 rounded-sm mr-2">{ruta}</span>
           {label}
         </td>
         <td className="py-2 text-right tabular-nums">{noVat ? `${formatAmount(baseAmount)} kr` : `${formatAmount(amount)} kr`}</td>
@@ -3490,8 +3469,8 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
             onClick={() => setDimNo(String(d.sie_dim_no))}
             className={
               active
-                ? 'px-3 py-1.5 text-xs rounded-md border transition-colors duration-150 bg-secondary border-border text-foreground'
-                : 'px-3 py-1.5 text-xs rounded-md border transition-colors duration-150 bg-transparent border-border text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
+                ? 'px-3 py-1.5 text-xs rounded-full border transition-colors duration-150 bg-secondary border-border text-foreground'
+                : 'px-3 py-1.5 text-xs rounded-full border transition-colors duration-150 bg-transparent border-border text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
             }
           >
             {d.name}

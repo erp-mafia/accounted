@@ -8,6 +8,10 @@ import {
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { SALARY_ACCOUNTS, getLineItemAccount } from './account-mapping'
+import {
+  computeDeclaredAvgifterWithOverrides,
+  resolveDeclaredAvgifterParams,
+} from './declared-avgifter'
 import { calculateLoneVaxlingPensionProvision } from './lonevaxling'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
@@ -26,6 +30,18 @@ interface SalaryRunEmployee {
   net_salary: number
   avgifter_amount: number
   avgifter_rate: number
+  // Declared-avgifter inputs (see lib/salary/declared-avgifter.ts): the
+  // whole-krona 2731 liability is computed Skatteverket's way from the
+  // FILED underlag (never basis overrides: those don't reach the IUs), not
+  // by truncating the öre-exact cost. Optional: rows from legacy callers
+  // without them fall back to the öre-exact liability.
+  avgifter_basis?: number
+  avgifter_category?: string | null
+  // True when avgifter_amount carries a manual review override: the split
+  // then mirrors the AGI's override path (per-category truncation of the
+  // overridden amounts) instead of the underlag computation, so the
+  // operator's adjustment stays on 2731 and never books as fake utjämning.
+  avgifter_amount_overridden?: boolean
   vacation_accrual: number
   vacation_accrual_avgifter: number
   // Dimensions PR8: the employee's default bag ({sie_dim_no: code}), read
@@ -223,6 +239,16 @@ async function createSalaryEntry(
     const BENEFIT_TYPES = ['benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_bike', 'benefit_other']
     let lineItemTotal = 0
     for (const li of emp.line_items) {
+      // Öresavrundning: part of the payout (the 1930 credit uses the rounded
+      // net) but NOT part of gross salary, so it must stay out of
+      // lineItemTotal: the baseRemainder below reconciles line items against
+      // gross_salary, and counting the rounding there would shrink the base
+      // salary debit by the same amount and unbalance the entry.
+      if (li.item_type === 'oresavrundning') {
+        const account = li.account_number || getLineItemAccount('oresavrundning', emp.employment_type)
+        addExpense(account, dimensions, li.amount)
+        continue
+      }
       if (li.is_net_deduction) {
         const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
         netDeductionBuckets.set(account, (netDeductionBuckets.get(account) ?? 0) + li.amount)
@@ -347,10 +373,94 @@ function bucketByEmployeeDimensions(
 }
 
 /**
+ * Split the öre-exact avgifter total into the whole-krona 2731 liability and
+ * the 3740 utjämning remainder.
+ *
+ * The liability is the DECLARED amount (computeDeclaredAvgifter: Skatteverket's
+ * per-sats computation on whole-krona underlag), which on öre-bearing rosters
+ * sits kronor, not just öre, below the exact cost: 4 employees at 30 000,99 kr
+ * cost 37 705,24 exactly while Skatteverket draws 37 704, so 1,24 kr books to
+ * 3740. The remainder is bounded by ~1 kr per employee (per-IU truncation)
+ * plus per-sats truncation; a remainder outside [0, employees + 2) means the
+ * roster's stored amounts diverge from its underlag (legacy rows without
+ * basis columns, corrupt data), and the entry falls back to the legacy
+ * öre-exact liability rather than manufacturing a fake utjämning.
+ *
+ * Manual avgifter_amount overrides (flagged EXPLICITLY: a small override
+ * inside the magnitude band would otherwise book the operator's deliberate
+ * adjustment as rounding income on 3740) contribute their manual amounts per
+ * category instead of the underlag computation: the identical hybrid the AGI
+ * generator files and the payment file pays
+ * (computeDeclaredAvgifterWithOverrides), so the booked 2731, the
+ * declaration and the payment stay one number, and colleagues of an
+ * overridden employee keep their SKV-exact declared amounts.
+ *
+ * Exported so the journal preview route computes the identical split.
+ */
+export function splitAvgifterLiability(
+  run: {
+    employees: Array<
+      Pick<
+        SalaryRunEmployee,
+        | 'avgifter_amount'
+        | 'avgifter_basis'
+        | 'avgifter_rate'
+        | 'avgifter_category'
+        | 'avgifter_amount_overridden'
+      >
+    >
+    calculation_params?: Record<string, unknown> | null
+  },
+  roundedAvgifter: number,
+): { liabilityAvgifter: number; oresutjamning: number } {
+  if (roundedAvgifter <= 0) {
+    return { liabilityAvgifter: roundedAvgifter, oresutjamning: 0 }
+  }
+  // Non-overridden rows need the underlag; overridden rows carry their own
+  // amount. A roster from a legacy caller without basis columns falls back.
+  const haveInputs = run.employees.every(
+    (e) => e.avgifter_amount_overridden === true || typeof e.avgifter_basis === 'number',
+  )
+  if (!haveInputs) {
+    return { liabilityAvgifter: roundedAvgifter, oresutjamning: 0 }
+  }
+  const declared = computeDeclaredAvgifterWithOverrides(
+    run.employees.map((e) => ({
+      basis: e.avgifter_basis ?? 0,
+      rate: e.avgifter_rate,
+      category: e.avgifter_category ?? null,
+      overrideAmount: e.avgifter_amount_overridden === true ? e.avgifter_amount : null,
+    })),
+    resolveDeclaredAvgifterParams(run.calculation_params),
+  )
+  const remainder = roundOre(roundedAvgifter - declared.totalAmount)
+  // Per-IU truncation loses under 1 kr per employee and each truncation cell
+  // strictly under 1 kr more; a remainder outside this band means the
+  // roster's stored amounts diverge from its underlag (corrupt or legacy
+  // data), and the entry keeps the öre-exact liability rather than
+  // manufacturing a fake utjämning.
+  const maxTruncationDrift = run.employees.length + 2
+  if (remainder < 0 || remainder >= maxTruncationDrift) {
+    return { liabilityAvgifter: roundedAvgifter, oresutjamning: 0 }
+  }
+  return { liabilityAvgifter: declared.totalAmount, oresutjamning: remainder }
+}
+
+/**
  * Entry 2: Arbetsgivaravgifter.
  *
- * Debit:  7510 Lagstadgade sociala avgifter (per dimensions bucket)
- * Credit: 2731 Avräkning sociala avgifter (single aggregated liability)
+ * Debit:  7510 Lagstadgade sociala avgifter (per dimensions bucket, exact öre)
+ * Credit: 2731 Avräkning sociala avgifter (whole kronor: the amount
+ *         Skatteverket computes from the declared underlag and draws)
+ * Credit: 3740 Öres- och kronutjämning (the remainder)
+ *
+ * 2731 holds the declared amount (computeDeclaredAvgifter: per-sats on
+ * whole-krona underlag, the same number the AGI's FK487 carries): crediting
+ * the öre-exact cost would leave a residual on 2731 after the whole-krona
+ * skattekonto draw. The 7510 cost side stays exact: the difference is a
+ * settlement artifact, not a cost reduction. Post-booking AGI edits
+ * (borttag, overrides set during review) still require a storno + rebook:
+ * this alignment covers the booking as calculated.
  */
 async function createAvgifterEntry(
   supabase: SupabaseClient,
@@ -365,6 +475,7 @@ async function createAvgifterEntry(
   // single untagged debit line, exactly as before the dimension split.
   const buckets = dimBuckets.length > 0 ? dimBuckets : [{ dimensions: undefined, amount: 0 }]
   const roundedAvgifter = roundOre(buckets.reduce((sum, b) => sum + b.amount, 0))
+  const { liabilityAvgifter, oresutjamning } = splitAvgifterLiability(run, roundedAvgifter)
 
   const lines: CreateJournalEntryLineInput[] = [
     ...buckets.map((bucket): CreateJournalEntryLineInput => ({
@@ -374,12 +485,29 @@ async function createAvgifterEntry(
       line_description: `${desc}: Arbetsgivaravgifter`,
       dimensions: bucket.dimensions,
     })),
-    {
-      account_number: SALARY_ACCOUNTS.AVGIFTER_LIABILITY,
-      debit_amount: 0,
-      credit_amount: roundedAvgifter,
-      line_description: `${desc}: Arbetsgivaravgifter`,
-    },
+    // Skip the liability line only when the utjämning carries the whole
+    // (sub-1-krona) amount: a 0/0 line is verifikat noise. The zero-total
+    // parity shape (nollrun) keeps its single 0-credit line as before.
+    ...(liabilityAvgifter !== 0 || oresutjamning === 0
+      ? [
+          {
+            account_number: SALARY_ACCOUNTS.AVGIFTER_LIABILITY,
+            debit_amount: 0,
+            credit_amount: liabilityAvgifter,
+            line_description: `${desc}: Arbetsgivaravgifter`,
+          } satisfies CreateJournalEntryLineInput,
+        ]
+      : []),
+    ...(oresutjamning > 0
+      ? [
+          {
+            account_number: SALARY_ACCOUNTS.ORESUTJAMNING,
+            debit_amount: 0,
+            credit_amount: oresutjamning,
+            line_description: `${desc}: Öres- och kronutjämning`,
+          } satisfies CreateJournalEntryLineInput,
+        ]
+      : []),
   ]
 
   const input: CreateJournalEntryInput = {
@@ -666,6 +794,7 @@ function accountLabel(account: string): string {
     '1613': 'Övriga förskott',
     '2794': 'Fackföreningsavgifter',
     '2799': 'Övriga löneavdrag',
+    '3740': 'Öres- och kronutjämning',
   }
   return labels[account] || `Konto ${account}`
 }

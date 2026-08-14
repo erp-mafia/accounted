@@ -49,7 +49,7 @@ export default function ChatConversationView({
             visible so a back button would be redundant. */}
         <Link
           href="/chat"
-          className="md:hidden inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors -ml-1"
+          className="md:hidden inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors -ml-1"
           aria-label="Tillbaka till konversationer"
         >
           <ArrowLeft className="h-4 w-4" />

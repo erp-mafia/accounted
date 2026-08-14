@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { roundOre, ORE_TOLERANCE, equalOre, isZeroOre, sumOre } from '@/lib/money'
+import {
+  roundOre,
+  truncateToWholeKronor,
+  ORE_TOLERANCE,
+  equalOre,
+  isZeroOre,
+  sumOre,
+} from '@/lib/money'
 
 describe('roundOre', () => {
   it('rounds exact-half öre values up where naive Math.round fails', () => {
@@ -29,6 +36,35 @@ describe('roundOre', () => {
     // an exact-half negative rounds toward +∞ (mirrors Math.round on negatives):
     // -1.005 → -1.00, not -1.01. Documented so a refactor can't silently flip it.
     expect(roundOre(-1.005)).toBe(-1)
+  })
+})
+
+describe('truncateToWholeKronor', () => {
+  it('drops the öre entirely: truncation, never rounding', () => {
+    // öretal bortfaller (SFF 2011:1261 22 kap. 1 §): 16 073,84 declares and
+    // draws as 16 073, and even ,99 never rounds up.
+    expect(truncateToWholeKronor(16073.84)).toBe(16073)
+    expect(truncateToWholeKronor(16073.99)).toBe(16073)
+    expect(truncateToWholeKronor(16073.5)).toBe(16073)
+    expect(truncateToWholeKronor(0.84)).toBe(0)
+  })
+
+  it('leaves whole-krona amounts untouched', () => {
+    expect(truncateToWholeKronor(16073)).toBe(16073)
+    expect(truncateToWholeKronor(0)).toBe(0)
+  })
+
+  it('does not lose a krona to IEEE drift just below an integer', () => {
+    // 51 158 × 0,3142 style float noise: a true 16 074,00 stored as
+    // 16 073,999999999998 must not truncate to 16 073.
+    expect(truncateToWholeKronor(16073.999999999998)).toBe(16074)
+    expect(truncateToWholeKronor(6.999999999999999)).toBe(7)
+  })
+
+  it('truncates negative amounts toward zero and normalizes -0', () => {
+    expect(truncateToWholeKronor(-5.99)).toBe(-5)
+    expect(truncateToWholeKronor(-0.84)).toBe(0)
+    expect(Object.is(truncateToWholeKronor(-0.84), -0)).toBe(false)
   })
 })
 

@@ -371,7 +371,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
       <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
+            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
               <Mail className="h-7 w-7 text-primary" />
             </div>
           </div>
@@ -432,7 +432,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         <div className="w-full max-w-sm animate-slide-up">
           <div className="text-center mb-10">
             <div className="flex justify-center mb-4">
-              <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
+              <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
                 <KeyRound className="h-7 w-7 text-primary" />
               </div>
             </div>

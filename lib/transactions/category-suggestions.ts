@@ -147,9 +147,14 @@ export function getSuggestedCategories(
     }
 
     if (matches && rule.debit_account && !rule.default_private) {
-      // Reverse-lookup: find category from debit account
-      const category = accountToCategory(rule.debit_account, transaction.amount)
-      if (category && !seen.has(category)) {
+      // Reverse-lookup: find category from debit account. A rule booking on
+      // an account outside the fixed maps (company-custom accounts like VMB)
+      // must still surface: the account itself is the signal, and callers
+      // reach it via account_override. Fall back to the direction's generic
+      // category instead of silently dropping the rule.
+      const mapped = accountToCategory(rule.debit_account, transaction.amount)
+      const category = mapped ?? (transaction.amount < 0 ? 'expense_other' : 'income_other')
+      if (!seen.has(category)) {
         seen.add(category)
         const suggestion: SuggestedCategory = {
           category: category as TransactionCategory,
@@ -158,8 +163,15 @@ export function getSuggestedCategories(
           confidence: rule.confidence_score || 0.8,
           source: 'mapping_rule',
         }
+        const reasons: string[] = []
         if (rule.source === 'user_description' && rule.user_description) {
-          suggestion.match_reason = `Matchad på din beskrivning: ${rule.user_description}`
+          reasons.push(`Matchad på din beskrivning: ${rule.user_description}`)
+        }
+        if (!mapped) {
+          reasons.push(`Regeln bokför på konto ${rule.debit_account} (utanför standardkategorierna)`)
+        }
+        if (reasons.length > 0) {
+          suggestion.match_reason = reasons.join('. ')
         }
         suggestions.push(suggestion)
       }
@@ -215,12 +227,15 @@ export function getSuggestedCategories(
  */
 function accountToCategory(account: string, amount: number): string | null {
   if (amount > 0) {
-    // Income
+    // Income. Unknown accounts return null (not a blanket 'income_other') so
+    // the caller can tell a mapped account from a custom one and attach the
+    // custom-account diagnostic; the caller's fallback still lands on
+    // income_other, so the surfaced category is unchanged.
     const incomeMap: Record<string, string> = {
       '3001': 'income_services',
       '3900': 'income_other',
     }
-    return incomeMap[account] || 'income_other'
+    return incomeMap[account] || null
   }
 
   // Expense

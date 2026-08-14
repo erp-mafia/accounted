@@ -287,7 +287,7 @@ describe('VAT kvittenser cron', () => {
 
     expect(body.expired).toBe(1)
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'SESSION_EXPIRED' })
-    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'SESSION_EXPIRED')
+    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'comp-1', 'SESSION_EXPIRED')
   })
 
   it('records error for generic failures without aborting the run', async () => {

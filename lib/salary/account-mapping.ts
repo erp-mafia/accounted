@@ -57,6 +57,9 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   net_deduction_union: '2794',
   net_deduction_benefit_payment: '7385',
   net_deduction_other: '2799',
+  // Öresavrundning: net payout rounded up to whole kronor; the 0-99 öre diff
+  // debits the standard rounding account (same account the invoice flows use).
+  oresavrundning: '3740',
   // Other
   correction: '7210',
   other: '7210',
@@ -104,6 +107,9 @@ export const SALARY_ACCOUNTS = {
   // Employer contributions
   AVGIFTER_EXPENSE: '7510',   // Lagstadgade sociala avgifter (debit)
   AVGIFTER_LIABILITY: '2731', // Avräkning sociala avgifter (credit)
+  // Whole-krona remainder: 2731 holds what Skatteverket actually draws
+  // (hela kronor, öretal bortfaller), the öre difference lands here.
+  ORESUTJAMNING: '3740',      // Öres- och kronutjämning (credit)
 
   // Vacation accrual
   VACATION_ACCRUAL_EXPENSE: '7290',   // Förändring semesterlöneskuld (debit)

@@ -1364,3 +1364,70 @@ describe('commitPendingOperation: categorize_transaction: dimensions propagation
     expect(opts.dimensions).toBeUndefined()
   })
 })
+
+// ─── categorize_transaction: account_override tamper gate ───────────────────
+
+describe('commitPendingOperation: categorize_transaction account_override', () => {
+  it('rejects loudly when a stored override is present but malformed (tamper/drift)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's rejected update
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'expense_other', account_override: '40a0' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    // Never degrade to the category default: the approver approved a preview
+    // showing the override account. 400 lands as 'failed' (the dispatcher
+    // reserves auto-reject for 404/409); the point is that the core is never
+    // called and the error names the override.
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toContain('account_override')
+    expect(categorizeMatchedTransaction).not.toHaveBeenCalled()
+  })
+
+  it('threads a valid stored override into the core opts', async () => {
+    vi.mocked(categorizeMatchedTransaction).mockResolvedValueOnce({
+      data: { journal_entry_id: 'je-1' },
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'expense_other', account_override: '4020' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const opts = vi.mocked(categorizeMatchedTransaction).mock.calls[0][4]
+    expect(opts.accountOverride).toBe('4020')
+  })
+
+  it('passes undefined when the staged params carry account_override: null (no override)', async () => {
+    vi.mocked(categorizeMatchedTransaction).mockResolvedValueOnce({
+      data: { journal_entry_id: 'je-1' },
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'expense_other', account_override: null },
+    })
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    const opts = vi.mocked(categorizeMatchedTransaction).mock.calls[0][4]
+    expect(opts.accountOverride).toBeUndefined()
+  })
+})

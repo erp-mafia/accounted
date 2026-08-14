@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataListEmpty } from '@/components/ui/data-list'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   DropdownMenu,
@@ -148,25 +149,11 @@ export default function TransactionHistoryList({
     <div className="space-y-4">
       {/* Business/private seg; the source chip lives in the page toolbar. */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          {FILTERS.map(({ key, labelKey }) => (
-            <button
-              key={key}
-              type="button"
-              role="tab"
-              aria-selected={filter === key}
-              onClick={() => setFilter(key)}
-              className={cn(
-                'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-                filter === key
-                  ? 'border border-border bg-card font-medium text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t(labelKey)}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          value={filter}
+          onChange={setFilter}
+          options={FILTERS.map(({ key, labelKey }) => ({ value: key, label: t(labelKey) }))}
+        />
       </div>
 
       {filtered.length === 0 ? (

@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { RowStatus, type RowStatusDescriptor } from '@/components/ui/row-status'
-import { Input } from '@/components/ui/input'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogTitle, DialogVeil } from '@/components/ui/dialog'
 import { DataListEmpty } from '@/components/ui/data-list'
@@ -39,13 +39,12 @@ import {
   ArrowUp,
   ArrowUpDown,
   Plus,
-  Search,
   ReceiptText,
   Repeat,
   FileInput,
   FileDown,
 } from 'lucide-react'
-import { EmptyInvoices } from '@/components/ui/empty-state'
+import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FiscalPeriod, Invoice } from '@/types'
@@ -223,6 +222,7 @@ export default function InvoicesPage() {
   const supabase = createClient()
   const t = useTranslations('invoices')
   const tCommon = useTranslations('common')
+  const tStart = useTranslations('start_cards')
   const { uiState, loaded: uiStateLoaded } = useUiState()
 
   // The "Ny faktura" modal is driven by the URL (?new=1) so every entry point
@@ -619,18 +619,15 @@ export default function InvoicesPage() {
             annotation: tabCounts[tab] > 0 ? String(tabCounts[tab]) : undefined,
           }))}
         />
-        <div className="relative min-w-[190px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={t('search_placeholder')}
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value)
-              resetPaging()
-            }}
-            className="h-9 pl-10"
-          />
-        </div>
+        <ToolbarSearch
+          containerClassName="min-w-[190px]"
+          placeholder={t('search_placeholder')}
+          value={searchTerm}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            resetPaging()
+          }}
+        />
         <div className="ml-auto">
           <FyPicker
             value={fyPeriodId}
@@ -695,7 +692,16 @@ export default function InvoicesPage() {
             description={t('no_search_results_description', { term: searchTerm })}
           />
         ) : invoices.length === 0 ? (
-          <EmptyInvoices onAction={openNewInvoice} />
+          <div className="animate-fade-in">
+            <StartCard
+              card="venice"
+              layout="center"
+              title={tStart('invoices_title')}
+              body={tStart('invoices_body')}
+              primary={{ label: tStart('invoices_primary'), href: '/import?mode=migration' }}
+              secondary={{ label: tStart('invoices_secondary'), onClick: openNewInvoice }}
+            />
+          </div>
         ) : (
           <DataListEmpty
             icon={<ReceiptText className="h-6 w-6" />}

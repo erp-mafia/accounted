@@ -334,9 +334,26 @@ export const POST = withRouteContext(
       })
     }
 
+    // A RECONCILIATION link (reconciliation_method set) is not a conflicting
+    // booking: the entry it points at is an independent verifikat (SIE import,
+    // salary run, manual booking) that may evidence OTHER affärshändelser, and
+    // reversing it wholesale as a side effect of matching one payment would be
+    // an over-broad rättelse (BFL 5 kap 5 §: a correction is scoped to the
+    // actual error). Nothing is detached HERE: the final transaction update
+    // below overwrites the pointer and clears reconciliation_method in the
+    // same write, so a failure anywhere in between leaves the existing link
+    // fully intact instead of orphaning the row.
+    const priorReconciliationLink =
+      transaction.journal_entry_id && transaction.reconciliation_method
+        ? {
+            journalEntryId: transaction.journal_entry_id as string,
+            method: transaction.reconciliation_method as string,
+          }
+        : null
+
     // Storno conflicting auto-categorization JE before any other state change.
     // If storno fails, return immediately: nothing else has been modified.
-    if (transaction.journal_entry_id) {
+    if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
         await reverseEntry(supabase, companyId, user.id, transaction.journal_entry_id)
 
@@ -348,7 +365,7 @@ export const POST = withRouteContext(
           txLog.warn('failed to clear journal_entry_id after storno', clearJeError)
         }
 
-        logMatchEvent(supabase, user.id, transactionId, 'storno_conflict_resolved', {
+        await logMatchEvent(supabase, user.id, transactionId, 'storno_conflict_resolved', {
           invoiceId: invoice_id,
           previousState: { journal_entry_id: transaction.journal_entry_id },
           newState: { journal_entry_id: null },
@@ -730,6 +747,13 @@ export const POST = withRouteContext(
         journal_entry_id: journalEntryId,
         is_business: true,
         category: 'income_services',
+        // The invoice match supersedes any prior reconciliation link: the
+        // stale method label must not survive the re-pointed journal_entry_id
+        // (deferred detach, see the priorReconciliationLink block above).
+        // Unconditional literal on purpose: null is already the value on every
+        // non-reconciliation-linked row, and a literal payload keeps the
+        // phantom-column scanner able to verify the column set.
+        reconciliation_method: null,
       })
       .eq('id', transactionId)
 
@@ -738,7 +762,21 @@ export const POST = withRouteContext(
       return errorResponseFromCode('MATCH_INVOICE_LINK_TX_FAILED', txLog, { requestId })
     }
 
-    logMatchEvent(supabase, user.id, transactionId, 'matched', {
+    // The deferred detach committed with the update above: record the release
+    // of the prior reconciliation link so the append-only trail shows the full
+    // transition (behandlingshistorik, BFNAR 2013:2 kap 8).
+    if (priorReconciliationLink) {
+      await logMatchEvent(supabase, user.id, transactionId, 'unmatched', {
+        invoiceId: invoice_id,
+        previousState: {
+          journal_entry_id: priorReconciliationLink.journalEntryId,
+          reconciliation_method: priorReconciliationLink.method,
+        },
+        newState: { journal_entry_id: journalEntryId, reconciliation_method: null },
+      })
+    }
+
+    await logMatchEvent(supabase, user.id, transactionId, 'matched', {
       invoiceId: invoice_id,
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',

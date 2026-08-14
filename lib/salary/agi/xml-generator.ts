@@ -1,5 +1,6 @@
 import { decryptPersonnummer } from '../personnummer'
 import { isOrgNumberShaped } from '@/lib/invariants/org-number'
+import { truncateToWholeKronor } from '@/lib/money'
 
 /**
  * AGI XML generator: Arbetsgivardeklaration på individnivå.
@@ -692,8 +693,12 @@ function escapeXml(str: string): string {
     .replace(/'/g, '&apos;')
 }
 
+// AGI amounts are stated in whole kronor with the öre dropped (öretal
+// bortfaller, SFF 2011:1261 22 kap. 1 §): truncation, never rounding.
+// Math.round here would declare 16 074 kr for an underlag-computed
+// 16 073,84 kr while Skatteverket draws 16 073 kr from the skattekonto.
 function formatAmount(amount: number): string {
-  return Math.round(amount).toString()
+  return truncateToWholeKronor(amount).toString()
 }
 
 /**

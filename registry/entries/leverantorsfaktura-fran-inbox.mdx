@@ -27,7 +27,7 @@ version: "1.0.0"
 ogImageEyebrow: "Skill"
 faq:
   - q: "Vilka filformat funkar?"
-    a: "PDF, JPEG, PNG, HEIC, WebP upp till 20 MB per dokument. Text-baserade PDF:er ger bäst extraktion eftersom OCR kan läsa fältnamn (Belopp, Moms, Förfallodatum). Skannade bilder fungerar men confidence är lägre."
+    a: "PDF, JPEG, PNG, WebP upp till 10 MB per dokument. Text-baserade PDF:er ger bäst extraktion eftersom OCR kan läsa fältnamn (Belopp, Moms, Förfallodatum). Skannade bilder fungerar men confidence är lägre."
   - q: "Vad händer med Peppol-fakturor?"
     a: "Peppol BIS Billing 3.0 (XML) stöds inte av `gnubok_create_supplier_invoice_from_inbox` idag. Verktyget kör OCR på dokumentet, inte XML-parsing. Native Peppol-ingestion är på roadmap i takt med EU:s VIDA-direktiv (Council Directive 2025/516, obligatoriskt 1 juli 2030 för gränsöverskridande B2B inom EU)."
   - q: "Vad händer om OCR-extraktionen är fel?"

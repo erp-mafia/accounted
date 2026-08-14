@@ -242,7 +242,7 @@ export default function MockDataImportDialog<T>({
 
         {/* ── Error ─────────────────────────────────────── */}
         {error && (
-          <div className="flex items-start gap-2 p-3 rounded-md bg-destructive/5 text-destructive text-sm">
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/5 text-destructive text-sm">
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
             <span>{error}</span>
           </div>
@@ -378,7 +378,7 @@ export default function MockDataImportDialog<T>({
               <span>{fileName}</span>
             </div>
 
-            <div className="flex items-center gap-2 p-3 rounded-md bg-success/10 text-success text-sm">
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-success/10 text-success text-sm">
               <Check className="h-4 w-4 shrink-0" />
               <span>Giltig JSON: {jsonSummary}</span>
             </div>

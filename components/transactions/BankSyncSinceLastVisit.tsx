@@ -75,7 +75,7 @@ export default function BankSyncSinceLastVisit() {
   }
 
   return (
-    <div className="inline-flex items-center gap-2 rounded-md border border-border bg-secondary px-2.5 py-1 text-xs text-foreground">
+    <div className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary px-2.5 py-1 text-xs text-foreground">
       <span>
         {count === 1
           ? t('bank_sync_new_since_last_visit_one')

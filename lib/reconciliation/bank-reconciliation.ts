@@ -67,6 +67,19 @@ export interface ReconciliationRunResult {
    * for human review. Always 0 on dry runs and when no threshold was given.
    */
   skippedBelowThreshold: number
+  /**
+   * Below-threshold matches persisted as suggestions on the transaction
+   * (potential_journal_entry_id + method + confidence) for the review surface.
+   * Always 0 unless persistSuggestions was set on a non-dry apply run with a
+   * confidence threshold.
+   */
+  suggested: number
+  /**
+   * Unmatched, non-ignored transactions the run considered (the candidate pool
+   * on the bank side). Lets callers report "X av Y matchade" without a second
+   * count query.
+   */
+  candidates: number
 }
 
 /**
@@ -198,6 +211,18 @@ export interface ReconciliationOptions {
    * committed without human review.
    */
   confidenceThreshold?: number
+  /**
+   * Persist below-threshold matches (the 0.75-0.89 band: auto_fuzzy,
+   * auto_date_range) onto the transaction's potential_journal_entry_id /
+   * potential_match_method / potential_match_confidence columns instead of
+   * dropping them, so the review surface can offer them for confirmation.
+   * Only meaningful together with confidenceThreshold on a non-dry apply run;
+   * ignored otherwise. Suggestions are soft data: the same optimistic
+   * `.is('journal_entry_id', null)` guard as the apply path, plus DB triggers
+   * that clear them when the row is booked/ignored or the entry is consumed
+   * or reversed.
+   */
+  persistSuggestions?: boolean
 }
 
 /**
@@ -417,6 +442,7 @@ export async function runReconciliation(
     includeUnassigned = true,
     applyOnly,
     confidenceThreshold,
+    persistSuggestions = false,
   } = options
 
   // Fetch unlinked GL lines via RPC
@@ -451,14 +477,28 @@ export async function runReconciliation(
   })
 
   if (transactions.length === 0 || glLines.length === 0) {
-    return { matches: [], applied: 0, errors: 0, skippedBelowThreshold: 0 }
+    return {
+      matches: [],
+      applied: 0,
+      errors: 0,
+      skippedBelowThreshold: 0,
+      suggested: 0,
+      candidates: transactions.length,
+    }
   }
 
   // Run greedy matching, highest confidence first
   let matches = greedyMatch(transactions, glLines, currency)
 
   if (dryRun) {
-    return { matches, applied: 0, errors: 0, skippedBelowThreshold: 0 }
+    return {
+      matches,
+      applied: 0,
+      errors: 0,
+      skippedBelowThreshold: 0,
+      suggested: 0,
+      candidates: transactions.length,
+    }
   }
 
   // When the caller reviewed a dry-run and ticked a subset, apply ONLY pairs
@@ -477,12 +517,13 @@ export async function runReconciliation(
   // counted separately. This is the server-side guardrail for unattended
   // callers (nightly sync / cron), where nobody reviews a dry-run first.
   let toApply = matches
-  let skippedBelowThreshold = 0
+  let belowThresholdMatches: ReconciliationMatch[] = []
   if (confidenceThreshold !== undefined) {
     const floor = Math.max(0, Math.min(1, confidenceThreshold))
     toApply = matches.filter((m) => m.confidence >= floor)
-    skippedBelowThreshold = matches.length - toApply.length
+    belowThresholdMatches = matches.filter((m) => m.confidence < floor)
   }
+  const skippedBelowThreshold = belowThresholdMatches.length
 
   // Apply matches
   let applied = 0
@@ -511,6 +552,18 @@ export async function runReconciliation(
         errors++
       } else {
         applied++
+        // Behandlingshistorik (BFNAR 2013:2 kap 8, BFL 7:1): every auto-applied
+        // link is a match event and must land in the append-only log, exactly
+        // like the invoice-match and confirm-suggestion paths. The bus event
+        // below goes to event_log (30-day TTL) and is NOT an audit record.
+        await logMatchEvent(supabase, userId, match.transaction.id, 'matched', {
+          matchConfidence: match.confidence,
+          matchMethod: match.method,
+          newState: {
+            journal_entry_id: match.glLine.journal_entry_id,
+            reconciliation_method: match.method,
+          },
+        })
         try {
           eventBus.emit({
             type: 'transaction.reconciled',
@@ -531,7 +584,51 @@ export async function runReconciliation(
     }
   }
 
-  return { matches, applied, errors, skippedBelowThreshold }
+  // Persist the below-threshold band as reviewable suggestions instead of
+  // dropping it. Same optimistic-lock guard as the apply loop: a row that got
+  // booked or linked between the read and this write matches zero rows, and
+  // the DB trigger clears any suggestion the moment a link lands, so a stale
+  // suggestion can never shadow a real link.
+  let suggested = 0
+  if (persistSuggestions) {
+    for (const match of belowThresholdMatches) {
+      try {
+        const { data: suggestedRows, error } = await supabase
+          .from('transactions')
+          .update({
+            potential_journal_entry_id: match.glLine.journal_entry_id,
+            potential_match_method: match.method,
+            potential_match_confidence: match.confidence,
+          })
+          .eq('id', match.transaction.id)
+          .eq('company_id', companyId)
+          .is('journal_entry_id', null)
+          .select('id')
+
+        if (!error && suggestedRows && suggestedRows.length > 0) {
+          suggested++
+          // Awaited: an unawaited promise can be frozen on serverless when the
+          // response returns, silently dropping the audit row.
+          await logMatchEvent(supabase, userId, match.transaction.id, 'auto_suggested', {
+            matchConfidence: match.confidence,
+            matchMethod: match.method,
+            newState: { potential_journal_entry_id: match.glLine.journal_entry_id },
+          })
+        }
+      } catch {
+        // Suggestions are best-effort: never fail the run over one row.
+      }
+    }
+  }
+
+  return {
+    matches,
+    applied,
+    errors,
+    skippedBelowThreshold,
+    suggested,
+    candidates: transactions.length,
+  }
 }
 
 // ============================================================
