@@ -10,7 +10,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-documents'
-import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, AlertTriangle, Inbox, FileText, X } from 'lucide-react'
 import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import { getVatRate } from '@/lib/bookkeeping/vat-entries'
@@ -23,7 +23,9 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
+import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
+import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import VatTreatmentSelect from './VatTreatmentSelect'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
@@ -91,6 +93,12 @@ export default function QuickReviewDialog({
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  // Underlag already sitting in the inkorg, picked instead of re-uploaded. The
+  // journal entry does not exist yet at pick time, so these are held here and
+  // linked (with their inbox_item_id, which consumes the inbox item) once the
+  // booking returns a verifikat: same select-mode contract TransactionBookingDialog uses.
+  const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
+  const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
   const [showUploadZone, setShowUploadZone] = useState(false)
   const [showVatDropdown, setShowVatDropdown] = useState(false)
   // Mirror of `transaction` so we can patch in a freshly-fetched SEK conversion
@@ -140,6 +148,9 @@ export default function QuickReviewDialog({
     setEnrichedTx(transaction)
     setRateError(null)
     setDims({ ...(counterpartyDefaultDimensions ?? {}) })
+    // A document picked for the previous row must never follow the dialog to
+    // the next one: it would attach that underlag to the wrong verifikat.
+    setPickedInboxDocs([])
     // Re-seeding on counterpartyDefaultDimensions alone would clobber in-
     // flight edits; the bag only changes together with the transaction.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -228,6 +239,8 @@ export default function QuickReviewDialog({
     tx.currency,
     tx.exchange_rate
   )
+  const attachedCount =
+    uploadedFiles.filter((f) => f.status === 'uploaded').length + pickedInboxDocs.length
   const isForeign = !!(tx.currency && tx.currency !== 'SEK')
   const sekConversionMissing = isForeign && (tx.amount_sek == null || tx.exchange_rate == null)
 
@@ -283,10 +296,20 @@ export default function QuickReviewDialog({
       // is already committed here, so a failed link can only be reported, not
       // undone. The parent's "Bokförd" toast must not be the last word when a
       // receipt never made it onto the books.
-      if (journalEntryId && uploadedFiles.length > 0) {
-        const targets = uploadedFiles
-          .filter((f) => f.status === 'uploaded' && f.id)
-          .map((f) => ({ documentId: f.id as string, fileName: f.fileName }))
+      if (journalEntryId && (uploadedFiles.length > 0 || pickedInboxDocs.length > 0)) {
+        const targets = [
+          ...uploadedFiles
+            .filter((f) => f.status === 'uploaded' && f.id)
+            .map((f) => ({ documentId: f.id as string, fileName: f.fileName })),
+          // inboxItemId stamps the inbox item as consumed so the underlag drops
+          // out of "Underlag att hantera" instead of lingering as a duplicate of
+          // the verifikat it now belongs to: see app/api/documents/[id]/link/route.ts.
+          ...pickedInboxDocs.map((doc) => ({
+            documentId: doc.document_id,
+            fileName: doc.supplier_name ?? doc.file_name,
+            inboxItemId: doc.inbox_item_id,
+          })),
+        ]
         const { failed } = await linkDocuments(targets, journalEntryId)
         if (failed.length > 0) {
           toast({
@@ -310,11 +333,19 @@ export default function QuickReviewDialog({
           // is invisible either way: the toast above, with its open-entry
           // action, is the user's actual pointer to the underlag that did not
           // attach. The early return just skips the redundant cleanup below.
+          //
+          // Picks are still dropped: the dialog instance is reused across rows,
+          // and a pick that DID link is already consumed, so carrying it into
+          // the next transaction would re-link a spent document. Nothing is lost
+          // by clearing, unlike uploadedFiles: an underlag that failed to link
+          // was never stamped, so it is still sitting in the inkorg to re-pick.
+          setPickedInboxDocs([])
           return
         }
       }
 
       setUploadedFiles([])
+      setPickedInboxDocs([])
       setShowUploadZone(false)
     } catch {
       setError(t('generic_error'))
@@ -331,6 +362,7 @@ export default function QuickReviewDialog({
     <Dialog open={open} onOpenChange={isProcessing ? undefined : (o) => {
       if (!o) {
         setUploadedFiles([])
+        setPickedInboxDocs([])
         setShowUploadZone(false)
       }
       onOpenChange(o)
@@ -586,9 +618,9 @@ export default function QuickReviewDialog({
               <div className="flex items-center gap-2">
                 <Paperclip className="h-4 w-4 text-muted-foreground" />
                 <span className="font-medium">{t('doc_label')}</span>
-                {uploadedFiles.filter((f) => f.status === 'uploaded').length > 0 && (
+                {attachedCount > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    {t('doc_attached_count', { count: uploadedFiles.filter((f) => f.status === 'uploaded').length })}
+                    {t('doc_attached_count', { count: attachedCount })}
                   </span>
                 )}
               </div>
@@ -599,12 +631,49 @@ export default function QuickReviewDialog({
               )}
             </button>
             {showUploadZone && (
-              <div className="px-3 pb-3">
+              <div className="px-3 pb-3 space-y-2">
                 <DocumentUploadZone
                   files={uploadedFiles}
                   onFilesChange={setUploadedFiles}
                   compact
                 />
+                {pickedInboxDocs.map((doc) => (
+                  <div
+                    key={doc.document_id}
+                    className="flex items-center gap-2 rounded-sm bg-muted/50 px-2 py-1.5 text-sm"
+                  >
+                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="flex-1 truncate">{doc.supplier_name ?? doc.file_name}</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 shrink-0 p-0"
+                      aria-label={t('doc_picked_remove')}
+                      disabled={isProcessing}
+                      onClick={() =>
+                        setPickedInboxDocs((prev) =>
+                          prev.filter((d) => d.document_id !== doc.document_id),
+                        )
+                      }
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
+                {/* Locked while the booking is in flight: handleConfirm captured
+                    pickedInboxDocs when it started, so anything picked now would
+                    never be linked and would then be cleared on completion,
+                    vanishing from the list with no error to explain it. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isProcessing}
+                  onClick={() => setInboxPickerOpen(true)}
+                >
+                  <Inbox className="mr-2 h-4 w-4" />
+                  {t('doc_pick_existing')}
+                </Button>
               </div>
             )}
           </div>
@@ -642,6 +711,18 @@ export default function QuickReviewDialog({
         </div>
           </div>
         </div>
+
+        {/* Select mode: the verifikat does not exist yet, so the pick is held in
+            state and linked in handleConfirm once the booking returns its id. */}
+        <InboxDocumentPicker
+          open={inboxPickerOpen}
+          onClose={() => setInboxPickerOpen(false)}
+          onSelect={(doc) =>
+            setPickedInboxDocs((prev) =>
+              prev.some((d) => d.document_id === doc.document_id) ? prev : [...prev, doc],
+            )
+          }
+        />
       </DialogContent>
     </Dialog>
   )
