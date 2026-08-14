@@ -2,17 +2,16 @@
 
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
-import { Button, buttonVariants } from '@/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { AttnLine } from '@/components/ui/attn-line'
 import Link from 'next/link'
-import { FallbackPrompt } from '@/components/ui/fallback-prompt'
 import { getBranding } from '@/lib/branding/service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -20,25 +19,13 @@ const branding = getBranding()
 import {
   ArrowLeft,
   ArrowRight,
-  Loader2,
-  AlertCircle,
-  CheckCircle,
-  Building2,
-  Users,
-  Truck,
-  FileText,
-  Database,
-  ExternalLink,
-  Info,
-  RotateCcw,
-  RefreshCw,
-  AlertTriangle,
-  ChevronDown,
+  Check,
   ChevronRight,
-  Calendar,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
   XCircle,
-  BookOpen,
-  Paperclip,
 } from 'lucide-react'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import {
@@ -251,6 +238,7 @@ interface MigrationResults {
 }
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
+import TheaterCanvas from '@/components/import/TheaterCanvas'
 import type { TheaterModel } from '@/lib/import/theater-model'
 import type { AccountMapping, ImportResult, ParsedSIEFile } from '@/lib/import/types'
 import type { BASAccount } from '@/types'
@@ -270,11 +258,6 @@ const STEP_LABELS: Record<WizardStep, string> = {
   migrating: 'Migrerar',
   result: 'Resultat',
 }
-
-const MONTH_NAMES = [
-  'Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
-  'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December',
-]
 
 interface MigrationOptions {
   importCompanyInfo: boolean
@@ -353,6 +336,94 @@ interface SIEData {
   basAccounts: BASAccount[]
 }
 
+// ── Shared step chrome ───────────────────────────────────────────
+// Living Paper: step content sits directly on the page. The serif headline
+// is the step's one display element; sections are kickers over hairline
+// rows; attention is one ochre sentence (AttnLine); the SIE escape hatch is
+// a quiet underlined link, never a boxed prompt.
+
+function StepHeading({ title, lede }: { title: string; lede?: string }) {
+  return (
+    <div>
+      <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">{title}</h2>
+      {lede && <p className="mt-2 text-sm text-muted-foreground">{lede}</p>}
+    </div>
+  )
+}
+
+function SectionKicker({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+      {children}
+    </h3>
+  )
+}
+
+function SieFallbackLine({ message, label = 'Ladda upp SIE-fil' }: { message: string; label?: string }) {
+  return (
+    <p className="text-[13px] text-muted-foreground">
+      {message}{' '}
+      <Link
+        href="/import?mode=sie"
+        className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground"
+      >
+        {label}
+      </Link>
+    </p>
+  )
+}
+
+function SpinnerLine({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-3 text-sm text-muted-foreground">
+      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+      <p>{children}</p>
+    </div>
+  )
+}
+
+/**
+ * The quiet step indicator that replaces the boxed progress card: the step
+ * labels as an uppercase tracking kicker row (done steps muted with a small
+ * check, the current step in foreground ink) over a hairline thread whose
+ * ink segment is the progress. No card, no fat bar.
+ */
+function StepRail({ steps, currentIndex }: { steps: WizardStep[]; currentIndex: number }) {
+  const progressPercent = ((currentIndex + 1) / steps.length) * 100
+  return (
+    <nav aria-label="Migreringens steg">
+      <p className="text-[11px] font-medium uppercase tracking-wider sm:hidden">
+        Steg {currentIndex + 1} av {steps.length}: {STEP_LABELS[steps[currentIndex]]}
+      </p>
+      <ol className="hidden flex-wrap items-center gap-x-6 gap-y-1 sm:flex">
+        {steps.map((s, i) => (
+          <li
+            key={s}
+            aria-current={i === currentIndex ? 'step' : undefined}
+            className={cn(
+              'flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider transition-colors duration-150',
+              i === currentIndex
+                ? 'text-foreground'
+                : i < currentIndex
+                  ? 'text-muted-foreground'
+                  : 'text-muted-foreground/60'
+            )}
+          >
+            {i < currentIndex && <Check className="h-3 w-3" aria-hidden="true" />}
+            {STEP_LABELS[s]}
+          </li>
+        ))}
+      </ol>
+      <div className="mt-3 h-px w-full bg-border">
+        <div
+          className="h-px bg-foreground transition-[width] duration-300 ease-out"
+          style={{ width: `${progressPercent}%` }}
+        />
+      </div>
+    </nav>
+  )
+}
+
 // ── Provider selection step ──────────────────────────────────────
 
 interface ConnectionStatus {
@@ -416,97 +487,66 @@ function ProviderStep({
   const showSieRequiredBanner = !isLoadingStatus && !hasSieImport && !allSieViaApi
 
   return (
-    <div className="space-y-4">
-      {/* SIE-required banner (not relevant for Fortnox/Briox: they fetch SIE via API) */}
+    <div className="stagger-enter space-y-8">
+      <StepHeading
+        title={activeConsents.length > 0 ? 'Anslut ytterligare system' : 'Välj ditt nuvarande bokföringssystem'}
+        lede="Vi hämtar bokföringsdata via SIE och kunder, leverantörer och fakturor via API:et."
+      />
+
+      {/* SIE-required attention (not relevant for Fortnox/Briox: they fetch
+          SIE via API): one ochre sentence with the action embedded, never a
+          banner. */}
       {showSieRequiredBanner && (
-        <div className="flex gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
-          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-500" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">SIE-import krävs först</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Bokio och Visma hämtar endast kunder, leverantörer och fakturor via API:et. Bokföringsdata (kontoplan, verifikationer och balanser) måste importeras via SIE-fil först. Gäller inte Fortnox, Briox, Björn Lundén och WINT: där hämtar vi bokföringen direkt via API:et.
-            </p>
-            <Link
-              href="/import?mode=sie"
-              className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'mt-3')}
-            >
-              <BookOpen className="mr-2 h-4 w-4" />
-              Ladda upp SIE-fil
-              <ExternalLink className="ml-2 h-3.5 w-3.5" />
-            </Link>
-          </div>
-        </div>
+        <AttnLine action={{ label: 'Ladda upp SIE-fil', href: '/import?mode=sie' }}>
+          Bokio och Visma hämtar endast kunder, leverantörer och fakturor via API:et: importera
+          bokföringsdatan (kontoplan, verifikationer och balanser) via SIE-fil först. Gäller inte
+          Fortnox, Briox, Björn Lundén och WINT, där hämtas bokföringen direkt via API:et.
+        </AttnLine>
       )}
 
-      {/* Existing connections */}
+      {/* Existing connections: quiet hairline rows, no cards. Being connected
+          is the normal state here, so it reads as muted text, not a chip. */}
       {activeConsents.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Aktiva anslutningar</CardTitle>
-            <CardDescription>
-              Du har redan anslutna leverantörer. Synka igen för att hämta ny data.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
+        <section className="space-y-3">
+          <SectionKicker>Aktiva anslutningar</SectionKicker>
+          <div className="stagger-enter divide-y divide-border" data-no-stagger>
             {activeConsents.map((consent) => {
               const providerInfo = ARCIM_PROVIDERS.find(p => p.id === consent.provider)
               const completedImports = connectionStatus?.sieImports.filter(i => i.status === 'completed') ?? []
               const lastImport = completedImports[0]
 
               return (
-                <div
-                  key={consent.id}
-                  className="rounded-lg border border-border bg-card p-4"
-                >
-                  <div className="flex items-start gap-3 sm:items-center sm:gap-4">
-                    <img
-                      src={PROVIDER_LOGOS[consent.provider]}
-                      alt={providerInfo?.name ?? consent.provider}
-                      className="h-10 w-10 shrink-0 rounded-lg object-contain"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium">{providerInfo?.name ?? consent.provider}</p>
-                        <Badge variant="success" className="gap-1">
-                          <CheckCircle className="h-3 w-3" />
-                          Ansluten
-                        </Badge>
-                      </div>
-                      <div className="mt-0.5 space-y-0.5">
-                        {consent.companyName && (
-                          <p className="text-xs text-muted-foreground">{consent.companyName}</p>
-                        )}
-                        {lastImport ? (
-                          <p className="text-xs text-muted-foreground">
-                            Senaste import: {new Date(lastImport.imported_at ?? lastImport.created_at).toLocaleDateString('sv-SE')}
-                            {lastImport.transactions_count != null && `, ${lastImport.transactions_count} verifikationer`}
-                          </p>
-                        ) : (
-                          <p className="text-xs text-muted-foreground">
-                            Ansluten {consent.createdAt ? new Date(consent.createdAt).toLocaleDateString('sv-SE') : ''}
-                          </p>
-                        )}
-                        {(connectionStatus?.entityCounts.customers ?? 0) > 0 && (
-                          <p className="text-xs text-muted-foreground">
-                            {connectionStatus?.entityCounts.customers} kunder, {connectionStatus?.entityCounts.suppliers} leverantörer, {connectionStatus?.entityCounts.invoices} fakturor
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="hidden shrink-0 text-muted-foreground hover:text-destructive sm:inline-flex"
-                      onClick={() => onDisconnect(consent.id)}
-                    >
-                      <XCircle className="h-3.5 w-3.5" />
-                    </Button>
+                <div key={consent.id} className="flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap sm:gap-4">
+                  <img
+                    src={PROVIDER_LOGOS[consent.provider]}
+                    alt={providerInfo?.name ?? consent.provider}
+                    className="h-8 w-8 shrink-0 rounded-sm object-contain"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{providerInfo?.name ?? consent.provider}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {consent.companyName && <>{consent.companyName} · </>}
+                      {lastImport ? (
+                        <>
+                          Senaste import {new Date(lastImport.imported_at ?? lastImport.created_at).toLocaleDateString('sv-SE')}
+                          {lastImport.transactions_count != null && (
+                            <span className="tabular-nums">, {lastImport.transactions_count} verifikationer</span>
+                          )}
+                        </>
+                      ) : (
+                        <>Ansluten {consent.createdAt ? new Date(consent.createdAt).toLocaleDateString('sv-SE') : ''}</>
+                      )}
+                    </p>
+                    {(connectionStatus?.entityCounts.customers ?? 0) > 0 && (
+                      <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+                        {connectionStatus?.entityCounts.customers} kunder, {connectionStatus?.entityCounts.suppliers} leverantörer, {connectionStatus?.entityCounts.invoices} fakturor
+                      </p>
+                    )}
                   </div>
-                  <div className="mt-3 flex items-center gap-2 sm:mt-0 sm:pl-[52px]">
+                  <div className="flex shrink-0 items-center gap-2">
                     <Button
                       variant="outline"
                       size="sm"
-                      className="flex-1 sm:flex-none"
                       onClick={() => onResync(consent.provider, consent.id)}
                     >
                       <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
@@ -515,7 +555,8 @@ function ProviderStep({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="shrink-0 text-muted-foreground hover:text-destructive sm:hidden"
+                      className="text-muted-foreground hover:text-destructive"
+                      aria-label={`Koppla från ${providerInfo?.name ?? consent.provider}`}
                       onClick={() => onDisconnect(consent.id)}
                     >
                       <XCircle className="h-3.5 w-3.5" />
@@ -524,84 +565,82 @@ function ProviderStep({
                 </div>
               )
             })}
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       )}
 
-      {/* Provider selection */}
-      <Card>
-        <CardHeader>
-          <CardTitle>{activeConsents.length > 0 ? 'Anslut ytterligare system' : 'Välj ditt nuvarande bokföringssystem'}</CardTitle>
-          <CardDescription>
-            Vi hämtar bokföringsdata via SIE och kunder, leverantörer och fakturor via API:et.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isLoadingStatus ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {ARCIM_PROVIDERS.map((provider) => {
-                const comingSoon = COMING_SOON_PROVIDERS.has(provider.id)
-                const alreadyConnected = activeConsents.some(c => c.provider === provider.id)
-                // Providers without SIE-over-API only expose entity data
-                // (customers, suppliers, invoices): the ledger must arrive via
-                // SIE upload first. Gate the connection entry until a completed
-                // SIE import exists so users don't authenticate into a flow that
-                // can't import anything yet. The /migrate route enforces this
-                // server-side regardless; this is just the matching UX.
-                const needsSieFirst = !hasSieImport && !provider.sieViaApi
-                const isDisabled = comingSoon || alreadyConnected || needsSieFirst
-                return (
-                  <button
-                    key={provider.id}
-                    disabled={isDisabled}
-                    className={`relative flex items-center gap-4 rounded-lg border p-4 text-left transition-colors ${
-                      isDisabled
-                        ? 'cursor-not-allowed border-border/50 opacity-60'
-                        : 'border-border hover:border-primary/50 hover:bg-accent/50'
-                    }`}
-                    onClick={() => !isDisabled && onSelect(provider.id)}
-                  >
-                    <img
-                      src={PROVIDER_LOGOS[provider.id]}
-                      alt={provider.name}
-                      className="h-10 w-10 shrink-0 rounded-lg object-contain"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium">{provider.name}</p>
-                        {comingSoon && (
-                          <Badge variant="secondary">Kommer snart</Badge>
-                        )}
-                        {alreadyConnected && (
-                          <Badge variant="success">Ansluten</Badge>
-                        )}
-                        {needsSieFirst && !comingSoon && !alreadyConnected && (
-                          <Badge variant="warning">SIE krävs först</Badge>
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {alreadyConnected
-                          ? 'Använd "Synka igen" ovan'
-                          : needsSieFirst
-                            ? 'Importera SIE-fil först'
-                            : provider.authType === 'oauth'
-                              ? 'Anslut via inloggning'
-                              : provider.id === 'bjornlunden'
-                                ? 'Anslut med företagsnyckel'
-                                : 'Anslut med API-nyckel'}
-                      </p>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Provider selection: quiet list rows on the page, hairline-divided. */}
+      {isLoadingStatus ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : (
+        <div className="stagger-enter divide-y divide-border" data-no-stagger>
+          {ARCIM_PROVIDERS.map((provider) => {
+            const comingSoon = COMING_SOON_PROVIDERS.has(provider.id)
+            const alreadyConnected = activeConsents.some(c => c.provider === provider.id)
+            // Providers without SIE-over-API only expose entity data
+            // (customers, suppliers, invoices): the ledger must arrive via
+            // SIE upload first. Gate the connection entry until a completed
+            // SIE import exists so users don't authenticate into a flow that
+            // can't import anything yet. The /migrate route enforces this
+            // server-side regardless; this is just the matching UX.
+            const needsSieFirst = !hasSieImport && !provider.sieViaApi
+            const isDisabled = comingSoon || alreadyConnected || needsSieFirst
+            return (
+              <button
+                key={provider.id}
+                type="button"
+                disabled={isDisabled}
+                className={cn(
+                  'group flex w-full items-center gap-4 py-3 text-left transition-colors duration-150',
+                  isDisabled
+                    ? 'cursor-not-allowed opacity-50'
+                    : 'hover:bg-secondary/35'
+                )}
+                onClick={() => !isDisabled && onSelect(provider.id)}
+              >
+                <img
+                  src={PROVIDER_LOGOS[provider.id]}
+                  alt={provider.name}
+                  className="h-8 w-8 shrink-0 rounded-sm object-contain"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium">{provider.name}</p>
+                    {comingSoon && (
+                      <Badge variant="secondary">Kommer snart</Badge>
+                    )}
+                    {alreadyConnected && (
+                      <Badge variant="success">Ansluten</Badge>
+                    )}
+                    {needsSieFirst && !comingSoon && !alreadyConnected && (
+                      <Badge variant="warning">SIE krävs först</Badge>
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {alreadyConnected
+                      ? 'Använd "Synka igen" ovan'
+                      : needsSieFirst
+                        ? 'Importera SIE-fil först'
+                        : provider.authType === 'oauth'
+                          ? 'Anslut via inloggning'
+                          : provider.id === 'bjornlunden'
+                            ? 'Anslut med företagsnyckel'
+                            : 'Anslut med API-nyckel'}
+                  </p>
+                </div>
+                {!isDisabled && (
+                  <ChevronRight
+                    className="h-4 w-4 shrink-0 text-muted-foreground/40 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -671,152 +710,134 @@ function ConnectStep({
     : !!(apiToken && (!needsCompanyId || companyId))
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Anslut till {providerName}</CardTitle>
-          <CardDescription>
-            {authType === 'token'
-              ? tokenDescription
-              : `Logga in i ${providerName} för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
-            }
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {isLoading && (
-            <div className="flex items-center gap-3 text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              <p>Förbereder anslutning...</p>
-            </div>
-          )}
+    <div className="stagger-enter space-y-8">
+      <StepHeading
+        title={`Anslut till ${providerName}`}
+        lede={authType === 'token'
+          ? tokenDescription
+          : `Logga in i ${providerName} för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`}
+      />
 
-          {error && (
-            <>
-              <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
-                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-                <div>
-                  <p className="font-medium text-destructive">Anslutning misslyckades</p>
-                  <p className="text-sm text-muted-foreground">{error}</p>
-                  {provider === 'fortnox' && (
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Obs: Fortnox kräver ett aktivt integrationstillägg (tillkostnadsbelagd tilläggstjänst) för att kunna använda integrationer. Kontrollera att detta är aktiverat i ditt Fortnox-konto.
-                    </p>
-                  )}
-                </div>
-              </div>
-              <FallbackPrompt
-                message="Du kan också importera din bokföringsdata manuellt via en SIE-fil."
-                linkHref="/import?mode=sie"
-                linkLabel="Ladda upp SIE-fil"
-              />
-            </>
-          )}
+      {isLoading && <SpinnerLine>Förbereder anslutning...</SpinnerLine>}
 
-          {/* OAuth flow */}
-          {authType === 'oauth' && authUrl && !isLoading && (
-            <div className="space-y-4">
+      {error && (
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-destructive">Anslutning misslyckades</p>
+            <p className="text-sm text-muted-foreground">{error}</p>
+            {provider === 'fortnox' && (
               <p className="text-sm text-muted-foreground">
-                Klicka nedan för att logga in i {providerName}.
-                Fönstret stängs automatiskt när du är klar.
+                Obs: Fortnox kräver ett aktivt integrationstillägg (tillkostnadsbelagd tilläggstjänst) för att kunna använda integrationer. Kontrollera att detta är aktiverat i ditt Fortnox-konto.
               </p>
-              <Button
-                className="min-h-11"
-                onClick={() => {
-                  const w = 600
-                  const h = 700
-                  const left = window.screenX + (window.outerWidth - w) / 2
-                  const top = window.screenY + (window.outerHeight - h) / 2
-                  const popup = window.open(authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
-                  if (!popup) {
-                    // Popup blocked: with the return value discarded, a blocked
-                    // popup looked exactly like a successful one (nothing opens,
-                    // nothing is said, the user clicks again). Fall back to the
-                    // full-page flow instead. The callback already supports it:
-                    // with no window.opener it redirects to
-                    // /import?migration=connected&consentId=..., which
-                    // handleOAuthReturn consumes and resumes the wizard at the
-                    // preview step. Same treatment as SkatteverketConnectPanel.
-                    window.location.href = authUrl
+            )}
+          </div>
+          <SieFallbackLine message="Du kan också importera din bokföringsdata manuellt via en SIE-fil." />
+        </div>
+      )}
+
+      {/* OAuth flow */}
+      {authType === 'oauth' && authUrl && !isLoading && (
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Klicka nedan för att logga in i {providerName}.
+            Fönstret stängs automatiskt när du är klar.
+          </p>
+          <Button
+            className="min-h-11"
+            onClick={() => {
+              const w = 600
+              const h = 700
+              const left = window.screenX + (window.outerWidth - w) / 2
+              const top = window.screenY + (window.outerHeight - h) / 2
+              const popup = window.open(authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+              if (!popup) {
+                // Popup blocked: with the return value discarded, a blocked
+                // popup looked exactly like a successful one (nothing opens,
+                // nothing is said, the user clicks again). Fall back to the
+                // full-page flow instead. The callback already supports it:
+                // with no window.opener it redirects to
+                // /import?migration=connected&consentId=..., which
+                // handleOAuthReturn consumes and resumes the wizard at the
+                // preview step. Same treatment as SkatteverketConnectPanel.
+                window.location.href = authUrl
+              }
+            }}
+          >
+            Logga in i {providerName}
+            <ExternalLink className="ml-2 h-4 w-4" />
+          </Button>
+        </div>
+      )}
+
+      {/* Token-based flow */}
+      {authType === 'token' && consentId && !isLoading && (
+        <div className="max-w-md space-y-4">
+          <p className="text-sm text-muted-foreground">
+            {tokenHelpText}
+          </p>
+          {/* WINT is a login form: e-mail reads above password (CSS order;
+              the button keeps its place). Other token providers keep
+              token-first order. */}
+          <div className={cn('space-y-3', isWintLogin && 'flex flex-col gap-3 space-y-0')}>
+            {needsApiToken && (
+              <div className={cn(isWintLogin && 'order-2')}>
+                <label htmlFor="apiToken" className="text-sm font-medium">
+                  {provider === 'briox' ? 'Applikationstoken' : isWintLogin ? 'Lösenord' : 'API-nyckel'}
+                </label>
+                <Input
+                  id="apiToken"
+                  name="apiToken_nocomplete"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder={
+                    provider === 'briox'
+                      ? 'Klistra in din applikationstoken'
+                      : isWintLogin
+                        ? 'Ditt lösenord hos WINT'
+                        : 'Klistra in din API-nyckel'
                   }
-                }}
-              >
-                Logga in i {providerName}
-                <ExternalLink className="ml-2 h-4 w-4" />
-              </Button>
-            </div>
-          )}
-
-          {/* Token-based flow */}
-          {authType === 'token' && consentId && !isLoading && (
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                {tokenHelpText}
-              </p>
-              {/* WINT is a login form: e-mail reads above password (CSS order;
-                  the button keeps its place). Other token providers keep
-                  token-first order. */}
-              <div className={cn('space-y-3', isWintLogin && 'flex flex-col gap-3 space-y-0')}>
-                {needsApiToken && (
-                  <div className={cn(isWintLogin && 'order-2')}>
-                    <label htmlFor="apiToken" className="text-sm font-medium">
-                      {provider === 'briox' ? 'Applikationstoken' : isWintLogin ? 'Lösenord' : 'API-nyckel'}
-                    </label>
-                    <Input
-                      id="apiToken"
-                      name="apiToken_nocomplete"
-                      type="password"
-                      autoComplete="new-password"
-                      placeholder={
-                        provider === 'briox'
-                          ? 'Klistra in din applikationstoken'
-                          : isWintLogin
-                            ? 'Ditt lösenord hos WINT'
-                            : 'Klistra in din API-nyckel'
-                      }
-                      value={apiToken}
-                      onChange={(e) => setApiToken(e.target.value)}
-                    />
-                  </div>
-                )}
-                {needsCompanyId && (
-                  <div className={cn(isWintLogin && 'order-1')}>
-                    <label htmlFor="companyId" className="text-sm font-medium">
-                      {companyIdLabel}
-                    </label>
-                    <Input
-                      id="companyId"
-                      name="companyId_nocomplete"
-                      type={isWintLogin ? 'email' : 'text'}
-                      autoComplete="new-password"
-                      placeholder={
-                        isClientCredentials
-                          ? 'Företagsnyckel, t.ex. 1f0e2d3c-4b5a-...'
-                          : provider === 'briox'
-                            ? 'Det långa numret inom parentes, t.ex. 35649125'
-                            : isWintLogin
-                              ? 'namn@foretaget.se'
-                              : 'GUID från URL:en, t.ex. 14ccad83-67f6-49bd-...'
-                      }
-                      value={companyId}
-                      onChange={(e) => setCompanyId(e.target.value)}
-                    />
-                  </div>
-                )}
-                <Button
-                  className={cn('min-h-11', isWintLogin && 'order-3')}
-                  onClick={() => onTokenSubmit(apiToken, companyId)}
-                  disabled={!canSubmit}
-                >
-                  Anslut
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
+                  value={apiToken}
+                  onChange={(e) => setApiToken(e.target.value)}
+                />
               </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            )}
+            {needsCompanyId && (
+              <div className={cn(isWintLogin && 'order-1')}>
+                <label htmlFor="companyId" className="text-sm font-medium">
+                  {companyIdLabel}
+                </label>
+                <Input
+                  id="companyId"
+                  name="companyId_nocomplete"
+                  type={isWintLogin ? 'email' : 'text'}
+                  autoComplete="new-password"
+                  placeholder={
+                    isClientCredentials
+                      ? 'Företagsnyckel, t.ex. 1f0e2d3c-4b5a-...'
+                      : provider === 'briox'
+                        ? 'Det långa numret inom parentes, t.ex. 35649125'
+                        : isWintLogin
+                          ? 'namn@foretaget.se'
+                          : 'GUID från URL:en, t.ex. 14ccad83-67f6-49bd-...'
+                  }
+                  value={companyId}
+                  onChange={(e) => setCompanyId(e.target.value)}
+                />
+              </div>
+            )}
+            <Button
+              className={cn('min-h-11', isWintLogin && 'order-3')}
+              onClick={() => onTokenSubmit(apiToken, companyId)}
+              disabled={!canSubmit}
+            >
+              Anslut
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
 
-      <div className="flex">
+      <div className="flex border-t border-border pt-6">
         <Button variant="outline" className="min-h-11" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
@@ -852,99 +873,74 @@ function PreviewStep({
     : ''
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Anslutet till {providerName}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {isLoading && (
-            <div className="flex items-center gap-3 text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              <p>Hämtar bokföringsdata...</p>
-            </div>
-          )}
+    <div className="stagger-enter space-y-8">
+      <div>
+        <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">
+          {preview ? `Anslutet till ${providerName}` : 'Förhandsgranskning'}
+        </h2>
 
-          {error && (
-            <>
-              <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
-                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-                <div className="space-y-3">
-                  <p className="text-sm text-muted-foreground">{error}</p>
-                  {authExpired && (
-                    <Button size="sm" className="min-h-9" onClick={onReconnect} disabled={isLoading}>
-                      <RotateCcw className="mr-2 h-4 w-4" />
-                      Återanslut {providerName}
-                    </Button>
-                  )}
-                </div>
-              </div>
-              {/* License-missing keeps the SIE fallback visible: re-auth loops
-                  until the customer re-orders the Fortnox Integration license,
-                  so a manual SIE import is the reliable escape hatch. */}
-              {(!authExpired || licenseMissing) && (
-                <FallbackPrompt
-                  message="Du kan också importera din bokföringsdata manuellt via en SIE-fil."
-                  linkHref="/import?mode=sie"
-                  linkLabel="Ladda upp SIE-fil"
-                />
-              )}
-            </>
-          )}
+        {isLoading && (
+          <div className="mt-3">
+            <SpinnerLine>Hämtar bokföringsdata...</SpinnerLine>
+          </div>
+        )}
 
-          {/* SIE stats summary */}
-          {preview?.sieAvailable && preview.sieStats && (
-            <div className="flex gap-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
-              <Database className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-              <div>
-                <p className="text-sm font-medium">
-                  Hittade {preview.sieStats.accountCount} konton och {preview.sieStats.transactionCount} verifikationer
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {preview.sieStats.fiscalYears.length === 1
-                    ? `Räkenskapsår ${preview.sieStats.fiscalYears[0]}`
-                    : `${preview.sieStats.fiscalYears.length} räkenskapsår: ${preview.sieStats.fiscalYears.join(', ')}`
-                  }
-                </p>
-              </div>
-            </div>
-          )}
+        {/* SIE stats: one quiet statline, the same grammar as the import
+            reveal, instead of a boxed summary. */}
+        {preview?.sieAvailable && preview.sieStats && (
+          <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground tabular-nums">
+            {preview.sieStats.accountCount.toLocaleString('sv-SE')} konton
+            {' · '}
+            {preview.sieStats.transactionCount.toLocaleString('sv-SE')} verifikationer
+            {' · '}
+            {preview.sieStats.fiscalYears.length === 1
+              ? `räkenskapsåret ${preview.sieStats.fiscalYears[0]}`
+              : `${preview.sieStats.fiscalYears.length} räkenskapsår: ${preview.sieStats.fiscalYears.join(', ')}`}
+          </p>
+        )}
 
-          {preview && !preview.sieAvailable && !isLoading && preview.hasSieData && (
-            <div className="flex gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4">
-              <CheckCircle className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
-              <div>
-                <p className="text-sm font-medium">SIE-data redan importerad</p>
-                <p className="text-xs text-muted-foreground">
-                  Bokföringsdata har redan importerats via SIE-fil. Du kan fortsätta med att importera kunder, leverantörer och fakturor.
-                </p>
-              </div>
-            </div>
-          )}
+        {preview && !preview.sieAvailable && !isLoading && preview.hasSieData && (
+          <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground">
+            Bokföringsdatan är redan importerad via SIE-fil. Du kan fortsätta med att importera
+            kunder, leverantörer och fakturor.
+          </p>
+        )}
+      </div>
 
-          {preview && !preview.sieAvailable && !isLoading && !preview.hasSieData && (
-            <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/5 p-4">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-              <div>
-                <p className="text-sm font-medium text-destructive">SIE-import krävs</p>
-                <p className="text-xs text-muted-foreground">
-                  Bokföringsdata (kontoplan, verifikationer och balanser) måste importeras via SIE-fil innan kunder, leverantörer och fakturor kan hämtas. Exportera en SIE-fil från {ARCIM_PROVIDERS.find(p => p.id === preview.consent.provider)?.name ?? 'ditt bokföringssystem'} och ladda upp den i {branding.appName.toLowerCase()}.
-                </p>
-                <Link
-                  href="/import?mode=sie"
-                  className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'mt-3')}
-                >
-                  <BookOpen className="mr-2 h-4 w-4" />
-                  Gå till SIE-importen
-                  <ExternalLink className="ml-2 h-3.5 w-3.5" />
-                </Link>
-              </div>
-            </div>
+      {error && (
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-destructive">Kunde inte hämta bokföringsdata</p>
+            <p className="text-sm text-muted-foreground">{error}</p>
+          </div>
+          {authExpired && (
+            <Button size="sm" className="min-h-9" onClick={onReconnect} disabled={isLoading}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Återanslut {providerName}
+            </Button>
           )}
-        </CardContent>
-      </Card>
+          {/* License-missing keeps the SIE fallback visible: re-auth loops
+              until the customer re-orders the Fortnox Integration license,
+              so a manual SIE import is the reliable escape hatch. */}
+          {(!authExpired || licenseMissing) && (
+            <SieFallbackLine message="Du kan också importera din bokföringsdata manuellt via en SIE-fil." />
+          )}
+        </div>
+      )}
 
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+      {preview && !preview.sieAvailable && !isLoading && !preview.hasSieData && (
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-destructive">SIE-import krävs</p>
+            <p className="text-sm text-muted-foreground">
+              Bokföringsdata (kontoplan, verifikationer och balanser) måste importeras via SIE-fil innan kunder, leverantörer och fakturor kan hämtas. Exportera en SIE-fil från {ARCIM_PROVIDERS.find(p => p.id === preview.consent.provider)?.name ?? 'ditt bokföringssystem'} och ladda upp den i {branding.appName.toLowerCase()}.
+            </p>
+          </div>
+          <SieFallbackLine message="När filen är exporterad:" label="Gå till SIE-importen" />
+        </div>
+      )}
+
+      <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" className="min-h-11" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
@@ -954,15 +950,6 @@ function PreviewStep({
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>
-    </div>
-  )
-}
-
-function InfoItem({ label, value }: { label: string; value: string | null }) {
-  return (
-    <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-sm font-medium">{value || '-'}</p>
     </div>
   )
 }
@@ -987,51 +974,33 @@ function MappingStep({
   onBack: () => void
 }) {
   if (isLoading) {
-    return (
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex items-center gap-3 text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" />
-            <p>Analyserar bokföringsdata och förbereder kontomappning...</p>
-          </div>
-        </CardContent>
-      </Card>
-    )
+    return <SpinnerLine>Analyserar bokföringsdata och förbereder kontomappning...</SpinnerLine>
   }
 
   if (error) {
     return (
-      <div className="space-y-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-              <div className="min-w-0">
-                <p className="font-medium text-destructive">Kunde inte ladda SIE-data</p>
-                <p className="text-sm text-muted-foreground">{error}</p>
-                {errorDetails && errorDetails.length > 0 && (
-                  <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-muted-foreground">
-                    {errorDetails.slice(0, 8).map((detail, i) => (
-                      <li key={i} className="break-words">{detail}</li>
-                    ))}
-                    {errorDetails.length > 8 && (
-                      <li>… och {errorDetails.length - 8} fel till</li>
-                    )}
-                  </ul>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <FallbackPrompt
-          message="Om problemet kvarstår kan du importera din SIE-fil manuellt istället."
-          linkHref="/import?mode=sie"
-          linkLabel="Ladda upp SIE-fil"
-        />
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Tillbaka
-        </Button>
+      <div className="stagger-enter space-y-8">
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-destructive">Kunde inte ladda SIE-data</p>
+          <p className="text-sm text-muted-foreground">{error}</p>
+          {errorDetails && errorDetails.length > 0 && (
+            <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-muted-foreground">
+              {errorDetails.slice(0, 8).map((detail, i) => (
+                <li key={i} className="break-words">{detail}</li>
+              ))}
+              {errorDetails.length > 8 && (
+                <li>… och {errorDetails.length - 8} fel till</li>
+              )}
+            </ul>
+          )}
+        </div>
+        <SieFallbackLine message="Om problemet kvarstår kan du importera din SIE-fil manuellt istället." />
+        <div className="flex border-t border-border pt-6">
+          <Button variant="outline" className="min-h-11" onClick={onBack}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Tillbaka
+          </Button>
+        </div>
       </div>
     )
   }
@@ -1091,142 +1060,112 @@ function OptionsStep({
   if (options.importSupplierInvoices) selectedItems.push('Leverantörsfakturor')
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Vad vill du importera?</CardTitle>
-          <CardDescription>
-            Bokföringsdata importeras via SIE-fil. Kunder, leverantörer och fakturor hämtas via API:et.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <OptionRow
-            icon={<Building2 className="h-4 w-4" />}
-            label="Företagsinformation"
-            description="Namn, organisationsnummer, adress"
-            checked={options.importCompanyInfo}
-            onChange={() => toggleOption('importCompanyInfo')}
-          />
+    <div className="stagger-enter space-y-8">
+      <StepHeading
+        title="Vad vill du importera?"
+        lede="Bokföringsdata importeras via SIE-fil. Kunder, leverantörer och fakturor hämtas via API:et."
+      />
 
-          {sieAvailable && (
-            <>
-              {/* Years whose provider export failed: must be visible before
-                  the user proceeds, otherwise an IB/UB gap slips through. */}
-              {failedYears.length > 0 && (
-                <div className="rounded-lg border border-amber-500/30 bg-amber-50/50 p-3 dark:bg-amber-950/20">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium">
-                        {failedYears.length === 1
-                          ? `Räkenskapsår ${failedYears[0].year} kunde inte hämtas`
-                          : `Räkenskapsår ${failedYears.map(f => f.year).join(', ')} kunde inte hämtas`}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Exporten från källsystemet misslyckades för{' '}
-                        {failedYears.length === 1 ? 'det här räkenskapsåret' : 'dessa räkenskapsår'}.
-                        Om du fortsätter importeras övriga år, men ingående och utgående balanser
-                        kan sakna kontinuitet mellan åren. Försök igen senare eller ladda upp en
-                        SIE-fil för {failedYears.length === 1 ? 'det saknade året' : 'de saknade åren'} manuellt.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-              <OptionRow
-                icon={<Database className="h-4 w-4" />}
-                label="Bokföringsdata (SIE)"
-                description={
-                  replacedFileCount > 0 && newFileCount > 0
-                    ? `${newFileCount} nya och ${replacedFileCount} uppdaterade räkenskapsår`
-                    : replacedFileCount > 0
-                      ? `${replacedFileCount} räkenskapsår med uppdaterad data: tidigare import ersätts`
-                      : newFileCount > 0
-                        ? `${newFileCount} ny(a) räkenskapsår att importera`
-                        : 'Kontoplan, ingående balanser och verifikationer'
-                }
-                checked={options.importSIEData}
-                onChange={() => toggleOption('importSIEData')}
-              />
-              {/* Per-file import status */}
-              {fileStatuses.length > 0 && (
-                <div className="ml-4 space-y-1.5">
-                  {fileStatuses.map((fs) => (
-                    <div key={fs.fiscalYear} className="flex items-center gap-2 text-xs">
-                      {fs.previousImport ? (
-                        <>
-                          <RefreshCw className="h-3.5 w-3.5 text-amber-500" />
-                          <span className="text-muted-foreground">
-                            Räkenskapsår {fs.fiscalYear}: ersätter tidigare import
-                            {fs.previousImport.importedAt
-                              ? ` från ${new Date(fs.previousImport.importedAt).toLocaleDateString('sv-SE')}`
-                              : ''}
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <Calendar className="h-3.5 w-3.5 text-primary" />
-                          <span className="font-medium">Räkenskapsår {fs.fiscalYear}: ny data att importera</span>
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {options.importSIEData && (
-                <div className="flex items-center gap-3 rounded-lg border border-border p-3 ml-4">
-                  <div className="text-muted-foreground">
-                    <FileText className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">Verifikationsserie</p>
-                    <p className="text-xs text-muted-foreground">Serie för importerade verifikationer</p>
-                  </div>
-                  <Input
-                    className="w-16 text-center"
-                    value={options.voucherSeries}
-                    onChange={(e) => onChange({ ...options, voucherSeries: e.target.value.toUpperCase() || 'B' })}
-                    maxLength={2}
-                  />
-                </div>
-              )}
-            </>
-          )}
+      {/* Years whose provider export failed: must be visible before the user
+          proceeds, otherwise an IB/UB gap slips through. One ochre sentence. */}
+      {sieAvailable && failedYears.length > 0 && (
+        <AttnLine>
+          {failedYears.length === 1
+            ? `Räkenskapsår ${failedYears[0].year} kunde inte hämtas från källsystemet: om du fortsätter importeras övriga år, men ingående och utgående balanser kan sakna kontinuitet. Försök igen senare eller ladda upp en SIE-fil för det saknade året manuellt.`
+            : `Räkenskapsår ${failedYears.map(f => f.year).join(', ')} kunde inte hämtas från källsystemet: om du fortsätter importeras övriga år, men ingående och utgående balanser kan sakna kontinuitet. Försök igen senare eller ladda upp SIE-filer för de saknade åren manuellt.`}
+        </AttnLine>
+      )}
 
-          <OptionRow
-            icon={<Users className="h-4 w-4" />}
-            label="Kunder"
-            description="Kund-register med kontaktuppgifter"
-            checked={options.importCustomers}
-            onChange={() => toggleOption('importCustomers')}
-          />
-          <OptionRow
-            icon={<Truck className="h-4 w-4" />}
-            label="Leverantörer"
-            description="Leverantör-register med bankuppgifter"
-            checked={options.importSuppliers}
-            onChange={() => toggleOption('importSuppliers')}
-          />
-          <OptionRow
-            icon={<FileText className="h-4 w-4" />}
-            label="Kundfakturor"
-            description="Alla kundfakturor (betalda och obetalda)"
-            checked={options.importSalesInvoices}
-            onChange={() => toggleOption('importSalesInvoices')}
-          />
-          <OptionRow
-            icon={<FileText className="h-4 w-4" />}
-            label="Leverantörsfakturor"
-            description={provider === 'fortnox'
-              ? 'Endast obetalda leverantörsfakturor hämtas. Historiska betalda fakturor finns kvar i Fortnox.'
-              : 'Alla leverantörsfakturor (betalda och obetalda)'}
-            checked={options.importSupplierInvoices}
-            onChange={() => toggleOption('importSupplierInvoices')}
-          />
-        </CardContent>
-      </Card>
+      {/* Clean hairline rows with the toggle on the right: no bordered box
+          per row, no nested boxes. */}
+      <div className="stagger-enter divide-y divide-border" data-no-stagger>
+        <OptionRow
+          label="Företagsinformation"
+          description="Namn, organisationsnummer, adress"
+          checked={options.importCompanyInfo}
+          onChange={() => toggleOption('importCompanyInfo')}
+        />
 
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+        {sieAvailable && (
+          <div>
+            <OptionRow
+              label="Bokföringsdata (SIE)"
+              description={
+                replacedFileCount > 0 && newFileCount > 0
+                  ? `${newFileCount} nya och ${replacedFileCount} uppdaterade räkenskapsår`
+                  : replacedFileCount > 0
+                    ? `${replacedFileCount} räkenskapsår med uppdaterad data: tidigare import ersätts`
+                    : newFileCount > 0
+                      ? `${newFileCount} ny(a) räkenskapsår att importera`
+                      : 'Kontoplan, ingående balanser och verifikationer'
+              }
+              checked={options.importSIEData}
+              onChange={() => toggleOption('importSIEData')}
+            />
+            {/* Per-file import status: quiet muted lines. */}
+            {fileStatuses.length > 0 && (
+              <div className="space-y-1 pb-3">
+                {fileStatuses.map((fs) => (
+                  <p key={fs.fiscalYear} className="text-xs text-muted-foreground tabular-nums">
+                    {fs.previousImport
+                      ? `Räkenskapsår ${fs.fiscalYear}: ersätter tidigare import${
+                          fs.previousImport.importedAt
+                            ? ` från ${new Date(fs.previousImport.importedAt).toLocaleDateString('sv-SE')}`
+                            : ''
+                        }`
+                      : `Räkenskapsår ${fs.fiscalYear}: ny data att importera`}
+                  </p>
+                ))}
+              </div>
+            )}
+            {/* Verifikationsserie: one aligned row, not a nested box. */}
+            {options.importSIEData && (
+              <div className="flex items-center gap-3 border-t border-border py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">Verifikationsserie</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">Serie för importerade verifikationer</p>
+                </div>
+                <Input
+                  className="w-16 text-center"
+                  aria-label="Verifikationsserie"
+                  value={options.voucherSeries}
+                  onChange={(e) => onChange({ ...options, voucherSeries: e.target.value.toUpperCase() || 'B' })}
+                  maxLength={2}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        <OptionRow
+          label="Kunder"
+          description="Kund-register med kontaktuppgifter"
+          checked={options.importCustomers}
+          onChange={() => toggleOption('importCustomers')}
+        />
+        <OptionRow
+          label="Leverantörer"
+          description="Leverantör-register med bankuppgifter"
+          checked={options.importSuppliers}
+          onChange={() => toggleOption('importSuppliers')}
+        />
+        <OptionRow
+          label="Kundfakturor"
+          description="Alla kundfakturor (betalda och obetalda)"
+          checked={options.importSalesInvoices}
+          onChange={() => toggleOption('importSalesInvoices')}
+        />
+        <OptionRow
+          label="Leverantörsfakturor"
+          description={provider === 'fortnox'
+            ? 'Endast obetalda leverantörsfakturor hämtas. Historiska betalda fakturor finns kvar i Fortnox.'
+            : 'Alla leverantörsfakturor (betalda och obetalda)'}
+          checked={options.importSupplierInvoices}
+          onChange={() => toggleOption('importSupplierInvoices')}
+        />
+      </div>
+
+      <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" className="min-h-11" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
@@ -1246,40 +1185,33 @@ function OptionsStep({
         }}
         isSubmitting={false}
         title="Starta migrering"
-        warningText={`Bokföringsdata, kunder, leverantörer och fakturor importeras till ${branding.appName.toLowerCase()}. Se till att ingen annan import pågår.`}
+        warningText="Se till att ingen annan import pågår."
         confirmLabel="Starta migrering"
       >
-        <div className="space-y-3">
+        {/* One sentence naming what happens, the selection as a compact muted
+            line list; the ochre caution above the actions is the dialog's
+            only colored element. */}
+        <div className="space-y-4">
           <div className="space-y-2">
-            <p className="text-sm font-medium">Följande importeras:</p>
+            <p className="text-sm">
+              Det här hämtas från källsystemet och importeras till {branding.appName.toLowerCase()}:
+            </p>
             <ul className="space-y-1">
               {selectedItems.map((item) => (
-                <li key={item} className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <CheckCircle className="h-3.5 w-3.5 text-primary" />
-                  {item}
-                </li>
+                <li key={item} className="text-sm text-muted-foreground">{item}</li>
               ))}
             </ul>
           </div>
 
           {options.importSIEData && yearsToReplace.length > 0 && (
-            <div className="rounded-lg border border-amber-500/30 bg-amber-50/50 p-3 dark:bg-amber-950/20">
-              <div className="flex items-start gap-2">
-                <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">
-                    {yearsToReplace.length === 1
-                      ? `Räkenskapsår ${yearsToReplace[0]} ersätts`
-                      : `Räkenskapsår ${yearsToReplace.join(', ')} ersätts`}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Tidigare importerade verifikationer markeras som annullerade och ersätts av
-                    uppdaterad data från källsystemet. Verifikationer som du själv skapat i {branding.appName.toLowerCase()}
-                    (kategoriserade banktransaktioner, fakturor m.m.) påverkas inte.
-                  </p>
-                </div>
-              </div>
-            </div>
+            <p className="text-sm text-muted-foreground">
+              {yearsToReplace.length === 1
+                ? `Räkenskapsår ${yearsToReplace[0]} ersätts:`
+                : `Räkenskapsår ${yearsToReplace.join(', ')} ersätts:`}{' '}
+              tidigare importerade verifikationer markeras som annullerade och ersätts av
+              uppdaterad data från källsystemet. Verifikationer som du själv skapat i {branding.appName.toLowerCase()}{' '}
+              (kategoriserade banktransaktioner, fakturor m.m.) påverkas inte.
+            </p>
           )}
         </div>
       </ConfirmationDialog>
@@ -1288,14 +1220,12 @@ function OptionsStep({
 }
 
 function OptionRow({
-  icon,
   label,
   description,
   checked,
   onChange,
   disabled,
 }: {
-  icon: React.ReactNode
   label: string
   description: string
   checked: boolean
@@ -1305,15 +1235,14 @@ function OptionRow({
   return (
     <div
       className={cn(
-        'flex items-center gap-3 rounded-lg border border-border p-3 transition-colors',
-        disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-accent/50'
+        'flex items-center gap-4 py-3 transition-colors duration-150',
+        disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-secondary/35'
       )}
       onClick={() => !disabled && onChange()}
     >
-      <div className="text-muted-foreground">{icon}</div>
-      <div className="flex-1">
+      <div className="min-w-0 flex-1">
         <p className="text-sm font-medium">{label}</p>
-        <p className="text-xs text-muted-foreground">{description}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
       </div>
       <Switch
         checked={checked}
@@ -1329,26 +1258,22 @@ function OptionRow({
 
 function MigratingStep({ currentStep, progress }: { currentStep: string; progress: number }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Migrering pågår</CardTitle>
-        <CardDescription>
-          Vänta medan vi hämtar och importerar din bokföringsdata. Det kan ta några minuter.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-1">
-          <div className="flex justify-end">
-            <span className="text-xs text-muted-foreground">{progress}%</span>
-          </div>
-          <Progress value={progress} className="h-3" />
+    <div className="stagger-enter space-y-8">
+      <StepHeading
+        title="Migrering pågår"
+        lede="Vänta medan vi hämtar och importerar din bokföringsdata. Det kan ta några minuter."
+      />
+      <div className="max-w-md space-y-3">
+        <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-2">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+            <span className="truncate" role="status" aria-live="polite">{currentStep}</span>
+          </span>
+          <span className="shrink-0 tabular-nums">{progress}%</span>
         </div>
-        <div className="flex items-center gap-3 text-muted-foreground">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          <p className="text-sm">{currentStep}</p>
-        </div>
-      </CardContent>
-    </Card>
+        <Progress value={progress} className="h-1" />
+      </div>
+    </div>
   )
 }
 
@@ -1375,250 +1300,113 @@ function getFYStatus(r: ImportResult): { icon: 'success' | 'warning' | 'error'; 
   return { icon: 'success', label: 'Importerad' }
 }
 
-const StatusIcon = ({ status }: { status: 'success' | 'warning' | 'error' }) => {
-  if (status === 'error') return <XCircle className="h-4 w-4 text-destructive" />
-  if (status === 'warning') return <AlertTriangle className="h-4 w-4 text-amber-500" />
-  return <CheckCircle className="h-4 w-4 text-green-600" />
+/** Compose the opening-balance adjustment into one quiet sentence. */
+function openingBalanceSentence(ob: NonNullable<NonNullable<ImportResult['details']>['openingBalance']>): string {
+  const amount = `${Math.abs(ob.imbalance).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK`
+  if (ob.explanation === 'unallocated_result') {
+    return `Ingående balanser justerade: differens på ${amount} bokförd på konto ${ob.bookedToAccount}, troligen för att föregående års resultat inte allokerats till eget kapital i källsystemet (vanligt vid byte av bokföringsprogram).`
+  }
+  if (ob.explanation === 'excluded_accounts') {
+    return `Ingående balanser justerade: exkluderade systemkonton (t.ex. Fortnox 0099) hade ingående saldon, differensen (${amount}) bokförd på konto ${ob.bookedToAccount}.`
+  }
+  if (ob.explanation === 'rounding') {
+    return `Ingående balanser justerade: avrundningsdifferens (${amount}) bokförd på konto ${ob.bookedToAccount}.`
+  }
+  return `Ingående balanser justerade: differens på ${amount} bokförd på konto ${ob.bookedToAccount}.`
 }
 
-/** Expandable per-fiscal-year detail card */
-function FiscalYearResult({ result, index }: { result: ImportResult; index: number }) {
-  const [expanded, setExpanded] = useState(false)
+/**
+ * Per-fiscal-year outcome as a line: year, count, status. Warnings are one
+ * ochre sentence each (AttnLine), neutral adjustments are quiet muted lines,
+ * errors keep strong color. Nothing folds away, nothing gets a box.
+ */
+function FiscalYearLine({ result, index }: { result: ImportResult; index: number }) {
   const status = getFYStatus(result)
   const d = result.details
   const fyLabel = d?.fiscalYear
     ? formatFiscalYearLabel(d.fiscalYear.start, d.fiscalYear.end)
     : `Räkenskapsår ${index + 1}`
 
+  // One ochre sentence per warning (the #1562 idiom).
+  const warningSentences: string[] = []
+  if (d?.skippedVouchers && d.skippedVouchers.total > 0) {
+    const parts: string[] = []
+    if (d.skippedVouchers.empty > 0) parts.push(`${d.skippedVouchers.empty} tomma`)
+    if (d.skippedVouchers.unbalanced > 0) parts.push(`${d.skippedVouchers.unbalanced} obalanserade`)
+    if (d.skippedVouchers.singleLine > 0) parts.push(`${d.skippedVouchers.singleLine} enradiga`)
+    if (d.skippedVouchers.unmapped > 0) parts.push(`${d.skippedVouchers.unmapped} med ej kopplade konton`)
+    warningSentences.push(
+      `${d.skippedVouchers.total} verifikationer hoppades över (${parts.join(', ')}): saldon har justerats automatiskt via omföringsverifikation.`
+    )
+  }
+  if (d?.untransferredResults && d.untransferredResults.length > 0) {
+    for (const u of d.untransferredResults) {
+      warningSentences.push(
+        `${u.period_name}: årets resultat på ${u.pl_net.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK är inte omfört till eget kapital, senare års balansräkning visar en differens tills omföringen bokförs (konto 8999 mot t.ex. 2099).`
+      )
+    }
+  }
+  // Remaining raw warnings; strings covered by the sentences above are
+  // filtered out.
+  warningSentences.push(
+    ...result.warnings.filter(
+      (w) =>
+        !(d?.skippedVouchers && d.skippedVouchers.total > 0 && w.includes('hoppades över')) &&
+        !(d?.untransferredResults && d.untransferredResults.length > 0 && w.includes('förts om till eget kapital'))
+    )
+  )
+
+  const infoLines: string[] = []
+  if (d?.openingBalance) infoLines.push(openingBalanceSentence(d.openingBalance))
+  if (d?.migrationAdjustment?.created) {
+    infoLines.push(
+      `Omföringsverifikation skapad: ${d.migrationAdjustment.accountsAdjusted} konton justerade så att balansräkning och resultaträkning matchar källsystemet.`
+    )
+  }
+  if (d && d.retriedBatches > 0 && d.failedBatches === 0) {
+    infoLines.push(`${d.retriedBatches} ${d.retriedBatches === 1 ? 'batch' : 'batcher'} behövde omförsök.`)
+  }
+
   return (
-    <div className="rounded-lg border border-border">
-      {/* Header: always visible */}
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-accent/50"
-      >
-        <StatusIcon status={status.icon} />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2">
-            <span className="font-medium">{fyLabel}</span>
-            <span className={`text-sm ${
-              status.icon === 'error' ? 'text-destructive' :
-              status.icon === 'warning' ? 'text-amber-600' :
-              'text-muted-foreground'
-            }`}>
-              {status.label}
-            </span>
-          </div>
-          <p className="text-sm text-muted-foreground tabular-nums">
-            {result.journalEntriesCreated.toLocaleString('sv-SE')} verifikationer importerade
-            {d?.skippedVouchers && d.skippedVouchers.total > 0 && (
-              <span className="text-amber-600">
-                {' · '}{d.skippedVouchers.total} hoppade över
-              </span>
-            )}
-            {result.replacedPriorImport && result.replacedPriorImport.deletedEntries > 0 && (
-              <span>
-                {' · '}ersatte {result.replacedPriorImport.deletedEntries.toLocaleString('sv-SE')} tidigare importerade verifikationer
-              </span>
-            )}
-          </p>
+    <div className="py-3">
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <span className="text-sm font-medium tabular-nums">{fyLabel}</span>
+        <span className="text-sm text-muted-foreground tabular-nums">
+          {result.journalEntriesCreated.toLocaleString('sv-SE')} verifikationer
+          {result.replacedPriorImport && result.replacedPriorImport.deletedEntries > 0 && (
+            <> · ersatte {result.replacedPriorImport.deletedEntries.toLocaleString('sv-SE')} tidigare importerade</>
+          )}
+        </span>
+        <span
+          className={cn(
+            'ml-auto text-xs',
+            status.icon === 'error'
+              ? 'font-medium text-destructive'
+              : status.icon === 'warning'
+                ? 'text-attn'
+                : 'text-muted-foreground'
+          )}
+        >
+          {status.label}
+        </span>
+      </div>
+      {result.errors.length > 0 && (
+        <div className="mt-1 space-y-1">
+          {result.errors.map((e, i) => (
+            <p key={i} className="text-sm text-destructive">{e}</p>
+          ))}
         </div>
-        {expanded
-          ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-          : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-        }
-      </button>
-
-      {/* Expanded details */}
-      {expanded && (
-        <div className="border-t border-border px-4 pb-4 pt-3 space-y-3">
-          {/* Errors: shown prominently */}
-          {result.errors.length > 0 && (
-            <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-                <div className="space-y-1.5">
-                  <p className="text-sm font-medium text-destructive">
-                    {result.errors.length === 1 ? '1 fel vid import' : `${result.errors.length} fel vid import`}
-                  </p>
-                  {result.errors.map((e, i) => (
-                    <p key={i} className="text-sm text-muted-foreground">{e}</p>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Opening balance adjustment */}
-          {d?.openingBalance && (
-            <div className="rounded-lg border border-border bg-muted/30 p-3">
-              <div className="flex items-start gap-2">
-                <BookOpen className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                <div>
-                  <p className="text-sm font-medium">Ingående balanser justerade</p>
-                  <p className="text-sm text-muted-foreground">
-                    {d.openingBalance.explanation === 'unallocated_result' && (
-                      <>
-                        Differens på <span className="tabular-nums font-medium">{Math.abs(d.openingBalance.imbalance).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK</span> bokförd
-                        på konto {d.openingBalance.bookedToAccount}. Detta beror troligen på att föregående
-                        års resultat inte allokerats till eget kapital i källsystemet, vanligt vid byte
-                        av bokföringsprogram.
-                      </>
-                    )}
-                    {d.openingBalance.explanation === 'excluded_accounts' && (
-                      <>
-                        Exkluderade systemkonton (t.ex. Fortnox 0099) hade ingående saldon. Differensen
-                        (<span className="tabular-nums font-medium">{Math.abs(d.openingBalance.imbalance).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK</span>)
-                        bokförd på konto {d.openingBalance.bookedToAccount}.
-                      </>
-                    )}
-                    {d.openingBalance.explanation === 'rounding' && (
-                      <>
-                        Avrundningsdifferens (<span className="tabular-nums font-medium">{Math.abs(d.openingBalance.imbalance).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK</span>)
-                        bokförd på konto {d.openingBalance.bookedToAccount}.
-                      </>
-                    )}
-                    {!d.openingBalance.explanation && (
-                      <>
-                        Differens på <span className="tabular-nums font-medium">{Math.abs(d.openingBalance.imbalance).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK</span> bokförd
-                        på konto {d.openingBalance.bookedToAccount}.
-                      </>
-                    )}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Skipped vouchers breakdown */}
-          {d?.skippedVouchers && d.skippedVouchers.total > 0 && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                <div>
-                  <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                    {d.skippedVouchers.total} verifikationer hoppades över
-                  </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Ofullständiga verifikationer i källsystemet som inte kan importeras.
-                    Saldon har justerats automatiskt via omföringsverifikation.
-                  </p>
-                  <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm text-muted-foreground tabular-nums">
-                    {d.skippedVouchers.unbalanced > 0 && (
-                      <div className="flex justify-between">
-                        <span>Obalanserade</span>
-                        <span className="font-medium">{d.skippedVouchers.unbalanced}</span>
-                      </div>
-                    )}
-                    {d.skippedVouchers.unmapped > 0 && (
-                      <div className="flex justify-between">
-                        <span>Ej mappade konton</span>
-                        <span className="font-medium">{d.skippedVouchers.unmapped}</span>
-                      </div>
-                    )}
-                    {d.skippedVouchers.singleLine > 0 && (
-                      <div className="flex justify-between">
-                        <span>Enradsverifikationer</span>
-                        <span className="font-medium">{d.skippedVouchers.singleLine}</span>
-                      </div>
-                    )}
-                    {d.skippedVouchers.empty > 0 && (
-                      <div className="flex justify-between">
-                        <span>Tomma</span>
-                        <span className="font-medium">{d.skippedVouchers.empty}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Migration adjustment info */}
-          {d?.migrationAdjustment?.created && (
-            <div className="rounded-lg border border-border bg-muted/30 p-3">
-              <div className="flex items-start gap-2">
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                <div>
-                  <p className="text-sm font-medium">Omföringsverifikation skapad</p>
-                  <p className="text-sm text-muted-foreground">
-                    {d.migrationAdjustment.accountsAdjusted} konton justerade för att saldon ska matcha
-                    källsystemet. Verifikationen kompenserar för hoppade verifikationer så att dina
-                    balansräkning och resultaträkning stämmer.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Untransferred prior-year results — omföring av årets resultat saknas */}
-          {d?.untransferredResults && d.untransferredResults.length > 0 && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                <div>
-                  <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                    Årets resultat är inte omfört till eget kapital
-                  </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Följande räkenskapsår saknar omföring av årets resultat. Senare års
-                    balansräkning visar en differens på beloppet tills omföringen bokförs
-                    (konto 8999 mot eget kapital, t.ex. 2099) i respektive år.
-                  </p>
-                  <div className="mt-2 space-y-1 text-sm text-muted-foreground tabular-nums">
-                    {d.untransferredResults.map((u) => (
-                      <div key={u.fiscal_period_id} className="flex justify-between gap-6">
-                        <span>{u.period_name}</span>
-                        <span className="font-medium">
-                          {u.pl_net.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Remaining warnings — previously dropped entirely in this flow.
-              Strings covered by structured cards above are filtered out. */}
-          {(() => {
-            const remainingWarnings = result.warnings.filter(
-              (w) =>
-                !(d?.skippedVouchers && d.skippedVouchers.total > 0 && w.includes('hoppades över')) &&
-                !(d?.untransferredResults && d.untransferredResults.length > 0 && w.includes('förts om till eget kapital'))
-            )
-            if (remainingWarnings.length === 0) return null
-            return (
-              <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/30 dark:bg-amber-950/20">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-                  <div className="space-y-1.5">
-                    <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                      {remainingWarnings.length === 1 ? '1 varning' : `${remainingWarnings.length} varningar`}
-                    </p>
-                    {remainingWarnings.map((w, i) => (
-                      <p key={i} className="text-sm text-muted-foreground">{w}</p>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )
-          })()}
-
-          {/* Retry info (only shown if retries happened) */}
-          {d && d.retriedBatches > 0 && (
-            <p className="text-xs text-muted-foreground">
-              {d.retriedBatches} {d.retriedBatches === 1 ? 'batch' : 'batcher'} behövde omförsök
-              {d.failedBatches > 0 && (
-                <span className="text-destructive">
-                  {' · '}{d.failedBatches} misslyckades trots omförsök
-                </span>
-              )}
-            </p>
-          )}
-        </div>
+      )}
+      {warningSentences.map((w, i) => (
+        <AttnLine key={i} className="mt-1">{w}</AttnLine>
+      ))}
+      {infoLines.map((l, i) => (
+        <p key={i} className="mt-1 text-[12.5px] leading-5 text-muted-foreground">{l}</p>
+      ))}
+      {d && d.failedBatches > 0 && (
+        <p className="mt-1 text-[12.5px] leading-5 text-destructive">
+          {d.retriedBatches} {d.retriedBatches === 1 ? 'batch' : 'batcher'} behövde omförsök, {d.failedBatches} misslyckades trots omförsök.
+        </p>
       )}
     </div>
   )
@@ -1641,12 +1429,7 @@ function DocumentImportFollowUp({
 
   if (state.phase === 'hidden' || state.phase === 'dismissed') return null
 
-  const title = (
-    <CardTitle className="flex items-center gap-2 text-base">
-      <Paperclip className="h-4 w-4 text-muted-foreground" />
-      {t('ext_arcim_documents_title')}
-    </CardTitle>
-  )
+  const title = <SectionKicker>{t('ext_arcim_documents_title')}</SectionKicker>
 
   if (
     state.phase === 'discovering' ||
@@ -1661,65 +1444,52 @@ function DocumentImportFollowUp({
           : t('ext_arcim_documents_reconnecting')
 
     return (
-      <Card aria-live="polite">
-        <CardHeader>{title}</CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-3 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-            <span>{label}</span>
-          </div>
-        </CardContent>
-      </Card>
+      <section className="space-y-3" aria-live="polite">
+        {title}
+        <SpinnerLine>{label}</SpinnerLine>
+      </section>
     )
   }
 
   if (state.phase === 'offered') {
     return (
-      <Card aria-live="polite">
-        <CardHeader>
-          {title}
-          <CardDescription>
-            {t('ext_arcim_documents_prompt', { count: state.found })}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <section className="space-y-3" aria-live="polite">
+        {title}
+        <p className="text-sm text-muted-foreground">
+          {t('ext_arcim_documents_prompt', { count: state.found })}
+        </p>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button className="min-h-11" onClick={onImport}>
             {t('ext_arcim_documents_import_action')}
           </Button>
           <Button variant="ghost" className="min-h-11" onClick={onDismiss}>
             {t('ext_arcim_documents_not_now')}
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     )
   }
 
   if (state.phase === 'empty') {
     return (
-      <Card aria-live="polite">
-        <CardHeader>
-          {title}
-          <CardDescription>{t('ext_arcim_documents_empty')}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button variant="outline" className="min-h-11" onClick={onDiscover}>
-            <RotateCcw className="mr-2 h-4 w-4" />
-            {t('ext_arcim_documents_retry_discovery')}
-          </Button>
-        </CardContent>
-      </Card>
+      <section className="space-y-3" aria-live="polite">
+        {title}
+        <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_empty')}</p>
+        <Button variant="outline" className="min-h-11" onClick={onDiscover}>
+          <RotateCcw className="mr-2 h-4 w-4" />
+          {t('ext_arcim_documents_retry_discovery')}
+        </Button>
+      </section>
     )
   }
 
   if (state.phase === 'complete') {
     if (!state.result) {
       return (
-        <Card aria-live="polite">
-          <CardHeader>
-            {title}
-            <CardDescription>{t('ext_arcim_documents_result_description')}</CardDescription>
-          </CardHeader>
-        </Card>
+        <section className="space-y-3" aria-live="polite">
+          {title}
+          <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_result_description')}</p>
+        </section>
       )
     }
 
@@ -1748,92 +1518,91 @@ function DocumentImportFollowUp({
     ]
 
     return (
-      <Card aria-live="polite">
-        <CardHeader>
-          {title}
-          <CardDescription>{t('ext_arcim_documents_result_description')}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            {outcomes.map(({ label, value, valueClassName }) => (
-              <div key={label} className="flex flex-col">
-                <dt className="order-2 text-xs text-muted-foreground">{label}</dt>
-                <dd className={cn('order-1 font-display text-xl tabular-nums', valueClassName)}>
-                  {value}
-                </dd>
-              </div>
-            ))}
-          </dl>
-          {unmatched > 0 && (
-            <p className="text-sm text-muted-foreground">
-              {t('ext_arcim_documents_unmatched_help')}
-            </p>
-          )}
-          {failed > 0 && (
-            <div className="space-y-3">
-              <p className="text-sm text-destructive">
-                {t('ext_arcim_documents_partial_failure')}
-              </p>
-              <Button variant="outline" className="min-h-11" onClick={onImport}>
-                <RotateCcw className="mr-2 h-4 w-4" />
-                {t('ext_arcim_documents_retry_import')}
-              </Button>
+      <section className="space-y-4" aria-live="polite">
+        {title}
+        <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_result_description')}</p>
+        <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {outcomes.map(({ label, value, valueClassName }) => (
+            <div key={label} className="flex flex-col">
+              <dt className="order-2 text-xs text-muted-foreground">{label}</dt>
+              <dd className={cn('order-1 font-display text-xl tabular-nums', valueClassName)}>
+                {value}
+              </dd>
             </div>
-          )}
-        </CardContent>
-      </Card>
+          ))}
+        </dl>
+        {unmatched > 0 && (
+          <p className="text-sm text-muted-foreground">
+            {t('ext_arcim_documents_unmatched_help')}
+          </p>
+        )}
+        {failed > 0 && (
+          <div className="space-y-3">
+            <p className="text-sm text-destructive">
+              {t('ext_arcim_documents_partial_failure')}
+            </p>
+            <Button variant="outline" className="min-h-11" onClick={onImport}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              {t('ext_arcim_documents_retry_import')}
+            </Button>
+          </div>
+        )}
+      </section>
     )
   }
 
   const reconnectRequired = state.problem?.reconnectRequired === true
   const discoveryFailed = state.phase === 'discovery-error'
   return (
-    <Card aria-live="polite">
-      <CardHeader>
-        {title}
-        <CardDescription className="text-foreground">
-          {state.problem?.message
-            ? state.problem.message
-            : reconnectRequired
-            ? t('ext_arcim_documents_scope_error')
-            : discoveryFailed
-              ? t('ext_arcim_documents_discovery_error')
-              : t('ext_arcim_documents_import_error')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {state.problem?.requestId && (
-          <p className="text-xs text-muted-foreground">
-            {t('ext_arcim_documents_error_reference', {
-              requestId: state.problem.requestId,
-            })}
-          </p>
+    <section className="space-y-3" aria-live="polite">
+      {title}
+      <p className="text-sm text-destructive">
+        {state.problem?.message
+          ? state.problem.message
+          : reconnectRequired
+          ? t('ext_arcim_documents_scope_error')
+          : discoveryFailed
+            ? t('ext_arcim_documents_discovery_error')
+            : t('ext_arcim_documents_import_error')}
+      </p>
+      {state.problem?.requestId && (
+        <p className="text-xs text-muted-foreground">
+          {t('ext_arcim_documents_error_reference', {
+            requestId: state.problem.requestId,
+          })}
+        </p>
+      )}
+      <Button
+        className="min-h-11"
+        onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
+      >
+        {reconnectRequired ? (
+          <RefreshCw className="mr-2 h-4 w-4" />
+        ) : (
+          <RotateCcw className="mr-2 h-4 w-4" />
         )}
-        <Button
-          className="min-h-11"
-          onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
-        >
-          {reconnectRequired ? (
-            <RefreshCw className="mr-2 h-4 w-4" />
-          ) : (
-            <RotateCcw className="mr-2 h-4 w-4" />
-          )}
-          {reconnectRequired
-            ? t('ext_arcim_documents_reconnect_action')
-            : discoveryFailed
-              ? t('ext_arcim_documents_retry_discovery')
-              : t('ext_arcim_documents_retry_import')}
-        </Button>
-      </CardContent>
-    </Card>
+        {reconnectRequired
+          ? t('ext_arcim_documents_reconnect_action')
+          : discoveryFailed
+            ? t('ext_arcim_documents_retry_discovery')
+            : t('ext_arcim_documents_retry_import')}
+      </Button>
+    </section>
   )
 }
+
+const NEXT_STEPS: { title: string; sub: string }[] = [
+  { title: 'Granska importerade verifikationer', sub: 'Kontrollera att bokföringen ser korrekt ut i huvudboken' },
+  { title: 'Stäm av balansräkningen', sub: 'Jämför ingående balanser och saldon mot ditt tidigare system' },
+  { title: 'Kontrollera kunder och leverantörer', sub: 'Verifiera kontaktuppgifter, organisationsnummer och bankinfo' },
+]
 
 function ResultStep({
   results,
   sieResults,
   error,
   documentImportState,
+  theaterModel,
   onDone,
   onRetry,
   onDiscoverDocuments,
@@ -1845,6 +1614,7 @@ function ResultStep({
   sieResults: ImportResult[]
   error: string | null
   documentImportState: ArcimDocumentImportState
+  theaterModel: TheaterModel | null
   onDone: () => void
   onRetry: () => void
   onDiscoverDocuments: () => void
@@ -1854,24 +1624,15 @@ function ResultStep({
 }) {
   if (error) {
     return (
-      <div className="space-y-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-              <div>
-                <p className="text-base font-medium text-destructive">Migreringen misslyckades</p>
-                <p className="mt-1 whitespace-pre-line text-sm text-muted-foreground">{error}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <FallbackPrompt
-          message="Du kan istället importera din bokföringsdata manuellt via en SIE-fil."
-          linkHref="/import?mode=sie"
-          linkLabel="Ladda upp SIE-fil"
-        />
-        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+      <div className="stagger-enter space-y-8">
+        <div>
+          <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">
+            Migreringen misslyckades
+          </h2>
+          <p className="mt-3 whitespace-pre-line text-sm text-destructive">{error}</p>
+        </div>
+        <SieFallbackLine message="Du kan istället importera din bokföringsdata manuellt via en SIE-fil." />
+        <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
           <Button variant="outline" className="min-h-11" onClick={onDone}>Klar</Button>
           <Button className="min-h-11" onClick={onRetry}>
             <RotateCcw className="mr-2 h-4 w-4" />
@@ -1891,7 +1652,6 @@ function ResultStep({
   // Compute combined SIE stats
   const totalJournalEntries = sieResults.reduce((sum, r) => sum + r.journalEntriesCreated, 0)
   const totalErrors = sieResults.reduce((sum, r) => sum + r.errors.length, 0)
-  const totalSkipped = sieResults.reduce((sum, r) => (r.details?.skippedVouchers?.total || 0) + sum, 0)
   const allSieSucceeded = sieResults.length > 0 && sieResults.every(r => r.success)
   const anySieFailed = sieResults.some(r => r.errors.length > 0 && r.journalEntriesCreated === 0)
 
@@ -1911,143 +1671,163 @@ function ResultStep({
   const apiFailed = stepErrors.length > 0
   const nothingNew = sieResults.length === 0 && !entityImported && !apiFailed
 
-  // Overall status
-  const overallIcon = anySieFailed ? 'error' as const :
-    (apiFailed || !allSieSucceeded || totalErrors > 0) ? 'warning' as const : 'success' as const
+  // ── The reveal: a serif verdict derived from the real results ──
+  const fyCount = sieResults.length
+  const verdict = nothingNew
+    ? 'Allt är redan uppdaterat.'
+    : (anySieFailed || apiFailed)
+      ? 'Migreringen är delvis genomförd.'
+      : totalJournalEntries > 0
+        ? fyCount === 1
+          ? `${totalJournalEntries.toLocaleString('sv-SE')} verifikationer är på plats.`
+          : `${totalJournalEntries.toLocaleString('sv-SE')} verifikationer över ${fyCount} räkenskapsår är på plats.`
+        : !allSieSucceeded || totalErrors > 0
+          ? 'Migreringen är klar, med anmärkningar.'
+          : 'Migreringen är klar.'
+
+  const statParts: string[] = []
+  if (totalJournalEntries > 0) statParts.push(`${totalJournalEntries.toLocaleString('sv-SE')} verifikat`)
+  if (fyCount > 0) statParts.push(`${fyCount} räkenskapsår`)
+  const customerCount = (results?.customers?.imported ?? 0) + (results?.customers?.updated ?? 0)
+  if (customerCount > 0) statParts.push(`${customerCount.toLocaleString('sv-SE')} kunder`)
+  if ((results?.suppliers?.imported ?? 0) > 0) statParts.push(`${results!.suppliers!.imported.toLocaleString('sv-SE')} leverantörer`)
+  const invoiceCount = (results?.salesInvoices?.imported ?? 0) + (results?.supplierInvoices?.imported ?? 0)
+  if (invoiceCount > 0) statParts.push(`${invoiceCount.toLocaleString('sv-SE')} fakturor`)
+
+  // The settled constellation only appears over a story that is true:
+  // it needs the model and actually imported entries.
+  const showCanvas = !!theaterModel && totalJournalEntries > 0
+
+  // Övriga data as a quiet line list, not a card grid.
+  const entityLines: { label: string; value: string; detail?: string; failed: boolean }[] = []
+  if (results) {
+    if (results.companyInfo?.imported) {
+      entityLines.push({ label: 'Företagsinformation', value: 'Importerad', failed: false })
+    }
+    if (results.customers && (results.customers.imported > 0 || (results.customers.updated ?? 0) > 0 || results.customers.skipped > 0)) {
+      entityLines.push({
+        label: 'Kunder',
+        value: results.customers.updated
+          ? `${results.customers.imported} importerade, ${results.customers.updated} kompletterade`
+          : `${results.customers.imported} importerade`,
+        detail: results.customers.skipped > 0
+          ? formatSkipReasons(results.customers.skipReasons, 'customer', results.customers.errorSample) ?? `${results.customers.skipped} hoppades över`
+          : undefined,
+        failed: entityRowStatus(results.customers.imported, results.customers.skipReasons) === 'error',
+      })
+    }
+    if (results.suppliers && (results.suppliers.imported > 0 || results.suppliers.skipped > 0)) {
+      entityLines.push({
+        label: 'Leverantörer',
+        value: `${results.suppliers.imported} importerade`,
+        detail: results.suppliers.skipped > 0
+          ? formatSkipReasons(results.suppliers.skipReasons, 'supplier', results.suppliers.errorSample) ?? `${results.suppliers.skipped} hoppades över`
+          : undefined,
+        failed: entityRowStatus(results.suppliers.imported, results.suppliers.skipReasons) === 'error',
+      })
+    }
+    if (results.salesInvoices && (results.salesInvoices.imported > 0 || results.salesInvoices.skipped > 0)) {
+      entityLines.push({
+        label: 'Kundfakturor',
+        value: `${results.salesInvoices.imported} importerade`,
+        detail: results.salesInvoices.skipped > 0
+          ? formatSkipReasons(results.salesInvoices.skipReasons, 'invoice', results.salesInvoices.errorSample) ?? `${results.salesInvoices.skipped} hoppades över`
+          : undefined,
+        failed: entityRowStatus(results.salesInvoices.imported, results.salesInvoices.skipReasons) === 'error',
+      })
+    }
+    if (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0)) {
+      entityLines.push({
+        label: 'Leverantörsfakturor',
+        value: `${results.supplierInvoices.imported} importerade`,
+        detail: results.supplierInvoices.skipped > 0
+          ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
+          : undefined,
+        failed: entityRowStatus(results.supplierInvoices.imported, results.supplierInvoices.skipReasons) === 'error',
+      })
+    }
+  }
 
   return (
-    <div className="space-y-4">
-      {/* ── Header card with overall summary ── */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <StatusIcon status={nothingNew ? 'success' : overallIcon} />
-            {nothingNew ? 'Allt är uppdaterat' :
-             (anySieFailed || apiFailed) ? 'Migrering delvis genomförd' :
-             !allSieSucceeded ? 'Migrering klar med anmärkningar' :
-             'Migrering klar'}
-          </CardTitle>
-          <CardDescription className="text-sm">
-            {nothingNew ? (
-              'Det finns ingen ny data att importera från leverantören.'
-            ) : totalJournalEntries > 0 ? (
-              <>
-                <span className="tabular-nums font-medium text-foreground">
-                  {totalJournalEntries.toLocaleString('sv-SE')}
-                </span>
-                {' verifikationer importerade'}
-                {sieResults.length > 1 && ` över ${sieResults.length} räkenskapsår`}
-                {totalSkipped > 0 && (
-                  <span className="text-amber-600">
-                    {' · '}{totalSkipped} hoppade över
-                  </span>
-                )}
-              </>
-            ) : null}
-          </CardDescription>
-        </CardHeader>
-      </Card>
+    <div className="stagger-enter space-y-8">
+      {/* ── The reveal: settled constellation beside the serif verdict ── */}
+      <div className={cn('grid items-center gap-6', showCanvas && 'md:grid-cols-[minmax(280px,380px)_1fr]')}>
+        <div>
+          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            Migrering
+          </p>
+          <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
+            {verdict}
+          </h2>
+          {nothingNew ? (
+            <p className="mt-3 text-[13px] text-muted-foreground">
+              Det finns ingen ny data att importera från leverantören.
+            </p>
+          ) : statParts.length > 0 ? (
+            <p className="mt-3 text-[13px] text-muted-foreground tabular-nums">
+              {statParts.join(' · ')}
+            </p>
+          ) : null}
+        </div>
+        {showCanvas && theaterModel && (
+          <div className="relative hidden min-h-[360px] md:block">
+            <TheaterCanvas model={theaterModel} settled />
+          </div>
+        )}
+      </div>
 
-      {/* ── Steps that failed against the provider API ── */}
+      {/* ── Steps that failed against the provider API: strong color, no box ── */}
       {stepErrors.length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {groupStepErrors(stepErrors).map((group, i) => (
-            <div key={i} className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-              <div>
-                <p className="text-sm font-medium text-destructive">
-                  Kunde inte hämta: {group.steps.map((s) => STEP_ERROR_LABELS[s]).join(', ')}
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">{group.message}</p>
-              </div>
+            <div key={i} className="space-y-1">
+              <p className="text-sm font-medium text-destructive">
+                Kunde inte hämta: {group.steps.map((s) => STEP_ERROR_LABELS[s]).join(', ')}
+              </p>
+              <p className="text-sm text-muted-foreground">{group.message}</p>
             </div>
           ))}
         </div>
       )}
 
-      {/* ── Per-fiscal-year SIE breakdown ── */}
+      {/* ── Per-fiscal-year outcomes as lines ── */}
       {sieResults.length > 0 && (
-        <div className="space-y-2">
-          <h3 className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Database className="h-4 w-4" />
-            Bokföringsdata (SIE)
-          </h3>
-          <div className="space-y-2">
+        <section className="space-y-3">
+          <SectionKicker>Bokföringsdata (SIE)</SectionKicker>
+          <div className="stagger-enter divide-y divide-border" data-no-stagger>
             {sieResults.map((r, i) => (
-              <FiscalYearResult key={i} result={r} index={i} />
+              <FiscalYearLine key={i} result={r} index={i} />
             ))}
           </div>
-        </div>
+        </section>
       )}
 
-      {/* ── API import results (company info, customers, etc.) ── */}
-      {results && (() => {
-        const hasCompanyInfo = results.companyInfo?.imported
-        const hasCustomers = results.customers && (results.customers.imported > 0 || (results.customers.updated ?? 0) > 0 || results.customers.skipped > 0)
-        const hasSuppliers = results.suppliers && (results.suppliers.imported > 0 || results.suppliers.skipped > 0)
-        const hasSalesInvoices = results.salesInvoices && (results.salesInvoices.imported > 0 || results.salesInvoices.skipped > 0)
-        const hasSupplierInvoices = results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0)
-        const hasAnything = hasCompanyInfo || hasCustomers || hasSuppliers || hasSalesInvoices || hasSupplierInvoices
-
-        if (!hasAnything) return null
-
-        return (
-          <div className="space-y-2">
-            <h3 className="flex items-center gap-2 text-sm text-muted-foreground">
-              <FileText className="h-4 w-4" />
-              Övriga data
-            </h3>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {hasCompanyInfo && (
-                <EntityResultRow
-                  icon={<Building2 className="h-4 w-4" />}
-                  label="Företagsinformation"
-                  status="success"
-                  statusText="Importerad"
-                />
-              )}
-              {hasCustomers && (
-                <EntityResultRow
-                  icon={<Users className="h-4 w-4" />}
-                  label="Kunder"
-                  status={entityRowStatus(results.customers!.imported, results.customers!.skipReasons)}
-                  statusText={results.customers!.updated
-                    ? `${results.customers!.imported} importerade, ${results.customers!.updated} kompletterade`
-                    : `${results.customers!.imported} importerade`}
-                  detail={results.customers!.skipped > 0 ? formatSkipReasons(results.customers!.skipReasons, 'customer', results.customers!.errorSample) ?? `${results.customers!.skipped} hoppades över` : undefined}
-                />
-              )}
-              {hasSuppliers && (
-                <EntityResultRow
-                  icon={<Truck className="h-4 w-4" />}
-                  label="Leverantörer"
-                  status={entityRowStatus(results.suppliers!.imported, results.suppliers!.skipReasons)}
-                  statusText={`${results.suppliers!.imported} importerade`}
-                  detail={results.suppliers!.skipped > 0 ? formatSkipReasons(results.suppliers!.skipReasons, 'supplier', results.suppliers!.errorSample) ?? `${results.suppliers!.skipped} hoppades över` : undefined}
-                />
-              )}
-              {hasSalesInvoices && (
-                <EntityResultRow
-                  icon={<FileText className="h-4 w-4" />}
-                  label="Kundfakturor"
-                  status={entityRowStatus(results.salesInvoices!.imported, results.salesInvoices!.skipReasons)}
-                  statusText={`${results.salesInvoices!.imported} importerade`}
-                  detail={results.salesInvoices!.skipped > 0 ? formatSkipReasons(results.salesInvoices!.skipReasons, 'invoice', results.salesInvoices!.errorSample) ?? `${results.salesInvoices!.skipped} hoppades över` : undefined}
-                />
-              )}
-              {hasSupplierInvoices && (
-                <EntityResultRow
-                  icon={<FileText className="h-4 w-4" />}
-                  label="Leverantörsfakturor"
-                  status={entityRowStatus(results.supplierInvoices!.imported, results.supplierInvoices!.skipReasons)}
-                  statusText={`${results.supplierInvoices!.imported} importerade`}
-                  detail={results.supplierInvoices!.skipped > 0 ? formatSkipReasons(results.supplierInvoices!.skipReasons, 'invoice', results.supplierInvoices!.errorSample) ?? `${results.supplierInvoices!.skipped} hoppades över` : undefined}
-                />
-              )}
-            </div>
+      {/* ── API import results: quiet two-column line list ── */}
+      {entityLines.length > 0 && (
+        <section className="space-y-3">
+          <SectionKicker>Övriga data</SectionKicker>
+          <div className="stagger-enter grid gap-x-10 sm:grid-cols-2" data-no-stagger>
+            {entityLines.map((line) => (
+              <div key={line.label} className="border-b border-border py-2">
+                <div className="flex items-baseline justify-between gap-4">
+                  <span className="text-sm">{line.label}</span>
+                  <span
+                    className={cn(
+                      'text-right text-sm tabular-nums',
+                      line.failed ? 'font-medium text-destructive' : 'text-muted-foreground'
+                    )}
+                  >
+                    {line.value}
+                  </span>
+                </div>
+                {line.detail && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">{line.detail}</p>
+                )}
+              </div>
+            ))}
           </div>
-        )
-      })()}
+        </section>
+      )}
 
       <DocumentImportFollowUp
         state={documentImportState}
@@ -2057,43 +1837,25 @@ function ResultStep({
         onReconnect={onReconnectDocuments}
       />
 
-      {/* ── Next steps ── */}
-      <Card className="bg-muted/50">
-        <CardHeader>
-          <CardTitle className="text-base">Nästa steg</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-start gap-3">
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-medium text-primary-foreground">
-              1
-            </div>
-            <div>
-              <p className="font-medium">Granska importerade verifikationer</p>
-              <p className="text-sm text-muted-foreground">Kontrollera att bokföringen ser korrekt ut i huvudboken</p>
-            </div>
-          </div>
-          <div className="flex items-start gap-3">
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-medium text-primary-foreground">
-              2
-            </div>
-            <div>
-              <p className="font-medium">Stäm av balansräkningen</p>
-              <p className="text-sm text-muted-foreground">Jämför ingående balanser och saldon mot ditt tidigare system</p>
-            </div>
-          </div>
-          <div className="flex items-start gap-3">
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-medium text-primary-foreground">
-              3
-            </div>
-            <div>
-              <p className="font-medium">Kontrollera kunder och leverantörer</p>
-              <p className="text-sm text-muted-foreground">Verifiera kontaktuppgifter, organisationsnummer och bankinfo</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* ── Next steps: quiet numbered lines, no card, no filled discs ── */}
+      {!nothingNew && (
+        <section className="space-y-3">
+          <SectionKicker>Nästa steg</SectionKicker>
+          <ol className="stagger-enter divide-y divide-border" data-no-stagger>
+            {NEXT_STEPS.map((step, i) => (
+              <li key={step.title} className="flex items-baseline gap-4 py-3">
+                <span className="text-[13px] text-muted-foreground tabular-nums">{i + 1}</span>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{step.title}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{step.sub}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
 
-      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+      <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" className="min-h-11" onClick={onDone}>
           <RotateCcw className="mr-2 h-4 w-4" />
           Ny migrering
@@ -2163,36 +1925,9 @@ function formatSkipReasons(
   return parts.length > 0 ? parts.join(', ') : undefined
 }
 
-/** A step that failed everything it tried is an error, not a green checkmark. */
+/** A step that failed everything it tried is an error, not a quiet count. */
 function entityRowStatus(imported: number, reasons?: SkipReasons): 'success' | 'error' {
   return imported === 0 && (reasons?.failed ?? 0) > 0 ? 'error' : 'success'
-}
-
-/** Simple row for non-SIE entity results (customers, invoices, etc.) */
-function EntityResultRow({
-  icon,
-  label,
-  status,
-  statusText,
-  detail,
-}: {
-  icon: React.ReactNode
-  label: string
-  status: 'success' | 'skipped' | 'error'
-  statusText: string
-  detail?: string
-}) {
-  return (
-    <div className="flex items-center gap-3 rounded-lg border border-border p-3">
-      <div className="text-muted-foreground">{icon}</div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium">{label}</p>
-        <p className="text-sm text-muted-foreground">{statusText}</p>
-        {detail && <p className="text-sm text-muted-foreground/70">{detail}</p>}
-      </div>
-      <StatusIcon status={status === 'skipped' ? 'warning' : status} />
-    </div>
-  )
 }
 
 // ── Main wizard ─────────────────────────────────────────────────
@@ -2265,9 +2000,6 @@ export default function ArcimMigrationWorkspace({
   })
   const currentUserStepIndex = userSteps.indexOf(step)
   const isInteractiveStep = currentUserStepIndex !== -1
-  const progressPercent = isInteractiveStep
-    ? ((currentUserStepIndex + 1) / userSteps.length) * 100
-    : 100
 
   // ── Fetch connection status on mount ───────────────────────────
 
@@ -3045,32 +2777,10 @@ export default function ArcimMigrationWorkspace({
   // ── Render ─────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6">
-      {/* Progress bar: only during interactive steps */}
+    <div className="space-y-8">
+      {/* Step indicator: only during interactive steps */}
       {step !== 'provider' && isInteractiveStep && (
-        <Card>
-          <CardContent className="pt-6">
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="sm:hidden text-primary font-medium">
-                  Steg {currentUserStepIndex + 1}/{userSteps.length}: {STEP_LABELS[step]}
-                </span>
-                {userSteps.map((s) => (
-                  <span
-                    key={s}
-                    className={cn(
-                      'hidden sm:inline',
-                      userSteps.indexOf(s) <= currentUserStepIndex ? 'font-medium text-primary' : 'text-muted-foreground'
-                    )}
-                  >
-                    {STEP_LABELS[s]}
-                  </span>
-                ))}
-              </div>
-              <Progress value={progressPercent} className="h-2" />
-            </div>
-          </CardContent>
-        </Card>
+        <StepRail steps={userSteps} currentIndex={currentUserStepIndex} />
       )}
 
       {/* Step content */}
@@ -3157,6 +2867,7 @@ export default function ArcimMigrationWorkspace({
           sieResults={sieImportResults}
           error={error}
           documentImportState={documentImportState}
+          theaterModel={theaterModel}
           onDone={handleDone}
           onRetry={() => {
             setError(null)
