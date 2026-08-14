@@ -2767,6 +2767,8 @@
     "view": "Visa",
     "doc_label": "Underlag",
     "doc_attached_count": "{count} bifogade",
+    "doc_pick_existing": "Välj från inkorgen",
+    "doc_picked_remove": "Ta bort underlag",
     "doc_link_failed_title": "Underlag kunde inte bifogas",
     "doc_link_failed_description": "{count} fil(er) kunde inte länkas till verifikationen.",
     "doc_link_failed_booked_title": "Bokförd, men underlag saknas",

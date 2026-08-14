@@ -2767,6 +2767,8 @@
     "view": "View",
     "doc_label": "Receipt",
     "doc_attached_count": "{count} attached",
+    "doc_pick_existing": "Choose from the inbox",
+    "doc_picked_remove": "Remove document",
     "doc_link_failed_title": "Receipt could not be attached",
     "doc_link_failed_description": "{count} file(s) could not be linked to the journal entry.",
     "doc_link_failed_booked_title": "Booked, but documents are missing",
