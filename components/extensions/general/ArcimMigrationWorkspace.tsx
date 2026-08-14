@@ -393,7 +393,7 @@ const PROVIDER_LOGOS: Record<ArcimProvider, string> = {
   bokio: '/logos/bokio.png',
   bjornlunden: '/logos/bjornlunden.png',
   briox: '/logos/Briox_logo.png',
-  wint: '/logos/wint.svg',
+  wint: '/logos/wint.png',
 }
 
 function ProviderStep({
