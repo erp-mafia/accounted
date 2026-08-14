@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { buildSkvManualCreateUrl } from '@/lib/skatteverket/manual-verifikat-prefill'
+import { stageSkvManualPrefill } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { Loader2 } from 'lucide-react'
 import type {
@@ -161,13 +161,14 @@ export default function SkattekontoBookDialog({
 
   function handleManualCreate() {
     if (!row) return
-    // Deep-link into /bookkeeping's Nytt verifikat dialog: the URL carries the
-    // row so the form opens prefilled (1630 + counter line) and the created
-    // verifikat is auto-linked back to this skattekonto row via the match
-    // endpoint. Plain '/bookkeeping' here was a dead end: the user landed on
-    // the list with no form, no prefill and no link.
+    // Deep-link into /bookkeeping's Nytt verifikat dialog: the row payload is
+    // staged in sessionStorage (only the opaque id rides in the URL) so the
+    // form opens prefilled (1630 + counter line) and the created verifikat is
+    // auto-linked back to this skattekonto row via the match endpoint. Plain
+    // '/bookkeeping' here was a dead end: the user landed on the list with no
+    // form, no prefill and no link.
     onOpenChange(false)
-    router.push(buildSkvManualCreateUrl(row))
+    router.push(stageSkvManualPrefill(row))
   }
 
   return (

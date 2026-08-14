@@ -1,24 +1,31 @@
 /**
  * Deep-link contract for "Skapa verifikat manuellt" on a skattekonto row:
- * the SkattekontoBookDialog builds a /bookkeeping URL carrying the row's id
- * and display data, and the bookkeeping page parses it back to prefill the
- * Nytt verifikat dialog and auto-link the created entry via the extension's
+ * the SkattekontoBookDialog stages the row payload and navigates to
+ * /bookkeeping, whose page consumes the payload to prefill the Nytt
+ * verifikat dialog and auto-link the created entry via the extension's
  * match endpoint. Kept in core lib (not the extension) because the
  * bookkeeping page cannot import from @/extensions/.
  *
- * The URL params are convenience prefill only: linking is validated
- * server-side by the match route (ownership, ALREADY_BOOKED,
- * ENTRY_ALREADY_LINKED), so a tampered URL can at worst prefill a form the
- * user could have typed anyway.
+ * The URL carries ONLY the opaque transaction id; date, text and amount
+ * ride in sessionStorage (compliance swarm PR #1621: query params leak
+ * financial data into browser history, access logs and Referer headers).
+ * The payload is prefill convenience only and is consumed single-use:
+ * linking is validated server-side by the match route (ownership,
+ * ALREADY_BOOKED, ENTRY_ALREADY_LINKED), so a missing or tampered payload
+ * can at worst degrade to the plain /bookkeeping list.
  */
 
 import { isIsoDateShaped } from '@/lib/invariants'
 import { roundOre } from '@/lib/money'
 
-/** Mirrors SKATTEKONTO_ACCOUNT in the skatteverket extension's booking lib. */
+/**
+ * The BAS account for skattekontot. The skatteverket extension's booking lib
+ * imports this constant so prefill and server-side booking cannot drift.
+ */
 export const SKATTEKONTO_ACCOUNT = '1630'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const STORAGE_KEY = 'accounted.skv-manual-prefill'
 
 export interface SkvManualPrefill {
   transactionId: string
@@ -38,33 +45,90 @@ export interface SkvPrefillLine {
   line_description: string
 }
 
-export function buildSkvManualCreateUrl(row: {
-  id: string
-  transaktionsdatum: string
-  transaktionstext: string
-  belopp_skatteverket: string | number
-}): string {
-  const params = new URLSearchParams({
-    skv_tx: row.id,
-    skv_date: row.transaktionsdatum,
-    skv_text: row.transaktionstext,
-    skv_amount: String(row.belopp_skatteverket),
-  })
+/** Minimal Storage surface, injectable so node-env tests can fake it. */
+export interface PrefillStorage {
+  getItem(key: string): string | null
+  setItem(key: string, value: string): void
+  removeItem(key: string): void
+}
+
+function defaultStorage(): PrefillStorage | null {
+  // sessionStorage can be absent (SSR) or throw (some privacy modes).
+  try {
+    return typeof window === 'undefined' ? null : window.sessionStorage
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Stage a skattekonto row for manual verifikat creation and return the
+ * /bookkeeping URL to navigate to. The row payload goes into sessionStorage;
+ * the URL exposes only the opaque row id.
+ */
+export function stageSkvManualPrefill(
+  row: {
+    id: string
+    transaktionsdatum: string
+    transaktionstext: string
+    belopp_skatteverket: string | number
+  },
+  storage: PrefillStorage | null = defaultStorage(),
+): string {
+  try {
+    storage?.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        transactionId: row.id,
+        date: row.transaktionsdatum,
+        text: row.transaktionstext,
+        amount: Number(row.belopp_skatteverket),
+      }),
+    )
+  } catch {
+    // Quota/privacy-mode failure: the deep link still arms the auto-link
+    // fallback path; only the prefill convenience is lost.
+  }
+  const params = new URLSearchParams({ skv_tx: row.id })
   return `/bookkeeping?${params.toString()}`
 }
 
-// Structural param type so Next's ReadonlyURLSearchParams fits without casts.
-export function parseSkvManualParams(params: {
-  get(name: string): string | null
-}): SkvManualPrefill | null {
-  const id = params.get('skv_tx')
-  if (!id || !UUID_RE.test(id)) return null
-  const date = params.get('skv_date') ?? ''
-  if (!isIsoDateShaped(date)) return null
-  const amount = Number(params.get('skv_amount'))
+/**
+ * Consume (single-use) the staged payload for the given skv_tx URL param.
+ * Returns null when the id is malformed or the stored payload is missing,
+ * mismatched or invalid; the caller then degrades to the plain list.
+ */
+export function takeSkvManualPrefill(
+  rawId: string | null,
+  storage: PrefillStorage | null = defaultStorage(),
+): SkvManualPrefill | null {
+  if (!rawId || !UUID_RE.test(rawId) || !storage) return null
+  let raw: string | null = null
+  try {
+    raw = storage.getItem(STORAGE_KEY)
+    storage.removeItem(STORAGE_KEY)
+  } catch {
+    return null
+  }
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  const p = parsed as {
+    transactionId?: unknown
+    date?: unknown
+    text?: unknown
+    amount?: unknown
+  }
+  if (p.transactionId !== rawId) return null
+  if (typeof p.date !== 'string' || !isIsoDateShaped(p.date)) return null
+  const amount = typeof p.amount === 'number' ? p.amount : Number.NaN
   if (!Number.isFinite(amount) || amount === 0) return null
-  const text = (params.get('skv_text') ?? '').trim()
-  return { transactionId: id, date, text, amount }
+  const text = typeof p.text === 'string' ? p.text.trim() : ''
+  return { transactionId: rawId, date: p.date, text, amount }
 }
 
 /**

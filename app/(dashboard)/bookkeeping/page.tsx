@@ -10,7 +10,7 @@ import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { CopyPrefill, SkvLinkPrefill } from '@/components/bookkeeping/NewJournalEntryDialog'
 import {
   buildSkvPrefillLines,
-  parseSkvManualParams,
+  takeSkvManualPrefill,
   type SkvManualPrefill,
 } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -54,10 +54,6 @@ export default function BookkeepingPage() {
     const raw = searchParams.get('copy_from')
     return raw && UUID_RE.test(raw) ? raw : null
   }, [searchParams])
-  const skvParams = useMemo<SkvManualPrefill | null>(
-    () => parseSkvManualParams(searchParams),
-    [searchParams],
-  )
 
   const [refreshKey, setRefreshKey] = useState(0)
   const [showNewEntry, setShowNewEntry] = useState(false)
@@ -132,16 +128,22 @@ export default function BookkeepingPage() {
       })
   }, [copyFromId, toast, router])
 
-  // React to the skattekonto deep link the same way: open the dialog
-  // prefilled, then clean the URL so a refresh doesn't re-trigger.
-  // copy_from wins if both are somehow present.
+  // React to the skattekonto deep link the same way: consume the staged
+  // payload (single-use, sessionStorage; the URL carries only the opaque id),
+  // open the dialog prefilled, and clean the URL so a refresh doesn't
+  // re-trigger. copy_from wins if both are somehow present. A missing or
+  // invalid payload (shared/stale link) degrades to the plain list.
   useEffect(() => {
-    if (!skvParams || copyFromId) return
-    setSkvLink(skvParams)
+    if (copyFromId) return
+    const rawId = searchParams.get('skv_tx')
+    if (!rawId) return
+    const prefill = takeSkvManualPrefill(rawId)
+    router.replace('/bookkeeping')
+    if (!prefill) return
+    setSkvLink(prefill)
     setCopyPrefill(null)
     setShowNewEntry(true)
-    router.replace('/bookkeeping')
-  }, [skvParams, copyFromId, router])
+  }, [searchParams, copyFromId, router])
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const skvPrefill = useMemo<SkvLinkPrefill | null>(() => {
