@@ -649,6 +649,7 @@ export default function QuickReviewDialog({
                       size="sm"
                       className="h-6 w-6 shrink-0 p-0"
                       aria-label={t('doc_picked_remove')}
+                      disabled={isProcessing}
                       onClick={() =>
                         setPickedInboxDocs((prev) =>
                           prev.filter((d) => d.document_id !== doc.document_id),
@@ -659,10 +660,15 @@ export default function QuickReviewDialog({
                     </Button>
                   </div>
                 ))}
+                {/* Locked while the booking is in flight: handleConfirm captured
+                    pickedInboxDocs when it started, so anything picked now would
+                    never be linked and would then be cleared on completion,
+                    vanishing from the list with no error to explain it. */}
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
+                  disabled={isProcessing}
                   onClick={() => setInboxPickerOpen(true)}
                 >
                   <Inbox className="mr-2 h-4 w-4" />
