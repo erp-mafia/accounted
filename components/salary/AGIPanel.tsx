@@ -1049,7 +1049,7 @@ export function AGIPanel(props: AGIPanelProps) {
           </div>
         )}
         {missingKvittensScope && !kvittensNoticeDismissed && !readOnly && (
-          <div className="rounded-md border border-border bg-muted/30 p-3">
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">
               {t('kvittens_scope_title')}
             </p>
