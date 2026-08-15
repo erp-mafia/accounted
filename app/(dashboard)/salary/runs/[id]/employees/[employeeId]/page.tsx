@@ -163,7 +163,7 @@ export default function SalaryRunEmployeeDetailPage({
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" /> {t('back_to_run')}
         </Link>
-        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+        <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
           {error ?? t('error_load_employee')}
         </div>
       </div>
@@ -321,7 +321,7 @@ export default function SalaryRunEmployeeDetailPage({
 function SummaryCard({ label, value, accent, overridden }: { label: string; value: number; accent?: boolean; overridden?: boolean }) {
   const t = useTranslations('salary_run_employee')
   return (
-    <div className={cn('rounded-md border bg-card p-3', accent && 'ring-1 ring-primary/40')}>
+    <div className={cn('rounded-lg border bg-card p-3', accent && 'ring-1 ring-primary/40')}>
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         {label}
         {/* The override is an exception, so it is a chip, not a second ring:
@@ -337,7 +337,7 @@ function SummaryCard({ label, value, accent, overridden }: { label: string; valu
 function AbsenceCount({ label, days }: { label: string; days: number }) {
   const t = useTranslations('salary_run_employee')
   return (
-    <div className="rounded-md border bg-muted/30 px-3 py-2">
+    <div className="rounded-lg border bg-muted/30 px-3 py-2">
       <div className="text-[11px] text-muted-foreground">{label}</div>
       <div className="text-sm font-medium tabular-nums">{t('days_count', { days })}</div>
     </div>

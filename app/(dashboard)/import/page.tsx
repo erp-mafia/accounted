@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import {
   Dialog,
   DialogContent,
@@ -64,6 +65,7 @@ import type {
 } from '@/lib/import/types'
 import {
   applyVatTreatmentReview,
+  enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
 } from '@/lib/import/account-vat-treatment'
 import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
@@ -113,6 +115,7 @@ const AccountMappingStep = dynamic(() => import('@/components/import/AccountMapp
 const ImportReviewStep = dynamic(() => import('@/components/import/ImportReviewStep'), { loading: ImportStepLoading })
 const ImportResultStep = dynamic(() => import('@/components/import/ImportResultStep'), { loading: ImportStepLoading })
 const SIEImportHistory = dynamic(() => import('@/components/import/SIEImportHistory'), { loading: ImportStepLoading })
+const UnderlagImportWizard = dynamic(() => import('@/components/import/UnderlagImportWizard'), { loading: ImportStepLoading })
 
 // ============================================================
 // Bank File Import Wizard Steps
@@ -602,15 +605,14 @@ function SIEImportWizard() {
       setIssues(data.parsed.issues)
       setSieAccounts(data.parsed.accounts)
 
-      const accountsRes = await fetch('/api/bookkeeping/accounts')
-      if (accountsRes.ok) {
-        const accountsData = await accountsRes.json()
-        const accounts = accountsData.data || []
-        setBasAccounts(accounts)
-        setMappings(enrichAccountMappingsWithVat(data.mappings, accounts))
-      } else {
-        setMappings(enrichAccountMappingsWithVat(data.mappings, []))
+      const accountsRes = await fetch('/api/bookkeeping/accounts?active=false')
+      if (!accountsRes.ok) {
+        throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
       }
+      const accountsData = await accountsRes.json()
+      const accounts = accountsData.data || []
+      setBasAccounts(accounts)
+      setMappings(enrichAccountMappingsWithVat(data.mappings, accounts))
 
       setStep('preview')
 
@@ -702,11 +704,19 @@ function SIEImportWizard() {
   }, [file, handleFileSelect, toast])
 
   const handleMappingChange = useCallback((sourceAccount: string, targetAccount: string, targetName: string) => {
-    setMappings((prev) => applyMappingOverride(prev, sourceAccount, targetAccount, targetName))
+    setMappings((prev) => enrichChangedAccountMappingWithVat(
+      applyMappingOverride(prev, sourceAccount, targetAccount, targetName),
+      sourceAccount,
+      basAccounts,
+    ))
 
     setPreview((prev) => {
       if (!prev) return prev
-      const updatedMappings = applyMappingOverride(mappings, sourceAccount, targetAccount, targetName)
+      const updatedMappings = enrichChangedAccountMappingWithVat(
+        applyMappingOverride(mappings, sourceAccount, targetAccount, targetName),
+        sourceAccount,
+        basAccounts,
+      )
       const mapped = updatedMappings.filter((m) => m.targetAccount).length
       const unmapped = updatedMappings.length - mapped
       const lowConfidence = updatedMappings.filter((m) => m.targetAccount && m.confidence < 0.7).length
@@ -721,7 +731,7 @@ function SIEImportWizard() {
         },
       }
     })
-  }, [mappings])
+  }, [basAccounts, mappings])
 
   const handleVatTreatmentChange = useCallback((
     sourceAccount: string,
@@ -769,13 +779,25 @@ function SIEImportWizard() {
 
       toast({ title: 'Konton skapade', description: `${data.created} nya konton har lagts till i din kontoplan` })
 
-      // Optimistically update mappings: mark created accounts as self-mapped
       const createdSet = new Set(missingAccounts.map(a => a.number))
-      setMappings(prev => enrichAccountMappingsWithVat(prev.map(m =>
-        !m.targetAccount && createdSet.has(m.sourceAccount)
-          ? { ...m, targetAccount: m.sourceAccount, targetName: m.sourceName, confidence: 1.0 }
-          : m
-      ), basAccounts))
+      const accountsRes = await fetch('/api/bookkeeping/accounts?active=false')
+      if (!accountsRes.ok) {
+        throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
+      }
+      const accountsData = await accountsRes.json()
+      const accounts = accountsData.data || []
+      setBasAccounts(accounts)
+      setMappings(prev => {
+        let updated = prev.map(m =>
+          !m.targetAccount && createdSet.has(m.sourceAccount)
+            ? { ...m, targetAccount: m.sourceAccount, targetName: m.sourceName, confidence: 1.0 }
+            : m
+        )
+        for (const sourceAccount of createdSet) {
+          updated = enrichChangedAccountMappingWithVat(updated, sourceAccount, accounts)
+        }
+        return updated
+      })
       setPreview(prev => {
         if (!prev) return prev
         const newMapped = prev.mappingStatus.mapped + createdSet.size
@@ -788,21 +810,12 @@ function SIEImportWizard() {
           },
         }
       })
-
-      // Also refresh BAS accounts list
-      const accountsRes = await fetch('/api/bookkeeping/accounts')
-      if (accountsRes.ok) {
-        const accountsData = await accountsRes.json()
-        const accounts = accountsData.data || []
-        setBasAccounts(accounts)
-        setMappings(prev => enrichAccountMappingsWithVat(prev, accounts))
-      }
     } catch (err) {
       toast({ title: 'Kunde inte skapa konton', description: err instanceof Error ? getErrorMessage(err) : 'Försök igen.', variant: 'destructive' })
     } finally {
       setIsCreatingAccounts(false)
     }
-  }, [basAccounts, missingAccounts, toast])
+  }, [missingAccounts, toast])
 
   const handleExecuteImport = useCallback(async (options: ImportExecuteOptions) => {
     if (!file) { setError('No file selected'); return }
@@ -939,8 +952,8 @@ function SIEImportWizard() {
           preview={preview} theaterModel={theaterModel}
           unresolvedVatAccountCount={mappings.filter((mapping) =>
             mapping.sourceAccount === mapping.targetAccount &&
-            ['3', '4', '5', '6'].includes(mapping.sourceAccount.charAt(0)) &&
-            !mapping.vatTreatmentReviewed
+            ['3', '4'].includes(mapping.sourceAccount.charAt(0)) &&
+            !mapping.defaultVatTreatment
           ).length} />
       )}
     </div>
@@ -2048,7 +2061,7 @@ function CSVDataImportWizard() {
                 onClick={() => setEntity(opt.value)}
                 aria-pressed={selected}
                 className={cn(
-                  'relative h-9 rounded-md border px-4 text-sm font-medium transition-colors',
+                  'relative h-9 rounded-lg border px-4 text-sm font-medium transition-colors',
                   selected
                     ? 'border-foreground bg-foreground text-background'
                     : 'border-border bg-card text-foreground hover:border-foreground/30 hover:bg-muted',
@@ -2095,7 +2108,7 @@ const ShopifyPanel = getSettingsPanel('shopify')
 // Import Page with Selection Cards
 // ============================================================
 
-type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'bank' | 'sie' | 'csv_data' | 'migration'
+type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'bank' | 'sie' | 'underlag' | 'csv_data' | 'migration'
 
 export default function ImportPage() {
   const { isSandbox } = useCompany()
@@ -2128,8 +2141,8 @@ export default function ImportPage() {
     // third-party credentials, so their deep links are ignored in the sandbox.
     // Manual file-import modes (bank file, CSV/Excel, SIE) stay reachable.
     const allowedModes = isSandbox
-      ? ['bank', 'sie', 'csv_data']
-      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'bank', 'sie', 'csv_data', 'migration']
+      ? ['bank', 'sie', 'underlag', 'csv_data']
+      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'bank', 'sie', 'underlag', 'csv_data', 'migration']
     if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
@@ -2203,29 +2216,14 @@ export default function ImportPage() {
           {isSandbox && <AttnLine>{t('sandbox_disabled')}</AttnLine>}
 
           {/* Importera / Exportera as separate tabs (house seg), like before */}
-          <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-            {(
-              [
-                { key: 'import', label: t('tab_import') },
-                { key: 'export', label: t('tab_export') },
-              ] as const
-            ).map(({ key, label }) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={view === key}
-                onClick={() => handleViewChange(key)}
-                className={`rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
-                  view === key
-                    ? 'border border-border bg-card font-medium text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            value={view}
+            onChange={handleViewChange}
+            options={[
+              { value: 'import', label: t('tab_import') },
+              { value: 'export', label: t('tab_export') },
+            ]}
+          />
 
           {view === 'import' ? (
             <div>
@@ -2286,7 +2284,7 @@ export default function ImportPage() {
                         <LogoChip src="/logos/bokio.png" name="Bokio" />
                         <LogoChip src="/logos/bjornlunden.png" name="Björn Lundén" />
                         <LogoChip src="/logos/Briox_logo.png" name="Briox" />
-                        <LogoChip src="/logos/wint.svg" name="WINT" />
+                        <LogoChip src="/logos/wint.png" name="WINT" />
                       </>
                     }
                     disabled={isSandbox}
@@ -2307,6 +2305,13 @@ export default function ImportPage() {
                   title={t('sie_title')}
                   sub={t('sie_description')}
                   onClick={() => setMode('sie')}
+                />
+                {/* Optional follow-up to a SIE import, never a step inside it:
+                    the receipts usually arrive later and from another export. */}
+                <ImportRow
+                  title={t('underlag_title')}
+                  sub={t('underlag_description')}
+                  onClick={() => setMode('underlag')}
                 />
                 <ImportRow
                   title={t('sie_history_title')}
@@ -2370,7 +2375,7 @@ export default function ImportPage() {
                 <label className="flex cursor-pointer items-start gap-2 text-sm text-muted-foreground">
                   <input
                     type="checkbox"
-                    className="mt-0.5 h-4 w-4 rounded border-border"
+                    className="mt-0.5 h-4 w-4 rounded-sm border-border"
                     checked={exportExcludeClosing}
                     onChange={(e) => setExportExcludeClosing(e.target.checked)}
                   />
@@ -2480,6 +2485,7 @@ export default function ImportPage() {
       )}
       {mode === 'bank' && <BankFileImportWizard />}
       {mode === 'sie' && <SIEImportWizard />}
+      {mode === 'underlag' && <UnderlagImportWizard />}
       {mode === 'csv_data' && <CSVDataImportWizard />}
       {mode === 'migration' && (
         <MigrationWizard userId={userId} initialProvider={initialProvider ?? undefined} />
@@ -2551,7 +2557,7 @@ function ImportRow({
 // with the inverse lift in dark mode.
 function LogoChip({ src, name, mono = false }: { src: string; name: string; mono?: boolean }) {
   return (
-    <span className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1">
+    <span className="flex items-center gap-2 rounded-sm border border-border bg-muted/30 px-2 py-1">
       <img
         src={src}
         alt=""

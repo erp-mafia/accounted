@@ -72,7 +72,7 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
               href={`/bookkeeping/${entry.id}`}
               className="block"
             >
-              <div className={`relative pl-7 py-2 rounded-md transition-colors hover:bg-muted/50 ${isCurrent ? 'bg-muted/30' : ''} ${isCancelled ? 'opacity-60' : ''}`}>
+              <div className={`relative pl-7 py-2 rounded-sm transition-colors hover:bg-muted/50 ${isCurrent ? 'bg-muted/30' : ''} ${isCancelled ? 'opacity-60' : ''}`}>
                 {/* Timeline dot */}
                 <div className={`absolute left-0.5 top-[18px] h-3 w-3 rounded-full border-2 border-background ${isCancelled ? 'bg-muted-foreground' : role.color}`} />
 

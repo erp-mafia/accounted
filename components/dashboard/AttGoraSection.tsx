@@ -275,7 +275,7 @@ export default function AttGoraSection({
                                 )}
                               >
                                 <div className="overflow-hidden pb-1">
-                                  <div className="flex items-center gap-3 rounded bg-secondary/40 px-3 py-2">
+                                  <div className="flex items-center gap-3 rounded-sm bg-secondary/40 px-3 py-2">
                                 <div className="flex-1 min-w-0">
                                   <p className="text-sm truncate">
                                     {match.transaction_description}
@@ -302,7 +302,7 @@ export default function AttGoraSection({
                                   href={`/transactions?highlight=${match.transaction_id}`}
                                   aria-label={t('suggested_view')}
                                   title={t('suggested_view')}
-                                  className="shrink-0 h-10 w-10 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+                                  className="shrink-0 h-10 w-10 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
                                 >
                                   <Eye className="h-4 w-4" />
                                 </Link>

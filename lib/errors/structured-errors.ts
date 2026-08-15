@@ -2015,6 +2015,30 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kopplingen misslyckades.',
     message_en: 'Failed to link document to journal entry.',
   },
+  UNDERLAG_REF_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Filnamnet pekar inte på den verifikation som valdes. Ladda om förhandsgranskningen och försök igen.',
+    message_en:
+      'The filename does not point at the selected verifikat. Reload the preview and try again.',
+  },
+  UNDERLAG_PERIOD_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen tillhör ett annat räkenskapsår än det du valde för underlagen. Ladda om förhandsgranskningen och försök igen.',
+    message_en:
+      'The verifikat belongs to a different fiscal year than the one selected for these files. Reload the preview and try again.',
+  },
+  UNDERLAG_ENTRY_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen är inte bokförd, så underlag kan inte kopplas till den ännu.',
+    message_en: 'The journal entry is not posted, so documents cannot be attached to it yet.',
+  },
+  UNDERLAG_ENTRY_NOT_MIGRATED: {
+    httpStatus: 400,
+    message_sv: 'Verifikationen kommer inte från en SIE-import och kan inte matchas mot filnamn.',
+    message_en: 'The journal entry did not come from a SIE import and cannot be matched by filename.',
+  },
 }
 
 // Invoice-inbox manual upload and attach-document (extension REST routes).

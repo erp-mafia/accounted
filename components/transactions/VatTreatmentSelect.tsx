@@ -46,7 +46,7 @@ export default function VatTreatmentSelect<T extends VatSelectValue>({
             key={opt.value}
             value={opt.value}
             className={cn(
-              'relative flex w-full cursor-default select-none items-start rounded-md py-1.5 pl-8 pr-2 text-sm outline-none transition-colors focus:bg-secondary focus:text-secondary-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50'
+              'relative flex w-full cursor-default select-none items-start rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none transition-colors focus:bg-secondary focus:text-secondary-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50'
             )}
           >
             <span className="absolute left-2 top-2 flex h-3.5 w-3.5 items-center justify-center">

@@ -19,6 +19,10 @@ export interface EntryPreview {
 }
 
 export interface PreviewData {
+  // True when the entries are the ACTUAL posted verifikat of a booked run
+  // (the preview route returns those instead of a recomputed projection,
+  // which could contradict vouchers booked under earlier rules).
+  booked?: boolean
   salaryEntry: EntryPreview | null
   avgifterEntry: EntryPreview | null
   vacationEntry: EntryPreview | null
@@ -46,7 +50,9 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating }: Run
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
-        <CardTitle className="text-base">{t('journal_preview_title')}</CardTitle>
+        <CardTitle className="text-base">
+          {preview.booked ? t('journal_booked_title') : t('journal_preview_title')}
+        </CardTitle>
         {onRecalculate && (
           <Button variant="outline" size="sm" onClick={onRecalculate} disabled={recalculating}>
             {recalculating ? (

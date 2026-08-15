@@ -51,7 +51,7 @@ export function OpenInNewTab({
       onKeyDown={(e) => e.stopPropagation()}
       className={cn(
         HOVER_REVEAL_CLASS,
-        'relative inline-flex shrink-0 items-center rounded p-1 text-muted-foreground',
+        'relative inline-flex shrink-0 items-center rounded-sm p-1 text-muted-foreground',
         // The icon stays 14px so the row keeps its density, but the pointer
         // target is padded out to the 40px the design rules require.
         'before:absolute before:left-1/2 before:top-1/2 before:h-10 before:w-10',

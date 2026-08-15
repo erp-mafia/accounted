@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
@@ -368,40 +370,30 @@ export default function DimensionsManager() {
           muted value count, search, and the actions far right. */}
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-            {dimensions.map((dim) => (
-              <button
-                key={dim.id}
-                type="button"
-                role="tab"
-                aria-selected={activeDimId === dim.id}
-                onClick={() => {
-                  setActiveDimId(dim.id)
-                  setSearchTerm('')
-                }}
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-                  activeDimId === dim.id
-                    ? 'border border-border bg-card font-medium text-foreground'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {dim.name}
-                {dim.values.length > 0 && (
-                  <span className="text-muted-foreground tabular-nums">{dim.values.length}</span>
-                )}
-              </button>
-            ))}
-          </div>
-          <div className="relative min-w-[180px] max-w-xs flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder={t('search_placeholder')}
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="h-9 pl-10"
-            />
-          </div>
+          <SegmentedControl
+            value={activeDimId ?? ''}
+            onChange={(id) => {
+              setActiveDimId(id)
+              setSearchTerm('')
+            }}
+            options={dimensions.map((dim) => ({
+              value: dim.id,
+              label: (
+                <>
+                  {dim.name}
+                  {dim.values.length > 0 && (
+                    <span className="text-muted-foreground tabular-nums">{dim.values.length}</span>
+                  )}
+                </>
+              ),
+            }))}
+          />
+          <ToolbarSearch
+            placeholder={t('search_placeholder')}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            containerClassName="min-w-[180px] max-w-xs flex-1"
+          />
           <div className="ml-auto flex items-center gap-4">
             <button
               type="button"

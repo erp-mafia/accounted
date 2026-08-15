@@ -63,7 +63,7 @@ function CompanyMark({ name }: { name: string }) {
   return (
     <span
       aria-hidden="true"
-      className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[4px] bg-secondary text-[9px] font-semibold uppercase leading-none text-foreground"
+      className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-sm bg-secondary text-[9px] font-semibold uppercase leading-none text-foreground"
     >
       {name.trim().charAt(0) || '?'}
     </span>
@@ -193,7 +193,7 @@ export default function UserMenu({
   )
 
   const menuRow =
-    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] ' +
+    'flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 text-left text-[13px] ' +
     'text-muted-foreground hover:text-foreground hover:bg-secondary/60 ' +
     'transition-colors duration-150 cursor-pointer'
 
@@ -293,7 +293,7 @@ export default function UserMenu({
                         role="option"
                         aria-selected={c.id === company?.id}
                         className={cn(
-                          'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
+                          'flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
                           c.id === company?.id
                             ? 'bg-secondary/60 text-foreground'
                             : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',

@@ -504,7 +504,7 @@ function LogoMark({ src, name, mono = false }: { src: string; name: string; mono
   return (
     <span
       className={cn(
-        'flex h-6 w-6 items-center justify-center overflow-hidden rounded-md border border-border',
+        'flex h-6 w-6 items-center justify-center overflow-hidden rounded-sm border border-border',
         !mono && 'bg-white',
       )}
       title={name}

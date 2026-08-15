@@ -72,7 +72,7 @@ export function DocsLayout({ currentPath, children }: DocsLayoutProps) {
                         <Link
                           href={link.href}
                           className={cn(
-                            'block text-sm px-3 py-1.5 rounded-md transition-colors',
+                            'block text-sm px-3 py-1.5 rounded-sm transition-colors',
                             isActive
                               ? 'bg-secondary text-foreground font-medium'
                               : 'text-foreground/75 hover:bg-secondary/60 hover:text-foreground',

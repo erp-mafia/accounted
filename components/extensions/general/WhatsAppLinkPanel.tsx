@@ -281,7 +281,7 @@ export function WhatsAppLinkPanel() {
         {minted ? (
           <div className="space-y-3">
             <div className="flex items-center gap-3">
-              <span className="rounded-md border border-border bg-muted/50 px-3 py-1.5 font-mono text-base tracking-wider">
+              <span className="rounded-sm border border-border bg-muted/50 px-3 py-1.5 font-mono text-base tracking-wider">
                 {minted.code}
               </span>
               {minted.waLink ? (

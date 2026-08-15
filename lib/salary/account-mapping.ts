@@ -107,6 +107,9 @@ export const SALARY_ACCOUNTS = {
   // Employer contributions
   AVGIFTER_EXPENSE: '7510',   // Lagstadgade sociala avgifter (debit)
   AVGIFTER_LIABILITY: '2731', // Avräkning sociala avgifter (credit)
+  // Whole-krona remainder: 2731 holds what Skatteverket actually draws
+  // (hela kronor, öretal bortfaller), the öre difference lands here.
+  ORESUTJAMNING: '3740',      // Öres- och kronutjämning (credit)
 
   // Vacation accrual
   VACATION_ACCRUAL_EXPENSE: '7290',   // Förändring semesterlöneskuld (debit)

@@ -143,14 +143,14 @@ describe('rutorFromTotals: explicit account VAT treatments', () => {
     expect(rutor.ruta20).toBe(1000)
   })
 
-  it('keeps a static BAS mapping authoritative over an explicit treatment', () => {
+  it('lets an explicit treatment replace a static BAS mapping', () => {
     const totals = new Map([['3001', { debit: 0, credit: 1000 }]])
     const rutor = rutorFromTotals(totals, {
       mappingByAccount: new Map([['3001', { box: 'ruta42', side: 'credit' }]]),
       explicitAccounts: new Set(['3001']),
     })
-    expect(rutor.ruta05).toBe(1000)
-    expect(rutor.ruta42).toBe(0)
+    expect(rutor.ruta05).toBe(0)
+    expect(rutor.ruta42).toBe(1000)
   })
 })
 

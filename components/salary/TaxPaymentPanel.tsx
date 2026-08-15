@@ -11,6 +11,7 @@ import { postAction } from '@/lib/browser/post-action'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 
 interface TaxPaymentPanelProps {
   /** YYYY-MM */
@@ -54,7 +55,13 @@ export function TaxPaymentPanel({
     setPaymentDeadline(`${dlYear}-${String(dlMonth).padStart(2, '0')}-12`)
   }, [period])
 
-  const totalAmount = Math.round((totalTax + totalAvgifter) * 100) / 100
+  // The page passes the AGI declaration's stored totals when the AGI exists
+  // (whole kronor for declarations generated since the whole-krona change:
+  // exactly what the payment file pays and Skatteverket draws), falling back
+  // to run totals. Display what will actually be paid: no reformatting here,
+  // so legacy öre declarations still show the öre-exact amount their
+  // payment file pays.
+  const totalAmount = roundOre(totalTax + totalAvgifter)
 
   const handleDownload = useCallback(async () => {
     // Both buttons are disabled while either is in flight; this guard closes the

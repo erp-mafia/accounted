@@ -26,13 +26,13 @@ export function SandboxBanner() {
       </span>
       <button
         onClick={handleCreateAccount}
-        className="shrink-0 rounded-md bg-foreground/10 px-3 py-0.5 text-xs font-semibold hover:bg-foreground/15 transition-colors"
+        className="shrink-0 rounded-full bg-foreground/10 px-3 py-0.5 text-xs font-semibold hover:bg-foreground/15 transition-colors"
       >
         Skapa konto
       </button>
       <button
         onClick={() => setDismissed(true)}
-        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 hover:bg-foreground/10 transition-colors"
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 hover:bg-foreground/10 transition-colors"
         aria-label="Stäng"
       >
         <X className="h-3.5 w-3.5" />

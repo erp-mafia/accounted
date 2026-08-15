@@ -1,18 +1,22 @@
 'use client'
 
-import { useCallback, useSyncExternalStore } from 'react'
+import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import { ExternalLink } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import {
   SettingsRow,
   SettingsRowEnd,
 } from '@/components/settings/SettingsRows'
 
 /**
- * Per-user toggle for the periodisering wizard's auto-detection step.
+ * Per-company toggle for the periodisering wizard's auto-detection step.
  *
- * Backed by localStorage (key: `periodisering_autodetect_enabled`) because
+ * Backed by localStorage (key: `periodisering_autodetect_enabled:<companyId>`,
+ * with the old unscoped key as a read fallback so existing choices survive:
+ * the unscoped key silently applied one company's choice to every company in
+ * the browser) because
  * the company_settings table does not yet have a dedicated column for this
  * preference, and the task description explicitly allows the persistence to
  * be UI-local. A future migration can promote this to a real
@@ -26,10 +30,16 @@ import {
  */
 const STORAGE_KEY = 'periodisering_autodetect_enabled'
 
-function readStored(): boolean {
+function storageKeyFor(companyId: string | null): string {
+  return companyId ? `${STORAGE_KEY}:${companyId}` : STORAGE_KEY
+}
+
+function readStored(companyId: string | null): boolean {
   if (typeof window === 'undefined') return true
   try {
-    const stored = window.localStorage.getItem(STORAGE_KEY)
+    const stored =
+      window.localStorage.getItem(storageKeyFor(companyId)) ??
+      window.localStorage.getItem(STORAGE_KEY)
     return stored === null ? true : stored !== 'false'
   } catch {
     return true
@@ -42,7 +52,7 @@ function readStored(): boolean {
 function subscribe(callback: () => void): () => void {
   if (typeof window === 'undefined') return () => {}
   const handler = (e: StorageEvent) => {
-    if (e.key === STORAGE_KEY || e.key === null) callback()
+    if (e.key === null || e.key === STORAGE_KEY || e.key.startsWith(`${STORAGE_KEY}:`)) callback()
   }
   const customHandler = () => callback()
   window.addEventListener('storage', handler)
@@ -61,9 +71,11 @@ function notifyChange() {
 }
 
 export function PeriodiseringAutoDetectToggle() {
+  const companyId = useCompanyOptional()?.company?.id ?? null
+  const getSnapshot = useMemo(() => () => readStored(companyId), [companyId])
   const enabled = useSyncExternalStore(
     subscribe,
-    readStored,
+    getSnapshot,
     // Server snapshot: default to enabled. Matches the client default so
     // hydration is identical.
     () => true,
@@ -71,12 +83,12 @@ export function PeriodiseringAutoDetectToggle() {
 
   const handleChange = useCallback((value: boolean) => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, String(value))
+      window.localStorage.setItem(storageKeyFor(companyId), String(value))
     } catch {
       // No-op; if storage is blocked the toggle simply won't persist.
     }
     notifyChange()
-  }, [])
+  }, [companyId])
 
   return (
     <SettingsRow

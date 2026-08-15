@@ -212,7 +212,7 @@ export default function DuplicateBookingDialog({
             {canIgnore && <> {t('dialog_duplicate_ignore_hint')}</>}
           </p>
           {candidate && (
-            <div className="space-y-1 rounded-md border bg-muted/30 p-3">
+            <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="font-medium">
                   {candidate.voucher_label

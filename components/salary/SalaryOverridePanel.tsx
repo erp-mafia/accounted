@@ -60,8 +60,12 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
   async function handleSave() {
     setSaving(true)
     try {
+      // Skatteavdrag is stated in whole kronor (öretal bortfaller): the
+      // schema rejects öre, so drop them here instead of bouncing the save
+      // with a 400 when someone types a decimal.
+      const taxOverride = num(taxStr)
       const body = {
-        tax_withheld_override: num(taxStr),
+        tax_withheld_override: taxOverride === null ? null : Math.trunc(taxOverride),
         avgifter_amount_override: num(avgStr),
         avgifter_basis_override: num(basisStr),
         reason: reason.trim() || null,

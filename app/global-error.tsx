@@ -78,7 +78,7 @@ export default function GlobalError({
               </p>
               <button
                 onClick={() => window.location.reload()}
-                className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
+                className="rounded-full bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
               >
                 Försök igen
               </button>

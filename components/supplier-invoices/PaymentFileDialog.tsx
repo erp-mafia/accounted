@@ -327,7 +327,7 @@ export default function PaymentFileDialog({
 
             {/* The file downloads fine and only fails at the bank if the
                 upload agreement is missing: say the precondition up front. */}
-            <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
+            <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span className="text-muted-foreground">{t('pain001_agreement_warning')}</span>
             </div>

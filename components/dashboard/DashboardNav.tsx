@@ -738,7 +738,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 alt=""
                 width={26}
                 height={26}
-                className="h-[26px] w-[26px] rounded-md"
+                className="h-[26px] w-[26px] rounded-lg"
               />
             </Link>
             <button
@@ -1010,7 +1010,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           {/* Bottom sheet */}
           <div
             className={cn(
-              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-2xl border-t border-border/40 overflow-y-auto overscroll-contain",
+              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-xl border-t border-border/40 overflow-y-auto overscroll-contain",
               isClosing
                 ? "animate-out slide-out-to-bottom duration-200"
                 : "animate-in slide-in-from-bottom duration-300"
@@ -1020,7 +1020,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             aria-label={tNav('navigation_menu')}
           >
             {/* Drag handle */}
-            <div className="flex justify-center pt-3 pb-1 sticky top-0 bg-card rounded-t-2xl">
+            <div className="flex justify-center pt-3 pb-1 sticky top-0 bg-card rounded-t-xl">
               <div className="w-8 h-1 rounded-full bg-muted-foreground/25" />
             </div>
 

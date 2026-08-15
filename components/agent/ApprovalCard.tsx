@@ -352,7 +352,7 @@ export default function ApprovalCard({
       </div>
 
       {preview != null && typeof preview === 'object' && (
-        <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
           <OperationPreview
             op={{
               operation_type: previewOperationType,
@@ -374,7 +374,7 @@ export default function ApprovalCard({
             value={confirmText}
             onChange={(e) => setConfirmText(e.target.value)}
             disabled={isBusy}
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             autoComplete="off"
             aria-label="Bekräfta med ordet godkänn"
           />
@@ -384,7 +384,7 @@ export default function ApprovalCard({
       {errorMessage && <p className="text-xs text-destructive">{errorMessage}</p>}
 
       {showRejectForm ? (
-        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+        <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
           <p className="text-xs font-medium">Vad är fel?</p>
           <Select
             value={rejectCategory}
@@ -448,7 +448,7 @@ export default function ApprovalCard({
           </div>
         </div>
       ) : accountsToActivate ? (
-        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+        <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
           <p className="text-xs leading-5">
             Bokningen använder konton som inte är aktiva i din kontoplan:{' '}
             <strong className="tabular-nums">{accountsToActivate.join(', ')}</strong>. Aktivera dem för att godkänna bokningen.

@@ -550,7 +550,7 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
 
-        const tokens = await getTokens(ctx.supabase, ctx.userId)
+        const tokens = await getTokens(ctx.supabase, ctx.userId, ctx.companyId)
         const environment = getSkatteverketEnvironment()
         const disabled = (process.env.SKATTEVERKET_DISABLED ?? '').toLowerCase() === 'true'
 
@@ -564,7 +564,7 @@ export const skatteverketExtension: Extension = {
         // Persisted health, written by the crons when they hit a terminal
         // auth state. Lets the settings panel prompt for re-consent
         // proactively instead of only after a live failure.
-        const health = await getTokenHealth(ctx.supabase, ctx.userId)
+        const health = await getTokenHealth(ctx.supabase, ctx.userId, ctx.companyId)
 
         return NextResponse.json({
           connected: true,
@@ -589,7 +589,7 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
 
-        await deleteTokens(ctx.supabase, ctx.userId)
+        await deleteTokens(ctx.supabase, ctx.userId, ctx.companyId)
         return NextResponse.json({ success: true })
       },
     },
@@ -752,6 +752,7 @@ export const skatteverketExtension: Extension = {
           const response = await skvRequest(
             ctx.supabase,
             ctx.userId,
+            ctx.companyId,
             'POST',
             `/kontrollera/${redovisare}/${redovisningsperiod}`,
             momsuppgift
@@ -800,6 +801,7 @@ export const skatteverketExtension: Extension = {
           const response = await skvRequest(
             ctx.supabase,
             ctx.userId,
+            ctx.companyId,
             'POST',
             `/utkast/${redovisare}/${redovisningsperiod}`,
             momsuppgift
@@ -850,6 +852,7 @@ export const skatteverketExtension: Extension = {
           const response = await skvRequest(
             ctx.supabase,
             ctx.userId,
+            ctx.companyId,
             'GET',
             `/utkast/${redovisare}/${redovisningsperiod}`
           )
@@ -889,6 +892,7 @@ export const skatteverketExtension: Extension = {
           const response = await skvRequest(
             ctx.supabase,
             ctx.userId,
+            ctx.companyId,
             'DELETE',
             `/utkast/${redovisare}/${redovisningsperiod}`
           )
@@ -928,6 +932,7 @@ export const skatteverketExtension: Extension = {
           const response = await skvRequest(
             ctx.supabase,
             ctx.userId,
+            ctx.companyId,
             'PUT',
             `/las/${redovisare}/${redovisningsperiod}`
           )
@@ -975,6 +980,7 @@ export const skatteverketExtension: Extension = {
           const response = await skvRequest(
             ctx.supabase,
             ctx.userId,
+            ctx.companyId,
             'DELETE',
             `/las/${redovisare}/${redovisningsperiod}`
           )
@@ -1211,7 +1217,7 @@ export const skatteverketExtension: Extension = {
 
           console.log('[skatteverket] AGI submitting underlag:', { arbetsgivare, period })
 
-          const result = await agiPostUnderlag(ctx.supabase, ctx.userId, xml)
+          const result = await agiPostUnderlag(ctx.supabase, ctx.userId, ctx.companyId, xml)
           if (!result.ok) {
             console.error('[skatteverket] AGI underlag error:', result.status, result.error)
             return NextResponse.json(
@@ -1268,7 +1274,7 @@ export const skatteverketExtension: Extension = {
             return NextResponse.json({ error: 'Saknar parameter: inlamningId' }, { status: 400 })
           }
 
-          const result = await agiGetKontrollresultat(ctx.supabase, ctx.userId, inlamningId)
+          const result = await agiGetKontrollresultat(ctx.supabase, ctx.userId, ctx.companyId, inlamningId)
           if (!result.ok) {
             return NextResponse.json(
               { error: result.error, code: result.body?.kod },
@@ -1338,7 +1344,7 @@ export const skatteverketExtension: Extension = {
             return NextResponse.json({ error: 'Saknar inlamningId' }, { status: 400 })
           }
 
-          const result = await agiSparaUnderlag(ctx.supabase, ctx.userId, inlamningId)
+          const result = await agiSparaUnderlag(ctx.supabase, ctx.userId, ctx.companyId, inlamningId)
           if (!result.ok) {
             return NextResponse.json(
               { error: result.error, code: result.body?.kod },
@@ -1426,7 +1432,7 @@ export const skatteverketExtension: Extension = {
           if (!Number.isFinite(inlamningId) || inlamningId <= 0) {
             return NextResponse.json({ error: 'Saknar parameter: inlamningId' }, { status: 400 })
           }
-          const result = await agiAvbrytUnderlag(ctx.supabase, ctx.userId, inlamningId)
+          const result = await agiAvbrytUnderlag(ctx.supabase, ctx.userId, ctx.companyId, inlamningId)
           if (!result.ok) {
             return NextResponse.json(
               { error: result.error, code: result.body?.kod },
@@ -1493,7 +1499,7 @@ export const skatteverketExtension: Extension = {
             )
           }
           const result = await agiTaBortSparadInlamning(
-            ctx.supabase, ctx.userId, arbetsgivare, period, inlamningId,
+            ctx.supabase, ctx.userId, ctx.companyId, arbetsgivare, period, inlamningId,
           )
           if (!result.ok) {
             return NextResponse.json(
@@ -1534,7 +1540,7 @@ export const skatteverketExtension: Extension = {
           }
 
           const result = await agiSkapaGranskningsunderlag(
-            ctx.supabase, ctx.userId, arbetsgivare, period, { lasPeriod },
+            ctx.supabase, ctx.userId, ctx.companyId, arbetsgivare, period, { lasPeriod },
           )
           if (!result.ok) {
             return NextResponse.json(
@@ -1618,7 +1624,7 @@ export const skatteverketExtension: Extension = {
           }
 
           const result = await agiGetKvittenser(
-            { mode: 'user', supabase: ctx.supabase, userId: ctx.userId },
+            { mode: 'user', supabase: ctx.supabase, userId: ctx.userId, companyId: ctx.companyId },
             arbetsgivare,
             period
           )
@@ -1800,7 +1806,7 @@ export const skatteverketExtension: Extension = {
         }
 
         try {
-          const result = await agiKontrolleraHU(ctx.supabase, ctx.userId, parsed.data)
+          const result = await agiKontrolleraHU(ctx.supabase, ctx.userId, ctx.companyId, parsed.data)
           if (!result.ok) {
             await writeSkatteverketAudit(ctx, {
               endpoint: 'agi.kontrollera.hu',
@@ -1908,7 +1914,7 @@ export const skatteverketExtension: Extension = {
         }
 
         try {
-          const result = await agiKontrolleraIU(ctx.supabase, ctx.userId, parsed.data)
+          const result = await agiKontrolleraIU(ctx.supabase, ctx.userId, ctx.companyId, parsed.data)
           if (!result.ok) {
             await writeSkatteverketAudit(ctx, {
               endpoint: 'agi.kontrollera.iu',
@@ -1968,7 +1974,7 @@ export const skatteverketExtension: Extension = {
               { status: 400 },
             )
           }
-          const result = await agiLasPeriod(ctx.supabase, ctx.userId, arbetsgivare, period)
+          const result = await agiLasPeriod(ctx.supabase, ctx.userId, ctx.companyId, arbetsgivare, period)
           if (!result.ok) {
             return NextResponse.json(
               { error: result.error, code: result.body?.kod },
@@ -1998,7 +2004,7 @@ export const skatteverketExtension: Extension = {
               { status: 400 },
             )
           }
-          const result = await agiLasUppPeriod(ctx.supabase, ctx.userId, arbetsgivare, period)
+          const result = await agiLasUppPeriod(ctx.supabase, ctx.userId, ctx.companyId, arbetsgivare, period)
           if (!result.ok) {
             return NextResponse.json(
               { error: result.error, code: result.body?.kod },
@@ -2055,6 +2061,19 @@ export const skatteverketExtension: Extension = {
       handler: async (_request: Request, ctx?: ExtensionContext) => {
         if (!ctx) {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        // The Skattekonto page keys its "inte anslutet" empty state off a 401
+        // NOT_CONNECTED from this route. Connections are per (user, company):
+        // without this check, a company that never connected rendered the
+        // connected-but-unsynced view because the snapshot read below always
+        // answered 200 (with null data), and "Synkronisera nu" then died on a
+        // behorighet error at SKV.
+        const tokens = await getTokens(ctx.supabase, ctx.userId, ctx.companyId)
+        if (!tokens) {
+          return NextResponse.json(
+            { error: 'Inte ansluten till Skatteverket.', code: 'NOT_CONNECTED' },
+            { status: 401 },
+          )
         }
         const snapshot = await ctx.settings.get<SkattekontoBalanceSnapshot>(SKATTEKONTO_BALANCE_SNAPSHOT_KEY)
         const lastSyncedAt = await ctx.settings.get<string>(SKATTEKONTO_LAST_SYNCED_AT_KEY)
@@ -2630,7 +2649,7 @@ async function commitSubmitAgi(
       await buildAgiUnderlag(supabase, companyId, salaryRunId)
 
     // 1. POST /underlag (XML) → inlamningId.
-    const submit = await agiPostUnderlag(supabase, userId, xml)
+    const submit = await agiPostUnderlag(supabase, userId, companyId, xml)
     await writeSkatteverketAudit(ctx, {
       endpoint: 'agi/submit', agRegistreradId: arbetsgivare, redovisningsperiod: period,
       outcome: submit.ok ? 'ok' : 'skv_error', responseStatus: submit.status,
@@ -2647,10 +2666,10 @@ async function commitSubmitAgi(
     }))
 
     // 2. Poll kontrollresultat (bounded; SKV is typically sub-second).
-    let kontroll = await agiGetKontrollresultat(supabase, userId, inlamningId)
+    let kontroll = await agiGetKontrollresultat(supabase, userId, companyId, inlamningId)
     for (let i = 0; i < 2 && kontroll.ok && kontroll.data.status === 'PROCESSING'; i++) {
       await sleep(750)
-      kontroll = await agiGetKontrollresultat(supabase, userId, inlamningId)
+      kontroll = await agiGetKontrollresultat(supabase, userId, companyId, inlamningId)
     }
     await writeSkatteverketAudit(ctx, {
       endpoint: 'agi/kontrollresultat', agRegistreradId: arbetsgivare, redovisningsperiod: period,
@@ -2678,7 +2697,7 @@ async function commitSubmitAgi(
     }
 
     // 3. skapaGranskningsunderlag (lasPeriod=true) → Mina Sidor signing link.
-    const gransk = await agiSkapaGranskningsunderlag(supabase, userId, arbetsgivare, period, { lasPeriod: true })
+    const gransk = await agiSkapaGranskningsunderlag(supabase, userId, companyId, arbetsgivare, period, { lasPeriod: true })
     await writeSkatteverketAudit(ctx, {
       endpoint: 'agi/granskningsunderlag', agRegistreradId: arbetsgivare, redovisningsperiod: period,
       outcome: gransk.ok ? 'ok' : 'skv_error', responseStatus: gransk.status,

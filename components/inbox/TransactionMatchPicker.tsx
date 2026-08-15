@@ -345,7 +345,7 @@ export default function TransactionMatchPicker({
         {/* Underlag reference: what we're matching against, so a currency or
             amount mismatch with a candidate is obvious at a glance. */}
         {(total != null || supplier) && (
-          <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs flex items-center gap-x-3 gap-y-1 flex-wrap">
+          <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs flex items-center gap-x-3 gap-y-1 flex-wrap">
             <span className="text-muted-foreground shrink-0">Underlag</span>
             {supplier && <span className="font-medium truncate">{supplier}</span>}
             {total != null && (
@@ -420,7 +420,7 @@ export default function TransactionMatchPicker({
                   onClick={() => void handlePick(c.id)}
                   disabled={!!matchingId}
                   className={cn(
-                    'w-full text-left flex items-center gap-3 py-3 hover:bg-muted/50 transition-colors px-2 -mx-2 rounded',
+                    'w-full text-left flex items-center gap-3 py-3 hover:bg-muted/50 transition-colors px-2 -mx-2 rounded-sm',
                     matchingId && !isMatching && 'opacity-50',
                   )}
                 >

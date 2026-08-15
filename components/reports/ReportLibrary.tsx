@@ -87,7 +87,7 @@ export function ReportLibrary({
             type="button"
             onClick={() => setQuery('')}
             aria-label={t('search_clear')}
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors duration-150 hover:text-foreground"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground transition-colors duration-150 hover:text-foreground"
           >
             <X className="h-3.5 w-3.5" aria-hidden="true" />
           </button>

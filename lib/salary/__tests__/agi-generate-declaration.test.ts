@@ -245,3 +245,162 @@ describe('generateAgiDeclaration: avgifter overrides on an F-skatt row are ignor
     expect(fSkattIu).not.toContain('faltkod="011"')
   })
 })
+
+describe('generateAgiDeclaration: whole-krona amounts (öretal bortfaller)', () => {
+  // Öre-bearing roster: hourly-wage taxes and 31,42 % avgifter rarely land on
+  // whole kronor. AGI amounts are declared in whole kronor with the öre
+  // dropped (SFF 2011:1261 22 kap. 1 §).
+  const ORE_ROW_1 = {
+    ...REGULAR_ROW,
+    gross_salary: 51158,
+    tax_withheld: 12268.6,
+    avgifter_basis: 51158,
+    avgifter_amount: 16073.84,
+  }
+  const ORE_ROW_2 = {
+    ...REGULAR_ROW,
+    employee_id: '22222222-2222-4222-8222-222222222222',
+    gross_salary: 10000.9,
+    tax_withheld: 4000.6,
+    avgifter_basis: 10000.9,
+    avgifter_amount: 3141.93,
+    employee: {
+      personnummer: 'emp2_encrypted',
+      specification_number: 2,
+      f_skatt_status: 'a_skatt',
+    },
+  }
+
+  it('declares FK497 as the sum of per-IU truncated taxes, not the truncated sum', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [ORE_ROW_1, ORE_ROW_2])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    // Per-IU FK001 truncates each employee's tax: 12 268 and 4 000.
+    expect(iuBlockFor(result.xml, '199001011234')).toContain(
+      '<gem:AvdrPrelSkatt faltkod="001">12268</gem:AvdrPrelSkatt>',
+    )
+    expect(iuBlockFor(result.xml, '198506159876')).toContain(
+      '<gem:AvdrPrelSkatt faltkod="001">4000</gem:AvdrPrelSkatt>',
+    )
+    // FK497 must equal the sum of the truncated FK001 values (16 268), NOT
+    // the truncated öre-exact sum (trunc(16 269,20) = 16 269): the HU total
+    // has to agree with what the IUs actually declare.
+    expect(result.totals.totalTax).toBe(16268)
+    expect(result.xml).toContain(
+      '<gem:SummaSkatteavdr faltkod="497">16268</gem:SummaSkatteavdr>',
+    )
+  })
+
+  it('declares FK487 and per-IU underlag in whole kronor', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [ORE_ROW_1, ORE_ROW_2])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    // FK011 truncates the öre-bearing gross: 10 000,90 declares as 10 000.
+    expect(iuBlockFor(result.xml, '198506159876')).toContain(
+      '<gem:KontantErsattningUlagAG faltkod="011">10000</gem:KontantErsattningUlagAG>',
+    )
+    // FK487 is Skatteverket's own computation (IK587): per sats on the
+    // whole-krona underlag sum. trunc((51 158 + 10 000) × 31,42 %) =
+    // trunc(19 215,84) = 19 215. This is the same number the salary booking
+    // credits on 2731 and the skattekonto draw settles.
+    expect(result.totals.totalAvgifterBasis).toBe(61158)
+    expect(result.totals.totalAvgifterAmount).toBe(19215)
+    expect(result.xml).toContain(
+      '<gem:SummaArbAvgSlf faltkod="487">19215</gem:SummaArbAvgSlf>',
+    )
+  })
+
+  it('computes FK487 per sats on summed underlag, not by truncating the öre-exact sum', async () => {
+    // Two employees at 30 000,99 kr: öre-exact avgifter are 9 426,51 each
+    // (18 853,02 in total), but Skatteverket declares 30 000 per IU and
+    // computes trunc(60 000 × 31,42 %) = 18 852: one whole krona below the
+    // truncated öre-exact sum. The filed FK487 must be Skatteverket's
+    // number, or kontroll B_006 flags the filing and the skattekonto draw
+    // diverges from the booked 2731.
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [
+      { ...ORE_ROW_1, gross_salary: 30000.99, avgifter_basis: 30000.99, avgifter_amount: 9426.51, tax_withheld: 9000 },
+      { ...ORE_ROW_2, gross_salary: 30000.99, avgifter_basis: 30000.99, avgifter_amount: 9426.51, tax_withheld: 9000 },
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    expect(result.totals.totalAvgifterBasis).toBe(60000)
+    expect(result.totals.totalAvgifterAmount).toBe(18852)
+    expect(result.xml).toContain(
+      '<gem:SummaArbAvgSlf faltkod="487">18852</gem:SummaArbAvgSlf>',
+    )
+    // The category breakdown cross-foots exactly against the total.
+    expect(result.totals.avgifterByCategory).toEqual({
+      standard: { basis: 60000, amount: 18852 },
+    })
+  })
+
+  it('keeps colleagues SKV-exact when one employee carries an amount override', async () => {
+    // FoU-style override on E1 must not cost E2 its per-sats declared
+    // amount: E2 declares trunc(30 000 × 31,42 %) = 9 426 from its filed
+    // underlag while E1 contributes its manual 7 855.
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [
+      { ...ORE_ROW_1, avgifter_amount_override: 7855 },
+      { ...ORE_ROW_2, gross_salary: 30000.99, avgifter_basis: 30000.99, avgifter_amount: 9426.51 },
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    expect(result.totals.totalAvgifterAmount).toBe(7855 + 9426)
+    expect(result.xml).toContain(
+      `<gem:SummaArbAvgSlf faltkod="487">${7855 + 9426}</gem:SummaArbAvgSlf>`,
+    )
+    const catSum = Object.values(result.totals.avgifterByCategory).reduce(
+      (s, c) => s + (c?.amount ?? 0),
+      0,
+    )
+    expect(catSum).toBe(result.totals.totalAvgifterAmount)
+  })
+
+  it('a basis-only override is inert on FK487 and the stored totals (filed underlag rules)', async () => {
+    // An avgifter_basis_override never reaches the filed IU fields: FK011
+    // stays the un-overridden gross, and Skatteverket computes IK587 from
+    // that. Letting the override steer FK487 would file 12 568 against IUs
+    // that prove 16 073 and underpay the skattekonto by 3 505 kr.
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [
+      {
+        ...ORE_ROW_1,
+        avgifter_basis_override: 40000,
+        avgifter_amount_override: null,
+      },
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    expect(iuBlockFor(result.xml, '199001011234')).toContain(
+      '<gem:KontantErsattningUlagAG faltkod="011">51158</gem:KontantErsattningUlagAG>',
+    )
+    expect(result.totals.totalAvgifterBasis).toBe(51158)
+    expect(result.totals.totalAvgifterAmount).toBe(16073)
+    expect(result.xml).toContain(
+      '<gem:SummaArbAvgSlf faltkod="487">16073</gem:SummaArbAvgSlf>',
+    )
+  })
+})

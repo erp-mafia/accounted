@@ -41,7 +41,9 @@ interface MockLine {
 interface MockChartAccount {
   account_number: string
   account_name: string
+  account_class: number
   default_vat_rate: number | null
+  default_vat_treatment: string | null
 }
 
 /**
@@ -127,7 +129,9 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
         [{
           account_number: '3011',
           account_name: 'Försäljning tjänster inom Sverige, 25 % moms',
+          account_class: 3,
           default_vat_rate: null,
+          default_vat_treatment: null,
         }],
       ),
     )
@@ -136,6 +140,54 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     expect(result.rutor.ruta10).toBe(2431.25)
     expect(result.declaration_checks.map((finding) => finding.code))
       .not.toContain('OUTPUT_VAT_WITHOUT_SALES_BASE')
+    expect(result.ready_to_close).toBe(true)
+  })
+
+  it('honors an explicit override of a standard BAS revenue account', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '3011', credit_amount: 1000 },
+          { entry: 'e1', account_number: '1510', debit_amount: 1000 },
+        ],
+        [{
+          account_number: '3011',
+          account_name: 'Momsfri försäljning',
+          account_class: 3,
+          default_vat_rate: 0,
+          default_vat_treatment: 'exempt',
+        }],
+      ),
+    )
+
+    expect(result.rutor.ruta05).toBe(0)
+  })
+
+  it('accepts a custom EU goods basis account in the MCP close check', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '4056', debit_amount: 1000 },
+          { entry: 'e1', account_number: '2440', credit_amount: 1000 },
+          { entry: 'e1', account_number: '2614', credit_amount: 250 },
+          { entry: 'e1', account_number: '2645', debit_amount: 250 },
+        ],
+        [{
+          account_number: '4056',
+          account_name: 'Inköp varor EU 25 %',
+          account_class: 4,
+          default_vat_rate: 0.25,
+          default_vat_treatment: 'reverse_charge_eu_goods',
+        }],
+      ),
+    )
+
+    expect(result.declaration_checks.map((finding) => finding.code))
+      .not.toContain('RC_BASIS_MISSING')
     expect(result.ready_to_close).toBe(true)
   })
 

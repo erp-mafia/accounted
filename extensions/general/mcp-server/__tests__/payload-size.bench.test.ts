@@ -168,9 +168,12 @@ describe('tools/list payload size guard', () => {
     //     Both property descriptions trimmed to one sentence first; headroom
     //     before the change was under 20 tokens, so even the trimmed wire
     //     contract crossed.
+    //   * 59.5K to 59.7K with account VAT treatments: create_account and
+    //     update_account both expose the 12-value treatment vocabulary. The
+    //     descriptions are minimal; the enum values are the wire contract.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(59_500)
+    expect(approxTokens).toBeLessThan(59_700)
   })
 })

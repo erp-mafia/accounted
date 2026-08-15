@@ -61,10 +61,10 @@ export default async function DashboardPage() {
     supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
     supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed'),
-    // Skatteverket tokens are user-scoped (one BankID identity per user) but
-    // carry the active company_id; either filter would work: we use user_id
-    // because that's what the token-store reads/writes against.
-    supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
+    // Skatteverket connections are per (user, company): filtering on user_id
+    // alone made a connection on ANY of the user's companies hide the connect
+    // nudge on all of them.
+    supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id).eq('company_id', companyId),
     // Any item ever received in the document inbox (email/WhatsApp/upload)
     // marks the receipts checklist step done: same "has ever done X" shape
     // as the other flags above.

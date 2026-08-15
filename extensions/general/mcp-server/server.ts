@@ -18,6 +18,8 @@ import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
@@ -46,7 +48,7 @@ import {
   rcInputTotalsFromDeclaration,
   calculateVatDeclaration,
 } from '@/lib/reports/vat-declaration'
-import { fetchDynamicRuta05Accounts } from '@/lib/reports/vat-revenue-accounts'
+import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 // The momsdeklaration completeness checks live in core (lib/reports) and are
 // shared with the web UI's "Kontroll av underlaget" gate. The MCP surface
 // imports them instead of mirroring them: a hand-rolled copy here is exactly
@@ -86,6 +88,12 @@ import {
 } from './tool-namespace'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { normalizeVatRateToDecimal } from '@/lib/vat/supplier-invoice-line-checks'
+import {
+  ACCOUNT_VAT_TREATMENTS,
+  defaultRateForVatTreatment,
+  isAccountVatTreatment,
+  isVatTreatmentAllowedForAccountClass,
+} from '@/lib/vat/account-vat-treatment'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
 import { accountClassTypeConflict } from '@/lib/pending-operations/schemas/account'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -824,6 +832,9 @@ async function categorizeTransactionCore(
   // Underlag's actual VAT when it differs from rate × belopp (e.g. dricks on
   // a restaurant receipt carries no moms). Replaces the computed VAT line.
   vatAmount: number | undefined,
+  // Explicit business-side account replacing the category default (v1 REST
+  // account_override semantics): must exist active in chart_of_accounts.
+  accountOverride: string | undefined,
   userId: string,
   companyId: string,
   supabase: SupabaseClient,
@@ -959,6 +970,22 @@ async function categorizeTransactionCore(
     log,
   )
   mappingResult = applySettlementAccount(mappingResult, settlementAccount)
+
+  // Applied at staging so the agent gets the tight rejection (unknown or
+  // inactive account) BEFORE anything is queued for approval, and the staged
+  // preview shows the account that will actually be posted. The commit path
+  // (categorizeMatchedTransaction) re-validates independently.
+  if (accountOverride) {
+    if (!isBusiness) {
+      throw new Error('account_override kan inte kombineras med category "private".')
+    }
+    mappingResult = await applyAccountOverride(
+      supabase, companyId, accountOverride, transaction.amount, mappingResult,
+      // Explicit VAT intent: a stated treatment or an underlag vat_amount.
+      // Without it the override books gross (see applyAccountOverride).
+      vatTreatment != null || vatAmount != null,
+    )
+  }
 
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
     throw new Error(
@@ -1338,33 +1365,15 @@ const SKV_AGI_STATUS_OUTPUT_SCHEMA = {
 // (the original sale's VAT silently disappears) and over-credit Period N+M
 // (a reversal with no original), incorrect per ML 2023:200.
 
-/** Common BAS taxable-revenue accounts that contribute to ruta 05.
- *
- *  Conservative expansion beyond 3001/3002/3003. Excludes 3004 (momsfri,
- *  exempt) and 3108/3305/3308 (handled by ruta35/40/39). 3106 covers the
- *  rare case of taxable EU goods (momspliktig EU-leverans, e.g. when the
- *  buyer's VAT number is invalid).
- *
- *  This hand-maintained widening predates #1261 and is kept so no company
- *  loses a figure it already saw. It is no longer the only path: a company's
- *  own class 3 konto marked with a moms-sats is resolved at runtime by
- *  fetchDynamicRuta05Accounts and unioned in below, which is what actually
- *  covers non-standard charts (Accounted's BAS chart ships no varugrupp
- *  accounts at all). */
-const RUTA_05_ACCOUNTS = [
-  // The 30xx gruppkonto. ACCOUNT_RUTA maps it to ruta05, so leaving it out here
-  // made a balance on 3000 appear in the filed projection but not in
-  // report.rutor.ruta05.
+// Keep the MCP report's historical ruta 05 widening for accounts that do not
+// have an explicit treatment. The effective resolver adds custom ruta 05
+// accounts and removes any of these when the company overrides their treatment.
+const RUTA_05_COMPATIBILITY_ACCOUNTS = [
   '3000',
-  // Domestic sales by VAT rate (canonical BAS)
   '3001', '3002', '3003', '3005', '3006', '3007', '3008',
-  // Taxable EU goods (momspliktig, buyer's VAT number invalid or buyer is private)
   '3106',
-  // Domestic services (alternative numbering some companies use)
   '3041', '3042', '3043', '3044', '3045', '3046', '3047', '3048',
-  // Domestic goods (alternative numbering)
   '3051', '3052', '3053', '3054', '3055', '3056', '3057', '3058',
-  // Other domestic taxable
   '3071', '3072', '3073', '3074', '3075', '3076', '3077', '3078',
 ] as const
 
@@ -1387,6 +1396,7 @@ export interface VatReportResult {
 
 export interface VatReportWithRutor {
   report: VatReportResult
+  dynamicVatAccounts: Awaited<ReturnType<typeof fetchDynamicVatAccounts>>
   /**
    * The FULL SKV 4700 projection of the same ledger aggregate, via core's
    * `rutorFromTotals`. `report.rutor` is the trimmed agent-facing view: it has
@@ -1525,43 +1535,36 @@ export async function computeVatReportWithRutor(
     accountTotals.set(acc, existing)
   }
 
-  function creditBalance(acc: string): number {
-    const t = accountTotals.get(acc)
-    return t ? Math.round((t.credit - t.debit) * 100) / 100 : 0
-  }
-
   function debitBalance(acc: string): number {
     const t = accountTotals.get(acc)
     return t ? Math.round((t.debit - t.credit) * 100) / 100 : 0
   }
 
-  // The company's own momspliktiga intäktskonton join the hand-maintained list.
-  // Deduped: an account can appear in both (e.g. 3041 with a moms-sats set),
-  // and counting it twice would inflate ruta 05.
-  const dynamicRuta05 = await fetchDynamicRuta05Accounts(supabase, companyId)
-  const ruta05Accounts = [...new Set([...RUTA_05_ACCOUNTS, ...dynamicRuta05.accounts])]
-  const ruta05 = ruta05Accounts.reduce((sum, acc) => sum + creditBalance(acc), 0)
-  const ruta10 = creditBalance('2611')
-  const ruta11 = creditBalance('2621')
-  const ruta12 = creditBalance('2631')
-  const ruta30 = creditBalance('2614')
-  const ruta31 = creditBalance('2624')
-  const ruta32 = creditBalance('2634')
-  const ruta35 = creditBalance('3108')   // EU intra-community goods supplies (momsfri leverans till EU)
-  const ruta39 = creditBalance('3308')
-  const ruta40 = creditBalance('3305')
+  function creditBalance(acc: string): number {
+    return -debitBalance(acc)
+  }
+
+  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
+  const declarationRutor = rutorFromTotals(accountTotals, dynamicVatAccounts)
+  const {
+    ruta10, ruta11, ruta12, ruta30, ruta31, ruta32,
+    ruta35, ruta39, ruta40, ruta48, ruta49, ruta60, ruta61, ruta62,
+  } = declarationRutor
+  const reportRuta05Accounts = new Set<string>(
+    RUTA_05_COMPATIBILITY_ACCOUNTS.filter(
+      (account) => !dynamicVatAccounts.explicitAccounts.has(account),
+    ),
+  )
+  for (const [account, mapping] of dynamicVatAccounts.mappingByAccount) {
+    if (mapping.box === 'ruta05') reportRuta05Accounts.add(account)
+  }
+  const ruta05 = [...reportRuta05Accounts]
+    .reduce((sum, account) => sum + creditBalance(account), 0)
   // Import VAT (since 2015 declared via momsdeklaration, not Tullverket): the
   // importer books output VAT to 2615/2625/2635 (ruta 60/61/62) and the
   // matching deductible input to 2645 (rolls into ruta 48 below).
-  const ruta60 = creditBalance('2615')
-  const ruta61 = creditBalance('2625')
-  const ruta62 = creditBalance('2635')
   const calculatedInput2645 = debitBalance('2645')
   const calculatedInput2647 = debitBalance('2647')
-  const ruta48 = debitBalance('2641') + calculatedInput2645 + calculatedInput2647
-  const ruta49 = Math.round(
-    (ruta10 + ruta11 + ruta12 + ruta30 + ruta31 + ruta32 + ruta60 + ruta61 + ruta62 - ruta48) * 100
-  ) / 100
 
   const monthNames = ['Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
     'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December']
@@ -1621,7 +1624,8 @@ export async function computeVatReportWithRutor(
   // (incl. rutor 20-24 and 50) instead of the trimmed report view.
   return {
     report,
-    declarationRutor: rutorFromTotals(accountTotals, dynamicRuta05.accounts),
+    declarationRutor,
+    dynamicVatAccounts,
     accountTotals,
   }
 }
@@ -1655,6 +1659,8 @@ async function runVatCompletenessChecks(
   year: number,
   period: number,
   accountTotals?: VatCheckAccountTotals,
+  dynamicVatAccounts?: Awaited<ReturnType<typeof fetchDynamicVatAccounts>>,
+  rcBasisByRate?: { r25: number; r12: number; r6: number },
 ): Promise<VatDeclarationCheck[]> {
   let scan: RcBasisGapScan
   try {
@@ -1667,7 +1673,10 @@ async function runVatCompletenessChecks(
   // caller supplied the account totals; without them the per-voucher gaps
   // keep their blocking ERROR tier rather than guessing.
   const evidence = accountTotals
-    ? { rutor, rcBasisByRate: rcBasisTotalsByRate(accountTotals) }
+    ? {
+        rutor,
+        rcBasisByRate: rcBasisByRate ?? rcBasisTotalsByRate(accountTotals, dynamicVatAccounts),
+      }
     : undefined
   return withRcBasisGapFindings(runVatDeclarationChecks(rutor, accountTotals), scan, evidence)
 }
@@ -2052,7 +2061,7 @@ export async function computeVatCloseCheck(
   //    step 4b: they need rutor 20-24 and 50, which the report view omits, plus
   //    the per-account totals so the RC input comparison reads 2645/2647
   //    instead of the ruta 48 aggregate.
-  const { report: vatReport, declarationRutor, accountTotals } =
+  const { report: vatReport, declarationRutor, dynamicVatAccounts, accountTotals } =
     await computeVatReportWithRutor(args, companyId, supabase)
   const { start, end, type: periodType, year, period } = vatReport.period
 
@@ -2163,6 +2172,7 @@ export async function computeVatCloseCheck(
     Number(year),
     Number(period),
     accountTotals,
+    dynamicVatAccounts,
   )
 
   // Zero deductible input VAT against self-assessed utgående moms is
@@ -4172,7 +4182,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_categorize_transaction',
     title: 'Categorize Bank Transaction',
-    description: 'Categorize a bank transaction. Stages the verifikat: cost line NET of moms, bank line gross; dimensions bag tags the cost line. vat_amount overrides computed moms; reverse_charge rejected when the underlag shows seller VAT. Commit via gnubok_approve_pending_operation.',
+    description: 'Categorize a bank transaction. Stages the verifikat: cost line NET of moms, bank line gross; dimensions bag tags the cost line. account_override books the business side on any active kontoplan account (custom incl.). Commit via gnubok_approve_pending_operation.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4181,6 +4191,7 @@ export const tools: McpTool[] = [
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
         vat_treatment: { type: 'string', description: 'VAT treatment override. Defaults to standard_25 for business expenses. Set reverse_charge ONLY when the underlag confirms the seller did NOT charge VAT (omvänd skattskyldighet). An invoice with foreign VAT already debited is NOT reverse charge.', enum: [...VALID_VAT_TREATMENTS] },
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp: e.g. dricks carries no VAT. Requires a rate-based vat_treatment. Swedish moms only: foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
+        account_override: { type: 'string', pattern: '^\\d{4}$', description: 'Books the business side (debit when money goes out, credit when money comes in) on this kontoplan account instead of the category default: the ONLY way to reach company-custom accounts (e.g. VMB). Must exist and be active (gnubok_list_accounts; create via gnubok_create_account). VMB purchases/sales carry no deductible moms: use vat_treatment "exempt". Without an explicit vat_treatment (or vat_amount) the override books GROSS with no auto-VAT line: a moms leg is never guessed onto a custom account. Class-2 overrides outside 2610-2649 always drop auto-VAT. Not valid with category "private". State the actual affärshändelse in notes (BFL 5 kap).' },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
         dimensions: {
           type: 'object',
@@ -4208,12 +4219,20 @@ export const tools: McpTool[] = [
       // categorization preview runs. Resolution happens right before staging.
       const inputDimensions = parseDimensionsArg(args.dimensions, 'dimensions')
 
+      // Runtime guard (hosts don't always enforce inputSchema patterns).
+      const accountOverride =
+        args.account_override === undefined ? undefined : String(args.account_override).trim()
+      if (accountOverride !== undefined && !ACCOUNT_NUMBER_RE.test(accountOverride)) {
+        throw new Error('account_override must be exactly 4 digits, e.g. "4020".')
+      }
+
       // Compute the preview (accounts, amounts, VAT lines)
       const result = await categorizeTransactionCore(
         args.transaction_id as string,
         args.category as TransactionCategory,
         args.vat_treatment as VatTreatment | undefined,
         vatAmount,
+        accountOverride,
         userId,
         companyId,
         supabase,
@@ -4296,6 +4315,7 @@ export const tools: McpTool[] = [
           category: args.category,
           vat_treatment: args.vat_treatment || null,
           vat_amount: vatAmount ?? null,
+          account_override: accountOverride ?? null,
           notes: typeof args.notes === 'string' && args.notes.trim().length > 0
             ? (args.notes as string).trim()
             : null,
@@ -4305,6 +4325,7 @@ export const tools: McpTool[] = [
         {
           debit_account: result.debit_account,
           credit_account: result.credit_account,
+          ...(accountOverride ? { account_override: accountOverride } : {}),
           amount: result.amount,
           currency: result.currency,
           // Exact journal lines the approval will post (net cost line, VAT
@@ -6377,6 +6398,11 @@ export const tools: McpTool[] = [
         description: { type: 'string' },
         default_vat_code: { type: 'string' },
         default_vat_rate: { type: 'number', enum: [0, 0.06, 0.12, 0.25], description: 'Fraction (0.25 = 25%). Livsmedel: 0.06 from 2026-04-01 (temporary cut from 0.12, reverts 2027-12-31).' },
+        default_vat_treatment: {
+          type: 'string',
+          enum: [...ACCOUNT_VAT_TREATMENTS],
+          description: 'VAT return treatment.',
+        },
         sru_code: { type: 'string', description: 'Prefilled for BAS numbers.' },
         dry_run: { type: 'boolean', description: 'Validate and preview without staging.' },
         idempotency_key: { type: 'string', description: 'Per-operation UUID for safe retries (24h TTL).' },
@@ -6438,6 +6464,17 @@ export const tools: McpTool[] = [
       if (vatRate !== undefined && ![0, 0.06, 0.12, 0.25].includes(vatRate)) {
         throw new Error('default_vat_rate must be one of 0, 0.06, 0.12, 0.25 (fraction, not percent)')
       }
+      const vatTreatment = args.default_vat_treatment
+      if (vatTreatment !== undefined && vatTreatment !== null && !isAccountVatTreatment(vatTreatment)) {
+        throw new Error('default_vat_treatment is not supported')
+      }
+      const accountClass = Number(accountNumber[0])
+      if (vatTreatment && !isVatTreatmentAllowedForAccountClass(vatTreatment, accountClass)) {
+        throw new Error('default_vat_treatment is not valid for this account class')
+      }
+      const effectiveVatRate = vatTreatment && vatRate === undefined
+        ? defaultRateForVatTreatment(vatTreatment, accountClass)
+        : vatRate
 
       const params: Record<string, unknown> = {
         account_number: accountNumber,
@@ -6447,7 +6484,8 @@ export const tools: McpTool[] = [
         plan_type: ref ? 'full_bas' : 'k1',
         description: String(args.description ?? '').trim() || ref?.description || undefined,
         default_vat_code: String(args.default_vat_code ?? '').trim() || undefined,
-        default_vat_rate: vatRate,
+        default_vat_rate: effectiveVatRate,
+        default_vat_treatment: vatTreatment,
         sru_code: String(args.sru_code ?? '').trim() || ref?.sru_code || undefined,
       }
 
@@ -6457,7 +6495,7 @@ export const tools: McpTool[] = [
         { ...params, source: ref ? 'bas_2026' : 'custom' },
         actor,
         {
-          description: 'Once approved, the account is active and can carry voucher lines via gnubok_create_voucher or gnubok_categorize_transaction.',
+          description: 'Once approved, the account is active and bookable via gnubok_create_voucher, gnubok_bulk_book_transactions, or gnubok_categorize_transaction with account_override.',
           tool: 'gnubok_list_accounts',
         },
         {
@@ -6482,6 +6520,11 @@ export const tools: McpTool[] = [
         description: { type: 'string' },
         default_vat_code: { type: 'string' },
         default_vat_rate: { type: 'number', enum: [0, 0.06, 0.12, 0.25], description: 'Default VAT rate as a fraction (0.25 = 25%). Livsmedel: 0.06 from 2026-04-01 (temporary cut from 0.12, reverts 2027-12-31).' },
+        default_vat_treatment: {
+          type: ['string', 'null'],
+          enum: [...ACCOUNT_VAT_TREATMENTS, null],
+          description: 'VAT return treatment.',
+        },
         sru_code: { type: 'string' },
         is_active: { type: 'boolean', description: 'false deactivates (hides from pickers, keeps history); true (re)activates.' },
         dry_run: { type: 'boolean' },
@@ -6503,7 +6546,7 @@ export const tools: McpTool[] = [
 
       const { data: current, error: fetchErr } = await supabase
         .from('chart_of_accounts')
-        .select('account_number, account_name, description, default_vat_code, default_vat_rate, sru_code, is_active')
+        .select('account_number, account_name, description, default_vat_code, default_vat_rate, default_vat_treatment, sru_code, is_active')
         .eq('company_id', companyId)
         .eq('account_number', accountNumber)
         .maybeSingle()
@@ -6516,17 +6559,30 @@ export const tools: McpTool[] = [
       if (vatRate !== undefined && ![0, 0.06, 0.12, 0.25].includes(vatRate)) {
         throw new Error('default_vat_rate must be one of 0, 0.06, 0.12, 0.25 (fraction, not percent)')
       }
+      const vatTreatment = args.default_vat_treatment
+      if (vatTreatment !== undefined && vatTreatment !== null && !isAccountVatTreatment(vatTreatment)) {
+        throw new Error('default_vat_treatment is not supported')
+      }
+      const accountClass = Number(accountNumber[0])
+      if (vatTreatment && !isVatTreatmentAllowedForAccountClass(vatTreatment, accountClass)) {
+        throw new Error('default_vat_treatment is not valid for this account class')
+      }
 
       const params: Record<string, unknown> = { account_number: accountNumber }
       const changes: Record<string, unknown> = {}
-      for (const key of ['account_name', 'description', 'default_vat_code', 'default_vat_rate', 'sru_code', 'is_active']) {
+      for (const key of ['account_name', 'description', 'default_vat_code', 'default_vat_rate', 'default_vat_treatment', 'sru_code', 'is_active']) {
         if (args[key] !== undefined) {
           params[key] = args[key]
           changes[key] = args[key]
         }
       }
+      if (vatTreatment && vatRate === undefined && current.default_vat_rate == null) {
+        const derivedRate = defaultRateForVatTreatment(vatTreatment, accountClass)
+        params.default_vat_rate = derivedRate
+        changes.default_vat_rate = derivedRate
+      }
       if (Object.keys(changes).length === 0) {
-        throw new Error('Nothing to update: pass at least one of account_name, description, default_vat_code, default_vat_rate, sru_code, is_active.')
+        throw new Error('Nothing to update: pass at least one account field.')
       }
 
       return stagePendingOperation(supabase, companyId, userId, 'update_account',
@@ -11189,6 +11245,8 @@ export const tools: McpTool[] = [
       const completenessChecks = await runVatCompletenessChecks(
         supabase, companyId, declaration.rutor, periodType, year, period,
         rcInputTotalsFromDeclaration(declaration),
+        undefined,
+        declaration.rcBasisByRate,
       )
       const completenessOk = !isFilingBlocked(completenessChecks)
 
@@ -11196,7 +11254,7 @@ export const tools: McpTool[] = [
         const { redovisare, redovisningsperiod, momsuppgift } =
           await buildMomsuppgift(supabase, companyId, { periodType, year, period })
         const res = await skvRequest(
-          supabase, userId, 'POST', `/kontrollera/${redovisare}/${redovisningsperiod}`, momsuppgift,
+          supabase, userId, companyId, 'POST', `/kontrollera/${redovisare}/${redovisningsperiod}`, momsuppgift,
         )
         await writeSkatteverketAudit(ctx, {
           endpoint: 'kontrollera', agRegistreradId: redovisare, redovisningsperiod,
@@ -11266,7 +11324,7 @@ export const tools: McpTool[] = [
         try {
           const prep = await buildMomsuppgift(supabase, companyId, { periodType, year, period })
           const res = await skvRequest(
-            supabase, userId, 'POST', `/kontrollera/${prep.redovisare}/${prep.redovisningsperiod}`, prep.momsuppgift,
+            supabase, userId, companyId, 'POST', `/kontrollera/${prep.redovisare}/${prep.redovisningsperiod}`, prep.momsuppgift,
           )
           await writeSkatteverketAudit(ctx, {
             endpoint: 'kontrollera', agRegistreradId: prep.redovisare, redovisningsperiod: prep.redovisningsperiod,
@@ -11333,7 +11391,7 @@ export const tools: McpTool[] = [
         let submitted: unknown = null
         let decided: unknown = null
         if (state === 'submitted' || state === 'both') {
-          const res = await skvRequest(supabase, userId, 'GET', `/inlamnat/${redovisare}/${redovisningsperiod}`)
+          const res = await skvRequest(supabase, userId, companyId, 'GET', `/inlamnat/${redovisare}/${redovisningsperiod}`)
           await writeSkatteverketAudit(ctx, {
             endpoint: 'inlamnat', agRegistreradId: redovisare, redovisningsperiod,
             outcome: res.ok || res.status === 404 ? 'ok' : 'skv_error', responseStatus: res.status,
@@ -11347,7 +11405,7 @@ export const tools: McpTool[] = [
           }
         }
         if (state === 'decided' || state === 'both') {
-          const res = await skvRequest(supabase, userId, 'GET', `/beslutat/${redovisare}/${redovisningsperiod}`)
+          const res = await skvRequest(supabase, userId, companyId, 'GET', `/beslutat/${redovisare}/${redovisningsperiod}`)
           await writeSkatteverketAudit(ctx, {
             endpoint: 'beslutat', agRegistreradId: redovisare, redovisningsperiod,
             outcome: res.ok || res.status === 404 ? 'ok' : 'skv_error', responseStatus: res.status,
@@ -11492,7 +11550,7 @@ export const tools: McpTool[] = [
         // leaves kvittenser null rather than hard-failing the status check;
         // auth errors throw and map to SKATTEVERKET_NOT_CONNECTED.
         let kvittenser: unknown = null
-        const res = await agiGetKvittenser({ mode: 'user', supabase, userId }, arbetsgivare, period)
+        const res = await agiGetKvittenser({ mode: 'user', supabase, userId, companyId }, arbetsgivare, period)
         await writeSkatteverketAudit(ctx, {
           endpoint: 'kvittenser', agRegistreradId: arbetsgivare, redovisningsperiod: period,
           outcome: res.ok ? 'ok' : 'skv_error', responseStatus: res.status,
@@ -14542,9 +14600,13 @@ export const tools: McpTool[] = [
 
       // Resolve account names for the preview so the approver reads
       // "1010 Balanserade utgifter / 2440 Leverantörsskulder" rather than
-      // bare numbers. Also gate: refuse to stage when any line references an
-      // unknown or inactive account so the approver isn't shown a voucher
-      // that would fail at commit time anyway.
+      // bare numbers. Also gate: refuse to stage when a line references an
+      // account the ENGINE could not resolve either (same semantics as
+      // findUnresolvableAccounts): a BAS 2026 number merely absent from the
+      // chart passes, because createDraftEntry seeds it at commit; only
+      // numbers outside both the chart and the BAS catalog, plus rows a user
+      // deliberately deactivated (the backfill never resurrects those), are
+      // rejected here.
       const accountNumbers = [...new Set(lines.map((l) => l.account_number))]
       const { data: accounts } = await supabase
         .from('chart_of_accounts')
@@ -14559,26 +14621,33 @@ export const tools: McpTool[] = [
         })
       }
       const unknownAccounts = accountNumbers.filter((n) => !accountInfo.has(n))
+      const unseedableAccounts = unknownAccounts.filter((n) => !getBASReference(n))
+      const seedableAccounts = unknownAccounts.filter((n) => Boolean(getBASReference(n)))
       const inactiveAccounts = accountNumbers.filter(
         (n) => accountInfo.has(n) && !accountInfo.get(n)!.active,
       )
-      if (unknownAccounts.length > 0 || inactiveAccounts.length > 0) {
+      if (unseedableAccounts.length > 0 || inactiveAccounts.length > 0) {
         const parts: string[] = []
-        if (unknownAccounts.length > 0) {
-          parts.push(`saknas i kontoplanen: ${unknownAccounts.join(', ')}`)
+        if (unseedableAccounts.length > 0) {
+          parts.push(`saknas i kontoplanen och finns inte i BAS 2026: ${unseedableAccounts.join(', ')}`)
         }
         if (inactiveAccounts.length > 0) {
           parts.push(`inaktiva: ${inactiveAccounts.join(', ')}`)
         }
         throw new Error(
           `Kan inte skapa verifikation. Konton ${parts.join('; ')}. ` +
-          'Aktivera dem i kontoplanen eller välj andra konton.'
+          'Skapa kontot med gnubok_create_account, aktivera det med gnubok_update_account, eller välj andra konton.'
         )
       }
 
       const previewLines = lines.map((l) => ({
         account_number: l.account_number,
-        account_name: accountInfo.get(l.account_number)?.name ?? null,
+        // Fallback to the BAS catalog name for a seedable account that is not
+        // in the chart yet, so the approver still reads a named line.
+        account_name:
+          accountInfo.get(l.account_number)?.name ??
+          getBASReference(l.account_number)?.account_name ??
+          null,
         debit_amount: l.debit_amount,
         credit_amount: l.credit_amount,
         line_description: l.line_description ?? null,
@@ -14648,6 +14717,9 @@ export const tools: McpTool[] = [
           total_credit: balance.totalCredit,
           line_count: lines.length,
           lines: previewLines,
+          // BAS accounts not yet in the chart: the engine activates them at
+          // commit. Surfaced so the approver sees the side-effect up front.
+          ...(seedableAccounts.length > 0 ? { will_activate_accounts: seedableAccounts } : {}),
           // Echoed for every non-exact dimension resolution (resolve-don't-
           // select) so the agent can verify what a name attached to.
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),

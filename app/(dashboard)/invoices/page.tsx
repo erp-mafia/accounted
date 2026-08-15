@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { RowStatus, type RowStatusDescriptor } from '@/components/ui/row-status'
-import { Input } from '@/components/ui/input'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogTitle, DialogVeil } from '@/components/ui/dialog'
 import { DataListEmpty } from '@/components/ui/data-list'
@@ -39,7 +39,6 @@ import {
   ArrowUp,
   ArrowUpDown,
   Plus,
-  Search,
   ReceiptText,
   Repeat,
   FileInput,
@@ -620,18 +619,15 @@ export default function InvoicesPage() {
             annotation: tabCounts[tab] > 0 ? String(tabCounts[tab]) : undefined,
           }))}
         />
-        <div className="relative min-w-[190px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={t('search_placeholder')}
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value)
-              resetPaging()
-            }}
-            className="h-9 pl-10"
-          />
-        </div>
+        <ToolbarSearch
+          containerClassName="min-w-[190px]"
+          placeholder={t('search_placeholder')}
+          value={searchTerm}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            resetPaging()
+          }}
+        />
         <div className="ml-auto">
           <FyPicker
             value={fyPeriodId}

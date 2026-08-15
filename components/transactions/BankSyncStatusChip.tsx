@@ -110,7 +110,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10"
+        className="inline-flex items-center gap-1.5 rounded-full border border-destructive/40 bg-destructive/5 px-2.5 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10"
       >
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>
@@ -128,7 +128,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
+        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
       >
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>
@@ -143,7 +143,7 @@ export default function BankSyncStatusChip() {
   return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="inline-flex cursor-help items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground">
+          <span className="inline-flex cursor-help items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground">
             <RefreshCw className="h-3.5 w-3.5" />
             <span>
               {t('bank_sync_auto_nightly')}

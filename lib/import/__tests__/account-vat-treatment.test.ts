@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyVatTreatmentReview,
+  enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
 } from '../account-vat-treatment'
 import type { AccountMapping } from '../types'
@@ -32,28 +33,6 @@ describe('enrichAccountMappingsWithVat', () => {
     })
   })
 
-  it('requires review for suggested class 5 and 6 purchase treatments', () => {
-    const results = enrichAccountMappingsWithVat(
-      [
-        mapping('5010', 'Inköp tjänst EU'),
-        mapping('6010', 'Inköp tjänst utanför EU'),
-      ],
-      [],
-    )
-    expect(results).toEqual([
-      expect.objectContaining({
-        defaultVatTreatment: 'reverse_charge_eu_services',
-        requiresVatTreatmentReview: true,
-        vatTreatmentReviewed: false,
-      }),
-      expect.objectContaining({
-        defaultVatTreatment: 'export_services',
-        requiresVatTreatmentReview: true,
-        vatTreatmentReviewed: false,
-      }),
-    ])
-  })
-
   it('keeps an existing account treatment without asking again', () => {
     const [result] = enrichAccountMappingsWithVat(
       [mapping('3041', 'Försäljning tjänst 25% sv')],
@@ -70,25 +49,99 @@ describe('enrichAccountMappingsWithVat', () => {
       requiresVatTreatmentReview: false,
     })
   })
+
+  it('preserves an existing booking rate when suggesting a missing treatment', () => {
+    const [result] = enrichAccountMappingsWithVat(
+      [mapping('3041', 'Försäljning tjänst 25% sv')],
+      [{
+        account_number: '3041',
+        default_vat_treatment: null,
+        default_vat_rate: 0.12,
+      } as never],
+    )
+    expect(result.defaultVatTreatment).toBe('standard_25')
+    expect(result.defaultVatRate).toBe(0.12)
+  })
+
+  it('requires review for a suggested class 6 service treatment', () => {
+    const [result] = enrichAccountMappingsWithVat(
+      [mapping('6545', 'Inköp tjänster utanför EU 25%')],
+      [],
+    )
+    expect(result).toMatchObject({
+      defaultVatTreatment: 'reverse_charge_non_eu_services',
+      requiresVatTreatmentReview: true,
+      vatTreatmentReviewed: false,
+    })
+  })
 })
 
 describe('applyVatTreatmentReview', () => {
-  it('marks only the selected row reviewed, including class 5 and 6 accounts', () => {
-    const mappings = [
-      mapping('5010', 'Inköp tjänst EU'),
-      mapping('3041', 'Försäljning tjänst 25% sv'),
-    ]
-    const result = applyVatTreatmentReview(
+  it('persists a suggestion only after an explicit row confirmation', () => {
+    const mappings = enrichAccountMappingsWithVat([
+      mapping('4056', 'Inköp varor 25% EU'),
+    ], [])
+
+    expect(mappings[0].vatTreatmentReviewed).toBe(false)
+    const reviewed = applyVatTreatmentReview(
       mappings,
-      '5010',
-      'reverse_charge_eu_services',
-      0.25,
+      '4056',
+      mappings[0].defaultVatTreatment ?? null,
+      mappings[0].defaultVatRate ?? null,
     )
-    expect(result[0]).toMatchObject({
-      defaultVatTreatment: 'reverse_charge_eu_services',
-      defaultVatRate: 0.25,
+    expect(reviewed[0]).toMatchObject({
+      defaultVatTreatment: 'reverse_charge_eu_goods',
+      vatTreatmentReviewed: true,
+      vatTreatmentSuggested: false,
+    })
+  })
+
+  it('clears hidden review state on remap and restores it on identity mapping', () => {
+    const [suggested] = enrichAccountMappingsWithVat([
+      mapping('4056', 'Inköp varor 25% EU'),
+    ], [])
+
+    const [remapped] = enrichAccountMappingsWithVat([{
+      ...suggested,
+      targetAccount: '4010',
+      targetName: 'Inköp material',
+    }], [])
+    expect(remapped).toMatchObject({
+      defaultVatTreatment: null,
+      requiresVatTreatmentReview: false,
       vatTreatmentReviewed: true,
     })
-    expect(result[1].vatTreatmentReviewed).toBeUndefined()
+
+    const [identity] = enrichAccountMappingsWithVat([{
+      ...remapped,
+      targetAccount: '4056',
+      targetName: 'Inköp varor 25% EU',
+    }], [])
+    expect(identity).toMatchObject({
+      defaultVatTreatment: 'reverse_charge_eu_goods',
+      requiresVatTreatmentReview: true,
+      vatTreatmentReviewed: false,
+    })
+  })
+
+  it('preserves another row review when one mapping changes', () => {
+    const initial = enrichAccountMappingsWithVat([
+      mapping('3041', 'Försäljning tjänst 25% sv'),
+      mapping('4056', 'Inköp varor 25% EU'),
+    ], [])
+    const reviewed = applyVatTreatmentReview(initial, '3041', 'exempt', 0)
+    const remapped = enrichChangedAccountMappingWithVat(
+      reviewed.map((item) => item.sourceAccount === '4056'
+        ? { ...item, targetAccount: '4010', targetName: 'Inköp material' }
+        : item),
+      '4056',
+      [],
+    )
+
+    expect(remapped[0]).toMatchObject({
+      defaultVatTreatment: 'exempt',
+      defaultVatRate: 0,
+      vatTreatmentReviewed: true,
+    })
   })
 })

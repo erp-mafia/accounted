@@ -888,7 +888,7 @@ function MatchDialog({
         )}
 
         {!loading && candidates && candidates.length > 0 && (
-          <div className="max-h-[420px] overflow-y-auto rounded-md border">
+          <div className="max-h-[420px] overflow-y-auto rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow>

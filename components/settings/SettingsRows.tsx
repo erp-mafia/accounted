@@ -242,7 +242,7 @@ export function SettingsSeg<T extends string>({
           aria-pressed={o.value === value}
           onClick={() => onChange(o.value)}
           className={cn(
-            'rounded-md px-3 py-1 text-xs transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60',
+            'rounded-sm px-3 py-1 text-xs transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60',
             o.value === value
               ? 'border border-border bg-card font-medium text-foreground'
               : 'text-muted-foreground hover:text-foreground',
