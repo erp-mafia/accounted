@@ -65,6 +65,7 @@ function rangeMockSupabase(byTable: Record<string, unknown[]>): SupabaseClient {
       select: () => node,
       eq: () => node,
       not: () => node,
+      in: () => node,
       order: () => node,
       range: () => Promise.resolve({ data: byTable[table] ?? [], error: null }),
     }

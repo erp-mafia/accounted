@@ -3191,6 +3191,20 @@ export const LinkDocumentSchema = z.object({
   transaction_id: uuid.optional(),
 })
 
+/**
+ * Underlag import preview: filenames only, never file contents. The plan is
+ * built from the voucher reference in each name, so the bytes stay in the
+ * browser until the user has approved where each file will land.
+ *
+ * `fiscal_period_id` is required, not optional: a filename carries no year and
+ * source systems restart voucher numbering annually, so a plan with no declared
+ * year cannot identify a verifikat at all.
+ */
+export const UnderlagImportPreviewSchema = z.object({
+  file_names: z.array(z.string().min(1).max(400)).min(1).max(2000),
+  fiscal_period_id: uuid,
+})
+
 // ============================================================
 // Shift-premium rules (OB-tillägg och övertid)
 // ============================================================

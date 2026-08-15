@@ -47,6 +47,12 @@ import {
   detectFileMagic,
   ALLOWED_DOCUMENT_TYPES,
 } from '@/lib/core/documents/document-service'
+import {
+  buildVoucherIndex,
+  fetchFiscalPeriods,
+  fetchSourceRefVouchers,
+  resolveDatedRef,
+} from '@/lib/documents/voucher-ref-resolver'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
 
@@ -87,20 +93,6 @@ export interface ImportDocumentsResult {
   unmatchedSamples: { uploadId: string; voucher: string; date: string }[]
 }
 
-interface FiscalPeriodRow {
-  id: string
-  period_start: string
-  period_end: string
-}
-
-interface VoucherRow {
-  id: string
-  fiscal_period_id: string
-  entry_date: string
-  source_voucher_series: string | null
-  source_voucher_number: number | null
-}
-
 interface ProviderAttachment {
   id: string
   fileName: string | null
@@ -119,20 +111,6 @@ const EXTENSION_BY_TYPE: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
-}
-
-/** Find the fiscal period whose date range contains a given date. */
-function periodIdForDate(periods: FiscalPeriodRow[], date: string): string | null {
-  const period = periods.find((p) => p.period_start <= date && date <= p.period_end)
-  return period?.id ?? null
-}
-
-/**
- * In-memory key for a verifikat: fiscal period + series + number. Scoping by
- * period is essential: providers may reuse voucher numbers across fiscal years.
- */
-function voucherKey(periodId: string, series: string, number: number): string {
-  return `${periodId}|${series}|${number}`
 }
 
 /** Remove path/control characters while retaining a readable archive name. */
@@ -283,28 +261,11 @@ export async function importProviderDocuments(
   // ── Bulk reads (one round of paged requests each, no per-item N+1) ──
   const [attachments, periods, vouchers, existingAttachments] = await Promise.all([
     source().list(),
+    fetchFiscalPeriods(supabase, companyId),
+    fetchSourceRefVouchers(supabase, companyId),
     // A stable `.order('id')` is required: fetchAllRows pages with `.range()`,
     // and PostgREST paging without a deterministic order can skip or repeat
-    // rows once a table exceeds one page (journal_entries crosses 1000 once
-    // several years are migrated), which would defeat both resolution and the
-    // hash dedup below.
-    fetchAllRows<FiscalPeriodRow>(({ from, to }) =>
-      supabase
-        .from('fiscal_periods')
-        .select('id, period_start, period_end')
-        .eq('company_id', companyId)
-        .order('id', { ascending: true })
-        .range(from, to),
-    ),
-    fetchAllRows<VoucherRow>(({ from, to }) =>
-      supabase
-        .from('journal_entries')
-        .select('id, fiscal_period_id, entry_date, source_voucher_series, source_voucher_number')
-        .eq('company_id', companyId)
-        .not('source_voucher_number', 'is', null)
-        .order('id', { ascending: true })
-        .range(from, to),
-    ),
+    // rows once a table exceeds one page, which would defeat the hash dedup.
     fetchAllRows<{ sha256_hash: string; journal_entry_id: string | null }>(({ from, to }) =>
       supabase
         .from('document_attachments')
@@ -316,24 +277,7 @@ export async function importProviderDocuments(
   ])
 
   // Index gnubok verifikat by (period, series, number) for in-memory resolution.
-  const journalEntryByKey = new Map<string, string>()
-  const journalEntriesBySourceRef = new Map<string, VoucherRow[]>()
-  const ambiguousVoucherKeys = new Set<string>()
-  for (const v of vouchers) {
-    if (v.source_voucher_series == null || v.source_voucher_number == null) continue
-    const sourceRef = `${v.source_voucher_series}|${v.source_voucher_number}`
-    journalEntriesBySourceRef.set(sourceRef, [
-      ...(journalEntriesBySourceRef.get(sourceRef) ?? []),
-      v,
-    ])
-    const key = voucherKey(v.fiscal_period_id, v.source_voucher_series, v.source_voucher_number)
-    if (journalEntryByKey.has(key)) {
-      journalEntryByKey.delete(key)
-      ambiguousVoucherKeys.add(key)
-    } else if (!ambiguousVoucherKeys.has(key)) {
-      journalEntryByKey.set(key, v.id)
-    }
-  }
+  const voucherIndex = buildVoucherIndex(vouchers)
 
   // (content, verifikat) pairs already archived → idempotent skip set. Keyed
   // on hash + journal entry, NOT hash alone: the same content may back
@@ -363,17 +307,7 @@ export async function importProviderDocuments(
       continue
     }
 
-    let journalEntryId: string | undefined
-    if (ref.dateTo) {
-      const candidates = (journalEntriesBySourceRef.get(`${ref.series}|${ref.number}`) ?? [])
-        .filter((voucher) => ref.date <= voucher.entry_date && voucher.entry_date <= ref.dateTo!)
-      journalEntryId = candidates.length === 1 ? candidates[0].id : undefined
-    } else {
-      const periodId = periodIdForDate(periods, ref.date)
-      journalEntryId = periodId
-        ? journalEntryByKey.get(voucherKey(periodId, ref.series, ref.number))
-        : undefined
-    }
+    const journalEntryId = resolveDatedRef(voucherIndex, periods, ref)
 
     if (!journalEntryId) {
       recordUnmatched(attachment.id, `${ref.series}${ref.number}`, ref.date)
