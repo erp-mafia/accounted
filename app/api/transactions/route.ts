@@ -63,9 +63,14 @@ export async function GET(request: Request) {
     }
   }
 
+  // The transaction_voucher_links embed is what keeps a bank row coupled to
+  // SEVERAL verifikat out of the "unmatched" list. Such a row carries no scalar
+  // journal_entry_id (no single entry is "the" one), so the column filters
+  // below cannot see that it is already fully accounted for, and it would keep
+  // offering itself for matching after the user had finished with it.
   let query = supabase
     .from('transactions')
-    .select('id, date, description, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
+    .select('id, date, description, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, transaction_voucher_links(transaction_id, journal_entry_id)')
     .eq('company_id', companyId)
 
   // unmatched and reconciled are mutually exclusive: unmatched wins if both set
@@ -102,7 +107,26 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
-  const rows = data || []
+  type RowWithLinks = Record<string, unknown> & {
+    transaction_voucher_links?: unknown[] | null
+  }
+
+  // Resolve the link anchor, then drop the embed so the response shape stays
+  // exactly what callers already parse. Filtering happens BEFORE the truncate
+  // so has_more still describes the rows actually returned.
+  const rows = ((data || []) as RowWithLinks[])
+    .filter((row) => {
+      const linkCount = row.transaction_voucher_links?.length ?? 0
+      if (unmatched) return linkCount === 0
+      // "reconciled" already selected rows with a scalar pointer; a split row
+      // belongs there too, but the .not() filter above cannot select it, so
+      // there is nothing to add here. Left explicit so the asymmetry is not
+      // read as an oversight: widening it needs an OR across the embed, which
+      // PostgREST cannot express on a nested resource.
+      return true
+    })
+    .map(({ transaction_voucher_links: _links, ...rest }) => rest)
+
   const hasMore = rows.length > MAX_ROWS
   const truncated = hasMore ? rows.slice(0, MAX_ROWS) : rows
 
