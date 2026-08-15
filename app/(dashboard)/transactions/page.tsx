@@ -91,6 +91,7 @@ const MatchVoucherDialog = dynamic(
 const InvoicePicker = dynamic(() => import('@/components/transactions/InvoicePicker'), { loading: InlineDialogContentLoading })
 const SupplierInvoicePicker = dynamic(() => import('@/components/transactions/SupplierInvoicePicker'), { loading: InlineDialogContentLoading })
 const MatchAllocationDialog = dynamic(() => import('@/components/transactions/MatchAllocationDialog'), { loading: DialogLoadingSkeleton })
+const LinkVouchersDialog = dynamic(() => import('@/components/transactions/LinkVouchersDialog'), { loading: DialogLoadingSkeleton })
 const BulkBookDialog = dynamic(() => import('@/components/transactions/BulkBookDialog'), { loading: DialogLoadingSkeleton })
 const TransactionBookingDialog = dynamic(() => import('@/components/transactions/TransactionBookingDialog'), { loading: DialogLoadingSkeleton })
 const TransactionAttachDocumentDialog = dynamic(
@@ -358,6 +359,7 @@ export default function TransactionsPage() {
   // "Matcha mot befintlig verifikation": link a bank tx to an already-booked
   // voucher (salary, Fortnox import, manual entry) with no new bokföring.
   const [matchVoucherTx, setMatchVoucherTx] = useState<TransactionWithInvoice | null>(null)
+  const [linkVouchersTx, setLinkVouchersTx] = useState<TransactionWithInvoice | null>(null)
   const [bulkBookOpen, setBulkBookOpen] = useState(false)
   const [isMatchingSupplierFromPicker, setIsMatchingSupplierFromPicker] = useState(false)
   const [isMatchingFromPicker, setIsMatchingFromPicker] = useState(false)
@@ -2244,6 +2246,26 @@ export default function TransactionsPage() {
     setSplitMatchOpen(true)
   }
 
+  function openLinkVouchersDialog(transaction: TransactionWithInvoice) {
+    setLinkVouchersTx(transaction)
+  }
+
+  // A row coupled to several verifikat leaves transactions.journal_entry_id
+  // NULL on purpose, so there is no single id to patch onto the row optimistically.
+  // Refetch instead: the list resolves "booked" from the voucher links, and
+  // guessing here would put the row back in the inbox until the next reload.
+  async function handleVouchersLinked(transactionId: string) {
+    setExitingIds((prev) => new Set(prev).add(transactionId))
+    await refreshTransactions()
+    setTimeout(() => {
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(transactionId)
+        return next
+      })
+    }, 350)
+  }
+
   // Selected-tx derivation for bulk-book eligibility.
   // The action bar shows "Bokför i klump" only when ≥2 txs are selected,
   // share the same date, and same direction (all income or all expense):
@@ -3387,6 +3409,7 @@ export default function TransactionsPage() {
                         onOpenMatchDialog={openMatchDialog}
                         onOpenMatchInvoicePicker={openInvoiceMatchPicker}
                         onOpenSplitMatch={openSplitMatchDialog}
+                        onOpenLinkVouchers={openLinkVouchersDialog}
                         onOpenMatchVoucher={openMatchVoucherDialog}
                         onOpenAttachDocument={openAttachDocumentDialog}
                         onOpenCategoryDialog={openCategoryDialog}
@@ -3513,6 +3536,15 @@ export default function TransactionsPage() {
           onOpenChange={(o) => { if (!o) setMatchVoucherTx(null) }}
           transaction={matchVoucherTx}
           onLinked={handleVoucherLinked}
+        />
+      )}
+
+      {linkVouchersTx && (
+        <LinkVouchersDialog
+          open
+          onOpenChange={(o) => { if (!o) setLinkVouchersTx(null) }}
+          transaction={linkVouchersTx}
+          onLinked={handleVouchersLinked}
         />
       )}
 

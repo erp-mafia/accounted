@@ -17,6 +17,7 @@ import {
   EyeOff,
   FileSearch,
   Link2,
+  ListTree,
   Loader2,
   MoreHorizontal,
   Paperclip,
@@ -63,6 +64,8 @@ interface TransactionInboxCardProps {
    *  detection as the single-pick picker. Optional so legacy callers stay
    *  source-compatible. */
   onOpenSplitMatch?: (transaction: TransactionWithInvoice) => void
+  /** Couple this row to several already-posted verifikat (1:N). */
+  onOpenLinkVouchers?: (transaction: TransactionWithInvoice) => void
   /** Open the existing-verifikat matcher: link the bank tx to an already-booked
    *  voucher (salary, Fortnox import, manual entry) with no new bokföring. */
   onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
@@ -105,6 +108,7 @@ export default function TransactionInboxCard({
   onOpenMatchDialog,
   onOpenMatchInvoicePicker,
   onOpenSplitMatch,
+  onOpenLinkVouchers,
   onOpenMatchVoucher,
   onOpenAttachDocument,
   onOpenCategoryDialog,
@@ -210,6 +214,11 @@ export default function TransactionInboxCard({
   // tx→doc mirror of the Documents view's "Matcha mot transaktion".
   const showAttachDocumentItem = isUnbooked && canWrite && !!onOpenAttachDocument
   const showSplitItem = showInvoiceMatchButton && !!onOpenSplitMatch
+  // "Dela upp pa flera verifikationer": one bank movement settling several
+  // already-booked verifikat (flera utlagg, en utbetalning). Gated on
+  // isUnbooked like the single-voucher match rather than on an invoice match
+  // being detected: the verifikat already exist and need not be invoices.
+  const showLinkVouchersItem = isUnbooked && canWrite && !!onOpenLinkVouchers
   const showEditItem = isTitleEditable && !!onEditTitle
   // Moving between cash accounts only makes sense with somewhere to move TO,
   // and only for rows the server would accept: same movable gate as the title
@@ -219,7 +228,7 @@ export default function TransactionInboxCard({
   const showIgnoreItem = isUnbooked && isImportedTransaction(transaction) && !!onIgnore
   const showDeleteItem = canDelete && !!onDelete
   const showOverflowMenu =
-    showInvoiceMatchButton || showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem
+    showInvoiceMatchButton || showMatchVoucherItem || showLinkVouchersItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem
 
   // The foldout carries row detail only (actions live on the row: pill + ⋯).
   // Rows with nothing to show don't expand at all; classified imported rows
@@ -377,6 +386,17 @@ export default function TransactionInboxCard({
                     >
                       <FileSearch className="h-4 w-4" />
                       {t('match_voucher_btn')}
+                    </DropdownMenuItem>
+                  )}
+                  {showLinkVouchersItem && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenLinkVouchers!(transaction)
+                      }}
+                    >
+                      <ListTree className="h-4 w-4" />
+                      {t('link_vouchers_btn')}
                     </DropdownMenuItem>
                   )}
                   {showAttachDocumentItem && (
