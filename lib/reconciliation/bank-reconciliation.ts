@@ -226,6 +226,47 @@ export interface ReconciliationOptions {
 }
 
 /**
+ * PostgREST embed pulling a transaction's voucher-link rows alongside it.
+ *
+ * A bank row split across several verifikat deliberately leaves
+ * transactions.journal_entry_id NULL (no single entry is "the" one), so every
+ * scalar-only `journal_entry_id IS NULL` test in this module reads such a row
+ * as unmatched. Left uncorrected that is not cosmetic: the auto-matcher would
+ * offer an already-settled row for linking a second time, and `is_reconciled`
+ * could never go true because unmatched_transaction_count would not reach zero
+ * on a fully accounted account.
+ *
+ * Embedded rather than fetched as a second company-wide query: it costs no
+ * extra round-trip, and it is scoped to exactly the rows this window already
+ * selected instead of every link the company has ever made.
+ */
+/**
+ * Row shape contributed by the `transaction_voucher_links(transaction_id,
+ * journal_entry_id)` embed.
+ *
+ * The embed is spelled out as a literal inside each `.select()` below rather
+ * than interpolated from a shared constant: the phantom-column guard
+ * (tests/schema/no-phantom-columns.test.ts) can only verify columns it can read
+ * statically, and a template-literal select is invisible to it. Four literals
+ * that must stay in sync is the lesser cost.
+ */
+interface WithVoucherLinks {
+  transaction_voucher_links?: { transaction_id: string; journal_entry_id: string }[] | null
+}
+
+/**
+ * Is this row anchored to a verifikat by EITHER route: the scalar column, or
+ * one or more voucher links?
+ *
+ * A missing/undefined embed counts as "no links", which degrades to exactly the
+ * pre-split behaviour rather than to a wrong answer.
+ */
+function hasAnyVoucherAnchor(tx: { journal_entry_id: string | null } & WithVoucherLinks): boolean {
+  if (tx.journal_entry_id !== null) return true
+  return (tx.transaction_voucher_links?.length ?? 0) > 0
+}
+
+/**
  * Scope a transactions query builder to a single cash account, tolerating
  * legacy rows that predate the cash_account_id backfill.
  *
@@ -452,10 +493,10 @@ export async function runReconciliation(
   // Paginated: a busy company can exceed PostgREST's silent 1000-row cap, which
   // would make the matcher skip transactions without any signal. Ordered on id
   // (unique) so pages never duplicate or skip rows.
-  const transactions = await fetchAllRows<Transaction>(({ from, to }) => {
+  const rawTransactions = await fetchAllRows<Transaction & WithVoucherLinks>(({ from, to }) => {
     let query = supabase
       .from('transactions')
-      .select('*')
+      .select('*, transaction_voucher_links(transaction_id, journal_entry_id)')
       .eq('company_id', companyId)
       .is('journal_entry_id', null)
       .eq('is_ignored', false)
@@ -464,6 +505,14 @@ export async function runReconciliation(
     if (dateTo) query = query.lte('date', dateTo)
     return query.order('id').range(from, to)
   })
+
+  // A row split across several verifikat has journal_entry_id NULL by design,
+  // so the filter above still returns it. It is already fully accounted for,
+  // and this function WRITES the matches it finds: leaving it in the pool would
+  // let the auto-matcher link an already-settled row to a second voucher.
+  const transactions: Transaction[] = rawTransactions.filter(
+    (tx) => (tx.transaction_voucher_links?.length ?? 0) === 0,
+  )
 
   // Same diagnostic as the read path, and it matters MORE here: an unscoped run
   // matches transactions from every same-currency account against unlinked GL
@@ -671,11 +720,13 @@ export async function getReconciliationStatus(
     reconciliation_method: string | null
     is_ignored: boolean | null
     cash_account_id: string | null
-  }
+  } & WithVoucherLinks
   const transactions = await fetchAllRows<StatusTxRow>(({ from, to }) => {
     let txQuery = supabase
       .from('transactions')
-      .select('date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
+      .select(
+        'date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, transaction_voucher_links(transaction_id, journal_entry_id)',
+      )
       .eq('company_id', companyId)
     txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
     if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
@@ -829,10 +880,17 @@ export async function getReconciliationStatus(
   // a bank-feed counterpart, so it stays in.
   const glPeriodMovement = glBalance - glOpeningBalance
 
-  const matchedCount = countedTx.filter((tx) => tx.journal_entry_id !== null).length
+  // Matched = anchored to a verifikat by EITHER route. A row split across
+  // several verifikat carries no scalar pointer, so counting the column alone
+  // reported it as unmatched forever and, because is_reconciled requires
+  // unmatched_transaction_count === 0, a fully accounted account could never
+  // show as avstämt. The bank-side total above is unaffected either way: it
+  // sums every transaction in the window exactly once at its full amount,
+  // regardless of how many verifikat it is linked to.
+  const matchedCount = countedTx.filter(hasAnyVoucherAnchor).length
 
   const unmatchedTransactionCount = countedTx.filter(
-    (tx) => tx.journal_entry_id === null && tx.is_ignored !== true
+    (tx) => !hasAnyVoucherAnchor(tx) && tx.is_ignored !== true
   ).length
 
   // Unmatched GL lines count (RPC excludes opening_balance, storno and correction
@@ -896,7 +954,7 @@ export async function manualLink(
   // Fetch transaction
   const { data: tx, error: txError } = await supabase
     .from('transactions')
-    .select('*')
+    .select('*, transaction_voucher_links(transaction_id, journal_entry_id)')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .single()
@@ -911,6 +969,17 @@ export async function manualLink(
   // (issue #988). The stale pointer is overwritten by the locked UPDATE below.
   if (tx.journal_entry_id && (await hasLiveJournalEntryLink(supabase, companyId, tx.journal_entry_id))) {
     return { success: false, error: 'Transaktionen är redan kopplad till en verifikation.' }
+  }
+
+  // A row already coupled to several verifikat has no scalar pointer, so the
+  // guard above waves it through. Linking it again here would push the account
+  // past its own bank movement without anything in the UI saying so: the
+  // allocation is only balanced as a set, and this path knows nothing about
+  // that set. Re-allocating goes through unlink first. Read from the embed on
+  // the fetch above, so this costs no extra round-trip.
+  const existingLinks = (tx as WithVoucherLinks).transaction_voucher_links ?? []
+  if (existingLinks.length > 0) {
+    return { success: false, error: 'Transaktionen är redan fördelad på flera verifikationer.' }
   }
 
   // Fetch journal entry + verify it has a 1930 line
@@ -1031,9 +1100,13 @@ export async function unlinkReconciliation(
   userId: string,
 ): Promise<{ success: boolean; error?: string }> {
   // Fetch transaction
+  // The embed carries the link rows: a row coupled to several verifikat has no
+  // scalar pointer, so they are the only evidence it is anchored at all. Without
+  // them this returned "not linked to any journal entry" on the scalar alone and
+  // the coupling could never be undone.
   const { data: tx, error: txError } = await supabase
     .from('transactions')
-    .select('id, journal_entry_id, reconciliation_method')
+    .select('id, journal_entry_id, reconciliation_method, transaction_voucher_links(transaction_id, journal_entry_id)')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .single()
@@ -1042,12 +1115,37 @@ export async function unlinkReconciliation(
     return { success: false, error: 'Transaction not found' }
   }
 
-  if (!tx.journal_entry_id) {
+  const links = (tx as WithVoucherLinks).transaction_voucher_links ?? []
+
+  if (!tx.journal_entry_id && links.length === 0) {
     return { success: false, error: 'Transaction is not linked to any journal entry' }
   }
 
   if (!tx.reconciliation_method) {
     return { success: false, error: 'Cannot unlink a categorization-created entry. Use storno to reverse it instead.' }
+  }
+
+  // Delete the links BEFORE clearing the scalar. Both orders leave the row
+  // unanchored on success, but this one fails safe: if the delete succeeds and
+  // the update then errors, the row still reads as anchored via the scalar and
+  // the user can retry. The reverse order would briefly present a row that is
+  // unanchored by the scalar while links still claim it, which is the state
+  // is_transaction_booked() resolves as booked and the matcher would skip.
+  //
+  // Only the links are removed, never the entries they point at: those were
+  // committed through the sanctioned path and are posted verifikat. Unlinking
+  // is a reconciliation act, not a correction (BFL 5 kap 5 §); reversing the
+  // bookkeeping itself is storno's job.
+  if (links.length > 0) {
+    const { error: linkDeleteError } = await supabase
+      .from('transaction_voucher_links')
+      .delete()
+      .eq('transaction_id', transactionId)
+      .eq('company_id', companyId)
+
+    if (linkDeleteError) {
+      return { success: false, error: 'Failed to unlink transaction' }
+    }
   }
 
   const { error: updateError } = await supabase
@@ -1068,6 +1166,9 @@ export async function unlinkReconciliation(
     previousState: {
       journal_entry_id: tx.journal_entry_id,
       reconciliation_method: tx.reconciliation_method,
+      // Named individually so the audit trail records WHICH verifikat the row
+      // was detached from: with the links gone there is no other record of it.
+      unlinked_journal_entry_ids: links.map((l) => l.journal_entry_id),
     },
   })
 

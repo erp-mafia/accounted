@@ -269,3 +269,126 @@ describe('get_account_gl_lines_for_matching RPC: account-scoped link count (#102
     expect(withMatched.find((r) => r.journal_entry_id === legacyEntry).linked_transaction_count).toBe(1)
   })
 })
+
+describe('gl-line candidate RPCs: vouchers settled through transaction_voucher_links', () => {
+  /**
+   * Both candidate RPCs used to decide "already settled?" from
+   * transactions.journal_entry_id alone. A bank row coupled to several
+   * verifikat (link_transaction_to_vouchers) leaves that scalar NULL by design,
+   * so every verifikat settled that way kept surfacing as an omatchad
+   * verifikation with no way for the user to make it go away, and
+   * get_unlinked_gl_lines offered it to the auto-reconciler as a free candidate.
+   * Covers 20260815093000.
+   */
+  async function seedSplitScenario() {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const fiscalPeriodId = await insertFiscalPeriod({
+      userId, companyId, periodStart: '2026-01-01', periodEnd: '2026-12-31',
+    })
+
+    // Two booked utlägg settled by ONE outgoing payment, plus an untouched
+    // voucher that must stay a candidate.
+    const jeA = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-06-01', sourceType: 'manual', voucherNumber: 1,
+      lines: [{ account: '5460', debit: 5000, credit: 0 }, { account: '1930', debit: 0, credit: 5000 }],
+    })
+    const jeB = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-06-01', sourceType: 'manual', voucherNumber: 2,
+      lines: [{ account: '5460', debit: 3000, credit: 0 }, { account: '1930', debit: 0, credit: 3000 }],
+    })
+    const jeFree = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-06-02', sourceType: 'manual', voucherNumber: 3,
+      lines: [{ account: '5460', debit: 999, credit: 0 }, { account: '1930', debit: 0, credit: 999 }],
+    })
+
+    const txId = await insertTransaction({
+      companyId, userId, amount: -8000, date: '2026-06-01',
+    })
+
+    // Write the links directly: this suite exercises the READ RPCs, and the
+    // writer has its own coverage in link-transaction-to-vouchers.pg.test.ts.
+    for (const [je, amount] of [[jeA, -5000], [jeB, -3000]] as const) {
+      await getPool().query(
+        `INSERT INTO public.transaction_voucher_links
+           (user_id, company_id, transaction_id, journal_entry_id, allocated_amount, role)
+         VALUES ($1, $2, $3, $4, $5, 'bank_line')`,
+        [userId, companyId, txId, je, amount],
+      )
+    }
+
+    return { companyId, jeA, jeB, jeFree }
+  }
+
+  it('drops link-settled vouchers from get_unlinked_gl_lines', async () => {
+    const { companyId, jeA, jeB, jeFree } = await seedSplitScenario()
+
+    const { rows } = await getPool().query(
+      `SELECT journal_entry_id FROM public.get_unlinked_gl_lines($1, '1930')`,
+      [companyId],
+    )
+    const ids = rows.map((r) => r.journal_entry_id)
+
+    // This RPC feeds the auto-reconciler, which WRITES the matches it finds:
+    // leaving a settled voucher here would let it be auto-linked a second time.
+    expect(ids).not.toContain(jeA)
+    expect(ids).not.toContain(jeB)
+    expect(ids).toContain(jeFree)
+  })
+
+  it('counts a link-settled voucher as matched in get_account_gl_lines_for_matching', async () => {
+    const { companyId, jeA, jeFree } = await seedSplitScenario()
+
+    const { rows: defaultRows } = await getPool().query(
+      `SELECT journal_entry_id
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1930')`,
+      [companyId],
+    )
+    expect(defaultRows.map((r) => r.journal_entry_id)).toEqual([jeFree])
+
+    const { rows: matchedRows } = await getPool().query(
+      `SELECT journal_entry_id, linked_transaction_count
+         FROM public.get_account_gl_lines_for_matching(
+           p_company_id => $1, p_account_number => '1930', p_include_matched => true)`,
+      [companyId],
+    )
+    expect(matchedRows.find((r) => r.journal_entry_id === jeA).linked_transaction_count).toBe(1)
+  })
+
+  it('counts a transaction anchored by BOTH the scalar and a link only once', async () => {
+    // The single-link case keeps transactions.journal_entry_id in sync with the
+    // link row, so a naive count(*) over the union would report 2 and overstate
+    // how settled the voucher is.
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const fiscalPeriodId = await insertFiscalPeriod({
+      userId, companyId, periodStart: '2026-01-01', periodEnd: '2026-12-31',
+    })
+    const je = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-06-01', sourceType: 'manual', voucherNumber: 1,
+      lines: [{ account: '5460', debit: 5000, credit: 0 }, { account: '1930', debit: 0, credit: 5000 }],
+    })
+    const txId = await insertTransaction({
+      companyId, userId, amount: -5000, date: '2026-06-01', journalEntryId: je,
+    })
+    await getPool().query(
+      `INSERT INTO public.transaction_voucher_links
+         (user_id, company_id, transaction_id, journal_entry_id, allocated_amount, role)
+       VALUES ($1, $2, $3, $4, -5000, 'bank_line')`,
+      [userId, companyId, txId, je],
+    )
+
+    const { rows } = await getPool().query(
+      `SELECT linked_transaction_count
+         FROM public.get_account_gl_lines_for_matching(
+           p_company_id => $1, p_account_number => '1930', p_include_matched => true)
+        WHERE journal_entry_id = $2`,
+      [companyId, je],
+    )
+    expect(rows[0].linked_transaction_count).toBe(1)
+  })
+})

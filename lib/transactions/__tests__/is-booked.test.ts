@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { isTransactionBooked, getPrimaryJournalEntryId } from '../is-booked'
+import {
+  isTransactionBooked,
+  getPrimaryJournalEntryId,
+  getAllJournalEntryIds,
+} from '../is-booked'
 
 describe('isTransactionBooked', () => {
   it('returns false for a tx with no journal entry, payments, or voucher links', () => {
@@ -70,5 +74,61 @@ describe('getPrimaryJournalEntryId', () => {
     const tx = { id: 'tx-1', journal_entry_id: null }
     const payments = [{ transaction_id: 'tx-1', journal_entry_id: null }]
     expect(getPrimaryJournalEntryId(tx, payments, [])).toBeNull()
+  })
+})
+
+describe('getAllJournalEntryIds', () => {
+  it('returns an empty array for an unbooked transaction', () => {
+    expect(getAllJournalEntryIds({ id: 'tx-1', journal_entry_id: null })).toEqual([])
+  })
+
+  it('returns every voucher link for a transaction split across verifikat', () => {
+    // The case getPrimaryJournalEntryId cannot answer: one payment covering
+    // several booked utlagg. Picking the first would state something untrue.
+    const tx = { id: 'tx-1', journal_entry_id: null }
+    const links = [
+      { transaction_id: 'tx-1', journal_entry_id: 'je-a' },
+      { transaction_id: 'tx-1', journal_entry_id: 'je-b' },
+      { transaction_id: 'tx-1', journal_entry_id: 'je-c' },
+    ]
+    expect(getAllJournalEntryIds(tx, [], links)).toEqual(['je-a', 'je-b', 'je-c'])
+  })
+
+  it('ignores links and payments belonging to other transactions', () => {
+    const tx = { id: 'tx-1', journal_entry_id: null }
+    const links = [
+      { transaction_id: 'tx-1', journal_entry_id: 'je-a' },
+      { transaction_id: 'tx-2', journal_entry_id: 'je-other' },
+    ]
+    const payments = [{ transaction_id: 'tx-2', journal_entry_id: 'je-other-payment' }]
+    expect(getAllJournalEntryIds(tx, payments, links)).toEqual(['je-a'])
+  })
+
+  it('leads with the same id getPrimaryJournalEntryId returns', () => {
+    // The two helpers must never disagree about which entry is "first":
+    // a UI showing a primary link plus a count would otherwise contradict itself.
+    const tx = { id: 'tx-1', journal_entry_id: 'je-scalar' }
+    const links = [{ transaction_id: 'tx-1', journal_entry_id: 'je-link' }]
+    const all = getAllJournalEntryIds(tx, [], links)
+    expect(all[0]).toBe(getPrimaryJournalEntryId(tx, [], links))
+    expect(all).toEqual(['je-scalar', 'je-link'])
+  })
+
+  it('dedupes an entry reachable through more than one anchor', () => {
+    // match_batch_allocate points every payment row at ONE combined verifikat,
+    // so the same id legitimately arrives several times.
+    const tx = { id: 'tx-1', journal_entry_id: null }
+    const payments = [
+      { transaction_id: 'tx-1', journal_entry_id: 'je-combined' },
+      { transaction_id: 'tx-1', journal_entry_id: 'je-combined' },
+    ]
+    const links = [{ transaction_id: 'tx-1', journal_entry_id: 'je-combined' }]
+    expect(getAllJournalEntryIds(tx, payments, links)).toEqual(['je-combined'])
+  })
+
+  it('skips a payment row whose journal_entry_id is still null', () => {
+    const tx = { id: 'tx-1', journal_entry_id: null }
+    const payments = [{ transaction_id: 'tx-1', journal_entry_id: null }]
+    expect(getAllJournalEntryIds(tx, payments, [])).toEqual([])
   })
 })

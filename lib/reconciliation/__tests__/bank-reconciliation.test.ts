@@ -1137,6 +1137,70 @@ describe('unlinkReconciliation', () => {
     expect(result.success).toBe(true)
   })
 
+  it('unlinks a split transaction whose only anchor is voucher links', async () => {
+    // Before this, a row coupled to several verifikat carried no scalar
+    // pointer, so unlink refused it as "not linked to any journal entry" and
+    // the coupling could never be undone: a dead end with no way out.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: {
+        id: 'tx-1',
+        journal_entry_id: null,
+        reconciliation_method: 'manual',
+        transaction_voucher_links: [
+          { transaction_id: 'tx-1', journal_entry_id: 'je-1' },
+          { transaction_id: 'tx-1', journal_entry_id: 'je-2' },
+        ],
+      },
+    })
+    enqueue({ data: null, error: null }) // delete links
+    enqueue({ data: null, error: null }) // clear scalar
+
+    const result = await unlinkReconciliation(supabase as never, 'company-1', 'tx-1', 'user-1')
+
+    expect(result.success).toBe(true)
+  })
+
+  it('does not clear the scalar when deleting the links failed', async () => {
+    // Fail-safe ordering: if the delete errors, the row must stay anchored so
+    // the user can retry, rather than ending up half-detached.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: {
+        id: 'tx-1',
+        journal_entry_id: null,
+        reconciliation_method: 'manual',
+        transaction_voucher_links: [{ transaction_id: 'tx-1', journal_entry_id: 'je-1' }],
+      },
+    })
+    enqueue({ data: null, error: { message: 'delete failed' } })
+
+    const result = await unlinkReconciliation(supabase as never, 'company-1', 'tx-1', 'user-1')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('Failed to unlink transaction')
+  })
+
+  it('still rejects a row anchored by neither the scalar nor any link', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: {
+        id: 'tx-1',
+        journal_entry_id: null,
+        reconciliation_method: 'manual',
+        transaction_voucher_links: [],
+      },
+    })
+
+    const result = await unlinkReconciliation(supabase as never, 'company-1', 'tx-1', 'user-1')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('not linked')
+  })
+
   it('attributes the audit log row to the acting user, not the company', async () => {
     // Regression: unlinkReconciliation used to pass companyId where
     // logMatchEvent expects userId, so payment_match_log.user_id recorded the
@@ -1872,9 +1936,84 @@ describe('unscoped cash-account diagnostic', () => {
     }
   }
 
+  /**
+   * A bank row split across N verifikat: journal_entry_id NULL by design, with
+   * the anchor living in the embedded link rows.
+   */
+  function splitStatusTx(cashAccountId: string | null, amount: number, linkCount: number) {
+    return {
+      date: '2026-03-05',
+      amount,
+      journal_entry_id: null,
+      reconciliation_method: 'manual',
+      is_ignored: false,
+      cash_account_id: cashAccountId,
+      transaction_voucher_links: Array.from({ length: linkCount }, (_, i) => ({
+        transaction_id: 'tx-split',
+        journal_entry_id: `je-part-${i + 1}`,
+      })),
+    }
+  }
+
+  it('counts a split transaction once, at its full amount, however many links it has', async () => {
+    // The invariant the whole 1:N feature rests on. getReconciliationStatus
+    // compares the bank-side total against the ledger movement, so a row
+    // allocated across three verifikat must contribute its ONE full amount to
+    // bankTotal (not once per link, and not its per-link allocated_amount) and
+    // must read as matched even though the scalar column is NULL.
+    const { supabase, enqueue } = createRecordingMockSupabase()
+    enqueueStatusReads(enqueue, [splitStatusTx(null, -8000, 3)])
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.bank_transaction_total).toBe(-8000)
+    expect(status.matched_count).toBe(1)
+    expect(status.unmatched_transaction_count).toBe(0)
+  })
+
+  it('lets a fully accounted account reach avstämt when the anchor is links only', async () => {
+    // Before the embed, unmatched_transaction_count could never reach 0 for a
+    // split row, and is_reconciled requires it to be 0: the account was stuck
+    // showing "ej avstämt" with nothing actionable to point at.
+    const { supabase, enqueue } = createRecordingMockSupabase()
+    enqueue({ data: [splitStatusTx(null, -8000, 2)] })
+    enqueue({ data: [{ id: 'je-part-1', company_id: 'company-1', entry_date: '2026-03-05', status: 'posted', source_type: 'manual' }] })
+    // Ledger movement matching the bank side: -5000 + -3000 on 1930.
+    enqueue({
+      data: [
+        { debit_amount: 0, credit_amount: 5000, currency: 'SEK', amount_in_currency: null, journal_entries: { id: 'je-part-1', entry_date: '2026-03-05', status: 'posted', source_type: 'manual' } },
+        { debit_amount: 0, credit_amount: 3000, currency: 'SEK', amount_in_currency: null, journal_entries: { id: 'je-part-2', entry_date: '2026-03-05', status: 'posted', source_type: 'manual' } },
+      ],
+    })
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.difference).toBe(0)
+    expect(status.unmatched_transaction_count).toBe(0)
+    expect(status.is_reconciled).toBe(true)
+  })
+
+  it('still counts a genuinely unanchored row as unmatched', () => {
+    // Guard against the fix over-reaching: an empty link array must not be
+    // mistaken for an anchor.
+    const { supabase, enqueue } = createRecordingMockSupabase()
+    enqueueStatusReads(enqueue, [splitStatusTx(null, -8000, 0)])
+
+    return getReconciliationStatus(supabase as never, 'company-1').then((status) => {
+      expect(status.matched_count).toBe(0)
+      expect(status.unmatched_transaction_count).toBe(1)
+      expect(status.is_reconciled).toBe(false)
+    })
+  })
+
   it('selects cash_account_id on the transactions read (the diagnostic needs it)', async () => {
     // Pins the column list: drop cash_account_id from the select and every row
     // arrives with it undefined, so the warning below can never fire again.
+    // The transaction_voucher_links embed is pinned for the same reason: drop
+    // it and a bank row split across several verifikat (which carries no scalar
+    // journal_entry_id) counts as unmatched forever, so is_reconciled can never
+    // go true on an account that is in fact fully accounted for.
     const { supabase, enqueue, calls } = createRecordingMockSupabase()
     enqueueStatusReads(enqueue, [])
 
@@ -1884,7 +2023,8 @@ describe('unscoped cash-account diagnostic', () => {
     expect(firstFrom?.args[0]).toBe('transactions')
     const firstSelect = calls.find((c) => c.method === 'select')
     expect(firstSelect?.args[0]).toBe(
-      'date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id',
+      'date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, ' +
+        'transaction_voucher_links(transaction_id, journal_entry_id)',
     )
   })
 

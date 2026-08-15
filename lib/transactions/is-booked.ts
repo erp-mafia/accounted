@@ -85,3 +85,42 @@ export function getPrimaryJournalEntryId(
   const payment = payments.find((p) => p.transaction_id === tx.id && p.journal_entry_id != null)
   return payment?.journal_entry_id ?? null
 }
+
+/**
+ * Every journal entry anchoring `tx`, deduped, in a stable order.
+ *
+ * getPrimaryJournalEntryId answers "which single verifikat should this row link
+ * to?", which is the right question for a row with exactly one. It is the WRONG
+ * question for a bank row split across several verifikat (one payment covering
+ * several booked utlägg): picking the first would make the UI state something
+ * untrue, and any caller deciding "is there anything left to do here?" from a
+ * single id would miss the rest.
+ *
+ * Use this wherever the answer is a set: rendering "3 verifikat" instead of a
+ * link to an arbitrary one, reversing every part on undo, or deciding whether
+ * a voucher still has an unsettled bank side.
+ *
+ * Order of precedence matches getPrimaryJournalEntryId so the first element is
+ * always the same id that function returns: scalar column, then voucher links
+ * (insertion order), then payment rows.
+ */
+export function getAllJournalEntryIds(
+  tx: TxLike,
+  payments: { transaction_id: string | null; journal_entry_id: string | null }[] = [],
+  voucherLinks: { transaction_id: string; journal_entry_id: string }[] = [],
+): string[] {
+  const ids: string[] = []
+  const push = (id: string | null | undefined): void => {
+    if (id != null && !ids.includes(id)) ids.push(id)
+  }
+
+  push(tx.journal_entry_id)
+  for (const link of voucherLinks) {
+    if (link.transaction_id === tx.id) push(link.journal_entry_id)
+  }
+  for (const payment of payments) {
+    if (payment.transaction_id === tx.id) push(payment.journal_entry_id)
+  }
+
+  return ids
+}
