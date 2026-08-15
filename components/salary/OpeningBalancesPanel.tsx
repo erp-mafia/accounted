@@ -103,8 +103,9 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   useEffect(() => {
     async function load() {
       setLoading(true)
-      const res = await fetch(`/api/salary/employees/${employeeId}/opening-balances`)
-      if (res.ok) {
+      try {
+        const res = await fetch(`/api/salary/employees/${employeeId}/opening-balances`)
+        if (!res.ok) return
         const { data } = (await res.json()) as { data: OpeningBalancesData | null }
         if (data) {
           const values: PanelValues = {
@@ -135,8 +136,12 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
           setKarens(values.karens)
           setBaseline(fingerprint(values))
         }
+      } catch {
+        // Network failure: the panel falls back to its empty form rather
+        // than holding the skeleton forever; a retry happens on remount.
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
     }
     load()
   }, [employeeId])
