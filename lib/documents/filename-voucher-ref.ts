@@ -35,25 +35,58 @@ export interface ParsedFileNameRef {
  * Optional noise ahead of the reference: a year folder prefix and the words
  * some exporters prepend. Kept tight on purpose, `(?:19|20)\d{2}` rather than
  * any 4 digits, so a voucher number is never eaten as a year.
+ *
+ * `ifikation` must precede `ifikat` in the alternation: regex alternation is
+ * first-match, so the short branch would otherwise consume `Verifikat` out of
+ * `Verifikation 31` and leave `ion` for the series group to swallow.
  */
-const LEADING_NOISE = '(?:(?:19|20)\\d{2}[-_. ]+)?(?:ver(?:ifikat|ifikation)?[-_. ]*)?'
+const YEAR_NOISE = '(?:(?:19|20)\\d{2}[-_. ]+)?'
+/**
+ * The lookahead is load-bearing, not decoration. Without it the engine
+ * backtracks into the shorter alternatives and `Verifikation 31` matches `ver`
+ * + `ifikat`, leaving `ion` for the series group to swallow as series `ION`.
+ * Requiring the word to end here means the prefix is either the whole word or
+ * not consumed at all.
+ */
+const VER_NOISE = '(?:ver(?:ifikation|ifikat)?(?![A-Za-zÅÄÖåäö])[-_. ]*)?'
 
 /** `A31`, `A-31`, `A_31`, `A 31`, optionally followed by `_`/`-`/space + anything. */
 const SERIES_NUMBER_RE = new RegExp(
-  `^${LEADING_NOISE}([A-Za-zÅÄÖåäö]{1,3})[-_. ]?(\\d{1,7})(?:[-_. ].*)?$`,
+  `^${YEAR_NOISE}${VER_NOISE}([A-Za-zÅÄÖåäö]{1,3})[-_. ]?(\\d{1,7})(?:[-_. ].*)?$`,
   'i',
 )
 
-/** `31`, `31_kvitto`. No year prefix accepted here: see parseVoucherRefFromFileName. */
-const NUMBER_ONLY_RE = /^(\d{1,6})(?:[-_. ].*)?$/
+/**
+ * `31`, `31_kvitto`, `Verifikat 31`. The `ver` prefix is allowed here but the
+ * year prefix is NOT: `2024 31` is far more likely a date fragment than
+ * voucher 31 of 2024, and this branch has no series to corroborate it with.
+ */
+const NUMBER_ONLY_RE = new RegExp(`^${VER_NOISE}(\\d{1,6})(?:[-_. ].*)?$`, 'i')
 
-/** `20240131...`, `2024-01-31...`: a date-named file, never a voucher number. */
-const DATE_PREFIX_RE = /^(?:19|20)\d{2}[-_.]?\d{2}[-_.]?\d{2}/
+/**
+ * A date-named file, never a voucher number. Deliberately loose where the
+ * parser is strict: unpadded components (`2024-1-31`), two-digit years
+ * (`24-01-31`), any of `-_. /` as separator, and the compact `20240131`.
+ * A false positive here costs one manual assignment; a false negative attaches
+ * a receipt to a verifikat whose number happens to equal a year fragment.
+ */
+const DATE_PREFIX_RE =
+  /^(?:(?:19|20)\d{6}|(?:19|20)?\d{2}[-_. /]\d{1,2}[-_. /]\d{1,2})(?!\d)/
 
-/** Drop any directory part (drag-dropped folders carry a relative path). */
+/**
+ * Any four-digit run that reads as a calendar year. Used to refuse a
+ * SERIES-LESS parse: `2024` alone is overwhelmingly a year, not verifikat 2024.
+ */
+const YEAR_LIKE_RE = /^(?:19|20)\d{2}$/
+
+/**
+ * Trim only. Directory components are NOT stripped: `file.name` from an
+ * `<input type=file>` never carries a path, while the manual-reference box
+ * feeds arbitrary user text through this same parser, where splitting on `/`
+ * would quietly turn the typed date `2024/01/31` into voucher 31.
+ */
 function baseName(fileName: string): string {
-  const withoutDirs = fileName.split(/[/\\]/).pop() ?? fileName
-  return withoutDirs.trim()
+  return fileName.trim()
 }
 
 /** Drop the extension, but only a real-looking one (`.pdf`, `.jpeg`). */
@@ -84,7 +117,7 @@ export function parseVoucherRefFromFileName(fileName: string): ParsedFileNameRef
   }
 
   const numberMatch = NUMBER_ONLY_RE.exec(stem)
-  if (numberMatch) {
+  if (numberMatch && !YEAR_LIKE_RE.test(numberMatch[1])) {
     const number = Number(numberMatch[1])
     if (Number.isInteger(number) && number > 0) {
       return { series: null, number, pattern: 'number_only', autoSelectable: false }

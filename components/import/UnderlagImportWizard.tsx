@@ -15,9 +15,11 @@ import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
+import { FyPicker } from '@/components/common/FyPicker'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
 import { FileUp, Loader2 } from 'lucide-react'
+import type { FiscalPeriod } from '@/types'
 import type {
   UnderlagPlan,
   UnderlagPlanCandidate,
@@ -37,10 +39,18 @@ import type {
 // uploaded. Attaching a document to a posted verifikat makes it
 // räkenskapsinformation, which cannot be re-pointed afterwards (BFL 7 kap), so
 // nothing is ever attached without the user seeing exactly where it lands.
+//
+// The fiscal year is chosen first and every row resolves inside it. A filename
+// carries no year and source systems restart voucher numbering annually, so
+// `A31` names a verifikat only within a year. The year is the one piece of the
+// mapping the files cannot supply, which is why the user supplies it.
 
 type Step = 'select' | 'review' | 'result'
 
 const ACCEPTED_TYPES = 'application/pdf,image/jpeg,image/png,image/webp'
+
+/** Page-specific so the batch year never steers the shared report scope. */
+const FY_STORAGE_PREFIX = 'underlag-import-fy:'
 
 /** Message keys per status, spelled out so next-intl keeps checking them. */
 const STATUS_KEY: Record<UnderlagPlanStatus, string> = {
@@ -93,6 +103,8 @@ export default function UnderlagImportWizard() {
   const [step, setStep] = useState<Step>('select')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [fiscalPeriodId, setFiscalPeriodId] = useState<string | null>(null)
+  const [fiscalPeriod, setFiscalPeriod] = useState<FiscalPeriod | null>(null)
   const [plan, setPlan] = useState<UnderlagPlan | null>(null)
   const [rows, setRows] = useState<ReviewRow[]>([])
   const [attached, setAttached] = useState(0)
@@ -113,19 +125,23 @@ export default function UnderlagImportWizard() {
   )
 
   /** Resolve filenames server-side. Only names travel: the bytes stay here. */
-  const fetchPlan = useCallback(async (fileNames: string[]): Promise<UnderlagPlan | null> => {
-    const res = await fetch('/api/import/documents/preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_names: fileNames }),
-    })
-    const data = await res.json()
-    if (!res.ok) {
-      setError(getErrorMessage(data, { statusCode: res.status }))
-      return null
-    }
-    return data.data as UnderlagPlan
-  }, [])
+  const fetchPlan = useCallback(
+    async (fileNames: string[]): Promise<UnderlagPlan | null> => {
+      if (!fiscalPeriodId) return null
+      const res = await fetch('/api/import/documents/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_names: fileNames, fiscal_period_id: fiscalPeriodId }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(getErrorMessage(data, { statusCode: res.status }))
+        return null
+      }
+      return data.data as UnderlagPlan
+    },
+    [fiscalPeriodId],
+  )
 
   const handleFilesSelected = useCallback(
     async (fileList: FileList | null) => {
@@ -197,9 +213,18 @@ export default function UnderlagImportWizard() {
         updateRow(row.id, {
           candidates,
           resolving: false,
+          // Hand-resolved: the filename itself still says nothing, so the
+          // server cannot re-derive this target and the row carries an override.
           manual: true,
           targetId: single && !single.period_locked ? single.journal_entry_id : null,
           selected: Boolean(single && !single.period_locked),
+          // Without this the row keeps rendering "Kan inte tolkas" while
+          // sitting checked and queued for an irreversible write.
+          status: single
+            ? single.period_locked
+              ? 'period_locked'
+              : 'needs_confirmation'
+            : 'ambiguous',
         })
       } catch (err) {
         updateRow(row.id, { resolving: false })
@@ -210,9 +235,14 @@ export default function UnderlagImportWizard() {
   )
 
   const runAttach = useCallback(async () => {
+    // The year is named in the confirm text on purpose: it is the one input
+    // the files cannot corroborate, so it is the one worth reading back.
     const ok = await confirm({
       title: t('underlag_confirm_title'),
-      description: t('underlag_confirm_body', { count: selectedRows.length }),
+      description: t('underlag_confirm_body', {
+        count: selectedRows.length,
+        year: fiscalPeriod?.name ?? '',
+      }),
       confirmLabel: t('underlag_confirm_action'),
       variant: 'warning',
     })
@@ -266,8 +296,11 @@ export default function UnderlagImportWizard() {
       }),
       variant: failed > 0 ? 'destructive' : 'default',
     })
-  }, [confirm, selectedRows, t, toast])
+  }, [confirm, fiscalPeriod, selectedRows, t, toast])
 
+  // The fiscal year deliberately survives a reset: a migration is several
+  // batches from the same year's export, and re-picking it every round is
+  // where a wrong year would creep in.
   const reset = () => {
     setStep('select')
     setPlan(null)
@@ -318,6 +351,22 @@ export default function UnderlagImportWizard() {
               <p>{t('underlag_intro_formats')}</p>
             </div>
 
+            <div className="space-y-2">
+              <p className="text-sm">{t('underlag_year_label')}</p>
+              <FyPicker
+                value={fiscalPeriodId}
+                onChange={(id, period) => {
+                  setFiscalPeriodId(id)
+                  setFiscalPeriod(period ?? null)
+                }}
+                includeAllOption={false}
+                storageKeyPrefix={FY_STORAGE_PREFIX}
+              />
+              <p className="text-[12.5px] leading-5 text-muted-foreground">
+                {t('underlag_year_help')}
+              </p>
+            </div>
+
             <input
               ref={fileInputRef}
               type="file"
@@ -327,7 +376,10 @@ export default function UnderlagImportWizard() {
               onChange={(e) => handleFilesSelected(e.target.files)}
             />
 
-            <Button onClick={() => fileInputRef.current?.click()} disabled={isLoading}>
+            <Button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isLoading || !fiscalPeriodId}
+            >
               {isLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
@@ -352,6 +404,7 @@ export default function UnderlagImportWizard() {
             {t('underlag_summary', {
               matched: plan.summary.matched,
               total: plan.summary.total,
+              year: fiscalPeriod?.name ?? '',
             })}
           </p>
 
@@ -397,7 +450,10 @@ export default function UnderlagImportWizard() {
                           updateRow(row.id, {
                             targetId: candidate.journal_entry_id,
                             selected: !candidate.period_locked,
-                            manual: true,
+                            // Deliberately NOT `manual`: the server proposed
+                            // this candidate itself, so it can re-derive it.
+                            // Flagging it would switch the filename check off
+                            // on exactly the rows it exists to protect.
                           })
                         }
                         onManualRefChange={(value) =>

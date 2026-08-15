@@ -132,7 +132,7 @@ function makeRequest(options: {
 describe('POST /api/import/documents/attach', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    targetEntry = { id: TARGET_ID, source_voucher_series: 'A', source_voucher_number: 31 }
+    targetEntry = { id: TARGET_ID, fiscal_period_id: PERIOD_OPEN, source_voucher_series: 'A', source_voucher_number: 31 }
     vouchers = [VOUCHER]
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
     getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
@@ -186,8 +186,26 @@ describe('POST /api/import/documents/attach', () => {
     expect(uploadDocumentMock).not.toHaveBeenCalled()
   })
 
+  it('refuses a target in a different fiscal year than the ref resolves in', async () => {
+    // The re-resolution runs inside the TARGET's own year. A31 exists, but in
+    // another year, so the target cannot be what this filename names.
+    targetEntry = {
+      id: TARGET_ID,
+      fiscal_period_id: 'period-other',
+      source_voucher_series: 'A',
+      source_voucher_number: 31,
+    }
+
+    const res = await POST(makeRequest({}), emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('UNDERLAG_REF_MISMATCH')
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+  })
+
   it('explains a target that never came from a SIE import', async () => {
-    targetEntry = { id: TARGET_ID, source_voucher_series: null, source_voucher_number: null }
+    targetEntry = { id: TARGET_ID, fiscal_period_id: PERIOD_OPEN, source_voucher_series: null, source_voucher_number: null }
 
     const res = await POST(makeRequest({}), emptyParams)
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
@@ -198,7 +216,7 @@ describe('POST /api/import/documents/attach', () => {
   })
 
   it('allows an explicit manual assignment to skip the filename check', async () => {
-    targetEntry = { id: TARGET_ID, source_voucher_series: null, source_voucher_number: null }
+    targetEntry = { id: TARGET_ID, fiscal_period_id: PERIOD_OPEN, source_voucher_series: null, source_voucher_number: null }
 
     const res = await POST(
       makeRequest({ fileName: 'kvitto ica.pdf', override: true }),

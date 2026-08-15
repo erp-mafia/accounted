@@ -41,11 +41,13 @@ export interface VoucherRow {
   id: string
   fiscal_period_id: string
   entry_date: string
-  description: string | null
-  voucher_series: string | null
-  voucher_number: number | null
   source_voucher_series: string | null
   source_voucher_number: number | null
+  // Display-only, and fetched only by the reads that need them: the provider
+  // sweep resolves thousands of entries and never renders any of this.
+  description?: string | null
+  voucher_series?: string | null
+  voucher_number?: number | null
 }
 
 export interface FiscalPeriodRow {
@@ -168,11 +170,15 @@ export function candidatesForNumber(index: VoucherIndex, number: number): Vouche
   return index.byNumber.get(number) ?? []
 }
 
-const VOUCHER_SELECT =
-  'id, fiscal_period_id, entry_date, description, voucher_series, voucher_number, source_voucher_series, source_voucher_number'
+// Both selects are written out inline at their call site rather than hoisted
+// into a shared constant. tests/schema/no-phantom-columns.test.ts resolves
+// column lists by scanning the AST for string literals passed to .select();
+// a constant is opaque to it, and hiding this query surface would drop all
+// eight journal_entries columns out of the phantom-column net on the one code
+// path that writes irreversible räkenskapsinformation links.
 
 /**
- * All entries that carry a source voucher ref.
+ * All entries that carry a source voucher ref, resolution columns only.
  *
  * A stable `.order('id')` is required: fetchAllRows pages with `.range()`, and
  * PostgREST paging without a deterministic order can skip or repeat rows once
@@ -186,7 +192,7 @@ export async function fetchSourceRefVouchers(
   return fetchAllRows<VoucherRow>(({ from, to }) =>
     supabase
       .from('journal_entries')
-      .select(VOUCHER_SELECT)
+      .select('id, fiscal_period_id, entry_date, source_voucher_series, source_voucher_number')
       .eq('company_id', companyId)
       .not('source_voucher_number', 'is', null)
       .order('id', { ascending: true })
@@ -203,6 +209,9 @@ const REF_QUERY_CHUNK = 200
  * per request and would otherwise pull thousands of rows into memory each time.
  * Series is filtered in memory afterwards: it is case-insensitive here and a
  * series-less filename has to search across all of them anyway.
+ *
+ * Carries the display columns too, because this is the read behind a plan the
+ * user has to be able to read before approving it.
  */
 export async function fetchVouchersForNumbers(
   supabase: SupabaseClient,
@@ -218,7 +227,9 @@ export async function fetchVouchersForNumbers(
     const chunkRows = await fetchAllRows<VoucherRow>(({ from, to }) =>
       supabase
         .from('journal_entries')
-        .select(VOUCHER_SELECT)
+        .select(
+          'id, fiscal_period_id, entry_date, description, voucher_series, voucher_number, source_voucher_series, source_voucher_number',
+        )
         .eq('company_id', companyId)
         .in('source_voucher_number', chunk)
         .order('id', { ascending: true })
@@ -229,15 +240,21 @@ export async function fetchVouchersForNumbers(
   return rows
 }
 
-/** Whether the company has any SIE-imported entry carrying a source ref at all. */
+/**
+ * Whether a fiscal year holds any SIE-imported entry carrying a source ref.
+ * Distinguishes "the filenames are wrong" from "this year was never imported
+ * from SIE", which are the same empty plan on screen but different problems.
+ */
 export async function hasSourceRefVouchers(
   supabase: SupabaseClient,
   companyId: string,
+  fiscalPeriodId: string,
 ): Promise<boolean> {
   const { count, error } = await supabase
     .from('journal_entries')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
     .not('source_voucher_number', 'is', null)
 
   if (error) throw new Error(`Failed to count migrated vouchers: ${error.message}`)

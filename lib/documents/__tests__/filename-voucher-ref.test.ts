@@ -32,12 +32,29 @@ describe('parseVoucherRefFromFileName', () => {
     expect(parseVoucherRefFromFileName('a31_x.pdf')).toMatchObject({ series: 'A' })
   })
 
-  it('drops a directory prefix from a dropped folder', () => {
-    expect(parseVoucherRefFromFileName('underlag/2024/A31_kvitto.pdf')).toMatchObject({
-      series: 'A',
-      number: 31,
+  it.each([
+    'underlag/2024/A31_kvitto.pdf',
+    'underlag\\A31.pdf',
+    // The manual-reference box feeds arbitrary typed text through this same
+    // parser. Splitting on the separator would turn a typed date into a
+    // voucher number and hand the user an irreversible link to approve.
+    '2024/01/31 kvitto.pdf',
+    '2024/01/31',
+  ])('does not strip a path component out of %s', (input) => {
+    expect(parseVoucherRefFromFileName(input)).toBeNull()
+  })
+
+  it.each([
+    ['Verifikation 31.pdf', 31],
+    ['verifikation31.pdf', 31],
+    ['Verifikat 31.pdf', 31],
+  ])('reads %s as a series-less reference, not a bogus series', (fileName, number) => {
+    expect(parseVoucherRefFromFileName(fileName)).toEqual({
+      series: null,
+      number,
+      pattern: 'number_only',
+      autoSelectable: false,
     })
-    expect(parseVoucherRefFromFileName('underlag\\A31.pdf')).toMatchObject({ series: 'A' })
   })
 
   it('returns a series-less parse for a number-only name, never auto-selectable', () => {
@@ -55,9 +72,24 @@ describe('parseVoucherRefFromFileName', () => {
     '20240131_kvitto.pdf',
     '2024-01-31 kvitto.pdf',
     '2024_01_31.pdf',
+    // Unpadded components, two-digit years and space separators are just as
+    // common in receipt exports and used to slip through as voucher 2024 / 24.
+    '2024-1-31 kvitto.pdf',
+    '2024_1_31.pdf',
+    '2024.1.31.pdf',
+    '2024 01 31 kvitto.pdf',
+    '24-01-31 kvitto.pdf',
+    '2024/01/31.pdf',
   ])('refuses the date-named file %s rather than reading it as a number', (fileName) => {
     expect(parseVoucherRefFromFileName(fileName)).toBeNull()
   })
+
+  it.each(['2024.pdf', '2024_kvitto.pdf', '1999.pdf'])(
+    'refuses the year-shaped series-less name %s',
+    (fileName) => {
+      expect(parseVoucherRefFromFileName(fileName)).toBeNull()
+    },
+  )
 
   it.each([
     'kvitto.pdf',

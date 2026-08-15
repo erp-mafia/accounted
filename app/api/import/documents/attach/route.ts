@@ -12,9 +12,13 @@ ensureInitialized()
 const AttachFieldsSchema = z.object({
   journal_entry_id: z.string().uuid(),
   /**
-   * Set when the user assigned this file by hand instead of taking the
-   * filename's proposal (an unreadable name dragged onto a verifikat). Skips
-   * the filename consistency check; company ownership is still verified.
+   * Set ONLY when the user resolved this file by hand because its filename
+   * carries no usable reference. Skips the filename consistency check; company
+   * ownership and the period lock are still enforced.
+   *
+   * Choosing among candidates the server itself proposed is NOT an override:
+   * those targets pass the check already, and flagging them would switch the
+   * guard off on exactly the ambiguous rows it exists for.
    */
   override: z.boolean(),
 })
@@ -84,7 +88,7 @@ export const POST = withRouteContext(
     // company an entry belongs to.
     const { data: entry, error: entryError } = await supabase
       .from('journal_entries')
-      .select('id, source_voucher_series, source_voucher_number')
+      .select('id, fiscal_period_id, source_voucher_series, source_voucher_number')
       .eq('id', journalEntryId)
       .eq('company_id', companyId!)
       .maybeSingle()
@@ -100,13 +104,23 @@ export const POST = withRouteContext(
     // The automatic path must land where the preview said it would. A stale
     // plan in the browser (the user re-imported SIE in another tab, say) would
     // otherwise scatter underlag across the wrong verifikat, permanently.
+    //
+    // The fiscal year comes from the TARGET, not from the client: re-resolving
+    // inside the target's own year is the strictest reading of the request, and
+    // a caller cannot widen the check by naming a different year.
     if (!override) {
       if (entry.source_voucher_number == null) {
         // Not a SIE-migrated verifikat, so no filename can ever resolve to it.
         // Say that plainly instead of reporting a mismatch the user can't fix.
         return errorResponseFromCode('UNDERLAG_ENTRY_NOT_MIGRATED', opLog, { requestId })
       }
-      const accepted = await planAcceptsTarget(supabase, companyId!, file.name, journalEntryId)
+      const accepted = await planAcceptsTarget(
+        supabase,
+        companyId!,
+        file.name,
+        journalEntryId,
+        entry.fiscal_period_id as string,
+      )
       if (!accepted) {
         opLog.warn('underlag attach refused: filename does not resolve to the target')
         return errorResponseFromCode('UNDERLAG_REF_MISMATCH', opLog, { requestId })

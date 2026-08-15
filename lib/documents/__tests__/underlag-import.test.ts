@@ -86,7 +86,7 @@ describe('buildUnderlagPlan', () => {
 
     const plan = await buildUnderlagPlan(supabase, 'company-1', [
       'A31_8c2db060-79ba-4b6e-9f3d-4b0042aa5c52.pdf',
-    ])
+    ], PERIOD_OPEN)
 
     expect(plan.rows[0]).toMatchObject({
       file_name: 'A31_8c2db060-79ba-4b6e-9f3d-4b0042aa5c52.pdf',
@@ -107,7 +107,7 @@ describe('buildUnderlagPlan', () => {
     // number must NOT match: A47 does not exist in the source system.
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
 
-    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A47_kvitto.pdf'])
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A47_kvitto.pdf'], PERIOD_OPEN)
 
     expect(plan.rows[0].status).toBe('no_match')
   })
@@ -117,7 +117,7 @@ describe('buildUnderlagPlan', () => {
       vouchers: [makeVoucher({ id: 'je-1', fiscal_period_id: PERIOD_LOCKED })],
     })
 
-    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'])
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'], PERIOD_LOCKED)
 
     expect(plan.rows[0]).toMatchObject({ status: 'period_locked', journal_entry_id: 'je-1' })
     expect(plan.rows[0].candidates[0].period_locked).toBe(true)
@@ -130,12 +130,12 @@ describe('buildUnderlagPlan', () => {
       periods: [{ ...PERIODS[0], locked_at: '2025-01-31T00:00:00Z' }],
     })
 
-    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'])
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'], PERIOD_OPEN)
 
     expect(plan.rows[0].status).toBe('period_locked')
   })
 
-  it('surfaces every candidate when one ref spans several migrated years', async () => {
+  it('resolves ONLY inside the declared year when a ref exists in several', async () => {
     const supabase = makeSupabase({
       vouchers: [
         makeVoucher({ id: 'je-2023', fiscal_period_id: PERIOD_LOCKED, entry_date: '2023-03-14' }),
@@ -143,18 +143,58 @@ describe('buildUnderlagPlan', () => {
       ],
     })
 
-    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'])
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'], PERIOD_OPEN)
+
+    expect(plan.rows[0].status).toBe('matched')
+    expect(plan.rows[0].journal_entry_id).toBe('je-2024')
+    // The other year's A31 is not even offered as a candidate.
+    expect(plan.rows[0].candidates.map((c) => c.journal_entry_id)).toEqual(['je-2024'])
+  })
+
+  it('NEVER proposes a verifikat outside the declared year, even as the only one', async () => {
+    // The defect this scoping exists for: a partial migration, or a year whose
+    // A31 the importer skipped, leaves exactly one A31 in the whole ledger.
+    // Treating that single hit as identity attached a 2023 receipt to a 2025
+    // verifikat, permanently and undetectably.
+    const supabase = makeSupabase({
+      vouchers: [makeVoucher({ id: 'je-other-year', fiscal_period_id: PERIOD_LOCKED })],
+    })
+
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'], PERIOD_OPEN)
+
+    expect(plan.rows[0].status).toBe('no_match')
+    expect(plan.rows[0].journal_entry_id).toBeNull()
+    expect(plan.rows[0].candidates).toEqual([])
+  })
+
+  it('still hands back a choice when one ref repeats INSIDE the declared year', async () => {
+    const supabase = makeSupabase({
+      vouchers: [
+        makeVoucher({ id: 'je-a' }),
+        makeVoucher({ id: 'je-b', entry_date: '2024-09-02' }),
+      ],
+    })
+
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'], PERIOD_OPEN)
 
     expect(plan.rows[0].status).toBe('ambiguous')
     expect(plan.rows[0].journal_entry_id).toBeNull()
-    expect(plan.rows[0].candidates.map((c) => c.journal_entry_id)).toEqual(['je-2023', 'je-2024'])
+    expect(plan.rows[0].candidates.map((c) => c.journal_entry_id)).toEqual(['je-a', 'je-b'])
     expect(plan.summary.ambiguous).toBe(1)
+  })
+
+  it('reports which year the plan was resolved against', async () => {
+    const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
+
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'], PERIOD_OPEN)
+
+    expect(plan.fiscal_period_id).toBe(PERIOD_OPEN)
   })
 
   it('never auto-selects a series-less filename, even on a single hit', async () => {
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
 
-    const plan = await buildUnderlagPlan(supabase, 'company-1', ['31.pdf'])
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['31.pdf'], PERIOD_OPEN)
 
     expect(plan.rows[0]).toMatchObject({
       status: 'needs_confirmation',
@@ -167,7 +207,7 @@ describe('buildUnderlagPlan', () => {
   it('reports an unreadable filename as unparsed without touching the ledger', async () => {
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
 
-    const plan = await buildUnderlagPlan(supabase, 'company-1', ['kvitto ica.pdf'])
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['kvitto ica.pdf'], PERIOD_OPEN)
 
     expect(plan.rows[0]).toMatchObject({
       status: 'unparsed',
@@ -181,7 +221,7 @@ describe('buildUnderlagPlan', () => {
   it('flags a ledger with no source refs at all, so the miss is explained', async () => {
     const supabase = makeSupabase({ vouchers: [], sourceRefCount: 0 })
 
-    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'])
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'], PERIOD_OPEN)
 
     expect(plan.rows[0].status).toBe('no_match')
     expect(plan.no_source_refs).toBe(true)
@@ -190,7 +230,7 @@ describe('buildUnderlagPlan', () => {
   it('does not blame missing source refs when the ledger has them', async () => {
     const supabase = makeSupabase({ vouchers: [], sourceRefCount: 120 })
 
-    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'])
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf'], PERIOD_OPEN)
 
     expect(plan.rows[0].status).toBe('no_match')
     expect(plan.no_source_refs).toBe(false)
@@ -199,7 +239,7 @@ describe('buildUnderlagPlan', () => {
   it('skips the diagnostic round-trip once anything matched', async () => {
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })], sourceRefCount: 0 })
 
-    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf', 'kvitto.pdf'])
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A31.pdf', 'kvitto.pdf'], PERIOD_OPEN)
 
     expect(plan.no_source_refs).toBe(false)
   })
@@ -212,7 +252,7 @@ describe('buildUnderlagPlan', () => {
       'A31_b.pdf',
       'A99.pdf',
       'kvitto.pdf',
-    ])
+    ], PERIOD_OPEN)
 
     expect(plan.summary).toEqual({
       total: 4,
@@ -230,24 +270,33 @@ describe('planAcceptsTarget', () => {
   it('accepts the entry the filename resolves to', async () => {
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
 
-    await expect(planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-1')).resolves.toBe(true)
+    await expect(planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-1', PERIOD_OPEN)).resolves.toBe(true)
   })
 
   it('accepts any candidate of an ambiguous filename: the user picked one', async () => {
     const supabase = makeSupabase({
-      vouchers: [
-        makeVoucher({ id: 'je-2023', fiscal_period_id: PERIOD_LOCKED, entry_date: '2023-03-14' }),
-        makeVoucher({ id: 'je-2024' }),
-      ],
+      vouchers: [makeVoucher({ id: 'je-a' }), makeVoucher({ id: 'je-b' })],
     })
 
-    await expect(planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-2023')).resolves.toBe(true)
+    await expect(
+      planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-b', PERIOD_OPEN),
+    ).resolves.toBe(true)
+  })
+
+  it('refuses a target in another fiscal year even when the ref matches', async () => {
+    const supabase = makeSupabase({
+      vouchers: [makeVoucher({ id: 'je-other-year', fiscal_period_id: PERIOD_LOCKED })],
+    })
+
+    await expect(
+      planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-other-year', PERIOD_OPEN),
+    ).resolves.toBe(false)
   })
 
   it('refuses an entry the filename does not point at', async () => {
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
 
-    await expect(planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-other')).resolves.toBe(
+    await expect(planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-other', PERIOD_OPEN)).resolves.toBe(
       false,
     )
   })
@@ -255,7 +304,7 @@ describe('planAcceptsTarget', () => {
   it('refuses an unreadable filename outright', async () => {
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
 
-    await expect(planAcceptsTarget(supabase, 'company-1', 'kvitto.pdf', 'je-1')).resolves.toBe(
+    await expect(planAcceptsTarget(supabase, 'company-1', 'kvitto.pdf', 'je-1', PERIOD_OPEN)).resolves.toBe(
       false,
     )
   })

@@ -13,6 +13,16 @@
  * That split is deliberate: linking a document to a posted verifikat makes it
  * räkenskapsinformation, which can never be re-pointed (BFL 7 kap), so a bulk
  * write with no preview would be an unrecoverable mistake by design.
+ *
+ * EVERY plan is scoped to one fiscal year, which the user declares. That is not
+ * ceremony. Source systems restart voucher numbering every year and a filename
+ * carries no year, so `A31` alone does not identify a verifikat. An earlier
+ * version resolved company-wide and treated "only one candidate exists" as
+ * proof of identity: with a partial migration, or with the year's A31 among the
+ * vouchers the importer skipped (empty, single-line, unbalanced), that silently
+ * attached a 2023 receipt to a 2025 verifikat, permanently. Cardinality is not
+ * identity. Scoping cannot make the year inferable, so it makes it asserted:
+ * a file can only ever land in the year the user named.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -78,11 +88,15 @@ export interface UnderlagPlanSummary {
 export interface UnderlagPlan {
   rows: UnderlagPlanRow[]
   summary: UnderlagPlanSummary
+  /** The fiscal year every row in this plan was resolved against. */
+  fiscal_period_id: string
   /**
-   * True when the company has no migrated entry carrying a source voucher ref.
-   * Either nothing was imported from SIE, or the import predates the columns
-   * (added 2026-04-21 and never backfilled), in which case filename matching
-   * cannot work at all and the UI must say so instead of showing 400 misses.
+   * True when the SELECTED fiscal year holds no migrated entry carrying a
+   * source voucher ref. Either that year was never imported from SIE, or the
+   * import predates the columns (added 2026-04-21 and never backfilled), in
+   * which case filename matching cannot work for it at all and the UI must say
+   * so instead of showing 400 misses. Often it just means the wrong year is
+   * selected, which is the first thing worth telling the user.
    */
   no_source_refs: boolean
 }
@@ -97,7 +111,7 @@ function toCandidate(entry: VoucherRow, periods: Map<string, FiscalPeriodRow>): 
     voucher_label: voucherLabel(entry),
     source_voucher_label: sourceVoucherLabel(entry),
     entry_date: entry.entry_date,
-    description: entry.description,
+    description: entry.description ?? null,
     period_locked: isPeriodLocked(periods.get(entry.fiscal_period_id)),
   }
 }
@@ -115,7 +129,8 @@ function emptySummary(): UnderlagPlanSummary {
 }
 
 /**
- * Build the match plan for a set of filenames. Reads only: no upload, no link.
+ * Build the match plan for a set of filenames, inside one declared fiscal year.
+ * Reads only: no upload, no link.
  *
  * The same function backs the preview and the per-file attach check, so the
  * server can never link a file to a verifikat the preview would not have
@@ -125,6 +140,7 @@ export async function buildUnderlagPlan(
   supabase: SupabaseClient,
   companyId: string,
   fileNames: string[],
+  fiscalPeriodId: string,
 ): Promise<UnderlagPlan> {
   const parsed = fileNames.map((fileName) => ({
     fileName,
@@ -138,7 +154,12 @@ export async function buildUnderlagPlan(
     fetchFiscalPeriods(supabase, companyId),
   ])
 
-  const index = buildVoucherIndex(vouchers)
+  // The single most important line in this module: candidates outside the
+  // declared year are dropped BEFORE the index is built, so no downstream
+  // branch can ever see, count or propose one.
+  const index = buildVoucherIndex(
+    vouchers.filter((entry) => entry.fiscal_period_id === fiscalPeriodId),
+  )
   const periods = new Map(periodRows.map((p) => [p.id, p]))
 
   const summary = emptySummary()
@@ -174,8 +195,9 @@ export async function buildUnderlagPlan(
     }
 
     if (candidates.length > 1) {
-      // Source systems restart numbering every year, so one ref legitimately
-      // hits several migrated years. Hand the choice back rather than pick.
+      // Inside one fiscal year a source ref should be unique, so this is either
+      // a re-imported year or a series-less filename hitting several series.
+      // Hand the choice back rather than pick.
       summary.ambiguous++
       return {
         file_name: fileName,
@@ -220,22 +242,26 @@ export async function buildUnderlagPlan(
   })
 
   // Only worth a round-trip when nothing landed: the answer distinguishes
-  // "wrong filenames" from "this ledger has no source refs to match against".
+  // "wrong filenames" from "this year holds no source refs to match against",
+  // which most often means the wrong year is selected.
   const no_source_refs =
     summary.matched + summary.needs_confirmation + summary.ambiguous + summary.period_locked === 0
-      ? !(await hasSourceRefVouchers(supabase, companyId))
+      ? !(await hasSourceRefVouchers(supabase, companyId, fiscalPeriodId))
       : false
 
-  return { rows, summary, no_source_refs }
+  return { rows, summary, fiscal_period_id: fiscalPeriodId, no_source_refs }
 }
 
 /**
  * Whether `journalEntryId` is a target the plan for `fileName` would accept.
  *
  * Guards the attach route against a stale or wrong client: the file the browser
- * uploads must land on the verifikat the preview proposed for that name. A
- * deliberate manual assignment (an unreadable filename dragged onto a verifikat
- * by hand) bypasses this via the route's `override` flag, which is why company
+ * uploads must land on the verifikat the preview proposed for that name. The
+ * fiscal year is taken from the target entry itself rather than from the
+ * client, so the check cannot be widened by asking for the wrong year.
+ *
+ * A deliberate manual assignment (an unreadable filename the user resolved by
+ * hand) bypasses this via the route's `override` flag, which is why company
  * ownership of the entry is verified separately and never inferred from here.
  */
 export async function planAcceptsTarget(
@@ -243,8 +269,9 @@ export async function planAcceptsTarget(
   companyId: string,
   fileName: string,
   journalEntryId: string,
+  fiscalPeriodId: string,
 ): Promise<boolean> {
-  const plan = await buildUnderlagPlan(supabase, companyId, [fileName])
+  const plan = await buildUnderlagPlan(supabase, companyId, [fileName], fiscalPeriodId)
   const row = plan.rows[0]
   if (!row) return false
   return row.candidates.some((candidate) => candidate.journal_entry_id === journalEntryId)
