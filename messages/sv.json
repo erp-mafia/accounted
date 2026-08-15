@@ -1162,6 +1162,7 @@
     "terms_and": "och",
     "privacy_link": "integritetspolicy",
     "bankid_failed_title": "BankID misslyckades",
+    "bankid_cancel_failed": "Kunde inte avbryta BankID-identifieringen. Försök igen.",
     "bankid_failed_description": "Kunde inte verifiera din identitet.",
     "bankid_already_linked_title": "BankID redan kopplat",
     "bankid_already_linked_description": "Detta BankID är redan kopplat till ett konto. Försök logga in istället.",

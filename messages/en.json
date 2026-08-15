@@ -1162,6 +1162,7 @@
     "terms_and": "and",
     "privacy_link": "privacy policy",
     "bankid_failed_title": "BankID failed",
+    "bankid_cancel_failed": "Could not cancel the BankID identification. Please try again.",
     "bankid_failed_description": "Could not verify your identity.",
     "bankid_already_linked_title": "BankID already linked",
     "bankid_already_linked_description": "This BankID is already linked to an account. Try signing in instead.",
