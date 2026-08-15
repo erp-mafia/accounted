@@ -30,6 +30,18 @@ interface FyPickerProps {
    * wrong there. Manual picks still work and are still persisted.
    */
   preferLatestEnded?: boolean
+  /**
+   * Never auto-select on load: leave the picker empty until the user chooses.
+   *
+   * The default behaviour (pick the newest period when nothing is stored) is
+   * right for a filter, where a sensible default beats an empty page. It is
+   * wrong where the year is an ASSERTION the user is making rather than a view
+   * they are narrowing: the underlag import resolves voucher references inside
+   * the chosen year and writes irreversible links, so a silently pre-filled
+   * "newest year" would let a 2023 batch land in 2026 with nobody having
+   * claimed otherwise. A previously stored explicit choice is still restored.
+   */
+  requireExplicitChoice?: boolean
   /** Fires once after the initial period load completes. */
   onReady?: () => void
   /** Server-loaded periods for the first render, scoped to initialCompanyId. */
@@ -65,6 +77,7 @@ export function FyPicker({
   includeAllOption = true,
   hideFuturePeriods = false,
   preferLatestEnded = false,
+  requireExplicitChoice = false,
   onReady,
   initialPeriods,
   initialCompanyId,
@@ -122,7 +135,7 @@ export function FyPicker({
             else if (fetched.length > 0) onChange(fetched[0].id, fetched[0])
           } else if (stored && fetched.some((p) => p.id === stored)) {
             onChange(stored, fetched.find((p) => p.id === stored) ?? null)
-          } else if (!includeAllOption && fetched.length > 0) {
+          } else if (!includeAllOption && !requireExplicitChoice && fetched.length > 0) {
             onChange(fetched[0].id, fetched[0])
           }
         }
@@ -136,7 +149,7 @@ export function FyPicker({
   // onReady is a lifecycle callback: fire once per load, not on parent
   // re-renders that re-create it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id, hideFuturePeriods, includeAllOption, preferLatestEnded, initialCompanyId, initialPeriods, storageKeyPrefix])
+  }, [company?.id, hideFuturePeriods, includeAllOption, preferLatestEnded, requireExplicitChoice, initialCompanyId, initialPeriods, storageKeyPrefix])
 
   const handleChange = (id: string) => {
     const nextId = id === ALL_YEARS_VALUE ? null : id

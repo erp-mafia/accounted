@@ -394,6 +394,10 @@ export default function UnderlagImportWizard() {
                   setFiscalPeriod(period ?? null)
                 }}
                 includeAllOption={false}
+                // The year is the user's assertion, so it must be the user who
+                // makes it. Defaulting to the newest year would let a 2023
+                // batch resolve against 2026 with nobody having claimed it.
+                requireExplicitChoice
                 storageKeyPrefix={FY_STORAGE_PREFIX}
                 className={isLoading ? 'pointer-events-none opacity-60' : undefined}
               />
@@ -422,6 +426,16 @@ export default function UnderlagImportWizard() {
               )}
               {t('underlag_pick_files')}
             </Button>
+
+            {/* Both the picker and the button are disabled until a year is
+                chosen, and if the company has no fiscal years at all the
+                picker never becomes usable. Say why rather than leave two
+                dead controls on screen. */}
+            {!fiscalPeriodId && (
+              <p className="text-[12.5px] leading-5 text-muted-foreground">
+                {t('underlag_year_required')}
+              </p>
+            )}
           </CardContent>
         </Card>
       )}

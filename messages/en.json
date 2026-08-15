@@ -6997,6 +6997,7 @@
     "underlag_intro_formats": "Filenames that work: A31_abc123.pdf, A31.pdf, A-31 receipt.pdf, 2024-A-31.pdf. Matching uses the voucher number from your old system, not the number here.",
     "underlag_pick_files": "Pick files",
     "underlag_year_help": "The old system restarts voucher numbering every year, so A31 only identifies a verifikat within one year. Pick the year the export came from. Files are never attached to any other year.",
+    "underlag_year_required": "Pick a fiscal year above to continue. If the year you want is missing, its bookkeeping was not imported via SIE.",
     "underlag_year_label": "Which fiscal year are these receipts from?",
     "underlag_summary": "{matched} of {total} files matched a verifikat in {year}.",
     "underlag_no_source_refs": "The selected fiscal year holds no verifikat from a SIE import, so there is nothing to match the filenames against. Check that you picked the right year.",
