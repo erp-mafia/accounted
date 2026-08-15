@@ -1756,6 +1756,33 @@ export const MatchBatchSchema = z
     }
   })
 
+/**
+ * Couple ONE bank transaction to N already-posted verifikat.
+ *
+ * `allocated_amount` is SIGNED and denominated in the transaction's own
+ * currency, matching the transaction_voucher_links column contract. It is not
+ * constrained to be positive here (unlike MatchBatchSchema's `amount`): the
+ * sign carries the direction of the bank movement, and the RPC rejects any leg
+ * whose sign disagrees with the transaction. Requiring positives would force
+ * the client to strip and re-apply the sign, which is exactly where an
+ * inverted allocation would slip in.
+ */
+export const LinkTransactionVouchersSchema = z.object({
+  links: z
+    .array(
+      z.object({
+        journal_entry_id: uuid,
+        allocated_amount: z
+          .number()
+          .refine((n) => n !== 0, 'Allocated amount must be non-zero'),
+      }),
+    )
+    .min(1, 'At least one link is required')
+    // Same DoS ceiling as MatchBatchSchema: the RPC takes a FOR UPDATE lock per
+    // target verifikat, and a real bank row never settles more than a few dozen.
+    .max(100, 'At most 100 links per transaction'),
+})
+
 export const LinkTransactionJournalEntrySchema = z.object({
   journal_entry_id: uuid,
   // Optional invoice to settle alongside the link. When provided, the

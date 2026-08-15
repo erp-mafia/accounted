@@ -2905,6 +2905,80 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
     message_en:
       'The full transaction amount must be allocated. Add more invoices or raise an amount so the sum matches the bank movement.',
   },
+  // link_transaction_to_vouchers (20260815090000): couple one bank row to N
+  // already-posted verifikat. Amount-sum failures deliberately reuse the
+  // BATCH_AMOUNT_* codes above so the allocation UI has one error path.
+  LINK_VOUCHERS_UNAUTHORIZED: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet till det här företaget.',
+    message_en: 'You do not have access to this company.',
+  },
+  LINK_VOUCHERS_NO_LINKS: {
+    httpStatus: 400,
+    message_sv: 'Välj minst en verifikation att koppla bankhändelsen till.',
+    message_en: 'Select at least one journal entry to link the bank transaction to.',
+  },
+  LINK_VOUCHERS_TX_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bankhändelsen kunde inte hittas i det aktuella företaget.',
+    message_en: 'The bank transaction could not be found in this company.',
+  },
+  LINK_VOUCHERS_TX_ZERO_AMOUNT: {
+    httpStatus: 400,
+    message_sv: 'En bankhändelse med beloppet 0 kan inte kopplas till verifikationer.',
+    message_en: 'A zero-amount bank transaction cannot be linked to journal entries.',
+  },
+  LINK_VOUCHERS_TX_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Bankhändelsen är redan kopplad till bokföring. Ta bort den befintliga kopplingen först.',
+    message_en:
+      'The bank transaction is already anchored to bookkeeping. Remove the existing link first.',
+  },
+  LINK_VOUCHERS_INVALID_PAYLOAD: {
+    httpStatus: 400,
+    message_sv: 'En av kopplingarna saknar verifikation eller belopp.',
+    message_en: 'One of the links is missing a journal entry or an amount.',
+  },
+  LINK_VOUCHERS_ZERO_ALLOCATION: {
+    httpStatus: 400,
+    message_sv: 'En koppling med beloppet 0 går inte att spara. Ta bort raden eller ange ett belopp.',
+    message_en: 'A zero-amount link cannot be saved. Remove the row or enter an amount.',
+  },
+  LINK_VOUCHERS_DIRECTION_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Alla kopplingar måste gå åt samma håll som bankhändelsen (in eller ut).',
+    message_en:
+      'Every link must move money in the same direction as the bank transaction.',
+  },
+  LINK_VOUCHERS_DUPLICATE_JE: {
+    httpStatus: 400,
+    message_sv: 'Samma verifikation är vald mer än en gång.',
+    message_en: 'The same journal entry is selected more than once.',
+  },
+  LINK_VOUCHERS_JE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'En av verifikationerna kunde inte hittas i det aktuella företaget.',
+    message_en: 'One of the journal entries could not be found in this company.',
+  },
+  LINK_VOUCHERS_JE_NOT_POSTED: {
+    httpStatus: 400,
+    message_sv: 'En av verifikationerna är inte bokförd ännu.',
+    message_en: 'One of the journal entries is not posted yet.',
+  },
+  LINK_VOUCHERS_DB_ERROR: {
+    httpStatus: 500,
+    message_sv: 'Kopplingen kunde inte sparas. Försök igen.',
+    message_en: 'The link could not be saved. Please try again.',
+  },
+  LINK_VOUCHERS_JE_NO_SETTLEMENT_LINE: {
+    httpStatus: 400,
+    message_sv:
+      'En av verifikationerna saknar rad på bankhändelsens konto och kan därför inte kopplas till den.',
+    message_en:
+      'One of the journal entries has no line on the transaction settlement account, so it cannot be linked to it.',
+  },
   BATCH_MIXED_KINDS_UNSUPPORTED: {
     httpStatus: 400,
     message_sv:
