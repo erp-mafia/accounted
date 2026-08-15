@@ -1,0 +1,159 @@
+import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { ensureInitialized } from '@/lib/init'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
+import { planAcceptsTarget } from '@/lib/documents/underlag-import'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+
+ensureInitialized()
+
+const AttachFieldsSchema = z.object({
+  journal_entry_id: z.string().uuid(),
+  /**
+   * Set when the user assigned this file by hand instead of taking the
+   * filename's proposal (an unreadable name dragged onto a verifikat). Skips
+   * the filename consistency check; company ownership is still verified.
+   */
+  override: z.boolean(),
+})
+
+/**
+ * POST /api/import/documents/attach: archive one underlag file and link it to a
+ * migrated verifikat.
+ *
+ * multipart/form-data:
+ *   file:              the underlag
+ *   journal_entry_id:  the target the user approved in the preview
+ *   override:          'true' when the target was chosen by hand
+ *
+ * One file per request on purpose: a folder migration is hundreds of files, the
+ * browser streams them one at a time with visible progress, and a failure on
+ * file 200 leaves the first 199 correctly attached instead of rolling back work
+ * that is legally irreversible anyway.
+ *
+ * Idempotent per (verifikat, content): re-running the same import converges on
+ * the same document row rather than archiving duplicates, via the deterministic
+ * document id that `idempotency_key` reserves.
+ */
+export const POST = withRouteContext(
+  'import.documents.attach',
+  async (request, ctx) => {
+    const { user, supabase, companyId, log, requestId } = ctx
+
+    const formData = await request.formData()
+    const file = formData.get('file') as File | null
+
+    if (!file) {
+      return errorResponseFromCode('DOC_UPLOAD_NO_FILE', log, { requestId })
+    }
+
+    const fields = AttachFieldsSchema.safeParse({
+      journal_entry_id: formData.get('journal_entry_id'),
+      override: formData.get('override') === 'true',
+    })
+    if (!fields.success) {
+      return errorResponseFromCode('VALIDATION_ERROR', log, {
+        requestId,
+        details: {
+          issues: fields.error.issues.map((i) => ({
+            field: i.path.join('.'),
+            reason: i.message,
+          })),
+        },
+      })
+    }
+    const { journal_entry_id: journalEntryId, override } = fields.data
+
+    const validationError = validateDocumentFile({ size: file.size, type: file.type })
+    if (validationError) {
+      const code = /storlek|stor|MB/i.test(validationError)
+        ? 'DOC_UPLOAD_TOO_LARGE'
+        : 'DOC_UPLOAD_UNSUPPORTED_TYPE'
+      return errorResponseFromCode(code, log, {
+        requestId,
+        details: { reason: validationError, sizeBytes: file.size, mimeType: file.type },
+      })
+    }
+
+    const opLog = log.child({ filename: file.name, journalEntryId })
+
+    // Tenant check first and explicitly: RLS covers the cookie session, but the
+    // link is irreversible, so the route never takes the client's word for which
+    // company an entry belongs to.
+    const { data: entry, error: entryError } = await supabase
+      .from('journal_entries')
+      .select('id, source_voucher_series, source_voucher_number')
+      .eq('id', journalEntryId)
+      .eq('company_id', companyId!)
+      .maybeSingle()
+
+    if (entryError) {
+      opLog.error('underlag attach target lookup failed', entryError)
+      return errorResponseFromCode('DOC_LINK_FAILED', opLog, { requestId })
+    }
+    if (!entry) {
+      return errorResponseFromCode('DOC_LINK_ENTRY_NOT_FOUND', opLog, { requestId })
+    }
+
+    // The automatic path must land where the preview said it would. A stale
+    // plan in the browser (the user re-imported SIE in another tab, say) would
+    // otherwise scatter underlag across the wrong verifikat, permanently.
+    if (!override) {
+      if (entry.source_voucher_number == null) {
+        // Not a SIE-migrated verifikat, so no filename can ever resolve to it.
+        // Say that plainly instead of reporting a mismatch the user can't fix.
+        return errorResponseFromCode('UNDERLAG_ENTRY_NOT_MIGRATED', opLog, { requestId })
+      }
+      const accepted = await planAcceptsTarget(supabase, companyId!, file.name, journalEntryId)
+      if (!accepted) {
+        opLog.warn('underlag attach refused: filename does not resolve to the target')
+        return errorResponseFromCode('UNDERLAG_REF_MISMATCH', opLog, { requestId })
+      }
+    }
+
+    try {
+      const buffer = await file.arrayBuffer()
+
+      const document = await uploadDocument(
+        supabase,
+        user.id,
+        companyId!,
+        { name: file.name, buffer, type: file.type },
+        {
+          upload_source: 'file_upload',
+          journal_entry_id: journalEntryId,
+          // Scope the deterministic id to the target verifikat: the same
+          // receipt may legitimately back several verifikat, so content alone
+          // must not dedupe across them.
+          idempotency_key: journalEntryId,
+        },
+      )
+
+      return NextResponse.json({ data: document })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'unknown'
+
+      // enforce_period_lock_documents: a migrated year is often closed by the
+      // time the receipts arrive, and the trigger blocks the link outright.
+      if (/locked\/closed fiscal period|Bokföringen är låst/i.test(message)) {
+        return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, {
+          requestId,
+          details: { reason: getErrorMessage(err) },
+        })
+      }
+      if (/kunde inte verifieras|matchar inte den angivna filtypen/i.test(message)) {
+        opLog.warn('underlag attach rejected by content validation', { reason: message })
+        return errorResponseFromCode('DOC_UPLOAD_INVALID_CONTENT', opLog, {
+          requestId,
+          details: { reason: getErrorMessage(err) },
+        })
+      }
+
+      opLog.error('underlag attach failed', err as Error)
+      return errorResponseFromCode('DOC_UPLOAD_STORAGE_FAILED', opLog, { requestId })
+    }
+  },
+  { requireWrite: true },
+)

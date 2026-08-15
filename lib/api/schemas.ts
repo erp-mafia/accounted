@@ -3191,6 +3191,15 @@ export const LinkDocumentSchema = z.object({
   transaction_id: uuid.optional(),
 })
 
+/**
+ * Underlag import preview: filenames only, never file contents. The plan is
+ * built from the voucher reference in each name, so the bytes stay in the
+ * browser until the user has approved where each file will land.
+ */
+export const UnderlagImportPreviewSchema = z.object({
+  file_names: z.array(z.string().min(1).max(400)).min(1).max(2000),
+})
+
 // ============================================================
 // Shift-premium rules (OB-tillägg och övertid)
 // ============================================================

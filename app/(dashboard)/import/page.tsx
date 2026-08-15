@@ -114,6 +114,7 @@ const AccountMappingStep = dynamic(() => import('@/components/import/AccountMapp
 const ImportReviewStep = dynamic(() => import('@/components/import/ImportReviewStep'), { loading: ImportStepLoading })
 const ImportResultStep = dynamic(() => import('@/components/import/ImportResultStep'), { loading: ImportStepLoading })
 const SIEImportHistory = dynamic(() => import('@/components/import/SIEImportHistory'), { loading: ImportStepLoading })
+const UnderlagImportWizard = dynamic(() => import('@/components/import/UnderlagImportWizard'), { loading: ImportStepLoading })
 
 // ============================================================
 // Bank File Import Wizard Steps
@@ -2096,7 +2097,7 @@ const ShopifyPanel = getSettingsPanel('shopify')
 // Import Page with Selection Cards
 // ============================================================
 
-type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'bank' | 'sie' | 'csv_data' | 'migration'
+type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'bank' | 'sie' | 'underlag' | 'csv_data' | 'migration'
 
 export default function ImportPage() {
   const { isSandbox } = useCompany()
@@ -2129,8 +2130,8 @@ export default function ImportPage() {
     // third-party credentials, so their deep links are ignored in the sandbox.
     // Manual file-import modes (bank file, CSV/Excel, SIE) stay reachable.
     const allowedModes = isSandbox
-      ? ['bank', 'sie', 'csv_data']
-      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'bank', 'sie', 'csv_data', 'migration']
+      ? ['bank', 'sie', 'underlag', 'csv_data']
+      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'bank', 'sie', 'underlag', 'csv_data', 'migration']
     if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
@@ -2293,6 +2294,13 @@ export default function ImportPage() {
                   title={t('sie_title')}
                   sub={t('sie_description')}
                   onClick={() => setMode('sie')}
+                />
+                {/* Optional follow-up to a SIE import, never a step inside it:
+                    the receipts usually arrive later and from another export. */}
+                <ImportRow
+                  title={t('underlag_title')}
+                  sub={t('underlag_description')}
+                  onClick={() => setMode('underlag')}
                 />
                 <ImportRow
                   title={t('sie_history_title')}
@@ -2466,6 +2474,7 @@ export default function ImportPage() {
       )}
       {mode === 'bank' && <BankFileImportWizard />}
       {mode === 'sie' && <SIEImportWizard />}
+      {mode === 'underlag' && <UnderlagImportWizard />}
       {mode === 'csv_data' && <CSVDataImportWizard />}
       {mode === 'migration' && (
         <MigrationWizard userId={userId} initialProvider={initialProvider ?? undefined} />
