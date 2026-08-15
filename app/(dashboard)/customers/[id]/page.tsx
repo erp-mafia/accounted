@@ -5,9 +5,9 @@ import { useRouter } from 'next/navigation'
 import { use } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -17,22 +17,7 @@ import {
 import { AttnLine } from '@/components/ui/attn-line'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import {
-  ArrowLeft,
-  Building,
-  Globe,
-  User,
-  Mail,
-  Phone,
-  MapPin,
-  Edit2,
-  Trash2,
-  Loader2,
-  ReceiptText,
-  Lock,
-  Eye,
-  EyeOff,
-} from 'lucide-react'
+import { ArrowLeft, Loader2, Lock, Eye, EyeOff } from 'lucide-react'
 import { useLocale } from 'next-intl'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -45,13 +30,6 @@ const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   swedish_business: 'type_swedish_business',
   eu_business: 'type_eu_business',
   non_eu_business: 'type_non_eu_business',
-}
-
-const customerTypeIcons: Record<CustomerType, React.ElementType> = {
-  individual: User,
-  swedish_business: Building,
-  eu_business: Globe,
-  non_eu_business: Globe,
 }
 
 interface RelatedInvoice {
@@ -232,244 +210,200 @@ export default function CustomerDetailPage({
 
   if (!customer) return null
 
-  const Icon = customerTypeIcons[customer.customer_type]
-
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <Link
-            href="/customers"
-            className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            {t('back')}
-          </Link>
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-              <Icon className="h-6 w-6 text-primary" />
-            </div>
-            <div>
-              <h1 className="font-display text-2xl leading-8 tracking-tight">{customer.name}</h1>
-              <p className="text-sm text-muted-foreground">{t(CUSTOMER_TYPE_KEY[customer.customer_type])}</p>
-            </div>
+    <div className="max-w-2xl space-y-8 stagger-enter">
+      {/* Header: serif name over a quiet type kicker, quiet actions right */}
+      <div>
+        <Link
+          href="/customers"
+          className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('back')}
+        </Link>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h1 className="font-display text-2xl leading-8 tracking-tight">{customer.name}</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {t(CUSTOMER_TYPE_KEY[customer.customer_type])}
+            </p>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsEditOpen(true)}
+              className="min-h-10 text-muted-foreground hover:text-foreground"
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {t('edit')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDelete}
+              className="min-h-10 text-muted-foreground hover:text-destructive"
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {t('delete')}
+            </Button>
           </div>
         </div>
-
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setIsEditOpen(true)}
-            disabled={!canWrite}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            {canWrite ? <Edit2 className="h-4 w-4 mr-1" /> : <Lock className="h-4 w-4 mr-1" />}
-            {t('edit')}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDelete}
-            className="text-destructive hover:text-destructive"
-            disabled={!canWrite}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            {canWrite ? <Trash2 className="h-4 w-4 mr-1" /> : <Lock className="h-4 w-4 mr-1" />}
-            {t('delete')}
-          </Button>
-        </div>
       </div>
 
-      {/* Info cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {/* Contact */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('section_contact')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {customer.email && (
-              <div className="flex items-center gap-2 text-sm">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <a href={`mailto:${customer.email}`} className="hover:underline">
-                  {customer.email}
-                </a>
-              </div>
-            )}
-            {customer.phone && (
-              <div className="flex items-center gap-2 text-sm">
-                <Phone className="h-4 w-4 text-muted-foreground" />
-                {customer.phone}
-              </div>
-            )}
-            {(customer.address_line1 || customer.city) && (
-              <div className="flex items-start gap-2 text-sm">
-                <MapPin className="h-4 w-4 text-muted-foreground mt-0.5" />
-                <div>
-                  {customer.address_line1 && <p>{customer.address_line1}</p>}
-                  {customer.address_line2 && <p>{customer.address_line2}</p>}
-                  {(customer.postal_code || customer.city) && (
-                    <p>{[customer.postal_code, customer.city].filter(Boolean).join(' ')}</p>
-                  )}
-                  {customer.country && <p>{customer.country}</p>}
-                </div>
-              </div>
-            )}
-            {!customer.email && !customer.phone && !customer.address_line1 && !customer.city && (
-              <p className="text-sm text-muted-foreground">{t('no_contact_info')}</p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Customer details */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('section_business')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {customer.customer_number && (
-              <div className="text-sm">
-                <span className="text-muted-foreground">{t('label_customer_number')} </span>
-                {customer.customer_number}
-              </div>
-            )}
-            {customer.customer_type !== 'individual' && customer.org_number && (
-              <div className="text-sm">
-                <span className="text-muted-foreground">{t('label_org_number')} </span>
-                {customer.org_number}
-              </div>
-            )}
-            {customer.customer_type === 'individual' && (customer.personal_number || customer.org_number) && (
-              <div className="text-sm">
-                <span className="text-muted-foreground">{t('label_personal_number')} </span>
-                <span className="tabular-nums">
-                  {revealedPersonalNumber ??
-                    maskCustomerPersonalNumber(customer.personal_number || customer.org_number)}
-                </span>
-                {/* Viewers keep the mask: the endpoint refuses them anyway. */}
-                {canWrite && customer.personal_number && !isUnreadablePersonalNumber && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="ml-1 h-10 w-10 align-middle"
-                    onClick={togglePersonalNumber}
-                    disabled={isRevealing}
-                    aria-label={revealedPersonalNumber ? t('personal_number_hide') : t('personal_number_show')}
-                    title={revealedPersonalNumber ? t('personal_number_hide') : t('personal_number_show')}
-                  >
-                    {isRevealing ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : revealedPersonalNumber ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
-                  </Button>
-                )}
-                {isUnreadablePersonalNumber && (
-                  <AttnLine
-                    className="mt-1"
-                    action={{ label: t('personal_number_unreadable_action'), onClick: () => setIsEditOpen(true) }}
-                  >
-                    {t('personal_number_unreadable')}
-                  </AttnLine>
-                )}
-              </div>
-            )}
-            {customer.vat_number && (
-              <div className="text-sm flex items-center gap-2">
-                <span className="text-muted-foreground">{t('label_vat')} </span>
-                {customer.vat_number}
-                {customer.vat_number_validated && (
-                  <Badge variant="success" className="text-xs">{t('verified')}</Badge>
-                )}
-              </div>
-            )}
-            <div className="text-sm">
-              <span className="text-muted-foreground">{t('label_payment_terms')} </span>
-              {t('payment_terms_value', { days: customer.default_payment_terms || 30 })}
-            </div>
-            {!customer.customer_number && !customer.org_number && !customer.personal_number && !customer.vat_number && (
-              <p className="text-sm text-muted-foreground">{t('no_business_info')}</p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Summary */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('section_summary')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-center gap-2 text-sm">
-              <ReceiptText className="h-4 w-4 text-muted-foreground" />
-              <span>{t('invoice_count', { count: customer.invoices?.length || 0 })}</span>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Notes */}
-      {customer.notes && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('section_notes')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{customer.notes}</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Related invoices */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <ReceiptText className="h-4 w-4" />
-            {t('section_invoices')}
-            {customer.invoices?.length > 0 && (
-              <span className="text-sm text-muted-foreground tabular-nums">({customer.invoices.length})</span>
-            )}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {customer.invoices?.length > 0 ? (
-            <div className="space-y-2">
-              {customer.invoices.map((invoice) => (
-                <Link
-                  key={invoice.id}
-                  href={`/invoices/${invoice.id}`}
-                  className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
-                >
-                  <div>
-                    <p className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</p>
-                    <p className="text-sm text-muted-foreground tabular-nums">{formatDate(invoice.invoice_date)}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm tabular-nums">
-                      {formatCurrency(invoice.total, invoice.currency)}
-                    </span>
-                    <Badge variant={invoice.payment_status === 'paid' ? 'success' : 'secondary'}>
-                      {invoice.payment_status === 'paid'
-                        ? t('invoice_status_paid')
-                        : invoice.payment_status === 'overdue'
-                          ? t('invoice_status_overdue')
-                          : t('invoice_status_unpaid')}
-                    </Badge>
-                  </div>
-                </Link>
-              ))}
+      <DetailSection kicker={t('section_contact')}>
+        <DefRow label={t('def_email')}>
+          {customer.email ? (
+            <a href={`mailto:${customer.email}`} className="hover:underline">
+              {customer.email}
+            </a>
+          ) : (
+            <DefEmpty />
+          )}
+        </DefRow>
+        <DefRow label={t('def_phone')}>{customer.phone || <DefEmpty />}</DefRow>
+        <DefRow label={t('def_address')}>
+          {customer.address_line1 || customer.city ? (
+            <div>
+              {customer.address_line1 && <p>{customer.address_line1}</p>}
+              {customer.address_line2 && <p>{customer.address_line2}</p>}
+              {(customer.postal_code || customer.city) && (
+                <p>{[customer.postal_code, customer.city].filter(Boolean).join(' ')}</p>
+              )}
+              {customer.country && <p>{customer.country}</p>}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground text-center py-4">
-              {t('no_invoices')}
-            </p>
+            <DefEmpty />
           )}
-        </CardContent>
-      </Card>
+        </DefRow>
+      </DetailSection>
+
+      <DetailSection kicker={t('section_business')}>
+        <DefRow label={t('def_customer_number')}>
+          {customer.customer_number || <DefEmpty />}
+        </DefRow>
+        {customer.customer_type !== 'individual' && (
+          <DefRow label={t('def_org_number')}>
+            {customer.org_number ? (
+              <span className="tabular-nums">{customer.org_number}</span>
+            ) : (
+              <DefEmpty />
+            )}
+          </DefRow>
+        )}
+        {customer.customer_type === 'individual' && (customer.personal_number || customer.org_number) && (
+          <DefRow label={t('def_personal_number')}>
+            <span className="tabular-nums">
+              {revealedPersonalNumber ??
+                maskCustomerPersonalNumber(customer.personal_number || customer.org_number)}
+            </span>
+            {/* Viewers keep the mask: the endpoint refuses them anyway. */}
+            {canWrite && customer.personal_number && !isUnreadablePersonalNumber && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="ml-1 h-10 w-10 -my-2 align-middle"
+                onClick={togglePersonalNumber}
+                disabled={isRevealing}
+                aria-label={revealedPersonalNumber ? t('personal_number_hide') : t('personal_number_show')}
+                title={revealedPersonalNumber ? t('personal_number_hide') : t('personal_number_show')}
+              >
+                {isRevealing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : revealedPersonalNumber ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </Button>
+            )}
+            {isUnreadablePersonalNumber && (
+              <AttnLine
+                className="mt-1"
+                action={{ label: t('personal_number_unreadable_action'), onClick: () => setIsEditOpen(true) }}
+              >
+                {t('personal_number_unreadable')}
+              </AttnLine>
+            )}
+          </DefRow>
+        )}
+        {customer.vat_number && (
+          <DefRow label={t('def_vat')}>
+            <span className="inline-flex flex-wrap items-center gap-2">
+              {customer.vat_number}
+              {customer.vat_number_validated && (
+                <Badge variant="success" className="text-xs">{t('verified')}</Badge>
+              )}
+            </span>
+          </DefRow>
+        )}
+        <DefRow label={t('def_payment_terms')}>
+          {t('payment_terms_value', { days: customer.default_payment_terms || 30 })}
+        </DefRow>
+      </DetailSection>
+
+      {customer.notes && (
+        <DetailSection kicker={t('section_notes')}>
+          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{customer.notes}</p>
+        </DetailSection>
+      )}
+
+      <DetailSection
+        kicker={t('section_invoices')}
+        aside={
+          customer.invoices?.length > 0 ? (
+            <span className="text-[11px] tabular-nums text-muted-foreground">
+              {t('invoice_count', { count: customer.invoices.length })}
+            </span>
+          ) : undefined
+        }
+      >
+        {customer.invoices?.length > 0 ? (
+          <div className="divide-y divide-border">
+            {customer.invoices.map((invoice) => (
+              <Link
+                key={invoice.id}
+                href={`/invoices/${invoice.id}`}
+                className="flex items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-secondary/35"
+              >
+                <span
+                  className={cn(
+                    'min-w-0 truncate',
+                    !invoice.invoice_number && 'italic text-muted-foreground',
+                  )}
+                >
+                  {invoiceNumberDisplay(invoice.invoice_number)}
+                </span>
+                <span className="text-muted-foreground tabular-nums">
+                  {formatDate(invoice.invoice_date)}
+                </span>
+                <span className="ml-auto tabular-nums">
+                  {formatCurrency(invoice.total, invoice.currency)}
+                </span>
+                {/* Chips mark exceptions: an overdue invoice is the deviation
+                    worth a chip; paid and not-yet-due render as muted text. */}
+                {invoice.payment_status === 'overdue' ? (
+                  <Badge variant="destructive">{t('invoice_status_overdue')}</Badge>
+                ) : (
+                  <span className="min-w-14 text-right text-xs text-muted-foreground">
+                    {invoice.payment_status === 'paid'
+                      ? t('invoice_status_paid')
+                      : t('invoice_status_unpaid')}
+                  </span>
+                )}
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">{t('no_invoices')}</p>
+        )}
+      </DetailSection>
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
