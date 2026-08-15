@@ -27,12 +27,14 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { ticExtension } from '../index'
 import {
   BANKID_FLOW_COOKIE,
+  BANKID_FLOW_ID_HEADER,
   signBankIdFlow,
   verifyBankIdFlow,
   type BankIdFlowMode,
 } from '../lib/bankid-flow-cookie'
 
 const TEST_KEY = 'a'.repeat(64)
+const TEST_FLOW_ID = 'flow-1'
 
 /**
  * The session id and the mode now arrive in a signed HttpOnly cookie rather
@@ -47,13 +49,17 @@ async function flowCookie(
   const value = await signBankIdFlow({
     version: 1,
     sessionId,
+    flowId: TEST_FLOW_ID,
     mode,
     // A link flow is owned by the user who opened it; login/signup have none.
     userId: mode === 'link' ? userId : undefined,
     startedAt: Date.now(),
     expiresAt: Date.now() + 60_000,
   })
-  return { cookie: `${BANKID_FLOW_COOKIE}=${encodeURIComponent(value)}` }
+  return {
+    cookie: `${BANKID_FLOW_COOKIE}=${encodeURIComponent(value)}`,
+    [BANKID_FLOW_ID_HEADER]: TEST_FLOW_ID,
+  }
 }
 
 function findCompleteHandler() {
@@ -265,7 +271,7 @@ describe('POST /bankid/complete', () => {
     })
   })
 
-  describe('signup mode — rollback on partial failure', () => {
+  describe('signup mode: rollback on partial failure', () => {
     // A half-created account strands the user: retrying signup hits
     // account_exists/already_linked, but the account only has a random
     // password they never saw. Every failure after createUser must delete
@@ -521,6 +527,26 @@ describe('POST /bankid/complete', () => {
         .some((c) => c.startsWith(`${BANKID_FLOW_COOKIE}=`) && /Max-Age=0/i.test(c))
     }
 
+    it('refuses completion from a stale tab after the shared cookie was replaced', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      mockServiceClient([])
+      const headers = await flowCookie('signup')
+      headers[BANKID_FLOW_ID_HEADER] = 'older-flow'
+
+      const { status } = await parseJsonResponse(
+        await findCompleteHandler()(
+          createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+            method: 'POST',
+            headers,
+            body: { email: 'fresh@example.com' },
+          })
+        )
+      )
+
+      expect(status).toBe(400)
+      expect(collectBankIdResult).not.toHaveBeenCalled()
+    })
+
     it('ignores a sessionId and mode supplied in the body', async () => {
       // The old contract took both from the body, which made /complete a
       // bearer endpoint: anyone who had seen a session id could complete it,
@@ -714,11 +740,13 @@ describe('POST /bankid/start', () => {
       })
     )
     const payload = await response.clone().text()
+    const parsed = JSON.parse(payload) as { data: { flowId: string } }
 
     // The id is a bearer credential for a personnummer and for a session.
     // The browser gets the autostart/QR tokens, which identify nobody.
     expect(payload).not.toContain('secret-session')
     expect(payload).toContain('ast')
+    expect(parsed.data.flowId).toBeTruthy()
 
     const flowCookieHeader = response.headers
       .getSetCookie()
@@ -726,10 +754,12 @@ describe('POST /bankid/start', () => {
     expect(flowCookieHeader).toMatch(/HttpOnly/i)
 
     const [, value] = /^[^=]+=([^;]*)/.exec(flowCookieHeader!)!
-    expect(await verifyBankIdFlow(decodeURIComponent(value))).toMatchObject({
+    const flow = await verifyBankIdFlow(decodeURIComponent(value))
+    expect(flow).toMatchObject({
       sessionId: 'secret-session',
       mode: 'signup',
     })
+    expect(flow?.flowId).toBe(parsed.data.flowId)
   })
 })
 
@@ -770,10 +800,11 @@ describe('POST /bankid/poll', () => {
     } as never)
 
     const response = await findPollHandler()(
-      createMockRequest('/api/extensions/ext/tic/bankid/poll', {
-        method: 'POST',
-        headers: await flowCookie('signup'),
-      })
+        createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+          method: 'POST',
+          headers: await flowCookie('signup'),
+          body: { mode: 'signup' },
+        })
     )
     const payload = await response.clone().text()
     const { body } = await parseJsonResponse<{ data: { user?: Record<string, unknown> } }>(response)
@@ -792,22 +823,24 @@ describe('POST /bankid/poll', () => {
       user: { givenName: 'Anna', surname: 'Andersson', personalNumber: 'x' },
     } as never)
 
-    const probe = await parseJsonResponse<{ data: { user?: unknown } }>(
+    const probe = await parseJsonResponse<{ data: { flowId?: string; user?: unknown } }>(
       await findPollHandler()(
         createMockRequest('/api/extensions/ext/tic/bankid/poll', {
           method: 'POST',
           headers: await flowCookie('signup'),
-          body: { mode: 'signup' }, // probe
+          body: { mode: 'signup', probe: true },
         })
       )
     )
+    expect(probe.body.data.flowId).toBe(TEST_FLOW_ID)
     expect(probe.body.data.user).toBeUndefined()
 
     const active = await parseJsonResponse<{ data: { user?: unknown } }>(
       await findPollHandler()(
         createMockRequest('/api/extensions/ext/tic/bankid/poll', {
           method: 'POST',
-          headers: await flowCookie('signup'), // no mode = active poll
+          headers: await flowCookie('signup'),
+          body: { mode: 'signup' },
         })
       )
     )
@@ -834,23 +867,40 @@ describe('POST /bankid/poll', () => {
     expect(pollBankIdSession).not.toHaveBeenCalled()
   })
 
-  it('polls when the panel mode matches, or when the client names no mode', async () => {
+  it('polls when both the panel mode and tab flow id match', async () => {
     vi.mocked(pollBankIdSession).mockResolvedValue({ status: 'pending' } as never)
 
-    for (const body of [{ mode: 'signup' }, {}]) {
-      vi.mocked(pollBankIdSession).mockClear()
-      const { status } = await parseJsonResponse(
-        await findPollHandler()(
-          createMockRequest('/api/extensions/ext/tic/bankid/poll', {
-            method: 'POST',
-            headers: await flowCookie('signup'),
-            body,
-          })
-        )
+    const { status } = await parseJsonResponse(
+      await findPollHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+          method: 'POST',
+          headers: await flowCookie('signup'),
+          body: { mode: 'signup' },
+        })
       )
-      expect(status).toBe(200)
-      expect(pollBankIdSession).toHaveBeenCalledOnce()
-    }
+    )
+    expect(status).toBe(200)
+    expect(pollBankIdSession).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a stale tab after a newer same-mode flow replaced the shared cookie', async () => {
+    vi.mocked(pollBankIdSession).mockResolvedValue({ status: 'complete' } as never)
+    const headers = await flowCookie('signup')
+    headers[BANKID_FLOW_ID_HEADER] = 'older-flow'
+
+    const { status, body } = await parseJsonResponse<{ error?: string }>(
+      await findPollHandler()(
+        createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+          method: 'POST',
+          headers,
+          body: { mode: 'signup' },
+        })
+      )
+    )
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('no_session')
+    expect(pollBankIdSession).not.toHaveBeenCalled()
   })
 
   it('does NOT clear the cookie when TIC has forgotten the session', async () => {
@@ -866,6 +916,7 @@ describe('POST /bankid/poll', () => {
       createMockRequest('/api/extensions/ext/tic/bankid/poll', {
         method: 'POST',
         headers: await flowCookie('login'),
+        body: { mode: 'login' },
       })
     )
     const { status, body } = await parseJsonResponse<{ error?: string }>(response)
@@ -890,6 +941,7 @@ describe('POST /bankid/poll', () => {
       createMockRequest('/api/extensions/ext/tic/bankid/poll', {
         method: 'POST',
         headers: await flowCookie('signup'),
+        body: { mode: 'signup' },
       })
     )
 
@@ -948,6 +1000,26 @@ describe('POST /bankid/cancel', () => {
 
     expect(response.status).toBe(200)
     expect(clearsFlow(response)).toBe(true)
+  })
+
+  it('does not cancel or clear a newer flow from a stale tab', async () => {
+    const headers = await flowCookie('signup')
+    headers[BANKID_FLOW_ID_HEADER] = 'older-flow'
+
+    const response = await findCancelHandler()(
+      createMockRequest('/api/extensions/ext/tic/bankid/cancel', {
+        method: 'POST',
+        headers,
+      })
+    )
+    const { body } = await parseJsonResponse<{
+      data?: { cancelled?: boolean; replaced?: boolean }
+    }>(response.clone())
+
+    expect(response.status).toBe(200)
+    expect(body.data).toEqual({ cancelled: false, replaced: true })
+    expect(clearsFlow(response)).toBe(false)
+    expect(cancelBankIdSession).not.toHaveBeenCalled()
   })
 
   it('is a no-op that still succeeds when there is no flow', async () => {

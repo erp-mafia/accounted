@@ -19,6 +19,7 @@ const T0 = 1_700_000_000_000
 const STATE: BankIdFlowState = {
   version: 1,
   sessionId: 'sess-1',
+  flowId: 'flow-1',
   mode: 'signup',
   startedAt: T0,
   expiresAt: T0 + FLOW_WINDOW_SECONDS * 1000,
@@ -143,6 +144,11 @@ describe('sign / verify', () => {
 
   it('rejects an unknown mode', async () => {
     const signed = await signBankIdFlow({ ...STATE, mode: 'admin' as never })
+    expect(await verifyBankIdFlow(signed, process.env, T0)).toBeNull()
+  })
+
+  it('rejects a flow with no tab-binding id', async () => {
+    const signed = await signBankIdFlow({ ...STATE, flowId: undefined as never })
     expect(await verifyBankIdFlow(signed, process.env, T0)).toBeNull()
   })
 

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Image from 'next/image'
+import { useTranslations } from 'next-intl'
 import { BankIdQrCode } from './BankIdQrCode'
 import { Button } from '@/components/ui/button'
 import { Smartphone, Monitor, AlertTriangle, Loader2 } from 'lucide-react'
@@ -23,7 +24,7 @@ const MAX_POLL_FAILURES = 3
 
 /**
  * Abandon a session that never reaches a terminal state. Safety net for TIC
- * responses that carry no `status` (e.g. an expired-session 410 body) — without
+ * responses that carry no `status` (e.g. an expired-session 410 body): without
  * it the poll loop would spin forever on a dead QR code.
  */
 const POLL_DEADLINE_MS = 6 * 60 * 1000
@@ -40,6 +41,7 @@ const START_COOLDOWN_MS = 5_000
  * neither identifies anybody.
  */
 interface BankIdSession {
+  flowId: string
   autoStartToken: string
   qrStartToken: string
   qrStartSecret: string
@@ -52,6 +54,8 @@ export interface BankIdResult {
   error?: 'no_account' | 'already_linked' | 'session_invalid' | 'service_unavailable'
   givenName?: string
   surname?: string
+  /** Non-secret id that binds this tab to the shared server-held flow. */
+  flowId?: string
 }
 
 interface BankIdAuthProps {
@@ -66,6 +70,7 @@ interface BankIdAuthProps {
 }
 
 const API_BASE = '/api/extensions/ext/tic/bankid'
+const FLOW_ID_HEADER = 'x-bankid-flow-id'
 
 function isMobile(): boolean {
   if (typeof navigator === 'undefined') return false
@@ -103,8 +108,10 @@ function launchBankIdApp(autoStartToken: string): void {
  * polling, and result handling.
  */
 export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) {
+  const t = useTranslations('auth')
   const [status, setStatus] = useState<BankIdStatus>('idle')
   const [session, setSession] = useState<BankIdSession | null>(null)
+  const [activeFlowId, setActiveFlowId] = useState<string | null>(null)
   const [hintMessage, setHintMessage] = useState<string>('')
   const [errorMessage, setErrorMessage] = useState<string>('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -114,15 +121,15 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
   onCompleteRef.current = onComplete
 
   const pollFailureCount = useRef(0)
-  /** True while a poll response is being processed — prevents overlapping ticks. */
+  /** True while a poll response is being processed: prevents overlapping ticks. */
   const pollInFlightRef = useRef(false)
-  /** Set once a terminal poll result has been handled — the completion branch must run at most once. */
+  /** Set once a terminal poll result has been handled: the completion branch must run at most once. */
   const completedRef = useRef(false)
   /** When the current poll loop began, for the POLL_DEADLINE_MS cap. */
   const pollStartedAtRef = useRef(0)
   /** Bumped by cancel/unmount so an in-flight startSession stops touching state. */
   const startGenRef = useRef(0)
-  /** True while startSession is running — collapses double-clicks into one billable session. */
+  /** True while startSession is running: collapses double-clicks into one billable session. */
   const startingRef = useRef(false)
   /**
    * True when this tab is polling a flow it did not start, on the strength of
@@ -160,7 +167,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
   // Poll the flow this browser holds until it completes, fails, or the service
   // gives up. Extracted from startSession so the resume effect (the tab BankID
   // returned the user to) can attach to a flow it did not start.
-  const beginPolling = useCallback(() => {
+  const beginPolling = useCallback((flowId: string) => {
     // Never leave a previous interval running: two loops would share
     // pollFailureCount and completedRef, and the orphan would eventually
     // declare a healthy session unavailable and clear the live one.
@@ -176,7 +183,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
       // link and fails the login intermittently).
       if (pollInFlightRef.current || completedRef.current) return
 
-      // Hard cap — a session that never reaches a terminal state (expired
+      // Hard cap: a session that never reaches a terminal state (expired
       // order, TIC response without `status`) must not poll forever.
       if (Date.now() - pollStartedAtRef.current > POLL_DEADLINE_MS) {
         cleanup()
@@ -187,9 +194,15 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
       pollInFlightRef.current = true
       try {
-        // No body: the server reads the session from the flow cookie.
+        // The server reads the secret session from the cookie. The body and
+        // non-secret header bind this polling loop to its mode and flow id.
         const pollRes = await fetch(`${API_BASE}/poll`, {
           method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            [FLOW_ID_HEADER]: flowId,
+          },
+          body: JSON.stringify({ mode }),
           signal: abortRef.current?.signal,
         })
 
@@ -221,11 +234,12 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
             setErrorMessage('BankID-sessionen löpte ut. Försök igen.')
           }
           setSession(null)
+          setActiveFlowId(null)
           return
         }
 
         if (!pollRes.ok) {
-          // Count EVERY failed poll (5xx, 429, unexpected 4xx) — errors that
+          // Count EVERY failed poll (5xx, 429, unexpected 4xx): errors that
           // never increment the counter would otherwise leave the user
           // silently polling a dead session forever.
           pollFailureCount.current++
@@ -260,6 +274,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         // renderable QR code instead of a spinner with nothing under it.
         if (pollData.qrStartToken && pollData.qrStartSecret) {
           setSession((prev) => ({
+            flowId,
             autoStartToken: prev?.autoStartToken ?? '',
             qrStartToken: pollData.qrStartToken,
             qrStartSecret: pollData.qrStartSecret,
@@ -280,6 +295,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
             try {
               const completeRes = await fetch(`${API_BASE}/complete`, {
                 method: 'POST',
+                headers: { [FLOW_ID_HEADER]: flowId },
               })
               const completeJson = await completeRes.json()
 
@@ -313,7 +329,10 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
             // mode, so a session started to sign someone in cannot be turned
             // into a binding against whoever is logged in here.
             try {
-              const linkRes = await fetch(`${API_BASE}/link`, { method: 'POST' })
+              const linkRes = await fetch(`${API_BASE}/link`, {
+                method: 'POST',
+                headers: { [FLOW_ID_HEADER]: flowId },
+              })
               const linkJson = await linkRes.json()
 
               if (!linkRes.ok) {
@@ -332,6 +351,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
             onCompleteRef.current({
               givenName: pollData.user?.givenName,
               surname: pollData.user?.surname,
+              flowId,
             })
           }
         } else if (pollData.status === 'failed' || pollData.status === 'cancelled') {
@@ -356,20 +376,21 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
   }, [cleanup, mode])
 
   const startSession = useCallback(async () => {
-    // Collapse double-clicks — one billable TIC session per intent.
+    // Collapse double-clicks: one billable TIC session per intent.
     if (startingRef.current) return
     startingRef.current = true
     const gen = ++startGenRef.current
 
     cleanup()
     resumedRef.current = false
+    setActiveFlowId(null)
     setStatus('scanning')
     setHintMessage('Starta BankID-appen')
     setErrorMessage('')
 
     try {
       // Respect the billable-session cooldown by waiting out the remainder
-      // instead of silently dropping the click — a retry button that does
+      // instead of silently dropping the click: a retry button that does
       // nothing reads as "BankID is broken". Also keeps us under the
       // server-side per-IP cooldown on /start.
       const sinceLast = Date.now() - lastStartRef.current
@@ -402,7 +423,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
           setErrorMessage('För många försök. Vänta en stund och försök igen.')
           return
         }
-        // Unknown error — server messages are not user-facing copy; keep the
+        // Unknown error: server messages are not user-facing copy; keep the
         // detail in the console and show Swedish.
         console.error('[bankid] start failed', res.status, err)
         setStatus('failed')
@@ -413,6 +434,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
       const { data } = await res.json()
       const newSession: BankIdSession = data
       setSession(newSession)
+      setActiveFlowId(newSession.flowId)
       launchedRef.current = false
 
       // On mobile, open the BankID app on this device. Nothing needs saving
@@ -424,7 +446,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         launchBankIdApp(newSession.autoStartToken)
       }
 
-      beginPolling()
+      beginPolling(newSession.flowId)
     } catch (error) {
       if (gen !== startGenRef.current) return
       console.error('[bankid] start failed', error)
@@ -441,11 +463,12 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
    * mount: see the probe effect below for why.
    */
   const resumePolling = useCallback(() => {
+    if (!activeFlowId) return
     resumedRef.current = true
     setStatus('scanning')
-    setHintMessage('Slutför BankID-verifieringen...')
-    beginPolling()
-  }, [beginPolling])
+    setHintMessage(t('bankid_resume_hint'))
+    beginPolling(activeFlowId)
+  }, [activeFlowId, beginPolling, t])
 
   /**
    * On mount, ask ONCE whether this browser is mid-flow, and if so present a
@@ -478,7 +501,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         const res = await fetch(`${API_BASE}/poll`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode }),
+          body: JSON.stringify({ mode, probe: true }),
         })
         // No live flow this browser can point to (no cookie, or one for a
         // different mode): leave the start button.
@@ -495,6 +518,9 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         // are indistinguishable from here, so it is theirs to confirm, never
         // ours to spend. The probe deliberately gets no holder name from /poll,
         // so the card cannot reveal whose identification it is.
+        const flowId = json?.data?.flowId
+        if (typeof flowId !== 'string' || !flowId) return
+        setActiveFlowId(flowId)
         setStatus('resumable')
       } catch {
         // Offline or a blip: leave the start button. A flow that really is
@@ -522,19 +548,23 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
     // 'cancelling', so a new /start cannot race the clear.
     setStatus('cancelling')
     try {
-      await fetch(`${API_BASE}/cancel`, { method: 'POST' })
+      await fetch(`${API_BASE}/cancel`, {
+        method: 'POST',
+        headers: activeFlowId ? { [FLOW_ID_HEADER]: activeFlowId } : undefined,
+      })
     } catch {
       // Unreachable server: the flow expires on its own.
     } finally {
+      setActiveFlowId(null)
       setStatus('idle')
     }
-  }, [cleanup])
+  }, [activeFlowId, cleanup])
 
   if (status === 'cancelling') {
     return (
       <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" />
-        Avbryter...
+        {t('bankid_cancelling')}
       </div>
     )
   }
@@ -543,27 +573,35 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
     return (
       <div className="rounded-lg border border-border bg-muted/30 p-4">
         <div className="space-y-3">
-          <div className="space-y-1.5">
-            <p className="text-sm font-medium">BankID-identifiering pågår</p>
+          <div className="space-y-2">
+            <p className="text-sm font-medium">{t('bankid_resume_title')}</p>
             <p className="text-sm text-muted-foreground">
               {/* Deliberately does not say who: naming the holder would leak a
                   stranger's identity to whoever sits down at a shared machine.
                   Signup shows the verified name on the next step, after the
                   person here has claimed the identification as theirs. */}
-              Den här webbläsaren har en påbörjad BankID-identifiering. Fortsätt
-              bara om det är du som startade den.
+              {t('bankid_resume_description')}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={resumePolling} variant="default" className="h-9 gap-2">
+            <Button onClick={resumePolling} variant="default" className="h-11 gap-2">
               <BankIdIcon className="invert dark:invert-0" />
-              Fortsätt
+              {t('bankid_resume_continue')}
             </Button>
-            <Button onClick={handleCancel} variant="outline" className="h-9">
-              Starta om
+            <Button onClick={handleCancel} variant="outline" className="h-11">
+              {t('bankid_resume_restart')}
             </Button>
           </div>
         </div>
+      </div>
+    )
+  }
+
+  if (status === 'complete') {
+    return (
+      <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        {t('bankid_completing')}
       </div>
     )
   }
@@ -651,7 +689,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
               tokens but no autostart token. Rendering the button anyway would
               deep-link `autostarttoken=` empty, which does nothing and says
               nothing. The QR above still works. */}
-          {session.autoStartToken && (
+          {session.qrStartToken && session.qrStartSecret && session.autoStartToken && (
             <Button
               onClick={openBankIdOnDevice}
               variant="ghost"
@@ -673,7 +711,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
           <p className="text-sm text-muted-foreground">
             {launchedRef.current
               ? 'Öppnar BankID-appen...'
-              : 'Slutför identifieringen i BankID-appen'}
+              : t('bankid_finish_in_app')}
           </p>
         </div>
       )}
@@ -682,6 +720,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
       <Button
         onClick={handleCancel}
+        disabled={!activeFlowId}
         variant="ghost"
         size="sm"
         className="text-muted-foreground"

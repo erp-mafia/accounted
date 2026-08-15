@@ -69,6 +69,14 @@ export type BankIdFlowMode = 'login' | 'signup' | 'link'
 export const BANKID_FLOW_COOKIE = '__Host-accounted-bankid-flow'
 
 /**
+ * Non-secret identifier that binds one browser tab to the flow it started or
+ * explicitly resumed. The signed cookie remains the credential; this header
+ * only prevents a stale tab from silently acting on a newer flow that replaced
+ * the shared cookie.
+ */
+export const BANKID_FLOW_ID_HEADER = 'x-bankid-flow-id'
+
+/**
  * How long a fresh order may be resumed. A BankID order is good for ~3 minutes;
  * the rest covers the app switch and a slow return.
  */
@@ -98,6 +106,8 @@ const SIGNING_CONTEXT = 'accounted-bankid-flow-v1:'
 export interface BankIdFlowState {
   version: 1
   sessionId: string
+  /** Random, non-secret tab binding. The BankID session id remains HttpOnly. */
+  flowId: string
   mode: BankIdFlowMode
   /**
    * Who opened a `link` flow. Linking binds a personnummer to whoever is
@@ -256,6 +266,7 @@ export async function verifyBankIdFlow(
   const state = parsed as Partial<BankIdFlowState>
   if (state.version !== 1) return null
   if (typeof state.sessionId !== 'string' || !state.sessionId) return null
+  if (typeof state.flowId !== 'string' || !state.flowId) return null
   if (!isBankIdFlowMode(state.mode)) return null
   if (state.userId !== undefined && (typeof state.userId !== 'string' || !state.userId)) return null
   // A `link` flow with no owner cannot be validated against the caller, and an

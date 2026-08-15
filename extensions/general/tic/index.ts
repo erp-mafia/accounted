@@ -26,6 +26,7 @@ import {
 import { TICAPIError } from './lib/tic-types'
 import type { TICCompanyProfile, TICFinancialReportSummary } from './lib/tic-types'
 import {
+  BANKID_FLOW_ID_HEADER,
   FLOW_VERIFIED_WINDOW_SECONDS,
   FLOW_WINDOW_SECONDS,
   clearBankIdFlowCookies,
@@ -872,6 +873,7 @@ export const ticExtension: Extension = {
 
           const userAgent = request.headers.get('user-agent') || undefined
           const session = await startBankIdAuth(ip, userAgent)
+          const flowId = crypto.randomUUID()
 
           // sessionId is deliberately NOT in the response. It is a bearer
           // credential for the holder's personnummer and for a Supabase
@@ -879,6 +881,7 @@ export const ticExtension: Extension = {
           // client drives the flow without ever seeing it.
           const response = NextResponse.json({
             data: {
+              flowId,
               autoStartToken: session.autoStartToken,
               qrStartToken: session.qrStartToken,
               qrStartSecret: session.qrStartSecret,
@@ -887,6 +890,7 @@ export const ticExtension: Extension = {
           await setBankIdFlowCookies(response, {
             version: 1,
             sessionId: session.sessionId,
+            flowId,
             mode,
             userId,
             startedAt: Date.now(),
@@ -929,21 +933,24 @@ export const ticExtension: Extension = {
             return NextResponse.json({ error: 'no_session' }, { status: 404 })
           }
 
-          // The caller says which flow it is showing, and a flow only answers
+          // The caller says which mode it is showing, and a flow only answers
           // to its own. Without this a login session started on /login is
           // picked up by the signup panel (or the reverse) whenever the user
-          // navigates between them: the client would render the signup e-mail
-          // step, then /complete would read mode 'login' off the cookie and
-          // either sign them in from the "Skapa konto" form or burn the
-          // identification on a raw no_account. Deliberately NOT clearing: the
-          // flow is still legitimate for the page that started it.
-          // A mount probe carries { mode } so it can be matched against the
-          // cookie and, crucially, so its response withholds the holder's name
-          // (see below). The active poll loop, which only runs after the flow
-          // is owned or confirmed, sends no body.
+          // navigates between them. Deliberately NOT clearing: the flow is
+          // still legitimate for the page that started it.
           const pollBody = await request.json().catch(() => ({}))
-          const isProbe = isBankIdFlowMode(pollBody?.mode)
-          if (isProbe && pollBody.mode !== flow.mode) {
+          if (!isBankIdFlowMode(pollBody?.mode) || pollBody.mode !== flow.mode) {
+            return NextResponse.json({ error: 'no_session' }, { status: 404 })
+          }
+          const isProbe = pollBody?.probe === true
+
+          // The cookie is shared by every tab. A newer same-mode /start can
+          // replace it while an older tab is still polling, so mode alone is
+          // not enough: without the flow id, that stale tab would silently
+          // follow and complete the newer person's identification. A mount
+          // probe has no id yet and may discover it, but every active poll must
+          // present the id returned by /start or by that probe.
+          if (!isProbe && request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
             return NextResponse.json({ error: 'no_session' }, { status: 404 })
           }
 
@@ -990,6 +997,7 @@ export const ticExtension: Extension = {
           // through the active poll loop (no probe mode), which does get it.
           const response = NextResponse.json({
             data: {
+              flowId: isProbe ? flow.flowId : undefined,
               status: result.status,
               message: result.message,
               hintCode: result.hintCode,
@@ -1052,6 +1060,16 @@ export const ticExtension: Extension = {
             )
           }
           const { sessionId, mode } = flow
+
+          // The shared cookie may have been replaced by a newer flow after
+          // this tab started. Only the tab that started or explicitly resumed
+          // the current flow may complete it.
+          if (request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
+            return NextResponse.json(
+              { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
+              { status: 400 }
+            )
+          }
 
           if (mode === 'link') {
             // Linking runs on the authenticated /bankid/link route, which
@@ -1236,14 +1254,14 @@ export const ticExtension: Extension = {
 
           // All-or-nothing signup: if any step after createUser fails, delete
           // the just-created user so the same email/BankID can retry cleanly.
-          // Leaving the half-created account behind strands the user — a retry
+          // Leaving the half-created account behind strands the user: a retry
           // hits account_exists/already_linked, but the account only has a
           // random password they never saw, so "log in instead" requires a
           // password reset. bankid_identities cascades on user delete.
           const rollbackSignup = async (step: string) => {
             const { error: deleteError } = await supabase.auth.admin.deleteUser(userId)
             if (deleteError) {
-              log.error(`signup rollback after failed ${step} could not delete user — orphaned account`, {
+              log.error(`signup rollback after failed ${step} could not delete user: orphaned account`, {
                 userId,
                 message: deleteError.message,
               })
@@ -1358,17 +1376,18 @@ export const ticExtension: Extension = {
       path: '/bankid/cancel',
       skipAuth: true,
       handler: async (request: Request) => {
-        // Always clear the cookie, even when TIC cannot be reached or the
-        // cookie is unreadable: the user pressed Avbryt, and an abandoned flow
-        // must not survive in their browser waiting to be picked up. This is
-        // the one place an untargeted clear is right, because it is the user
-        // saying so, and the client awaits it before starting anything new.
+        // A malformed cookie must still be clearable rather than turning
+        // Avbryt into a 500.
+        const flow = await readBankIdFlow(request).catch(() => null)
+
+        if (flow && request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
+          // A newer tab replaced the shared cookie. This caller may settle its
+          // own stale UI, but it must not cancel or clear the newer flow.
+          return NextResponse.json({ data: { cancelled: false, replaced: true } })
+        }
+
         const response = NextResponse.json({ data: { cancelled: true } })
         clearBankIdFlowCookies(response)
-
-        // A malformed cookie makes readBankIdFlow throw on decodeURIComponent;
-        // Avbryt must still clear rather than 500.
-        const flow = await readBankIdFlow(request).catch(() => null)
 
         if (flow) {
           try {
@@ -1404,6 +1423,13 @@ export const ticExtension: Extension = {
           // currently logged in on this browser.
           const flow = await readBankIdFlow(request)
           if (!flow || flow.mode !== 'link') {
+            return NextResponse.json(
+              { error: 'session_invalid', message: 'BankID session is not complete' },
+              { status: 400 }
+            )
+          }
+
+          if (request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
             return NextResponse.json(
               { error: 'session_invalid', message: 'BankID session is not complete' },
               { status: 400 }
@@ -1548,7 +1574,7 @@ export const ticExtension: Extension = {
           // Clear app_metadata.bankid_linked so MFA enforcement resumes.
           // Read-merge-write: updateUserById REPLACES app_metadata wholesale
           // (same rationale as /bankid/link above). Writing only
-          // { bankid_linked: false } would wipe has_password — a BankID-only
+          // { bankid_linked: false } would wipe has_password: a BankID-only
           // user (has_password: false) would then be inferred as HAVING a
           // password (lib/auth/has-password.ts) and could strand themselves
           // with no working login method.

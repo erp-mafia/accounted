@@ -26,11 +26,13 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { ticExtension } from '../index'
 import {
   BANKID_FLOW_COOKIE,
+  BANKID_FLOW_ID_HEADER,
   signBankIdFlow,
   type BankIdFlowMode,
 } from '../lib/bankid-flow-cookie'
 
 const TEST_KEY = 'a'.repeat(64)
+const TEST_FLOW_ID = 'flow-1'
 
 /** Linking reads its session from the signed flow cookie, not the body. */
 async function flowCookie(
@@ -41,13 +43,17 @@ async function flowCookie(
   const value = await signBankIdFlow({
     version: 1,
     sessionId,
+    flowId: TEST_FLOW_ID,
     mode,
     // A link flow is owned by the user who opened it; login/signup have none.
     userId: mode === 'link' ? userId : undefined,
     startedAt: Date.now(),
     expiresAt: Date.now() + 60_000,
   })
-  return { cookie: `${BANKID_FLOW_COOKIE}=${encodeURIComponent(value)}` }
+  return {
+    cookie: `${BANKID_FLOW_COOKIE}=${encodeURIComponent(value)}`,
+    [BANKID_FLOW_ID_HEADER]: TEST_FLOW_ID,
+  }
 }
 
 function findRoute(method: string, path: string) {
@@ -301,6 +307,24 @@ describe('POST /bankid/link', () => {
     expect(collectBankIdResult).not.toHaveBeenCalled()
     expect(client.from).not.toHaveBeenCalled()
     expect(admin.updateUserById).not.toHaveBeenCalled()
+  })
+
+  it('refuses a stale tab after a newer link flow replaced the shared cookie', async () => {
+    mockAuthenticated()
+    const { client } = mockServiceClient([], {})
+    vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+    const headers = await flowCookie('link')
+    headers[BANKID_FLOW_ID_HEADER] = 'older-flow'
+
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
+      method: 'POST',
+      headers,
+    })
+    const { status } = await parseJsonResponse(await findHandler('POST', '/bankid/link')(req))
+
+    expect(status).toBe(400)
+    expect(collectBankIdResult).not.toHaveBeenCalled()
+    expect(client.from).not.toHaveBeenCalled()
   })
 
   it('refuses to link twice off one identification', async () => {
