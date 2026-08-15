@@ -58,6 +58,14 @@
  *      the four Skatteverket-bound org-number paths disagreed outright about
  *      what "valid" meant, which is the kind of drift a customer only discovers
  *      when a filing fails at the deadline. Tracked as a count.
+ *   9. off-ladder-radius: a border-radius class outside the locked ladder
+ *      (pill / rounded-xl overlays / rounded-lg surfaces / rounded-sm leaves;
+ *      see .claude/rules/design.md). Before the 2026-08 migration the UI had
+ *      seven radii in circulation (4/5/6/8/12/16px + pill) and one toolbar row
+ *      could mix four of them. `rounded-md`, bare `rounded`, `rounded-2xl`+
+ *      and arbitrary `rounded-[Npx]` are dead vocabulary in app/ and
+ *      components/. No baseline: the count is 0, any new one is a hard
+ *      failure.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -280,6 +288,59 @@ function countHandRolledInvariants() {
     }
   }
   return count
+}
+
+// 9. off-ladder-radius. The radius ladder (.claude/rules/design.md) allows
+// exactly: rounded-full (interactive toolbar controls, chips, dots),
+// rounded-xl (page panel, dialogs, slide-overs, hero surfaces), rounded-lg
+// (cards, form fields, popover/menu content, bordered boxes), rounded-sm
+// (nested leaf elements), rounded-none, and directional variants of those.
+// Everything else is off-ladder. Bare `rounded` is banned as vocabulary: it
+// renders the same 4px as rounded-sm but hides from a rounded-sm grep.
+const OFF_LADDER_RADIUS_RES = [
+  // rounded-md and any directional variant (rounded-t-md, rounded-bl-md, ...)
+  /\brounded(?:-[trbl]{1,2})?-(?:md|2xl|3xl|4xl)\b/,
+  // arbitrary radius values: rounded-[5px], rounded-t-[10px], ...
+  /\brounded(?:-[trbl]{1,2})?-\[/,
+]
+
+// Bare `rounded` as a class token (not rounded-*): renders the same 4px as
+// rounded-sm but hides from a rounded-sm grep. `rounded` is also a common
+// variable name and an ordinary English word, so this one only counts inside
+// a quoted string that looks like a Tailwind class list (contains at least
+// one other utility-class token).
+const BARE_ROUNDED_RE = /(?<![-\w])rounded(?![-\w])/
+const CLASS_LIST_HINT_RE =
+  /(?:^|\s)(?:[a-z-]+:)*(?:flex|inline-flex|grid|hidden|absolute|relative|sticky|fixed|bg-\S|text-\S|border\b|border-\S|shadow\S*|p-\d|px-\S|py-\S|pl-\S|pr-\S|pt-\S|pb-\S|h-\S|w-\S|gap-\S|items-\S|justify-\S|font-\S|overflow-\S|transition\S*|animate-\S)/
+
+function lineHasBareRoundedClass(line) {
+  const strings = line.match(/"[^"]*"|'[^']*'|`[^`]*`/g)
+  if (!strings) return false
+  return strings.some(
+    (s) => BARE_ROUNDED_RE.test(s) && CLASS_LIST_HINT_RE.test(s.slice(1, -1)),
+  )
+}
+
+/** Off-ladder border-radius classes in UI code. */
+function findOffLadderRadii() {
+  const files = [
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+  ]
+  const findings = []
+  for (const f of files) {
+    const lines = fs.readFileSync(f, 'utf8').split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      // Prose mentions of "rounded" in comments are not class tokens.
+      const trimmed = line.trim()
+      if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue
+      if (OFF_LADDER_RADIUS_RES.some((re) => re.test(line)) || lineHasBareRoundedClass(line)) {
+        findings.push(`${rel(f)}:${i + 1}`)
+      }
+    }
+  }
+  return findings.sort()
 }
 
 // Dependencies pinned to an EXACT version on purpose, because a bump broke prod
@@ -621,6 +682,7 @@ const current = {
   rawUserErrors: findRawUserErrors(),
   sekLabelledAmounts: findSekLabelledFxAmounts(ROOT),
   extensionRoutes: findExtensionRouteFindings(ROOT),
+  offLadderRadii: findOffLadderRadii(),
 }
 
 const isUpdate = process.argv.includes('--update')
@@ -725,6 +787,21 @@ if (current.sekLabelledAmounts.length) {
   console.error(
     '  → pass the record\'s currency as the second argument, formatCurrency(amount, record.currency),\n' +
       '    or format the SEK twin (record.amount_sek / record.total_sek) when one exists.',
+  )
+}
+
+// 1e1. off-ladder-radius: no baseline, the count is 0 after the 2026-08
+// migration and any new off-ladder radius class is a hard failure.
+if (current.offLadderRadii.length) {
+  failed = true
+  console.error(
+    `\n✗ off-ladder-radius: ${current.offLadderRadii.length} border-radius class(es) outside the locked ladder:`,
+  )
+  current.offLadderRadii.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → use the radius ladder (.claude/rules/design.md): rounded-full for toolbar controls/chips,\n' +
+      '    rounded-xl for overlays, rounded-lg for cards/fields/menu content, rounded-sm for nested\n' +
+      '    leaves. rounded-md, bare `rounded`, rounded-2xl and rounded-[Npx] are dead vocabulary.',
   )
 }
 
@@ -839,5 +916,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
 )

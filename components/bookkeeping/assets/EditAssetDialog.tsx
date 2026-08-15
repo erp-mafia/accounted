@@ -191,7 +191,7 @@ export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAsse
           </div>
 
           {basisLocked && (
-            <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+            <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
               <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
                 Anskaffningsdatum, anskaffningsvärde och kategori är låsta eftersom avskrivningar
@@ -216,7 +216,7 @@ export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAsse
           </div>
 
           {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
               {error}
             </div>
           )}

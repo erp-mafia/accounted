@@ -213,6 +213,7 @@ Per Bokföringslagen 5 kap 5 §, posted entries cannot be modified. This endpoin
 - The new lines must balance. JOURNAL_ENTRY_NOT_BALANCED if not.
 - The original's entry_date and fiscal_period_id are inherited. If the original's period has been locked since posting, the call returns PERIOD_LOCKED.
 - Three voucher numbers are advanced in this call: the original (already burned), the reversal, and the corrected. The series stays unbroken.
+- A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -223,7 +224,8 @@ Request body:
 ```ts
 {
   description?: string,
-  lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[]
+  lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[],
+  allow_deep_chain?: boolean
 }
 ```
 
@@ -264,6 +266,7 @@ Creates a reversing journal entry that nullifies the original. The original rema
 - Idempotency-Key is mandatory.
 - reversal_date defaults to today; the reversal is posted in the fiscal period covering that date. If today's period is locked the call returns PERIOD_LOCKED.
 - You cannot reverse a draft (status must be posted). Use /correct after commit if the original needs replacing.
+- Reversing an entry 3+ links deep in a correction chain returns CORRECTION_CHAIN_TOO_DEEP (409). Book ONE net-effect correction instead, or pass allow_deep_chain=true to override.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -272,7 +275,7 @@ Creates a reversing journal entry that nullifies the original. The original rema
 
 Request body:
 ```ts
-{ reversal_date?: string }
+{ reversal_date?: string, allow_deep_chain?: boolean }
 ```
 
 Response `200`:

@@ -6,14 +6,14 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Search, Building2, Lock } from 'lucide-react'
+import { Plus, Building2, Lock } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -170,18 +170,14 @@ export default function SuppliersPage() {
 
       {/* Toolbar: search (concept) */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[220px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={t('search_placeholder')}
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value)
-              setVisibleCount(INITIAL_VISIBLE_ROWS)
-            }}
-            className="h-9 pl-10"
-          />
-        </div>
+        <ToolbarSearch
+          placeholder={t('search_placeholder')}
+          value={searchTerm}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            setVisibleCount(INITIAL_VISIBLE_ROWS)
+          }}
+        />
       </div>
 
       {isLoading ? (

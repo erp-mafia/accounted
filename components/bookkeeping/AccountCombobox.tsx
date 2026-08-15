@@ -301,7 +301,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
         <div
           ref={listRef}
           className={cn(
-            'absolute z-50 top-full left-0 mt-1 max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md',
+            'absolute z-50 top-full left-0 mt-1 max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md',
             listWidthClass,
           )}
         >
@@ -348,7 +348,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
       {isOpen && !disabled && search.trim() && flatList.length === 0 && (
         <div
           className={cn(
-            'absolute z-50 top-full left-0 mt-1 rounded-md border border-input bg-card shadow-md p-3',
+            'absolute z-50 top-full left-0 mt-1 rounded-lg border border-input bg-card shadow-md p-3',
             listWidthClass,
           )}
         >
@@ -367,7 +367,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
           {onCreateAccount && (
             <button
               type="button"
-              className="mt-2 flex w-full items-center gap-2 rounded-md border border-input bg-card px-2 py-1.5 text-left text-sm hover:bg-muted/50"
+              className="mt-2 flex w-full items-center gap-2 rounded-sm border border-input bg-card px-2 py-1.5 text-left text-sm hover:bg-muted/50"
               onMouseDown={(e) => {
                 e.preventDefault()
                 setIsOpen(false)

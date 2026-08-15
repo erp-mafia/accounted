@@ -82,6 +82,87 @@ describe('buildMerchantHistory / merchantHistoryFor', () => {
   })
 })
 
+describe('getSuggestedCategories: mapping rules on custom accounts', () => {
+  const rule = (over: Record<string, unknown> = {}) =>
+    ({
+      id: 'rule-1',
+      company_id: 'company-1',
+      is_active: true,
+      merchant_pattern: 'Myrorna',
+      description_pattern: null,
+      mcc_codes: null,
+      debit_account: '4020',
+      credit_account: '1930',
+      default_private: false,
+      confidence_score: 0.9,
+      priority: 10,
+      source: 'user',
+      user_description: null,
+      ...over,
+      // MappingRule carries many more columns; only the fields the suggestion
+      // engine reads are modelled here.
+    }) as never
+
+  it('surfaces a rule booking on a custom account instead of silently dropping it', async () => {
+    const result = getSuggestedCategories(
+      tx({ merchant_name: 'Myrorna', description: 'MYRORNA BUTIK 1' }),
+      [rule()],
+      {},
+    )
+    // 4020 is outside the fixed category maps: the old reverse-lookup
+    // returned null and the rule vanished with no diagnostic.
+    expect(result.length).toBe(1)
+    expect(result[0]).toMatchObject({
+      category: 'expense_other',
+      account: '4020',
+      source: 'mapping_rule',
+      confidence: 0.9,
+    })
+    expect(result[0].match_reason).toMatch(/konto 4020/)
+  })
+
+  it('surfaces an unmapped INCOME account with the custom-account diagnostic', async () => {
+    const result = getSuggestedCategories(
+      tx({ amount: 100, merchant_name: 'Myrorna', description: 'SWISH MYRORNA' }),
+      [rule({ debit_account: '3020' })],
+      {},
+    )
+    expect(result.length).toBe(1)
+    expect(result[0]).toMatchObject({
+      category: 'income_other',
+      account: '3020',
+      source: 'mapping_rule',
+    })
+    expect(result[0].match_reason).toMatch(/konto 3020/)
+  })
+
+  it('accumulates the user_description reason with the custom-account reason', async () => {
+    const result = getSuggestedCategories(
+      tx({ merchant_name: 'Myrorna', description: 'MYRORNA BUTIK 1' }),
+      [rule({ source: 'user_description', user_description: 'Second hand-inköp till butiken' })],
+      {},
+    )
+    expect(result.length).toBe(1)
+    expect(result[0].match_reason).toMatch(/Matchad på din beskrivning: Second hand-inköp till butiken/)
+    expect(result[0].match_reason).toMatch(/konto 4020/)
+  })
+
+  it('keeps the exact category for rules on accounts inside the fixed maps', async () => {
+    const result = getSuggestedCategories(
+      tx({ merchant_name: 'Anthropic', description: 'ANTHROPIC* CLAUDE' }),
+      [rule({ merchant_pattern: 'Anthropic', debit_account: '5420' })],
+      {},
+    )
+    expect(result.length).toBe(1)
+    expect(result[0]).toMatchObject({
+      category: 'expense_software',
+      account: '5420',
+      source: 'mapping_rule',
+    })
+    expect(result[0].match_reason).toBeUndefined()
+  })
+})
+
 describe('getSuggestedCategories: counterparty history', () => {
   it('returns an empty list (not a fabricated spread) when nothing matches', () => {
     const result = getSuggestedCategories(

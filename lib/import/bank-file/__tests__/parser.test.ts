@@ -51,6 +51,15 @@ const SEB_PRIVAT_CSV = [
   '2024-10-31;2024-10-31;5841990687;H31520956893;433,16;5147,56',
 ].join('\n')
 
+// SEB "Transaktioner" web export: UTF-8 BOM, CRLF, dot decimals, and the
+// amount split across Insättningar/Uttag (Uttag rows carry their own minus).
+// Header and first data row are verbatim from a user-provided export
+// (2026-08); the deposit row is synthetic.
+const SEB_TRANSAKTIONER_CSV =
+  '\uFEFFBokförd;Valutadatum;Text;Typ;Insättningar;Uttag;Bokfört saldo\r\n' +
+  '2026-07-21;2026-07-21;SAN FRANCISC/26-07-20;Kortköp;;-89.44;433217.91\r\n' +
+  '2026-07-18;2026-07-18;KUNDINBETALNING;Insättning;12500.00;;433307.35\r\n'
+
 const SWEDBANK_CSV = [
   'Kontouppgifter',
   'Clearingnummer,Kontonummer,Datum,Text,Belopp,Saldo',
@@ -823,6 +832,62 @@ describe('parseBankFile: SEB format', () => {
 
     const deposit = result.transactions[2]
     expect(deposit.amount).toBe(433.16)
+  })
+
+  it('auto-detects the SEB Transaktioner layout (Bokförd + Insättningar/Uttag)', () => {
+    const format = detectFileFormat(SEB_TRANSAKTIONER_CSV, 'transaktioner.csv')
+    expect(format).not.toBeNull()
+    expect(format!.id).toBe('seb')
+  })
+
+  it('parses the Transaktioner layout: BOM, CRLF, dot decimals, split amount columns', () => {
+    const result = parseBankFile(SEB_TRANSAKTIONER_CSV, 'transaktioner.csv')
+
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(2)
+    expect(result.issues).toHaveLength(0)
+
+    const cardPurchase = result.transactions[0]
+    expect(cardPurchase.date).toBe('2026-07-21')
+    expect(cardPurchase.description).toBe('SAN FRANCISC/26-07-20')
+    expect(cardPurchase.amount).toBe(-89.44)
+    expect(cardPurchase.balance).toBe(433217.91)
+
+    const deposit = result.transactions[1]
+    expect(deposit.date).toBe('2026-07-18')
+    expect(deposit.amount).toBe(12500)
+    expect(deposit.balance).toBe(433307.35)
+  })
+
+  it('parses the Transaktioner layout natively on an explicit SEB choice (no fallback)', () => {
+    const result = parseBankFile(SEB_TRANSAKTIONER_CSV, 'transaktioner.csv', 'seb')
+
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(2)
+    // Native parse: no "another format was used instead" info issue.
+    expect(result.issues).toHaveLength(0)
+  })
+
+  it('normalizes an unsigned Uttag magnitude to an expense', () => {
+    const unsignedWithdrawal =
+      'Bokförd;Valutadatum;Text;Typ;Insättningar;Uttag;Bokfört saldo\n' +
+      '2026-07-21;2026-07-21;BANKAVGIFT;Avgift;;120.00;1000.00'
+    const result = parseBankFile(unsignedWithdrawal, 'transaktioner.csv', 'seb')
+
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].amount).toBe(-120)
+  })
+
+  it('skips a Transaktioner row where both Insättningar and Uttag are empty', () => {
+    const emptyAmounts =
+      'Bokförd;Valutadatum;Text;Typ;Insättningar;Uttag;Bokfört saldo\n' +
+      '2026-07-21;2026-07-21;SPÄRRAD RAD;Info;;;1000.00\n' +
+      '2026-07-20;2026-07-20;KORTKÖP;Kortköp;;-50.00;950.00'
+    const result = parseBankFile(emptyAmounts, 'transaktioner.csv', 'seb')
+
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].amount).toBe(-50)
+    expect(result.stats.skipped_rows).toBe(1)
   })
 })
 

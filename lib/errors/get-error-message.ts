@@ -465,6 +465,20 @@ export function getErrorMessage(
         return 'Rättelsen saknar ekonomisk innebörd: varje konto netto till noll. En rättelse måste beskriva en faktisk affärshändelse (BFL 5 kap. 5 §).'
       }
 
+      if (structured.code === 'CORRECTION_CHAIN_TOO_DEEP') {
+        const details = structured.details as
+          | { depth?: number; chainRootVoucher?: string | null }
+          | undefined
+        const depthPart =
+          typeof details?.depth === 'number'
+            ? `Kedjan är redan ${details.depth} nivåer djup`
+            : 'Rättelsekedjan är redan flera nivåer djup'
+        const rootPart = details?.chainRootVoucher
+          ? ` (ursprungsverifikat ${details.chainRootVoucher})`
+          : ''
+        return `${depthPart}${rootPart}. Räkna ut nettoeffekten av hela kedjan och gör EN rättelse istället, eller skicka allow_deep_chain=true för att rätta ändå.`
+      }
+
       if (structured.code === 'BOOKKEEPING_DATABASE_ERROR') {
         // A DB-layer error may carry a user-relevant cause (e.g. period lock
         // trigger). Try the known-pattern map before falling back to the

@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 import { makeJournalEntry, makeJournalEntryLine } from '@/tests/helpers'
-import { BookkeepingDatabaseError, MeaninglessCorrectionError } from '@/lib/bookkeeping/errors'
+import {
+  BookkeepingDatabaseError,
+  CorrectionChainTooDeepError,
+  MeaninglessCorrectionError,
+} from '@/lib/bookkeeping/errors'
 
 // ============================================================
 // Mock: separate client (no .then) from query builder (thenable)
@@ -350,18 +354,20 @@ describe('correctEntry', () => {
 
     results = [
       { data: correctionAsOriginal, error: null },                            // 0: fetch original (the prior correction)
-      { data: [{ id: 'acc-5430', account_number: '5430' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 1: accounts (Step 0)
-      { data: secondReversal, error: null },                                  // 2: insert reversal
-      { data: null, error: null },                                            // 3: insert reversal lines
-      { data: null, error: null },                                            // 4: post reversal
-      { data: secondCorrection, error: null },                                // 5: insert corrected
-      { data: null, error: null },                                            // 6: insert corrected lines
-      { data: null, error: null },                                            // 7: post corrected
-      { data: [{ id: 'correction-1' }], error: null },                        // 8: CAS update
-      { data: null, error: null },                                            // 9: relink transactions
-      { data: null, error: null },                                            // 10: relink documents
-      { data: { ...secondReversal, lines: [] }, error: null },                // 11: fetch final reversal
-      { data: { ...secondCorrection, lines: [] }, error: null },              // 12: fetch final corrected
+      // 1: chain-depth walker follows correction_of_id to the root (depth 1)
+      { data: { id: 'orig-A', correction_of_id: null, reverses_id: null, voucher_series: 'A', voucher_number: 1 }, error: null },
+      { data: [{ id: 'acc-5430', account_number: '5430' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 2: accounts (Step 0)
+      { data: secondReversal, error: null },                                  // 3: insert reversal
+      { data: null, error: null },                                            // 4: insert reversal lines
+      { data: null, error: null },                                            // 5: post reversal
+      { data: secondCorrection, error: null },                                // 6: insert corrected
+      { data: null, error: null },                                            // 7: insert corrected lines
+      { data: null, error: null },                                            // 8: post corrected
+      { data: [{ id: 'correction-1' }], error: null },                        // 9: CAS update
+      { data: null, error: null },                                            // 10: relink transactions
+      { data: null, error: null },                                            // 11: relink documents
+      { data: { ...secondReversal, lines: [] }, error: null },                // 12: fetch final reversal
+      { data: { ...secondCorrection, lines: [] }, error: null },              // 13: fetch final corrected
     ]
 
     const supabase = makeClient()
@@ -373,6 +379,83 @@ describe('correctEntry', () => {
     expect(result.reversal.reverses_id).toBe('correction-1')
     expect(result.corrected.correction_of_id).toBe('correction-1')
     expect(result.corrected.source_type).toBe('correction')
+  })
+
+  it('rejects a correction whose target already sits 3 links deep in the chain', async () => {
+    // Chain: orig-0 ← c1 ← c2 ← c3 (target). Depth of c3 is 3 → guard fires.
+    // Christoffer case 2026-08-11: agents stacked rättelser 10 deep.
+    const target = makeJournalEntry({
+      id: 'c3',
+      status: 'posted',
+      source_type: 'correction',
+      correction_of_id: 'c2',
+      fiscal_period_id: 'fp-1',
+      voucher_series: 'A',
+      lines: [
+        makeJournalEntryLine({ account_number: '5410', debit_amount: 1000, credit_amount: 0 }),
+        makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 1000 }),
+      ],
+    })
+    results = [
+      { data: target, error: null },                                                                                   // 0: fetch original
+      { data: { id: 'c2', correction_of_id: 'c1', reverses_id: null, voucher_series: 'A', voucher_number: 3 }, error: null }, // 1: walker hop 1
+      { data: { id: 'c1', correction_of_id: 'orig-0', reverses_id: null, voucher_series: 'A', voucher_number: 2 }, error: null }, // 2: walker hop 2
+      { data: { id: 'orig-0', correction_of_id: null, reverses_id: null, voucher_series: 'A', voucher_number: 1 }, error: null }, // 3: walker hop 3 (root)
+    ]
+
+    const supabase = makeClient()
+    const err = await correctEntry(
+      supabase as never, 'company-1', 'user-1', 'c3', correctedLines
+    ).catch((e) => e)
+    expect(err).toBeInstanceOf(CorrectionChainTooDeepError)
+    expect(err).toMatchObject({
+      code: 'CORRECTION_CHAIN_TOO_DEEP',
+      depth: 3,
+      chainRootVoucher: 'A1',
+    })
+
+    // Guard fires before any write or voucher-number draw.
+    expect(inserts).toHaveLength(0)
+    expect(getNextVoucherNumber).not.toHaveBeenCalled()
+  })
+
+  it('allowDeepChain: true bypasses the chain-depth guard without walking the chain', async () => {
+    const target = makeJournalEntry({
+      id: 'c3',
+      status: 'posted',
+      source_type: 'correction',
+      correction_of_id: 'c2',
+      description: 'Test purchase',
+      fiscal_period_id: 'fp-1',
+      voucher_series: 'A',
+      lines: [
+        makeJournalEntryLine({ account_number: '5410', debit_amount: 1000, credit_amount: 0 }),
+        makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 1000 }),
+      ],
+    })
+    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'c3' })
+    const correctedEntry = makeJournalEntry({ id: 'c4', correction_of_id: 'c3' })
+    results = [
+      { data: target, error: null },                                         // 0: fetch original (no walker queries)
+      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 1: accounts
+      { data: reversalEntry, error: null },                                  // 2: insert reversal
+      { data: null, error: null },                                           // 3: reversal lines
+      { data: null, error: null },                                           // 4: post reversal
+      { data: correctedEntry, error: null },                                 // 5: insert corrected
+      { data: null, error: null },                                           // 6: corrected lines
+      { data: null, error: null },                                           // 7: post corrected
+      { data: [{ id: 'c3' }], error: null },                                 // 8: CAS
+      { data: null, error: null },                                           // 9: relink transactions
+      { data: null, error: null },                                           // 10: relink documents
+      { data: { ...reversalEntry, lines: [] }, error: null },                // 11: final reversal
+      { data: { ...correctedEntry, lines: [] }, error: null },               // 12: final corrected
+    ]
+
+    const supabase = makeClient()
+    const result = await correctEntry(
+      supabase as never, 'company-1', 'user-1', 'c3', correctedLines, { allowDeepChain: true }
+    )
+    expect(result.corrected.id).toBe('c4')
   })
 
   it('fails fast on unknown accounts: BEFORE the storno exists or a voucher number is consumed', async () => {

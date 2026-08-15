@@ -628,6 +628,7 @@ export function makeCompanySettings(
     preferred_payment_format: 'pain001',
     salary_pay_day: 25,
     salary_default_bank: null,
+    salary_net_rounding: false,
     logo_url: null,
     onboarding_step: 6,
     onboarding_complete: true,
@@ -682,6 +683,8 @@ export function createMockRequest(
     method?: string
     body?: unknown
     searchParams?: Record<string, string>
+    /** Extra request headers, e.g. `cookie` for routes that read one. */
+    headers?: Record<string, string>
   }
 ): Request {
   const fullUrl = new URL(url, 'http://localhost:3000')
@@ -692,7 +695,7 @@ export function createMockRequest(
   }
   return new Request(fullUrl.toString(), {
     method: options?.method || 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
   })
 }

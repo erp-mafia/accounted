@@ -31,7 +31,7 @@ export default function DashboardLoading() {
             full-width list, so that shape stays there. */}
         <aside className="hidden md:flex md:w-12 shrink-0 flex-col items-center border-r border-border bg-card/40 py-3 gap-2">
           <Skeleton className="h-8 w-8 rounded-full" />
-          <Skeleton className="h-8 w-8 rounded-md" />
+          <Skeleton className="h-8 w-8" />
         </aside>
         <aside className="flex w-full flex-col border-r border-border bg-card/40 md:hidden shrink-0">
           <div className="space-y-3 border-b border-border px-5 py-4">
@@ -42,7 +42,7 @@ export default function DashboardLoading() {
                 <Skeleton className="h-2.5 w-20" />
               </div>
             </div>
-            <Skeleton className="h-8 w-full rounded-md" />
+            <Skeleton className="h-8 w-full" />
           </div>
           <div className="space-y-1 p-3">
             {['w-40', 'w-48', 'w-36', 'w-44'].map((w, i) => (
@@ -80,7 +80,7 @@ export default function DashboardLoading() {
               key={i}
               className="flex items-start gap-3 border-b border-border px-1 py-3.5"
             >
-              <Skeleton className="mt-px h-[15px] w-[15px] shrink-0 rounded" />
+              <Skeleton className="mt-px h-[15px] w-[15px] shrink-0" />
               <Skeleton className={`h-3.5 ${w}`} />
               <Skeleton className="ml-auto h-5 w-7 shrink-0 rounded-full" />
             </div>

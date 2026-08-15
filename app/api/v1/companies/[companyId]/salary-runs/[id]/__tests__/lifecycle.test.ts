@@ -487,6 +487,85 @@ describe('POST /salary-runs/:id/book', () => {
     )
   })
 
+  it('applies review overrides with book-run parity (tax/net reconciled, F-skatt avgifter override ignored)', async () => {
+    // Overrides set during dashboard review must reach the ledger the same
+    // way no matter which surface books the run: v1 previously ignored them,
+    // so the booked 2710/2731 diverged from the AGI by the override delta.
+    const overriddenRow = {
+      ...employeeRow,
+      tax_withheld_override: 9000,
+      avgifter_amount_override: 10000,
+      avgifter_basis: 35000,
+      avgifter_category: 'standard',
+    }
+    const fSkattRow = {
+      ...employeeRow,
+      employee_id: 'emp_2',
+      employee: { employment_type: 'employee', f_skatt_status: 'f_skatt' },
+      gross_salary: 15000,
+      tax_withheld: 0,
+      net_salary: 15000,
+      avgifter_amount: 0,
+      // An avgifter override on an F-skatt row must be ignored (the AGI's
+      // isFSkattRow invariant), and the underlag zeroed.
+      avgifter_amount_override: 500,
+      avgifter_basis: 15000,
+      avgifter_category: 'standard',
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          { data: paidRun, error: null },
+          {
+            data: {
+              id: RUN_ID, status: 'booked',
+              booked_at: '2026-05-26T09:15:00Z', booked_by: USER_ID,
+              salary_entry_id: 'je_salary', avgifter_entry_id: 'je_avg',
+              vacation_entry_id: null, pension_entry_id: null,
+            },
+            error: null,
+          },
+        ],
+        salary_run_employees: { data: [overriddenRow, fSkattRow], error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    mocks.checkPeriodLock.mockResolvedValue({ locked: false })
+    mocks.createSalaryRunEntries.mockResolvedValue({
+      salaryEntry: { id: 'je_salary', voucher_number: 'L2026-0024' },
+      avgifterEntry: { id: 'je_avg' },
+      vacationEntry: null,
+      pensionEntry: null,
+    })
+
+    const res = await book(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/book`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const payload = mocks.createSalaryRunEntries.mock.calls[0][3] as {
+      employees: Array<Record<string, unknown>>
+    }
+    const [regular, fSkatt] = payload.employees
+    expect(regular).toMatchObject({
+      tax_withheld: 9000,
+      // net reconciles by the withheld difference: 25 500 + (9 500 - 9 000).
+      net_salary: 26000,
+      avgifter_amount: 10000,
+      avgifter_amount_overridden: true,
+      avgifter_basis: 35000,
+    })
+    expect(fSkatt).toMatchObject({
+      avgifter_amount: 0,
+      avgifter_amount_overridden: false,
+      avgifter_basis: 0,
+    })
+  })
+
   it('returns PERIOD_LOCKED before invoking the engine when payment_date is locked', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

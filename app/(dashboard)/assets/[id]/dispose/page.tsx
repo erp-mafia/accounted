@@ -325,7 +325,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
                 <SelectContent>{VAT_TREATMENTS.map((value) => <SelectItem key={value} value={value}>{t(`vat_${value}`)}</SelectItem>)}</SelectContent>
               </Select>
             </Field>
-            <div className="rounded-md bg-secondary/40 p-3 text-xs">
+            <div className="rounded-lg bg-secondary/40 p-3 text-xs">
               <SummaryRow label={t('gross')} value={formatCurrency(proceedsNumber)} />
               <SummaryRow label={t('vat')} value={formatCurrency(vatAmount)} />
               <SummaryRow label={t('net')} value={formatCurrency(netProceeds)} strong />
@@ -351,20 +351,20 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
             </div>
           )}
           {jamkningAssessment && (
-            <div className="rounded-md border border-border bg-secondary/40 p-3 text-sm">
+            <div className="rounded-lg border border-border bg-secondary/40 p-3 text-sm">
               <SummaryRow label={t('adjustment_direction')} value={t(`direction_${jamkningAssessment.direction}`)} />
               <SummaryRow label={t('adjustment_amount')} value={formatCurrency(jamkningAssessment.amount)} strong />
               {jamkningAssessment.capped && <p className="mt-2 text-xs text-muted-foreground">{t('adjustment_capped')}</p>}
             </div>
           )}
           {disposalType === 'business_transfer' && (
-            <div className="flex items-center gap-3 rounded-md border border-border p-3">
+            <div className="flex items-center gap-3 rounded-lg border border-border p-3">
               <Switch id="businessTransfer" checked={businessTransferConfirmed} onCheckedChange={setBusinessTransferConfirmed} />
               <Label htmlFor="businessTransfer" className="cursor-pointer">{t('business_transfer_confirm')}</Label>
             </div>
           )}
           {disposalType === 'business_transfer' && transferNeedsDocument && (
-            <div className="flex items-center gap-3 rounded-md border border-border p-3">
+            <div className="flex items-center gap-3 rounded-lg border border-border p-3">
               <Switch id="adjustmentDocument" checked={adjustmentDocumentConfirmed} onCheckedChange={setAdjustmentDocumentConfirmed} />
               <Label htmlFor="adjustmentDocument" className="cursor-pointer">{t('adjustment_document_confirm')}</Label>
             </div>

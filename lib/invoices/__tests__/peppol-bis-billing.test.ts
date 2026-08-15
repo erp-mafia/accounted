@@ -245,4 +245,35 @@ describe('generatePeppolBisBillingInvoice', () => {
       'SUPPLIER_PARTICIPANT_IDENTIFIER_UNSUPPORTED',
     ]))
   })
+
+  it('rejects a personnummer-only buyer instead of labeling it as scheme 0007', () => {
+    const input = makeValidInput()
+    input.customer = makeCustomer({ ...input.customer, org_number: '800101-1231' })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.issues.map(({ code }) => code)).toContain(
+      'BUYER_PARTICIPANT_IDENTIFIER_UNSUPPORTED',
+    )
+  })
+
+  it('rejects credit notes and self-billed invoices in the generation layer', () => {
+    for (const invoice of [
+      makeInvoice({
+        ...makeValidInput().invoice,
+        credited_invoice_id: '22222222-2222-4222-8222-222222222222',
+      }),
+      makeInvoice({ ...makeValidInput().invoice, is_self_billed: true }),
+    ]) {
+      const input = makeValidInput()
+      input.invoice = invoice
+      const result = generatePeppolBisBillingInvoice(input)
+
+      expect(result.ok).toBe(false)
+      if (result.ok) continue
+      expect(result.issues.map(({ code }) => code)).toContain('DOCUMENT_TYPE_UNSUPPORTED')
+    }
+  })
 })

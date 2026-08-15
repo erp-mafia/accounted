@@ -244,7 +244,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // 2440/1930 supplier-invoice payment entry: two verifikationer for
     // one affärshändelse violates BFL 5 kap 6 §. If storno fails, abort
     // before any further state change.
-    if (transaction.journal_entry_id) {
+    // A RECONCILIATION link (reconciliation_method set) is not a conflicting
+    // booking: the entry is an independent verifikat that may evidence OTHER
+    // affärshändelser; reversing it wholesale would be an over-broad rättelse
+    // (BFL 5 kap 5 §). Nothing is detached here: the final transaction update
+    // overwrites the pointer and clears reconciliation_method in the same
+    // write, so a failure in between leaves the existing link intact.
+    const priorReconciliationLink =
+      transaction.journal_entry_id && transaction.reconciliation_method
+        ? {
+            journalEntryId: transaction.journal_entry_id as string,
+            method: transaction.reconciliation_method as string,
+          }
+        : null
+
+    if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
         await reverseEntry(
           ctx.supabase,
@@ -508,12 +522,31 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         potential_supplier_invoice_id: null,
         journal_entry_id: journalEntryId,
         is_business: true,
+        // The supplier-invoice match supersedes any prior reconciliation link
+        // (deferred detach, see the priorReconciliationLink block above).
+        // Unconditional literal on purpose: null is already the value on every
+        // non-reconciliation-linked row, and a literal payload keeps the
+        // phantom-column scanner able to verify the column set.
+        reconciliation_method: null,
       })
       .eq('id', txId)
       .eq('company_id', ctx.companyId!)
     if (updateTxErr) {
       return v1ErrorResponseFromCode('MATCH_SI_LINK_TX_FAILED', txLog, {
         requestId: ctx.requestId,
+      })
+    }
+
+    // Record the release of the prior reconciliation link now that the
+    // re-point has committed (behandlingshistorik, BFNAR 2013:2 kap 8).
+    if (priorReconciliationLink) {
+      await logMatchEvent(ctx.supabase, ctx.userId, txId, 'unmatched', {
+        supplierInvoiceId: supplier_invoice_id,
+        previousState: {
+          journal_entry_id: priorReconciliationLink.journalEntryId,
+          reconciliation_method: priorReconciliationLink.method,
+        },
+        newState: { journal_entry_id: journalEntryId, reconciliation_method: null },
       })
     }
 
@@ -548,7 +581,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // invoice. No-op when it is already anchored. Never throws.
     await anchorSupplierInvoiceDocument(ctx.supabase, ctx.companyId!, supplier_invoice_id)
 
-    logMatchEvent(ctx.supabase, ctx.userId, txId, 'matched', {
+    await logMatchEvent(ctx.supabase, ctx.userId, txId, 'matched', {
       supplierInvoiceId: supplier_invoice_id,
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',

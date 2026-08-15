@@ -235,7 +235,7 @@ export default function BankFileUploadStep({
           <div>
             <p className="font-medium">SEB</p>
             <p className="text-muted-foreground">
-              Logga in → Konton → Kontoutdrag → Hämta som fil (CSV)
+              Logga in → Konton → Transaktioner → Exportera (CSV), eller Kontoutdrag → Hämta som fil (CSV)
             </p>
           </div>
           <div>

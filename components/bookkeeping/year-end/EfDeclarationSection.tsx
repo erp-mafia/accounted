@@ -213,7 +213,7 @@ export function EfDeclarationSection({
             <div className="space-y-1">
               <Label className="text-xs">Egenavgifter: kategori</Label>
               <select
-                className="border border-border rounded-md h-9 text-sm px-2 w-full bg-background"
+                className="border border-border rounded-lg h-9 text-sm px-2 w-full bg-background"
                 value={overrides.category}
                 onChange={(e) => update('category', e.target.value as EgenavgiftCategory)}
               >

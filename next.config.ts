@@ -109,6 +109,14 @@ const nextConfig: NextConfig = {
         destination: '/kpi',
         permanent: true,
       },
+      // The kontoplan lived as a tab on /bookkeeping until 2026-07-01 (#850);
+      // old bookmarks and stale links still carry ?tab=accounts.
+      {
+        source: '/bookkeeping',
+        has: [{ type: 'query', key: 'tab', value: 'accounts' }],
+        destination: '/chart-of-accounts',
+        permanent: false,
+      },
       // Docs canonicalised to docs.gnubok.se. Every `docs_url` field on the
       // v1 error envelope still points at this host; the 308 forwards both
       // humans and agents to the docs subdomain without us needing to

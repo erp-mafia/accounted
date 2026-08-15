@@ -8,13 +8,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { DataListEmpty } from '@/components/ui/data-list'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Plus, FileInput, Lock, Search } from 'lucide-react'
+import { Plus, FileInput, Lock } from 'lucide-react'
 import Link from 'next/link'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -316,15 +316,12 @@ export default function SupplierInvoicesPage() {
                   : undefined,
           }))}
         />
-        <div className="relative min-w-[190px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={t('search_placeholder')}
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="h-9 pl-10"
-          />
-        </div>
+        <ToolbarSearch
+          containerClassName="min-w-[190px]"
+          placeholder={t('search_placeholder')}
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
         <div className="ml-auto flex items-center gap-4">
           <Link href="/supplier-invoices/payment-files" className={QUIET_LINK_CLASS}>
             {t('payment_files_link')}

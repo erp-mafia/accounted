@@ -5,6 +5,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { roundOre } from '@/lib/money'
 
 ensureInitialized()
 
@@ -51,7 +52,17 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     )
   }
 
-  const totalAmount = Math.round((agi.total_tax + agi.total_avgifter) * 100) / 100
+  // Declarations generated since the whole-krona change store the declared
+  // amounts (what Skatteverket computes from the underlag and draws): pay
+  // exactly those. Legacy öre-bearing rows predate that storage; their
+  // salary bookings credited 2731 with the öre, so keep paying öre-exact as
+  // before: the öre lands as a small skattekonto överskott (the pre-existing
+  // equilibrium) instead of stranding on 2731 with no counterpart.
+  const declaredWholeKronor =
+    Number.isInteger(agi.total_tax) && Number.isInteger(agi.total_avgifter)
+  const totalAmount = declaredWholeKronor
+    ? agi.total_tax + agi.total_avgifter
+    : roundOre(agi.total_tax + agi.total_avgifter)
   if (totalAmount <= 0) {
     return NextResponse.json(
       { error: `Inget belopp att betala för perioden ${period}.` },

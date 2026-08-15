@@ -311,7 +311,7 @@ export default function TransactionBookingDialog({
                     {pickedInboxDocs.map((doc) => (
                       <div
                         key={doc.document_id}
-                        className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50"
+                        className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50"
                       >
                         <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                         <span className="truncate flex-1">

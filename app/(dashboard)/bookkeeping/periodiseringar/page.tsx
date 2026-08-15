@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, RowFoldout } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -211,35 +212,15 @@ export default function AccrualSchedulesPage() {
       ) : null}
 
       {/* Toolbar: status seg (concept scene 33) */}
-      <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-        {(
-          [
-            { key: 'active', label: 'Aktiva', count: activeCount },
-            { key: 'completed', label: 'Avslutade', count: null },
-            { key: 'all', label: 'Alla', count: null },
-          ] as const
-        ).map(({ key, label, count }) => (
-          <button
-            key={key}
-            type="button"
-            role="tab"
-            aria-selected={statusFilter === key}
-            onClick={() => setStatusFilter(key)}
-            className={`inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
-              statusFilter === key
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {label}
-            {count !== null && count > 0 && (
-              <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                {count}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        value={statusFilter}
+        onChange={setStatusFilter}
+        options={[
+          { value: 'active', label: 'Aktiva', count: activeCount ?? undefined },
+          { value: 'completed', label: 'Avslutade' },
+          { value: 'all', label: 'Alla' },
+        ]}
+      />
 
       {isLoading ? (
         <div className="space-y-3">

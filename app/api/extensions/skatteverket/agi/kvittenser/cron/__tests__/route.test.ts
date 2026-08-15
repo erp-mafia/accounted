@@ -410,7 +410,7 @@ describe('AGI kvittenser cron', () => {
     expect(body.expired).toBe(1)
     expect(body.apigwConfig).toBe(0)
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'SESSION_EXPIRED' })
-    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'SESSION_EXPIRED')
+    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'comp-1', 'SESSION_EXPIRED')
     expect(errorSpy).not.toHaveBeenCalled()
     expect(errorRecorder).not.toHaveBeenCalled()
     expect(warnSpy).not.toHaveBeenCalled()

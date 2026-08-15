@@ -1080,7 +1080,7 @@ export default function SupplierInvoiceDetailPage() {
                               onChange={(e) => updateEditLine(i, { description: e.target.value })}
                               placeholder="Beskrivning"
                             />
-                            <div className="inline-flex rounded-md border bg-background overflow-hidden h-9">
+                            <div className="inline-flex rounded-lg border bg-background overflow-hidden h-9">
                               <button
                                 type="button"
                                 onClick={() => updateEditLine(i, { side: 'debit' })}
@@ -1197,7 +1197,7 @@ export default function SupplierInvoiceDetailPage() {
                 ? t('duplicate_payment_description_one')
                 : t('duplicate_payment_description_many')}
             </p>
-            <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
               {duplicateCandidates?.map((c) => (
                 <div key={c.id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">

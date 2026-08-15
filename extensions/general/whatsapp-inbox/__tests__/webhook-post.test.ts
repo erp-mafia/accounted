@@ -284,6 +284,69 @@ describe('POST /webhook', () => {
       expect(row.body_text).toBeUndefined()
     })
 
+    it('media inside the hour but outside the 10 min burst window still gets M1', async () => {
+      const { enqueue } = mockSupabase()
+      enqueue({ data: null }) // no active link
+      enqueue({ data: { ok: true } }) // sender quota RPC
+      enqueue({
+        data: [{ created_at: new Date(Date.now() - 30 * 60 * 1000).toISOString() }],
+      }) // one greeting 30 min ago: inside the text hour, outside the burst
+      enqueue({ data: null, error: null }) // trace row insert ('done')
+
+      await route.handler(signedRequest(envelope({ messages: [imageMessage()] })))
+
+      expect(sendTextMock).toHaveBeenCalledTimes(1)
+      expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m1Unlinked)
+      // The privacy invariant holds: still no media touch for unlinked senders.
+      expect(vi.mocked(downloadMedia)).not.toHaveBeenCalled()
+    })
+
+    it('media inside the 10 min burst window stays silent (one M1 per burst)', async () => {
+      const { enqueue } = mockSupabase()
+      enqueue({ data: null })
+      enqueue({ data: { ok: true } })
+      enqueue({
+        data: [{ created_at: new Date(Date.now() - 2 * 60 * 1000).toISOString() }],
+      }) // greeted 2 min ago: same burst
+      enqueue({ count: 0 }) // decline-trace day cap
+      enqueue({ data: null, error: null }) // declined trace insert
+
+      await route.handler(signedRequest(envelope({ messages: [imageMessage()] })))
+      expect(sendTextMock).not.toHaveBeenCalled()
+    })
+
+    it('a text message inside the hour stays silent (hour rule unchanged for text)', async () => {
+      const { enqueue } = mockSupabase()
+      enqueue({ data: null })
+      enqueue({ data: { ok: true } })
+      enqueue({
+        data: [{ created_at: new Date(Date.now() - 30 * 60 * 1000).toISOString() }],
+      }) // greeted 30 min ago: text keeps the 1/hour rule
+      enqueue({ count: 0 }) // decline-trace day cap
+      enqueue({ data: null, error: null }) // declined trace insert
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('hej')] })))
+      expect(sendTextMock).not.toHaveBeenCalled()
+    })
+
+    it('the fourth media greeting of the day stays silent (daily cap kept)', async () => {
+      const { enqueue } = mockSupabase()
+      enqueue({ data: null })
+      enqueue({ data: { ok: true } })
+      enqueue({
+        data: [
+          { created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() },
+          { created_at: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString() },
+          { created_at: new Date(Date.now() - 9 * 60 * 60 * 1000).toISOString() },
+        ],
+      }) // GREETING_DAY_MAX greetings already sent today
+      enqueue({ count: 0 }) // decline-trace day cap
+      enqueue({ data: null, error: null }) // declined trace insert
+
+      await route.handler(signedRequest(envelope({ messages: [imageMessage()] })))
+      expect(sendTextMock).not.toHaveBeenCalled()
+    })
+
     it('stays silent but records the decline when the pre-binding quota is exhausted', async () => {
       const mock = mockSupabase()
       mock.enqueue({ data: null })

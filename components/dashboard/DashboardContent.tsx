@@ -57,6 +57,9 @@ interface DashboardContentProps {
    * started" instead of a false "all caught up".
    */
   emptyLedger?: boolean
+  /** Latest SIE reconciliation-sweep outcome, for the checklist's bank step
+   *  ("X matchade, Y att granska"). Null when no sweep has run. */
+  sieSweep?: { auto_linked: number; suggested: number; unmatched: number; errors: number } | null
 }
 
 /**
@@ -79,6 +82,7 @@ export default function DashboardContent({
   agentBuilt = true,
   vatLine = null,
   emptyLedger = false,
+  sieSweep = null,
 }: DashboardContentProps) {
   const t = useTranslations('dashboard')
   const hasAi = useCapability(CAPABILITY.ai)
@@ -137,6 +141,7 @@ export default function DashboardContent({
         hasInboxItems={!!onboardingProgress?.hasInboxItems}
         hasAgentBuilt={agentBuilt}
         vatLine={vatLine}
+        sieSweep={sieSweep}
       />
 
       {/* Build-assistant hero: shown only until the company has a verified

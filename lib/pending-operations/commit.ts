@@ -43,6 +43,7 @@ import {
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
@@ -307,6 +308,23 @@ async function commitCategorizeTransaction(
   // propagation all live in the shared core (lib/transactions/categorize-core.ts)
   // so the bulk-book-inbox executor and the Underlag "Bokför valda" route reuse
   // exactly this logic.
+  // Tamper/drift gate for the explicit business-side account: a PRESENT but
+  // malformed account_override must fail loudly, never degrade to the
+  // category default. The approver approved a preview showing the override
+  // account, so posting anything else would diverge from what was approved.
+  const rawAccountOverride = params.account_override
+  if (
+    rawAccountOverride != null &&
+    !(typeof rawAccountOverride === 'string' && ACCOUNT_NUMBER_RE.test(rawAccountOverride))
+  ) {
+    return {
+      error:
+        'Ogiltigt account_override i den stagade operationen (förväntade 4 siffror). ' +
+        'Avvisa operationen och stagea om kategoriseringen.',
+      status: 400,
+    }
+  }
+
   return categorizeMatchedTransaction(supabase, userId, companyId, txId, {
     category,
     vatTreatment,
@@ -315,6 +333,8 @@ async function commitCategorizeTransaction(
     allowDuplicate: params.allow_duplicate === true,
     // Dimensions PR7: resolved at staging; coerce is the drift/tamper gate.
     dimensions: coerceDimensionsBag(params.dimensions),
+    // Validated against the chart both at staging and inside the core at commit.
+    accountOverride: (rawAccountOverride as string | null | undefined) ?? undefined,
   })
 }
 
@@ -4721,7 +4741,12 @@ async function commitCorrectEntry(
     // made in May 2026 for a December 2025 voucher correctly lands in 2025,
     // keeping that period's balances consistent. The is_closed pre-flight
     // above is what blocks corrections to already-locked periods.
-    const result = await correctEntry(supabase, companyId, userId, entryId, lines)
+    const result = await correctEntry(supabase, companyId, userId, entryId, lines, {
+      // Staged by the MCP tool when the agent explicitly overrode the
+      // chain-depth guard; the guard re-checks here so a stale approval of a
+      // chain that grew deeper in the meantime still stops.
+      allowDeepChain: params.allow_deep_chain === true,
+    })
     return {
       data: {
         original_entry_id: entryId,
@@ -4794,7 +4819,9 @@ async function commitReverseEntry(
   }
 
   try {
-    const reversal = await reverseEntry(supabase, companyId, userId, entryId, reversalDate)
+    const reversal = await reverseEntry(supabase, companyId, userId, entryId, reversalDate, {
+      allowDeepChain: params.allow_deep_chain === true,
+    })
     // Invariant per BFL 5 kap 5§: the storno must land in the same fiscal period
     // as the original entry. reverseEntry() at lib/bookkeeping/engine.ts:492 uses
     // original.fiscal_period_id, but assert it here so a future engine change that

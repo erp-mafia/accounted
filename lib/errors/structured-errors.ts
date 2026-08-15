@@ -283,6 +283,18 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Rättelsen motsvarar ingen ekonomisk händelse: det finns inget att rätta.',
     message_en: 'The correction represents no economic event: nothing to correct.',
   },
+  CORRECTION_CHAIN_TOO_DEEP: {
+    httpStatus: 409,
+    message_sv:
+      'Rättelsekedjan är redan flera nivåer djup. Räkna ut nettoeffekten av hela kedjan och gör EN rättelse istället, eller skicka allow_deep_chain=true för att rätta ändå.',
+    message_en:
+      'The correction chain is already several levels deep. Compute the net effect of the whole chain and book ONE correction instead, or pass allow_deep_chain=true to override.',
+    remediation: {
+      description:
+        'Read the full chain with gnubok_query_journal (follow correction_of_id/reverses_id to the chain root), compute the net effect across all entries, and stage ONE correction on the live entry that expresses it. Only pass allow_deep_chain=true if stacking another correction is genuinely intended.',
+      tool: 'gnubok_query_journal',
+    },
+  },
   NO_OPEN_PERIOD_FOR_DATE: {
     httpStatus: 400,
     message_sv:
@@ -2003,6 +2015,64 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kopplingen misslyckades.',
     message_en: 'Failed to link document to journal entry.',
   },
+  UNDERLAG_REF_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Filnamnet pekar inte på den verifikation som valdes. Ladda om förhandsgranskningen och försök igen.',
+    message_en:
+      'The filename does not point at the selected verifikat. Reload the preview and try again.',
+  },
+  UNDERLAG_PERIOD_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen tillhör ett annat räkenskapsår än det du valde för underlagen. Ladda om förhandsgranskningen och försök igen.',
+    message_en:
+      'The verifikat belongs to a different fiscal year than the one selected for these files. Reload the preview and try again.',
+  },
+  UNDERLAG_ENTRY_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen är inte bokförd, så underlag kan inte kopplas till den ännu.',
+    message_en: 'The journal entry is not posted, so documents cannot be attached to it yet.',
+  },
+  UNDERLAG_ENTRY_NOT_MIGRATED: {
+    httpStatus: 400,
+    message_sv: 'Verifikationen kommer inte från en SIE-import och kan inte matchas mot filnamn.',
+    message_en: 'The journal entry did not come from a SIE import and cannot be matched by filename.',
+  },
+}
+
+// Invoice-inbox manual upload and attach-document (extension REST routes).
+const INBOX_UPLOAD: Record<string, StructuredErrorEntry> = {
+  INBOX_UPLOAD_NO_FILE: {
+    httpStatus: 400,
+    message_sv: 'Ingen fil bifogad.',
+    message_en: 'No file attached.',
+  },
+  INBOX_UPLOAD_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv: 'Filen är för stor. Maxstorlek är 10 MB.',
+    message_en: 'File exceeds the 10 MB size limit.',
+  },
+  INBOX_UPLOAD_UNSUPPORTED_TYPE: {
+    httpStatus: 400,
+    message_sv: 'Filtypen stöds inte. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.',
+    message_en: 'Unsupported file type. Allowed: PDF, JPEG, PNG, HEIC, WebP.',
+  },
+  INBOX_UPLOAD_TX_NOT_IN_COMPANY: {
+    httpStatus: 400,
+    message_sv: 'Den angivna transaktionen (matched_transaction_id) tillhör ett annat företag.',
+    message_en: 'matched_transaction_id refers to a transaction outside this company.',
+  },
+  INBOX_UPLOAD_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Uppladdningen misslyckades. Försök igen.',
+    message_en: 'Upload failed.',
+  },
+  INBOX_ATTACH_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Bilagan kunde inte kopplas. Försök igen.',
+    message_en: 'Failed to attach the document.',
+  },
 }
 
 const CUSTOMER: Record<string, StructuredErrorEntry> = {
@@ -3518,6 +3588,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...REGISTER_IMPORT,
   ...PROVIDER_MIGRATION,
   ...DOCUMENT,
+  ...INBOX_UPLOAD,
   ...CUSTOMER,
   ...ARTICLE,
   ...SUPPLIER,

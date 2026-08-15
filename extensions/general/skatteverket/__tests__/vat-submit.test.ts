@@ -69,7 +69,7 @@ describe('submitVatDeclarationChain', () => {
     })
     // Only the kontrollera call: no utkast, no lås, no persisted state.
     expect(mockSkvRequest).toHaveBeenCalledTimes(1)
-    expect(mockSkvRequest.mock.calls[0][3]).toBe('/kontrollera/165560000000/202606')
+    expect(mockSkvRequest.mock.calls[0][4]).toBe('/kontrollera/165560000000/202606')
     expect((ctx.settings.set as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled()
   })
 
@@ -122,7 +122,7 @@ describe('submitVatDeclarationChain', () => {
 
     expect(result).toMatchObject({ ok: true, signingUrl: 'https://skv.test/sign/xyz' })
     expect(mockSkvRequest).toHaveBeenCalledTimes(2)
-    expect(mockSkvRequest.mock.calls[0][3]).toBe('/utkast/165560000000/202606')
+    expect(mockSkvRequest.mock.calls[0][4]).toBe('/utkast/165560000000/202606')
   })
 
   it('utkast failure -> stage draft, nothing saved, retry-safe', async () => {

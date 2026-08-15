@@ -5,19 +5,19 @@ import { seedCompany } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
 const NORMALIZE_SQL = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20260813150000_normalize_legacy_account_vat_treatments.sql'),
+  join(process.cwd(), 'supabase/migrations/20260815150100_normalize_legacy_account_vat_treatments.sql'),
   'utf8',
 )
 const DROP_LEGACY_CONSTRAINT_SQL = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20260813149000_drop_legacy_account_vat_treatment_constraint.sql'),
+  join(process.cwd(), 'supabase/migrations/20260815150000_drop_legacy_account_vat_treatment_constraint.sql'),
   'utf8',
 )
 const ENFORCE_SQL = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20260813152001_enforce_class_aware_account_vat_treatment.sql'),
+  join(process.cwd(), 'supabase/migrations/20260815150300_enforce_class_aware_account_vat_treatment.sql'),
   'utf8',
 )
 const CLEAR_INCOMPATIBLE_SQL = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20260813151000_clear_incompatible_account_vat_treatments.sql'),
+  join(process.cwd(), 'supabase/migrations/20260815150200_clear_incompatible_account_vat_treatments.sql'),
   'utf8',
 )
 
