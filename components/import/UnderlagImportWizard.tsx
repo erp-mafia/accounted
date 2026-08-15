@@ -105,6 +105,15 @@ export default function UnderlagImportWizard() {
   const [error, setError] = useState<string | null>(null)
   const [fiscalPeriodId, setFiscalPeriodId] = useState<string | null>(null)
   const [fiscalPeriod, setFiscalPeriod] = useState<FiscalPeriod | null>(null)
+  /**
+   * The year the CURRENT plan was resolved against, snapshotted when the plan
+   * was requested. Everything downstream (summary, confirm text, manual
+   * re-resolution, the attach requests) reads this, never the live picker: the
+   * picker can move while a preview of 2000 filenames is in flight, and a
+   * confirm dialog that reads back a different year than the plan was built
+   * from is worse than no confirm dialog at all.
+   */
+  const [planPeriod, setPlanPeriod] = useState<FiscalPeriod | null>(null)
   const [plan, setPlan] = useState<UnderlagPlan | null>(null)
   const [rows, setRows] = useState<ReviewRow[]>([])
   const [attached, setAttached] = useState(0)
@@ -124,14 +133,17 @@ export default function UnderlagImportWizard() {
     [rows],
   )
 
-  /** Resolve filenames server-side. Only names travel: the bytes stay here. */
+  /**
+   * Resolve filenames server-side. Only names travel: the bytes stay here.
+   * The year is an explicit argument rather than read from state, so a caller
+   * cannot accidentally resolve against a year the user has since changed.
+   */
   const fetchPlan = useCallback(
-    async (fileNames: string[]): Promise<UnderlagPlan | null> => {
-      if (!fiscalPeriodId) return null
+    async (fileNames: string[], periodId: string): Promise<UnderlagPlan | null> => {
       const res = await fetch('/api/import/documents/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_names: fileNames, fiscal_period_id: fiscalPeriodId }),
+        body: JSON.stringify({ file_names: fileNames, fiscal_period_id: periodId }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -140,21 +152,31 @@ export default function UnderlagImportWizard() {
       }
       return data.data as UnderlagPlan
     },
-    [fiscalPeriodId],
+    [],
   )
 
   const handleFilesSelected = useCallback(
     async (fileList: FileList | null) => {
       if (!fileList || fileList.length === 0) return
+      if (!fiscalPeriodId) return
       const files = Array.from(fileList)
+      // Snapshot the year for this batch up front. The picker stays on screen
+      // while the request is in flight, so state read afterwards may not be
+      // the year the plan was built from.
+      const batchPeriodId = fiscalPeriodId
+      const batchPeriod = fiscalPeriod
 
       setError(null)
       setIsLoading(true)
       try {
-        const nextPlan = await fetchPlan(files.map((f) => f.name))
+        const nextPlan = await fetchPlan(
+          files.map((f) => f.name),
+          batchPeriodId,
+        )
         if (!nextPlan) return
 
         setPlan(nextPlan)
+        setPlanPeriod(batchPeriod)
         setRows(
           nextPlan.rows.map((row, index) => ({
             ...row,
@@ -176,7 +198,7 @@ export default function UnderlagImportWizard() {
         setIsLoading(false)
       }
     },
-    [fetchPlan],
+    [fetchPlan, fiscalPeriod, fiscalPeriodId],
   )
 
   const updateRow = useCallback((id: string, patch: Partial<ReviewRow>) => {
@@ -191,11 +213,14 @@ export default function UnderlagImportWizard() {
   const resolveManualRef = useCallback(
     async (row: ReviewRow) => {
       const ref = row.manualRef.trim()
-      if (!ref) return
+      if (!ref || !plan) return
 
       updateRow(row.id, { resolving: true })
       try {
-        const refPlan = await fetchPlan([ref])
+        // Resolve inside the year THIS PLAN was built against, straight from
+        // the server's own echo. Reading live state here would let a row join
+        // the batch from a different year than every other row in it.
+        const refPlan = await fetchPlan([ref], plan.fiscal_period_id)
         const resolved = refPlan?.rows[0]
         const candidates = resolved?.candidates ?? []
 
@@ -231,17 +256,18 @@ export default function UnderlagImportWizard() {
         toast({ title: t('underlag_manual_not_found_title'), description: getErrorMessage(err) })
       }
     },
-    [fetchPlan, t, toast, updateRow],
+    [fetchPlan, plan, t, toast, updateRow],
   )
 
   const runAttach = useCallback(async () => {
+    if (!plan) return
     // The year is named in the confirm text on purpose: it is the one input
     // the files cannot corroborate, so it is the one worth reading back.
     const ok = await confirm({
       title: t('underlag_confirm_title'),
       description: t('underlag_confirm_body', {
         count: selectedRows.length,
-        year: fiscalPeriod?.name ?? '',
+        year: planPeriod?.name ?? '',
       }),
       confirmLabel: t('underlag_confirm_action'),
       variant: 'warning',
@@ -259,6 +285,9 @@ export default function UnderlagImportWizard() {
       const formData = new FormData()
       formData.append('file', row.file)
       formData.append('journal_entry_id', row.targetId as string)
+      // The year the plan was built against, echoed from the server. The route
+      // refuses any target outside it, overrides included.
+      formData.append('fiscal_period_id', plan.fiscal_period_id)
       if (row.manual) formData.append('override', 'true')
 
       try {
@@ -296,7 +325,7 @@ export default function UnderlagImportWizard() {
       }),
       variant: failed > 0 ? 'destructive' : 'default',
     })
-  }, [confirm, fiscalPeriod, selectedRows, t, toast])
+  }, [confirm, plan, planPeriod, selectedRows, t, toast])
 
   // The fiscal year deliberately survives a reset: a migration is several
   // batches from the same year's export, and re-picking it every round is
@@ -304,6 +333,7 @@ export default function UnderlagImportWizard() {
   const reset = () => {
     setStep('select')
     setPlan(null)
+    setPlanPeriod(null)
     setRows([])
     setOutcomes([])
     setAttached(0)
@@ -356,11 +386,16 @@ export default function UnderlagImportWizard() {
               <FyPicker
                 value={fiscalPeriodId}
                 onChange={(id, period) => {
+                  // Ignored while a preview is in flight: that request already
+                  // captured a year and the plan must not disagree with the
+                  // control the user is looking at.
+                  if (isLoading) return
                   setFiscalPeriodId(id)
                   setFiscalPeriod(period ?? null)
                 }}
                 includeAllOption={false}
                 storageKeyPrefix={FY_STORAGE_PREFIX}
+                className={isLoading ? 'pointer-events-none opacity-60' : undefined}
               />
               <p className="text-[12.5px] leading-5 text-muted-foreground">
                 {t('underlag_year_help')}
@@ -404,7 +439,7 @@ export default function UnderlagImportWizard() {
             {t('underlag_summary', {
               matched: plan.summary.matched,
               total: plan.summary.total,
-              year: fiscalPeriod?.name ?? '',
+              year: planPeriod?.name ?? '',
             })}
           </p>
 

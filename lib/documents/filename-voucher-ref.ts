@@ -70,8 +70,25 @@ const NUMBER_ONLY_RE = new RegExp(`^${VER_NOISE}(\\d{1,6})(?:[-_. ].*)?$`, 'i')
  * A false positive here costs one manual assignment; a false negative attaches
  * a receipt to a verifikat whose number happens to equal a year fragment.
  */
-const DATE_PREFIX_RE =
-  /^(?:(?:19|20)\d{6}|(?:19|20)?\d{2}[-_. /]\d{1,2}[-_. /]\d{1,2})(?!\d)/
+const DATE_PREFIX_RE = new RegExp(
+  '^(?:' +
+    // 20240131
+    '(?:19|20)\\d{6}' +
+    // 2024-01-31, 2024-1-31, 24-01-31, 2024 01 31, 2024/01/31
+    '|(?:19|20)?\\d{2}[-_. /]\\d{1,2}[-_. /]\\d{1,2}' +
+    // 31.01.2024, 31/1/2024, 12-24-2024: day-first and US order. Without this
+    // the day becomes a voucher number that always exists in the year.
+    '|\\d{1,2}[-_. /]\\d{1,2}[-_. /](?:19|20)\\d{2}' +
+    ')(?!\\d)',
+)
+
+/**
+ * `ver` is a prefix word, never a series. Without this `ver 31.pdf` parses as
+ * series VER and comes back auto-selectable, while the spelled-out
+ * `Verifikat 31.pdf` correctly yields a series-less reference that requires
+ * confirmation. Same filename, two trust levels, decided by an abbreviation.
+ */
+const NOT_A_SERIES = new Set(['VER'])
 
 /**
  * Any four-digit run that reads as a calendar year. Used to refuse a
@@ -105,14 +122,10 @@ export function parseVoucherRefFromFileName(fileName: string): ParsedFileNameRef
 
   const seriesMatch = SERIES_NUMBER_RE.exec(stem)
   if (seriesMatch) {
+    const series = seriesMatch[1].toUpperCase()
     const number = Number(seriesMatch[2])
-    if (Number.isInteger(number) && number > 0) {
-      return {
-        series: seriesMatch[1].toUpperCase(),
-        number,
-        pattern: 'series_number',
-        autoSelectable: true,
-      }
+    if (!NOT_A_SERIES.has(series) && Number.isInteger(number) && number > 0) {
+      return { series, number, pattern: 'series_number', autoSelectable: true }
     }
   }
 

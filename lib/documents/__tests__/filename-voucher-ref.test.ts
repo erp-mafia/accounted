@@ -48,6 +48,12 @@ describe('parseVoucherRefFromFileName', () => {
     ['Verifikation 31.pdf', 31],
     ['verifikation31.pdf', 31],
     ['Verifikat 31.pdf', 31],
+    // `ver` is a prefix word, not a series: without that rule this one form
+    // came back auto-selectable while every spelled-out variant did not.
+    ['ver 31.pdf', 31],
+    ['ver31.pdf', 31],
+    ['VER-31.pdf', 31],
+    ['ver.31.pdf', 31],
   ])('reads %s as a series-less reference, not a bogus series', (fileName, number) => {
     expect(parseVoucherRefFromFileName(fileName)).toEqual({
       series: null,
@@ -80,6 +86,18 @@ describe('parseVoucherRefFromFileName', () => {
     '2024 01 31 kvitto.pdf',
     '24-01-31 kvitto.pdf',
     '2024/01/31.pdf',
+    // Day-first and US order: the day would otherwise become a voucher number
+    // that always exists in the year.
+    '31.01.2024.pdf',
+    '31-01-2024.pdf',
+    '31_01_2024.pdf',
+    '31.1.2024.pdf',
+    '24.12.2024 julbord.pdf',
+    '03.04.2025 ICA.pdf',
+    '12.24.2024.pdf',
+    '01-31-2024.pdf',
+    '1-31-2024 receipt.pdf',
+    '31/1/2024.pdf',
   ])('refuses the date-named file %s rather than reading it as a number', (fileName) => {
     expect(parseVoucherRefFromFileName(fileName)).toBeNull()
   })

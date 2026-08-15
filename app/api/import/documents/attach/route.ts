@@ -12,6 +12,15 @@ ensureInitialized()
 const AttachFieldsSchema = z.object({
   journal_entry_id: z.string().uuid(),
   /**
+   * The fiscal year the user reviewed this batch against, echoed back from the
+   * plan. Required, and checked against the target's own year on every request
+   * including overrides: it is the only thing that makes the year enforceable
+   * server-side. Deriving it from the target instead would be tautological, an
+   * entry is by construction inside its own period, and that is precisely the
+   * hole that let a 2023 receipt land on a 2025 verifikat.
+   */
+  fiscal_period_id: z.string().uuid(),
+  /**
    * Set ONLY when the user resolved this file by hand because its filename
    * carries no usable reference. Skips the filename consistency check; company
    * ownership and the period lock are still enforced.
@@ -55,6 +64,7 @@ export const POST = withRouteContext(
 
     const fields = AttachFieldsSchema.safeParse({
       journal_entry_id: formData.get('journal_entry_id'),
+      fiscal_period_id: formData.get('fiscal_period_id'),
       override: formData.get('override') === 'true',
     })
     if (!fields.success) {
@@ -68,7 +78,11 @@ export const POST = withRouteContext(
         },
       })
     }
-    const { journal_entry_id: journalEntryId, override } = fields.data
+    const {
+      journal_entry_id: journalEntryId,
+      fiscal_period_id: fiscalPeriodId,
+      override,
+    } = fields.data
 
     const validationError = validateDocumentFile({ size: file.size, type: file.type })
     if (validationError) {
@@ -101,13 +115,22 @@ export const POST = withRouteContext(
       return errorResponseFromCode('DOC_LINK_ENTRY_NOT_FOUND', opLog, { requestId })
     }
 
-    // The automatic path must land where the preview said it would. A stale
-    // plan in the browser (the user re-imported SIE in another tab, say) would
-    // otherwise scatter underlag across the wrong verifikat, permanently.
-    //
-    // The fiscal year comes from the TARGET, not from the client: re-resolving
-    // inside the target's own year is the strictest reading of the request, and
-    // a caller cannot widen the check by naming a different year.
+    // The batch declared a fiscal year and the user reviewed the plan against
+    // it. The target must actually be in that year. Enforced FIRST and
+    // unconditionally, overrides included: a hand-resolved filename is a
+    // statement about which verifikat, never about which year, and this is the
+    // only check that makes the declared year mean anything on the server.
+    if (entry.fiscal_period_id !== fiscalPeriodId) {
+      opLog.warn('underlag attach refused: target sits in a different fiscal year', {
+        declaredFiscalPeriodId: fiscalPeriodId,
+        entryFiscalPeriodId: entry.fiscal_period_id,
+      })
+      return errorResponseFromCode('UNDERLAG_PERIOD_MISMATCH', opLog, { requestId })
+    }
+
+    // The automatic path must additionally land where the preview said it
+    // would. A stale plan in the browser (the user re-imported SIE in another
+    // tab, say) would otherwise scatter underlag across the wrong verifikat.
     if (!override) {
       if (entry.source_voucher_number == null) {
         // Not a SIE-migrated verifikat, so no filename can ever resolve to it.
@@ -119,7 +142,7 @@ export const POST = withRouteContext(
         companyId!,
         file.name,
         journalEntryId,
-        entry.fiscal_period_id as string,
+        fiscalPeriodId,
       )
       if (!accepted) {
         opLog.warn('underlag attach refused: filename does not resolve to the target')

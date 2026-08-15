@@ -2022,6 +2022,13 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_en:
       'The filename does not point at the selected verifikat. Reload the preview and try again.',
   },
+  UNDERLAG_PERIOD_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen tillhör ett annat räkenskapsår än det du valde för underlagen. Ladda om förhandsgranskningen och försök igen.',
+    message_en:
+      'The verifikat belongs to a different fiscal year than the one selected for these files. Reload the preview and try again.',
+  },
   UNDERLAG_ENTRY_NOT_MIGRATED: {
     httpStatus: 400,
     message_sv: 'Verifikationen kommer inte från en SIE-import och kan inte matchas mot filnamn.',

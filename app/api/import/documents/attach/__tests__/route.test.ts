@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { parseJsonResponse } from '@/tests/helpers'
 
-const PERIOD_OPEN = 'period-open'
+const PERIOD_OPEN = '44444444-4444-4444-8444-444444444444'
+const PERIOD_OTHER = '55555555-5555-4555-8555-555555555555'
 
 const PERIODS = [
   {
@@ -105,6 +106,8 @@ const emptyParams = { params: Promise.resolve({}) }
 function makeRequest(options: {
   fileName?: string
   journalEntryId?: string | null
+  /** The year the plan was built against, as the wizard echoes it back. */
+  declaredPeriodId?: string | null
   override?: boolean
   withFile?: boolean
   mimeType?: string
@@ -120,6 +123,9 @@ function makeRequest(options: {
   }
   if (options.journalEntryId !== null) {
     form.append('journal_entry_id', options.journalEntryId ?? TARGET_ID)
+  }
+  if (options.declaredPeriodId !== null) {
+    form.append('fiscal_period_id', options.declaredPeriodId ?? PERIOD_OPEN)
   }
   if (options.override) form.append('override', 'true')
 
@@ -186,21 +192,34 @@ describe('POST /api/import/documents/attach', () => {
     expect(uploadDocumentMock).not.toHaveBeenCalled()
   })
 
-  it('refuses a target in a different fiscal year than the ref resolves in', async () => {
-    // The re-resolution runs inside the TARGET's own year. A31 exists, but in
-    // another year, so the target cannot be what this filename names.
-    targetEntry = {
-      id: TARGET_ID,
-      fiscal_period_id: 'period-other',
-      source_voucher_series: 'A',
-      source_voucher_number: 31,
-    }
+  it('returns 400 when the declared fiscal year is missing or not a uuid', async () => {
+    expect((await POST(makeRequest({ declaredPeriodId: null }), emptyParams)).status).toBe(400)
+    expect((await POST(makeRequest({ declaredPeriodId: '2024' }), emptyParams)).status).toBe(400)
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+  })
 
-    const res = await POST(makeRequest({}), emptyParams)
+  it('refuses a target outside the fiscal year the batch declared', async () => {
+    // The user reviewed a plan for one year; this target lives in another.
+    // Nothing about the filename can make that acceptable.
+    const res = await POST(makeRequest({ declaredPeriodId: PERIOD_OTHER }), emptyParams)
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
 
     expect(status).toBe(409)
-    expect(body.error.code).toBe('UNDERLAG_REF_MISMATCH')
+    expect(body.error.code).toBe('UNDERLAG_PERIOD_MISMATCH')
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+  })
+
+  it('enforces the declared year even on a manual override', async () => {
+    // An override is a statement about WHICH verifikat, never about which
+    // year, so it must not widen the batch across fiscal years.
+    const res = await POST(
+      makeRequest({ declaredPeriodId: PERIOD_OTHER, override: true, fileName: 'kvitto.pdf' }),
+      emptyParams,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('UNDERLAG_PERIOD_MISMATCH')
     expect(uploadDocumentMock).not.toHaveBeenCalled()
   })
 
