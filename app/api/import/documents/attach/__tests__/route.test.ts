@@ -77,6 +77,12 @@ vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
+// Guideline mock: no real Supabase client may ever be constructed in a route
+// test, even though this suite injects its double through requireAuth.
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: () => Promise.resolve(supabase),
+}))
+
 vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
@@ -231,6 +237,20 @@ describe('POST /api/import/documents/attach', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('UNDERLAG_ENTRY_NOT_MIGRATED')
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses an override for a filename that resolves to a DIFFERENT target', async () => {
+    // The server honors override only for filenames it cannot place. A31.pdf
+    // resolves cleanly to another verifikat, so a lying client cannot use
+    // override to scatter it.
+    vouchers = [{ ...VOUCHER, id: OTHER_ID }]
+
+    const res = await POST(makeRequest({ override: true }), emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('UNDERLAG_REF_MISMATCH')
     expect(uploadDocumentMock).not.toHaveBeenCalled()
   })
 

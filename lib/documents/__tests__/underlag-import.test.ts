@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { buildUnderlagPlan, planAcceptsTarget } from '@/lib/documents/underlag-import'
+import { buildUnderlagPlan, planPermitsAttach } from '@/lib/documents/underlag-import'
 import type { FiscalPeriodRow, VoucherRow } from '@/lib/documents/voucher-ref-resolver'
 
 const PERIOD_OPEN = 'period-open'
@@ -283,11 +283,37 @@ describe('buildUnderlagPlan', () => {
   })
 })
 
-describe('planAcceptsTarget', () => {
+describe('planPermitsAttach', () => {
+  it('override permits an unresolvable filename onto any same-year target', async () => {
+    const supabase = makeSupabase({ vouchers: [] })
+
+    await expect(
+      planPermitsAttach(supabase, 'company-1', 'kvitto ica.pdf', 'je-1', PERIOD_OPEN, true),
+    ).resolves.toBe(true)
+    // A parsed ref with no candidate in the year is unresolvable too.
+    await expect(
+      planPermitsAttach(supabase, 'company-1', 'A99.pdf', 'je-1', PERIOD_OPEN, true),
+    ).resolves.toBe(true)
+  })
+
+  it('override does NOT permit a resolvable filename onto a different target', async () => {
+    // The hole this closes: a lying client could set override=true and scatter
+    // cleanly-named underlag across arbitrary same-year verifikat.
+    const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
+
+    await expect(
+      planPermitsAttach(supabase, 'company-1', 'A31.pdf', 'je-other', PERIOD_OPEN, true),
+    ).resolves.toBe(false)
+    // The target the filename actually points at stays permitted, of course.
+    await expect(
+      planPermitsAttach(supabase, 'company-1', 'A31.pdf', 'je-1', PERIOD_OPEN, true),
+    ).resolves.toBe(true)
+  })
+
   it('accepts the entry the filename resolves to', async () => {
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
 
-    await expect(planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-1', PERIOD_OPEN)).resolves.toBe(true)
+    await expect(planPermitsAttach(supabase, 'company-1', 'A31.pdf', 'je-1', PERIOD_OPEN, false)).resolves.toBe(true)
   })
 
   it('accepts any candidate of an ambiguous filename: the user picked one', async () => {
@@ -296,7 +322,7 @@ describe('planAcceptsTarget', () => {
     })
 
     await expect(
-      planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-b', PERIOD_OPEN),
+      planPermitsAttach(supabase, 'company-1', 'A31.pdf', 'je-b', PERIOD_OPEN, false),
     ).resolves.toBe(true)
   })
 
@@ -306,14 +332,14 @@ describe('planAcceptsTarget', () => {
     })
 
     await expect(
-      planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-other-year', PERIOD_OPEN),
+      planPermitsAttach(supabase, 'company-1', 'A31.pdf', 'je-other-year', PERIOD_OPEN, false),
     ).resolves.toBe(false)
   })
 
   it('refuses an entry the filename does not point at', async () => {
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
 
-    await expect(planAcceptsTarget(supabase, 'company-1', 'A31.pdf', 'je-other', PERIOD_OPEN)).resolves.toBe(
+    await expect(planPermitsAttach(supabase, 'company-1', 'A31.pdf', 'je-other', PERIOD_OPEN, false)).resolves.toBe(
       false,
     )
   })
@@ -321,7 +347,7 @@ describe('planAcceptsTarget', () => {
   it('refuses an unreadable filename outright', async () => {
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
 
-    await expect(planAcceptsTarget(supabase, 'company-1', 'kvitto.pdf', 'je-1', PERIOD_OPEN)).resolves.toBe(
+    await expect(planPermitsAttach(supabase, 'company-1', 'kvitto.pdf', 'je-1', PERIOD_OPEN, false)).resolves.toBe(
       false,
     )
   })

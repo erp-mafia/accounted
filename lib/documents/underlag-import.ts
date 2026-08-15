@@ -150,7 +150,7 @@ export async function buildUnderlagPlan(
   const numbers = parsed.map((p) => p.ref?.number).filter((n): n is number => n != null)
 
   const [vouchers, periodRows] = await Promise.all([
-    fetchVouchersForNumbers(supabase, companyId, numbers),
+    fetchVouchersForNumbers(supabase, companyId, numbers, fiscalPeriodId),
     fetchFiscalPeriods(supabase, companyId),
   ])
 
@@ -253,26 +253,34 @@ export async function buildUnderlagPlan(
 }
 
 /**
- * Whether `journalEntryId` is a target the plan for `fileName` would accept.
+ * Whether attaching `fileName` to `journalEntryId` is permitted by the plan.
  *
  * Guards the attach route against a stale or wrong client: the file the browser
- * uploads must land on the verifikat the preview proposed for that name. The
- * fiscal year is taken from the target entry itself rather than from the
- * client, so the check cannot be widened by asking for the wrong year.
+ * uploads must land on a verifikat the preview would propose for that name.
+ * `fiscalPeriodId` is the caller-supplied declared year, which the route has
+ * ALREADY asserted equal to the target entry's own period before calling this;
+ * this function only decides the filename-to-target question inside that year.
  *
- * A deliberate manual assignment (an unreadable filename the user resolved by
- * hand) bypasses this via the route's `override` flag, which is why company
- * ownership of the entry is verified separately and never inferred from here.
+ * `override` marks a deliberate manual assignment. It is honored ONLY when the
+ * filename is unresolvable in the declared year (no parse, or no candidate):
+ * a filename the resolver CAN place must land where it points, override or
+ * not, otherwise a lying client could scatter cleanly-named underlag across
+ * arbitrary same-year verifikat. The shipped UI only ever overrides rows whose
+ * filenames resolved to nothing, so this costs it no capability.
  */
-export async function planAcceptsTarget(
+export async function planPermitsAttach(
   supabase: SupabaseClient,
   companyId: string,
   fileName: string,
   journalEntryId: string,
   fiscalPeriodId: string,
+  override: boolean,
 ): Promise<boolean> {
   const plan = await buildUnderlagPlan(supabase, companyId, [fileName], fiscalPeriodId)
   const row = plan.rows[0]
   if (!row) return false
-  return row.candidates.some((candidate) => candidate.journal_entry_id === journalEntryId)
+  if (row.candidates.some((candidate) => candidate.journal_entry_id === journalEntryId)) {
+    return true
+  }
+  return override && row.candidates.length === 0
 }

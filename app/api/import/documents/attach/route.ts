@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
-import { planAcceptsTarget } from '@/lib/documents/underlag-import'
+import { planPermitsAttach } from '@/lib/documents/underlag-import'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
@@ -22,8 +22,10 @@ const AttachFieldsSchema = z.object({
   fiscal_period_id: z.string().uuid(),
   /**
    * Set ONLY when the user resolved this file by hand because its filename
-   * carries no usable reference. Skips the filename consistency check; company
-   * ownership and the period lock are still enforced.
+   * carries no usable reference. Honored server-side ONLY for filenames the
+   * resolver cannot place in the declared year: a resolvable filename must
+   * land where it points, override or not. Company ownership, the year
+   * assertion and the period lock are always enforced.
    *
    * Choosing among candidates the server itself proposed is NOT an override:
    * those targets pass the check already, and flagging them would switch the
@@ -129,26 +131,27 @@ export const POST = withRouteContext(
       return errorResponseFromCode('UNDERLAG_PERIOD_MISMATCH', opLog, { requestId })
     }
 
-    // The automatic path must additionally land where the preview said it
-    // would. A stale plan in the browser (the user re-imported SIE in another
-    // tab, say) would otherwise scatter underlag across the wrong verifikat.
-    if (!override) {
-      if (entry.source_voucher_number == null) {
-        // Not a SIE-migrated verifikat, so no filename can ever resolve to it.
-        // Say that plainly instead of reporting a mismatch the user can't fix.
-        return errorResponseFromCode('UNDERLAG_ENTRY_NOT_MIGRATED', opLog, { requestId })
-      }
-      const accepted = await planAcceptsTarget(
-        supabase,
-        companyId!,
-        file.name,
-        journalEntryId,
-        fiscalPeriodId,
-      )
-      if (!accepted) {
-        opLog.warn('underlag attach refused: filename does not resolve to the target')
-        return errorResponseFromCode('UNDERLAG_REF_MISMATCH', opLog, { requestId })
-      }
+    // The file must additionally land where the preview said it would. A stale
+    // plan in the browser (the user re-imported SIE in another tab, say) would
+    // otherwise scatter underlag across the wrong verifikat. The resolver runs
+    // on EVERY request: an override only relaxes it for filenames it cannot
+    // place at all, never for a filename that resolves elsewhere.
+    if (!override && entry.source_voucher_number == null) {
+      // Not a SIE-migrated verifikat, so no filename can ever resolve to it.
+      // Say that plainly instead of reporting a mismatch the user can't fix.
+      return errorResponseFromCode('UNDERLAG_ENTRY_NOT_MIGRATED', opLog, { requestId })
+    }
+    const permitted = await planPermitsAttach(
+      supabase,
+      companyId!,
+      file.name,
+      journalEntryId,
+      fiscalPeriodId,
+      override,
+    )
+    if (!permitted) {
+      opLog.warn('underlag attach refused: filename does not resolve to the target', { override })
+      return errorResponseFromCode('UNDERLAG_REF_MISMATCH', opLog, { requestId })
     }
 
     try {

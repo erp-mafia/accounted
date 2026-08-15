@@ -275,42 +275,47 @@ export default function UnderlagImportWizard() {
     setAttached(0)
     const results: AttachOutcome[] = []
 
-    // Sequential on purpose: hundreds of uploads in parallel would swamp the
-    // browser and the storage bucket, and a visible one-by-one count is what
-    // makes a long migration legible.
-    for (const row of selectedRows) {
-      const formData = new FormData()
-      formData.append('file', row.file)
-      formData.append('journal_entry_id', row.targetId as string)
-      // The year the plan was built against, echoed from the server. The route
-      // refuses any target outside it, overrides included.
-      formData.append('fiscal_period_id', plan.fiscal_period_id)
-      if (row.manual) formData.append('override', 'true')
+    try {
+      // Sequential on purpose: hundreds of uploads in parallel would swamp the
+      // browser and the storage bucket, and a visible one-by-one count is what
+      // makes a long migration legible.
+      for (const row of selectedRows) {
+        const formData = new FormData()
+        formData.append('file', row.file)
+        formData.append('journal_entry_id', row.targetId as string)
+        // The year the plan was built against, echoed from the server. The
+        // route refuses any target outside it, overrides included.
+        formData.append('fiscal_period_id', plan.fiscal_period_id)
+        if (row.manual) formData.append('override', 'true')
 
-      try {
-        const res = await fetch('/api/import/documents/attach', {
-          method: 'POST',
-          body: formData,
-        })
-        if (!res.ok) {
-          const data = await res.json().catch(() => null)
-          results.push({
-            file_name: row.file_name,
-            ok: false,
-            message: getErrorMessage(data, { statusCode: res.status }),
+        try {
+          const res = await fetch('/api/import/documents/attach', {
+            method: 'POST',
+            body: formData,
           })
-        } else {
-          results.push({ file_name: row.file_name, ok: true })
+          if (!res.ok) {
+            const data = await res.json().catch(() => null)
+            results.push({
+              file_name: row.file_name,
+              ok: false,
+              message: getErrorMessage(data, { statusCode: res.status }),
+            })
+          } else {
+            results.push({ file_name: row.file_name, ok: true })
+          }
+        } catch (err) {
+          results.push({ file_name: row.file_name, ok: false, message: getErrorMessage(err) })
         }
-      } catch (err) {
-        results.push({ file_name: row.file_name, ok: false, message: getErrorMessage(err) })
-      }
 
-      setAttached((n) => n + 1)
+        setAttached((n) => n + 1)
+      }
+    } finally {
+      // Whatever happens above, the wizard must not stay stuck "loading":
+      // that state also freezes the year picker.
+      setIsLoading(false)
     }
 
     setOutcomes(results)
-    setIsLoading(false)
     setStep('result')
 
     const failed = results.filter((r) => !r.ok).length

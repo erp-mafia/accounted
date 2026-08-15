@@ -106,15 +106,19 @@ export function buildVoucherIndex(vouchers: VoucherRow[]): VoucherIndex {
   const byNumber = new Map<number, VoucherRow[]>()
   const ambiguousPeriodKeys = new Set<string>()
 
+  // Get-or-create + push, never copy: the provider sweep indexes every
+  // migrated entry in the company, and per-row array copies turn that O(n²).
+  const appendTo = <K,>(map: Map<K, VoucherRow[]>, key: K, row: VoucherRow) => {
+    const list = map.get(key)
+    if (list) list.push(row)
+    else map.set(key, [row])
+  }
+
   for (const v of vouchers) {
     if (v.source_voucher_series == null || v.source_voucher_number == null) continue
 
-    const refKey = sourceRefKey(v.source_voucher_series, v.source_voucher_number)
-    bySourceRef.set(refKey, [...(bySourceRef.get(refKey) ?? []), v])
-    byNumber.set(v.source_voucher_number, [
-      ...(byNumber.get(v.source_voucher_number) ?? []),
-      v,
-    ])
+    appendTo(bySourceRef, sourceRefKey(v.source_voucher_series, v.source_voucher_number), v)
+    appendTo(byNumber, v.source_voucher_number, v)
 
     const key = voucherKey(v.fiscal_period_id, v.source_voucher_series, v.source_voucher_number)
     if (byPeriodKey.has(key)) {
@@ -212,11 +216,16 @@ const REF_QUERY_CHUNK = 200
  *
  * Carries the display columns too, because this is the read behind a plan the
  * user has to be able to read before approving it.
+ *
+ * `fiscalPeriodId` narrows the read at the DB. It is an OPTIMIZATION, not the
+ * enforcement: buildUnderlagPlan re-filters the rows in memory before indexing,
+ * and that in-memory filter is the line the year guarantee rests on.
  */
 export async function fetchVouchersForNumbers(
   supabase: SupabaseClient,
   companyId: string,
   numbers: number[],
+  fiscalPeriodId?: string,
 ): Promise<VoucherRow[]> {
   const unique = [...new Set(numbers)]
   if (unique.length === 0) return []
@@ -224,17 +233,17 @@ export async function fetchVouchersForNumbers(
   const rows: VoucherRow[] = []
   for (let i = 0; i < unique.length; i += REF_QUERY_CHUNK) {
     const chunk = unique.slice(i, i + REF_QUERY_CHUNK)
-    const chunkRows = await fetchAllRows<VoucherRow>(({ from, to }) =>
-      supabase
+    const chunkRows = await fetchAllRows<VoucherRow>(({ from, to }) => {
+      let query = supabase
         .from('journal_entries')
         .select(
           'id, fiscal_period_id, entry_date, description, voucher_series, voucher_number, source_voucher_series, source_voucher_number',
         )
         .eq('company_id', companyId)
         .in('source_voucher_number', chunk)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
+      if (fiscalPeriodId) query = query.eq('fiscal_period_id', fiscalPeriodId)
+      return query.order('id', { ascending: true }).range(from, to)
+    })
     rows.push(...chunkRows)
   }
   return rows

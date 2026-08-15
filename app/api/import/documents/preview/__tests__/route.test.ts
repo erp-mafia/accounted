@@ -66,6 +66,12 @@ vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
+// Guideline mock: no real Supabase client may ever be constructed in a route
+// test, even though this suite injects its double through requireAuth.
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: () => Promise.resolve(supabase),
+}))
+
 vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),

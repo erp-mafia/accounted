@@ -31,13 +31,13 @@ async function insertPostedEntry(params: {
   return entryId
 }
 
-function insertDocument(params: {
+async function insertDocument(params: {
   userId: string
   companyId: string
   journalEntryId: string | null
-}): Promise<unknown> {
+}): Promise<string> {
   const id = randomUUID()
-  return getPool().query(
+  await getPool().query(
     `INSERT INTO public.document_attachments
        (id, user_id, company_id, storage_path, file_name, file_size_bytes,
         mime_type, sha256_hash, journal_entry_id)
@@ -54,6 +54,7 @@ function insertDocument(params: {
       params.journalEntryId,
     ],
   )
+  return id
 }
 
 describe('underlag-attach-period-lock.pg: attaching underlag across a period lock', () => {
@@ -116,23 +117,7 @@ describe('underlag-attach-period-lock.pg: attaching underlag across a period loc
     const entryId = await insertPostedEntry({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
     })
-    const docId = randomUUID()
-    await getPool().query(
-      `INSERT INTO public.document_attachments
-         (id, user_id, company_id, storage_path, file_name, file_size_bytes,
-          mime_type, sha256_hash, journal_entry_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)`,
-      [
-        docId,
-        userId,
-        companyId,
-        `documents/${userId}/${docId}.pdf`,
-        'A31_underlag.pdf',
-        1024,
-        'application/pdf',
-        randomUUID().replace(/-/g, '').padEnd(64, '0'),
-      ],
-    )
+    const docId = await insertDocument({ userId, companyId, journalEntryId: null })
     await getPool().query(`UPDATE public.fiscal_periods SET locked_at = now() WHERE id = $1`, [
       fiscalPeriodId,
     ])
