@@ -250,7 +250,20 @@ function BankHistoryRow({
   // dead end.
   const { canWrite } = useCanWrite()
   const isIncome = transaction.amount > 0
-  const isBooked = !!transaction.journal_entry_id
+  // A row coupled to several verifikat leaves journal_entry_id NULL on purpose
+  // (no single entry is "the" one), so the scalar alone is not a booked-flag:
+  // such a row rendered as "Ej bokford" with a Bokfor button that the server
+  // would reject as already anchored. `undefined` links mean the query did not
+  // ask for the embed, which is "unknown", not "none": the scalar still decides
+  // there, exactly as before.
+  const voucherLinks = transaction.transaction_voucher_links ?? []
+  const linkedVoucherIds = voucherLinks.map((l) => l.journal_entry_id)
+  const isBooked = !!transaction.journal_entry_id || linkedVoucherIds.length > 0
+  // Which single verifikat, if any, this row can honestly link to. With several
+  // there is no such entry, and linking to an arbitrary one would state
+  // something untrue, so the row reports the count instead.
+  const soleVoucherId =
+    transaction.journal_entry_id ?? (linkedVoucherIds.length === 1 ? linkedVoucherIds[0] : null)
   // Only user-created rows are deletable; imported (bank sync / CSV) rows are
   // ignore-only. Mirrors the server guard in DELETE /api/transactions/[id].
   const canDelete = !isBooked && !isImportedTransaction(transaction)
@@ -343,12 +356,15 @@ function BankHistoryRow({
               <span className="text-muted-foreground">
                 {isPrivate ? t('private_badge') : t('posted')}
               </span>
-              <Link
-                href={`/bookkeeping/${transaction.journal_entry_id}`}
-                className={QUIET_LINK_CLASS}
-              >
-                {t('view_voucher_short')}
-              </Link>
+              {soleVoucherId ? (
+                <Link href={`/bookkeeping/${soleVoucherId}`} className={QUIET_LINK_CLASS}>
+                  {t('view_voucher_short')}
+                </Link>
+              ) : (
+                <span className="text-muted-foreground">
+                  {t('voucher_count', { count: linkedVoucherIds.length })}
+                </span>
+              )}
             </>
           ) : isPrivate ? (
             <span className="text-muted-foreground">{t('private_badge')}</span>

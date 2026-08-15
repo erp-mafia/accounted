@@ -10,11 +10,26 @@ export interface PotentialVoucher {
   description: string | null
 }
 
+/** One verifikat a bank row is coupled to, from transaction_voucher_links. */
+export interface TransactionVoucherLink {
+  journal_entry_id: string
+}
+
 // Shared transaction type with potential invoice data
 export interface TransactionWithInvoice extends Transaction {
   potential_invoice?: Invoice & { customer?: Customer }
   potential_supplier_invoice?: SupplierInvoice
   potential_voucher?: PotentialVoucher
+  /**
+   * Verifikat coupled through transaction_voucher_links. Present only where the
+   * query asked for the embed (the history window); undefined elsewhere, which
+   * readers must treat as "unknown", not as "none".
+   *
+   * A row split across several verifikat leaves `journal_entry_id` NULL on
+   * purpose, so `!!transaction.journal_entry_id` is not a booked-flag on its
+   * own: see isRowBooked in TransactionHistoryList.
+   */
+  transaction_voucher_links?: TransactionVoucherLink[] | null
 }
 
 // Page view modes. 'review' is the migrator surface: rows whose sweep

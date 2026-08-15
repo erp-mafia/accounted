@@ -3381,6 +3381,7 @@
     "link": "Koppla",
     "match": "Matcha",
     "view_voucher_short": "Visa verifikat",
+    "voucher_count": "{count} verifikationer",
     "th_date": "Datum",
     "th_description": "Beskrivning",
     "th_amount": "Belopp",

@@ -3381,6 +3381,7 @@
     "link": "Link",
     "match": "Match",
     "view_voucher_short": "View voucher",
+    "voucher_count": "{count} journal entries",
     "th_date": "Date",
     "th_description": "Description",
     "th_amount": "Amount",

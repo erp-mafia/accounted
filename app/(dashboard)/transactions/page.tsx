@@ -921,9 +921,14 @@ export default function TransactionsPage() {
       // pending affarshandelser to be booked promptly, so every pending row
       // must stay in state regardless of the filter. The inbox applies the
       // period client-side and the footer surfaces what falls outside it.
+      // The voucher-link embed rides along on the history window so a row
+      // coupled to several verifikat renders as bokford there instead of
+      // offering a Bokfor button the server would reject. The inbox queries
+      // below need no embed: they select on is_business, which the coupling
+      // sets, so such a row already leaves the worklist.
       let windowQuery = supabase
         .from('transactions')
-        .select('*')
+        .select('*, transaction_voucher_links(journal_entry_id)')
         .eq('company_id', companyId)
       if (periodBounds) {
         windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
