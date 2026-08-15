@@ -49,9 +49,6 @@ type Step = 'select' | 'review' | 'result'
 
 const ACCEPTED_TYPES = 'application/pdf,image/jpeg,image/png,image/webp'
 
-/** Page-specific so the batch year never steers the shared report scope. */
-const FY_STORAGE_PREFIX = 'underlag-import-fy:'
-
 /** Message keys per status, spelled out so next-intl keeps checking them. */
 const STATUS_KEY: Record<UnderlagPlanStatus, string> = {
   matched: 'underlag_status_matched',
@@ -327,9 +324,11 @@ export default function UnderlagImportWizard() {
     })
   }, [confirm, plan, planPeriod, selectedRows, t, toast])
 
-  // The fiscal year deliberately survives a reset: a migration is several
-  // batches from the same year's export, and re-picking it every round is
-  // where a wrong year would creep in.
+  // The fiscal year survives a reset but never a session: within one sitting
+  // a migration is several batches from the same year's export, so in-state
+  // carry-over is the convenience. Cross-session persistence is the hazard
+  // (last-used is the wrong default for a user moving year by year), which is
+  // why the picker neither restores nor writes localStorage on this surface.
   const reset = () => {
     setStep('select')
     setPlan(null)
@@ -395,10 +394,12 @@ export default function UnderlagImportWizard() {
                 }}
                 includeAllOption={false}
                 // The year is the user's assertion, so it must be the user who
-                // makes it. Defaulting to the newest year would let a 2023
-                // batch resolve against 2026 with nobody having claimed it.
+                // makes it, EVERY session. Defaulting to the newest year lets
+                // a 2023 batch resolve against 2026; restoring last-used is
+                // aimed even worse, since a multi-year migration by definition
+                // moves to a different year each round. Within one sitting,
+                // reset() carries the choice across batches; nothing else does.
                 requireExplicitChoice
-                storageKeyPrefix={FY_STORAGE_PREFIX}
                 className={isLoading ? 'pointer-events-none opacity-60' : undefined}
               />
               <p className="text-[12.5px] leading-5 text-muted-foreground">

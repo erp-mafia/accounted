@@ -191,6 +191,23 @@ describe('buildUnderlagPlan', () => {
     expect(plan.fiscal_period_id).toBe(PERIOD_OPEN)
   })
 
+  it('never auto-selects a collision-list ref, even on a clean single hit', async () => {
+    // "A4.pdf" is a scanner's paper size far more often than verifikat A4,
+    // and verifikat A4 exists in every migrated ledger, so the collision is
+    // guaranteed. The parse survives, the pre-tick does not.
+    const supabase = makeSupabase({
+      vouchers: [makeVoucher({ id: 'je-a4', source_voucher_number: 4, voucher_number: 4 })],
+    })
+
+    const plan = await buildUnderlagPlan(supabase, 'company-1', ['A4 scan.pdf'], PERIOD_OPEN)
+
+    expect(plan.rows[0]).toMatchObject({
+      status: 'needs_confirmation',
+      parsed_ref: { series: 'A', number: 4 },
+      journal_entry_id: 'je-a4',
+    })
+  })
+
   it('never auto-selects a series-less filename, even on a single hit', async () => {
     const supabase = makeSupabase({ vouchers: [makeVoucher({ id: 'je-1' })] })
 

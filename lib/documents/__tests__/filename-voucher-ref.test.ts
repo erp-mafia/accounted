@@ -33,6 +33,51 @@ describe('parseVoucherRefFromFileName', () => {
   })
 
   it.each([
+    // Paper sizes: every scanner emits an A4.pdf.
+    'A4.pdf',
+    'A4 scan.pdf',
+    'a4.pdf',
+    'A3 ritning.pdf',
+    // A batch scanner's zero-padded counter normalizes onto the same refs.
+    'A0004.pdf',
+    'A001.pdf',
+    // Skatteverket blanketter and quarters.
+    'K10.pdf',
+    'K10 blankett 2024.pdf',
+    'K4.pdf',
+    'N9.pdf',
+    'Q1 2024.pdf',
+  ])('parses %s but never pre-selects it: more often a document name than a ref', (fileName) => {
+    const parsed = parseVoucherRefFromFileName(fileName)
+    expect(parsed).not.toBeNull()
+    expect(parsed?.autoSelectable).toBe(false)
+  })
+
+  it.each(['IMG_0031.jpg', 'DSC00123.JPG', 'DOC001.pdf', 'SCN0007.pdf', 'Del 1 av 3.pdf'])(
+    'parses %s but never pre-selects a three-letter series: cameras, not ledgers',
+    (fileName) => {
+      const parsed = parseVoucherRefFromFileName(fileName)
+      expect(parsed).not.toBeNull()
+      expect(parsed?.autoSelectable).toBe(false)
+    },
+  )
+
+  it.each([
+    ['A7.pdf', 'A', 7],
+    ['A31.pdf', 'A', 31],
+    ['K1.pdf', 'K', 1],
+    ['K14.pdf', 'K', 14],
+    ['LB2.pdf', 'LB', 2],
+  ])('keeps %s auto-selectable: just outside the collision list', (fileName, series, number) => {
+    expect(parseVoucherRefFromFileName(fileName)).toEqual({
+      series,
+      number,
+      pattern: 'series_number',
+      autoSelectable: true,
+    })
+  })
+
+  it.each([
     'underlag/2024/A31_kvitto.pdf',
     'underlag\\A31.pdf',
     // The manual-reference box feeds arbitrary typed text through this same

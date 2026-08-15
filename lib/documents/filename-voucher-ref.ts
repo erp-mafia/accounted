@@ -24,9 +24,14 @@ export interface ParsedFileNameRef {
   number: number
   pattern: VoucherRefPattern
   /**
-   * Whether this parse may be pre-selected in a bulk plan. Series-less parses
-   * are never auto-selectable: `31.pdf` can point at any series, so a human
-   * confirms even when the lookup happens to return a single candidate.
+   * Whether this parse may be pre-selected in a bulk plan. Three classes are
+   * never auto-selectable, even on a single-candidate hit:
+   *   - series-less parses (`31.pdf` can point at any series);
+   *   - refs on the collision list (`A4.pdf` is far more often a scanner's
+   *     paper size than verifikat A4, `K10.pdf` a blankett);
+   *   - three-letter series (`IMG_0031.jpg`: real SIE series are 1-2 chars,
+   *     three letters is a camera or scanner prefix).
+   * They all still parse and resolve; a human confirms with one click.
    */
   autoSelectable: boolean
 }
@@ -91,6 +96,30 @@ const DATE_PREFIX_RE = new RegExp(
 const NOT_A_SERIES = new Set(['VER'])
 
 /**
+ * Refs that are, in the wild, far more often document names than voucher
+ * references: A0-A6 are paper sizes (every scanner emits an `A4.pdf`),
+ * K2-K13 / N1-N9 / T1-T2 are Skatteverket blanketter, Q1-Q4 are quarters.
+ * Verifikat A4 genuinely exists in every migrated ledger, which is exactly
+ * why these must not be pre-selected: the review table cannot tell a scanned
+ * "A4.pdf" from the real receipt for voucher A4, and a wrong link is
+ * permanent. Demoted, not refused: a genuine A4 costs one click.
+ *
+ * The inconsistency this fixes: `31.pdf` already required confirmation while
+ * `A4 scan.pdf`, which carries LESS voucher evidence in a single-series
+ * company, was pre-ticked.
+ */
+const COLLISION_REFS = new Set([
+  'A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6',
+  'K2', 'K3', 'K4', 'K5', 'K6', 'K7', 'K8', 'K9', 'K10', 'K11', 'K12', 'K13',
+  'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9',
+  'T1', 'T2',
+  'Q1', 'Q2', 'Q3', 'Q4',
+])
+
+/** Real SIE series are 1-2 characters; three letters is IMG/DSC/DOC/SCN. */
+const MAX_AUTO_SERIES_LENGTH = 2
+
+/**
  * Any four-digit run that reads as a calendar year. Used to refuse a
  * SERIES-LESS parse: `2024` alone is overwhelmingly a year, not verifikat 2024.
  */
@@ -125,7 +154,11 @@ export function parseVoucherRefFromFileName(fileName: string): ParsedFileNameRef
     const series = seriesMatch[1].toUpperCase()
     const number = Number(seriesMatch[2])
     if (!NOT_A_SERIES.has(series) && Number.isInteger(number) && number > 0) {
-      return { series, number, pattern: 'series_number', autoSelectable: true }
+      // The check runs on the NORMALIZED ref: a scanner's `A0004.pdf` parses
+      // to number 4 and must be caught by the same A4 entry.
+      const autoSelectable =
+        series.length <= MAX_AUTO_SERIES_LENGTH && !COLLISION_REFS.has(`${series}${number}`)
+      return { series, number, pattern: 'series_number', autoSelectable }
     }
   }
 

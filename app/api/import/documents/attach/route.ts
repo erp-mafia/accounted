@@ -39,6 +39,7 @@ const AttachFieldsSchema = z.object({
  * multipart/form-data:
  *   file:              the underlag
  *   journal_entry_id:  the target the user approved in the preview
+ *   fiscal_period_id:  the year the plan was built against (echoed back)
  *   override:          'true' when the target was chosen by hand
  *
  * One file per request on purpose: a folder migration is hundreds of files, the
