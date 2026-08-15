@@ -2029,6 +2029,11 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_en:
       'The verifikat belongs to a different fiscal year than the one selected for these files. Reload the preview and try again.',
   },
+  UNDERLAG_ENTRY_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen är inte bokförd, så underlag kan inte kopplas till den ännu.',
+    message_en: 'The journal entry is not posted, so documents cannot be attached to it yet.',
+  },
   UNDERLAG_ENTRY_NOT_MIGRATED: {
     httpStatus: 400,
     message_sv: 'Verifikationen kommer inte från en SIE-import och kan inte matchas mot filnamn.',

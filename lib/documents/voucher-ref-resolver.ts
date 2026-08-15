@@ -182,6 +182,17 @@ export function candidatesForNumber(index: VoucherIndex, number: number): Vouche
 // path that writes irreversible räkenskapsinformation links.
 
 /**
+ * Statuses a resolved verifikat may have to receive underlag. Posted is the
+ * normal case; reversed stays in, because a storno'd original remains
+ * räkenskapsinformation and its underlag belongs on it. Draft and cancelled
+ * are excluded: the SIE import RPC posts every entry inside its own
+ * transaction, so a draft with a source ref should be unobservable, but the
+ * link is irreversible, and an invariant that lives in another file is not an
+ * invariant this module may lean on.
+ */
+const ATTACHABLE_STATUSES = ['posted', 'reversed']
+
+/**
  * All entries that carry a source voucher ref, resolution columns only.
  *
  * A stable `.order('id')` is required: fetchAllRows pages with `.range()`, and
@@ -199,6 +210,7 @@ export async function fetchSourceRefVouchers(
       .select('id, fiscal_period_id, entry_date, source_voucher_series, source_voucher_number')
       .eq('company_id', companyId)
       .not('source_voucher_number', 'is', null)
+      .in('status', ATTACHABLE_STATUSES)
       .order('id', { ascending: true })
       .range(from, to),
   )
@@ -241,6 +253,7 @@ export async function fetchVouchersForNumbers(
         )
         .eq('company_id', companyId)
         .in('source_voucher_number', chunk)
+        .in('status', ATTACHABLE_STATUSES)
       if (fiscalPeriodId) query = query.eq('fiscal_period_id', fiscalPeriodId)
       return query.order('id', { ascending: true }).range(from, to)
     })

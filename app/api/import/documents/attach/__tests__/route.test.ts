@@ -144,7 +144,7 @@ function makeRequest(options: {
 describe('POST /api/import/documents/attach', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    targetEntry = { id: TARGET_ID, fiscal_period_id: PERIOD_OPEN, source_voucher_series: 'A', source_voucher_number: 31 }
+    targetEntry = { id: TARGET_ID, fiscal_period_id: PERIOD_OPEN, status: 'posted', source_voucher_series: 'A', source_voucher_number: 31 }
     vouchers = [VOUCHER]
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
     getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
@@ -230,7 +230,7 @@ describe('POST /api/import/documents/attach', () => {
   })
 
   it('explains a target that never came from a SIE import', async () => {
-    targetEntry = { id: TARGET_ID, fiscal_period_id: PERIOD_OPEN, source_voucher_series: null, source_voucher_number: null }
+    targetEntry = { id: TARGET_ID, fiscal_period_id: PERIOD_OPEN, status: 'posted', source_voucher_series: null, source_voucher_number: null }
 
     const res = await POST(makeRequest({}), emptyParams)
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
@@ -238,6 +238,35 @@ describe('POST /api/import/documents/attach', () => {
     expect(status).toBe(400)
     expect(body.error.code).toBe('UNDERLAG_ENTRY_NOT_MIGRATED')
     expect(uploadDocumentMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a target that is not posted, overrides included', async () => {
+    // The SIE import posts entries inside its own transaction, so a draft with
+    // a source ref should be unreachable. This route does not lean on an
+    // invariant enforced in another file: underlag references a verifikation
+    // (BFL 5 kap 6-7 §), so the target must BE one.
+    targetEntry = { ...targetEntry!, status: 'draft' }
+
+    const auto = await POST(makeRequest({}), emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(auto)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('UNDERLAG_ENTRY_NOT_POSTED')
+
+    const overridden = await POST(
+      makeRequest({ fileName: 'kvitto ica.pdf', override: true }),
+      emptyParams,
+    )
+    expect(overridden.status).toBe(409)
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
+  })
+
+  it('accepts a REVERSED target: a storno original keeps its underlag', async () => {
+    targetEntry = { ...targetEntry!, status: 'reversed' }
+
+    const res = await POST(makeRequest({}), emptyParams)
+
+    expect(res.status).toBe(200)
+    expect(uploadDocumentMock).toHaveBeenCalledOnce()
   })
 
   it('refuses an override for a filename that resolves to a DIFFERENT target', async () => {
@@ -255,7 +284,7 @@ describe('POST /api/import/documents/attach', () => {
   })
 
   it('allows an explicit manual assignment to skip the filename check', async () => {
-    targetEntry = { id: TARGET_ID, fiscal_period_id: PERIOD_OPEN, source_voucher_series: null, source_voucher_number: null }
+    targetEntry = { id: TARGET_ID, fiscal_period_id: PERIOD_OPEN, status: 'posted', source_voucher_series: null, source_voucher_number: null }
 
     const res = await POST(
       makeRequest({ fileName: 'kvitto ica.pdf', override: true }),

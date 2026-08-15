@@ -105,7 +105,7 @@ export const POST = withRouteContext(
     // company an entry belongs to.
     const { data: entry, error: entryError } = await supabase
       .from('journal_entries')
-      .select('id, fiscal_period_id, source_voucher_series, source_voucher_number')
+      .select('id, fiscal_period_id, status, source_voucher_series, source_voucher_number')
       .eq('id', journalEntryId)
       .eq('company_id', companyId!)
       .maybeSingle()
@@ -116,6 +116,18 @@ export const POST = withRouteContext(
     }
     if (!entry) {
       return errorResponseFromCode('DOC_LINK_ENTRY_NOT_FOUND', opLog, { requestId })
+    }
+
+    // Underlag references a verifikation (BFL 5 kap 6-7 §), so the target must
+    // BE one: posted, or reversed (a storno'd original keeps its underlag). The
+    // SIE import posts entries inside its own transaction, so a draft here
+    // should be unreachable, but this route writes irreversible links and does
+    // not lean on an invariant enforced in another file.
+    if (entry.status !== 'posted' && entry.status !== 'reversed') {
+      opLog.warn('underlag attach refused: target entry is not posted', {
+        entryStatus: entry.status,
+      })
+      return errorResponseFromCode('UNDERLAG_ENTRY_NOT_POSTED', opLog, { requestId })
     }
 
     // The batch declared a fiscal year and the user reviewed the plan against
