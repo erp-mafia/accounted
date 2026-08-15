@@ -114,6 +114,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
   const [activeFlowId, setActiveFlowId] = useState<string | null>(null)
   const [hintMessage, setHintMessage] = useState<string>('')
   const [errorMessage, setErrorMessage] = useState<string>('')
+  const [launchedApp, setLaunchedApp] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const lastStartRef = useRef<number>(0)
@@ -137,12 +138,6 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
    * show the button) versus this tab's own order expiring (say so).
    */
   const resumedRef = useRef(false)
-  /**
-   * True only when this tab actually deep-linked into the BankID app. A
-   * resumed tab never did, so it must not claim to be opening anything.
-   */
-  const launchedRef = useRef(false)
-
   const cleanup = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current)
@@ -384,6 +379,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
     cleanup()
     resumedRef.current = false
     setActiveFlowId(null)
+    setLaunchedApp(false)
     setStatus('scanning')
     setHintMessage('Starta BankID-appen')
     setErrorMessage('')
@@ -435,14 +431,13 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
       const newSession: BankIdSession = data
       setSession(newSession)
       setActiveFlowId(newSession.flowId)
-      launchedRef.current = false
 
       // On mobile, open the BankID app on this device. Nothing needs saving
       // first: /start already set the flow cookie, and a cookie is shared by
       // every tab of the origin, so whichever tab BankID returns the user to
       // (this one reloaded, or a brand new one) can resume from it.
       if (isMobile()) {
-        launchedRef.current = true
+        setLaunchedApp(true)
         launchBankIdApp(newSession.autoStartToken)
       }
 
@@ -709,7 +704,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
           {/* A resumed tab never launched anything, so saying "opening the
               BankID app" would be a lie followed by silence. */}
           <p className="text-sm text-muted-foreground">
-            {launchedRef.current
+            {launchedApp
               ? 'Öppnar BankID-appen...'
               : t('bankid_finish_in_app')}
           </p>

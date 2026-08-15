@@ -177,7 +177,6 @@ function RegisterPageContent() {
   const handleBankIdSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setFormError(null)
-    setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
     const emailValue = (formData.get('bankid_email') as string) || bankIdEmail
@@ -186,6 +185,8 @@ function RegisterPageContent() {
       setFormError({ kind: 'bankid', message: t('bankid_failed_description') })
       return
     }
+
+    setIsLoading(true)
 
     try {
       // Only the e-mail travels: the session and the fact that this is a

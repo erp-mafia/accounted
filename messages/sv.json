@@ -320,7 +320,7 @@
     "bankid_resume_title": "BankID-identifiering pågår",
     "bankid_resume_description": "Den här webbläsaren har en påbörjad BankID-identifiering. Fortsätt bara om det är du som startade den.",
     "bankid_resume_continue": "Fortsätt",
-    "bankid_resume_hint": "Slutför BankID-verifieringen...",
+    "bankid_resume_hint": "Slutför BankID-identifieringen...",
     "bankid_resume_restart": "Starta om",
     "terms_prefix": "Genom att logga in godkänner du våra",
     "terms_link": "villkor",
