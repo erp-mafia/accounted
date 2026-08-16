@@ -609,6 +609,7 @@
   "pending": {
     "title": "Granskning",
     "subtitle": "Operationer som väntar på godkännande",
+    "refreshing": "Uppdaterar…",
     "tab_pending": "Väntar",
     "tab_committed": "Godkända",
     "tab_rejected": "Avvisade",
@@ -849,6 +850,8 @@
   },
   "supplier_invoices": {
     "title": "Leverantörsfakturor",
+    "load_failed_title": "Kunde inte ladda leverantörsfakturor",
+    "load_failed_description": "Kontrollera din anslutning och försök igen.",
     "register_invoice": "Registrera faktura",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
     "tab_all": "Alla",
@@ -5433,6 +5436,7 @@
     "dialog_duplicate_cancel": "Avbryt",
     "load_failed_title": "Kunde inte ladda transaktioner",
     "load_failed_description": "Kontrollera din anslutning och försök igen.",
+    "refreshing": "Uppdaterar…",
     "undone_title": "Ångrad",
     "undone_description": "Kategorisering har ångrats",
     "undo_failed_title": "Kunde inte ångra",

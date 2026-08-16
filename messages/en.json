@@ -609,6 +609,7 @@
   "pending": {
     "title": "Review",
     "subtitle": "Operations waiting for approval",
+    "refreshing": "Refreshing…",
     "tab_pending": "Waiting",
     "tab_committed": "Approved",
     "tab_rejected": "Rejected",
@@ -849,6 +850,8 @@
   },
   "supplier_invoices": {
     "title": "Supplier invoices",
+    "load_failed_title": "Could not load supplier invoices",
+    "load_failed_description": "Check your connection and try again.",
     "register_invoice": "Register invoice",
     "viewer_disabled_tooltip": "You only have viewer access in this company",
     "tab_all": "All",
@@ -5433,6 +5436,7 @@
     "dialog_duplicate_cancel": "Cancel",
     "load_failed_title": "Could not load transactions",
     "load_failed_description": "Check your connection and try again.",
+    "refreshing": "Refreshing…",
     "undone_title": "Undone",
     "undone_description": "Categorization was undone",
     "undo_failed_title": "Could not undo",

@@ -191,7 +191,20 @@ const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
 // Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
 const ALL_PAGE_SIZE = 100000
 
-export default function JournalEntryList({ pristineSlot }: { pristineSlot?: ReactNode } = {}) {
+export default function JournalEntryList({
+  pristineSlot,
+  refreshToken,
+}: {
+  pristineSlot?: ReactNode
+  /**
+   * Parent-driven refresh: bump to re-fetch IN PLACE (list stays mounted,
+   * dims at opacity-60). Replaces the old key={refreshKey} remount on
+   * /bookkeeping, which reset hasLoaded and blanked the whole journal to a
+   * spinner after every created verifikat, destroying expanded rows,
+   * selection, pagination and scroll position.
+   */
+  refreshToken?: number
+} = {}) {
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -616,6 +629,18 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
   }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, sortHydrated, periodHydrated, pageSizeHydrated])
+
+  // Parent-driven in-place refresh (see the refreshToken prop). Skips the
+  // mount value: the main effect above owns the initial fetch, and a token
+  // bump before hydration is covered by that same initial fetch.
+  const lastRefreshTokenRef = useRef(refreshToken)
+  useEffect(() => {
+    if (refreshToken === undefined || refreshToken === lastRefreshTokenRef.current) return
+    lastRefreshTokenRef.current = refreshToken
+    if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
+    fetchEntries()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken, sortHydrated, periodHydrated, pageSizeHydrated])
 
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))

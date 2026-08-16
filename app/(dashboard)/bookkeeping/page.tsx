@@ -265,8 +265,11 @@ export default function BookkeepingPage() {
         }
       />
 
+      {/* refreshToken, NOT key: a created verifikat refreshes the list in
+          place (dim + refetch) instead of remounting it into a spinner and
+          losing expansion/selection/scroll. */}
       <JournalEntryList
-        key={refreshKey}
+        refreshToken={refreshKey}
         pristineSlot={
           <div className="animate-fade-in space-y-4">
             <StartCard
