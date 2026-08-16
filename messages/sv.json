@@ -6772,6 +6772,8 @@
     "detail_f_skatt_verified": "F-skatt verifierad: {date}",
     "detail_vacation_none_hint": "Ingen avsättning till 2920 bokas. Använd om semester ingår i månadslönen — vanligt för ägare som är enda anställd.",
     "detail_save_changes": "Spara ändringar",
+    "detail_self_saving_heading": "Sparas separat",
+    "detail_self_saving_hint": "Förmåner och ingående saldon sparas direkt i respektive sektion och ingår inte i Spara ändringar ovan.",
     "tax_title": "Skatt",
     "tax_form_label": "Skatteform",
     "tax_form_tooltip": "A-skatt: du drar preliminärskatt enligt skattetabell. F-skatt/FA-skatt: personen sköter sin egen skatt — inget skatteavdrag görs.",

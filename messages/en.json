@@ -6772,6 +6772,8 @@
     "detail_f_skatt_verified": "F-skatt verified: {date}",
     "detail_vacation_none_hint": "No accrual to 2920 is booked. Use if vacation is included in the monthly salary — common for owners who are the only employee.",
     "detail_save_changes": "Save changes",
+    "detail_self_saving_heading": "Saved separately",
+    "detail_self_saving_hint": "Benefits and opening balances are saved directly in each section and are not included in Save changes above.",
     "tax_title": "Tax",
     "tax_form_label": "Tax status",
     "tax_form_tooltip": "A-skatt: you withhold preliminary tax according to the tax table (skattetabell). F-skatt/FA-skatt: the person handles their own tax — no tax is withheld.",

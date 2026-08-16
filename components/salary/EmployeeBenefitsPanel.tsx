@@ -132,7 +132,7 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base">{t('benefits_title')}</CardTitle>
         {canWrite && !adding && (
-          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+          <Button type="button" size="sm" variant="outline" onClick={() => setAdding(true)}>
             <Plus className="mr-2 h-4 w-4" />
             {t('benefits_add')}
           </Button>
@@ -169,7 +169,7 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
                     </TableCell>
                     <TableCell className="text-right">
                       {canWrite && (
-                        <Button size="icon" variant="ghost" onClick={() => handleDelete(b.id)} aria-label={t('benefits_remove')}>
+                        <Button type="button" size="icon" variant="ghost" onClick={() => handleDelete(b.id)} aria-label={t('benefits_remove')}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       )}
@@ -257,8 +257,8 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
             </div>
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={reset} disabled={submitting}>{t('form_cancel')}</Button>
-              <Button size="sm" onClick={handleAdd} disabled={submitting}>
+              <Button type="button" variant="outline" size="sm" onClick={reset} disabled={submitting}>{t('form_cancel')}</Button>
+              <Button type="button" size="sm" onClick={handleAdd} disabled={submitting}>
                 {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {t('form_save')}
               </Button>
