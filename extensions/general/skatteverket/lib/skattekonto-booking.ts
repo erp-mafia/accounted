@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { commitEntry, createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { getPrimary as getPrimaryCashAccount } from '@/lib/cash-accounts/service'
 import type {
   CreateJournalEntryInput,
@@ -31,8 +32,6 @@ import type {
  * side and doesn't move the GL. NO_COUNTER_ACCOUNT lets the user handle the rare
  * case of anstånd granted across a closed period manually.
  */
-
-const SKATTEKONTO_ACCOUNT = '1630'
 
 /**
  * Sentinel emitted by system rules for inbetalning / utbetalning: resolves to the

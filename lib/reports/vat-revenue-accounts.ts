@@ -42,7 +42,7 @@ const emptyDynamicVatAccounts = (): DynamicVatAccounts => ({
   rcBasisRateByAccount: new Map(),
 })
 
-/** Explicit treatments extend custom accounts; fixed BAS mappings stay authoritative. */
+/** Explicit account treatments win; accounts without one keep BAS fallback. */
 export async function fetchDynamicVatAccounts(
   supabase: SupabaseClient,
   companyId: string,
@@ -58,7 +58,6 @@ export async function fetchDynamicVatAccounts(
       .select('account_number, account_name, account_class, default_vat_rate, default_vat_treatment')
       .eq('company_id', companyId)
       .in('account_class', [3, 4, 5, 6])
-      .not('is_active', 'is', false)
       .order('account_number', { ascending: true })
       .range(from, to),
   )
@@ -66,27 +65,25 @@ export async function fetchDynamicVatAccounts(
   const result = emptyDynamicVatAccounts()
   for (const row of rows) {
     const account = row.account_number
-    const accountClass = Number(row.account_class ?? account.charAt(0))
     const configuredRate = row.default_vat_rate === null ? null : Number(row.default_vat_rate)
 
     if (isAccountVatTreatment(row.default_vat_treatment)) {
-      if (ACCOUNT_TO_BOX[account]) {
-        if (
-          RUTA_05_STATIC_RATE_ACCOUNTS.has(account) &&
-          configuredRate !== null && TAXABLE_RATES.includes(configuredRate)
-        ) {
-          result.staticRateByAccount.set(account, configuredRate)
-        }
-        continue
-      }
-      const mapping = resolveVatTreatmentRuta(row.default_vat_treatment, accountClass)
-      if (!mapping) continue
       result.explicitAccounts.add(account)
+      const mapping = resolveVatTreatmentRuta(
+        row.default_vat_treatment,
+        row.account_class,
+        row.account_number,
+      )
+      if (!mapping) continue
       result.mappingByAccount.set(account, mapping)
+      // Always include an explicit account in the ledger filter. The Set in
+      // fetchVatAccountTotals deduplicates static BAS accounts, while this also
+      // covers accounts that exist only in the separate moms-box mirror.
       result.accounts.push(account)
-      const rate = configuredRate ?? defaultRateForVatTreatment(row.default_vat_treatment, accountClass)
+      const rate = configuredRate ?? defaultRateForVatTreatment(row.default_vat_treatment, row.account_class)
       if (mapping.box === 'ruta05' && rate !== null && TAXABLE_RATES.includes(rate)) {
-        result.rateByAccount.set(account, rate)
+        const target = ACCOUNT_TO_BOX[account] ? result.staticRateByAccount : result.rateByAccount
+        target.set(account, rate)
       }
       if (
         ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24'].includes(mapping.box) &&
@@ -97,7 +94,7 @@ export async function fetchDynamicVatAccounts(
       continue
     }
 
-    if (accountClass !== 3) continue
+    if (row.account_class !== 3) continue
     const rate = configuredRate ?? inferDomesticSalesRate(account, row.account_name)
     if (rate === null || !TAXABLE_RATES.includes(rate)) continue
     if (ACCOUNT_TO_BOX[account]) {

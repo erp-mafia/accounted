@@ -9,6 +9,8 @@ interface AccountSummary {
   normal_balance: string
   is_active: boolean
   default_vat_code: string | null
+  default_vat_rate: number | null
+  default_vat_treatment: string | null
 }
 
 export const chartOfAccountsResource: McpResource = {
@@ -25,7 +27,7 @@ export const chartOfAccountsResource: McpResource = {
       accounts = await fetchAllRows<AccountSummary>(({ from, to }) =>
         supabase
           .from('chart_of_accounts')
-          .select('account_number, account_name, account_class, account_type, normal_balance, is_active, default_vat_code')
+          .select('account_number, account_name, account_class, account_type, normal_balance, is_active, default_vat_code, default_vat_rate, default_vat_treatment')
           .eq('company_id', companyId)
           .order('account_number', { ascending: true })
           .range(from, to)

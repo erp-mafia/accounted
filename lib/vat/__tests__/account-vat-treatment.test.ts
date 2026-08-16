@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   defaultRateForVatTreatment,
-  isVatTreatmentValidForAccountClass,
   resolveVatTreatmentRuta,
   suggestVatTreatment,
-  vatTreatmentsForAccountClass,
 } from '../account-vat-treatment'
 
 describe('resolveVatTreatmentRuta', () => {
@@ -23,20 +21,12 @@ describe('resolveVatTreatmentRuta', () => {
   it('maps purchase treatments by purchase class', () => {
     expect(resolveVatTreatmentRuta('reverse_charge_eu_goods', 4)).toEqual({ box: 'ruta20', side: 'debit' })
     expect(resolveVatTreatmentRuta('reverse_charge_eu_services', 4)).toEqual({ box: 'ruta21', side: 'debit' })
-    expect(resolveVatTreatmentRuta('export_services', 5)).toEqual({ box: 'ruta22', side: 'debit' })
+    expect(resolveVatTreatmentRuta('reverse_charge_non_eu_services', 5)).toEqual({ box: 'ruta22', side: 'debit' })
     expect(resolveVatTreatmentRuta('reverse_charge_domestic', 4)).toEqual({ box: 'ruta23', side: 'debit' })
+    expect(resolveVatTreatmentRuta('reverse_charge_domestic', 4, '4425')).toEqual({ box: 'ruta24', side: 'debit' })
     expect(resolveVatTreatmentRuta('reverse_charge_domestic', 5)).toEqual({ box: 'ruta24', side: 'debit' })
-    expect(resolveVatTreatmentRuta('export_goods', 4)).toEqual({ box: 'ruta50', side: 'debit' })
+    expect(resolveVatTreatmentRuta('export_goods', 4)).toBeNull()
     expect(resolveVatTreatmentRuta('exempt', 4)).toBeNull()
-  })
-})
-
-describe('vat treatment applicability', () => {
-  it('exposes only treatments that resolve for the account class', () => {
-    expect(vatTreatmentsForAccountClass(3)).toContain('vmb')
-    expect(vatTreatmentsForAccountClass(5)).not.toContain('vmb')
-    expect(isVatTreatmentValidForAccountClass('reverse_charge_eu_services', 5)).toBe(true)
-    expect(isVatTreatmentValidForAccountClass('standard_25', 5)).toBe(false)
   })
 })
 
@@ -55,30 +45,30 @@ describe('suggestVatTreatment', () => {
     expect(suggestVatTreatment('4056', 'Projektkostnad')).toBeNull()
   })
 
-  it('matches EU as a term, not a substring inside another word', () => {
-    expect(suggestVatTreatment('4056', 'Reumatologiska varor 25%')).toBeNull()
-    expect(suggestVatTreatment('4056', 'Inköp EU-varor 25%')).toEqual({
-      treatment: 'reverse_charge_eu_goods',
-      rate: 0.25,
+  it('does not suggest an unsupported purchase treatment for imports of goods', () => {
+    expect(suggestVatTreatment('4545', 'Import varor utanför EU 25%')).toBeNull()
+  })
+
+  it('checks outside-EU labels before the generic EU matcher', () => {
+    expect(suggestVatTreatment('3048', 'Export tjänster utanför EU')).toEqual({
+      treatment: 'export_services', rate: 0,
+    })
+    expect(suggestVatTreatment('3108', 'Försäljning varor till annat EU-land, momsfri')).toEqual({
+      treatment: 'reverse_charge_eu_goods', rate: 0,
+    })
+    expect(suggestVatTreatment('6545', 'Inköp tjänster utanför EU 25%')).toEqual({
+      treatment: 'reverse_charge_non_eu_services', rate: 0.25,
     })
   })
 
-  it('does not assume a purchase-side reverse-charge rate', () => {
-    expect(defaultRateForVatTreatment('reverse_charge_eu_goods', 4)).toBeNull()
-    expect(defaultRateForVatTreatment('reverse_charge_eu_services', 5)).toBeNull()
-    expect(defaultRateForVatTreatment('reverse_charge_domestic', 6)).toBeNull()
-    expect(defaultRateForVatTreatment('export_goods', 4)).toBeNull()
-    expect(suggestVatTreatment('4056', 'Inköp varor EU')).toEqual({
-      treatment: 'reverse_charge_eu_goods',
-      rate: null,
-    })
+  it('does not match EU inside an unrelated word', () => {
+    expect(suggestVatTreatment('4010', 'Reumatologiska varor')).toBeNull()
   })
 
-  it('does not use a gross account rate for VMB', () => {
+  it('keeps VMB without a generic booking rate', () => {
+    expect(suggestVatTreatment('3211', 'Försäljning VMB')).toEqual({
+      treatment: 'vmb', rate: null,
+    })
     expect(defaultRateForVatTreatment('vmb', 3)).toBeNull()
-    expect(suggestVatTreatment('3021', 'Försäljning begagnat 25% VMB')).toEqual({
-      treatment: 'vmb',
-      rate: null,
-    })
   })
 })

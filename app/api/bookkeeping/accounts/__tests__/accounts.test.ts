@@ -289,6 +289,42 @@ describe('POST /api/bookkeeping/accounts', () => {
     }
     expect(insertArg.default_vat_treatment).toBe('reverse_charge_eu_goods')
   })
+
+  it('derives the booking rate when a treatment is set without one', async () => {
+    const { supabase, calls } = createCapturingSupabase([{ data: { account_number: '4056' } }])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts', {
+      method: 'POST',
+      body: {
+        account_number: '4056',
+        account_name: 'Inköp varor EU',
+        account_type: 'expense',
+        normal_balance: 'debit',
+        default_vat_treatment: 'reverse_charge_eu_goods',
+      },
+    })
+    expect((await createPOST(req, routeParams)).status).toBe(200)
+    const insertArg = calls.find((c) => c.method === 'insert')?.args[0] as {
+      default_vat_rate?: number | null
+    }
+    expect(insertArg.default_vat_rate).toBe(0.25)
+  })
+
+  it('rejects a treatment that cannot apply to the account class', async () => {
+    const { supabase } = createCapturingSupabase([])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts', {
+      method: 'POST',
+      body: {
+        account_number: '4056',
+        account_name: 'Inköp varor EU',
+        account_type: 'expense',
+        normal_balance: 'debit',
+        default_vat_treatment: 'standard_25',
+      },
+    })
+    expect((await createPOST(req, routeParams)).status).toBe(400)
+  })
 })
 
 describe('DELETE /api/bookkeeping/accounts/[number]', () => {
@@ -398,10 +434,11 @@ describe('PUT /api/bookkeeping/accounts/[number]', () => {
     expect(updateArg?.default_vat_rate).toBe(0)
   })
 
-  it('forwards default_vat_treatment into the update', async () => {
-    const { supabase, calls } = createCapturingSupabase([{
-      data: { account_number: '3041', default_vat_treatment: 'standard_25' },
-    }])
+  it('preserves an existing booking rate when updating only the treatment', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { default_vat_rate: 0.12 } },
+      { data: { account_number: '3041', default_vat_treatment: 'standard_25' } },
+    ])
     auth(supabase)
     const req = createMockRequest('/api/bookkeeping/accounts/3041', {
       method: 'PUT',
@@ -410,19 +447,34 @@ describe('PUT /api/bookkeeping/accounts/[number]', () => {
     expect((await PUT(req, { params: Promise.resolve({ number: '3041' }) })).status).toBe(200)
     const updateArg = calls.find((c) => c.method === 'update')?.args[0] as {
       default_vat_treatment?: string | null
+      default_vat_rate?: number | null
     }
     expect(updateArg.default_vat_treatment).toBe('standard_25')
+    expect(updateArg.default_vat_rate).toBeUndefined()
   })
 
-  it('rejects a VAT treatment that does not apply to the account class', async () => {
-    const { supabase, calls } = createCapturingSupabase([])
+  it('derives the booking rate when treatment is updated and the stored rate is unset', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { default_vat_rate: null } },
+      {
+        data: {
+          account_number: '4056',
+          default_vat_treatment: 'reverse_charge_eu_goods',
+          default_vat_rate: 0.25,
+        },
+      },
+    ])
     auth(supabase)
-    const req = createMockRequest('/api/bookkeeping/accounts/5010', {
+    const req = createMockRequest('/api/bookkeeping/accounts/4056', {
       method: 'PUT',
-      body: { default_vat_treatment: 'standard_25' },
+      body: { default_vat_treatment: 'reverse_charge_eu_goods' },
     })
-    expect((await PUT(req, numberParams)).status).toBe(400)
-    expect(calls.some((call) => call.method === 'update')).toBe(false)
+
+    expect((await PUT(req, { params: Promise.resolve({ number: '4056' }) })).status).toBe(200)
+    const updateArg = calls.find((c) => c.method === 'update')?.args[0] as {
+      default_vat_rate?: number | null
+    }
+    expect(updateArg.default_vat_rate).toBe(0.25)
   })
 
   // The body is spread straight into .update(), so the write set must be
