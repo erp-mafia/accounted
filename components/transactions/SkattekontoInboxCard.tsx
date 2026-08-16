@@ -66,6 +66,10 @@ export default function SkattekontoInboxCard({
         isSelected && 'bg-secondary/40',
         isExiting && 'row-exit',
       )}
+      // .row-exit only blocks pointer input; `inert` also drops keyboard
+      // focus and activation (booking/matching controls) during the 350ms
+      // removal window.
+      inert={isExiting || undefined}
     >
       {/* Hover-revealed selection checkbox (concept .cb) */}
       {/* Zero-width cell: the checkbox hangs in the left page margin so

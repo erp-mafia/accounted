@@ -293,6 +293,10 @@ function BankHistoryRow({
         'group transition-colors duration-150 hover:bg-secondary/35',
         isExiting && 'row-exit',
       )}
+      // .row-exit only blocks pointer input; `inert` also drops keyboard
+      // focus and activation (booking, delete, the ⋯ menu) during the 350ms
+      // removal window.
+      inert={isExiting || undefined}
     >
       <td className={cn(TD_CLASS, 'w-0 !p-0')} aria-hidden="true"></td>
       <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>

@@ -1285,6 +1285,27 @@ export default function TransactionsPage() {
   const [isScopeRefreshing, setIsScopeRefreshing] = useState(false)
   const scopeRefreshSeqRef = useRef(0)
 
+  // Fiscal scope must not survive a company switch: periodBounds from the
+  // previous company would scope the first fetch for the new one, and a
+  // non-null fyPeriodId makes FyPicker skip its persisted-scope restore
+  // (it only restores when value === null). Resetting during render (React's
+  // adjust-state-on-prop-change pattern) rather than in an effect guarantees
+  // FyPicker's restore effect observes the cleared value: its effect captures
+  // `value` at commit time, and child effects run before a parent effect
+  // could reset it. fyReady = false holds the fetch effect until the new
+  // company's restore completes via onReady.
+  const [scopeCompanyId, setScopeCompanyId] = useState<string | null>(companyId)
+  if (scopeCompanyId !== companyId) {
+    setScopeCompanyId(companyId)
+    setFyReady(false)
+    setFyPeriodId(null)
+    setFyPeriod(null)
+    // A scope refresh in flight belongs to the old company: invalidate its
+    // finally-guard and drop the cue.
+    scopeRefreshSeqRef.current++
+    setIsScopeRefreshing(false)
+  }
+
   // Fetch the page whenever the scope changes (mount, company switch, period
   // change). The skeleton takeover is reserved for an empty or foreign list:
   // a period change refetches BEHIND the rendered rows, whose client-side
@@ -2431,6 +2452,15 @@ export default function TransactionsPage() {
       // 350ms window instead of vanishing with a hard jump, then the delayed
       // filter actually removes it.
       setExitingIds((prev) => new Set(prev).add(id))
+      // Drop the row from the batch selection immediately: leaving it there
+      // keeps the bulk bar counting (and acting on) a row that no longer
+      // exists once the timer removes it.
+      setSelectedIds((prev) => {
+        if (!prev.has(id)) return prev
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
       // The realtime echo is not guaranteed for DELETE on a filtered
       // subscription, so the pending badge must decrement locally.
       if (transaction.is_business === null && !transaction.is_ignored) {

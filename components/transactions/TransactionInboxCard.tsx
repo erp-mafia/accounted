@@ -252,6 +252,10 @@ export default function TransactionInboxCard({
           isDisabled && 'opacity-50',
           isExiting && 'row-exit',
         )}
+        // .row-exit only blocks pointer input; `inert` also drops keyboard
+        // focus and activation (row expand, Bokför, the ⋯ menu) during the
+        // 350ms removal window.
+        inert={isExiting || undefined}
         role={canExpand ? 'button' : undefined}
         tabIndex={canExpand ? 0 : undefined}
         aria-expanded={canExpand ? expanded : undefined}

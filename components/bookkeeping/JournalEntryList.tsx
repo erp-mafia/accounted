@@ -511,11 +511,15 @@ export default function JournalEntryList({
   // response would overwrite the current sort's rows after they rendered.
   const fetchGenRef = useRef(0)
 
-  async function fetchEntries() {
+  // `preserveSelection` marks a parent-driven background refresh (the
+  // refreshToken contract: refresh in place, don't disturb the user's
+  // working state). User-initiated reloads (filter/sort/page/mode changes,
+  // commit, storno, retry) keep the default reset: selection is page-scoped.
+  async function fetchEntries({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
     const gen = ++fetchGenRef.current
     const isCurrent = () => fetchGenRef.current === gen
     setLoading(true)
-    setSelectedIds(new Set()) // selection is page-scoped, reset on reload
+    if (!preserveSelection) setSelectedIds(new Set()) // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
       limit: String(pageSize),
       offset: String(page * pageSize),
@@ -552,6 +556,16 @@ export default function JournalEntryList({
       const loadedEntries = data || []
       setEntries(loadedEntries)
       setCount(total || 0)
+      if (preserveSelection) {
+        // Reconcile with the refreshed page: rows that left it (recommitted
+        // elsewhere, filtered out by the new data) must leave the selection
+        // too, or the bulk bar would act on rows no longer on screen.
+        const visibleIds = new Set(loadedEntries.map((e: JournalEntry) => e.id))
+        setSelectedIds((prev) => {
+          const next = new Set([...prev].filter((id) => visibleIds.has(id)))
+          return next.size === prev.size ? prev : next
+        })
+      }
 
       // The pristine empty card vs. the (toggle-bearing) "drafts exist" state hinges
       // on draftCount. When the committed list comes back empty, resolve the draft
@@ -638,7 +652,9 @@ export default function JournalEntryList({
     if (refreshToken === undefined || refreshToken === lastRefreshTokenRef.current) return
     lastRefreshTokenRef.current = refreshToken
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
-    fetchEntries()
+    // In-place refresh: the user didn't ask for a reload, so their current
+    // selection survives (reconciled against the refreshed page).
+    fetchEntries({ preserveSelection: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken, sortHydrated, periodHydrated, pageSizeHydrated])
 
