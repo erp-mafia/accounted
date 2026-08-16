@@ -128,6 +128,7 @@ import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pend
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import { CreateAccountParamsSchema, UpdateAccountParamsSchema } from '@/lib/pending-operations/schemas/account'
+import { defaultRateForVatTreatment } from '@/lib/vat/account-vat-treatment'
 import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
@@ -946,6 +947,13 @@ async function commitCreateAccount(
   // Same row shape as the dashboard create route
   // (app/api/bookkeeping/accounts/route.ts): class/group/sort_order derive
   // from the number so the two write paths cannot drift.
+  const defaultVatRate = validated.default_vat_treatment && validated.default_vat_rate == null
+    ? defaultRateForVatTreatment(
+        validated.default_vat_treatment,
+        Number(validated.account_number[0]),
+      )
+    : validated.default_vat_rate ?? null
+
   const { data, error } = await supabase
     .from('chart_of_accounts')
     .insert({
@@ -962,7 +970,8 @@ async function commitCreateAccount(
       is_system_account: false,
       description: validated.description ?? null,
       default_vat_code: validated.default_vat_code ?? null,
-      default_vat_rate: validated.default_vat_rate ?? null,
+      default_vat_rate: defaultVatRate,
+      default_vat_treatment: validated.default_vat_treatment ?? null,
       sru_code: validated.sru_code ?? null,
       sort_order: parseInt(validated.account_number),
     })
@@ -1000,6 +1009,31 @@ async function commitUpdateAccount(
   const updateData: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(rest)) {
     if (value !== undefined) updateData[key] = value
+  }
+
+  if (validated.default_vat_treatment && validated.default_vat_rate == null) {
+    const { data: current, error: currentError } = await supabase
+      .from('chart_of_accounts')
+      .select('default_vat_rate')
+      .eq('company_id', companyId)
+      .eq('account_number', account_number)
+      .single()
+
+    if (currentError) {
+      if (currentError.code === 'PGRST116') {
+        return { error: 'Kontot hittades inte', status: 404 }
+      }
+      return { error: currentError.message, status: 500 }
+    }
+
+    if (current.default_vat_rate == null) {
+      updateData.default_vat_rate = defaultRateForVatTreatment(
+        validated.default_vat_treatment,
+        Number(account_number.charAt(0)),
+      )
+    } else {
+      delete updateData.default_vat_rate
+    }
   }
   if (Object.keys(updateData).length === 0) {
     return { error: 'Inget att uppdatera', status: 400 }

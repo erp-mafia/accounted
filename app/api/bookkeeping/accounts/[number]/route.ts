@@ -4,7 +4,10 @@ import { validateBody } from '@/lib/api/validate'
 import { sparsePatchBody } from '@/lib/api/sparse-patch'
 import { UpdateAccountSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { isVatTreatmentValidForAccountClass } from '@/lib/vat/account-vat-treatment'
+import {
+  defaultRateForVatTreatment,
+  isVatTreatmentAllowedForAccountClass,
+} from '@/lib/vat/account-vat-treatment'
 
 // DELETE hard-deletes an unused, non-system account; accounts referenced by
 // this company's journal entries must be deactivated instead (PUT is_active).
@@ -104,17 +107,42 @@ export const PUT = withRouteContext(
     })
     if (!validation.success) return validation.response
     const body = validation.data
+    const accountClass = parseInt(number[0])
 
     if (
       body.default_vat_treatment &&
-      !isVatTreatmentValidForAccountClass(
-        body.default_vat_treatment,
-        Number(number.charAt(0)),
-      )
+      !isVatTreatmentAllowedForAccountClass(body.default_vat_treatment, accountClass)
     ) {
       return NextResponse.json(
-        { error: 'Momshanteringen är inte giltig för kontoklassen' },
+        { error: 'Momskoden kan inte användas för den här kontoklassen.' },
         { status: 400 },
+      )
+    }
+    if (body.default_vat_treatment && body.default_vat_rate === undefined) {
+      const { data: current, error: currentError } = await supabase
+        .from('chart_of_accounts')
+        .select('default_vat_rate')
+        .eq('company_id', companyId)
+        .eq('account_number', number)
+        .single()
+
+      if (currentError) {
+        if (currentError.code === 'PGRST116') {
+          return NextResponse.json({ error: 'Kontot hittades inte' }, { status: 404 })
+        }
+        return NextResponse.json({ error: getUserErrorMessage(currentError) }, { status: 500 })
+      }
+
+      if (current.default_vat_rate == null) {
+        body.default_vat_rate = defaultRateForVatTreatment(
+          body.default_vat_treatment,
+          accountClass,
+        )
+      }
+    } else if (body.default_vat_treatment && body.default_vat_rate === null) {
+      body.default_vat_rate = defaultRateForVatTreatment(
+        body.default_vat_treatment,
+        accountClass,
       )
     }
 

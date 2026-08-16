@@ -14,7 +14,12 @@ import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { AccountMapping } from './types'
-import { isAccountVatTreatment, type AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
+import {
+  defaultRateForVatTreatment,
+  isAccountVatTreatment,
+  isVatTreatmentAllowedForAccountClass,
+  type AccountVatTreatment,
+} from '@/lib/vat/account-vat-treatment'
 
 export interface AccountSyncResult {
   /** Accounts inserted into chart_of_accounts */
@@ -164,9 +169,19 @@ export async function syncMappedAccounts(
       result.error = `Invalid VAT treatment for account ${mapping.sourceAccount}`
       return result
     }
+    const accountClass = Number(mapping.targetAccount.charAt(0))
+    if (
+      mapping.defaultVatTreatment &&
+      !isVatTreatmentAllowedForAccountClass(mapping.defaultVatTreatment, accountClass)
+    ) {
+      result.error = `VAT treatment is not valid for account ${mapping.sourceAccount}`
+      return result
+    }
     vatDefaults.set(mapping.targetAccount, {
       treatment: mapping.defaultVatTreatment ?? null,
-      rate: mapping.defaultVatRate ?? null,
+      rate: mapping.defaultVatTreatment && mapping.defaultVatRate == null
+        ? defaultRateForVatTreatment(mapping.defaultVatTreatment, accountClass)
+        : mapping.defaultVatRate ?? null,
     })
   }
 

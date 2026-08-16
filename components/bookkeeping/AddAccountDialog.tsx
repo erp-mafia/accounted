@@ -22,6 +22,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { AccountVatTreatmentSelect } from './AccountVatTreatmentSelect'
 import {
   defaultRateForVatTreatment,
+  isVatTreatmentAllowedForAccountClass,
   type AccountVatTreatment,
 } from '@/lib/vat/account-vat-treatment'
 
@@ -72,6 +73,8 @@ export function AddAccountDialog({
     const num = (initialAccountNumber ?? '').replace(/\D/g, '').slice(0, 4)
     setAccountNumber(num)
     setAccountName(initialAccountName ?? '')
+    setDefaultVatRate('none')
+    setDefaultVatTreatment('none')
     setError('')
     setInactiveConflict(false)
     if (num.length === 4) {
@@ -209,6 +212,16 @@ export function AddAccountDialog({
                 onChange={(e) => {
                   const v = e.target.value.replace(/\D/g, '').slice(0, 4)
                   setAccountNumber(v)
+                  const nextClass = v.length > 0 ? Number(v[0]) : null
+                  if (
+                    defaultVatTreatment !== 'none' &&
+                    (nextClass === null || !isVatTreatmentAllowedForAccountClass(
+                      defaultVatTreatment,
+                      nextClass,
+                    ))
+                  ) {
+                    setDefaultVatTreatment('none')
+                  }
                   // The conflict is about a specific number; editing it makes
                   // the reactivate offer stale.
                   setInactiveConflict(false)
@@ -274,9 +287,9 @@ export function AddAccountDialog({
             accountClass={derived ? Number(accountNumber.charAt(0)) : null}
             onValueChange={(treatment) => {
               setDefaultVatTreatment(treatment)
-              if (treatment !== 'none') {
+              if (treatment !== 'none' && defaultVatRate === 'none') {
                 const rate = defaultRateForVatTreatment(treatment, Number(accountNumber.charAt(0)))
-                setDefaultVatRate(rate === null ? 'none' : String(rate))
+                if (rate !== null) setDefaultVatRate(String(rate))
               }
             }}
           />

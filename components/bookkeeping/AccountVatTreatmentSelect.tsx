@@ -22,7 +22,7 @@ export function AccountVatTreatmentSelect({
   const t = useTranslations('chart_of_accounts')
   const isRelevant = accountClass === 3 ||
     (accountClass !== null && accountClass >= 4 && accountClass <= 6)
-  const treatments = accountClass === null ? [] : vatTreatmentsForAccountClass(accountClass)
+  const treatments = vatTreatmentsForAccountClass(accountClass)
 
   return (
     <div className="space-y-2">

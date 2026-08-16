@@ -24,8 +24,37 @@ import { collectBankIdResult } from '../lib/bankid-client'
 import { createServiceClient } from '@/lib/supabase/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { ticExtension } from '../index'
+import {
+  BANKID_FLOW_COOKIE,
+  BANKID_FLOW_ID_HEADER,
+  signBankIdFlow,
+  type BankIdFlowMode,
+} from '../lib/bankid-flow-cookie'
 
 const TEST_KEY = 'a'.repeat(64)
+const TEST_FLOW_ID = 'flow-1'
+
+/** Linking reads its session from the signed flow cookie, not the body. */
+async function flowCookie(
+  mode: BankIdFlowMode,
+  sessionId = 'test-session',
+  userId = 'user-1',
+): Promise<Record<string, string>> {
+  const value = await signBankIdFlow({
+    version: 1,
+    sessionId,
+    flowId: TEST_FLOW_ID,
+    mode,
+    // A link flow is owned by the user who opened it; login/signup have none.
+    userId: mode === 'link' ? userId : undefined,
+    startedAt: Date.now(),
+    expiresAt: Date.now() + 60_000,
+  })
+  return {
+    cookie: `${BANKID_FLOW_COOKIE}=${encodeURIComponent(value)}`,
+    [BANKID_FLOW_ID_HEADER]: TEST_FLOW_ID,
+  }
+}
 
 function findRoute(method: string, path: string) {
   const route = ticExtension.apiRoutes!.find((r) => r.method === method && r.path === path)
@@ -56,7 +85,12 @@ function mockUnauthenticated() {
 type QueuedResult = { data?: unknown; error?: unknown }
 
 /** Minimal chainable service-client mock (same pattern as bankid-complete.test.ts). */
-function mockServiceClient(fromResults: QueuedResult[], appMetadata: Record<string, unknown>) {
+function mockServiceClient(
+  fromResults: QueuedResult[],
+  appMetadata: Record<string, unknown>,
+  // Single-use claim; `{ error: { code: '23505' } }` means another tab won.
+  consumed: QueuedResult = { error: null },
+) {
   const queue = [...fromResults]
 
   const chain = (): unknown => {
@@ -87,7 +121,9 @@ function mockServiceClient(fromResults: QueuedResult[], appMetadata: Record<stri
   }
 
   const client = {
-    from: vi.fn().mockImplementation(() => chain()),
+    from: vi.fn().mockImplementation((table: string) =>
+      table === 'bankid_consumed_sessions' ? chain2(consumed) : chain()
+    ),
     auth: { admin },
   }
 
@@ -170,6 +206,32 @@ describe('POST /bankid/unlink', () => {
   })
 })
 
+describe('POST /bankid/start, link mode', () => {
+  it('requires a signed-in caller, so a link flow always has an owner', async () => {
+    // An anonymous link flow would have no userId to check at /bankid/link,
+    // which is what lets an abandoned flow bind to the next person to sign in.
+    mockUnauthenticated()
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/start', {
+      method: 'POST',
+      body: { mode: 'link' },
+    })
+    const { status } = await parseJsonResponse(await findHandler('POST', '/bankid/start')(req))
+
+    expect(status).toBe(401)
+  })
+
+  it('does not require auth for login or signup, which have no user yet', async () => {
+    mockUnauthenticated()
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/start', {
+      method: 'POST',
+      body: { mode: 'login' },
+    })
+    const { status } = await parseJsonResponse(await findHandler('POST', '/bankid/start')(req))
+
+    expect(status).not.toBe(401)
+  })
+})
+
 describe('POST /bankid/link', () => {
   function makeSession() {
     return {
@@ -189,13 +251,13 @@ describe('POST /bankid/link', () => {
     mockServiceClient([], {})
     const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
       method: 'POST',
-      body: { sessionId: 'test-session' },
+      headers: await flowCookie('link'),
     })
     const { status } = await parseJsonResponse(await findHandler('POST', '/bankid/link')(req))
     expect(status).toBe(401)
   })
 
-  it('returns 400 when sessionId is missing', async () => {
+  it('returns 400 when the browser holds no flow', async () => {
     mockAuthenticated()
     mockServiceClient([], {})
     const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
@@ -204,6 +266,107 @@ describe('POST /bankid/link', () => {
     })
     const { status } = await parseJsonResponse(await findHandler('POST', '/bankid/link')(req))
     expect(status).toBe(400)
+  })
+
+  it('refuses a session that was not opened as a link flow', async () => {
+    // A session started to sign someone IN must not be redirectable into
+    // binding their personnummer to whoever happens to be logged in here.
+    mockAuthenticated()
+    const { admin, client } = mockServiceClient([], {})
+    vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
+      method: 'POST',
+      headers: await flowCookie('login'),
+      body: {},
+    })
+    const { status } = await parseJsonResponse(await findHandler('POST', '/bankid/link')(req))
+
+    expect(status).toBe(400)
+    expect(collectBankIdResult).not.toHaveBeenCalled()
+    expect(client.from).not.toHaveBeenCalled()
+    expect(admin.updateUserById).not.toHaveBeenCalled()
+  })
+
+  it('refuses a link flow that another user opened', async () => {
+    // The shared-browser takeover: A starts "Koppla BankID" and authenticates
+    // but never finishes; B signs in on the same machine and clicks the same
+    // button. Without the owner check, A's personnummer is written against B's
+    // user_id, and A can then sign in as B with their own BankID.
+    mockAuthenticated('user-b')
+    const { admin, client } = mockServiceClient([], {})
+    vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
+      method: 'POST',
+      headers: await flowCookie('link', 'test-session', 'user-a'),
+    })
+    const { status } = await parseJsonResponse(await findHandler('POST', '/bankid/link')(req))
+
+    expect(status).toBe(400)
+    expect(collectBankIdResult).not.toHaveBeenCalled()
+    expect(client.from).not.toHaveBeenCalled()
+    expect(admin.updateUserById).not.toHaveBeenCalled()
+  })
+
+  it('refuses a stale tab after a newer link flow replaced the shared cookie', async () => {
+    mockAuthenticated()
+    const { client } = mockServiceClient([], {})
+    vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+    const headers = await flowCookie('link')
+    headers[BANKID_FLOW_ID_HEADER] = 'older-flow'
+
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
+      method: 'POST',
+      headers,
+    })
+    const { status } = await parseJsonResponse(await findHandler('POST', '/bankid/link')(req))
+
+    expect(status).toBe(400)
+    expect(collectBankIdResult).not.toHaveBeenCalled()
+    expect(client.from).not.toHaveBeenCalled()
+  })
+
+  it('refuses to link twice off one identification', async () => {
+    mockAuthenticated()
+    const { admin, client } = mockServiceClient(
+      [{ data: null }], // pnr not linked to anyone yet
+      {},
+      { error: { code: '23505', message: 'duplicate key' } }, // another tab claimed it first
+    )
+    vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
+      method: 'POST',
+      headers: await flowCookie('link'),
+    })
+    const { status } = await parseJsonResponse(await findHandler('POST', '/bankid/link')(req))
+
+    expect(status).toBe(400)
+    // The identity insert never ran, so nothing was bound twice.
+    const inserts = vi.mocked(client.from).mock.calls.filter((c) => c[0] === 'bankid_identities')
+    expect(inserts).toHaveLength(1) // the pnr lookup only
+    expect(admin.updateUserById).not.toHaveBeenCalled()
+  })
+
+  it('refuses a forged flow cookie', async () => {
+    mockAuthenticated()
+    const { client } = mockServiceClient([], {})
+    vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+
+    // Same shape, no valid signature: what a same-origin script could plant.
+    const forged = Buffer.from(
+      JSON.stringify({ version: 1, sessionId: 'attacker-session', mode: 'link', startedAt: Date.now() }),
+    ).toString('base64url')
+    const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
+      method: 'POST',
+      headers: { cookie: `${BANKID_FLOW_COOKIE}=${forged}.not-a-signature` },
+      body: {},
+    })
+    const { status } = await parseJsonResponse(await findHandler('POST', '/bankid/link')(req))
+
+    expect(status).toBe(400)
+    expect(client.from).not.toHaveBeenCalled()
   })
 
   it('merges app_metadata so an existing has_password: true survives linking', async () => {
@@ -219,7 +382,7 @@ describe('POST /bankid/link', () => {
 
     const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
       method: 'POST',
-      body: { sessionId: 'test-session' },
+      headers: await flowCookie('link'),
     })
     const { status, body } = await parseJsonResponse<{ data?: { linked?: boolean } }>(
       await findHandler('POST', '/bankid/link')(req)
@@ -242,7 +405,7 @@ describe('POST /bankid/link', () => {
 
     const req = createMockRequest('/api/extensions/ext/tic/bankid/link', {
       method: 'POST',
-      body: { sessionId: 'test-session' },
+      headers: await flowCookie('link'),
     })
     const { status, body } = await parseJsonResponse<{ error?: string }>(
       await findHandler('POST', '/bankid/link')(req)

@@ -215,12 +215,26 @@ const TheaterCanvas = forwardRef<TheaterCanvasHandle, {
       const ease = (v: number) => 1 - Math.pow(1 - v, 3)
       const byId = new Map(engine.nodes.map((n) => [n.id, n]))
 
+      // Ambient life (Living Paper): the constellation moves because it is
+      // alive right now, never to fake progress. Build mode gets full
+      // amplitude, settled reveals rest at half (the reveal is a verdict),
+      // reduced motion gets none (the loop is frozen anyway). Everything is
+      // derived from the clock inside this one rAF loop; no extra timers.
+      const ambient = reduced ? 0 : settled ? 0.5 : 1
+      // Every 7s a quiet luminance wave travels hub -> rim over 2.6s,
+      // brightening the hairline rings and edges it passes (alpha only, no
+      // color, no geometry). Build mode only; -1 means resting.
+      const ripple =
+        ambient === 1 && now % 7000 < 2600 ? ((now % 7000) / 2600) * 340 : -1
+      const rippleGlow = (radius: number, width: number) =>
+        ripple < 0 ? 0 : Math.max(0, 1 - Math.abs(radius - ripple) / width)
+
       for (const n of engine.nodes) {
         if (n.kind !== 'ring' || n.born == null) continue
         const p = ease(age(n))
         const rad = (n.ring ?? 0) * k
         ctx.strokeStyle = colors.hair
-        ctx.globalAlpha = 0.75 * p
+        ctx.globalAlpha = (0.75 + 0.18 * rippleGlow(n.ring ?? 0, 30)) * p
         ctx.lineWidth = 0.8
         ctx.beginPath()
         ctx.arc(cx, cy, rad, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p)
@@ -244,9 +258,11 @@ const TheaterCanvas = forwardRef<TheaterCanvasHandle, {
         const p = ease(Math.min(age(A), age(B)))
         const pa = pos(A)
         const pb = pos(B)
+        const glow =
+          ripple < 0 ? 0 : rippleGlow(Math.hypot((A.x + B.x) / 2, (A.y + B.y) / 2), 40)
         ctx.strokeStyle = colors.hair
         ctx.lineWidth = 0.8
-        ctx.globalAlpha = 0.65
+        ctx.globalAlpha = 0.65 + 0.12 * glow
         ctx.beginPath()
         ctx.moveTo(pa.x, pa.y)
         ctx.lineTo(pa.x + (pb.x - pa.x) * p, pa.y + (pb.y - pa.y) * p)
@@ -304,13 +320,20 @@ const TheaterCanvas = forwardRef<TheaterCanvasHandle, {
         if (n.born == null || n.kind === 'ring') continue
         const p = ease(age(n))
         const q = pos(n)
-        const breathe = reduced ? 0 : Math.sin(now / 2600 + n.x + n.y) * 0.06
+        // Per-node breathing on two slow, incommensurate clocks, offset by
+        // the node's own position/wave so the field shimmers organically
+        // instead of in sync. Radius +-10% (roughly 1px on the hub, less on
+        // small dots) and a few percent of alpha; half of both when settled.
+        const breathe = ambient * 0.1 * Math.sin(now / 2600 + n.x + n.y)
+        const twinkle = ambient * 0.04 * (0.5 + 0.5 * Math.sin(now / 3400 + n.x + n.wave * 1.7))
         const splat = p < 1 ? 1 + 0.3 * Math.sin(p * Math.PI) : 1
         const r = n.r * (1 + breathe) * p * k * 1.55 * splat
         ctx.fillStyle = n.kind === 'bucket' ? colors.mut : colors.ink
+        ctx.globalAlpha = 1 - twinkle
         ctx.beginPath()
         ctx.arc(q.x, q.y, r, 0, Math.PI * 2)
         ctx.fill()
+        ctx.globalAlpha = 1
         if (n.label && n.lab) {
           ctx.globalAlpha = Math.max(0, p * 1.2 - 0.2)
           ctx.fillStyle = n.kind === 'hub' ? colors.ink : colors.mut

@@ -62,11 +62,12 @@ function RegisterPageContent() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isCancelling, setIsCancelling] = useState(false)
   const [isRegistered, setIsRegistered] = useState(false)
   const [duplicateEmail, setDuplicateEmail] = useState<string | null>(null)
   const [inviteEmail, setInviteEmail] = useState<string | null>(null)
   const [bankIdUser, setBankIdUser] = useState<{ givenName?: string; surname?: string } | null>(null)
-  const [bankIdSessionId, setBankIdSessionId] = useState<string | null>(null)
+  const [bankIdFlowId, setBankIdFlowId] = useState<string | null>(null)
   const [bankIdEmail, setBankIdEmail] = useState('')
   // Signup failures render inline next to the form (see AuthFormError), never
   // as a toast. Field-level problems attach to their field; everything else
@@ -166,29 +167,37 @@ function RegisterPageContent() {
       setFormError({ kind: 'bankid', message: t('bankid_failed_description') })
       return
     }
-    // BankID verified: store sessionId and show email form
+    // BankID verified: show the email form. The session itself stays in the
+    // server's HttpOnly flow cookie, so there is nothing to hold on to here.
     setFormError(null)
     setBankIdUser({ givenName: result.givenName, surname: result.surname })
-    if (result.sessionId) setBankIdSessionId(result.sessionId)
+    setBankIdFlowId(result.flowId ?? null)
   }
 
   const handleBankIdSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setFormError(null)
-    setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
     const emailValue = (formData.get('bankid_email') as string) || bankIdEmail
 
+    if (!bankIdFlowId) {
+      setFormError({ kind: 'bankid', message: t('bankid_failed_description') })
+      return
+    }
+
+    setIsLoading(true)
+
     try {
+      // Only the e-mail travels: the session and the fact that this is a
+      // signup are both pinned in the server's flow cookie.
       const res = await fetch('/api/extensions/ext/tic/bankid/complete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: bankIdSessionId,
-          mode: 'signup',
-          email: emailValue,
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-bankid-flow-id': bankIdFlowId,
+        },
+        body: JSON.stringify({ email: emailValue }),
       })
 
       const json = await res.json()
@@ -546,7 +555,9 @@ function RegisterPageContent() {
                   {inviteEmail ? t('invite_email_hint') : t('bankid_email_hint')}
                 </p>
               </div>
-              <Button type="submit" className="w-full h-11" disabled={isLoading}>
+              {/* Also disabled while Back's /cancel is in flight: submitting
+                  then would race the cookie clear (recoverable, but pointless). */}
+              <Button type="submit" className="w-full h-11" disabled={isLoading || isCancelling}>
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -560,9 +571,35 @@ function RegisterPageContent() {
                 type="button"
                 variant="ghost"
                 className="w-full text-muted-foreground"
-                onClick={() => {
-                  setBankIdUser(null)
-                  setBankIdSessionId(null)
+                disabled={isLoading || isCancelling}
+                onClick={async () => {
+                  // AWAIT the cancel before remounting BankIdAuth. The flow
+                  // cookie outlives this component and BankIdAuth probes for a
+                  // live flow on mount, so clearing the form first would let it
+                  // find the still-completed session. Its own isCancelling
+                  // state, not isLoading: isLoading drives the submit button's
+                  // "Skapar konto...", and pressing Back should not claim an
+                  // account is being created.
+                  setIsCancelling(true)
+                  try {
+                    const res = await fetch('/api/extensions/ext/tic/bankid/cancel', {
+                      method: 'POST',
+                      headers: bankIdFlowId
+                        ? { 'x-bankid-flow-id': bankIdFlowId }
+                        : undefined,
+                    })
+                    if (!res.ok) throw new Error(`cancel failed: ${res.status}`)
+                    // Flow cleared server-side; the remounted BankIdAuth will
+                    // probe, find nothing, and show the start button.
+                    setBankIdUser(null)
+                    setBankIdFlowId(null)
+                  } catch {
+                    // The flow is still live, so resetting the form would just
+                    // bounce the user back here. Say so instead of looping.
+                    setFormError({ kind: 'bankid', message: t('bankid_cancel_failed') })
+                  } finally {
+                    setIsCancelling(false)
+                  }
                 }}
               >
                 <ArrowLeft className="mr-2 h-4 w-4" />

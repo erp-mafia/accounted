@@ -239,8 +239,14 @@ interface MigrationResults {
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
+import {
+  applyVatTreatmentReview,
+  enrichChangedAccountMappingWithVat,
+  enrichAccountMappingsWithVat,
+} from '@/lib/import/account-vat-treatment'
 import type { TheaterModel } from '@/lib/import/theater-model'
 import type { AccountMapping, ImportResult, ParsedSIEFile } from '@/lib/import/types'
+import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
 import type { BASAccount } from '@/types'
 
 // ── Types ────────────────────────────────────────────────────────
@@ -962,6 +968,7 @@ function MappingStep({
   error,
   errorDetails,
   onMappingChange,
+  onVatTreatmentChange,
   onContinue,
   onBack,
 }: {
@@ -970,6 +977,11 @@ function MappingStep({
   error: string | null
   errorDetails: string[] | null
   onMappingChange: (sourceAccount: string, targetAccount: string, targetName: string) => void
+  onVatTreatmentChange: (
+    sourceAccount: string,
+    treatment: AccountVatTreatment | null,
+    rate: number | null,
+  ) => void
   onContinue: () => void
   onBack: () => void
 }) {
@@ -1012,6 +1024,7 @@ function MappingStep({
       mappings={sieData.mappings}
       basAccounts={sieData.basAccounts}
       onMappingChange={onMappingChange}
+      onVatTreatmentChange={onVatTreatmentChange}
       onContinue={onContinue}
       onBack={onBack}
     />
@@ -1972,6 +1985,7 @@ export default function ArcimMigrationWorkspace({
 
   // SIE data state (held between mapping and execution steps)
   const [sieData, setSieData] = useState<SIEData | null>(null)
+  const companyAccountsForVatRef = useRef<BASAccount[]>([])
 
   // Options state
   const [migrationOptions, setMigrationOptions] = useState<MigrationOptions>(DEFAULT_OPTIONS)
@@ -2539,16 +2553,29 @@ export default function ArcimMigrationWorkspace({
         throw apiError(data, `HTTP ${res.status}`)
       }
 
-      const data = await res.json()
-      setSieData(data)
+      const data = await res.json() as SIEData
+      const accountsRes = await fetch('/api/bookkeeping/accounts?active=false')
+      const accountsBody = await accountsRes.json().catch(() => ({})) as {
+        data?: BASAccount[]
+        error?: unknown
+      }
+      if (!accountsRes.ok) {
+        throw apiError(accountsBody, `HTTP ${accountsRes.status}`)
+      }
+      companyAccountsForVatRef.current = accountsBody.data ?? []
+      const enrichedMappings = enrichAccountMappingsWithVat(data.mappings, accountsBody.data ?? [])
+      setSieData({ ...data, mappings: enrichedMappings })
 
       // If all SIE files are already imported, disable SIE import by default
       if (data.allImported) {
         setMigrationOptions(prev => ({ ...prev, importSIEData: false }))
       }
 
-      // Auto-skip mapping step if all accounts are mapped or all files already imported
-      if (data.mappingStats.unmapped === 0 || data.allImported) {
+      const needsVatReview = enrichedMappings.some(mapping =>
+        mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
+      )
+      // Auto-skip only when there is neither account mapping nor VAT review work.
+      if ((data.mappingStats.unmapped === 0 && !needsVatReview) || data.allImported) {
         setStep('options')
       }
     } catch (err) {
@@ -2571,10 +2598,14 @@ export default function ArcimMigrationWorkspace({
   const handleMappingChange = useCallback((sourceAccount: string, targetAccount: string, targetName: string) => {
     if (!sieData) return
 
-    const updatedMappings = sieData.mappings.map(m =>
-      m.sourceAccount === sourceAccount
-        ? { ...m, targetAccount, targetName, isOverride: true, matchType: 'manual' as const, confidence: 1 }
-        : m
+    const updatedMappings = enrichChangedAccountMappingWithVat(
+      sieData.mappings.map(m =>
+        m.sourceAccount === sourceAccount
+          ? { ...m, targetAccount, targetName, isOverride: true, matchType: 'manual' as const, confidence: 1 }
+          : m
+      ),
+      sourceAccount,
+      companyAccountsForVatRef.current,
     )
     setSieData(prev => prev ? {
       ...prev,
@@ -2586,6 +2617,21 @@ export default function ArcimMigrationWorkspace({
       },
     } : null)
   }, [sieData])
+
+  const handleVatTreatmentChange = useCallback((
+    sourceAccount: string,
+    treatment: AccountVatTreatment | null,
+    rate: number | null,
+  ) => {
+    setSieData(prev => prev ? {
+      ...prev,
+      mappings: applyVatTreatmentReview(prev.mappings, sourceAccount, treatment, rate),
+    } : null)
+  }, [])
+
+  const handleMappingContinue = useCallback(() => {
+    setStep('options')
+  }, [])
 
   const handleStartMigration = useCallback(async () => {
     if (!consentId) return
@@ -2832,7 +2878,8 @@ export default function ArcimMigrationWorkspace({
           error={error}
           errorDetails={errorDetails}
           onMappingChange={handleMappingChange}
-          onContinue={() => setStep('options')}
+          onVatTreatmentChange={handleVatTreatmentChange}
+          onContinue={handleMappingContinue}
           onBack={() => setStep('preview')}
         />
       )}
