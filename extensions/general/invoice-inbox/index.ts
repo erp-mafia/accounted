@@ -1094,6 +1094,18 @@ export const invoiceInboxExtension: Extension = {
             fileName: doc.file_name,
           })
 
+          // Re-running the extraction has to re-run the match too, or the one
+          // affordance the user reaches for when an item failed to auto-link
+          // ("Tolka om") can never produce a link: this path rewrote
+          // extracted_data and left matched_supplier_id untouched. Only a
+          // positive match is written, so a supplier the user picked by hand
+          // survives a retry that finds nothing.
+          const matchedSupplierId = await matchSupplierId(
+            ctx.supabase,
+            ctx.companyId,
+            extracted.supplier,
+          )
+
           const { error: updateError } = await ctx.supabase
             .from('invoice_inbox_items')
             .update({
@@ -1103,6 +1115,7 @@ export const invoiceInboxExtension: Extension = {
               // Retry is user-initiated and bypasses the page-count gate by
               // design: the user explicitly opted into the slow path.
               extraction_skipped: false,
+              ...(matchedSupplierId ? { matched_supplier_id: matchedSupplierId } : {}),
             })
             .eq('id', id)
             .eq('company_id', ctx.companyId)
