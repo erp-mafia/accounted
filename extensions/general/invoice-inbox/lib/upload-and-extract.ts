@@ -5,6 +5,7 @@ import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import type { InvoiceExtractionResult } from '@/types'
 import { PDFDocument } from 'pdf-lib'
 import path from 'node:path'
@@ -444,28 +445,9 @@ export async function uploadAndExtract(
     extracted.pages = { total: pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
   }
 
-  // Supplier match by org-nr, then case-insensitive name (no AI fuzz).
-  let matchedSupplierId: string | null = null
-  if (extracted.supplier.orgNumber) {
-    const { data: s } = await supabase
-      .from('suppliers')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('org_number', extracted.supplier.orgNumber)
-      .limit(1)
-      .maybeSingle()
-    if (s) matchedSupplierId = s.id
-  }
-  if (!matchedSupplierId && extracted.supplier.name) {
-    const { data: s } = await supabase
-      .from('suppliers')
-      .select('id')
-      .eq('company_id', companyId)
-      .ilike('name', extracted.supplier.name)
-      .limit(1)
-      .maybeSingle()
-    if (s) matchedSupplierId = s.id
-  }
+  // Supplier match by org-nr, then VAT number, then case-insensitive name
+  // (no AI fuzz).
+  const matchedSupplierId = await matchSupplierId(supabase, companyId, extracted.supplier)
 
   const { data: inbox, error: inboxError } = await supabase
     .from('invoice_inbox_items')
@@ -598,28 +580,13 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
         console.error('[invoice-inbox] Deferred extraction failed:', err)
       }
 
-      // Supplier match by org-nr, then case-insensitive name (no AI fuzz).
-      let matchedSupplierId: string | null = null
-      if (extracted.supplier.orgNumber) {
-        const { data: s } = await supabase
-          .from('suppliers')
-          .select('id')
-          .eq('company_id', job.companyId)
-          .eq('org_number', extracted.supplier.orgNumber)
-          .limit(1)
-          .maybeSingle()
-        if (s) matchedSupplierId = s.id
-      }
-      if (!matchedSupplierId && extracted.supplier.name) {
-        const { data: s } = await supabase
-          .from('suppliers')
-          .select('id')
-          .eq('company_id', job.companyId)
-          .ilike('name', extracted.supplier.name)
-          .limit(1)
-          .maybeSingle()
-        if (s) matchedSupplierId = s.id
-      }
+      // Supplier match by org-nr, then VAT number, then case-insensitive name
+      // (no AI fuzz).
+      const matchedSupplierId = await matchSupplierId(
+        supabase,
+        job.companyId,
+        extracted.supplier,
+      )
 
       // CAS: only the row still waiting on THIS worker flips. A user retry
       // or the sweep cron may have claimed it first; their result wins.

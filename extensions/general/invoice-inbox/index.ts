@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
+import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
 import {
   uploadAndExtract,
@@ -595,28 +596,12 @@ export const invoiceInboxExtension: Extension = {
         }
 
         // Re-run supplier match so the agent's parsed fields trigger the
-        // same auto-link the AI path uses. Skipped if neither key is present.
-        let matchedSupplierId: string | null = null
-        if (extracted.supplier.orgNumber) {
-          const { data: s } = await ctx.supabase
-            .from('suppliers')
-            .select('id')
-            .eq('company_id', ctx.companyId)
-            .eq('org_number', extracted.supplier.orgNumber)
-            .limit(1)
-            .maybeSingle()
-          if (s) matchedSupplierId = s.id
-        }
-        if (!matchedSupplierId && extracted.supplier.name) {
-          const { data: s } = await ctx.supabase
-            .from('suppliers')
-            .select('id')
-            .eq('company_id', ctx.companyId)
-            .ilike('name', extracted.supplier.name)
-            .limit(1)
-            .maybeSingle()
-          if (s) matchedSupplierId = s.id
-        }
+        // same auto-link the AI path uses. Skipped if no key is present.
+        const matchedSupplierId = await matchSupplierId(
+          ctx.supabase,
+          ctx.companyId,
+          extracted.supplier,
+        )
 
         const { data: updated, error: updateError } = await ctx.supabase
           .from('invoice_inbox_items')

@@ -135,7 +135,12 @@ import {
   projectToolInputSchema,
   resolveMcpCompanyContext,
 } from './company-routing'
-import { findSupplierCandidates } from './supplier-candidates'
+import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
+import {
+  matchSupplierByIdentity,
+  matchSupplierId,
+  supplierIdentityFrom,
+} from '@/lib/suppliers/match-supplier'
 import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
@@ -405,17 +410,7 @@ async function createDocumentInboxItem(
 
   const { data: extracted } = await extractInvoiceFields({ buffer, mimeType, fileName })
 
-  let matchedSupplierId: string | null = null
-  if (extracted.supplier.orgNumber) {
-    const { data: supplier } = await supabase
-      .from('suppliers')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('org_number', extracted.supplier.orgNumber)
-      .limit(1)
-      .maybeSingle()
-    if (supplier) matchedSupplierId = supplier.id
-  }
+  const matchedSupplierId = await matchSupplierId(supabase, companyId, extracted.supplier)
 
   const { data: inbox, error: inboxError } = await supabase
     .from('invoice_inbox_items')
@@ -9903,38 +9898,30 @@ export const tools: McpTool[] = [
       const totalsExt = extracted.totals as Record<string, unknown> | undefined
       const lineItemsExt = (extracted.lineItems as Array<Record<string, unknown>> | undefined) ?? []
 
-      // Resolve supplier: explicit override > matched > org_number lookup > name lookup
+      // Resolve supplier: explicit override > matched > org_number > VAT number > name
       const supplierIdOverride = args.supplier_id_override as string | undefined
       let supplierId: string | null = supplierIdOverride ?? (inbox.matched_supplier_id as string | null) ?? null
-      let supplierResolution: 'override' | 'matched' | 'lookup_org_number' | 'lookup_name' | 'unresolved' =
+      let supplierResolution:
+        | 'override'
+        | 'matched'
+        | 'lookup_org_number'
+        | 'lookup_vat_number'
+        | 'lookup_name'
+        | 'unresolved' =
         supplierIdOverride ? 'override' : inbox.matched_supplier_id ? 'matched' : 'unresolved'
 
+      const supplierIdentity = supplierIdentityFrom(supplierExt)
+
       if (!supplierId) {
-        const orgNumber = supplierExt?.organizationNumber as string | undefined
-        const supplierName = supplierExt?.name as string | undefined
-        if (orgNumber) {
-          const { data } = await supabase
-            .from('suppliers')
-            .select('id')
-            .eq('company_id', companyId)
-            .eq('org_number', orgNumber)
-            .maybeSingle()
-          if (data) {
-            supplierId = data.id
-            supplierResolution = 'lookup_org_number'
-          }
-        }
-        if (!supplierId && supplierName) {
-          const { data } = await supabase
-            .from('suppliers')
-            .select('id')
-            .eq('company_id', companyId)
-            .ilike('name', supplierName)
-            .maybeSingle()
-          if (data) {
-            supplierId = data.id
-            supplierResolution = 'lookup_name'
-          }
+        const match = await matchSupplierByIdentity(supabase, companyId, supplierIdentity)
+        if (match) {
+          supplierId = match.supplierId
+          supplierResolution =
+            match.matchedOn === 'org_number'
+              ? 'lookup_org_number'
+              : match.matchedOn === 'vat_number'
+                ? 'lookup_vat_number'
+                : 'lookup_name'
         }
       }
 
@@ -9945,20 +9932,21 @@ export const tools: McpTool[] = [
         // with near-miss candidates the agent can pass as supplier_id_override,
         // or a create-supplier next hint when nothing is close. Fuzzy scores
         // never auto-resolve: the agent/human confirms against the underlag.
-        const extractedName = (supplierExt?.name as string | undefined) ?? null
-        const extractedOrg = (supplierExt?.organizationNumber as string | undefined) ?? null
+        const extractedName = supplierIdentity.name
+        const extractedOrg = supplierIdentity.orgNumber
 
         const CANDIDATE_POOL_CAP = 500
         const { data: companySuppliers } = await supabase
           .from('suppliers')
-          .select('id, name, org_number')
+          .select('id, name, org_number, vat_number')
           .eq('company_id', companyId)
           .limit(CANDIDATE_POOL_CAP)
 
         const candidates = findSupplierCandidates(
-          (companySuppliers ?? []) as { id: string; name: string; org_number: string | null }[],
+          (companySuppliers ?? []) as SupplierRow[],
           extractedName,
           extractedOrg,
+          supplierIdentity.vatNumber,
         )
         const best = candidates[0]
         // No silent caps: past the pool cap the right supplier may exist yet
@@ -9978,6 +9966,7 @@ export const tools: McpTool[] = [
             unresolved_supplier: {
               extracted_name: extractedName,
               extracted_org_number: extractedOrg,
+              extracted_vat_number: supplierIdentity.vatNumber,
             },
             candidates,
             candidate_pool_truncated: poolTruncated,
@@ -10165,8 +10154,9 @@ export const tools: McpTool[] = [
         inbox_item_id: inboxItemId,
         supplier_id: supplierId,
         supplier_resolution: supplierResolution,
-        extracted_supplier_name: supplierExt?.name ?? null,
-        extracted_org_number: supplierExt?.organizationNumber ?? null,
+        extracted_supplier_name: supplierIdentity.name,
+        extracted_org_number: supplierIdentity.orgNumber,
+        extracted_vat_number: supplierIdentity.vatNumber,
         supplier_invoice_number: supplierInvoiceNumber,
         invoice_date: invoiceDate,
         due_date: dueDate,
@@ -15914,28 +15904,8 @@ export const tools: McpTool[] = [
       }
 
       // Re-run supplier match so agent-supplied fields trigger the same
-      // auto-link the AI path does (org-nr → name, ILIKE).
-      let matchedSupplierId: string | null = null
-      if (extracted.supplier.orgNumber) {
-        const { data: s } = await supabase
-          .from('suppliers')
-          .select('id')
-          .eq('company_id', companyId)
-          .eq('org_number', extracted.supplier.orgNumber)
-          .limit(1)
-          .maybeSingle()
-        if (s) matchedSupplierId = s.id
-      }
-      if (!matchedSupplierId && extracted.supplier.name) {
-        const { data: s } = await supabase
-          .from('suppliers')
-          .select('id')
-          .eq('company_id', companyId)
-          .ilike('name', extracted.supplier.name)
-          .limit(1)
-          .maybeSingle()
-        if (s) matchedSupplierId = s.id
-      }
+      // auto-link the AI path does (org-nr → VAT number → name, ILIKE).
+      const matchedSupplierId = await matchSupplierId(supabase, companyId, extracted.supplier)
 
       const { error: updateError } = await supabase
         .from('invoice_inbox_items')
