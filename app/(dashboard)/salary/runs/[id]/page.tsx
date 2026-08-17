@@ -62,6 +62,10 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const [approveOverride, setApproveOverride] = useState<string[] | null>(null)
   const [preferredPaymentFormat, setPreferredPaymentFormat] = useState<'bg_lb' | 'pain001'>('pain001')
   const [defaultBank, setDefaultBank] = useState<string | null>(null)
+  // undefined = settings not loaded yet, null = confirmed missing. The panel
+  // only warns on null, so a failed settings fetch never shows a false alarm.
+  const [senderBankgiro, setSenderBankgiro] = useState<string | null | undefined>(undefined)
+  const [senderIban, setSenderIban] = useState<string | null | undefined>(undefined)
   // Gates the default-dimensions chips on the employee rows: same
   // company_settings.dimensions_enabled UI gate as the voucher form.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
@@ -123,6 +127,10 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           setPreferredPaymentFormat(data.preferred_payment_format)
         }
         setDefaultBank(typeof data?.salary_default_bank === 'string' ? data.salary_default_bank : null)
+        setSenderBankgiro(
+          typeof data?.bankgiro === 'string' && data.bankgiro.trim() ? data.bankgiro : null,
+        )
+        setSenderIban(typeof data?.iban === 'string' && data.iban.trim() ? data.iban : null)
         setDimensionsEnabled(data?.dimensions_enabled === true)
       }
       setLoading(false)
@@ -821,6 +829,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           paymentFileGeneratedAt={run.payment_file_generated_at}
           defaultFormat={preferredPaymentFormat}
           defaultBank={defaultBank}
+          senderBankgiro={senderBankgiro}
+          senderIban={senderIban}
           readOnly={!canWrite}
           onDownloaded={loadRun}
         />
