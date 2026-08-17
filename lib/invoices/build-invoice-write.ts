@@ -353,8 +353,18 @@ export async function buildInvoiceWriteData(params: {
     // treated as absent: the validator below then asks the user to type one,
     // which beats surfacing an "invalid personnummer" error for a value they
     // never entered.
+    // Individual-only: ROT/RUT is a privatperson deduction (HUSFL), and
+    // customers.personal_number is individual-only in the Zod schemas but not
+    // in the DB, so a stray value on a business row (legacy import, direct
+    // write) must never be claimed on implicitly. A typed personnummer is
+    // unaffected: the user is stating it explicitly.
     let customerCardPersonnummer: string | null = null
-    if (personnummerRaw.length === 0 && hasDeductionItems && !keepStoredPersonnummer) {
+    if (
+      personnummerRaw.length === 0 &&
+      hasDeductionItems &&
+      !keepStoredPersonnummer &&
+      customer.customer_type === 'individual'
+    ) {
       try {
         const revealed = revealStoredCustomerPersonalNumber(customer.personal_number)
         const expanded = revealed ? expandPersonnummerTo12(revealed) : null

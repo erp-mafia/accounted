@@ -486,3 +486,41 @@ describe('buildInvoiceWriteData kundkort personnummer fallback', () => {
     expect('code' in result && result.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
   })
 })
+
+describe('buildInvoiceWriteData kundkort fallback customer-type gate', () => {
+  it('never claims on a stray personal_number of a non-individual customer', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    // personal_number is individual-only in the Zod schemas but not in the
+    // DB: a legacy/business row carrying one must not be claimed on
+    // implicitly, so the fallback stays off and validation asks for a typed
+    // personnummer.
+    const customer = makeCustomer({
+      customer_type: 'swedish_business',
+      personal_number: '900101-9802',
+    })
+    const result = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: {
+        ...baseHeader,
+        items: [{
+          description: 'Städning',
+          quantity: 10,
+          unit: 'tim',
+          unit_price: 500,
+          vat_rate: 25,
+          deduction_type: 'rut' as const,
+          labor_hours: 10,
+        }],
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect('code' in result && result.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
+  })
+})
