@@ -28,6 +28,7 @@ import {
   CannotCorrectNonPostedError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
+  CorrectionChainTooDeepError,
   DimensionValidationError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
@@ -289,6 +290,7 @@ function postgresCodeToStructured(code: string): string | null {
     case '42501':
       return 'FORBIDDEN'
     case '42P01':
+    case 'P0002':
       return 'NOT_FOUND'
     case '40001':
     case '40P01':
@@ -441,6 +443,12 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   }
   if (err instanceof MeaninglessCorrectionError) {
     return { code: err.code, details: { reason: err.reason } }
+  }
+  if (err instanceof CorrectionChainTooDeepError) {
+    return {
+      code: err.code,
+      details: { depth: err.depth, chainRootVoucher: err.chainRootVoucher },
+    }
   }
   if (err instanceof DimensionValidationError) {
     return { code: err.code, details: { issues: err.issues } }

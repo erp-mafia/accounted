@@ -14,9 +14,11 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Plus, Trash2, AlertTriangle, Search, Check, BookmarkPlus } from 'lucide-react'
+import { Loader2, Plus, Trash2, Search, Check, BookmarkPlus } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
 import { TemplateForm } from '@/components/settings/TemplateForm'
@@ -188,6 +190,12 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
 
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [accounts, setAccounts] = useState<BASAccount[]>([])
+  // Full BAS catalogue (static reference data, fetched once per session). Lets
+  // the account picker surface standard accounts the company hasn't activated
+  // yet; picking one activates it at commit via the existing
+  // ActivateAccountsDialog rail. Without it the picker only knows the active
+  // chart, which reads as "the account doesn't exist".
+  const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [entryDate, setEntryDate] = useState<string>(
     item.extracted_data?.invoice?.invoiceDate || new Date().toISOString().slice(0, 10)
   )
@@ -414,6 +422,9 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
         console.error('[book-direct] fetch reference data failed:', err)
       }
     })()
+    loadBasCatalog().then((data) => {
+      if (!cancelled) setCatalog(data)
+    }).catch(() => {/* search degrades to the active chart */})
     return () => { cancelled = true }
   }, [open])
 
@@ -522,6 +533,37 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   const removeLine = useCallback((idx: number) => {
     setLines((prev) => prev.length <= 2 ? prev : prev.filter((_, i) => i !== idx))
   }, [])
+
+  // Outstanding imbalance from every line except `excludeIndex`.
+  // Positive => debit side is short (a debit on the target row balances it);
+  // negative => credit side is short. Same semantics as JournalEntryForm.
+  const computeBalancingDiff = useCallback(
+    (excludeIndex: number) => {
+      const others = lines.filter((_, i) => i !== excludeIndex)
+      const d = others.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
+      const c = others.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
+      return roundOre(c - d)
+    },
+    [lines]
+  )
+
+  // Opt-in balancing (ported from JournalEntryForm): double-click a debit or
+  // credit field to fill the amount that makes the entry balance. No-op if
+  // already balanced or if the balancing entry belongs on the other side.
+  const handleFillBalance = useCallback(
+    (idx: number, side: 'debit' | 'credit') => {
+      const diff = computeBalancingDiff(idx)
+      const fill = side === 'debit' ? diff : -diff
+      if (fill <= 0) return
+      updateLine(
+        idx,
+        side === 'debit'
+          ? { debit_amount: fill.toFixed(2), credit_amount: '' }
+          : { credit_amount: fill.toFixed(2), debit_amount: '' }
+      )
+    },
+    [computeBalancingDiff, updateLine]
+  )
 
   // Replace the line set with a booking template's computed rows. The picker
   // hands back JournalEntryForm-shaped lines; we keep only the three fields
@@ -721,7 +763,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   disabled={isSubmitting}
                 />
               </div>
-              <div className="max-h-56 overflow-y-auto rounded-md border">
+              <div className="max-h-56 overflow-y-auto rounded-lg border">
                 {isLoadingTransactions ? (
                   <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Laddar…
@@ -858,6 +900,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                         <AccountCombobox
                           value={line.account_number}
                           accounts={accounts}
+                          catalog={catalog}
                           onChange={(v) => updateLine(idx, { account_number: v })}
                         />
                       </td>
@@ -868,6 +911,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           inputMode="decimal"
                           value={line.debit_amount}
                           onChange={(e) => updateLine(idx, { debit_amount: e.target.value, credit_amount: e.target.value ? '' : line.credit_amount })}
+                          onDoubleClick={() => handleFillBalance(idx, 'debit')}
                           disabled={isSubmitting}
                           className="text-right tabular-nums"
                           placeholder="0,00"
@@ -880,6 +924,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           inputMode="decimal"
                           value={line.credit_amount}
                           onChange={(e) => updateLine(idx, { credit_amount: e.target.value, debit_amount: e.target.value ? '' : line.debit_amount })}
+                          onDoubleClick={() => handleFillBalance(idx, 'credit')}
                           disabled={isSubmitting}
                           className="text-right tabular-nums"
                           placeholder="0,00"
@@ -903,13 +948,36 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 </tbody>
                 <tfoot className="bg-muted/20 text-xs">
                   <tr>
-                    <td className="px-3 py-2 text-right font-medium uppercase tracking-wider text-muted-foreground">
-                      Summa
+                    <td className="px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        {/* The remaining debit/credit gap, right where the user
+                            reconciles the sums: what is still missing to balance. */}
+                        {totals.diff !== 0 ? (
+                          <span className="tabular-nums font-medium text-destructive">
+                            Differens {Math.abs(totals.diff).toFixed(2)}
+                          </span>
+                        ) : (
+                          <span />
+                        )}
+                        <span className="text-right font-medium uppercase tracking-wider text-muted-foreground">
+                          Summa
+                        </span>
+                      </div>
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-medium">
+                    <td
+                      className={cn(
+                        'px-3 py-2 text-right tabular-nums font-medium',
+                        totals.diff !== 0 && 'text-destructive'
+                      )}
+                    >
                       {totals.debit.toFixed(2)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-medium">
+                    <td
+                      className={cn(
+                        'px-3 py-2 text-right tabular-nums font-medium',
+                        totals.diff !== 0 && 'text-destructive'
+                      )}
+                    >
                       {totals.credit.toFixed(2)}
                     </td>
                     <td />
@@ -958,12 +1026,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 <Badge variant="success" className="text-[11px]">
                   Balanserad
                 </Badge>
-              ) : (
-                <span className="text-xs text-muted-foreground flex items-center gap-1.5 tabular-nums">
-                  <AlertTriangle className="h-3.5 w-3.5 text-warning" />
-                  Diff {totals.diff.toFixed(2)}
+              ) : totals.diff !== 0 ? (
+                <span className="text-xs text-muted-foreground">
+                  Dubbelklicka i ett tomt beloppsfält för att fylla i differensen
                 </span>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -985,7 +1052,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
             <p
               className={cn(
                 'text-xs tabular-nums',
-                disabledReason ? 'text-warning-foreground' : 'text-muted-foreground'
+                disabledReason ? 'text-attn' : 'text-muted-foreground'
               )}
               aria-live="polite"
             >

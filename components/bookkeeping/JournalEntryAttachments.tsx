@@ -307,7 +307,7 @@ export default function JournalEntryAttachments({
             const isReplacing = replacingDocId === doc.id
             return (
               <div key={doc.id}>
-                <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50">
+                <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
                   {isPreviewable(doc.mime_type) ? (
                     <button
                       onClick={() => handlePreviewToggle(doc)}
@@ -432,8 +432,8 @@ export default function JournalEntryAttachments({
         <DialogContent>
           <DialogHeader>
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-warning/15 shrink-0">
-                <Lock className="h-5 w-5 text-warning-foreground" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted shrink-0">
+                <Lock className="h-5 w-5 text-attn" />
               </div>
               <DialogTitle>{t('remove_blocked_title')}</DialogTitle>
             </div>

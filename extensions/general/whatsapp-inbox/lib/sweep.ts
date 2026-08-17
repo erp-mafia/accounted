@@ -18,6 +18,9 @@
  *     questions keep their options and their parked receipts, so a late
  *     answer still files them (see the pass itself).
  *  4. Clear expired 8h company pins.
+ *  5. Count outbound sends that failed in the last 24h, so the per-minute
+ *     "whatsapp sweep complete" log line surfaces delivery problems nothing
+ *     else reads (delivery_status is otherwise write-only).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -64,6 +67,10 @@ export interface SweepSummary {
   finalizedAcks: number
   expiredQuestions: number
   clearedPins: number
+  /** Outbound rows with delivery_status='failed' created in the last 24h
+   *  (Graph send failure or a Meta 'failed' status callback). Observability
+   *  only: the sweep log line is the consumer. */
+  outboundFailed24h: number
 }
 
 interface StuckRow {
@@ -133,6 +140,7 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
     finalizedAcks: 0,
     expiredQuestions: 0,
     clearedPins: 0,
+    outboundFailed24h: 0,
   }
   const finalizeConversations = new Set<string>()
   const now = Date.now()
@@ -378,6 +386,20 @@ export async function runSweep(supabase: SupabaseClient): Promise<SweepSummary> 
     }
   } catch (err) {
     log.error('sweep: pin expiry pass failed', err)
+  }
+
+  // ── 5. Outbound delivery failures, last 24h (one head count) ──
+  try {
+    const since = new Date(now - 24 * 60 * 60 * 1000).toISOString()
+    const { count } = await supabase
+      .from('whatsapp_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('direction', 'outbound')
+      .eq('delivery_status', 'failed')
+      .gte('created_at', since)
+    summary.outboundFailed24h = count ?? 0
+  } catch (err) {
+    log.error('sweep: outbound failure count failed', err)
   }
 
   return summary

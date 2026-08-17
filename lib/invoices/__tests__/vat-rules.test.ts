@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   getAvailableVatRates,
+  getArticleVatRateAdoptionSet,
   getPermittedVatRates,
   getVatTreatmentForRate,
   getVatRules,
@@ -353,5 +354,45 @@ describe('getMomsRutaDescription', () => {
 
   it('returns the ruta string itself for unknown rutor', () => {
     expect(getMomsRutaDescription('99')).toBe('99')
+  })
+})
+
+// ============================================================
+// getArticleVatRateAdoptionSet
+// ============================================================
+
+describe('getArticleVatRateAdoptionSet', () => {
+  it('adopts nothing for a VAT-validated EU business (single locked 0% reverse charge)', () => {
+    expect(getArticleVatRateAdoptionSet('eu_business', true).size).toBe(0)
+  })
+
+  it('adopts nothing for a non-EU business (single locked 0% export)', () => {
+    expect(getArticleVatRateAdoptionSet('non_eu_business', false).size).toBe(0)
+  })
+
+  it('adopts the full domestic set for a Swedish business', () => {
+    const set = getArticleVatRateAdoptionSet('swedish_business', false)
+    expect([...set].sort((a, b) => a - b)).toEqual([0, 6, 12, 25])
+  })
+
+  it('adopts the full domestic set for an EU business WITHOUT validated VAT', () => {
+    const set = getArticleVatRateAdoptionSet('eu_business', false)
+    expect(set.has(25)).toBe(true)
+  })
+
+  it('is always a subset of the permitted set (adoption can never stage an unlawful rate)', () => {
+    const combos: Array<['individual' | 'swedish_business' | 'eu_business' | 'non_eu_business', boolean]> = [
+      ['individual', false],
+      ['swedish_business', false],
+      ['eu_business', false],
+      ['eu_business', true],
+      ['non_eu_business', false],
+    ]
+    for (const [type, validated] of combos) {
+      const permitted = new Set(getPermittedVatRates(type, validated).map((r) => r.rate))
+      for (const rate of getArticleVatRateAdoptionSet(type, validated)) {
+        expect(permitted.has(rate)).toBe(true)
+      }
+    }
   })
 })

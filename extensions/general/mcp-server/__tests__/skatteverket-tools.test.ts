@@ -125,7 +125,7 @@ describe('gnubok_vat_declaration_validate', () => {
     expect(result.redovisningsperiod).toBe('202503')
     // Only /kontrollera was called: nothing was saved at SKV.
     expect(mockSkvRequest).toHaveBeenCalledTimes(1)
-    expect(mockSkvRequest.mock.calls[0][3]).toMatch(/^\/kontrollera\//)
+    expect(mockSkvRequest.mock.calls[0][4]).toMatch(/^\/kontrollera\//)
   })
 })
 
@@ -148,7 +148,7 @@ describe('gnubok_vat_declaration_submit', () => {
     expect(result.preview.commit_action).toMatch(/signering/i)
     // Exactly one SKV call (the stage-time /kontrollera); no /utkast.
     expect(mockSkvRequest).toHaveBeenCalledTimes(1)
-    expect(mockSkvRequest.mock.calls[0][3]).toMatch(/^\/kontrollera\//)
+    expect(mockSkvRequest.mock.calls[0][4]).toMatch(/^\/kontrollera\//)
   })
 })
 

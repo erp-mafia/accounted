@@ -30,11 +30,35 @@ interface FyPickerProps {
    * wrong there. Manual picks still work and are still persisted.
    */
   preferLatestEnded?: boolean
+  /**
+   * Never auto-select on load, from ANY source: not the newest-period
+   * fallback, and not a selection persisted by an earlier session. The picker
+   * stays empty until the user chooses, every session.
+   *
+   * The default behaviour (restore or pick the newest) is right for a filter,
+   * where a sensible default beats an empty page. It is wrong where the year
+   * is an ASSERTION the user is making rather than a view they are narrowing:
+   * the underlag import resolves voucher references inside the chosen year and
+   * writes irreversible links. A pre-filled newest year would let a 2023 batch
+   * land in 2026, and a restored LAST-USED year is aimed even worse: in a
+   * multi-year migration the user is by definition moving to a year other than
+   * last time. Within one sitting the caller carries the choice in its own
+   * state (the wizard's reset() keeps it), which covers multi-batch runs
+   * without any cross-session hazard.
+   */
+  requireExplicitChoice?: boolean
   /** Fires once after the initial period load completes. */
   onReady?: () => void
   /** Server-loaded periods for the first render, scoped to initialCompanyId. */
   initialPeriods?: FiscalPeriod[]
   initialCompanyId?: string | null
+  /**
+   * localStorage prefix for the persisted selection (companyId is appended).
+   * Defaults to the report-wide shared scope; pass a page-specific prefix
+   * when the page's scope must not follow (or steer) the shared one, e.g.
+   * the transactions inbox, where a narrowed scope hides pending rows.
+   */
+  storageKeyPrefix?: string
   className?: string
 }
 
@@ -58,9 +82,11 @@ export function FyPicker({
   includeAllOption = true,
   hideFuturePeriods = false,
   preferLatestEnded = false,
+  requireExplicitChoice = false,
   onReady,
   initialPeriods,
   initialCompanyId,
+  storageKeyPrefix = STORAGE_KEY_PREFIX,
   className,
 }: FyPickerProps) {
   const { company } = useCompany()
@@ -100,7 +126,13 @@ export function FyPicker({
 
       // Restore last selection (same key as FiscalYearSelector so pages keep
       // their scope when the picker swaps in).
-      if (value === null && typeof window !== 'undefined') {
+      //
+      // requireExplicitChoice gates this WHOLE block, not individual branches:
+      // every path in here ends in an unprompted onChange (restore, the
+      // ALL_YEARS-stored fallback, newest-period, preferLatestEnded), and a
+      // per-branch gate already missed one of them once. Nothing auto-fires;
+      // the picker stays empty until a human picks.
+      if (value === null && !requireExplicitChoice && typeof window !== 'undefined') {
         if (preferLatestEnded) {
           // Filing surfaces: ignore the shared scope memory and open on the
           // most recently ended period (fetched is sorted newest-first).
@@ -108,7 +140,7 @@ export function FyPicker({
           const pick = fetched.find((p) => p.period_end < today) ?? fetched[0]
           if (pick) onChange(pick.id, pick)
         } else {
-          const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + company.id)
+          const stored = window.localStorage.getItem(storageKeyPrefix + company.id)
           if (stored === ALL_YEARS_VALUE) {
             if (includeAllOption) onChange(null, null)
             else if (fetched.length > 0) onChange(fetched[0].id, fetched[0])
@@ -128,12 +160,16 @@ export function FyPicker({
   // onReady is a lifecycle callback: fire once per load, not on parent
   // re-renders that re-create it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id, hideFuturePeriods, includeAllOption, preferLatestEnded, initialCompanyId, initialPeriods])
+  }, [company?.id, hideFuturePeriods, includeAllOption, preferLatestEnded, requireExplicitChoice, initialCompanyId, initialPeriods, storageKeyPrefix])
 
   const handleChange = (id: string) => {
     const nextId = id === ALL_YEARS_VALUE ? null : id
-    if (company?.id && typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEY_PREFIX + company.id, nextId ?? ALL_YEARS_VALUE)
+    // A per-batch assertion is never restored, so persisting it would be a
+    // write nothing reads. Worse than useless: this write happens BEFORE
+    // onChange, so a pick the caller rejects (e.g. mid-preview) would still
+    // be recorded as if it had taken effect.
+    if (!requireExplicitChoice && company?.id && typeof window !== 'undefined') {
+      window.localStorage.setItem(storageKeyPrefix + company.id, nextId ?? ALL_YEARS_VALUE)
     }
     onChange(nextId, nextId ? periods.find((p) => p.id === nextId) ?? null : null)
   }

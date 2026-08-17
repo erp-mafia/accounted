@@ -743,6 +743,24 @@ describe('CreateSupplierSchema', () => {
     const result = CreateSupplierSchema.safeParse(validSupplier({ default_expense_account: '6200' }))
     expect(result.success).toBe(true)
   })
+
+  // The web form submits untouched optional inputs as '' (Björn 2026-08-17:
+  // saving with the field left blank failed "Kontonummer måste vara 4 siffror").
+  it('treats empty-string expense account as absent', () => {
+    const result = CreateSupplierSchema.safeParse(validSupplier({ default_expense_account: '' }))
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.default_expense_account).toBeUndefined()
+    }
+  })
+
+  it('treats empty-string email as absent', () => {
+    const result = CreateSupplierSchema.safeParse(validSupplier({ email: '' }))
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.email).toBeUndefined()
+    }
+  })
 })
 
 // ============================================================
@@ -925,6 +943,23 @@ describe('CreateSupplierInvoiceItemSchema', () => {
       validSupplierInvoiceItem({ amount: 100.04, vat_rate: 0.25, vat_amount: 25.02 })
     )
     expect(result.success).toBe(true)
+  })
+
+  it('accepts apply_slp as an optional boolean (särskild löneskatt opt-in)', () => {
+    const flagged = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({ account_number: '7412', vat_rate: 0, apply_slp: true })
+    )
+    expect(flagged.success).toBe(true)
+
+    const omitted = CreateSupplierInvoiceItemSchema.safeParse(validSupplierInvoiceItem())
+    expect(omitted.success).toBe(true)
+  })
+
+  it('rejects non-boolean apply_slp', () => {
+    const result = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({ apply_slp: 'yes' })
+    )
+    expect(result.success).toBe(false)
   })
 
   it('works with quantity * unit_price line total', () => {
@@ -2189,6 +2224,39 @@ describe('UpdateSupplierSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  // Update routes pass fields straight into .update(), where undefined keys
+  // are dropped (unchanged) and null writes NULL. An empty string from a
+  // cleared form field must therefore become null, or clearing does nothing.
+  it('maps empty-string expense account to null so clearing persists', () => {
+    const result = UpdateSupplierSchema.safeParse({ default_expense_account: '' })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.default_expense_account).toBeNull()
+    }
+  })
+
+  it('maps empty-string email to null so clearing persists', () => {
+    const result = UpdateSupplierSchema.safeParse({ email: '' })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.email).toBeNull()
+    }
+  })
+
+  it('leaves omitted fields absent', () => {
+    const result = UpdateSupplierSchema.safeParse({ name: 'New Supplier' })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect('default_expense_account' in result.data).toBe(false)
+      expect('email' in result.data).toBe(false)
+    }
+  })
+
+  it('still rejects a malformed expense account on update', () => {
+    const result = UpdateSupplierSchema.safeParse({ default_expense_account: '54' })
+    expect(result.success).toBe(false)
+  })
+
   it('rejects invalid expense account format', () => {
     const result = UpdateSupplierSchema.safeParse({ default_expense_account: '40' })
     expect(result.success).toBe(false)
@@ -2287,6 +2355,17 @@ describe('UpdateAccountSchema', () => {
       normal_balance: 'debit',
       default_vat_rate: 0.5,
     }).success).toBe(false)
+  })
+
+  it('accepts supported account VAT treatments and rejects unknown values', () => {
+    expect(UpdateAccountSchema.safeParse({
+      default_vat_treatment: 'reverse_charge_eu_goods',
+    }).success).toBe(true)
+    expect(UpdateAccountSchema.safeParse({
+      default_vat_treatment: 'reverse_charge_non_eu_services',
+    }).success).toBe(true)
+    expect(UpdateAccountSchema.safeParse({ default_vat_treatment: null }).success).toBe(true)
+    expect(UpdateAccountSchema.safeParse({ default_vat_treatment: 'eu_purchase' }).success).toBe(false)
   })
 })
 
@@ -2771,5 +2850,24 @@ describe('CreateRecurringScheduleSchema interval_months', () => {
     expect(CreateRecurringScheduleSchema.safeParse({ ...base, interval_months: 0 }).success).toBe(false)
     expect(CreateRecurringScheduleSchema.safeParse({ ...base, interval_months: 13 }).success).toBe(false)
     expect(CreateRecurringScheduleSchema.safeParse({ ...base, interval_months: 1.5 }).success).toBe(false)
+  })
+})
+
+describe('CreateSalaryLineItemSchema: derived-only item types', () => {
+  it("rejects manual 'oresavrundning' lines (only the calculator may write them)", async () => {
+    const { CreateSalaryLineItemSchema, UpdateSalaryLineItemSchema } = await import('../schemas')
+    const base = {
+      salary_run_employee_id: '3f0a2f60-0000-4000-8000-000000000001',
+      description: 'Öresavrundning',
+      amount: 0.4,
+    }
+    expect(
+      CreateSalaryLineItemSchema.safeParse({ ...base, item_type: 'oresavrundning' }).success,
+    ).toBe(false)
+    expect(
+      CreateSalaryLineItemSchema.safeParse({ ...base, item_type: 'bonus' }).success,
+    ).toBe(true)
+    expect(UpdateSalaryLineItemSchema.safeParse({ item_type: 'oresavrundning' }).success).toBe(false)
+    expect(UpdateSalaryLineItemSchema.safeParse({ item_type: 'bonus' }).success).toBe(true)
   })
 })

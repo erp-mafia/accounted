@@ -43,6 +43,8 @@ import {
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
+import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
@@ -52,6 +54,13 @@ import {
   executeYearEndClosing,
   generateOpeningBalances,
 } from '@/lib/core/bookkeeping/year-end-service'
+import {
+  assessKontantmetodCutoff,
+  cutoffPreviewFingerprint,
+  hasIncompleteKontantmetodCutoffPair,
+  KontantmetodCutoffPartialError,
+  postKontantmetodCutoff,
+} from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
 import {
   createSupplierCreditNoteEntry,
@@ -68,6 +77,10 @@ import {
   type BatchAllocationResult,
 } from '@/lib/invoices/clear-settled-batch-allocations'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
+import {
+  completeInboxItemsForBookedTransaction,
+  resolveVoucherLinkedEntryIds,
+} from '@/lib/transactions/inbox-underlag'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import { executeSIEImport, undoSIEImport } from '@/lib/import/sie-import'
@@ -115,6 +128,7 @@ import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pend
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import { CreateAccountParamsSchema, UpdateAccountParamsSchema } from '@/lib/pending-operations/schemas/account'
+import { defaultRateForVatTreatment } from '@/lib/vat/account-vat-treatment'
 import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
 import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
@@ -294,6 +308,23 @@ async function commitCategorizeTransaction(
   // propagation all live in the shared core (lib/transactions/categorize-core.ts)
   // so the bulk-book-inbox executor and the Underlag "Bokför valda" route reuse
   // exactly this logic.
+  // Tamper/drift gate for the explicit business-side account: a PRESENT but
+  // malformed account_override must fail loudly, never degrade to the
+  // category default. The approver approved a preview showing the override
+  // account, so posting anything else would diverge from what was approved.
+  const rawAccountOverride = params.account_override
+  if (
+    rawAccountOverride != null &&
+    !(typeof rawAccountOverride === 'string' && ACCOUNT_NUMBER_RE.test(rawAccountOverride))
+  ) {
+    return {
+      error:
+        'Ogiltigt account_override i den stagade operationen (förväntade 4 siffror). ' +
+        'Avvisa operationen och stagea om kategoriseringen.',
+      status: 400,
+    }
+  }
+
   return categorizeMatchedTransaction(supabase, userId, companyId, txId, {
     category,
     vatTreatment,
@@ -302,6 +333,8 @@ async function commitCategorizeTransaction(
     allowDuplicate: params.allow_duplicate === true,
     // Dimensions PR7: resolved at staging; coerce is the drift/tamper gate.
     dimensions: coerceDimensionsBag(params.dimensions),
+    // Validated against the chart both at staging and inside the core at commit.
+    accountOverride: (rawAccountOverride as string | null | undefined) ?? undefined,
   })
 }
 
@@ -914,6 +947,13 @@ async function commitCreateAccount(
   // Same row shape as the dashboard create route
   // (app/api/bookkeeping/accounts/route.ts): class/group/sort_order derive
   // from the number so the two write paths cannot drift.
+  const defaultVatRate = validated.default_vat_treatment && validated.default_vat_rate == null
+    ? defaultRateForVatTreatment(
+        validated.default_vat_treatment,
+        Number(validated.account_number[0]),
+      )
+    : validated.default_vat_rate ?? null
+
   const { data, error } = await supabase
     .from('chart_of_accounts')
     .insert({
@@ -930,7 +970,8 @@ async function commitCreateAccount(
       is_system_account: false,
       description: validated.description ?? null,
       default_vat_code: validated.default_vat_code ?? null,
-      default_vat_rate: validated.default_vat_rate ?? null,
+      default_vat_rate: defaultVatRate,
+      default_vat_treatment: validated.default_vat_treatment ?? null,
       sru_code: validated.sru_code ?? null,
       sort_order: parseInt(validated.account_number),
     })
@@ -968,6 +1009,31 @@ async function commitUpdateAccount(
   const updateData: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(rest)) {
     if (value !== undefined) updateData[key] = value
+  }
+
+  if (validated.default_vat_treatment && validated.default_vat_rate == null) {
+    const { data: current, error: currentError } = await supabase
+      .from('chart_of_accounts')
+      .select('default_vat_rate')
+      .eq('company_id', companyId)
+      .eq('account_number', account_number)
+      .single()
+
+    if (currentError) {
+      if (currentError.code === 'PGRST116') {
+        return { error: 'Kontot hittades inte', status: 404 }
+      }
+      return { error: currentError.message, status: 500 }
+    }
+
+    if (current.default_vat_rate == null) {
+      updateData.default_vat_rate = defaultRateForVatTreatment(
+        validated.default_vat_treatment,
+        Number(account_number.charAt(0)),
+      )
+    } else {
+      delete updateData.default_vat_rate
+    }
   }
   if (Object.keys(updateData).length === 0) {
     return { error: 'Inget att uppdatera', status: 400 }
@@ -1485,6 +1551,26 @@ async function commitCreateInvoice(
   for (const acct of overrideAccounts) {
     if (!(await isValidRevenueAccount(supabase, companyId, acct))) {
       return { error: `Bokföringskonto ${acct} är inte ett aktivt balans- eller intäktskonto (klass 1-3)`, status: 400 }
+    }
+  }
+
+  // Drift/tamper gate for staged article references: the FK on
+  // invoice_items.article_id only proves the article exists, not that it
+  // belongs to THIS company, so scope-check here like revenue_account above.
+  const stagedArticleIds = Array.from(
+    new Set(items.map((i) => i.article_id).filter((a): a is string => !!a)),
+  )
+  if (stagedArticleIds.length > 0) {
+    const { data: articleRows, error: articleError } = await supabase
+      .from('articles')
+      .select('id')
+      .eq('company_id', companyId)
+      .in('id', stagedArticleIds)
+    if (articleError) return { error: articleError.message, status: 500 }
+    const foundArticleIds = new Set((articleRows ?? []).map((a: { id: string }) => a.id))
+    const missingArticleId = stagedArticleIds.find((a) => !foundArticleIds.has(a))
+    if (missingArticleId) {
+      return { error: `Artikel ${missingArticleId} finns inte i företaget`, status: 400 }
     }
   }
 
@@ -2941,13 +3027,18 @@ async function commitAttachDocumentToTransaction(
   // A document that already serves as underlag for a DIFFERENT verifikation
   // cannot be pinned here: propagating would either corrupt that link or be
   // blocked by the document-metadata immutability trigger. Same verifikation
-  // is fine (idempotent re-attach; propagation below becomes a no-op).
+  // is fine (idempotent re-attach; propagation below becomes a no-op). A
+  // bulk-booked tx keeps journal_entry_id null and is anchored through
+  // transaction_voucher_links, so that anchoring counts as "same" too.
   // Mirrors the REST route in app/api/transactions/[id]/attach-document.
   const docJournalEntryId = (doc.journal_entry_id as string | null) ?? null
   if (docJournalEntryId && docJournalEntryId !== tx.journal_entry_id) {
-    return {
-      error: 'Underlaget är redan kopplat till en annan verifikation.',
-      status: 409,
+    const voucherLinked = await resolveVoucherLinkedEntryIds(supabase, companyId, [txId])
+    if (docJournalEntryId !== voucherLinked.get(txId)) {
+      return {
+        error: 'Underlaget är redan kopplat till en annan verifikation.',
+        status: 409,
+      }
     }
   }
 
@@ -3041,6 +3132,20 @@ async function commitAttachDocumentToTransaction(
     }
   }
 
+  // The transaction may already be booked, directly or via a bulk-book
+  // samlingsverifikat (journal_entry_id null, anchored through
+  // transaction_voucher_links): complete the matched inbox items against the
+  // anchoring verifikat so an after-the-fact attach resolves them instead of
+  // stranding them as "linked" forever. Best-effort, logged inside. Returns
+  // the anchoring verifikat (the direct id when there is one), so the result
+  // and audit trail can report the voucher-linked case too.
+  const effectiveJournalEntryId = await completeInboxItemsForBookedTransaction(
+    supabase,
+    companyId,
+    txId,
+    { directJournalEntryId: journalEntryId },
+  )
+
   // Rättelse audit trail (BFL 5 kap 5 §): if we replaced a non-null doc, log
   // the swap to processing_history so the original is traceable. Best-effort:
   // a logging failure must not roll back the (compliant) attach.
@@ -3056,7 +3161,7 @@ async function commitAttachDocumentToTransaction(
           transaction_id: txId,
           previous_document_id: previousDocumentId,
           new_document_id: documentId,
-          journal_entry_id: journalEntryId,
+          journal_entry_id: effectiveJournalEntryId,
         },
         actor: { type: 'user', id: userId },
         occurredAt: new Date(),
@@ -3071,7 +3176,7 @@ async function commitAttachDocumentToTransaction(
       transaction_id: txId,
       document_id: documentId,
       previous_document_id: previousDocumentId,
-      journal_entry_id: journalEntryId,
+      journal_entry_id: effectiveJournalEntryId,
     },
   }
 }
@@ -3164,6 +3269,124 @@ async function commitRunYearEnd(
   } catch (err) {
     if (isBookkeepingError(err)) throw err
     return { error: err instanceof Error ? err.message : 'Year-end failed', status: 400 }
+  }
+}
+
+async function commitPostKontantmetodCutoff(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  const fiscalPeriodId = params.fiscal_period_id as string
+  const nextFiscalPeriodId = params.next_fiscal_period_id as string
+  const stagedPeriodEnd = params.period_end as string
+  const stagedEntityType = params.entity_type as EntityType
+  const stagedFingerprint = params.preview_fingerprint as string
+  if (
+    !fiscalPeriodId || !nextFiscalPeriodId ||
+    !stagedPeriodEnd || !stagedEntityType || !stagedFingerprint
+  ) {
+    return { error: 'Invalid staged kontantmetod cut-off parameters', status: 400 }
+  }
+
+  const [{ data: period }, { data: settings }] = await Promise.all([
+    supabase
+      .from('fiscal_periods')
+      .select('id, period_start, period_end, is_closed, locked_at')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    supabase
+      .from('company_settings')
+      .select('accounting_method, entity_type')
+      .eq('company_id', companyId)
+      .maybeSingle(),
+  ])
+
+  if (!period) return { error: 'Fiscal period not found', status: 404 }
+  if (period.is_closed || period.locked_at) {
+    return { error: 'Räkenskapsperioden är stängd eller låst', status: 409 }
+  }
+  if (period.period_end >= getSwedishLocalDate()) {
+    return { error: 'Bokslutsavgränsningen kan bokföras först efter periodens slut', status: 409 }
+  }
+  if (period.period_end !== stagedPeriodEnd || settings?.entity_type !== stagedEntityType) {
+    return { error: 'Period- eller företagsuppgifter har ändrats sedan förhandsgranskningen', status: 409 }
+  }
+  if (settings?.accounting_method !== 'cash') {
+    return { error: 'Företaget använder inte kontantmetoden', status: 409 }
+  }
+
+  const { data: nextPeriod } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start, period_end, is_closed, locked_at')
+    .eq('id', nextFiscalPeriodId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (!nextPeriod) return { error: 'Nästa räkenskapsår hittades inte', status: 409 }
+
+  try {
+    const assessment = await assessKontantmetodCutoff(
+      supabase,
+      companyId,
+      period,
+      nextFiscalPeriodId,
+      settings.entity_type ?? 'aktiebolag',
+    )
+
+    if (assessment.postings.complete || hasIncompleteKontantmetodCutoffPair(
+      assessment.postings,
+      assessment.lines,
+    )) {
+      return {
+        error:
+          'Kontantmetodens bokslutsavgränsning är redan bokförd eller delvis bokförd för perioden',
+        status: 409,
+      }
+    }
+    const currentFingerprint = cutoffPreviewFingerprint({
+      collection: assessment.collection,
+      lines: assessment.lines,
+      entityType: settings.entity_type ?? 'aktiebolag',
+      periodEnd: period.period_end,
+    })
+    if (currentFingerprint !== stagedFingerprint) {
+      return {
+        error:
+          'Reskontran har ändrats sedan förhandsgranskningen. Skapa en ny förhandsgranskning innan du bokför.',
+        status: 409,
+      }
+    }
+
+    const result = await postKontantmetodCutoff(supabase, companyId, userId, {
+      fiscalPeriodId,
+      nextFiscalPeriodId,
+      periodEnd: period.period_end,
+      receivables: assessment.collection.receivables,
+      payables: assessment.collection.payables,
+      entityType: settings.entity_type ?? 'aktiebolag',
+      unknownVatTreatment: assessment.collection.unknownVatTreatment,
+      strayVatOnZeroRate: assessment.collection.strayVatOnZeroRate,
+    })
+
+    return {
+      data: {
+        receivable_entry_id: result.receivableEntry?.id ?? null,
+        receivable_reversal_entry_id: result.receivableReversal?.id ?? null,
+        payable_entry_id: result.payableEntry?.id ?? null,
+        payable_reversal_entry_id: result.payableReversal?.id ?? null,
+      },
+    }
+  } catch (err) {
+    if (err instanceof KontantmetodCutoffPartialError) {
+      throw new PartialCommitError(err.message, err.postedIds, err.cause)
+    }
+    if (isBookkeepingError(err)) throw err
+    return {
+      error: err instanceof Error ? err.message : 'Kontantmetodens bokslutsavgränsning misslyckades',
+      status: 400,
+    }
   }
 }
 
@@ -3383,6 +3606,21 @@ async function commitCreateSupplierInvoiceFromInbox(
     return { error: 'exchange_rate must be a finite number when provided', status: 400 }
   }
 
+  // Särskild löneskatt (SLP): staged params must respect the same rule the
+  // create routes enforce; the 7533/2514 pair is only lawful on 741x pension
+  // premiums, so a flag on any other account is tampered or mis-staged.
+  const slpInvalid = rawItems.some(
+    (item) => item.apply_slp === true && !isSlpPensionAccount(String(item.account_number ?? '')),
+  )
+  if (slpInvalid) {
+    return {
+      error:
+        getErrorEntry('SI_CREATE_SLP_INVALID_ACCOUNT')?.message_sv ??
+        'Särskild löneskatt kan bara läggas till på rader med pensionskonto 7410-7419.',
+      status: 400,
+    }
+  }
+
   // Idempotency: a re-fired commit (e.g. retry, double-click on the approval
   // UI, racy MCP call) must not create a second leverantörsfaktura for the
   // same inbox row. The DB FK on invoice_inbox_items.created_supplier_invoice_id
@@ -3566,6 +3804,9 @@ async function commitCreateSupplierInvoiceFromInbox(
       reverse_charge_rate: reverseCharge
         ? ([0.06, 0.12, 0.25].includes(Number(item.reverse_charge_rate)) ? Number(item.reverse_charge_rate) : null)
         : null,
+      // Särskild löneskatt (SLP): booking injects the self-balancing
+      // 7533/2514 pair for this line. Validated above (741x accounts only).
+      apply_slp: item.apply_slp === true,
       dimensions: coerceDimensionsBag(item.dimensions) ?? {},
     }
   })
@@ -4520,7 +4761,12 @@ async function commitCorrectEntry(
     // made in May 2026 for a December 2025 voucher correctly lands in 2025,
     // keeping that period's balances consistent. The is_closed pre-flight
     // above is what blocks corrections to already-locked periods.
-    const result = await correctEntry(supabase, companyId, userId, entryId, lines)
+    const result = await correctEntry(supabase, companyId, userId, entryId, lines, {
+      // Staged by the MCP tool when the agent explicitly overrode the
+      // chain-depth guard; the guard re-checks here so a stale approval of a
+      // chain that grew deeper in the meantime still stops.
+      allowDeepChain: params.allow_deep_chain === true,
+    })
     return {
       data: {
         original_entry_id: entryId,
@@ -4593,7 +4839,9 @@ async function commitReverseEntry(
   }
 
   try {
-    const reversal = await reverseEntry(supabase, companyId, userId, entryId, reversalDate)
+    const reversal = await reverseEntry(supabase, companyId, userId, entryId, reversalDate, {
+      allowDeepChain: params.allow_deep_chain === true,
+    })
     // Invariant per BFL 5 kap 5§: the storno must land in the same fiscal period
     // as the original entry. reverseEntry() at lib/bookkeeping/engine.ts:492 uses
     // original.fiscal_period_id, but assert it here so a future engine change that
@@ -4940,9 +5188,23 @@ async function commitRegisterAbsence(
       includeWeekends: (params.include_weekends as boolean | undefined) ?? false,
     })
     if (!result.ok) {
+      // The user-facing message is generic Swedish; without this log the
+      // underlying PG error (e.g. the franvaro audit-trigger RLS denial that
+      // caused five untraceable 500s, feedback 2026-08-13) leaves no trace.
+      // pgDetails, not details: `details` is the logger record's own field
+      // for non-object args and would be swallowed by the pretty emitter.
+      createLogger('commit/register_absence').error('register_absence commit failed', {
+        code: result.code,
+        pgDetails: result.details,
+        employeeId,
+        absenceType,
+        from,
+        to,
+      })
       const entry = getErrorEntry(result.code)
       return {
         error: entry?.message_sv ?? `Kunde inte registrera frånvaron: ${result.code}`,
+        errorCode: result.code,
         status: entry?.httpStatus ?? 500,
       }
     }
@@ -5039,9 +5301,19 @@ async function commitDeleteAbsence(
       absenceType: (params.absence_type as string | undefined) || undefined,
     })
     if (!result.ok) {
+      // Same diagnosability treatment as commitRegisterAbsence: keep the PG
+      // error in the logs and the registry code on the op row.
+      createLogger('commit/delete_absence').error('delete_absence commit failed', {
+        code: result.code,
+        pgDetails: result.details,
+        employeeId,
+        from,
+        to,
+      })
       const entry = getErrorEntry(result.code)
       return {
         error: entry?.message_sv ?? `Kunde inte ta bort frånvaron: ${result.code}`,
+        errorCode: result.code,
         status: entry?.httpStatus ?? 500,
       }
     }
@@ -5626,6 +5898,14 @@ async function commitPendingOperationInner(
         break
       case 'run_year_end':
         result = await commitRunYearEnd(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'post_kontantmetod_cutoff':
+        result = await commitPostKontantmetodCutoff(
+          supabase,
+          userId,
+          companyId,
+          pendingOp.params,
+        )
         break
       case 'set_opening_balances':
         result = await commitSetOpeningBalances(supabase, userId, companyId, pendingOp.params)

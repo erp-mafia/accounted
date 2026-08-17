@@ -44,6 +44,7 @@ import {
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -56,9 +57,15 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
+import {
+  completeInboxItemsForBookedTransaction,
+  resolveBookedJournalEntryIds,
+} from '@/lib/transactions/inbox-underlag'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
+import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { buildFallbackKonteringLines } from './lib/fallback-kontering'
 import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import type { Transaction, EntityType } from '@/types'
@@ -182,10 +189,17 @@ export const invoiceInboxExtension: Extension = {
         if (!limit.ok) {
           return NextResponse.json(
             {
-              error:
-                limit.scope === 'minute'
-                  ? 'För många uppladdningar på kort tid. Försök igen om en stund.'
-                  : 'Dagsgränsen för uppladdningar är nådd. Försök igen imorgon.',
+              error: {
+                code: 'RATE_LIMITED',
+                message:
+                  limit.scope === 'minute'
+                    ? 'För många uppladdningar på kort tid. Försök igen om en stund.'
+                    : 'Dagsgränsen för uppladdningar är nådd. Försök igen imorgon.',
+                message_en:
+                  limit.scope === 'minute'
+                    ? 'Too many uploads in a short time. Try again in a moment.'
+                    : 'The daily upload limit has been reached. Try again tomorrow.',
+              },
               retry_after: limit.retryAfterSec,
             },
             { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
@@ -206,15 +220,18 @@ export const invoiceInboxExtension: Extension = {
           formData.get('skip_extraction') === 'true' ||
           formData.get('skip_extraction') === '1'
 
-        if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+        if (!file) return errorResponseFromCode('INBOX_UPLOAD_NO_FILE', ctx.log)
         if (file.size > MAX_FILE_SIZE) {
-          return NextResponse.json({ error: `File too large (max ${MAX_FILE_SIZE / 1024 / 1024} MB)` }, { status: 400 })
+          return errorResponseFromCode('INBOX_UPLOAD_TOO_LARGE', ctx.log, {
+            messageSv: `Filen är för stor. Maxstorlek är ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
+            messageEn: `File exceeds the ${MAX_FILE_SIZE / 1024 / 1024} MB size limit.`,
+          })
         }
         if (!UPLOAD_ALLOWED_MIME_TYPES.has(file.type)) {
-          return NextResponse.json(
-            { error: `Unsupported file type: ${file.type}. Allowed: PDF, JPEG, PNG, HEIC, WebP` },
-            { status: 400 }
-          )
+          return errorResponseFromCode('INBOX_UPLOAD_UNSUPPORTED_TYPE', ctx.log, {
+            messageSv: `Filtypen stöds inte: ${file.type || 'okänd'}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
+            messageEn: `Unsupported file type: ${file.type || 'unknown'}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
+          })
         }
 
         // Validate matched_transaction_id belongs to this company before we
@@ -233,15 +250,18 @@ export const invoiceInboxExtension: Extension = {
             return NextResponse.json({ error: txErr.message }, { status: 500 })
           }
           if (!tx) {
-            return NextResponse.json(
-              { error: 'matched_transaction_id refers to a transaction outside this company.' },
-              { status: 400 },
-            )
+            return errorResponseFromCode('INBOX_UPLOAD_TX_NOT_IN_COMPANY', ctx.log)
           }
         }
 
         try {
           const buffer = await file.arrayBuffer()
+          // Staged upload: the row lands as 'processing' and the response
+          // returns before Bedrock runs; the deferred worker (or the sweep
+          // cron) flips it to 'received'. Only this web route defers: email
+          // and WhatsApp ingestion already run in background contexts and
+          // consume the returned item synchronously. When skipExtraction is
+          // set the call stays synchronous (see uploadAndExtract).
           const result = await uploadAndExtract(
             ctx.supabase,
             ctx.userId,
@@ -250,13 +270,24 @@ export const invoiceInboxExtension: Extension = {
             'upload',
             undefined,
             matchedTransactionId,
-            { skipExtraction },
+            { skipExtraction, deferExtraction: true },
           )
           return NextResponse.json({ data: result })
         } catch (error) {
           console.error('[invoice-inbox/upload] Failed:', error)
+          // Pass the thrown message through: the document service raises its
+          // user-facing failures (magic-byte mismatch, corrupt content) in
+          // Swedish, and getErrorMessage substitutes the registry copy for
+          // this code when the message is internal English.
+          const message = error instanceof Error && error.message.trim() ? error.message : null
           return NextResponse.json(
-            { error: error instanceof Error ? error.message : 'Upload failed' },
+            {
+              error: {
+                code: 'INBOX_UPLOAD_FAILED',
+                message: message ?? 'Uppladdningen misslyckades. Försök igen.',
+                message_en: message ?? 'Upload failed.',
+              },
+            },
             { status: 500 }
           )
         }
@@ -297,7 +328,44 @@ export const invoiceInboxExtension: Extension = {
         const { data, error } = await query
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-        return NextResponse.json({ data: { items: data, count: data?.length ?? 0 } })
+        // Enrich matched-but-unstamped items with the verifikat that anchors
+        // their transaction, when it is already booked. The stamp
+        // (created_journal_entry_id) is UNIQUE per verifikat, so on a
+        // samlingsverifikat only one of N items can carry it: deriving
+        // "booked" from the transaction's own state is what lets the rest
+        // leave the active inbox (2026-08-12 report: booked items stuck in
+        // "Att göra" pointing at a transaction no longer in the work list).
+        type ItemRow = {
+          matched_transaction_id: string | null
+          created_journal_entry_id: string | null
+          created_supplier_invoice_id: string | null
+        }
+        const rows = (data ?? []) as ItemRow[]
+        const unresolvedTxIds = Array.from(
+          new Set(
+            rows
+              .filter(
+                (r) =>
+                  r.matched_transaction_id &&
+                  !r.created_journal_entry_id &&
+                  !r.created_supplier_invoice_id,
+              )
+              .map((r) => r.matched_transaction_id as string),
+          ),
+        )
+        const bookedByTx = await resolveBookedJournalEntryIds(
+          ctx.supabase,
+          ctx.companyId,
+          unresolvedTxIds,
+        )
+        const items = rows.map((r) => ({
+          ...r,
+          matched_transaction_journal_entry_id: r.matched_transaction_id
+            ? bookedByTx.get(r.matched_transaction_id) ?? null
+            : null,
+        }))
+
+        return NextResponse.json({ data: { items, count: items.length } })
       },
     },
 
@@ -358,7 +426,28 @@ export const invoiceInboxExtension: Extension = {
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
         if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-        return NextResponse.json({ data })
+        // Same enrichment as the list: the detail rail must not offer to
+        // book a matched transaction that is already booked.
+        const row = data as {
+          matched_transaction_id: string | null
+          created_journal_entry_id: string | null
+          created_supplier_invoice_id: string | null
+        }
+        let matchedTransactionJournalEntryId: string | null = null
+        if (
+          row.matched_transaction_id &&
+          !row.created_journal_entry_id &&
+          !row.created_supplier_invoice_id
+        ) {
+          const bookedByTx = await resolveBookedJournalEntryIds(ctx.supabase, ctx.companyId, [
+            row.matched_transaction_id,
+          ])
+          matchedTransactionJournalEntryId = bookedByTx.get(row.matched_transaction_id) ?? null
+        }
+
+        return NextResponse.json({
+          data: { ...row, matched_transaction_journal_entry_id: matchedTransactionJournalEntryId },
+        })
       },
     },
 
@@ -586,15 +675,18 @@ export const invoiceInboxExtension: Extension = {
 
         const formData = await request.formData()
         const file = formData.get('file') as File | null
-        if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+        if (!file) return errorResponseFromCode('INBOX_UPLOAD_NO_FILE', ctx.log)
         if (file.size > MAX_FILE_SIZE) {
-          return NextResponse.json({ error: `File too large (max ${MAX_FILE_SIZE / 1024 / 1024} MB)` }, { status: 400 })
+          return errorResponseFromCode('INBOX_UPLOAD_TOO_LARGE', ctx.log, {
+            messageSv: `Filen är för stor. Maxstorlek är ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
+            messageEn: `File exceeds the ${MAX_FILE_SIZE / 1024 / 1024} MB size limit.`,
+          })
         }
         if (!UPLOAD_ALLOWED_MIME_TYPES.has(file.type)) {
-          return NextResponse.json(
-            { error: `Unsupported file type: ${file.type}. Allowed: PDF, JPEG, PNG, HEIC, WebP` },
-            { status: 400 }
-          )
+          return errorResponseFromCode('INBOX_UPLOAD_UNSUPPORTED_TYPE', ctx.log, {
+            messageSv: `Filtypen stöds inte: ${file.type || 'okänd'}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
+            messageEn: `Unsupported file type: ${file.type || 'unknown'}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
+          })
         }
 
         const { data: item } = await ctx.supabase
@@ -709,8 +801,16 @@ export const invoiceInboxExtension: Extension = {
           })
         } catch (error) {
           console.error('[invoice-inbox/attach-document] Failed:', error)
+          // Same pass-through rationale as the /upload catch above.
+          const message = error instanceof Error && error.message.trim() ? error.message : null
           return NextResponse.json(
-            { error: error instanceof Error ? error.message : 'Attach failed' },
+            {
+              error: {
+                code: 'INBOX_ATTACH_FAILED',
+                message: message ?? 'Bilagan kunde inte kopplas. Försök igen.',
+                message_en: message ?? 'Failed to attach the document.',
+              },
+            },
             { status: 500 }
           )
         }
@@ -842,6 +942,17 @@ export const invoiceInboxExtension: Extension = {
             console.error('[invoice-inbox/match-transaction] tx.document_id backfill failed:', txUpdateError)
           }
         }
+
+        // The matched transaction may already be booked (directly or via a
+        // bulk-book samlingsverifikat): complete the item against the
+        // anchoring verifikat (underlag link + consumed stamp) so matching
+        // to a settled purchase resolves the item instead of stranding it
+        // as "linked". Best-effort, logged inside.
+        await completeInboxItemsForBookedTransaction(
+          ctx.supabase,
+          ctx.companyId,
+          body.transaction_id,
+        )
 
         return NextResponse.json({ data: updated })
       },
@@ -1754,6 +1865,28 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Supplier not found' }, { status: 404 })
         }
 
+        // Särskild löneskatt (SLP): same guards as /api/supplier-invoices.
+        // The 7533/2514 pair is only lawful on 741x pension premiums and
+        // cannot be combined with periodisering on the same row.
+        if (
+          body.items.some(
+            (bodyItem) => bodyItem.apply_slp && !isSlpPensionAccount(bodyItem.account_number),
+          )
+        ) {
+          return errorResponseFromCode('SI_CREATE_SLP_INVALID_ACCOUNT', ctx.log)
+        }
+        if (
+          body.items.some(
+            (bodyItem) =>
+              bodyItem.apply_slp &&
+              (bodyItem.accrual_period_start ||
+                bodyItem.accrual_period_end ||
+                bodyItem.accrual_balance_account),
+          )
+        ) {
+          return errorResponseFromCode('SI_CREATE_SLP_ACCRUAL', ctx.log)
+        }
+
         // Periodisering requires faktureringsmetoden: mirror the main
         // /api/supplier-invoices guard so kontantmetod companies never store
         // accrual fields the booking would silently ignore.
@@ -1840,6 +1973,9 @@ export const invoiceInboxExtension: Extension = {
                 ? (bodyItem.accrual_balance_account ??
                   suggestBalanceAccount('expense', bodyItem.account_number))
                 : null,
+            // Särskild löneskatt (SLP): booking injects the self-balancing
+            // 7533/2514 pair for this line. Guarded above (741x, no accrual).
+            apply_slp: bodyItem.apply_slp === true,
           }
         })
 
@@ -2256,8 +2392,14 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
-        // If transaction-linked, mark the transaction as booked.
-        if (transaction) {
+        // The transaction this verifikat settles: the one the caller named, or
+        // the one the item was already matched to. Preserving the match without
+        // booking it was half a fix, and the worse half: the item then looked
+        // resolved while the bank line stayed open forever. The fallback needs
+        // no ownership check because it was read off a company-scoped item.
+        const bookedTransactionId = transaction?.id ?? item.matched_transaction_id ?? null
+
+        if (bookedTransactionId) {
           const { error: txUpdateError } = await ctx.supabase
             .from('transactions')
             .update({
@@ -2265,7 +2407,7 @@ export const invoiceInboxExtension: Extension = {
               is_business: true,
               category: 'uncategorized',
             })
-            .eq('id', transaction.id)
+            .eq('id', bookedTransactionId)
             .eq('company_id', ctx.companyId)
           if (txUpdateError) {
             console.error('[invoice-inbox/book-direct] Transaction link failed:', txUpdateError)
@@ -2280,7 +2422,11 @@ export const invoiceInboxExtension: Extension = {
           .from('invoice_inbox_items')
           .update({
             created_journal_entry_id: journalEntry.id,
-            matched_transaction_id: transaction?.id ?? null,
+            // Keep the existing match when the caller sent no transaction_id.
+            // Overwriting with null let a caller that merely forgot the field
+            // silently unpick a match somebody had already made, and left the
+            // bank line unbooked with nothing on screen saying so.
+            matched_transaction_id: bookedTransactionId,
           })
           .eq('id', id)
           .eq('company_id', ctx.companyId)
@@ -2435,6 +2581,30 @@ export const invoiceInboxExtension: Extension = {
           })
         }
 
+        // Everything an empty proposal can still say about the matched bank
+        // row: the amount in kronor and the day the money moved. Without it
+        // the manual-booking dialog opened with nothing at all (the regression
+        // behind "beloppet följer inte med längre"), which on a foreign
+        // invoice left the user with no kronor figure anywhere.
+        const txSekSigned = resolveSekAmountOrNull(
+          (tx as Transaction).amount,
+          (tx as Transaction).amount_sek,
+          (tx as Transaction).currency,
+          (tx as Transaction).exchange_rate,
+        )
+        const txSummary =
+          txSekSigned != null
+            ? {
+                amount_sek: roundOre(txSekSigned),
+                date: (tx as Transaction).date,
+              }
+            : null
+        const emptyProposalExtras = (settlementAccount: string) => ({
+          entry_date: (tx as Transaction).date,
+          transaction: txSummary,
+          fallback_lines: buildFallbackKonteringLines(tx as Transaction, settlementAccount),
+        })
+
         try {
           const { data: settings } = await ctx.supabase
             .from('company_settings')
@@ -2471,7 +2641,12 @@ export const invoiceInboxExtension: Extension = {
             !mapping.rule && !mapping.template_id && mapping.confidence <= 0.1
           if (isPlaceholder || !mapping.debit_account || !mapping.credit_account) {
             return NextResponse.json({
-              data: { source: 'no_mapping' as const, lines: [], confidence: mapping.confidence ?? null },
+              data: {
+                source: 'no_mapping' as const,
+                lines: [],
+                confidence: mapping.confidence ?? null,
+                ...emptyProposalExtras(settlementAccount),
+              },
             })
           }
 
@@ -2493,7 +2668,12 @@ export const invoiceInboxExtension: Extension = {
               currency: (tx as Transaction).currency,
             })
             return NextResponse.json({
-              data: { source: 'currency_unsupported' as const, lines: [], confidence: null },
+              data: {
+                source: 'currency_unsupported' as const,
+                lines: [],
+                confidence: null,
+                ...emptyProposalExtras(settlementAccount),
+              },
             })
           }
 
@@ -2538,9 +2718,15 @@ export const invoiceInboxExtension: Extension = {
           })
           // A suggestion that cannot be produced is not an error the user did
           // anything about: fall back to the empty proposal and let them book
-          // by hand.
+          // by hand. The settlement account may be what threw, so the skeleton
+          // uses the 1930 default rather than the resolved account here.
           return NextResponse.json({
-            data: { source: 'no_mapping' as const, lines: [], confidence: null },
+            data: {
+              source: 'no_mapping' as const,
+              lines: [],
+              confidence: null,
+              ...emptyProposalExtras('1930'),
+            },
           })
         }
       },

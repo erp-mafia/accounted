@@ -8,13 +8,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { DataListEmpty } from '@/components/ui/data-list'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Plus, FileInput, Lock, Search } from 'lucide-react'
+import { Plus, FileInput, Lock } from 'lucide-react'
 import Link from 'next/link'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -23,6 +23,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { FiscalPeriod, SupplierInvoice } from '@/types'
 
 const NewSupplierInvoiceDialog = dynamic(
@@ -90,6 +92,7 @@ export default function SupplierInvoicesPage() {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
+  const company = useCompanyOptional()?.company ?? null
   const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ListTab>('all')
@@ -114,11 +117,27 @@ export default function SupplierInvoicesPage() {
   const openNewInvoice = () => router.push('/supplier-invoices?new=1', { scroll: false })
 
   async function fetchInvoices() {
-    setIsLoading(true)
-    const res = await fetch('/api/supplier-invoices?status=all')
-    const { data } = await res.json()
-    setInvoices(data || [])
-    setIsLoading(false)
+    // Skeleton takeover only while nothing is on screen: refetches after an
+    // action (register, betalfil, approve fallback) reconcile BEHIND the
+    // rendered table instead of collapsing it to 4 skeleton stubs and
+    // replaying the entrance animation.
+    if (invoices.length === 0) setIsLoading(true)
+    try {
+      const res = await fetch('/api/supplier-invoices?status=all')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const { data } = await res.json()
+      setInvoices(data || [])
+    } catch {
+      // Without this, a failed fetch either stuck the skeleton forever or
+      // silently rendered the empty state as if the invoices were gone.
+      toast({
+        title: t('load_failed_title'),
+        description: t('load_failed_description'),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   // Which invoices already sit in an active (not cancelled) betalfil: feeds
@@ -141,6 +160,9 @@ export default function SupplierInvoicesPage() {
   useEffect(() => {
     fetchInvoices()
     fetchActiveBatchMembership()
+    // Mount-only fetch (same pattern as /invoices): fetchInvoices reads state
+    // only to decide skeleton vs background refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Mirrors the old standalone page's post-create navigation: inbox
@@ -184,6 +206,14 @@ export default function SupplierInvoicesPage() {
       (inv.invoice_date >= fyPeriod.period_start && inv.invoice_date <= fyPeriod.period_end)
     return matchesTab && matchesSearch && matchesFy
   })
+
+  // Detail-pager context: the filtered list as rendered, written when the
+  // user navigates into a row.
+  const rememberListContext = () => {
+    writeListContext(listContextKey('supplier-invoices', company?.id), {
+      ids: filteredInvoices.map((inv) => inv.id),
+    })
+  }
 
   const registeredCount = invoices.filter((inv) => inv.status === 'registered').length
   const toPayCount = invoices.filter(
@@ -305,15 +335,12 @@ export default function SupplierInvoicesPage() {
                   : undefined,
           }))}
         />
-        <div className="relative min-w-[190px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={t('search_placeholder')}
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="h-9 pl-10"
-          />
-        </div>
+        <ToolbarSearch
+          containerClassName="min-w-[190px]"
+          placeholder={t('search_placeholder')}
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
         <div className="ml-auto flex items-center gap-4">
           <Link href="/supplier-invoices/payment-files" className={QUIET_LINK_CLASS}>
             {t('payment_files_link')}
@@ -423,7 +450,10 @@ export default function SupplierInvoicesPage() {
                       'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
                       selectedIds.has(inv.id) && 'bg-secondary/40',
                     )}
-                    onClick={() => router.push(`/supplier-invoices/${inv.id}`)}
+                    onClick={() => {
+                      rememberListContext()
+                      router.push(`/supplier-invoices/${inv.id}`)
+                    }}
                   >
                     {/* Hover-revealed selection checkbox (JournalEntryList shape). */}
                     {canWrite && (
@@ -453,7 +483,10 @@ export default function SupplierInvoicesPage() {
                       <Link
                         href={`/supplier-invoices/${inv.id}`}
                         className="hover:underline"
-                        onClick={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          rememberListContext()
+                        }}
                       >
                         {inv.supplier_invoice_number}
                       </Link>

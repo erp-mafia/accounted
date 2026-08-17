@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { attachStagedOperations, toolNameFor } from '../AgentChat'
+import { attachStagedOperations } from '../AgentChat'
 import type { StoredStagedOperation } from '@/types'
 
 /**
@@ -43,29 +43,33 @@ describe('attachStagedOperations', () => {
     expect(assistant!.staged![0]).toMatchObject({
       operation_id: 'op-1',
       risk_level: 'low',
-      tool_name: 'gnubok_categorize_transaction',
+      operation_type: 'categorize_transaction',
       message: 'Kontering: Circle K, 689 kr',
     })
   })
 
-  it('maps the stored operation_type onto the tool name the preview dispatches on', () => {
-    // pending_operations stores the bare action name; the live card carries the
-    // MCP tool name, and ApprovalCard's PreviewBlock keys off that. Getting this
-    // wrong is invisible in a mock but drops every hydrated card to the flat
-    // generic preview instead of the journal-line one. These four are the
-    // operation types that have a specialized renderer.
+  it('passes the stored operation_type through untranslated, for EVERY type', () => {
+    // The predecessor mapped operation_type onto an MCP tool name here and
+    // ApprovalCard's old preview dispatch only recognized 4 of them, so a
+    // hydrated attach_document_to_transaction card (among others) silently
+    // fell back to the raw generic preview. The stored bare name now drives
+    // the dispatch directly; nothing may rewrite it on the way.
     for (const t of [
       'categorize_transaction',
       'create_invoice',
       'create_voucher',
       'correct_entry',
+      'attach_document_to_transaction',
+      'match_transaction_invoice',
+      'create_customer',
+      'create_transaction',
     ]) {
-      expect(toolNameFor(t)).toBe(`gnubok_${t}`)
+      const out = attachStagedOperations(
+        [{ role: 'assistant', text: 'svar' }],
+        [op({ operation_type: t })],
+      )
+      expect(out[0]!.staged![0]!.operation_type).toBe(t)
     }
-  })
-
-  it('leaves an already-prefixed operation type alone', () => {
-    expect(toolNameFor('gnubok_create_voucher')).toBe('gnubok_create_voucher')
   })
 
   it('keeps risk level for medium and high, and floors anything unknown to low', () => {

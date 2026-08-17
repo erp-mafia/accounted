@@ -71,7 +71,7 @@ export async function resolveReadAuth(
   if (opts.userId) {
     return {
       ok: true,
-      auth: { mode: 'user', supabase, userId: opts.userId },
+      auth: { mode: 'user', supabase, userId: opts.userId, companyId },
       source: 'user',
       tokenUserId: opts.userId,
     }
@@ -83,7 +83,7 @@ export async function resolveReadAuth(
 
   return {
     ok: true,
-    auth: { mode: 'user', supabase, userId: token.userId },
+    auth: { mode: 'user', supabase, userId: token.userId, companyId },
     source: 'user',
     tokenUserId: token.userId,
   }

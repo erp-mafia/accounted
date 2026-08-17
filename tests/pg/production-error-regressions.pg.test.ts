@@ -54,6 +54,24 @@ describe('production error regressions', () => {
     expect(rows).toEqual([{ event_type: 'PendingOperationApproved' }])
   })
 
+  it('registers the WhatsApp channel question events in the processing history catalog', async () => {
+    // appendQuestionHistory() swallows FK failures so the reply to the sender
+    // still goes out, so an unregistered type is invisible outside the logs.
+    const { rows } = await getPool().query(
+      `SELECT event_type
+       FROM public.processing_event_types
+       WHERE event_type = ANY($1::text[])
+       ORDER BY event_type`,
+      [['ChannelQuestionAsked', 'ChannelQuestionAnswered', 'ChannelQuestionExpired']],
+    )
+
+    expect(rows.map((row) => row.event_type)).toEqual([
+      'ChannelQuestionAnswered',
+      'ChannelQuestionAsked',
+      'ChannelQuestionExpired',
+    ])
+  })
+
   it('aggregates period activity and excludes a specified opening entry', async () => {
     const ctx = await seedCompany()
     const openingId = await insertEntry({

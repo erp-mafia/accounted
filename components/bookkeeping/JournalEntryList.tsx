@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback, useRef } from 'react'
+import { Fragment, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/data-list'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
@@ -56,6 +58,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import type { FiscalPeriod, JournalEntry, JournalEntryLine } from '@/types'
 
 const NEEDS_ATTACHMENT = new Set([
@@ -149,10 +152,12 @@ function SortableHeader({
       className={cn(TH_CLASS, className)}
       aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
     >
+      {/* Preflight sets text-transform: none on buttons, which would drop the
+          TH_CLASS uppercase idiom inside the sort control. */}
       <button
         type="button"
         className={cn(
-          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
           align === 'right' && 'ml-auto justify-end',
         )}
         aria-label={sortLabel}
@@ -186,7 +191,20 @@ const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
 // Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
 const ALL_PAGE_SIZE = 100000
 
-export default function JournalEntryList() {
+export default function JournalEntryList({
+  pristineSlot,
+  refreshToken,
+}: {
+  pristineSlot?: ReactNode
+  /**
+   * Parent-driven refresh: bump to re-fetch IN PLACE (list stays mounted,
+   * dims at opacity-60). Replaces the old key={refreshKey} remount on
+   * /bookkeeping, which reset hasLoaded and blanked the whole journal to a
+   * spinner after every created verifikat, destroying expanded rows,
+   * selection, pagination and scroll position.
+   */
+  refreshToken?: number
+} = {}) {
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -254,6 +272,12 @@ export default function JournalEntryList() {
   // original). Toggled off via the filter dialog to reveal the full chain.
   const [collapseCorrections, setCollapseCorrections] = useState(true)
   const [draftCount, setDraftCount] = useState(0)
+  // All-years emptiness, resolved only when the scoped list comes back empty:
+  // the pristine start card must key on "this ledger has never had an entry",
+  // not "the selected fiscal year is empty" (the default year selection used
+  // to make the pristine state unreachable on brand-new companies). null =
+  // not yet known; the pristine gate requires an explicit false.
+  const [ledgerHasAnyEntry, setLedgerHasAnyEntry] = useState<boolean | null>(null)
   const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
   const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
   const showingAll = pageSizeChoice === 'all'
@@ -487,11 +511,15 @@ export default function JournalEntryList() {
   // response would overwrite the current sort's rows after they rendered.
   const fetchGenRef = useRef(0)
 
-  async function fetchEntries() {
+  // `preserveSelection` marks a parent-driven background refresh (the
+  // refreshToken contract: refresh in place, don't disturb the user's
+  // working state). User-initiated reloads (filter/sort/page/mode changes,
+  // commit, storno, retry) keep the default reset: selection is page-scoped.
+  async function fetchEntries({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
     const gen = ++fetchGenRef.current
     const isCurrent = () => fetchGenRef.current === gen
     setLoading(true)
-    setSelectedIds(new Set()) // selection is page-scoped, reset on reload
+    if (!preserveSelection) setSelectedIds(new Set()) // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
       limit: String(pageSize),
       offset: String(page * pageSize),
@@ -528,14 +556,31 @@ export default function JournalEntryList() {
       const loadedEntries = data || []
       setEntries(loadedEntries)
       setCount(total || 0)
+      if (preserveSelection) {
+        // Reconcile with the refreshed page: rows that left it (recommitted
+        // elsewhere, filtered out by the new data) must leave the selection
+        // too, or the bulk bar would act on rows no longer on screen.
+        const visibleIds = new Set(loadedEntries.map((e: JournalEntry) => e.id))
+        setSelectedIds((prev) => {
+          const next = new Set([...prev].filter((id) => visibleIds.has(id)))
+          return next.size === prev.size ? prev : next
+        })
+      }
 
       // The pristine empty card vs. the (toggle-bearing) "drafts exist" state hinges
       // on draftCount. When the committed list comes back empty, resolve the draft
       // count BEFORE clearing loading so the toggle doesn't flash out for a frame on
       // a stale count of 0. Every other case refreshes the badge in the background.
       if (loadedEntries.length === 0 && listMode === 'committed') {
-        await fetchDraftCount()
+        const unscopedQuery = !periodId && !dateFrom && !dateTo && seriesFilter === 'all' && !search
+        await Promise.all([
+          fetchDraftCount(),
+          unscopedQuery
+            ? Promise.resolve(setLedgerHasAnyEntry((total || 0) > 0))
+            : fetchLedgerHasAnyEntry(isCurrent),
+        ])
       } else {
+        if (listMode === 'committed' && loadedEntries.length > 0) setLedgerHasAnyEntry(true)
         fetchDraftCount()
       }
       if (!isCurrent()) return
@@ -556,6 +601,24 @@ export default function JournalEntryList() {
       toast({ title: t('load_failed_title'), variant: 'destructive' })
     } finally {
       if (isCurrent()) setLoading(false)
+    }
+  }
+
+  // Cheap count-only probe across ALL years and filters: does this ledger
+  // hold any committed entry at all? Distinguishes "pristine ledger" from
+  // "the selected scope is empty" for the start-card gate below.
+  async function fetchLedgerHasAnyEntry(isCurrent: () => boolean) {
+    // Back to unknown while the probe is in flight: a failed probe must not
+    // leave a stale false behind, or the pristine card could render on data
+    // this scope change never confirmed.
+    if (isCurrent()) setLedgerHasAnyEntry(null)
+    try {
+      const res = await fetch('/api/bookkeeping/journal-entries?exclude_draft=true&limit=1')
+      if (!res.ok || !isCurrent()) return
+      const { count: total } = await res.json()
+      if (isCurrent()) setLedgerHasAnyEntry((total || 0) > 0)
+    } catch {
+      // Non-fatal: an unknown probe keeps the pristine card hidden.
     }
   }
 
@@ -580,6 +643,20 @@ export default function JournalEntryList() {
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
   }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, sortHydrated, periodHydrated, pageSizeHydrated])
+
+  // Parent-driven in-place refresh (see the refreshToken prop). Skips the
+  // mount value: the main effect above owns the initial fetch, and a token
+  // bump before hydration is covered by that same initial fetch.
+  const lastRefreshTokenRef = useRef(refreshToken)
+  useEffect(() => {
+    if (refreshToken === undefined || refreshToken === lastRefreshTokenRef.current) return
+    lastRefreshTokenRef.current = refreshToken
+    if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
+    // In-place refresh: the user didn't ask for a reload, so their current
+    // selection survives (reconciled against the refreshed page).
+    fetchEntries({ preserveSelection: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken, sortHydrated, periodHydrated, pageSizeHydrated])
 
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))
@@ -799,6 +876,14 @@ export default function JournalEntryList() {
       )
     : entries
 
+  // Detail-pager context: the loaded page as rendered, written when the user
+  // opens a verifikat. Server-paginated, so prev/next spans this page only.
+  const rememberListContext = () => {
+    writeListContext(listContextKey('bookkeeping', company?.id), {
+      ids: filteredEntries.map((e) => e.id),
+    })
+  }
+
   // Count of active dialog filters, shown as a badge on the Filtrera button so
   // the user can tell the list is scoped without opening the dialog. Sort order
   // is a view preference (always set), not a filter, so it is excluded.
@@ -915,12 +1000,21 @@ export default function JournalEntryList() {
     })
   }
 
-  // Pristine, untouched ledger: nothing posted, no drafts, no filters, and we're
-  // on the committed view. ONLY this genuinely-empty case may short-circuit the
-  // whole component: every other empty state (a draft exists, or we're in the
-  // drafts view) must fall through to the main render below so the
+  // Pristine, untouched ledger: nothing posted in ANY year, no drafts, no
+  // search or dialog filters, and we're on the committed view. The fiscal-year
+  // scope deliberately does NOT count here: every company has a period
+  // selected by default, and requiring "no scope" made this state unreachable
+  // (the empty current year fell through to "inga träffar" on brand-new
+  // ledgers). ledgerHasAnyEntry must be an explicit false: while the
+  // all-years probe is in flight we show the filtered-empty state, never a
+  // flash of the start card. ONLY this genuinely-empty case may short-circuit
+  // the whole component: every other empty state (a draft exists, or we're in
+  // the drafts view) must fall through to the main render below so the
   // Verifikat/Utkast toggle stays reachable.
-  if (!loading && entries.length === 0 && !loadFailed && !hasActiveFilters && listMode === 'committed' && draftCount === 0) {
+  if (!loading && entries.length === 0 && !loadFailed && !search && dialogFilterCount === 0 && ledgerHasAnyEntry === false && listMode === 'committed' && draftCount === 0) {
+    if (pristineSlot) {
+      return <>{pristineSlot}</>
+    }
     return (
       <DataList className="stagger-enter">
         <DataListEmpty
@@ -939,51 +1033,24 @@ export default function JournalEntryList() {
       <div className="flex flex-wrap items-center gap-2">
         {/* Verifikat vs Utkast. Drafts live in their own view with a count badge so
             they don't sink to the last page of the committed list. */}
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={listMode === 'committed'}
-            onClick={() => switchMode('committed')}
-            className={cn(
-              'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-              listMode === 'committed'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t('mode_vouchers')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={listMode === 'drafts'}
-            onClick={() => switchMode('drafts')}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-              listMode === 'drafts'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t('mode_drafts')}
-            {draftCount > 0 && (
-              <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                {draftCount}
-              </span>
-            )}
-          </button>
-        </div>
+        <SegmentedControl
+          value={listMode}
+          onChange={switchMode}
+          options={[
+            { value: 'committed', label: t('mode_vouchers') },
+            { value: 'drafts', label: t('mode_drafts'), count: draftCount },
+          ]}
+        />
         <div className="relative flex-1 sm:flex-none sm:w-[280px]">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-          <Input
+          <ToolbarSearch
             type="text"
             inputMode="search"
             placeholder={t('search_placeholder')}
             aria-label={t('search_placeholder')}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            className="h-8 pl-8 pr-7 text-xs"
+            containerClassName="min-w-0 max-w-none"
+            className="pr-7"
           />
           {searchInput && (
             <button
@@ -1055,7 +1122,6 @@ export default function JournalEntryList() {
                     <SelectItem value="description_desc">{t('sort_description_desc')}</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{t('sort_stack_hint')}</p>
               </div>
 
               {/* Verifikationsserie */}
@@ -1399,7 +1465,10 @@ export default function JournalEntryList() {
                               'font-mono text-[13px] tabular-nums hover:underline',
                               struckCell,
                             )}
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              rememberListContext()
+                            }}
                             // The row's Enter/Space handler calls
                             // preventDefault(), so without this the voucher
                             // link expands the row instead of opening it.
@@ -1453,7 +1522,7 @@ export default function JournalEntryList() {
                                 e.stopPropagation()
                                 setPreviewEntryId(entry.id)
                               }}
-                              className="inline-flex items-center gap-0.5 rounded text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                              className="inline-flex items-center gap-0.5 rounded-sm text-muted-foreground transition-colors duration-150 hover:text-foreground"
                             >
                               <Paperclip className="h-3.5 w-3.5" />
                               <span className="text-xs tabular-nums">{attachmentCounts[entry.id]}</span>
@@ -1500,7 +1569,7 @@ export default function JournalEntryList() {
                                 // p-2 grows the tap target to 30px without
                                 // changing row height (the row is ~40px from
                                 // the description cell).
-                                'inline-flex items-center rounded p-2 text-muted-foreground transition-opacity duration-150 hover:text-foreground',
+                                'inline-flex items-center rounded-sm p-2 text-muted-foreground transition-opacity duration-150 hover:text-foreground',
                                 // Quiet at rest on desktop, but the table has no
                                 // mobile card to fall back on, so touch keeps the
                                 // icon visible.
@@ -1631,7 +1700,11 @@ export default function JournalEntryList() {
                                     {t('post')}
                                   </Button>
                                 )}
-                                <Link href={`/bookkeeping/${entry.id}`} className={QUIET_LINK_CLASS}>
+                                <Link
+                                  href={`/bookkeeping/${entry.id}`}
+                                  className={QUIET_LINK_CLASS}
+                                  onClick={rememberListContext}
+                                >
                                   {t('show_details')}
                                 </Link>
                                 {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (

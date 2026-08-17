@@ -118,7 +118,7 @@ Request body:
   country?: string,
   org_number?: string,
   vat_number?: string,
-  personal_number: string,
+  personal_number?: string,
   language?: "sv" | "en",
   default_payment_terms?: number,
   notes?: string
@@ -353,7 +353,7 @@ Bulk-create endpoint mirroring /invoices/bulk-create. Each customer is validated
 Request body:
 ```ts
 {
-  customers: { name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", customer_number?: string, contact_person?: string, email?: string, phone?: string, invoice_email_cc_addresses?: string[], invoice_email_bcc_addresses?: string[], address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, personal_number: string, language?: "sv" | "en", default_payment_terms?: number, notes?: string }[],
+  customers: { name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", customer_number?: string, contact_person?: string, email?: string, phone?: string, invoice_email_cc_addresses?: string[], invoice_email_bcc_addresses?: string[], address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, personal_number?: string, language?: "sv" | "en", default_payment_terms?: number, notes?: string }[],
   all_or_nothing?: boolean
 }
 ```

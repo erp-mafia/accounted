@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
+import { StartCard } from '@/components/dashboard/StartCard'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { HandCoins, Loader2, Plus, Users } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
@@ -53,6 +54,7 @@ export default function SalaryPage() {
   const { toast } = useToast()
   const router = useRouter()
   const t = useTranslations('salary')
+  const tStart = useTranslations('start_cards')
 
   const load = useCallback(async () => {
     const [runsRes, empRes] = await Promise.all([
@@ -146,23 +148,37 @@ export default function SalaryPage() {
       {header}
 
       {runs.length === 0 && employees.length === 0 ? (
-        <EmptyState
-          icon={Users}
-          title={t('onboarding_title')}
-          description={t('onboarding_description')}
-          actionLabel={canWrite ? t('onboarding_action') : undefined}
-          actionHref={canWrite ? '/salary/employees/new' : undefined}
-        />
+        canWrite ? (
+          <div className="animate-fade-in">
+            <StartCard
+              card="stopwatch"
+              layout="side-right"
+              eyebrow={tStart('salary_eyebrow_start')}
+              title={tStart('salary_title')}
+              body={tStart('salary_body_no_employees')}
+              primary={{ label: tStart('salary_primary_add'), href: '/salary/employees/new' }}
+            />
+          </div>
+        ) : (
+          <EmptyState icon={Users} title={t('onboarding_title')} description={t('onboarding_description')} />
+        )
       ) : (
         <div>
           {runs.length === 0 ? (
-            <EmptyState
-              icon={HandCoins}
-              title={t('empty_runs_title')}
-              description={t('empty_runs_description')}
-              actionLabel={canWrite ? t('start_run') : undefined}
-              onAction={canWrite ? startRun : undefined}
-            />
+            canWrite ? (
+              <div className="animate-fade-in">
+                <StartCard
+                  card="stopwatch"
+                  layout="side-right"
+                  eyebrow={tStart('salary_eyebrow_next')}
+                  title={tStart('salary_title')}
+                  body={tStart('salary_body_ready', { count: employees.length })}
+                  primary={{ label: tStart('salary_primary_run'), onClick: startRun }}
+                />
+              </div>
+            ) : (
+              <EmptyState icon={HandCoins} title={t('empty_runs_title')} description={t('empty_runs_description')} />
+            )
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-[13px]">

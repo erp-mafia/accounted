@@ -102,6 +102,41 @@ function run(
 // --- Tests ---
 
 describe('syncMappedAccounts: create pass', () => {
+  it('persists a reviewed VAT treatment on a created identity account', async () => {
+    const { supabase, inserts } = buildCapturingSupabase()
+    const result = await run(supabase, [
+      mapping({
+        sourceAccount: '4056',
+        targetAccount: '4056',
+        sourceName: 'Inköp varor 25% EU',
+        defaultVatTreatment: 'reverse_charge_eu_goods',
+        defaultVatRate: 0.25,
+        vatTreatmentReviewed: true,
+      }),
+    ])
+    expect(result.error).toBeNull()
+    expect(inserts[0]).toMatchObject({
+      default_vat_treatment: 'reverse_charge_eu_goods',
+      default_vat_rate: 0.25,
+    })
+  })
+
+  it('derives the booking rate for a confirmed treatment when the rate is unset', async () => {
+    const { supabase, inserts } = buildCapturingSupabase()
+    const result = await run(supabase, [
+      mapping({
+        sourceAccount: '4056',
+        targetAccount: '4056',
+        sourceName: 'Inköp varor EU',
+        defaultVatTreatment: 'reverse_charge_eu_goods',
+        defaultVatRate: null,
+        vatTreatmentReviewed: true,
+      }),
+    ])
+    expect(result.error).toBeNull()
+    expect(inserts[0].default_vat_rate).toBe(0.25)
+  })
+
   it('creates a missing BAS account with the BAS default name when the file has no custom name', async () => {
     const { supabase, inserts } = buildCapturingSupabase()
 

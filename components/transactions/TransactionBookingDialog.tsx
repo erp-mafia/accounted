@@ -282,10 +282,19 @@ export default function TransactionBookingDialog({
           </p>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]">
-          {/* Document column: sticky on desktop so the receipt stays visible
-              while the form scrolls; stacks above the form on smaller screens. */}
-          <div className="flex h-[45vh] flex-col gap-3 lg:sticky lg:top-0 lg:h-[72vh] lg:self-start">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          {/* Underlag column: one coherent surface. Empty state sizes to its
+              content (dropzone + attached inbox-picker row) and top-aligns;
+              once a document exists the column takes the fixed viewer height
+              and stays sticky on desktop while the form scrolls. Stacks above
+              the form on smaller screens. */}
+          <div
+            className={
+              currentDocId
+                ? 'flex h-[45vh] flex-col gap-3 lg:sticky lg:top-0 lg:h-[72vh] lg:self-start'
+                : 'flex flex-col gap-2 lg:sticky lg:top-0 lg:self-start'
+            }
+          >
             {currentDocId ? (
               <DocumentViewerPane
                 documentId={currentDocId}
@@ -294,57 +303,55 @@ export default function TransactionBookingDialog({
                 className="min-h-0 flex-1"
               />
             ) : (
-              <div className="min-h-0 flex-1">
-                <DocumentUploadZone
-                  files={uploadedFiles}
-                  onFilesChange={setUploadedFiles}
-                />
-              </div>
+              <DocumentUploadZone
+                files={uploadedFiles}
+                onFilesChange={setUploadedFiles}
+              />
             )}
 
             {/* Attach controls: only when the transaction has no pre-linked
                 document (a pre-linked one is already the verifikat's underlag). */}
             {!preexistingDocId && (
-              <div className="shrink-0 space-y-2">
-                {pickedInboxDocs.length > 0 && (
-                  <div className="space-y-1">
-                    {pickedInboxDocs.map((doc) => (
-                      <div
-                        key={doc.document_id}
-                        className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50"
-                      >
-                        <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                        <span className="truncate flex-1">
-                          {doc.supplier_name ?? doc.file_name}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 w-6 p-0 shrink-0"
-                          aria-label={t('doc_picked_remove')}
-                          onClick={() =>
-                            setPickedInboxDocs((prev) =>
-                              prev.filter((d) => d.document_id !== doc.document_id),
-                            )
-                          }
+              currentDocId ? (
+                <div className="shrink-0 space-y-2">
+                  {pickedInboxDocs.length > 0 && (
+                    <div className="space-y-1">
+                      {pickedInboxDocs.map((doc) => (
+                        <div
+                          key={doc.document_id}
+                          className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50"
                         >
-                          <X className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setInboxPickerOpen(true)}
-                  >
-                    <Inbox className="h-4 w-4 mr-2" />
-                    {t('doc_pick_existing')}
-                  </Button>
-                  {inDialogDocId && (
+                          <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                          <span className="truncate flex-1">
+                            {doc.supplier_name ?? doc.file_name}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 shrink-0"
+                            aria-label={t('doc_picked_remove')}
+                            onClick={() =>
+                              setPickedInboxDocs((prev) =>
+                                prev.filter((d) => d.document_id !== doc.document_id),
+                              )
+                            }
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setInboxPickerOpen(true)}
+                    >
+                      <Inbox className="h-4 w-4 mr-2" />
+                      {t('doc_pick_existing')}
+                    </Button>
                     <Button
                       type="button"
                       variant="ghost"
@@ -357,9 +364,20 @@ export default function TransactionBookingDialog({
                       <X className="h-3.5 w-3.5 mr-1.5" />
                       {t('doc_clear')}
                     </Button>
-                  )}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                /* Secondary intake path, rendered as the dropzone's footer so
+                   "drop a file" and "pick from the inbox" read as one surface. */
+                <button
+                  type="button"
+                  onClick={() => setInboxPickerOpen(true)}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/25 px-3 py-2 text-[13px] text-muted-foreground transition-colors duration-150 hover:border-primary/50 hover:text-foreground"
+                >
+                  <Inbox className="h-4 w-4" />
+                  <span>{t('doc_pick_existing_inline')}</span>
+                </button>
+              )
             )}
           </div>
 

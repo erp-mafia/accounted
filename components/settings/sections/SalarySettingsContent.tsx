@@ -14,6 +14,7 @@ import {
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { TaxTableStatus } from '@/components/salary/TaxTableStatus'
+import { Switch } from '@/components/ui/switch'
 import { useSettings } from '@/components/settings/useSettings'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { CompanySettings } from '@/types'
@@ -36,11 +37,15 @@ export function SalarySettingsContent() {
   const { settings, isLoading, updateSettings, refetch } = useSettings()
   // Controlled so the LB sunset note reacts to the selection before save.
   const [format, setFormat] = useState<'bg_lb' | 'pain001' | null>(null)
+  // Controlled: the Radix Switch is not a form element, so its value rides
+  // along in handleSave instead of FormData.
+  const [netRounding, setNetRounding] = useState<boolean | null>(null)
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
 
   const effectiveFormat = format ?? settings.preferred_payment_format ?? 'pain001'
+  const effectiveNetRounding = netRounding ?? settings.salary_net_rounding ?? false
   const currentSeries = resolveDefaultSeriesForSource(settings, 'salary_payment')
 
   function handleSave(formData: FormData) {
@@ -54,6 +59,7 @@ export function SalarySettingsContent() {
       salary_pay_day: payDay,
       preferred_payment_format: paymentFormat,
       salary_default_bank: bank === 'none' ? null : bank,
+      salary_net_rounding: effectiveNetRounding,
     }
 
     // The booking engine resolves the series from the per-source-type map;
@@ -131,6 +137,16 @@ export function SalarySettingsContent() {
               ))}
               <option value="other">{t('bank_other')}</option>
             </SettingsSelect>
+          </SettingsRow>
+          <SettingsRow label={t('net_rounding_label')} help={t('net_rounding_help')}>
+            <Switch
+              id="salary_net_rounding"
+              checked={effectiveNetRounding}
+              onCheckedChange={(next) => setNetRounding(next)}
+            />
+            <label htmlFor="salary_net_rounding" className="cursor-pointer text-sm">
+              {t('net_rounding_toggle')}
+            </label>
           </SettingsRow>
         </SettingsGroup>
 

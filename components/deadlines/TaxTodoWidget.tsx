@@ -126,7 +126,7 @@ export function TaxTodoWidget({ deadlines, onStatusChange }: TaxTodoWidgetProps)
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
-            <FileText className="h-5 w-5 text-warning-foreground" />
+            <FileText className="h-5 w-5 text-attn" />
             {t('title')}
           </CardTitle>
           <div className="flex gap-2">
@@ -155,7 +155,7 @@ export function TaxTodoWidget({ deadlines, onStatusChange }: TaxTodoWidgetProps)
                   {isOverdue ? (
                     <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
                   ) : (
-                    <Clock className="h-4 w-4 text-warning-foreground flex-shrink-0 mt-0.5" />
+                    <Clock className="h-4 w-4 text-attn flex-shrink-0 mt-0.5" />
                   )}
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium">{deadline.title}</p>

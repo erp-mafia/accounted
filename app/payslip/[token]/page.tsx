@@ -19,7 +19,7 @@ const MONTH_NAMES = [
 
 function MessageShell({ title, body }: { title: string; body: string }) {
   return (
-    <main className="min-h-screen bg-background flex items-center justify-center px-5">
+    <main className="min-h-dvh bg-background flex items-center justify-center px-5">
       <div className="max-w-md w-full rounded-lg border border-border p-6 space-y-2">
         <h1 className="font-display text-2xl tracking-tight">{title}</h1>
         <p className="text-sm text-muted-foreground">{body}</p>
@@ -99,7 +99,7 @@ export default async function PayslipPage({
   const monthName = MONTH_NAMES[run.period_month - 1]
 
   return (
-    <main className="min-h-screen bg-background flex items-center justify-center px-5 py-10">
+    <main className="min-h-dvh bg-background flex items-center justify-center px-5 py-10">
       <div className="max-w-md w-full rounded-lg border border-border p-6 space-y-6">
         <div className="space-y-1">
           <p className="text-sm text-muted-foreground">{company.name}</p>
@@ -134,7 +134,7 @@ export default async function PayslipPage({
 
         <a
           href={`/api/payslip/${token}/pdf`}
-          className="inline-flex h-10 w-full items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90"
+          className="inline-flex h-10 w-full items-center justify-center rounded-full bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors duration-150 hover:bg-primary/90"
         >
           Ladda ner PDF (lönespecifikation)
         </a>

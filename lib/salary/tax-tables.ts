@@ -491,12 +491,16 @@ export async function fetchKommunTaxRates(year: number): Promise<Array<{
     if (typeof data.resultCount === 'number' && offset >= data.resultCount) break
   }
 
-  return Array.from(byKommun.entries()).map(([kommun, rate]) => ({
-    kommun,
-    totalRate: rate,
-    // Table number: round total rate. ≤0.50 rounds down, ≥0.51 rounds up
-    tableNumber: Math.round(rate),
-  }))
+  return Array.from(byKommun.entries()).map(([kommun, rate]) => {
+    // Table number per Skatteverket: a fractional part of at most 50 öre picks
+    // the lower table, 51 öre or more the higher (32,50 gives table 32 but
+    // 32,51 gives 33). Compare in hundredths so float noise cannot decide the
+    // boundary (32.51 * 100 === 3250.9999999999995 before rounding).
+    const hundredths = Math.round(rate * 100)
+    const tableNumber =
+      hundredths % 100 <= 50 ? Math.floor(hundredths / 100) : Math.ceil(hundredths / 100)
+    return { kommun, totalRate: rate, tableNumber }
+  })
 }
 
 /**
@@ -521,17 +525,36 @@ function normalizeKommunName(raw: string): string {
 // ── Legacy compatibility (used by calculation-engine.ts) ──
 
 /**
+ * Percentage-based skatteavdrag stated in whole kronor with öretal dropped
+ * (the whole-krona rule in SFF 2011:1261 22 kap. 1 §), same rule as
+ * taxForRate above. Computed in integer öre and hundredths of a percent:
+ * truncating the raw float product would lose a whole krona when float noise
+ * lands an exact result just below an integer
+ * (1000 × 0.007 === 6.999999999999999, so 0.7 % jämkning of 1 000 kr would
+ * come out as 6 kr instead of 7 kr).
+ */
+function wholeKronaPercentageTax(monthlyIncome: number, percentage: number): number {
+  const incomeOre = Math.round(monthlyIncome * 100)
+  const percentageHundredths = Math.round(percentage * 100)
+  // Math.trunc, not Math.floor: dropping öre truncates toward zero, and a
+  // negative taxable income (deductions exceeding pay) must not gain an extra
+  // negative krona. Normalize the -0 that Math.trunc leaves on small negatives.
+  const wholeKronor = Math.trunc((incomeOre * percentageHundredths) / 1_000_000)
+  return wholeKronor === 0 ? 0 : wholeKronor
+}
+
+/**
  * Calculate tax using jämkning (custom percentage from Skatteverket decision).
  */
 export function calculateJamkningTax(monthlyIncome: number, jamkningPercentage: number): number {
-  return Math.round(monthlyIncome * (jamkningPercentage / 100) * 100) / 100
+  return wholeKronaPercentageTax(monthlyIncome, jamkningPercentage)
 }
 
 /**
  * Calculate tax for sidoinkomst (flat 30%).
  */
 export function calculateSidoinkomstTax(monthlyIncome: number): number {
-  return Math.round(monthlyIncome * 0.30 * 100) / 100
+  return wholeKronaPercentageTax(monthlyIncome, 30)
 }
 
 /**

@@ -375,6 +375,175 @@ export async function closePeriod(
 }
 
 /**
+ * Mark a fiscal period as closed in a previous bookkeeping system
+ * ("klarmarkera"). Imported historical years (SIE) arrive with
+ * is_closed = false and no closing entry, so the year-end page lists them as
+ * pending bokslut even though the bokslut was already done in the old
+ * software.
+ *
+ * Deliberately bypasses closePeriod's locked_at/closing_entry_id
+ * preconditions: the closing entry lives in the previous system. Everything
+ * else stays strict:
+ * - the period must have ended (a running year cannot be done elsewhere)
+ * - a period with its own closing entry goes through the normal close
+ * - already-closed periods are refused
+ * - the same unbooked-bank-transactions guard as lockPeriod applies, because
+ *   closing strands them exactly the way locking would (BFL 5 kap 2 §)
+ *
+ * Sets locked_at too (when missing) so the period carries the full
+ * closed+locked state the enforcement triggers and readers expect, and writes
+ * the immutable audit_log entry (BFNAR 2013:2 kap. 8: this is a control
+ * decision made by a person, not a year-end run).
+ */
+export async function markPeriodClosedExternally(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  fiscalPeriodId: string
+): Promise<FiscalPeriod> {
+  const { data: period, error: fetchError } = await supabase
+    .from('fiscal_periods')
+    .select('*')
+    .eq('id', fiscalPeriodId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (fetchError || !period) {
+    throw new Error('Fiscal period not found')
+  }
+
+  if (period.is_closed) {
+    throw new Error('Period is already closed')
+  }
+
+  if (period.closing_entry_id) {
+    throw new Error(
+      'Period has a closing entry in Accounted: use the normal year-end close instead'
+    )
+  }
+
+  const today = new Date().toISOString().slice(0, 10)
+  if (period.period_end > today) {
+    throw new Error('Cannot mark a period that has not ended yet as closed')
+  }
+
+  // Klarmarkera exists for MIGRATED years. A period bookkept natively in
+  // Accounted must go through the real year-end: closing it without a
+  // bokslutsverifikat leaves 3xxx-8xxx untransferred (BFL 5-6 kap) with no
+  // clean way back once locked. "Migrated" is read from the ledger itself:
+  // the period either contains SIE-imported verifikat (source_type='import')
+  // or no verifikat at all (year closed elsewhere and never imported here).
+  const { count: importedCount, error: importedError } = await supabase
+    .from('journal_entries')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('source_type', 'import')
+    .gte('entry_date', period.period_start)
+    .lte('entry_date', period.period_end)
+  if (importedError) {
+    throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
+  }
+  if ((importedCount ?? 0) === 0) {
+    const { count: totalCount, error: totalError } = await supabase
+      .from('journal_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .gte('entry_date', period.period_start)
+      .lte('entry_date', period.period_end)
+    if (totalError) {
+      throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
+    }
+    if ((totalCount ?? 0) > 0) {
+      throw new Error(
+        'Perioden innehåller bokföring skapad i Accounted och inga importerade verifikat. Använd det vanliga årsbokslutet i stället.'
+      )
+    }
+  }
+
+  // Same stranding guard as lockPeriod: closing makes unbooked
+  // affärshändelser in the period unbookable in place. Fail closed if the
+  // guard cannot run.
+  let unbooked: UnbookedInPeriod
+  try {
+    unbooked = await countUnbookedInPeriod(
+      supabase,
+      companyId,
+      period.period_start,
+      period.period_end,
+    )
+  } catch (err) {
+    log.error('unbooked-transaction guard failed, refusing to close externally', {
+      companyId,
+      fiscalPeriodId,
+      reason: err instanceof Error ? err.message : String(err),
+    })
+    throw new Error(
+      'Kunde inte kontrollera obokförda banktransaktioner i perioden. Perioden lämnas öppen. Försök igen.'
+    )
+  }
+
+  const blockingCount = unbooked.untriaged + unbooked.businessUnbooked
+  if (blockingCount > 0) {
+    const breakdown = [
+      unbooked.untriaged > 0 ? `${unbooked.untriaged} ej hanterade` : null,
+      unbooked.businessUnbooked > 0
+        ? `${unbooked.businessUnbooked} markerade som affärshändelse men utan verifikat`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(', ')
+    throw new Error(
+      `Kan inte klarmarkera period: ${blockingCount} banktransaktion(er) i perioden saknar bokföring ` +
+        `(${breakdown}). Alla affärstransaktioner måste vara bokförda innan perioden stängs. ` +
+        `Gå till Transaktioner, bokför dem eller markera dem som privata eller ignorerade, och klarmarkera därefter.`
+    )
+  }
+
+  const now = new Date().toISOString()
+  const { data: updated, error: updateError } = await supabase
+    .from('fiscal_periods')
+    .update({
+      is_closed: true,
+      closed_at: now,
+      closed_externally: true,
+      locked_at: period.locked_at ?? now,
+    })
+    .eq('id', fiscalPeriodId)
+    .eq('company_id', companyId)
+    // TOCTOU guard: a concurrent normal close between the fetch above and
+    // this update must not be overwritten with closed_externally=true (and a
+    // clobbered closed_at). The predicate makes that race a 0-row update,
+    // which .single() surfaces as an error.
+    .eq('is_closed', false)
+    .select()
+    .single()
+
+  if (updateError || !updated) {
+    throw new Error(`Failed to mark period as externally closed: ${updateError?.message}`)
+  }
+
+  const result = updated as FiscalPeriod
+
+  await supabase.from('audit_log').insert({
+    user_id: userId,
+    company_id: companyId,
+    action: 'UPDATE',
+    table_name: 'fiscal_periods',
+    record_id: fiscalPeriodId,
+    description: `Period marked as closed in previous system: ${result.name} (${result.period_start} to ${result.period_end})`,
+    old_state: { is_closed: false, closed_at: null, locked_at: period.locked_at },
+    new_state: {
+      is_closed: true,
+      closed_at: result.closed_at,
+      closed_externally: true,
+      locked_at: result.locked_at,
+    },
+  })
+
+  return result
+}
+
+/**
  * Create the next fiscal period following the current one.
  * Computes dates based on the current period's length (handles brutet räkenskapsår).
  * Sets previous_period_id for chain validation.

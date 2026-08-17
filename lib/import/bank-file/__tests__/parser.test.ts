@@ -51,6 +51,15 @@ const SEB_PRIVAT_CSV = [
   '2024-10-31;2024-10-31;5841990687;H31520956893;433,16;5147,56',
 ].join('\n')
 
+// SEB "Transaktioner" web export: UTF-8 BOM, CRLF, dot decimals, and the
+// amount split across Insättningar/Uttag (Uttag rows carry their own minus).
+// Header and first data row are verbatim from a user-provided export
+// (2026-08); the deposit row is synthetic.
+const SEB_TRANSAKTIONER_CSV =
+  '\uFEFFBokförd;Valutadatum;Text;Typ;Insättningar;Uttag;Bokfört saldo\r\n' +
+  '2026-07-21;2026-07-21;SAN FRANCISC/26-07-20;Kortköp;;-89.44;433217.91\r\n' +
+  '2026-07-18;2026-07-18;KUNDINBETALNING;Insättning;12500.00;;433307.35\r\n'
+
 const SWEDBANK_CSV = [
   'Kontouppgifter',
   'Clearingnummer,Kontonummer,Datum,Text,Belopp,Saldo',
@@ -824,6 +833,62 @@ describe('parseBankFile: SEB format', () => {
     const deposit = result.transactions[2]
     expect(deposit.amount).toBe(433.16)
   })
+
+  it('auto-detects the SEB Transaktioner layout (Bokförd + Insättningar/Uttag)', () => {
+    const format = detectFileFormat(SEB_TRANSAKTIONER_CSV, 'transaktioner.csv')
+    expect(format).not.toBeNull()
+    expect(format!.id).toBe('seb')
+  })
+
+  it('parses the Transaktioner layout: BOM, CRLF, dot decimals, split amount columns', () => {
+    const result = parseBankFile(SEB_TRANSAKTIONER_CSV, 'transaktioner.csv')
+
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(2)
+    expect(result.issues).toHaveLength(0)
+
+    const cardPurchase = result.transactions[0]
+    expect(cardPurchase.date).toBe('2026-07-21')
+    expect(cardPurchase.description).toBe('SAN FRANCISC/26-07-20')
+    expect(cardPurchase.amount).toBe(-89.44)
+    expect(cardPurchase.balance).toBe(433217.91)
+
+    const deposit = result.transactions[1]
+    expect(deposit.date).toBe('2026-07-18')
+    expect(deposit.amount).toBe(12500)
+    expect(deposit.balance).toBe(433307.35)
+  })
+
+  it('parses the Transaktioner layout natively on an explicit SEB choice (no fallback)', () => {
+    const result = parseBankFile(SEB_TRANSAKTIONER_CSV, 'transaktioner.csv', 'seb')
+
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(2)
+    // Native parse: no "another format was used instead" info issue.
+    expect(result.issues).toHaveLength(0)
+  })
+
+  it('normalizes an unsigned Uttag magnitude to an expense', () => {
+    const unsignedWithdrawal =
+      'Bokförd;Valutadatum;Text;Typ;Insättningar;Uttag;Bokfört saldo\n' +
+      '2026-07-21;2026-07-21;BANKAVGIFT;Avgift;;120.00;1000.00'
+    const result = parseBankFile(unsignedWithdrawal, 'transaktioner.csv', 'seb')
+
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].amount).toBe(-120)
+  })
+
+  it('skips a Transaktioner row where both Insättningar and Uttag are empty', () => {
+    const emptyAmounts =
+      'Bokförd;Valutadatum;Text;Typ;Insättningar;Uttag;Bokfört saldo\n' +
+      '2026-07-21;2026-07-21;SPÄRRAD RAD;Info;;;1000.00\n' +
+      '2026-07-20;2026-07-20;KORTKÖP;Kortköp;;-50.00;950.00'
+    const result = parseBankFile(emptyAmounts, 'transaktioner.csv', 'seb')
+
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].amount).toBe(-50)
+    expect(result.stats.skipped_rows).toBe(1)
+  })
 })
 
 describe('parseBankFile: Swedbank format', () => {
@@ -1389,7 +1454,9 @@ describe('parseBankFile: camt.053 XML format', () => {
 
 describe('parseBankFile: explicit format override', () => {
   it('uses the specified format instead of auto-detection', () => {
-    // Force parsing Nordea content as SEB (will produce issues but should use SEB format)
+    // Nordea content forced as SEB: the widened SEB parser handles it via
+    // delimiter sniffing + the bare-Datum tier, and a working explicit parse
+    // is never overridden by the auto-detect fallback.
     const result = parseBankFile(
       'Datum,Transaktion,Kategori,Belopp,Saldo\n2024-01-15,Test,,"-100,00","5000,00"',
       'nordea.csv',
@@ -1397,6 +1464,8 @@ describe('parseBankFile: explicit format override', () => {
     )
 
     expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].amount).toBe(-100)
   })
 
   it('returns error for unknown formatId', () => {
@@ -1407,7 +1476,7 @@ describe('parseBankFile: explicit format override', () => {
     expect(result.transactions).toHaveLength(0)
     expect(result.issues).toHaveLength(1)
     expect(result.issues[0].severity).toBe('error')
-    expect(result.issues[0].message).toContain('Unknown format')
+    expect(result.issues[0].message).toContain('Okänt format')
   })
 
   it('returns format detection error when no format matches and no override given', () => {
@@ -1427,6 +1496,131 @@ describe('parseBankFile: explicit format override', () => {
     // generic_csv uses a default mapping (date=0, description=1, amount=2)
     // But the first line is treated as header (skip_rows=1), so only second row is data
     expect(result.format).toBe('generic_csv')
+  })
+})
+
+describe('parseBankFile: explicit format fallback to auto-detection', () => {
+  it('falls back to the detected format when the explicit choice parses 0 transactions', () => {
+    const result = parseBankFile(SWEDBANK_CSV, 'export.csv', 'seb')
+
+    expect(result.format).toBe('swedbank')
+    expect(result.transactions).toHaveLength(3)
+    expect(result.issues[0].severity).toBe('info')
+    expect(result.issues[0].message).toContain('SEB')
+    expect(result.issues[0].message).toContain('Swedbank')
+  })
+
+  it('falls back to Handelsbanken when a Handelsbanken file is forced as SEB', () => {
+    const result = parseBankFile(HANDELSBANKEN_CSV, 'export.csv', 'seb')
+
+    expect(result.format).toBe('handelsbanken')
+    expect(result.transactions).toHaveLength(3)
+    expect(result.issues[0].severity).toBe('info')
+    expect(result.issues[0].message).toContain('Handelsbanken')
+  })
+
+  it('never overrides a working explicit parse even when detection prefers another format', () => {
+    // NORDEA_CSV auto-detects as nordea, but forced-SEB parses it fine via
+    // delimiter sniffing + the bare-Datum tier: the user's choice stands.
+    expect(detectFileFormat(NORDEA_CSV, 'nordea.csv')!.id).toBe('nordea')
+
+    const result = parseBankFile(NORDEA_CSV, 'nordea.csv', 'seb')
+
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(3)
+    expect(result.issues.filter((i) => i.severity === 'info')).toHaveLength(0)
+  })
+
+  it('keeps the explicit error result when no other format can parse the file', () => {
+    const result = parseBankFile(UNKNOWN_CSV, 'unknown.csv', 'seb')
+
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(0)
+    expect(result.issues[0].severity).toBe('error')
+    expect(result.issues[0].message).toContain('Kunde inte identifiera nödvändiga kolumner')
+  })
+
+  it('does not fall back for explicit generic_csv (the manual mapping escape hatch)', () => {
+    // The default generic mapping parses 0 rows of a Nordea file, but the
+    // user chose "Annan CSV" to map columns manually: never reroute them.
+    const result = parseBankFile(NORDEA_CSV, 'nordea.csv', 'generic_csv')
+
+    expect(result.format).toBe('generic_csv')
+  })
+})
+
+describe('parseBankFile: BOM handling', () => {
+  it('auto-detects and parses SEB CSV with a real UTF-8 BOM (U+FEFF)', () => {
+    const content = '\uFEFF' + SEB_CSV
+
+    expect(detectFileFormat(content, 'seb.csv')!.id).toBe('seb')
+
+    const result = parseBankFile(content, 'seb.csv')
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(3)
+  })
+
+  it('auto-detects and parses SEB privat CSV with a mojibake BOM prefix', () => {
+    const content = 'ï»¿' + SEB_PRIVAT_CSV
+
+    expect(detectFileFormat(content, 'kontoutdrag.csv')!.id).toBe('seb')
+
+    const result = parseBankFile(content, 'kontoutdrag.csv')
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(3)
+  })
+
+  it('detects an exact-match Datum header behind a mojibake BOM prefix', () => {
+    // Exact-match header checks (h === 'datum') are the genuinely BOM-fragile
+    // ones: a surviving mojibake prefix used to make this file undetectable.
+    const content = 'ï»¿' + [
+      'Datum;Text;Belopp;Saldo',
+      '2026-01-15;SPOTIFY AB;-99,00;1000,00',
+    ].join('\n')
+
+    const format = detectFileFormat(content, 'export.csv')
+    expect(format).not.toBeNull()
+    expect(format!.id).toBe('nordea_business')
+
+    const result = parseBankFile(content, 'export.csv')
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].amount).toBe(-99)
+  })
+})
+
+describe('parseBankFile: SEB delimiter sniffing and bare-Datum tier', () => {
+  it('parses a comma-delimited SEB-labeled file under explicit seb', () => {
+    const commaSeb = [
+      'Bokföringsdag,Valutadag,Verifikationsnummer,Text,Belopp,Saldo',
+      '2024-01-15,2024-01-15,12345,SPOTIFY AB,"-99,00","12345,67"',
+      '2024-01-14,2024-01-14,12346,HEMKÖP,"-432,50","12444,67"',
+    ].join('\n')
+
+    const result = parseBankFile(commaSeb, 'seb.csv', 'seb')
+
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(2)
+    expect(result.transactions[0].amount).toBe(-99)
+    expect(result.transactions[0].description).toBe('SPOTIFY AB')
+    expect(result.transactions[0].balance).toBe(12345.67)
+  })
+
+  it('parses a bare-Datum layout under explicit seb without claiming it in detect', () => {
+    const bareDatum = [
+      'Datum;Text;Belopp;Saldo',
+      '2026-02-01;SPOTIFY AB;-99,00;1000,00',
+      '2026-02-02;LÖN;25000,00;26000,00',
+    ].join('\n')
+
+    // detect must NOT claim the bare-Datum layout: in auto-detection it
+    // belongs to other profiles (nordea_business format D family).
+    expect(getFormat('seb')!.detect(bareDatum, 'seb.csv')).toBe(false)
+
+    const result = parseBankFile(bareDatum, 'seb.csv', 'seb')
+
+    expect(result.format).toBe('seb')
+    expect(result.transactions).toHaveLength(2)
+    expect(result.transactions[1].amount).toBe(25000)
   })
 })
 

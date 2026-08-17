@@ -63,9 +63,9 @@ export default function GlobalError({
       </head>
       <body>
         {phase === "fallback" ? (
-          <div className="flex min-h-screen items-center justify-center p-8">
+          <div className="flex min-h-dvh items-center justify-center p-8">
             <div className="text-center space-y-4">
-              <h2 className="text-xl font-semibold">Något gick fel</h2>
+              <h2 className="text-xl">Något gick fel</h2>
               <p className="text-muted-foreground">
                 Ett oväntat fel inträffade. Försök igen eller{" "}
                 <a
@@ -78,7 +78,7 @@ export default function GlobalError({
               </p>
               <button
                 onClick={() => window.location.reload()}
-                className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
+                className="rounded-full bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90"
               >
                 Försök igen
               </button>

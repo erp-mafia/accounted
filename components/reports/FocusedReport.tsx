@@ -68,10 +68,13 @@ function FocusedReportInner({
   slug,
   initialPeriods,
   initialCompanyId,
+  autoRun,
 }: {
   slug: string
   initialPeriods: FiscalPeriod[]
   initialCompanyId: string | null
+  /** ?autorun=1: the bank-reconciliation view runs its preview once on load. */
+  autoRun?: boolean
 }) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -186,6 +189,7 @@ function FocusedReportInner({
           isEnskildFirma={isEnskildFirma}
           isAktiebolag={isAktiebolag}
           onNavigateToAccount={navigateToAccount}
+          autoRun={autoRun}
         />
       ) : (
         <EmptyState
@@ -210,6 +214,7 @@ function FocusedView({
   isEnskildFirma,
   isAktiebolag,
   onNavigateToAccount,
+  autoRun,
 }: {
   slug: string
   reportName: string
@@ -221,6 +226,7 @@ function FocusedView({
   isEnskildFirma: boolean
   isAktiebolag: boolean
   onNavigateToAccount: (account: string) => void
+  autoRun?: boolean
 }) {
   switch (slug) {
     case 'resultatrapport':
@@ -252,7 +258,7 @@ function FocusedView({
     case 'supplier-ledger':
       return <SupplierLedgerView periodId={periodId} />
     case 'bank-reconciliation':
-      return <BankReconciliationView periodId={periodId} periodBounds={periodBounds} />
+      return <BankReconciliationView periodId={periodId} periodBounds={periodBounds} autoRun={autoRun} />
     default:
       return null
   }
@@ -262,10 +268,13 @@ export function FocusedReport({
   slug,
   initialPeriods,
   initialCompanyId,
+  autoRun,
 }: {
   slug: string
   initialPeriods: FiscalPeriod[]
   initialCompanyId: string | null
+  /** ?autorun=1: the bank-reconciliation view runs its preview once on load. */
+  autoRun?: boolean
 }) {
   return (
     <Suspense fallback={<div className="space-y-8" />}>
@@ -273,6 +282,7 @@ export function FocusedReport({
         slug={slug}
         initialPeriods={initialPeriods}
         initialCompanyId={initialCompanyId}
+        autoRun={autoRun}
       />
     </Suspense>
   )

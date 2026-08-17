@@ -147,7 +147,8 @@ export function SkattekontoMatchDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
-          <DialogDescription>
+          {/* data-ph-mask: transaction text and amount are user data */}
+          <DialogDescription data-ph-mask="">
             {row && (
               <>
                 {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
@@ -177,7 +178,7 @@ export function SkattekontoMatchDialog({
         )}
 
         {!loading && candidates && candidates.length > 0 && (
-          <div className="max-h-[420px] overflow-y-auto rounded-md border">
+          <div className="max-h-[420px] overflow-y-auto rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow>

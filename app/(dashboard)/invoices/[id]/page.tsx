@@ -3,7 +3,7 @@
 import { useState, useEffect, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -31,6 +31,7 @@ import {
   ArrowLeft,
   Send,
   CheckCircle,
+  FileCheck2,
   FileText,
   Download,
   Eye,
@@ -58,6 +59,8 @@ import {
   type InvoiceDeliveryView,
 } from '@/components/invoices/InvoiceDeliveryHistory'
 import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
 import {
   Dialog,
   DialogContent,
@@ -116,6 +119,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoice_detail')
+  const locale = useLocale()
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
   const [reminders, setReminders] = useState<InvoiceReminder[]>([])
@@ -156,6 +160,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isLoading, setIsLoading] = useState(true)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
+  const [isDownloadingPeppol, setIsDownloadingPeppol] = useState(false)
+  const [isPreparingPeppol, setIsPreparingPeppol] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
@@ -580,6 +586,83 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     )
   }
 
+  async function downloadPeppolXml() {
+    if (!invoice) return
+    setIsDownloadingPeppol(true)
+
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/peppol`)
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as {
+          error?: { code?: string; message?: string; message_en?: string }
+        } | null
+        throw body?.error ?? new Error(t('peppol_download_failed_description'))
+      }
+
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
+        ?? `peppol-invoice-${invoice.invoice_number ?? invoice.id}.xml`
+      document.body.appendChild(anchor)
+      anchor.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(anchor)
+
+      toast({
+        title: t('peppol_downloaded_title'),
+        description: t('peppol_downloaded_description'),
+      })
+    } catch (error) {
+      toast({
+        title: t('peppol_download_failed_title'),
+        description: error instanceof Error
+          ? getUserErrorMessage(error, { locale: locale.startsWith('sv') ? 'sv' : 'en' })
+          : getUserErrorMessage(error, {
+              context: 'invoice',
+              locale: locale.startsWith('sv') ? 'sv' : 'en',
+            }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsDownloadingPeppol(false)
+    }
+  }
+
+  async function preparePeppolDelivery() {
+    if (!invoice) return
+    setIsPreparingPeppol(true)
+
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/peppol`, { method: 'POST' })
+      const body = await response.json().catch(() => null) as {
+        error?: { code?: string; message?: string; message_en?: string }
+      } | null
+      if (!response.ok) {
+        throw body?.error ?? new Error(t('peppol_prepare_failed_description'))
+      }
+
+      toast({
+        title: t('peppol_prepared_title'),
+        description: t('peppol_prepared_description'),
+      })
+    } catch (error) {
+      toast({
+        title: t('peppol_prepare_failed_title'),
+        description: error instanceof Error
+          ? getUserErrorMessage(error, { locale: locale.startsWith('sv') ? 'sv' : 'en' })
+          : getUserErrorMessage(error, {
+              context: 'invoice',
+              locale: locale.startsWith('sv') ? 'sv' : 'en',
+            }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsPreparingPeppol(false)
+    }
+  }
+
   /**
    * Show one specific document in the browser instead of saving it (#1190):
    * granskning should not require leaving the app for the Downloads folder.
@@ -855,12 +938,27 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   )
   return (
     <div className="space-y-8">
+      {/* Back link + prev/next record pager on their own quiet row, so the
+          title below keeps a stable position while stepping between records */}
+      <div className="flex items-center justify-between gap-4">
+        <button
+          type="button"
+          onClick={() => router.back()}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('back')}
+        </button>
+        <DetailPager
+          contextKey={listContextKey('invoices', company?.id)}
+          basePath="/invoices"
+          currentId={id}
+        />
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label={t('back')}>
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <h1 className={cn('font-display text-2xl leading-8 tracking-tight', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : (invoice.invoice_number ?? '-')}</h1>
@@ -1005,6 +1103,42 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 )}
                 {t('download_pdf')}
               </Button>
+            </>
+          )}
+          {!isSelfBilled && isRealInvoice && !isCreditNote && invoice.invoice_number && (
+            <>
+              <Button
+                variant="outline"
+                onClick={downloadPeppolXml}
+                disabled={isDownloadingPeppol}
+              >
+                {isDownloadingPeppol ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <FileText className="mr-2 h-4 w-4" />
+                )}
+                {t('download_peppol_xml')}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={preparePeppolDelivery}
+                disabled={isPreparingPeppol || !canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {isPreparingPeppol ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <FileCheck2 className="mr-2 h-4 w-4" />
+                )}
+                {t('prepare_peppol_delivery')}
+              </Button>
+              <span className="inline-flex" title={t('peppol_provider_required')}>
+                <Button variant="outline" disabled>
+                  <Send className="mr-2 h-4 w-4" />
+                  {t('send_via_peppol')}
+                </Button>
+                <span className="sr-only">{t('peppol_provider_required')}</span>
+              </span>
             </>
           )}
         </div>
@@ -1373,7 +1507,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   className={cn(
                     'flex items-center gap-2',
                     invoice.status === 'paid' && 'text-success',
-                    invoice.status === 'partially_paid' && 'text-warning-foreground',
+                    invoice.status === 'partially_paid' && 'text-attn',
                   )}
                 >
                   {invoice.status === 'paid' ? (
@@ -1406,7 +1540,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     <p
                       className={cn(
                         'font-display text-xl tabular-nums mt-1',
-                        invoice.status === 'partially_paid' && 'text-warning-foreground',
+                        invoice.status === 'partially_paid' && 'text-attn',
                       )}
                     >
                       {formatCurrency(
@@ -1446,7 +1580,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         return (
                           <li
                             key={p.id}
-                            className="flex items-center justify-between gap-3 px-2 py-2 text-sm transition-colors hover:bg-secondary/60 rounded"
+                            className="flex items-center justify-between gap-3 px-2 py-2 text-sm transition-colors hover:bg-secondary/60 rounded-sm"
                           >
                             <span className="tabular-nums text-muted-foreground">
                               {formatDate(p.payment_date)}
@@ -1550,7 +1684,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
           {/* Credit note reference (if this invoice was credited) */}
           {creditNote && (
-            <Card className={creditNote.status === 'draft' ? undefined : 'border-warning/50'}>
+            <Card className={creditNote.status === 'draft' ? undefined : 'border-border'}>
               <CardHeader>
                 <CardTitle className={cn(
                   'flex items-center gap-2',
@@ -1722,7 +1856,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   {t('delete_dialog_desc_with_number_1')}
                   <strong>{t('delete_dialog_status_makulerad')}</strong>
                   {t('delete_dialog_desc_with_number_2')}
-                  <span className="mt-2 block text-muted-foreground">
+                  {/* data-ph-mask: interpolates the invoice number */}
+                  <span data-ph-mask="" className="mt-2 block text-muted-foreground">
                     {t('delete_dialog_number_kept', { number: invoice.invoice_number })}
                   </span>
                 </>

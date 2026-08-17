@@ -237,7 +237,7 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
               </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="font-medium">{term.term}</h3>
+                  <h3>{term.term}</h3>
                   {term.simpleTerm && (
                     <span className="text-sm text-muted-foreground font-normal">
                       {term.simpleTerm}
@@ -381,7 +381,7 @@ export default function HelpPage() {
           <EmptyState
             icon={Search}
             title={t('no_results_title')}
-            description={t('no_results', { query: searchQuery })}
+            description={<span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>}
           />
         ) : (
           filteredTerms.map((term) => (

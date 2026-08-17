@@ -374,7 +374,7 @@ export default function RotRutPayoutDialog({
             <section className="space-y-3" aria-labelledby="rot-rut-candidates-title">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h2 id="rot-rut-candidates-title" className="text-sm font-medium">
+                  <h2 id="rot-rut-candidates-title" className="text-sm">
                     {t('rot_rut_eligible_title')}
                   </h2>
                   <p className="text-xs text-muted-foreground">
@@ -441,8 +441,8 @@ export default function RotRutPayoutDialog({
               )}
 
               {visibleCandidates.length > MAX_CASES_PER_FILE && (
-                <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs text-muted-foreground">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning-foreground" />
+                <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-attn" />
                   <span>{t('rot_rut_max_cases_help', { count: MAX_CASES_PER_FILE })}</span>
                 </div>
               )}
@@ -487,7 +487,7 @@ export default function RotRutPayoutDialog({
 
             <section className="space-y-3 border-t pt-5" aria-labelledby="rot-rut-history-title">
               <div>
-                <h2 id="rot-rut-history-title" className="text-sm font-medium">
+                <h2 id="rot-rut-history-title" className="text-sm">
                   {t('rot_rut_history_title')}
                 </h2>
                 <p className="text-xs text-muted-foreground">{t('rot_rut_upload_help')}</p>

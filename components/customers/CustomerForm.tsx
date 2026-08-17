@@ -318,7 +318,7 @@ export default function CustomerForm({
 
       {/* Customer-specific invoice recipients */}
       <div className="space-y-4">
-        <h3 className="text-sm font-medium">{t('invoice_email_section')}</h3>
+        <h3 className="text-sm">{t('invoice_email_section')}</h3>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="invoice_email_cc_addresses">{t('invoice_email_cc_label')}</Label>
@@ -350,7 +350,7 @@ export default function CustomerForm({
 
       {/* Address */}
       <div className="space-y-4">
-        <h3 className="font-medium">{t('address_section')}</h3>
+        <h3>{t('address_section')}</h3>
         <div className="space-y-2">
           <Label htmlFor="address_line1">{t('street_label')}</Label>
           <Input
@@ -390,7 +390,7 @@ export default function CustomerForm({
       {/* Identification: depends on customer type */}
       {customerType === 'individual' ? (
         <div className="space-y-4 pt-4 border-t">
-          <h3 className="font-medium">{t('individual_section')}</h3>
+          <h3>{t('individual_section')}</h3>
 
           <div className="space-y-2">
             <Label htmlFor="personal_number">{t('personal_number_label')}</Label>
@@ -408,7 +408,7 @@ export default function CustomerForm({
         </div>
       ) : (
         <div className="space-y-4 pt-4 border-t">
-          <h3 className="font-medium">{t('business_section')}</h3>
+          <h3>{t('business_section')}</h3>
 
           <div className="space-y-2">
             <Label htmlFor="org_number">{t('org_number_label')}</Label>

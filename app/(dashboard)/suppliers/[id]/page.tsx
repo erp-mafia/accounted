@@ -5,13 +5,14 @@ import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from "@/components/ui/skeleton"
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, Edit, Trash2, FileText, Lock } from 'lucide-react'
+import { ArrowLeft, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
 import SupplierForm from '@/components/suppliers/SupplierForm'
@@ -181,124 +182,159 @@ export default function SupplierDetailPage() {
     credited: t('status_credited'),
   }
 
+  // One fallback row keeps the figures band composed for a supplier that has
+  // no invoices yet: zeros in the supplier's own default currency.
+  const currencyRows = supplier.stats?.by_currency?.length
+    ? supplier.stats.by_currency
+    : [{ currency: supplier.default_currency || 'SEK', total_outstanding: 0, total_paid: 0 }]
+
   return (
-    <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => router.push('/suppliers')} aria-label={t('back_aria')}>
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
-          <div>
+    <div className="max-w-3xl space-y-8 stagger-enter">
+      {/* Header: serif name over a quiet type/org kicker, quiet actions right */}
+      <div>
+        <Link
+          href="/suppliers"
+          className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"
+          aria-label={t('back_aria')}
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('back')}
+        </Link>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
             <h1 className="font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>
-            <p className="text-muted-foreground">
+            <p className="mt-1 text-sm text-muted-foreground">
               {supplierTypeLabels[supplier.supplier_type]}
-              {supplier.org_number && t('org_number_inline', { number: supplier.org_number })}
+              {supplier.org_number ? ` · ${t('kicker_org', { number: supplier.org_number })}` : ''}
             </p>
           </div>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => setIsEditOpen(true)}
-            disabled={!canWrite}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            {canWrite ? <Edit className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-            {t('edit')}
-          </Button>
-          <Button
-            variant="destructive"
-            size="icon"
-            onClick={handleDelete}
-            disabled={!canWrite}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            aria-label={t('delete_confirm_label')}
-          >
-            {canWrite ? <Trash2 className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
-          </Button>
+
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsEditOpen(true)}
+              className="min-h-10 text-muted-foreground hover:text-foreground"
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {t('edit')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDelete}
+              className="min-h-10 text-muted-foreground hover:text-destructive"
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {t('delete')}
+            </Button>
+          </div>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">{t('outstanding')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(supplier.stats?.by_currency?.length ? supplier.stats.by_currency : [{ currency: supplier.default_currency || 'SEK', total_outstanding: 0, total_paid: 0 }]).map((row) => (
-              <p key={row.currency} className="font-display text-2xl tabular-nums">
+      {/* Figures band: the three headline numbers, flat on the page */}
+      <div className="grid gap-6 sm:grid-cols-3">
+        <div>
+          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            {t('outstanding')}
+          </p>
+          <div className="mt-1">
+            {currencyRows.map((row) => (
+              <p key={row.currency} className="font-display text-xl tabular-nums">
                 {amountWithCurrency(row.total_outstanding, row.currency)}
               </p>
             ))}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">{t('total_paid')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(supplier.stats?.by_currency?.length ? supplier.stats.by_currency : [{ currency: supplier.default_currency || 'SEK', total_outstanding: 0, total_paid: 0 }]).map((row) => (
-              <p key={row.currency} className="font-display text-2xl tabular-nums">
+          </div>
+        </div>
+        <div>
+          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            {t('total_paid')}
+          </p>
+          <div className="mt-1">
+            {currencyRows.map((row) => (
+              <p key={row.currency} className="font-display text-xl tabular-nums">
                 {amountWithCurrency(row.total_paid, row.currency)}
               </p>
             ))}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">{t('invoice_count')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="font-display text-2xl tabular-nums">{supplier.stats?.invoice_count || 0}</p>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
+        <div>
+          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            {t('invoice_count')}
+          </p>
+          <p className="mt-1 font-display text-xl tabular-nums">
+            {supplier.stats?.invoice_count || 0}
+          </p>
+        </div>
       </div>
 
-      {/* Contact & Payment Info */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('contact_section_title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            {supplier.email && <p>{t('email_inline', { email: supplier.email })}</p>}
-            {supplier.phone && <p>{t('phone_inline', { phone: supplier.phone })}</p>}
-            {supplier.address_line1 && <p>{supplier.address_line1}</p>}
-            {supplier.postal_code && <p>{supplier.postal_code} {supplier.city}</p>}
-            {supplier.vat_number && <p>{t('vat_inline', { vat: supplier.vat_number })}</p>}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('payment_section_title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            {supplier.bankgiro && <p>{t('bankgiro_inline', { value: supplier.bankgiro })}</p>}
-            {supplier.plusgiro && <p>{t('plusgiro_inline', { value: supplier.plusgiro })}</p>}
-            {supplier.iban && <p>{t('iban_inline', { value: supplier.iban })}</p>}
-            {supplier.bic && <p>{t('bic_inline', { value: supplier.bic })}</p>}
-            <p>{t('payment_terms_inline', { days: supplier.default_payment_terms })}</p>
-            <p>{t('currency_inline', { currency: supplier.default_currency })}</p>
-            {supplier.default_expense_account && <p>{t('expense_account_inline', { account: supplier.default_expense_account })}</p>}
-          </CardContent>
-        </Card>
-      </div>
+      <DetailSection kicker={t('contact_section_title')}>
+        <DefRow label={t('def_email')}>{supplier.email || <DefEmpty />}</DefRow>
+        <DefRow label={t('def_phone')}>{supplier.phone || <DefEmpty />}</DefRow>
+        <DefRow label={t('def_address')}>
+          {supplier.address_line1 || supplier.city ? (
+            <div>
+              {supplier.address_line1 && <p>{supplier.address_line1}</p>}
+              {supplier.address_line2 && <p>{supplier.address_line2}</p>}
+              {(supplier.postal_code || supplier.city) && (
+                <p>{[supplier.postal_code, supplier.city].filter(Boolean).join(' ')}</p>
+              )}
+            </div>
+          ) : (
+            <DefEmpty />
+          )}
+        </DefRow>
+        {supplier.vat_number && <DefRow label={t('def_vat')}>{supplier.vat_number}</DefRow>}
+      </DetailSection>
 
-      {/* Invoices */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-base">{t('invoices_section_title')}</CardTitle>
-          <Link href="/supplier-invoices?new=1">
-            <Button size="sm">
-              <FileText className="mr-2 h-4 w-4" />
-              {t('new_invoice')}
-            </Button>
+      <DetailSection kicker={t('payment_section_title')}>
+        {supplier.bankgiro && (
+          <DefRow label={t('def_bankgiro')}>
+            <span className="tabular-nums">{supplier.bankgiro}</span>
+          </DefRow>
+        )}
+        {supplier.plusgiro && (
+          <DefRow label={t('def_plusgiro')}>
+            <span className="tabular-nums">{supplier.plusgiro}</span>
+          </DefRow>
+        )}
+        {supplier.iban && (
+          <DefRow label={t('def_iban')}>
+            <span className="tabular-nums">{supplier.iban}</span>
+          </DefRow>
+        )}
+        {supplier.bic && (
+          <DefRow label={t('def_bic')}>
+            <span className="tabular-nums">{supplier.bic}</span>
+          </DefRow>
+        )}
+        <DefRow label={t('def_payment_terms')}>
+          {t('payment_terms_value', { days: supplier.default_payment_terms })}
+        </DefRow>
+        <DefRow label={t('def_currency')}>{supplier.default_currency}</DefRow>
+        <DefRow label={t('def_expense_account')}>
+          {supplier.default_expense_account ? (
+            <span className="tabular-nums">{supplier.default_expense_account}</span>
+          ) : (
+            <DefEmpty />
+          )}
+        </DefRow>
+      </DetailSection>
+
+      <DetailSection
+        kicker={t('invoices_section_title')}
+        aside={
+          <Link href="/supplier-invoices?new=1" className={QUIET_LINK_CLASS}>
+            {t('new_invoice')}
           </Link>
-        </CardHeader>
-        <CardContent>
+        }
+      >
           {invoices.length === 0 ? (
-            <p className="text-muted-foreground text-sm text-center py-8">
+            <p className="text-muted-foreground text-sm py-4">
               {t('no_invoices')}
             </p>
           ) : (
@@ -366,8 +402,7 @@ export default function SupplierDetailPage() {
             </div>
             </>
           )}
-        </CardContent>
-      </Card>
+      </DetailSection>
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 

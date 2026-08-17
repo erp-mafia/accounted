@@ -8,6 +8,7 @@ import {
   isReverseChargeBasisAccount,
   resolveReverseChargeRate,
 } from './vat-entries'
+import { generateSlpLines, isSlpPensionAccount } from './slp-lines'
 import {
   coerceDimensionsBag,
   dimensionsBagKey,
@@ -230,6 +231,18 @@ export async function createSupplierInvoiceRegistrationEntry(
         })
       }
     }
+  }
+
+  // Särskild löneskatt på pensionskostnader (SLP, 24.26 %): items flagged
+  // apply_slp (tjänstepensionspremier on 741x) get a self-balancing
+  // 7533 D / 2514 K pair, injected the same way the reverse-charge pairs are.
+  // The pair nets to zero, so the 2440 balance guarantee below keeps the
+  // payable at the invoice total: SLP is the buyer's own tax, never part of
+  // the supplier's fordran.
+  const slpBase = slpBaseSek(items, invoice.currency, invoice.exchange_rate)
+  if (slpBase > 0) {
+    const slpLines = generateSlpLines(slpBase)
+    lines.push(...slpLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
   }
 
   // Credit: Leverantörsskulder, balance guarantee: ensures sum(debits) === sum(credits)
@@ -491,6 +504,16 @@ export async function createSupplierInvoiceCashEntry(
     }
   }
 
+  // Särskild löneskatt på pensionskostnader (SLP): same self-balancing
+  // 7533 D / 2514 K pair as the registration entry, at the effective rate so
+  // the base stays consistent with the expense lines above. Nets to zero:
+  // the payment-account credit below is untouched.
+  const slpBase = slpBaseSek(items, invoice.currency, effectiveRate)
+  if (slpBase > 0) {
+    const slpLines = generateSlpLines(slpBase)
+    lines.push(...slpLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
+  }
+
   // Öresavrundning: when translating a foreign invoice at the payment-date
   // rate, per-line rounding can drift the implied bank total by an öre or two.
   // Fold that residual into the largest expense line so the payment-account
@@ -603,12 +626,24 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
     }
   }
 
-  // Credit: Owner payable/equity, balance guarantee
+  // Särskild löneskatt på pensionskostnader (SLP): same self-balancing
+  // 7533 D / 2514 K pair as the registration entry. Nets to zero, so the
+  // owner account below still carries exactly the expense + VAT total.
+  const slpBase = slpBaseSek(items, invoice.currency, invoice.exchange_rate)
+  if (slpBase > 0) {
+    const slpLines = generateSlpLines(slpBase)
+    lines.push(...slpLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
+  }
+
+  // Credit: Owner payable/equity, balance guarantee. Existing credits (the
+  // SLP 2514 leg) are subtracted so the pair never inflates what the owner
+  // is owed: same guarantee shape as the registration entry's 2440 line.
   const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+  const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   lines.push({
     account_number: ownerAccount,
     debit_amount: 0,
-    credit_amount: Math.round(totalDebits * 100) / 100,
+    credit_amount: Math.round((totalDebits - totalCredits) * 100) / 100,
     line_description: desc,
     dimensions: defaultDimensions,
   })
@@ -753,6 +788,30 @@ export async function createSupplierCreditNoteEntry(
     }
   }
 
+  // Reverse the SLP pair: registration booked 7533 D / 2514 K, so the credit
+  // note books 7533 K / 2514 D (same debit/credit swap as basbeloppsraderna
+  // above). Items are the ORIGINAL invoice's, so apply_slp reverses against
+  // the same base. Nets to zero: the 2440 debit guarantee is untouched.
+  //
+  // The base is abs of the SIGNED sum, not the per-item abs the expense
+  // buckets use: registration computed its SLP base as the signed sum, so a
+  // mixed-sign flagged original (+10000 premium and -2000 rebate) booked SLP
+  // on 8000. Per-item abs here would reverse SLP on 12000, striking more
+  // 7533/2514 than was ever posted. The buckets keep per-item abs because
+  // each reversal line must land positive on its own side per account.
+  const slpBase = Math.abs(slpBaseSek(items, creditNote.currency, creditNote.exchange_rate))
+  if (slpBase > 0) {
+    for (const line of generateSlpLines(slpBase)) {
+      lines.push({
+        account_number: line.account_number,
+        debit_amount: line.credit_amount,
+        credit_amount: line.debit_amount,
+        line_description: line.line_description,
+        dimensions: defaultDimensions,
+      })
+    }
+  }
+
   lines.push(...creditLines)
 
   // Debit: Leverantörsskulder, balance guarantee: debit = sum of credits minus other debits
@@ -858,6 +917,30 @@ function groupBaseByRate(
     baseByRate.set(rate, (baseByRate.get(rate) || 0) + baseSek)
   }
   return baseByRate
+}
+
+/**
+ * Sum, in SEK, the base for särskild löneskatt på pensionskostnader: items
+ * flagged apply_slp whose account is a 741x pension-premium account
+ * (tjänstepensionspremier). The create routes reject apply_slp on any other
+ * account; the account check here is defense in depth so a tampered or
+ * legacy row can never SLP-flag an arbitrary expense.
+ */
+function slpBaseSek(
+  items: SupplierInvoiceItem[],
+  currency: string,
+  exchangeRate: number | null | undefined,
+  useAbsoluteValues = false
+): number {
+  let base = 0
+  for (const item of items) {
+    if (item.apply_slp !== true) continue
+    if (!isSlpPensionAccount(item.account_number)) continue
+    let sek = toSekOrThrow(item.line_total, currency, exchangeRate)
+    if (useAbsoluteValues) sek = Math.abs(sek)
+    base += sek
+  }
+  return base
 }
 
 /**

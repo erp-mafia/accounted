@@ -179,6 +179,18 @@ describe('bulkBookMatchedInboxItems: skip classification (never errors)', () => 
     expect(mockCreateJE).not.toHaveBeenCalled()
   })
 
+  it("skips an item whose staged extraction is still in flight (status 'processing')", async () => {
+    // Staged upload: the row exists with extracted_data NULL while the
+    // deferred worker runs. Matched or not, it must not book from empty data.
+    const supabase = queuedSupabase([
+      { data: { id: 'i1', status: 'processing', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null } },
+    ])
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', { ...base, item_ids: ['i1'] })
+    expect(booked).toEqual([])
+    expect(skipped).toEqual([{ item_id: 'i1', reason: 'extraction_in_progress' }])
+    expect(mockCreateJE).not.toHaveBeenCalled()
+  })
+
   it('skips an item already booked (created_journal_entry_id)', async () => {
     const supabase = queuedSupabase([
       { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: 'je-x', created_supplier_invoice_id: null } },
@@ -519,14 +531,15 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
 })
 
 describe('bulkBookMatchedInboxItems: intra-batch duplicate handling', () => {
-  /** Six queued from() results for one successfully-booked item. */
+  /** Seven queued from() results for one successfully-booked item. */
   const bookableItem = (itemId: string, txId: string, amount: number) => [
     { data: { id: itemId, matched_transaction_id: txId, created_journal_entry_id: null, created_supplier_invoice_id: null } },
     { data: { id: txId, date: '2026-06-01', amount, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
     { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
     { data: [{ id: 'fp-1' }] },
     { error: null },
-    { data: [] },
+    { data: { document_id: null } }, // propagation: tx pin lookup
+    { data: [] }, // propagation: matched inbox items
   ]
 
   it('books BOTH distinct transactions that share (date, amount) in one bulk run', async () => {

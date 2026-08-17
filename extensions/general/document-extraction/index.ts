@@ -1,6 +1,7 @@
 import type { Extension } from '@/lib/extensions/types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { toProviderModelId } from '@/lib/ai/provider'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { createLogger } from '@/lib/logger'
@@ -170,7 +171,7 @@ async function extractAndPersist(
         return
       }
       extractedData = data as unknown as Record<string, unknown>
-      model = process.env.BEDROCK_MODEL_ID || 'eu.anthropic.claude-sonnet-5'
+      model = toProviderModelId(process.env.BEDROCK_MODEL_ID || 'claude-sonnet-5')
     } catch (err) {
       log.warn('extraction threw', {
         doc: document.id,

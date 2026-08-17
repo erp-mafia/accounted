@@ -212,14 +212,66 @@ describe('POST /items/:id/suggest-booking', () => {
     expect(body.data.lines).toEqual([])
   })
 
+  it('still hands the dialog the bank amount when there is no proposal', async () => {
+    // The 2026-08-12 regression: unknown supplier meant an empty proposal,
+    // and the manual-booking dialog opened with no amount at all. An empty
+    // proposal must still carry the matched row's kronor figure, its date,
+    // and a balanced two-row skeleton against the settlement account.
+    evaluateMappingRules.mockResolvedValue(mappingResult({ debit_account: '', credit_account: '' }))
+    const mock = createQueuedMockSupabase()
+    queueRows(mock)
+    const { body } = await parseJsonResponse<{
+      data: {
+        entry_date: string
+        transaction: { amount_sek: number; date: string }
+        fallback_lines: { account_number: string; debit_amount: number; credit_amount: number }[]
+      }
+    }>(await route.handler(req(), buildCtx(mock.supabase)))
+
+    expect(body.data.entry_date).toBe('2026-08-04')
+    expect(body.data.transaction).toEqual({ amount_sek: -21639, date: '2026-08-04' })
+    expect(body.data.fallback_lines).toEqual([
+      { account_number: '', debit_amount: 21639, credit_amount: 0, description: '' },
+      { account_number: '1930', debit_amount: 0, credit_amount: 21639, description: '' },
+    ])
+  })
+
+  it('builds the skeleton from the SEK amount on a withheld foreign proposal', async () => {
+    // currency_unsupported hides the rule's wrong VAT, but the bank row's SEK
+    // amount is still the one honest kronor figure and must reach the dialog.
+    evaluateMappingRules.mockResolvedValue(mappingResult({ rule: { rule_name: 'ACME' }, template_id: undefined }))
+    const mock = createQueuedMockSupabase()
+    queueRows(mock, { tx: { amount: -100, amount_sek: -1150, currency: 'EUR', exchange_rate: 11.5 } })
+    const { body } = await parseJsonResponse<{
+      data: {
+        source: string
+        transaction: { amount_sek: number }
+        fallback_lines: { debit_amount: number; credit_amount: number }[]
+      }
+    }>(await route.handler(req(), buildCtx(mock.supabase)))
+
+    expect(body.data.source).toBe('currency_unsupported')
+    expect(body.data.transaction.amount_sek).toBe(-1150)
+    expect(body.data.fallback_lines[0].debit_amount).toBe(1150)
+    expect(body.data.fallback_lines[1].credit_amount).toBe(1150)
+  })
+
   it('degrades rather than 500s when the mapping engine throws', async () => {
     evaluateMappingRules.mockRejectedValue(new Error('boom'))
     const mock = createQueuedMockSupabase()
     queueRows(mock)
     const res = await route.handler(req(), buildCtx(mock.supabase))
     expect(res.status).toBe(200)
-    const { body } = await parseJsonResponse<{ data: { source: string } }>(res)
+    const { body } = await parseJsonResponse<{
+      data: { source: string; fallback_lines: { account_number: string; credit_amount: number }[] }
+    }>(res)
     expect(body.data.source).toBe('no_mapping')
+    // Even here the dialog gets the amount: the settlement resolution may be
+    // what threw, so the skeleton falls back to the 1930 default.
+    expect(body.data.fallback_lines).toEqual([
+      { account_number: '', debit_amount: 21639, credit_amount: 0, description: '' },
+      { account_number: '1930', debit_amount: 0, credit_amount: 21639, description: '' },
+    ])
   })
 
   it('proposes nothing when the bank line already has a verifikat', async () => {

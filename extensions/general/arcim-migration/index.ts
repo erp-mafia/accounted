@@ -20,11 +20,16 @@ import {
 import { providerSupportsSie, fetchProviderSieFiles, getAllowedFiscalYears } from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
-import { importProviderDocuments } from './lib/import-documents'
+import {
+  FortnoxDocumentScopesRequiredError,
+  importProviderDocuments,
+} from './lib/import-documents'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
+import { mergeParsedSIEFiles } from '@/lib/import/sie-merge'
+import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
 import { loadMappings, generateImportPreview, executeSIEImport } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
@@ -510,10 +515,11 @@ export const arcimMigrationExtension: Extension = {
         const jsLiteral = (value: unknown) =>
           JSON.stringify(value ?? '').replace(/</g, '\\u003c')
 
-        const respondWithError = (reason: string) => {
+        const respondWithError = (reason: string, consentId?: string) => {
           const fallbackUrl = new URL(`${appUrl}/import`)
           fallbackUrl.searchParams.set('migration', 'error')
           fallbackUrl.searchParams.set('reason', reason)
+          if (consentId) fallbackUrl.searchParams.set('consentId', consentId)
 
           const escapedReason = reason
             .replace(/&/g, '&amp;')
@@ -537,7 +543,9 @@ export const arcimMigrationExtension: Extension = {
 
           return new Response(html, {
             status: 200,
-            headers: { 'Content-Type': 'text/html' },
+            // charset is required: without it browsers default to Latin-1 and
+            // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
           })
         }
 
@@ -550,7 +558,18 @@ export const arcimMigrationExtension: Extension = {
             hasCode: !!code,
             hasState: !!stateRaw,
           })
-          return respondWithError(translateOAuthError(oauthError, oauthErrorDescription))
+          let consentId: string | undefined
+          if (stateRaw) {
+            try {
+              consentId = (await consumeOAuthState(stateRaw))?.consentId
+            } catch (error) {
+              log.error('OAuth callback could not resolve failed consent', error)
+            }
+          }
+          return respondWithError(
+            translateOAuthError(oauthError, oauthErrorDescription),
+            consentId,
+          )
         }
 
         if (!code || !stateRaw) {
@@ -562,6 +581,7 @@ export const arcimMigrationExtension: Extension = {
           return respondWithError('Återanropet saknade code eller state. Försök igen.')
         }
 
+        let callbackConsentId: string | undefined
         try {
           // Single source of truth for who this callback belongs to: the
           // server-written provider_otc row, consumed atomically here. The row
@@ -584,6 +604,7 @@ export const arcimMigrationExtension: Extension = {
           }
 
           const { consentId, provider } = resolvedState
+          callbackConsentId = consentId
 
           // Must match the redirect_uri the authorization request was built
           // with, so both come from resolveArcimCallbackUrl.
@@ -605,12 +626,14 @@ export const arcimMigrationExtension: Extension = {
 
           return new Response(html, {
             status: 200,
-            headers: { 'Content-Type': 'text/html' },
+            // charset is required: without it browsers default to Latin-1 and
+            // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
           })
         } catch (error) {
           log.error('OAuth callback exchange failed', error)
           const reason = error instanceof Error ? error.message : 'Okänt fel vid tokenutbyte.'
-          return respondWithError(reason)
+          return respondWithError(reason, callbackConsentId)
         }
       },
     },
@@ -681,19 +704,24 @@ export const arcimMigrationExtension: Extension = {
           if (providerSupportsSie(provider)) {
             try {
               log.info(`Fetching SIE export from ${provider} for consent ${consentId}...`)
-              // Fetch SIE type 4 for the most recent allowed year to get stats
+              // Fetch SIE type 4 for EVERY allowed year, not latestOnly: the
+              // stats below render as "Hittade X konton och Y verifikationer"
+              // on the connect step, and a mid-year export has few or zero
+              // vouchers in the newest year (the One.com migration previewed
+              // "0 verifikationer" and then imported 4153). Costs one SIE
+              // export per extra year, the same work /sie-data repeats right
+              // after: honest numbers are worth it.
               const { files, availableYears } = await fetchProviderSieFiles(
                 provider,
                 resolved.accessToken,
                 resolved.providerCompanyId,
-                { latestOnly: true },
               )
               if (files.length > 0) {
-                const parsed = parseSIEFile(files[files.length - 1].rawContent)
+                const merged = mergeParsedSIEFiles(files.map((f) => parseSIEFile(f.rawContent)))
                 sieAvailable = true
                 sieStats = {
-                  accountCount: parsed.accounts.length,
-                  transactionCount: parsed.vouchers.length,
+                  accountCount: merged.accounts.length,
+                  transactionCount: merged.vouchers.length,
                   fiscalYears: availableYears,
                 }
               }
@@ -795,14 +823,26 @@ export const arcimMigrationExtension: Extension = {
             })
           }
 
-          // Parse most recent file for preview/validation
-          const sieFile = sieFiles[sieFiles.length - 1]
-          const parsed = parseSIEFile(sieFile.rawContent)
-          const validation = validateSIEFile(parsed)
+          // Parse every file ONCE: validation, account collection, the
+          // preview and the returned `parsed` all read from these parses.
+          const parsedFiles = sieFiles.map((file) => ({
+            file,
+            parsed: parseSIEFile(file.rawContent),
+          }))
+
+          // Validate the most recent file's parse: unchanged behavior, so no
+          // previously accepted dataset is newly rejected. Older years get no
+          // gate here (they never had one); their problems still surface
+          // per-file at import time. Validating the merged parse instead
+          // would be wrong: validateSIEFile assumes single-file invariants
+          // (balance yearIndexes relative to ONE current year) that the
+          // merged view deliberately does not preserve.
+          const newestFile = parsedFiles[parsedFiles.length - 1]
+          const validation = validateSIEFile(newestFile.parsed)
 
           if (!validation.valid) {
             log.warn(
-              `arcim sie-data validation failed for ${provider} fiscal year ${sieFile.fiscalYear}: ` +
+              `arcim sie-data validation failed for ${provider} fiscal year ${newestFile.file.fiscalYear}: ` +
               `${validation.errors.length} error(s): ${validation.errors.slice(0, 3).join(' | ')}`,
             )
             return NextResponse.json({
@@ -812,17 +852,16 @@ export const arcimMigrationExtension: Extension = {
             }, { status: 400 })
           }
 
-          // Collect ALL unique accounts across ALL fiscal year files
-          const allAccountsMap = new Map<string, { number: string; name: string }>()
-          for (const file of sieFiles) {
-            const fileParsed = parseSIEFile(file.rawContent)
-            for (const acc of fileParsed.accounts) {
-              if (!allAccountsMap.has(acc.number)) {
-                allAccountsMap.set(acc.number, { number: acc.number, name: acc.name })
-              }
-            }
-          }
-          const allAccounts = [...allAccountsMap.values()]
+          // Whole-dataset view across ALL fiscal years. Mid-year provider
+          // exports have few or zero vouchers in the newest file, so the
+          // preview counts and the theater model must never be built from
+          // that file alone ("Hittade 740 konton och 0 verifikationer" while
+          // 4153 vouchers were about to be imported).
+          const merged = mergeParsedSIEFiles(parsedFiles.map((p) => p.parsed))
+
+          // All unique accounts across all files (first file's name wins,
+          // same as the merge's account union).
+          const allAccounts = merged.accounts
             .filter(a => !isSystemAccount(a.number))
             .map(a => ({ number: a.number, name: a.name }))
 
@@ -850,7 +889,7 @@ export const arcimMigrationExtension: Extension = {
 
           log.info(`Account mapping: ${allAccounts.length} unique accounts across ${sieFiles.length} files, ${mappingStats.unmapped} unmapped`)
 
-          const preview = generateImportPreview(parsed, mappings)
+          const preview = generateImportPreview(merged, mappings)
 
           // Detect prior imports by *fiscal period overlap*, not file hash.
           // Providers embed the export-time #GEN date in every SIE export so
@@ -865,8 +904,7 @@ export const arcimMigrationExtension: Extension = {
               fiscalYearEnd: string | null
             } | null
           }[] = []
-          for (const file of sieFiles) {
-            const fileParsed = parseSIEFile(file.rawContent)
+          for (const { file, parsed: fileParsed } of parsedFiles) {
             const fyStart = fileParsed.stats.fiscalYearStart
             const fyEnd = fileParsed.stats.fiscalYearEnd
 
@@ -905,7 +943,10 @@ export const arcimMigrationExtension: Extension = {
           const replacedFileCount = fileStatuses.filter(f => f.previousImport).length
 
           return NextResponse.json({
-            parsed,
+            // The merged whole-dataset parse: SIEData.parsed feeds the
+            // migration theater (buildTheaterModel), which must see every
+            // fiscal year, not just the newest file.
+            parsed: merged,
             mappings,
             mappingStats,
             preview,
@@ -974,6 +1015,20 @@ export const arcimMigrationExtension: Extension = {
         try {
           const parsed = parseSIEFile(rawContent)
 
+          // Mojibake tripwire (warn, never block). This handler receives SIE
+          // as an ALREADY-DECODED string, so an upstream that decoded CP437
+          // bytes as windows-1252 has baked the corruption in before we ever
+          // see it (the retired Arcim Sync gateway did exactly that on
+          // 2026-03-17). Flag the signature so it can never again land
+          // silently in posted entries; the import itself proceeds untouched.
+          const artifactScan = scanSieForCp1252Artifacts(parsed)
+          if (artifactScan.flagged) {
+            log.warn('import-sie: CP1252 mojibake artifacts in SIE text', {
+              artifactCount: artifactScan.artifactCount,
+              samples: artifactScan.samples,
+            })
+          }
+
           // Validate all accounts are mapped (same as manual upload)
           const unmapped = mappings.filter((m: import('@/lib/import/types').AccountMapping) => !m.targetAccount)
           if (unmapped.length > 0) {
@@ -1013,6 +1068,12 @@ export const arcimMigrationExtension: Extension = {
             // 'block' behavior.
             onExistingPeriod: 'replace',
           })
+
+          // Surface the tripwire on the result the workspace UI already
+          // renders (its "Remaining warnings" card shows result.warnings).
+          if (artifactScan.flagged) {
+            result.warnings.push(formatSieArtifactWarning(artifactScan))
+          }
 
           log.info('SIE import completed:', {
             success: result.success,
@@ -1252,13 +1313,12 @@ export const arcimMigrationExtension: Extension = {
     },
 
     // ── Import provider underlag (receipts) and link to verifikat ──
-    // Best-effort, re-runnable. Kept off the migration's critical path: the
-    // Bokio document API is rate-limited (200 req/60s) and a full receipt
-    // sweep issues hundreds of download calls, which would blow the 300s
-    // migration window. Pages /uploads, resolves each receipt's verifikat via
-    // the SIE-preserved Bokio voucher number, and archives it idempotently
-    // (skips content already stored for the company). Pass { dryRun: true } to
-    // preview the match plan without downloading or writing.
+    // Best-effort, re-runnable. Kept off the migration's critical path because
+    // the Bokio and Fortnox APIs are rate-limited and a full receipt sweep can
+    // issue hundreds of download calls. Resolves each receipt's verifikat via
+    // the SIE-preserved provider voucher number and archives it idempotently.
+    // Fortnox consents need archive and connectfile scopes. Pass
+    // { dryRun: true } to preview the match plan without downloading or writing.
     {
       method: 'POST',
       path: '/import-documents',
@@ -1307,6 +1367,13 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json({ success: true, dryRun, result })
         } catch (error) {
           log.error('arcim import-documents failed', error as Error)
+          if (error instanceof FortnoxDocumentScopesRequiredError) {
+            return errorResponseFromCode(
+              'PROVIDER_DOCUMENT_SCOPES_REQUIRED',
+              moduleLog,
+              { status: 403 },
+            )
+          }
           return errorResponseFromCode('PROVIDER_IMPORT_DOCUMENTS_FAILED', moduleLog, {
             details: { reason: error instanceof Error ? error.message : 'unknown' },
           })

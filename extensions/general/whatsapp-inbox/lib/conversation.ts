@@ -26,8 +26,52 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import type { WhatsAppConversation, WhatsAppMessage } from '@/types'
 import { decryptPhone } from './phone-crypto'
+import { TEMPLATE } from './messages'
 
 const log = createLogger('whatsapp-inbox/conversation')
+
+// The M1 "not linked" greeting is hard throttled per phone hash: text gets
+// 1/hour, media rides a 10-minute burst window instead (see below); both
+// share the 3/day cap, then silence. Shared by the unknown-sender path
+// (webhook) and the revoked-mid-processing path (process-inbound), so it
+// lives here.
+const GREETING_HOUR_MS = 60 * 60 * 1000
+const GREETING_BURST_MS = 10 * 60 * 1000
+const GREETING_DAY_MS = 24 * 60 * 60 * 1000
+const GREETING_DAY_MAX = 3
+
+/** True when another M1 greeting to this phone hash would exceed the cap.
+ *  Fails CLOSED: if the throttle window cannot be read, no greeting goes
+ *  out, matching the unknown-sender quota's stance.
+ *
+ *  `media: true` marks a message that carried an image or document: the
+ *  sender is handing over a receipt they expect to be handled, so repeats are
+ *  suppressed only inside a 10-minute burst window (one burst of photos earns
+ *  exactly one M1) instead of the full hour. The daily cap applies to both. */
+export async function greetingThrottled(
+  supabase: SupabaseClient,
+  phoneHash: string,
+  opts: { media?: boolean } = {},
+): Promise<boolean> {
+  const since = new Date(Date.now() - GREETING_DAY_MS).toISOString()
+  const { data, error } = await supabase
+    .from('whatsapp_messages')
+    .select('created_at')
+    .eq('direction', 'outbound')
+    .eq('sender_phone_hash', phoneHash)
+    .eq('raw_payload->>template', TEMPLATE.m1Unlinked)
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(GREETING_DAY_MAX)
+  if (error) {
+    log.warn('greeting throttle window unreadable; staying silent', { error: error.message })
+    return true
+  }
+  const rows = (data ?? []) as Array<{ created_at: string }>
+  if (rows.length >= GREETING_DAY_MAX) return true
+  const windowStart = Date.now() - (opts.media ? GREETING_BURST_MS : GREETING_HOUR_MS)
+  return rows.some((r) => new Date(r.created_at).getTime() > windowStart)
+}
 
 export const COMPANY_PIN_TTL_MS = 8 * 60 * 60 * 1000
 export const QUESTION_TTL_MS = 48 * 60 * 60 * 1000
@@ -41,6 +85,11 @@ export const MAX_QUESTIONS_PER_DAY = 6
 export const STAGED_AWAITING_COMPANY = 'staged_awaiting_company'
 /** Marker after the 48h TTL expired: excluded from any later re-open. */
 export const COMPANY_CHOICE_EXPIRED = 'company_choice_expired'
+/** Terminal marker when the company question could not be asked at all:
+ *  the sender has fewer than 2 companies to choose between, so nothing will
+ *  change until they fix the linking in the app. The rows are never retried;
+ *  M19 tells the sender why. */
+export const NO_COMPANY_OPTIONS = 'no_company_options'
 
 export type QuestionType = 'representation' | 'context' | 'resend'
 export type ConversationQuestionType = QuestionType | 'company'

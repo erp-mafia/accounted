@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
 import { Textarea } from '@/components/ui/textarea'
-import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy, ChevronDown, CalendarClock, FileText, Link2, RotateCcw, Scissors, PenLine } from 'lucide-react'
+import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy, ChevronDown, CalendarClock, FileText, Link2, RotateCcw, Scissors, PenLine, Bot } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -27,7 +27,6 @@ import StrikeLinesDialog from '@/components/bookkeeping/StrikeLinesDialog'
 import CorrectMetadataDialog from '@/components/bookkeeping/CorrectMetadataDialog'
 import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -37,6 +36,9 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { fetchDimensions, type DimensionDto } from '@/components/dimensions/types'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 
@@ -63,10 +65,39 @@ type RattelseLogRow = {
   created_at: string
 }
 
+/**
+ * Human "who committed this" line from the committed_actor_* snapshot
+ * (WHO relayed the commit; commit_method records HOW). The claude.ai MCP
+ * connector mints a gnubok_sk_ API key, so MCP traffic arrives as
+ * actor_type='api_key' with the key name as the label.
+ */
+function committedByLabel(
+  actorType: string,
+  actorLabel: string | null,
+  t: (key: string, values?: Record<string, string>) => string,
+): string {
+  switch (actorType) {
+    case 'user':
+      return actorLabel || t('committed_by_user')
+    case 'api_key':
+    case 'mcp_oauth':
+      return actorLabel ? t('committed_by_ai', { label: actorLabel }) : t('committed_by_ai_plain')
+    case 'agent_chat':
+      return t('committed_by_agent_chat')
+    case 'cron':
+      return t('committed_by_cron')
+    case 'system':
+      return t('committed_by_system')
+    default:
+      return actorType
+  }
+}
+
 export default function JournalEntryDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
   const { canWrite } = useCanWrite()
+  const company = useCompanyOptional()?.company ?? null
   const { toast } = useToast()
   const t = useTranslations('journal_detail')
   const sourceTypeLabels = useSourceTypeLabels()
@@ -84,6 +115,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReverseConfirm, setShowReverseConfirm] = useState(false)
   const [isReversing, setIsReversing] = useState(false)
+  // Non-null when the server refused the storno with CORRECTION_CHAIN_TOO_DEEP:
+  // holds the reported chain depth and opens the bypass confirm ("Återför ändå").
+  const [reverseDeepChainDepth, setReverseDeepChainDepth] = useState<number | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
   // Confirm-before-posting (convention 10). The list already gates this exact
@@ -254,10 +288,18 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // no replacement, per BFL 5 kap 5§. Distinct from "Rätta", which always books
   // a replacement entry. Routes through the engine's reverseEntry (storno +
   // reverses_id link; original → 'reversed', never deleted).
-  const handleReverse = useCallback(async () => {
+  const handleReverse = useCallback(async (allowDeepChain = false) => {
     setIsReversing(true)
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/reverse`, { method: 'POST' })
+      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/reverse`, {
+        method: 'POST',
+        ...(allowDeepChain
+          ? {
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ allow_deep_chain: true }),
+            }
+          : {}),
+      })
       const result = await res.json()
       if (res.ok) {
         const storno = result.data
@@ -266,7 +308,13 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           description: t('toast_reverse_done_description', { voucher: formatVoucher(storno ?? {}) }),
         })
         setShowReverseConfirm(false)
+        setReverseDeepChainDepth(null)
         await fetchData()
+      } else if (result?.error?.code === 'CORRECTION_CHAIN_TOO_DEEP') {
+        // Chain-depth guard: swap into the bypass confirm instead of a
+        // dead-end toast. "Återför ändå" resubmits with allow_deep_chain.
+        setShowReverseConfirm(false)
+        setReverseDeepChainDepth(result.error?.details?.depth ?? 3)
       } else {
         toast({ title: t('toast_reverse_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
       }
@@ -393,11 +441,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           const prefix = DIM_BADGE_PREFIX[dimNo] ?? dim?.name ?? `Dim ${dimNo}`
           const hasName = !!value && value.name !== '' && value.name !== value.code
           return (
+            // data-ph-mask: dimension names and codes are user data. No title
+            // attribute: replay masking covers text nodes, not attributes, so
+            // a title tooltip would ship the masked content in the clear.
             <Badge
               key={dimNo}
+              data-ph-mask=""
               variant="outline"
               className="font-mono text-[11px] font-normal"
-              title={`${dim?.name ?? prefix} ${code}${hasName ? `: ${value.name}` : ''}`}
             >
               {prefix}: {hasName ? value.name : code}
             </Badge>
@@ -409,14 +460,25 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
   return (
     <div className="space-y-8">
-      {/* Back link */}
-      <Link
-        href="/bookkeeping"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        {t('back')}
-      </Link>
+      {/* Back link + prev/next record pager */}
+      <div className="flex items-center justify-between gap-4">
+        <Link
+          href="/bookkeeping"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('back')}
+        </Link>
+        <DetailPager
+          contextKey={listContextKey('bookkeeping', company?.id)}
+          basePath="/bookkeeping"
+          currentId={id}
+          // Arrow paging unmounts the page and would destroy an unsaved notes
+          // draft; the textarea only guards arrows while it has focus, so gate
+          // the keyboard bindings on the editing state itself.
+          keyboard={!editingNotes}
+        />
+      </div>
 
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -437,14 +499,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
         {(entry.status === 'posted' || entry.status === 'draft') && (
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-            {entry.status === 'draft' && (
-              <AgentSparkleButton
-                intentId="verifikation.draft"
-                intentArgs={{ journal_entry_id: id }}
-                contextRef={`verifikation:${id}`}
-                className="w-full sm:w-auto"
-              />
-            )}
             {entry.status === 'draft' && (
               <Button
                 variant="outline"
@@ -574,6 +628,15 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 <span>{formatDate(entry.committed_at)}</span>
               </div>
             )}
+            {entry.committed_at && entry.committed_actor_type && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('field_committed_by')}</span>
+                <span className="flex items-center gap-1.5 text-right">
+                  {entry.committed_actor_type !== 'user' && <Bot className="h-3.5 w-3.5 shrink-0" />}
+                  {committedByLabel(entry.committed_actor_type, entry.committed_actor_label, t)}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-muted-foreground">{t('field_type')}</span>
               <span>{sourceTypeLabels[entry.source_type] || entry.source_type}</span>
@@ -675,7 +738,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <CardContent className="text-sm">
             {attachmentCount === 0 && references.length === 0 ? (
               <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-warning-foreground" />
+                <AlertTriangle className="h-4 w-4 text-attn" />
                 <span className="text-muted-foreground">{t('no_attachments')}</span>
               </div>
             ) : (
@@ -782,7 +845,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                             <button
                               type="button"
                               onClick={() => setRetagLine(line as unknown as RetagLine)}
-                              className="p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
+                              className="p-1 rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
                               aria-label="Ändra dimensioner"
                               title="Ändra dimensioner (påverkar endast internredovisningen)"
                             >
@@ -872,7 +935,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                         <button
                           type="button"
                           onClick={() => setRetagLine(line as unknown as RetagLine)}
-                          className="p-1 rounded text-muted-foreground/50 hover:text-foreground transition-colors"
+                          className="p-1 rounded-sm text-muted-foreground/50 hover:text-foreground transition-colors"
                           aria-label="Ändra dimensioner"
                         >
                           <Pencil className="h-3.5 w-3.5" />
@@ -930,14 +993,13 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             <div className="mb-4 space-y-2">
               <div>
                 <h4 className="text-sm font-medium">{t('references_title')}</h4>
-                <p className="text-xs text-muted-foreground">{t('references_subtitle')}</p>
               </div>
               <ul className="space-y-1">
                 {references.map((ref) => (
                   <li key={`${ref.type}-${ref.id}`}>
                     <Link
                       href={ref.type === 'invoice' ? `/invoices/${ref.id}` : `/supplier-invoices/${ref.id}`}
-                      className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50 hover:bg-secondary/60 transition-colors"
+                      className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50 hover:bg-secondary/60 transition-colors"
                     >
                       <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                       <span className="truncate">
@@ -1201,7 +1263,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       <ConfirmationDialog
         open={showReverseConfirm}
         onOpenChange={setShowReverseConfirm}
-        onConfirm={handleReverse}
+        onConfirm={() => handleReverse()}
         isSubmitting={isReversing}
         title={t('reverse_confirm_title')}
         warningText={t('reverse_warning')}
@@ -1212,6 +1274,26 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <div className="text-sm">
             <p className="font-medium mb-1">{t('reverse_dialog_heading', { voucher: formatVoucher(entry) })}</p>
             <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
+          </div>
+        </div>
+      </ConfirmationDialog>
+
+      {/* Chain-depth guard confirm: the storno was refused because this entry
+          already sits deep in a rättelse chain. Advisory, never a dead end. */}
+      <ConfirmationDialog
+        open={reverseDeepChainDepth != null}
+        onOpenChange={(next) => { if (!next) setReverseDeepChainDepth(null) }}
+        onConfirm={() => handleReverse(true)}
+        isSubmitting={isReversing}
+        title={t('deep_chain_title')}
+        warningText={t('deep_chain_body', { depth: reverseDeepChainDepth ?? 3 })}
+        confirmLabel={t('deep_chain_reverse_anyway')}
+      >
+        <div className="flex items-start gap-3 rounded-lg border bg-muted/50 p-4">
+          <RotateCcw className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
+          <div className="text-sm">
+            <p className="font-medium mb-1">{t('deep_chain_reverse_heading', { voucher: formatVoucher(entry) })}</p>
+            <p className="text-muted-foreground">{t('deep_chain_reverse_body')}</p>
           </div>
         </div>
       </ConfirmationDialog>

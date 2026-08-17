@@ -461,6 +461,41 @@ describe('journeyReducer: server errors', () => {
   })
 })
 
+describe('journeyReducer: branch question step (source)', () => {
+  function atDone(mode: 'first' | 'add' = 'first'): JourneyState {
+    return run(
+      initJourney({ mode }),
+      { type: 'ORG_SUBMITTED', orgNumber: '556677-8899' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'found', result: lookup() } },
+      { type: 'FY_CALENDAR_CONFIRMED' },
+      { type: 'MOMS_PERIOD_PICKED', period: 'quarterly' },
+      { type: 'METHOD_PICKED', method: 'accrual' },
+      { type: 'SUBMIT_SUCCEEDED' },
+    )
+  }
+
+  it('continue moves the done screen to the source step, still on the Klart station', () => {
+    const s = journeyReducer(atDone(), { type: 'DONE_CONTINUE' })
+    expect(s.step).toBe('source')
+    expect(stationOfStep(s.step)).toBe(4)
+  })
+
+  it("mode='add' never reaches the source step", () => {
+    const s = atDone('add')
+    expect(journeyReducer(s, { type: 'DONE_CONTINUE' })).toBe(s)
+  })
+
+  it('is ignored anywhere but the done screen', () => {
+    const s = manualAbAtFy()
+    expect(journeyReducer(s, { type: 'DONE_CONTINUE' })).toBe(s)
+  })
+
+  it('Back from the source step restores the done screen', () => {
+    const s = run(atDone(), { type: 'DONE_CONTINUE' }, { type: 'BACK' })
+    expect(s.step).toBe('done')
+  })
+})
+
 describe('journeyReducer: robustness', () => {
   it('ignores a LOOKUP_RESULT when no lookup is pending', () => {
     const s = initJourney()

@@ -217,6 +217,39 @@ export function formatPersonnummer(personnummer: string): string {
 }
 
 /**
+ * Expand a personnummer to the 12-digit form (YYYYMMDDNNNN).
+ *
+ * Accepts the shapes the customer card stores (10 or 12 digits, optional -/+
+ * separator; see PERSONAL_NUMBER_INPUT_RE in lib/customers). A 10-digit value
+ * gets its century inferred the standard Skatteverket way: the most recent
+ * birth date not after `now`, minus a further hundred years when the
+ * separator is '+' (the over-100 marker). Samordningsnummer day offsets
+ * (+60) are stripped for the calendar comparison only; the returned digits
+ * keep the printed day. Returns digits only, or null when the input has
+ * neither shape. No checksum validation here: callers that need it run the
+ * result through validatePersonnummer.
+ */
+export function expandPersonnummerTo12(value: string, now: Date = new Date()): string | null {
+  const trimmed = value.trim()
+  const digits = trimmed.replace(/\D/g, '')
+  if (digits.length === 12) return digits
+  if (digits.length !== 10) return null
+
+  const yy = parseInt(digits.slice(0, 2), 10)
+  const month = parseInt(digits.slice(2, 4), 10)
+  const day = parseInt(digits.slice(4, 6), 10)
+  const birthDay = day > 60 ? day - 60 : day
+
+  // Compare dates as yyyymmdd integers: immune to Date rollover on the
+  // not-yet-validated month/day values.
+  const today = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate()
+  let year = Math.floor(now.getFullYear() / 100) * 100 + yy
+  if (year * 10000 + month * 100 + birthDay > today) year -= 100
+  if (trimmed.includes('+')) year -= 100
+  return `${year}${digits.slice(2)}`
+}
+
+/**
  * Shape a raw `employees` row (or an embedded employee object) for a JSON
  * response: drop every personnummer-derived column and expose the display
  * form under `personnummer_masked`.

@@ -25,21 +25,27 @@ export interface WooCommerceConnection {
   updated_at: string
 }
 
+/** Connection fields safe for the browser (never encrypted credentials). */
+export type WooCommerceConnectionStatus = Pick<
+  WooCommerceConnection,
+  | 'id'
+  | 'status'
+  | 'store_url'
+  | 'store_name'
+  | 'currency'
+  | 'error_message'
+  | 'connected_at'
+  | 'transaction_sync_enabled'
+  | 'last_order_synced_at'
+>
+
 /** Status payload returned by GET /api/extensions/ext/woocommerce/status. */
 export interface WooCommerceStatusResponse {
   configured: boolean
-  connection: Pick<
-    WooCommerceConnection,
-    | 'id'
-    | 'status'
-    | 'store_url'
-    | 'store_name'
-    | 'currency'
-    | 'error_message'
-    | 'connected_at'
-    | 'transaction_sync_enabled'
-    | 'last_order_synced_at'
-  > | null
+  /** First entry of `connections`; kept for the old single-store shape. */
+  connection: WooCommerceConnectionStatus | null
+  /** Multi-store: every active connection (or the latest inactive row). */
+  connections: WooCommerceConnectionStatus[]
 }
 
 /**
@@ -59,7 +65,7 @@ export interface WooOrder {
   prices_include_tax: boolean
   date_created_gmt: string
   date_modified_gmt: string
-  /** Set when payment completed; the feed's inclusion criterion and row date. */
+  /** Set when payment completed; drives is_paid and the paid date. */
   date_paid_gmt: string | null
   payment_method: string
   payment_method_title: string
@@ -67,15 +73,73 @@ export interface WooOrder {
   transaction_id: string
   /** Summary of refunds against this order; totals are negative strings. */
   refunds: Array<{ id: number; reason: string; total: string }>
+  /**
+   * The fields below always ride along in the wc/v3 order payload; the feed
+   * historically discarded them at map time. The Orders page persists them
+   * (customer, per-rate VAT, line snapshot), so the type now keeps them.
+   * All are optional-tolerant at runtime: hardened stores and old WC
+   * versions can serve partial payloads.
+   */
+  billing?: {
+    first_name?: string
+    last_name?: string
+    company?: string
+    email?: string
+    /** ISO 3166-1 alpha-2 (e.g. 'SE'); drives the 0%-sale export/EU hint. */
+    country?: string
+  }
+  line_items?: Array<{
+    id: number
+    name: string
+    quantity: number
+    /** Line net total after discounts, excl. tax. */
+    total: string
+    total_tax: string
+    taxes?: Array<{ id: number; total: string }>
+  }>
+  tax_lines?: Array<{
+    rate_id: number
+    rate_percent?: number
+    label?: string
+    tax_total: string
+    shipping_tax_total: string
+  }>
+  shipping_lines?: Array<{
+    method_title?: string
+    total: string
+    total_tax: string
+    taxes?: Array<{ id: number; total: string }>
+  }>
+  /** Payment surcharges / plugin fees; part of order.total like shipping. */
+  fee_lines?: Array<{
+    name?: string
+    total: string
+    total_tax: string
+    taxes?: Array<{ id: number; total: string }>
+  }>
+  meta_data?: Array<{ key: string; value: unknown }>
 }
 
-/** Minimal wc/v3 order-refund shape (GET /orders/{id}/refunds). */
+/** wc/v3 order-refund shape (GET /orders/{id}/refunds). */
 export interface WooRefund {
   id: number
   /** Refund amount as a positive string. */
   amount: string
   reason: string
   date_created_gmt: string
+  /**
+   * Per-line refund allocation with NEGATIVE totals, present when the
+   * merchant refunded specific lines. Amount-only refunds ship an empty
+   * array; the sync then prorates VAT from the parent order's breakdown.
+   */
+  line_items?: Array<{
+    id: number
+    name?: string
+    quantity?: number
+    total: string
+    total_tax: string
+    taxes?: Array<{ id: number; total: string }>
+  }>
 }
 
 /** Store metadata read at connect time. */

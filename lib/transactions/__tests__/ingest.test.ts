@@ -130,8 +130,10 @@ function makeMappingResult(overrides: Record<string, unknown> = {}) {
 // Tests
 //
 // Queue order after batch dedup refactor:
-// 1. Booked transaction map query
-// 1b. Unbooked bank-synced transaction map query
+// 1. Booked transaction map query (paginated via fetchAllRows: one queue entry
+//    per page; a page under 1000 rows ends the loop, so the common one-entry
+//    enqueue is unchanged)
+// 1b. Unbooked bank-synced transaction map query (same pagination)
 // 2. Supplier invoices fetch
 // 3. Batch external_id dedup query (returns matching external_ids)
 // 4. Per-transaction: insert, updates, etc.
@@ -376,6 +378,52 @@ describe('ingestTransactions', () => {
     expect(result.duplicates).toBe(1)
     expect(result.imported).toBe(0)
     expect(result.transaction_ids).toEqual([])
+  })
+
+  // -----------------------------------------------------------------------
+  // 2b-page. Pagination regression: buildExistingTransactionMaps paginates
+  //     via fetchAllRows, so a stored twin BEYOND the 1000-row PostgREST page
+  //     still lands in the dedup map. The old un-paginated select silently
+  //     truncated at 1000 rows, and a re-import over a wide date range in an
+  //     active company inserted everything past the cap as duplicates.
+  // -----------------------------------------------------------------------
+  it('dedupes against a stored twin served on the second page (>1000 stored rows)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({
+      date: '2024-06-15',
+      amount: -250.0,
+      description: 'ICA Maxi Solna',
+      external_id: 'lunar_csvhash_page2',
+      import_source: 'csv_lunar',
+    })
+
+    // Booked map page 1: exactly 1000 filler rows in OTHER (date, öre)
+    // buckets. A full page forces fetchAllRows to request page 2.
+    const filler = Array.from({ length: 1000 }, (_, i) => ({
+      date: '2024-06-01',
+      amount: -(i + 1),
+      original_description: `Filler ${i}`,
+      description: `Filler ${i}`,
+      import_source: 'csv_lunar',
+    }))
+    enqueue({ data: filler, error: null })
+    // Booked map page 2: the twin the old un-paginated query dropped.
+    enqueue({
+      data: [{ date: '2024-06-15', amount: -250.0, original_description: 'ICA Maxi Solna', description: 'ICA Maxi Solna', import_source: 'csv_lunar' }],
+      error: null,
+    })
+    // Unbooked map
+    enqueue({ data: [], error: null })
+    // Supplier invoices fetch
+    enqueue({ data: [], error: null })
+    // Batch external_id dedup query: no match
+    enqueue({ data: [], error: null })
+    // No insert expected: deduped by the text bridge against the page-2 twin.
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.duplicates).toBe(1)
+    expect(result.imported).toBe(0)
   })
 
   // -----------------------------------------------------------------------

@@ -81,6 +81,16 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Du har inte behörighet att utföra denna åtgärd.',
     message_en: 'Insufficient permissions.',
   },
+  // A Postgres privilege/RLS denial (42501) on a write the application
+  // expected to succeed: a server-side configuration bug (e.g. a SECURITY
+  // INVOKER trigger writing to a policy-less RLS table), not a user-permission
+  // problem. Kept distinct from FORBIDDEN (which blames the user) and from
+  // INTERNAL_ERROR (which hides the failure mode from diagnostics).
+  DB_PERMISSION_DENIED: {
+    httpStatus: 500,
+    message_sv: 'Ett behörighetsfel i databasen stoppade åtgärden. Kontakta supporten om felet kvarstår.',
+    message_en: 'A database permission (RLS) denial blocked the write. This indicates a server-side misconfiguration.',
+  },
   NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Resursen kunde inte hittas.',
@@ -273,6 +283,18 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Rättelsen motsvarar ingen ekonomisk händelse: det finns inget att rätta.',
     message_en: 'The correction represents no economic event: nothing to correct.',
   },
+  CORRECTION_CHAIN_TOO_DEEP: {
+    httpStatus: 409,
+    message_sv:
+      'Rättelsekedjan är redan flera nivåer djup. Räkna ut nettoeffekten av hela kedjan och gör EN rättelse istället, eller skicka allow_deep_chain=true för att rätta ändå.',
+    message_en:
+      'The correction chain is already several levels deep. Compute the net effect of the whole chain and book ONE correction instead, or pass allow_deep_chain=true to override.',
+    remediation: {
+      description:
+        'Read the full chain with gnubok_query_journal (follow correction_of_id/reverses_id to the chain root), compute the net effect across all entries, and stage ONE correction on the live entry that expresses it. Only pass allow_deep_chain=true if stacking another correction is genuinely intended.',
+      tool: 'gnubok_query_journal',
+    },
+  },
   NO_OPEN_PERIOD_FOR_DATE: {
     httpStatus: 400,
     message_sv:
@@ -381,6 +403,25 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       'Det går inte att ändra titeln på en bokförd eller matchad transaktion. Bokförda verifikat rättas med storno.',
     message_en:
       'Cannot edit the title of a booked or matched transaction. Posted vouchers are corrected with storno.',
+  },
+  TRANSACTION_MOVE_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är bokförd eller kopplad till en verifikation och kan inte flyttas till ett annat konto. Koppla bort den under Rapporter → Bankavstämning, eller storna verifikationen först.',
+    message_en:
+      'The transaction is booked or linked to a voucher and cannot be moved to another account. Unlink it under Reports → Bank reconciliation, or reverse (storno) the voucher first.',
+  },
+  TRANSACTION_MOVE_UNKNOWN_ACCOUNT: {
+    httpStatus: 404,
+    message_sv: 'Kontot finns inte bland företagets registrerade bankkonton.',
+    message_en: "The account is not one of the company's registered cash accounts.",
+  },
+  TRANSACTION_MOVE_CURRENCY_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Transaktionens valuta stämmer inte med kontots valuta. En transaktion kan bara flyttas till ett konto i samma valuta.',
+    message_en:
+      'The transaction currency does not match the target account currency. A transaction can only be moved to an account in the same currency.',
   },
   TX_CATEGORIZE_INVALID_ACCOUNT: {
     httpStatus: 400,
@@ -918,6 +959,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Vid kontantmetoden bokförs fakturan när den betalas.',
     message_en: 'Under the cash method the invoice is booked when it is paid.',
+  },
+  // Bulk Bokför on a DRAFT when the company defers invoice booking (#967):
+  // issuing the draft would consume an F-number and mark it sent without
+  // booking anything, so the item is rejected before any side effect.
+  INVOICE_BOOK_DEFERRED_DRAFT: {
+    httpStatus: 400,
+    message_sv:
+      'Företaget bokför fakturor i ett separat steg. Skicka eller markera utkastet som skickat först, bokför sedan.',
+    message_en:
+      'This company books invoices in a separate step. Send or mark the draft as sent first, then book it.',
   },
   INVOICE_BOOK_NO_FISCAL_PERIOD: {
     httpStatus: 400,
@@ -1635,6 +1686,65 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bankfilsimporten misslyckades.',
     message_en: 'Bank file import failed.',
   },
+  BANK_FILE_SKATTEKONTO_DETECTED: {
+    httpStatus: 400,
+    message_sv:
+      'Filen ser ut som ett skattekontoutdrag från Skatteverket. Använd Skattekonto-importen i stället.',
+    message_en:
+      'This file looks like a Skatteverket tax account statement. Use the skattekonto import instead.',
+  },
+}
+
+const SKATTEKONTO_FILE: Record<string, StructuredErrorEntry> = {
+  SKATTEKONTO_FILE_NO_FILE: {
+    httpStatus: 400,
+    message_sv: 'Ingen fil bifogad i förfrågan.',
+    message_en: 'No file attached to the request.',
+  },
+  SKATTEKONTO_FILE_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv: 'Filen är för stor. Maxstorlek är 10 MB.',
+    message_en: 'File exceeds the 10 MB size limit.',
+  },
+  SKATTEKONTO_FILE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Det här kontoutdraget har redan importerats.',
+    message_en: 'This tax account statement has already been imported.',
+  },
+  SKATTEKONTO_FILE_PARSE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte tolka skattekontoutdraget.',
+    message_en: 'Failed to parse the tax account statement.',
+  },
+  SKATTEKONTO_FILE_NOT_RECOGNIZED: {
+    httpStatus: 400,
+    message_sv:
+      'Filen känns inte igen som ett skattekontoutdrag. Ladda ner kontohändelserna från Skatteverkets e-tjänst Skattekonto och försök igen.',
+    message_en:
+      'The file was not recognized as a tax account statement. Download the account events from Skatteverket and try again.',
+  },
+  SKATTEKONTO_FILE_SUM_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Utdraget summerar inte: ingående saldo plus händelser stämmer inte med utgående saldo. Filen kan vara ofullständig.',
+    message_en:
+      'The statement does not sum: opening balance plus events does not equal the closing balance. The file may be incomplete.',
+  },
+  SKATTEKONTO_FILE_NO_ROWS: {
+    httpStatus: 400,
+    message_sv: 'Kontoutdraget innehåller inga händelser att importera.',
+    message_en: 'No account events to import.',
+  },
+  SKATTEKONTO_FILE_IMPORT_RECORD_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte skapa importpost.',
+    message_en: 'Failed to create the import record.',
+  },
+  SKATTEKONTO_FILE_EXECUTE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Importen av skattekontoutdraget misslyckades.',
+    message_en: 'Tax account statement import failed.',
+  },
 }
 
 const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
@@ -1880,6 +1990,13 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte importera underlag från leverantören.',
     message_en: 'Failed to import documents from provider.',
   },
+  PROVIDER_DOCUMENT_SCOPES_REQUIRED: {
+    httpStatus: 403,
+    message_sv:
+      'Fortnox-anslutningen saknar behörighet till Arkiv och Koppla fil. Koppla om Fortnox och godkänn behörigheterna för att importera underlag.',
+    message_en:
+      'The Fortnox connection lacks Archive and Connect file access. Reconnect Fortnox and approve those permissions to import documents.',
+  },
   PROVIDER_DISCONNECT_FAILED: {
     httpStatus: 500,
     message_sv: 'Frånkoppling från leverantören misslyckades.',
@@ -1956,6 +2073,64 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Kopplingen misslyckades.',
     message_en: 'Failed to link document to journal entry.',
+  },
+  UNDERLAG_REF_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Filnamnet pekar inte på den verifikation som valdes. Ladda om förhandsgranskningen och försök igen.',
+    message_en:
+      'The filename does not point at the selected verifikat. Reload the preview and try again.',
+  },
+  UNDERLAG_PERIOD_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen tillhör ett annat räkenskapsår än det du valde för underlagen. Ladda om förhandsgranskningen och försök igen.',
+    message_en:
+      'The verifikat belongs to a different fiscal year than the one selected for these files. Reload the preview and try again.',
+  },
+  UNDERLAG_ENTRY_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Verifikationen är inte bokförd, så underlag kan inte kopplas till den ännu.',
+    message_en: 'The journal entry is not posted, so documents cannot be attached to it yet.',
+  },
+  UNDERLAG_ENTRY_NOT_MIGRATED: {
+    httpStatus: 400,
+    message_sv: 'Verifikationen kommer inte från en SIE-import och kan inte matchas mot filnamn.',
+    message_en: 'The journal entry did not come from a SIE import and cannot be matched by filename.',
+  },
+}
+
+// Invoice-inbox manual upload and attach-document (extension REST routes).
+const INBOX_UPLOAD: Record<string, StructuredErrorEntry> = {
+  INBOX_UPLOAD_NO_FILE: {
+    httpStatus: 400,
+    message_sv: 'Ingen fil bifogad.',
+    message_en: 'No file attached.',
+  },
+  INBOX_UPLOAD_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv: 'Filen är för stor. Maxstorlek är 10 MB.',
+    message_en: 'File exceeds the 10 MB size limit.',
+  },
+  INBOX_UPLOAD_UNSUPPORTED_TYPE: {
+    httpStatus: 400,
+    message_sv: 'Filtypen stöds inte. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.',
+    message_en: 'Unsupported file type. Allowed: PDF, JPEG, PNG, HEIC, WebP.',
+  },
+  INBOX_UPLOAD_TX_NOT_IN_COMPANY: {
+    httpStatus: 400,
+    message_sv: 'Den angivna transaktionen (matched_transaction_id) tillhör ett annat företag.',
+    message_en: 'matched_transaction_id refers to a transaction outside this company.',
+  },
+  INBOX_UPLOAD_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Uppladdningen misslyckades. Försök igen.',
+    message_en: 'Upload failed.',
+  },
+  INBOX_ATTACH_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Bilagan kunde inte kopplas. Försök igen.',
+    message_en: 'Failed to attach the document.',
   },
 }
 
@@ -2137,6 +2312,20 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
       'Periodisering kan inte kombineras med omvänd skattskyldighet. Kostnadsraden utgör momsunderlaget i momsdeklarationen (ruta 20-32), så nettobeloppet kan inte skjutas upp till ett interimskonto.',
     message_en:
       'Periodisering cannot be combined with reverse charge. The expense line carries the VAT base for the VAT declaration (boxes 20-32), so the net amount cannot be deferred to an interim account.',
+  },
+  SI_CREATE_SLP_INVALID_ACCOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Särskild löneskatt kan bara läggas till på rader med pensionskonto 7410-7419 (t.ex. 7412 Premier för tjänstepensioner). Byt konto på raden eller ta bort löneskatten.',
+    message_en:
+      'Särskild löneskatt (payroll tax on pension costs) can only be added on lines booked to a pension account 7410-7419 (e.g. 7412 occupational pension premiums). Change the line account or remove the flag.',
+  },
+  SI_CREATE_SLP_ACCRUAL: {
+    httpStatus: 400,
+    message_sv:
+      'Särskild löneskatt kan inte kombineras med periodisering på samma rad. Löneskatten (7533/2514) beräknas på hela radbeloppet vid registrering och kan inte skjutas upp.',
+    message_en:
+      'Särskild löneskatt cannot be combined with periodisering on the same line. The payroll tax (7533/2514) is computed on the full line amount at registration and cannot be deferred.',
   },
   SI_DELETE_HAS_BOOKING: {
     httpStatus: 400,
@@ -3343,6 +3532,80 @@ const NETWORK_TRANSIENT_ENTRY: StructuredErrorEntry = {
   retryable: true,
 }
 
+const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
+  WEBSHOP_ORDER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Ordern hittades inte.',
+    message_en: 'The order was not found.',
+  },
+  WEBSHOP_ORDER_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Ordern är redan bokförd.',
+    message_en: 'The order is already booked.',
+  },
+  WEBSHOP_ORDER_ALREADY_INVOICED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är kopplad till en kundfaktura. Bokföringen sker via fakturaflödet, inte direkt från ordern.',
+    message_en:
+      'The order is linked to a customer invoice. Bookkeeping happens through the invoice flow, not directly from the order.',
+  },
+  WEBSHOP_ORDER_NOT_PAID: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är inte betald ännu. Obetalda ordrar bokförs när betalningen kommer, eller faktureras via Skapa faktura.',
+    message_en:
+      'The order is not paid yet. Unpaid orders are booked when payment arrives, or invoiced via Create invoice.',
+  },
+  WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN: {
+    httpStatus: 409,
+    message_sv:
+      'Samma order ligger redan som en obokförd transaktion under Transaktioner (importerad av det tidigare orderflödet). Bokför eller ignorera den transaktionen först, så att samma affärshändelse inte bokförs två gånger.',
+    message_en:
+      'The same order already exists as an unbooked transaction under Transactions (imported by the previous order feed). Book or ignore that transaction first so the same business event is not booked twice.',
+  },
+  WEBSHOP_ORDER_LEGACY_TRANSACTION_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är redan bokförd via en transaktion under Transaktioner (importerad av det tidigare orderflödet).',
+    message_en:
+      'The order is already booked via a transaction under Transactions (imported by the previous order feed).',
+  },
+  WEBSHOP_ORDER_FX_UNRESOLVED: {
+    httpStatus: 422,
+    message_sv:
+      'Växelkursen för orderns valuta kunde inte hämtas ännu. Försök igen om en stund; ordern kan inte bokföras i SEK utan kurs.',
+    message_en:
+      'The exchange rate for the order currency could not be fetched yet. Try again shortly; the order cannot be booked in SEK without a rate.',
+  },
+  WEBSHOP_ORDER_REFUND_NOT_CONVERTIBLE: {
+    httpStatus: 409,
+    message_sv:
+      'Återbetalningar kan inte omvandlas till fakturor. Hantera återbetalningen med en kreditfaktura från kundfakturan, eller bokför återbetalningsraden direkt.',
+    message_en:
+      'Refunds cannot be converted to invoices. Handle the refund with a credit note from the customer invoice, or book the refund row directly.',
+  },
+  WEBSHOP_ORDER_REFUND_PARENT_INVOICED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern fakturerades via en kundfaktura. Återbetalningen hanteras med en kreditfaktura, inte genom att bokföra återbetalningsraden direkt.',
+    message_en:
+      'The order was invoiced through a customer invoice. Handle the refund with a credit note instead of booking the refund row directly.',
+  },
+  WEBSHOP_ORDER_CREATE_INVOICE_CUSTOMER_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunden kunde inte skapas från orderns uppgifter.',
+    message_en: 'The customer could not be created from the order data.',
+  },
+  WEBSHOP_ORDER_CREATE_INVOICE_MISSING_CUSTOMER: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern saknar kunduppgifter. Välj en befintlig kund att fakturera.',
+    message_en:
+      'The order has no customer data. Choose an existing customer to invoice.',
+  },
+}
+
 const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
   ECONNREFUSED: NETWORK_TRANSIENT_ENTRY,
   ECONNRESET: NETWORK_TRANSIENT_ENTRY,
@@ -3380,10 +3643,12 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...TAX_DECL,
   ...SIE_IMPORT,
   ...BANK_FILE,
+  ...SKATTEKONTO_FILE,
   ...OPENING_BALANCE_IMPORT,
   ...REGISTER_IMPORT,
   ...PROVIDER_MIGRATION,
   ...DOCUMENT,
+  ...INBOX_UPLOAD,
   ...CUSTOMER,
   ...ARTICLE,
   ...SUPPLIER,
@@ -3396,6 +3661,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...BOLAGSVERKET,
   ...ASSETS,
   ...DIMENSION,
+  ...WEBSHOP_ORDERS,
   ...NODE_SYSTEM,
 }
 

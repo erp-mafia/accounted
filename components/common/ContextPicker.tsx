@@ -97,7 +97,7 @@ export function ContextPicker({
         aria-haspopup="listbox"
         aria-label={ariaLabel}
         className={cn(
-          'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border px-3 py-[5px] text-[13px]',
+          'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-border px-3 text-[13px]',
           'text-foreground transition-colors duration-150',
           disabled
             ? 'opacity-50 cursor-not-allowed'
@@ -130,7 +130,7 @@ export function ContextPicker({
                     setOpen(false)
                   }}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
+                    'flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
                     item.disabled
                       ? 'text-muted-foreground/40 cursor-not-allowed'
                       : item.id === value

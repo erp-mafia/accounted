@@ -6,6 +6,7 @@ import {
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { ensureInitialized } from '@/lib/init'
@@ -122,6 +123,23 @@ export const POST = withRouteContext(
       })
     }
 
+    // Särskild löneskatt (SLP): the 7533/2514 pair is only lawful on pension
+    // premiums, so the flag is rejected on any non-741x account, and rejected
+    // together with periodisering on the same row (the pair is computed on
+    // the full line amount at registration and cannot be deferred).
+    if (body.items.some((item) => item.apply_slp && !isSlpPensionAccount(item.account_number))) {
+      return errorResponseFromCode('SI_CREATE_SLP_INVALID_ACCOUNT', log, { requestId })
+    }
+    if (
+      body.items.some(
+        (item) =>
+          item.apply_slp &&
+          (item.accrual_period_start || item.accrual_period_end || item.accrual_balance_account),
+      )
+    ) {
+      return errorResponseFromCode('SI_CREATE_SLP_ACCRUAL', log, { requestId })
+    }
+
     const hasAccrualItems = body.items.some(
       (item) => item.accrual_period_start && item.accrual_period_end,
     )
@@ -154,6 +172,30 @@ export const POST = withRouteContext(
           details: { reason: 'periodisering requires faktureringsmetoden (accrual)' },
         })
       }
+    }
+
+    // Icke momsregistrerad verksamhet has no deduction right for input VAT
+    // (avdragsrätt, 13 kap. ML 2023:200): a line carrying moms would book
+    // 2641 the company can never reclaim. The form hides the moms controls;
+    // this guard covers THIS route only. The v1 REST route, the inbox convert
+    // route and the MCP staged executor still default 25 % and need the same
+    // treatment in a follow-up sweep. Reverse charge stays allowed:
+    // self-assessment is a separate obligation from deduction.
+    const { data: vatSettings } = await supabase
+      .from('company_settings')
+      .select('vat_registered')
+      .eq('company_id', companyId)
+      .single()
+    const vatRegistered = vatSettings?.vat_registered !== false
+    if (
+      !vatRegistered &&
+      !body.reverse_charge &&
+      body.items.some((item) => (item.vat_rate ?? 0) > 0 || (item.vat_amount ?? 0) > 0)
+    ) {
+      return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+        requestId,
+        details: { reason: 'company is not VAT-registered; supplier invoice lines cannot carry moms' },
+      })
     }
 
     const { data: supplier, error: supplierError } = await supabase
@@ -218,7 +260,9 @@ export const POST = withRouteContext(
     }
 
     const items = body.items.map((item, index) => {
-      const vatRate = item.vat_rate ?? 0.25
+      // An omitted rate defaults to 25 % only for VAT-registered companies;
+      // icke momsregistrerade book the gross amount with no moms line.
+      const vatRate = item.vat_rate ?? (vatRegistered ? 0.25 : 0)
       const lineTotal = item.amount != null
         ? Math.round(item.amount * 100) / 100
         : Math.round((item.quantity ?? 1) * (item.unit_price ?? 0) * 100) / 100
@@ -256,6 +300,9 @@ export const POST = withRouteContext(
         // Dimensions PR7: per-item bag, merged over default_dimensions on the
         // expense line at booking (supplier-invoice-entries.ts).
         dimensions: item.dimensions ?? {},
+        // Särskild löneskatt (SLP): booking injects the self-balancing
+        // 7533/2514 pair for this line. Guarded above (741x only, no accrual).
+        apply_slp: item.apply_slp === true,
       }
     })
 

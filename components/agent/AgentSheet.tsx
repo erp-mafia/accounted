@@ -25,6 +25,7 @@ import {
   DOCK_WIDTH_MIN,
   clampDockWidth,
   clampFloatRect,
+  containFloatRect,
   defaultFloatRect,
   expandedDockWidth,
   resizeFloatRect,
@@ -250,6 +251,33 @@ export default function AgentSheet({
         viewport.h,
       )
     : null
+
+  // Open/resize-time validation of the persisted float rect: a rect saved at
+  // the viewport edge (or on a larger monitor) passes clampFloatRect but
+  // renders as a 48px sliver, so snap it fully on screen and persist the
+  // corrected position. panelPrefs.float is read through a ref, NOT the deps:
+  // putting it in the deps would re-run this on every drag commit and snap
+  // the window back mid-session, killing the deliberate hang-off-the-edge
+  // allowance of the live drag path. The effect fires on sheet mount (every
+  // fresh open remounts, keyed by the provider) and on viewport resize only.
+  const floatPrefRef = useRef(panelPrefs.float)
+  useEffect(() => {
+    floatPrefRef.current = panelPrefs.float
+  }, [panelPrefs.float])
+  useEffect(() => {
+    if (!floating) return
+    const rect = floatPrefRef.current
+    if (!rect) return
+    const contained = containFloatRect(rect, viewport.w, viewport.h)
+    if (
+      contained.x !== rect.x ||
+      contained.y !== rect.y ||
+      contained.w !== rect.w ||
+      contained.h !== rect.h
+    ) {
+      updatePanelPrefs({ float: contained })
+    }
+  }, [floating, viewport.w, viewport.h, updatePanelPrefs])
 
   // Reserve page margin while docked, compact AND expanded: both reflow the
   // page beside the panel instead of covering it (the original complaint).
@@ -589,7 +617,7 @@ export default function AgentSheet({
         >
           <button
             onClick={() => setView('chat')}
-            className="h-9 w-9 -ml-1 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            className="h-9 w-9 -ml-1 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             aria-label="Tillbaka"
             title="Tillbaka"
           >
@@ -598,7 +626,7 @@ export default function AgentSheet({
           <h2 className="font-display text-lg tracking-tight truncate">Konversationer</h2>
           <button
             onClick={onClose}
-            className="ml-auto h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            className="ml-auto h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             aria-label="Stäng"
             title="Avsluta sessionen"
           >
@@ -618,7 +646,7 @@ export default function AgentSheet({
           {!isSandbox && (
             <button
               onClick={() => setView('list')}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               aria-label="Tidigare konversationer"
               title="Tidigare konversationer"
             >
@@ -643,7 +671,7 @@ export default function AgentSheet({
             {!isSandbox && (
               <button
                 onClick={toggleFloating}
-                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                 aria-label={floating ? 'Docka mot högerkanten' : 'Frigör panelen'}
                 title={
                   floating
@@ -665,7 +693,7 @@ export default function AgentSheet({
             {!isSandbox && !floating && (
               <button
                 onClick={() => setExpanded((v) => !v)}
-                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                 aria-label={expanded ? 'Förminska' : 'Förstora'}
                 title={expanded ? 'Förminska' : 'Förstora'}
               >
@@ -678,7 +706,7 @@ export default function AgentSheet({
             {activeConversationId && !isSandbox && (
               <button
                 onClick={onRestart}
-                className="h-9 inline-flex items-center gap-2 rounded-md px-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="h-9 inline-flex items-center gap-2 rounded-sm px-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                 aria-label="Rensa: börja en ny konversation"
                 title="Rensa: börja en ny konversation"
               >
@@ -688,7 +716,7 @@ export default function AgentSheet({
             )}
             <button
               onClick={handleCollapse}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               aria-label="Minimera"
               title="Minimera: behåll sessionen"
             >
@@ -696,7 +724,7 @@ export default function AgentSheet({
             </button>
             <button
               onClick={onClose}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               aria-label="Stäng"
               title="Avsluta sessionen"
             >

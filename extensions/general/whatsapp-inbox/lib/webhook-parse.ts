@@ -52,6 +52,17 @@ const MessageSchema = z.object({
 const StatusSchema = z.object({
   id: z.string().min(1).max(200),
   status: z.string().max(40),
+  // Present on 'failed' statuses: the only record of WHY a message never
+  // reached the recipient (undeliverable, blocked, re-engagement needed).
+  errors: z
+    .array(
+      z.object({
+        code: z.union([z.number(), z.string()]).optional(),
+        title: z.string().max(300).optional(),
+        message: z.string().max(300).optional(),
+      }),
+    )
+    .optional(),
 })
 
 const ContactSchema = z.object({
@@ -125,6 +136,8 @@ export interface ParsedInboundMessage {
 export interface ParsedStatus {
   wamid: string
   status: string
+  /** Compact "code: title" from the first status error, when Meta sent one. */
+  errorDetail: string | null
 }
 
 export interface ParsedWebhook {
@@ -225,7 +238,15 @@ export function parseWebhookEnvelope(body: unknown): ParsedWebhook {
 
       for (const rawStatus of value.statuses ?? []) {
         const parsed = StatusSchema.safeParse(rawStatus)
-        if (parsed.success) result.statuses.push({ wamid: parsed.data.id, status: parsed.data.status })
+        if (!parsed.success) continue
+        const firstError = parsed.data.errors?.[0]
+        const errorDetail = firstError
+          ? [firstError.code, firstError.title ?? firstError.message]
+              .filter((part) => part != null && String(part).length > 0)
+              .join(': ')
+              .slice(0, 300) || null
+          : null
+        result.statuses.push({ wamid: parsed.data.id, status: parsed.data.status, errorDetail })
       }
     }
   }

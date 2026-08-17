@@ -192,7 +192,7 @@ function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: strin
 
   return (
     <div className="relative group">
-      <pre className="select-all rounded-md bg-muted p-4 pr-12 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
+      <pre className="select-all rounded-lg bg-muted p-4 pr-12 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
         {text}
       </pre>
       <Button
@@ -240,7 +240,7 @@ function ScopeCard({
   return (
     <label
       className={cn(
-        'flex min-h-[68px] cursor-pointer flex-col gap-1 rounded-md border p-2 transition-colors',
+        'flex min-h-[68px] cursor-pointer flex-col gap-1 rounded-lg border p-2 transition-colors',
         checked
           ? 'border-border bg-secondary'
           : 'border-border hover:bg-secondary/60'
@@ -580,7 +580,7 @@ export function ApiKeysPanel() {
 
       {/* Create key dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="max-w-[calc(100vw-2rem)] rounded-2xl p-4 sm:max-w-3xl sm:p-6">
+        <DialogContent className="max-w-[calc(100vw-2rem)] rounded-xl p-4 sm:max-w-3xl sm:p-6">
           <DialogHeader>
             <DialogTitle>{t('create_dialog_title')}</DialogTitle>
             <DialogDescription>
@@ -600,7 +600,7 @@ export function ApiKeysPanel() {
             </div>
             <div className="space-y-2">
               <Label>{t('mode_label')}</Label>
-              <div className="inline-flex rounded-md border p-0.5" role="radiogroup" aria-label={t('mode_label')}>
+              <div className="inline-flex rounded-full border p-0.5" role="radiogroup" aria-label={t('mode_label')}>
                 {(['live', 'test'] as const).map((m) => (
                   <button
                     key={m}
@@ -609,7 +609,7 @@ export function ApiKeysPanel() {
                     aria-checked={newKeyMode === m}
                     onClick={() => setNewKeyMode(m)}
                     className={cn(
-                      'rounded-[5px] px-3 py-1.5 text-xs transition-colors',
+                      'rounded-full px-3 py-1.5 text-xs transition-colors',
                       newKeyMode === m
                         ? 'bg-secondary text-foreground'
                         : 'text-muted-foreground hover:text-foreground',
@@ -683,7 +683,7 @@ export function ApiKeysPanel() {
               {hasSodConflict && (
                 <div
                   role="alert"
-                  className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs text-foreground"
+                  className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-foreground"
                 >
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                   <p className="leading-snug">{t('sod_warning')}</p>

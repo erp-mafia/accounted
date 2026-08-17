@@ -97,6 +97,25 @@ describe('PUT /api/settings', () => {
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
   })
 
+  it('accepts the mileage_enabled visibility toggle', async () => {
+    enqueueMany([
+      { data: { entity_type: 'enskild_firma', onboarding_complete: true } }, // fetch oldSettings
+      { data: { id: 's1', mileage_enabled: true } },                          // update ... returning
+      { data: null, count: 5 },                                               // deadlines count (has some -> no regen)
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { mileage_enabled: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { mileage_enabled: boolean } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.mileage_enabled).toBe(true)
+    expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
   it('round-trips share capital fields and clears them with null', async () => {
     const updates = { aktiekapital: 25000, antal_aktier: 500 }
     enqueueMany([
@@ -632,5 +651,36 @@ describe('PUT /api/settings', () => {
       'company_settings',
       'employee_vacation_balances',
     ])
+  })
+
+  it('accepts the öresavrundning toggle', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } },                              // oldSettings
+      { data: { company_id: 'company-1', salary_net_rounding: true } },     // update result
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { salary_net_rounding: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { salary_net_rounding: boolean } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.salary_net_rounding).toBe(true)
+  })
+
+  it('rejects a non-boolean öresavrundning value', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: true } }, // oldSettings
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { salary_net_rounding: 'yes' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
   })
 })

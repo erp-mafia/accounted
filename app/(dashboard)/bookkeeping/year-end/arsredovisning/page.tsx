@@ -514,9 +514,11 @@ export default function ArsredovisningPage() {
       <PageHeader
         title={`Årsredovisning ${data.fiscal_period.name}`}
         description={
-          data.company.org_number
-            ? `${data.company.name} · ${data.company.org_number}`
-            : data.company.name
+          <span data-ph-mask="">
+            {data.company.org_number
+              ? `${data.company.name} · ${data.company.org_number}`
+              : data.company.name}
+          </span>
         }
         action={
           <Button variant="outline" asChild>

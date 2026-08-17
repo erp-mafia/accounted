@@ -185,6 +185,11 @@ export interface AccountMapping {
   confidence: number               // 0-1
   matchType: AccountMatchType
   isOverride: boolean              // User manually set this
+  defaultVatTreatment?: import('@/lib/vat/account-vat-treatment').AccountVatTreatment | null
+  defaultVatRate?: number | null
+  vatTreatmentSuggested?: boolean
+  vatTreatmentReviewed?: boolean
+  requiresVatTreatmentReview?: boolean
 }
 
 /**

@@ -237,7 +237,7 @@ export function TemplateForm({
           {lines.map((line, i) => {
             const showRatioInput = showRatio && line.type === 'business'
             return (
-            <div key={i} className="rounded-md border border-border p-2 space-y-1.5">
+            <div key={i} className="rounded-lg border border-border p-2 space-y-1.5">
               <div className="flex items-center gap-2">
                 <Input
                   value={line.account}
@@ -323,8 +323,8 @@ export function TemplateForm({
       </div>
 
       {ratioSumOff && (
-        <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
-          <p className="text-xs text-warning-foreground leading-snug">
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+          <p className="text-xs text-attn leading-snug">
             {t('ratio_sum_warning')}
           </p>
         </div>
@@ -361,16 +361,16 @@ export function TemplateForm({
       )}
 
       {nameCollision && (
-        <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
-          <p className="text-xs text-warning-foreground leading-snug">
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+          <p className="text-xs text-attn leading-snug">
             {t('duplicate_name_warning')}
           </p>
         </div>
       )}
 
       {!isConvertible && (
-        <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
-          <p className="text-xs text-warning-foreground leading-snug">
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+          <p className="text-xs text-attn leading-snug">
             {t('unconvertible_hint')}
           </p>
         </div>

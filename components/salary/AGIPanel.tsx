@@ -165,6 +165,36 @@ export function AGIPanel(props: AGIPanelProps) {
   // /authorize call overwrites the stored oauth_state + PKCE verifier, so a
   // parallel flow guarantees a CSRF failure for whichever tab finishes last.
   const [connecting, setConnecting] = useState(false)
+  // Dismissal for the kvittens-scope notice, keyed by employer plus the exact
+  // granted scope string. The employer keeps dismissals from leaking across
+  // companies on a shared browser (tokens are per company, so each company's
+  // grant is its own question); the scope string means a reconnect that comes
+  // back with the same grant (the scope not yet registered on Skatteverket's
+  // application) keeps the dismissal, so the notice cannot become an
+  // un-clearable reconnect loop (#1010), while a new grant re-evaluates from
+  // scratch.
+  const [kvittensNoticeDismissed, setKvittensNoticeDismissed] = useState(false)
+  const grantedScopeString = typeof status?.scope === 'string' ? status.scope : null
+  const kvittensNoticeKey = grantedScopeString
+    ? `agi-kvittens-scope-notice:${arbetsgivare}:${grantedScopeString}`
+    : null
+  useEffect(() => {
+    if (!kvittensNoticeKey) return
+    try {
+      setKvittensNoticeDismissed(localStorage.getItem(kvittensNoticeKey) === 'dismissed')
+    } catch {
+      setKvittensNoticeDismissed(false)
+    }
+  }, [kvittensNoticeKey])
+  const dismissKvittensNotice = useCallback(() => {
+    setKvittensNoticeDismissed(true)
+    if (!kvittensNoticeKey) return
+    try {
+      localStorage.setItem(kvittensNoticeKey, 'dismissed')
+    } catch {
+      // Best effort: the state update alone hides it for this mount.
+    }
+  }, [kvittensNoticeKey])
 
   // "2026-06" for user-facing copy; the period prop is compact YYYYMM.
   const prettyPeriod = `${period.slice(0, 4)}-${period.slice(4)}`
@@ -841,7 +871,7 @@ export function AGIPanel(props: AGIPanelProps) {
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
             <p>
               {t('disabled_before')}
-              <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">SKATTEVERKET_ENABLED</code>
+              <code className="mx-1 rounded-sm bg-muted px-1 py-0.5 text-xs">SKATTEVERKET_ENABLED</code>
               {t('disabled_after')}
             </p>
           </div>
@@ -884,12 +914,21 @@ export function AGIPanel(props: AGIPanelProps) {
     )
   }
 
-  // Tokens issued before the agd scope was added to DEFAULT_SCOPES will
-  // 403 with invalid_scope at submission time: surface that proactively
-  // so the user reconnects before hitting the deadline rather than at it.
-  const missingAgdScope =
-    typeof status?.scope === 'string' &&
-    !status.scope.split(/\s+/).filter(Boolean).includes('agd')
+  // Tokens issued before an AGI scope was added to DEFAULT_SCOPES will 403 at
+  // submission time: surface that proactively so the user reconnects before
+  // hitting the deadline rather than at it. The two scopes back different
+  // steps and get different treatments: `agd` (inlämning) fails already at
+  // submit, is proven grantable, and keeps the hard reconnect nudge. A token
+  // missing only `agdredovisningperiod` (hantera) sails through submit and
+  // signing and dies on "Hämta kvittens", but until Skatteverket's application
+  // registration carries that scope a reconnect mints the same grant again
+  // (SKV silently drops unregistered scope names), so its notice must be
+  // dismissible rather than a demand no reconnect can clear (#1010).
+  const grantedScopes =
+    typeof status?.scope === 'string' ? status.scope.split(/\s+/).filter(Boolean) : null
+  const missingAgdScope = grantedScopes !== null && !grantedScopes.includes('agd')
+  const missingKvittensScope =
+    grantedScopes !== null && !missingAgdScope && !grantedScopes.includes('agdredovisningperiod')
 
   // Recovery states expose the advanced actions on their own: the stale-draft
   // and error-report guidance below reference them by name.
@@ -923,7 +962,7 @@ export function AGIPanel(props: AGIPanelProps) {
                 type="button"
                 onClick={handleDisconnect}
                 disabled={actionLoading === 'disconnect' || connecting}
-                className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
                 title={t('disconnect_title')}
               >
                 {actionLoading === 'disconnect' ? (
@@ -945,7 +984,7 @@ export function AGIPanel(props: AGIPanelProps) {
             receipt a later correction has replaced) still gets the card, just
             without a number: better than showing another declaration's. */}
         {isSigned && (
-          <div className="rounded-md border border-border bg-muted/30 p-4">
+          <div className="rounded-lg border border-border bg-muted/30 p-4">
             <div className="flex items-start gap-3">
               <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
               <div className="space-y-1">
@@ -979,7 +1018,7 @@ export function AGIPanel(props: AGIPanelProps) {
             refresh token or has burned through its 10-refresh budget. The
             only fix is a fresh BankID round-trip. */}
         {(status?.expired === true || status?.canRefresh === false) && !readOnly && (
-          <div className="rounded-md border border-border bg-muted/30 p-3">
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">{t('expired_banner_title')}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               {t('expired_banner_description')}
@@ -991,12 +1030,14 @@ export function AGIPanel(props: AGIPanelProps) {
           </div>
         )}
 
-        {/* Missing-scope banner: proactive nudge before the user hits a
-            403 invalid_scope at submission time. The agd scope was added
-            after some users had already connected, so their stored token
-            grants moms/skattekonto but not AGI. */}
+        {/* Missing-scope nudges: proactive, before the user hits a 403
+            invalid_scope. The agd scope was added after some users had
+            already connected, so their stored token grants moms/skattekonto
+            but not AGI: that one stays a hard nudge. The kvittens scope only
+            breaks the final receipt fetch and may not be grantable yet, so
+            its notice is softer and dismissible. */}
         {missingAgdScope && !readOnly && (
-          <div className="rounded-md border border-border bg-muted/30 p-3">
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">
               {t('missing_scope_title')}
             </p>
@@ -1009,6 +1050,31 @@ export function AGIPanel(props: AGIPanelProps) {
             >
               {t('open_settings')} <ExternalLink className="h-3.5 w-3.5" />
             </a>
+          </div>
+        )}
+        {missingKvittensScope && !kvittensNoticeDismissed && !readOnly && (
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
+            <p className="text-sm font-medium">
+              {t('kvittens_scope_title')}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('kvittens_scope_description')}
+            </p>
+            <div className="mt-2 flex items-center gap-4">
+              <a
+                href="/settings/tax"
+                className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
+              >
+                {t('open_settings')} <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <button
+                type="button"
+                onClick={dismissKvittensNotice}
+                className="text-sm text-muted-foreground hover:underline"
+              >
+                {t('kvittens_scope_dismiss')}
+              </button>
+            </div>
           </div>
         )}
 
@@ -1046,7 +1112,7 @@ export function AGIPanel(props: AGIPanelProps) {
             treatment so the user understands they must fix errors before
             BankID signing is even possible. */}
         {submission?.signeringslank && awaitingSigning && !draftIsStale && (
-          <div className="rounded-md border border-border bg-muted/30 p-3">
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">
               <InfoTooltip variant="help" content={t('granskningsunderlag_gloss')}>
                 {t('draft_locked_title')}
@@ -1072,7 +1138,7 @@ export function AGIPanel(props: AGIPanelProps) {
             it would file the old amounts. The "Lås upp" button below releases
             the SKV lock; the user then re-submits the freshly generated XML. */}
         {awaitingSigning && draftIsStale && (
-          <div className="rounded-md border border-border bg-muted/30 p-3">
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">{t('stale_draft_title')}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t('stale_draft_description', {
@@ -1096,7 +1162,7 @@ export function AGIPanel(props: AGIPanelProps) {
             link would be permanently unreachable even though the extension
             persisted it. */}
         {submission?.signeringslank && underlagRejected && (
-          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3">
+          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3">
             <p className="text-sm font-medium text-destructive">
               {t('incorrect_data_title')}
             </p>
@@ -1115,7 +1181,7 @@ export function AGIPanel(props: AGIPanelProps) {
         )}
 
         {kontroller.length > 0 && (
-          <div className="space-y-1 rounded-md border bg-muted/30 p-3">
+          <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
             {kontroller.map((k, i) => (
               <div
                 key={i}
@@ -1144,7 +1210,7 @@ export function AGIPanel(props: AGIPanelProps) {
             status?.expired === true ||
             status?.canRefresh === false
           return (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
               <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
               {error}
               {sessionExpired && !readOnly && (
@@ -1159,7 +1225,7 @@ export function AGIPanel(props: AGIPanelProps) {
           )
         })()}
         {success && !error && (
-          <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
             <CheckCircle2 className="mr-1 inline h-3.5 w-3.5 text-success" />
             {success}
           </div>
@@ -1204,7 +1270,7 @@ export function AGIPanel(props: AGIPanelProps) {
             </div>
 
             {chain && (
-              <ol className="space-y-1.5 rounded-md border border-border bg-muted/30 p-3">
+              <ol className="space-y-1.5 rounded-lg border border-border bg-muted/30 p-3">
                 {CHAIN_STEPS.map(step => {
                   const state = chainStepState(step)
                   return (

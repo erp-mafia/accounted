@@ -159,7 +159,7 @@ export default function TransactionAttachDocumentDialog({
             disabled={isAttaching}
           />
           {pickedDoc && (
-            <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50">
+            <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
               <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
               <span className="truncate flex-1">
                 {pickedDoc.supplier_name ?? pickedDoc.file_name}

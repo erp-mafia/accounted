@@ -10,6 +10,7 @@ import {
   validateInvoice,
   deductionSekConverter,
   deductionToSek,
+  deductionTypeForWorkType,
   type ItemForDeduction,
   type ValidateInvoiceItem,
 } from '../rot-rut-rules'
@@ -358,5 +359,24 @@ describe('validateInvoice: foreign currency vs the kronor ceilings', () => {
     expect(result.warnings).toHaveLength(2)
     expect(result.warnings[0]).toContain('ROT-avdraget')
     expect(result.warnings[1]).toContain('RUT-avdraget')
+  })
+})
+
+describe('deductionTypeForWorkType', () => {
+  it('maps ROT codes to rot and RUT codes to rut', () => {
+    expect(deductionTypeForWorkType('BYGG')).toBe('rot')
+    expect(deductionTypeForWorkType('VVS')).toBe('rot')
+    expect(deductionTypeForWorkType('STAD')).toBe('rut')
+    // IT-tjänster moved from the rot list to rut 2026-07: the mapping must
+    // follow the lists, never a hardcoded copy.
+    expect(deductionTypeForWorkType('IT')).toBe('rut')
+    expect(deductionTypeForWorkType('TVATT')).toBe('rut')
+  })
+
+  it('maps unknown or absent codes to null', () => {
+    expect(deductionTypeForWorkType(null)).toBeNull()
+    expect(deductionTypeForWorkType(undefined)).toBeNull()
+    expect(deductionTypeForWorkType('')).toBeNull()
+    expect(deductionTypeForWorkType('SNICKERI')).toBeNull()
   })
 })

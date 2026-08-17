@@ -219,6 +219,21 @@ function NewRecurringScheduleForm({
     }
   }
 
+  // Mirror InvoiceEditor: a failed validation must never look like a dead
+  // button. Toast, then scroll the first inline error into view once rendered.
+  function onInvalidSubmit(_errors: unknown, event?: React.BaseSyntheticEvent) {
+    toast({
+      title: t('validation_toast_title'),
+      description: t('validation_toast_description'),
+      variant: 'destructive',
+    })
+    const root = (event?.target as HTMLElement | null)?.closest('form')
+    setTimeout(() => {
+      const firstError = (root ?? document).querySelector('p.text-destructive')
+      firstError?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 100)
+  }
+
   const items = watch('items')
   const watchCurrency = watch('currency')
   // Automatic sending requires a customer email; without one the cron would
@@ -246,7 +261,7 @@ function NewRecurringScheduleForm({
   const subtotal = Math.round(subtotalRaw * 100) / 100
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+    <form onSubmit={handleSubmit(onSubmit, onInvalidSubmit)} className="space-y-6">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">{t('schedule_card_title')}</CardTitle>
@@ -429,7 +444,7 @@ function NewRecurringScheduleForm({
                   {t('auto_send_description')}
                 </p>
                 {customerMissingEmail && (
-                  <p className="text-sm text-warning-foreground mt-1">
+                  <p className="text-sm text-attn mt-1">
                     {t('auto_send_missing_email')}
                   </p>
                 )}
@@ -459,6 +474,11 @@ function NewRecurringScheduleForm({
                   placeholder={t('description_placeholder')}
                   {...register(`items.${index}.description`)}
                 />
+                {errors.items?.[index]?.description && (
+                  <p className="text-sm text-destructive mt-1">
+                    {errors.items[index].description?.message}
+                  </p>
+                )}
               </div>
               <div className="col-span-3 sm:col-span-2">
                 <Input
@@ -468,6 +488,11 @@ function NewRecurringScheduleForm({
                   className="tabular-nums"
                   {...register(`items.${index}.quantity`, { valueAsNumber: true })}
                 />
+                {errors.items?.[index]?.quantity && (
+                  <p className="text-sm text-destructive mt-1">
+                    {errors.items[index].quantity?.message}
+                  </p>
+                )}
               </div>
               <div className="col-span-3 sm:col-span-1">
                 <Controller
@@ -488,6 +513,11 @@ function NewRecurringScheduleForm({
                     </Select>
                   )}
                 />
+                {errors.items?.[index]?.unit && (
+                  <p className="text-sm text-destructive mt-1">
+                    {errors.items[index].unit?.message}
+                  </p>
+                )}
               </div>
               <div className="col-span-4 sm:col-span-3">
                 <Input

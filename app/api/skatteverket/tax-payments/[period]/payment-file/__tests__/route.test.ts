@@ -94,5 +94,44 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     expect(response.headers.get('Content-Type')).toBe('text/plain; charset=iso-8859-1')
     expect(response.headers.get('Content-Disposition')).toContain('skatt-2026-04.txt')
     expect(mockGenerateBgLb).toHaveBeenCalledTimes(1)
+    expect(mockGenerateBgLb.mock.calls[0][1]).toMatchObject({ amount: 1500 })
+  })
+
+  it('pays the declared whole-krona totals as-is for new-era declarations', async () => {
+    // Declarations generated since the whole-krona change store the declared
+    // integers (what Skatteverket computes from the underlag and draws), and
+    // the matching salary booking credited 2731 with the same number: the
+    // payment must be exactly their sum.
+    enqueue({ data: { id: 'agi-1', total_tax: 12268, total_avgifter: 16073 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899' } }) // companies
+    enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
+    enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockGenerateBgLb.mock.calls[0][1]).toMatchObject({ amount: 28341 })
+  })
+
+  it('keeps paying öre-exact for legacy öre-bearing declarations', async () => {
+    // Legacy rows predate the whole-krona storage: their salary bookings
+    // credited 2731 with the öre, so the payment keeps clearing 2731 in full
+    // (the öre parks as a small skattekonto överskott, the pre-existing
+    // equilibrium). Truncating here would strand the öre on 2731 instead.
+    enqueue({ data: { id: 'agi-1', total_tax: 12268, total_avgifter: 16073.84 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899' } }) // companies
+    enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
+    enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file'),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockGenerateBgLb.mock.calls[0][1]).toMatchObject({ amount: 28341.84 })
   })
 })

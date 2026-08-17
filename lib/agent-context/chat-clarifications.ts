@@ -62,7 +62,14 @@ export interface ChatClarifications {
     type: 'representation' | 'context' | 'resend'
     status: 'open' | 'moved_to_app'
   } | null
-  /** Where these answers were captured, for provenance in the prompt. */
+  /**
+   * Where these answers were captured, for provenance in the prompt.
+   *
+   * Only WhatsApp asks a human anything, so only WhatsApp produces
+   * clarifications. The mail hunt writes the same column with its own shape
+   * and never carries answers, which is why this stays narrow while
+   * InboxChannelContext.channel spans both intakes.
+   */
   channel: 'whatsapp'
 }
 
@@ -112,7 +119,7 @@ export function summariseClarifications(
     userNote,
     contextAnswerRaw,
     openQuestion,
-    channel: ctx.channel,
+    channel: 'whatsapp',
   }
 }
 

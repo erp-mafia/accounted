@@ -117,7 +117,8 @@ export function DimensionFilter({ value, onChange }: Props) {
       </div>
       {value && (
         <Badge variant="warning" className="w-fit">
-          Filtrerad: {activeDim?.name ?? `Dim ${value.dimNo}`} {value.code}, ej fullständig rapport
+          {/* data-ph-mask: dimension names and codes are user data */}
+          Filtrerad: <span data-ph-mask="">{activeDim?.name ?? `Dim ${value.dimNo}`} {value.code}</span>, ej fullständig rapport
         </Badge>
       )}
     </div>

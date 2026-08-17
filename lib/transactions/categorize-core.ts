@@ -24,12 +24,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import {
   detectBookingDuplicate,
@@ -37,6 +37,7 @@ import {
   type BookingDuplicateExclusions,
 } from '@/lib/transactions/booking-duplicate-detection'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createLogger } from '@/lib/logger'
 import type { InboxChannelContext, Transaction, TransactionCategory, EntityType, VatTreatment } from '@/types'
@@ -72,6 +73,14 @@ export interface CategorizeMatchedTransactionOpts {
    * registry at staging time (MCP) or picked in the UI.
    */
   dimensions?: Record<string, string>
+  /**
+   * Explicit business-side account (e.g. a company-custom VMB account) that
+   * replaces the category's debit (money out) or credit (money in) account,
+   * with the same semantics as the v1 REST route's account_override: must be
+   * present and active in chart_of_accounts, never combined with category
+   * 'private'. See lib/bookkeeping/account-override.ts.
+   */
+  accountOverride?: string
 }
 
 // ── Helper: duplicate-guard claim text ───────────────────────────────
@@ -211,7 +220,7 @@ export async function categorizeMatchedTransaction(
    */
   exclude?: BookingDuplicateExclusions,
 ): Promise<CategorizeCoreResult> {
-  const { category, vatTreatment, vatAmount, notes, allowDuplicate, dimensions } = opts
+  const { category, vatTreatment, vatAmount, notes, allowDuplicate, dimensions, accountOverride } = opts
 
   const { data: transaction, error: fetchError } = await supabase
     .from('transactions').select('*').eq('id', txId).eq('company_id', companyId).single()
@@ -342,6 +351,24 @@ export async function categorizeMatchedTransaction(
     log,
   )
   mappingResult = applySettlementAccount(mappingResult, settlementAccount)
+  // Re-validated here (not only at staging): the account can be deactivated
+  // between MCP staging and the user's approval, and the posted entry must
+  // never land on an account the chart no longer offers.
+  if (accountOverride) {
+    if (!isBusiness) {
+      return { error: 'account_override kan inte kombineras med category "private".', status: 400 }
+    }
+    try {
+      mappingResult = await applyAccountOverride(
+        supabase, companyId, accountOverride, transaction.amount, mappingResult,
+        // Explicit VAT intent: a stated treatment or an underlag vat_amount.
+        // Without it the override books gross (see applyAccountOverride).
+        vatTreatment != null || vatAmount != null,
+      )
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : 'account_override failed', status: 400 }
+    }
+  }
   // Dimensions PR7: tag the business lines of the generated verifikat.
   if (dimensions && Object.keys(dimensions).length > 0) {
     mappingResult.dimensions = dimensions
@@ -375,57 +402,12 @@ export async function categorizeMatchedTransaction(
     return { error: 'Failed to update transaction', status: 500 }
   }
 
-  // Propagate the underlag from a matched invoice-inbox item onto the new
-  // verifikation. Without this, BFL 7 kap is violated: a verifikation exists
-  // with no underlag attached even though the user explicitly linked an inbox
-  // item (with a document) to this transaction. We:
-  //   1. find the inbox item(s) where matched_transaction_id = txId
-  //   2. for each item with a document_id, set
-  //        document_attachments.journal_entry_id = journalEntryId (idempotent)
-  //   3. stamp invoice_inbox_items.created_journal_entry_id so the inbox row
-  //      visibly moves to "Bearbetade" and shows "Öppna verifikation".
-  // Errors are logged but don't fail the commit: the verifikation itself is
-  // already posted, and the link can be repaired by re-running this step.
+  // Propagate the underlag from matched invoice-inbox items onto the new
+  // verifikation and stamp them consumed (BFL 7 kap): shared with the other
+  // booking paths, see lib/transactions/inbox-underlag.ts. Best-effort: the
+  // verifikation is already posted, so a failure is logged, never fatal.
   if (journalEntryId) {
-    try {
-      const { data: matchedInboxItems } = await supabase
-        .from('invoice_inbox_items')
-        .select('id, document_id')
-        .eq('company_id', companyId)
-        .eq('matched_transaction_id', txId)
-        .is('created_journal_entry_id', null)
-      for (const inbox of (matchedInboxItems ?? []) as Array<{
-        id: string
-        document_id: string | null
-      }>) {
-        if (inbox.document_id) {
-          try {
-            await linkToJournalEntry(supabase, companyId, inbox.document_id, journalEntryId)
-          } catch (err) {
-            log.error('Failed to link inbox document to journal entry', {
-              inbox_item_id: inbox.id,
-              document_id: inbox.document_id,
-              journal_entry_id: journalEntryId,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        }
-        const { error: stampError } = await supabase
-          .from('invoice_inbox_items')
-          .update({ created_journal_entry_id: journalEntryId })
-          .eq('id', inbox.id)
-          .eq('company_id', companyId)
-        if (stampError) {
-          log.error('Failed to stamp inbox item created_journal_entry_id', {
-            inbox_item_id: inbox.id,
-            journal_entry_id: journalEntryId,
-            error: stampError.message,
-          })
-        }
-      }
-    } catch (err) {
-      log.error('Failed to propagate underlag from matched inbox items', err)
-    }
+    await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId)
   }
 
   try {
@@ -472,9 +454,9 @@ export interface BulkBookInboxResult {
 /**
  * Book each selected inbox item against its matched bank transaction with one
  * shared category + VAT treatment. Items without a matched transaction, already
- * booked, or already linked to a leverantörsfaktura are skipped: never an
- * error: so one bad underlag never blocks the rest ("Bokför valda hoppar
- * över"). A per-item throw (period locked, accounts not in chart) is caught and
+ * booked, already linked to a leverantörsfaktura, or still mid AI extraction
+ * (staged upload, status 'processing') are skipped: never an error: so one bad
+ * underlag never blocks the rest ("Bokför valda hoppar över"). A per-item throw (period locked, accounts not in chart) is caught and
  * recorded as a skip with the actionable message.
  *
  * Shared by the direct UI route (POST /items/bulk-book) and the
@@ -502,13 +484,21 @@ export async function bulkBookMatchedInboxItems(
   for (const itemId of item_ids) {
     const { data: item, error: itemError } = await supabase
       .from('invoice_inbox_items')
-      .select('id, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, channel_context')
+      .select('id, status, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, channel_context')
       .eq('id', itemId)
       .eq('company_id', companyId)
       .maybeSingle()
 
     if (itemError || !item) {
       skipped.push({ item_id: itemId, reason: 'not_found' })
+      continue
+    }
+    if ((item as { status?: string }).status === 'processing') {
+      // Staged upload: the row exists but its deferred AI extraction has not
+      // landed yet (extracted_data is NULL). Booking it now would mint a
+      // verifikat from an underlag nobody has read; the flip to 'received'
+      // arrives within seconds, so this is a "try again in a moment" skip.
+      skipped.push({ item_id: itemId, reason: 'extraction_in_progress' })
       continue
     }
     if (item.created_journal_entry_id) {

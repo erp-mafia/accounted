@@ -141,7 +141,7 @@ export function RunHeader({ run, canWrite, actionLoading, employeeCount, onDelet
             <DialogDescription className="space-y-3 pt-2 text-left">
               <span className="block">{t('correct_dialog_body', { period: periodLabel })}</span>
               {run.agi_generated_at && (
-                <span className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
+                <span className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
                   <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                   <span>{t('correct_dialog_agi_warning')}</span>
                 </span>

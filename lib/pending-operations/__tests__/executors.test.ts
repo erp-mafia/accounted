@@ -1004,6 +1004,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
+    enqueue({ data: [], error: null }) // voucher-link resolution: not bulk-booked either
     enqueue({ data: null, error: null }) // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1023,6 +1024,8 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { journal_entry_id: 'je-7' }, error: null }) // UPDATE returning post-state
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: null, error: null }) // doc propagation update
+    enqueue({ data: { document_id: null }, error: null }) // completion: tx pin lookup
+    enqueue({ data: [], error: null }) // completion: matched inbox items (none)
     enqueue({ data: null, error: null }) // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1032,6 +1035,35 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
       makePendingOp(baseOp),
     )
     expect(result.status).toBe('committed')
+  })
+
+  it('completes matched inbox items when the tx is anchored via a bulk-book samlingsverifikat', async () => {
+    // A bulk-booked tx keeps transactions.journal_entry_id null: the verifikat
+    // hangs off transaction_voucher_links. Attaching a hunted receipt to it
+    // must still resolve the matched inbox item, or it strands as "linked"
+    // forever (the 2026-08-12 report).
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning (still null)
+    enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
+    enqueue({ data: [{ transaction_id: 'tx-1', journal_entry_id: 'je-9' }], error: null }) // voucher links
+    enqueue({ data: { document_id: null }, error: null }) // propagation: tx pin lookup
+    enqueue({ data: [{ id: 'inbox-9', document_id: null }], error: null }) // matched inbox items
+    enqueue({ data: null, error: null }) // created_journal_entry_id stamp
+    enqueue({ data: null, error: null }) // dispatcher commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('committed')
+    expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
+      { created_journal_entry_id: 'je-9' },
+    ])
   })
 
   it('still commits when the inbox-link best-effort update errors', async () => {
@@ -1046,6 +1078,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // tx UPDATE returning
     enqueue({ data: null, error: { message: 'inbox row missing or RLS-blocked' } }) // inbox link: errors
+    enqueue({ data: [], error: null }) // voucher-link resolution: not bulk-booked either
     enqueue({ data: null, error: null }) // dispatcher commit update
 
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -1329,5 +1362,72 @@ describe('commitPendingOperation: categorize_transaction: dimensions propagation
 
     const opts = vi.mocked(categorizeMatchedTransaction).mock.calls[0][4]
     expect(opts.dimensions).toBeUndefined()
+  })
+})
+
+// ─── categorize_transaction: account_override tamper gate ───────────────────
+
+describe('commitPendingOperation: categorize_transaction account_override', () => {
+  it('rejects loudly when a stored override is present but malformed (tamper/drift)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's rejected update
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'expense_other', account_override: '40a0' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    // Never degrade to the category default: the approver approved a preview
+    // showing the override account. 400 lands as 'failed' (the dispatcher
+    // reserves auto-reject for 404/409); the point is that the core is never
+    // called and the error names the override.
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toContain('account_override')
+    expect(categorizeMatchedTransaction).not.toHaveBeenCalled()
+  })
+
+  it('threads a valid stored override into the core opts', async () => {
+    vi.mocked(categorizeMatchedTransaction).mockResolvedValueOnce({
+      data: { journal_entry_id: 'je-1' },
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'expense_other', account_override: '4020' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const opts = vi.mocked(categorizeMatchedTransaction).mock.calls[0][4]
+    expect(opts.accountOverride).toBe('4020')
+  })
+
+  it('passes undefined when the staged params carry account_override: null (no override)', async () => {
+    vi.mocked(categorizeMatchedTransaction).mockResolvedValueOnce({
+      data: { journal_entry_id: 'je-1' },
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'expense_other', account_override: null },
+    })
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    const opts = vi.mocked(categorizeMatchedTransaction).mock.calls[0][4]
+    expect(opts.accountOverride).toBeUndefined()
   })
 })

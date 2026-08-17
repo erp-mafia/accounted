@@ -27,7 +27,7 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
 
   return (
     <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+      <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
         {t('heading')}
       </h2>
       <p className="text-xs text-muted-foreground -mt-2">

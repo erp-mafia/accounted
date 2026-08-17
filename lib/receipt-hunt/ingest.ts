@@ -11,6 +11,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadDocument } from '@/lib/core/documents/document-service'
+import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getMailSearchService, type MailCandidate } from '@/lib/mail-search/service'
 import { createLogger } from '@/lib/logger'
 
@@ -164,8 +165,64 @@ export async function ingestMailCandidate(
           ) as ArrayBuffer,
           type: sniffMimeType(fetched.bytes, fetched.mimeType, fileName),
         },
-        { upload_source: 'mail_hunt' },
+        { upload_source: 'mail_hunt', dedupeByContent: true },
       )
+
+      // Content already archived for this company: the provenance key above
+      // only catches the SAME message re-hunted, while this catches the same
+      // receipt arriving through another inbox or channel (forwards are
+      // common). Skip ONLY when an inbox item already carries the document:
+      // then the receipt is in the Underlag flow (or handled). When the match
+      // is a document that never passed the inbox (a manually attached copy,
+      // an archival file), fall through and file an item for the EXISTING
+      // document: silently dropping the receipt could leave a real
+      // affärshändelse without underlag routing (BFL 5 kap).
+      if (document.deduplicated) {
+        const { data: dupItem, error: dupErr } = await supabase
+          .from('invoice_inbox_items')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('document_id', document.id)
+          .limit(1)
+          .maybeSingle()
+        // Fail closed: a broken lookup must not file a second item.
+        if (dupErr) throw new Error(dupErr.message)
+        if (dupItem) {
+          // Behandlingshistorik, not just an app log: the dedupe decision is
+          // part of the auditable trail (BFNAR 2013:2 kap 8).
+          try {
+            await appendProcessingHistory({
+              companyId,
+              correlationId: crypto.randomUUID(),
+              aggregateType: 'Document',
+              aggregateId: document.id,
+              eventType: 'DocumentDuplicateSkipped',
+              // No mailbox address here: the processing-history payload
+              // contract is pseudonymous IDs only (never emails). Which
+              // mailbox first delivered the receipt is on the existing
+              // item's channel_context.
+              payload: {
+                channel: 'mail_hunt',
+                document_id: document.id,
+                inbox_item_id: (dupItem as { id: string }).id,
+                mail_message_id: candidate.messageId,
+                reason: 'duplicate_content',
+              },
+              actor: { type: 'system', id: 'receipt-hunt' },
+              occurredAt: new Date(),
+            })
+          } catch (histErr) {
+            log.warn('could not append DocumentDuplicateSkipped', {
+              error: histErr instanceof Error ? histErr.message : String(histErr),
+            })
+          }
+          log.info('skipped duplicate attachment content', {
+            messageId: candidate.messageId,
+            documentId: document.id,
+          })
+          continue
+        }
+      }
 
       // uploadDocument emits document.uploaded and awaits its handlers, so the
       // extraction extension has already read the amount, date and vendor out

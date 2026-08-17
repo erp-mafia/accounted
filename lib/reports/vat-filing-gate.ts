@@ -2,6 +2,7 @@ import type {
   VatDeclarationCheck,
   VatCheckAccountTotals,
 } from './vat-declaration-checks'
+import { roundOre } from '@/lib/money'
 import type { VatDeclarationRutor } from '@/types'
 
 /**
@@ -106,20 +107,31 @@ export interface RcBasisTotalsByRate {
  * Debit minus credit, like every basis box: a credit-heavy rate (a period
  * dominated by credit notes) legitimately comes out negative.
  */
-export function rcBasisTotalsByRate(totals: VatCheckAccountTotals): RcBasisTotalsByRate {
+export function rcBasisTotalsByRate(
+  totals: VatCheckAccountTotals,
+  dynamic?: { explicitAccounts: Set<string>; rcBasisRateByAccount: Map<string, number> },
+): RcBasisTotalsByRate {
   const sumGroup = (accounts: readonly string[]): number => {
     let sum = 0
     for (const account of accounts) {
+      if (dynamic?.explicitAccounts.has(account)) continue
       const t = totals.get(account)
       if (t) sum += t.debit - t.credit
     }
     return Math.round(sum * 100) / 100
   }
-  return {
+  const result = {
     r25: sumGroup(RC_BASIS_ACCOUNTS_BY_RATE.r25),
     r12: sumGroup(RC_BASIS_ACCOUNTS_BY_RATE.r12),
     r6: sumGroup(RC_BASIS_ACCOUNTS_BY_RATE.r6),
   }
+  for (const [account, rate] of dynamic?.rcBasisRateByAccount ?? []) {
+    const total = totals.get(account)
+    if (!total) continue
+    const key = rate === 0.25 ? 'r25' : rate === 0.12 ? 'r12' : 'r6'
+    result[key] = roundOre(result[key] + total.debit - total.credit)
+  }
+  return result
 }
 
 /**

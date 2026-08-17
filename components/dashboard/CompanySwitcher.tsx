@@ -152,7 +152,7 @@ export default function CompanySwitcher() {
                     onClick={() => handleSwitch(c.id)}
                     disabled={isPending}
                     className={cn(
-                      'flex items-center gap-2 w-full px-2.5 py-2 text-left text-[13px] leading-snug transition-colors rounded-md md:whitespace-nowrap',
+                      'flex items-center gap-2 w-full px-2.5 py-2 text-left text-[13px] leading-snug transition-colors rounded-sm md:whitespace-nowrap',
                       c.id === company?.id
                         ? 'text-foreground bg-muted/40'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
@@ -184,7 +184,7 @@ export default function CompanySwitcher() {
               <Link
                 href="/select-company?choose=1"
                 onClick={() => setOpen(false)}
-                className="flex items-center gap-2 px-2.5 py-2 text-[13px] text-muted-foreground hover:text-foreground hover:bg-muted/40 rounded-md transition-colors md:whitespace-nowrap"
+                className="flex items-center gap-2 px-2.5 py-2 text-[13px] text-muted-foreground hover:text-foreground hover:bg-muted/40 rounded-sm transition-colors md:whitespace-nowrap"
               >
                 <Plus className="h-3.5 w-3.5" />
                 {t('add_company')}

@@ -10,7 +10,6 @@ import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
 import { SupportLink } from '@/components/ui/support-link'
 import {
-  Building2,
   Check,
   ChevronsUpDown,
   ChevronRight,
@@ -56,6 +55,19 @@ function accountInitial(name: string | null, email: string | null): string {
   const trimmedEmail = email?.trim()
   if (trimmedEmail && trimmedEmail.length > 0) return trimmedEmail[0]!.toUpperCase()
   return '?'
+}
+
+// Company monogram: first letter in a small rounded square. Square = company,
+// circle = person (the avatar above), so the two identity marks stay distinct.
+function CompanyMark({ name }: { name: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-sm bg-secondary text-[9px] font-semibold uppercase leading-none text-foreground"
+    >
+      {name.trim().charAt(0) || '?'}
+    </span>
+  )
 }
 
 /**
@@ -181,7 +193,7 @@ export default function UserMenu({
   )
 
   const menuRow =
-    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] ' +
+    'flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 text-left text-[13px] ' +
     'text-muted-foreground hover:text-foreground hover:bg-secondary/60 ' +
     'transition-colors duration-150 cursor-pointer'
 
@@ -246,7 +258,7 @@ export default function UserMenu({
                 aria-expanded={companiesOpen}
                 className={cn(menuRow, companiesOpen && 'bg-secondary/60 text-foreground')}
               >
-                <Building2 className="h-4 w-4 flex-shrink-0" />
+                <CompanyMark name={company?.name || tSwitcher('default_company_name')} />
                 <span className="flex-1 truncate">
                   {company?.name || tSwitcher('default_company_name')}
                 </span>
@@ -281,14 +293,14 @@ export default function UserMenu({
                         role="option"
                         aria-selected={c.id === company?.id}
                         className={cn(
-                          'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
+                          'flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
                           c.id === company?.id
                             ? 'bg-secondary/60 text-foreground'
                             : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
                           isPending && 'opacity-50',
                         )}
                       >
-                        <Building2 className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                        <CompanyMark name={c.name} />
                         <span className="min-w-0 flex-1 truncate">{c.name}</span>
                         {role !== 'owner' && (
                           <span className="flex-shrink-0 text-[10px] text-muted-foreground/60">
@@ -322,7 +334,7 @@ export default function UserMenu({
                 <Settings className="h-4 w-4 flex-shrink-0" />
                 {tNav('settings')}
               </Link>
-              <Link href="/settings/team" onClick={close} className={menuRow}>
+              <Link href="/settings/company#members" onClick={close} className={menuRow}>
                 <Users className="h-4 w-4 flex-shrink-0" />
                 {tNav('members_roles')}
               </Link>

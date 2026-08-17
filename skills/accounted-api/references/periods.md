@@ -30,7 +30,7 @@ Response `200`:
 ```ts
 {
   data: {
-    accounts: { account_number: string, account_name: string, account_class: number, account_group: string, account_type: string, normal_balance: string, is_system_account: boolean, is_active: boolean, description: string, default_vat_code: string, sru_code: string, sort_order: number }[]
+    accounts: { account_number: string, account_name: string, account_class: number, account_group: string, account_type: string, normal_balance: string, is_system_account: boolean, is_active: boolean, description: string, default_vat_code: string, default_vat_rate: number, default_vat_treatment: string, sru_code: string, sort_order: number }[]
   },
   meta: {
     request_id: string,

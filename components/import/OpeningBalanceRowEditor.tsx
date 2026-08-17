@@ -239,7 +239,7 @@ export default function OpeningBalanceRowEditor({
   return (
     <div className="space-y-4">
       {/* Table */}
-      <div className="overflow-x-auto rounded-md border">
+      <div className="overflow-x-auto rounded-lg border">
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
             <tr className="border-b">
@@ -284,7 +284,7 @@ export default function OpeningBalanceRowEditor({
                   {activeAutocomplete === row.id && autocompleteResults.length > 0 && (
                     <div
                       ref={autocompleteRef}
-                      className="absolute z-50 top-full left-3 mt-1 w-72 max-h-48 overflow-y-auto rounded-md border bg-popover shadow-md"
+                      className="absolute z-50 top-full left-3 mt-1 w-72 max-h-48 overflow-y-auto rounded-lg border bg-popover shadow-md"
                     >
                       {autocompleteResults.map((item) => (
                         <button
@@ -415,7 +415,7 @@ export default function OpeningBalanceRowEditor({
 
       {/* Warnings */}
       {!totals.isBalanced && Math.abs(totals.diff) > 1 && (
-        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
           <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
           <p className="text-sm text-warning">
             Debet och kredit balanserar inte. Differens:{' '}

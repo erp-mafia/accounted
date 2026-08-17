@@ -237,7 +237,7 @@ export function DispositionsStep({
           fiscalYear={fiscalYear}
         />
         {taxDepreciationDirty && (
-          <p className="text-sm text-warning-foreground" role="status">
+          <p className="text-sm text-attn" role="status">
             Spara eller återställ ändringarna i skattemässig avskrivning innan du lämnar steget.
           </p>
         )}
@@ -302,7 +302,7 @@ export function DispositionsStep({
 
       {proposal.warnings?.map((warning) => (
         <Card key={warning}>
-          <CardContent className="p-4 text-sm text-warning-foreground flex items-start gap-2">
+          <CardContent className="p-4 text-sm text-attn flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
             <span>{warning}</span>
           </CardContent>
@@ -335,7 +335,7 @@ export function DispositionsStep({
           {completed.warnings.length > 0 && (
             <CardContent className="space-y-2">
               {completed.warnings.map((warning) => (
-                <p key={warning} className="text-sm text-warning-foreground">{warning}</p>
+                <p key={warning} className="text-sm text-attn">{warning}</p>
               ))}
             </CardContent>
           )}
@@ -378,7 +378,7 @@ export function DispositionsStep({
       )}
 
       {taxDepreciationDirty && (
-        <p className="text-sm text-warning-foreground" role="status">
+        <p className="text-sm text-attn" role="status">
           Spara eller återställ ändringarna i skattemässig avskrivning innan du lämnar steget.
         </p>
       )}
@@ -582,7 +582,7 @@ function ProposalCard({
       </CardHeader>
       <CardContent className="space-y-3">
         {proposal.warnings.map((w, i) => (
-          <p key={i} className="text-sm text-warning-foreground">
+          <p key={i} className="text-sm text-attn">
             {w}
           </p>
         ))}

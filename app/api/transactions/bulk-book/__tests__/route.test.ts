@@ -33,8 +33,30 @@ vi.mock('@/lib/bookkeeping/template-library', () => ({
   applyTemplate: vi.fn(),
 }))
 
+// Stubbed so the queued mock stays aligned with the route's own
+// queries; the helper's behaviour is covered in
+// lib/transactions/__tests__/inbox-underlag.test.ts.
+vi.mock('@/lib/transactions/inbox-underlag', () => ({
+  propagateUnderlagForBookedTransaction: vi.fn().mockResolvedValue(undefined),
+}))
+
+// The booking-time duplicate guard runs several queries of its own per tx;
+// stubbing it keeps the queued supabase mock aligned with the route's queries.
+// Detection behaviour is covered in
+// lib/transactions/__tests__/booking-duplicate-detection.test.ts.
+vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
+  detectBookingDuplicate: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
+}))
+
 import { POST } from '../route'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { appendProcessingHistory } from '@/lib/processing-history/append'
+import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
 const TX1 = '11111111-1111-4111-8111-111111111111'
 const TX2 = '22222222-2222-4222-8222-222222222222'
@@ -48,6 +70,17 @@ describe('POST /api/transactions/bulk-book', () => {
     vi.clearAllMocks()
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+  })
+
+  it('returns 401 when unauthenticated', async () => {
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request)
+    expect(response.status).toBe(401)
   })
 
   it('returns 400 when neither template_id nor existing_journal_entry_id is set', async () => {
@@ -114,6 +147,20 @@ describe('POST /api/transactions/bulk-book', () => {
     expect(body.data.mode).toBe('link_existing')
     expect(body.data.journal_entry_id).toBe(JE)
     expect(body.data.linked_tx_count).toBe(2)
+    // Every booked tx gets its matched inbox items completed against the
+    // samlingsverifikat (underlag link + consumed stamp).
+    expect(propagateUnderlagForBookedTransaction).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      TX1,
+      JE,
+    )
+    expect(propagateUnderlagForBookedTransaction).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      TX2,
+      JE,
+    )
   })
 
   it('create-new path fetches template, expands per mode, and calls RPC', async () => {
@@ -404,6 +451,145 @@ describe('POST /api/transactions/bulk-book: mixed-currency guard', () => {
           { account_number: '3001', debit_amount: 0, credit_amount: 200, currency: 'SEK' },
         ],
       },
+    })
+    const response = await POST(request)
+    expect(response.status).toBe(200)
+  })
+})
+
+/**
+ * Booking-time duplicate guard on the samlingsverifikation path (parity with
+ * /categorize and /book): before this, bulk-book never called
+ * detectBookingDuplicate at all, so a batch containing an already-booked
+ * twin minted a second verifikat with no warning.
+ */
+describe('POST /api/transactions/bulk-book: duplicate guard', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+  const SEK_TXS = [
+    { id: TX1, amount: 100, currency: 'SEK', description: 'Swish 1', date: '2026-06-05' },
+    { id: TX2, amount: 200, currency: 'SEK', description: 'Swish 2', date: '2026-06-05' },
+  ]
+
+  const CANDIDATE: BookedDuplicateCandidate = {
+    transaction_id: null,
+    journal_entry_id: '55555555-5555-4555-8555-555555555555',
+    voucher_label: 'A17',
+    entry_date: '2026-06-05',
+    description: 'Swish inbetalning',
+    amount: 200,
+    account_number: '1930',
+    currency: null,
+    amount_in_currency: null,
+    amount_verified: true,
+    unverified_reason: null,
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+  })
+
+  it('returns 409 with the candidate and the flagged tx, before the RPC', async () => {
+    enqueue({ data: SEK_TXS, error: null })
+    // TX1 clean, TX2 flagged (checked in tx_ids order).
+    vi.mocked(detectBookingDuplicate)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(CANDIDATE)
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { transaction_id?: string; candidate?: { journal_entry_id: string } } }
+    }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+    expect(body.error.details?.transaction_id).toBe(TX2)
+    expect(body.error.details?.candidate?.journal_entry_id).toBe(CANDIDATE.journal_entry_id)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('passes intra-batch exclusions so siblings and the link target never flag each other', async () => {
+    enqueue({ data: SEK_TXS, error: null })
+    // RPC + event re-fetch for the clean pass-through.
+    enqueue({
+      data: {
+        ok: true, mode: 'link_existing', journal_entry_id: JE,
+        voucher_series: 'A', voucher_number: 12, linked_tx_count: 2, tx_sum: 300,
+      },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE },
+    })
+    const response = await POST(request)
+    expect(response.status).toBe(200)
+    expect(detectBookingDuplicate).toHaveBeenCalledTimes(2)
+    expect(detectBookingDuplicate).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      expect.objectContaining({ id: TX1, date: '2026-06-05', amount: 100 }),
+      { excludeTransactionIds: [TX1, TX2], excludeJournalEntryIds: [JE] },
+    )
+  })
+
+  it('force=true books through and records each dismissed candidate in behandlingshistorik', async () => {
+    enqueue({ data: SEK_TXS, error: null })
+    enqueue({
+      data: {
+        ok: true, mode: 'link_existing', journal_entry_id: JE,
+        voucher_series: 'A', voucher_number: 12, linked_tx_count: 2, tx_sum: 300,
+      },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+    // Re-detection under force: TX1 clean, TX2 had the candidate.
+    vi.mocked(detectBookingDuplicate)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(CANDIDATE)
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE, force: true },
+    })
+    const response = await POST(request)
+    expect(response.status).toBe(200)
+    expect(appendProcessingHistory).toHaveBeenCalledTimes(1)
+    expect(appendProcessingHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aggregateId: TX2,
+        eventType: 'BankTransactionDuplicateDismissed',
+        payload: expect.objectContaining({
+          dismissed_journal_entry_id: CANDIDATE.journal_entry_id,
+          via: 'bulk_book_force',
+        }),
+      }),
+    )
+  })
+
+  it('fails open when detection itself throws (a guard failure never blocks a booking)', async () => {
+    enqueue({ data: SEK_TXS, error: null })
+    enqueue({
+      data: {
+        ok: true, mode: 'link_existing', journal_entry_id: JE,
+        voucher_series: 'A', voucher_number: 12, linked_tx_count: 2, tx_sum: 300,
+      },
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+    vi.mocked(detectBookingDuplicate).mockRejectedValue(new Error('detector down'))
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1, TX2], existing_journal_entry_id: JE },
     })
     const response = await POST(request)
     expect(response.status).toBe(200)

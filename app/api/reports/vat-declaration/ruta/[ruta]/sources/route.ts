@@ -4,7 +4,7 @@ import {
   ACCOUNT_RUTA,
   resolvePeriodDates,
 } from '@/lib/reports/vat-declaration'
-import { fetchDynamicRuta05Accounts } from '@/lib/reports/vat-revenue-accounts'
+import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 import type { VatDeclarationRutor, VatPeriodType } from '@/types'
 
@@ -40,17 +40,18 @@ export const GET = withRouteContext<{ params: Promise<{ ruta: string }> }>(
     rutaParam.startsWith('ruta') ? rutaParam : `ruta${rutaParam}`
   ) as keyof VatDeclarationRutor
 
-  // Invert ACCOUNT_RUTA: which BAS accounts feed this ruta?
+  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
+
+  // Invert the effective mapping. Explicit account treatments replace the
+  // fixed BAS mapping and can move a standard account to another ruta.
   const accountsForRuta = Object.entries(ACCOUNT_RUTA)
-    .filter(([, m]) => m.box === rutaKey)
+    .filter(([account, m]) =>
+      m.box === rutaKey && !dynamicVatAccounts.explicitAccounts.has(account)
+    )
     .map(([acc]) => acc)
 
-  // Ruta 05 also collects the company's own momspliktiga intäktskonton, which
-  // ACCOUNT_RUTA cannot know about (#1261). Without them the drill-down would
-  // list a smaller sum than the figure it drills into.
-  if (rutaKey === 'ruta05') {
-    const { accounts } = await fetchDynamicRuta05Accounts(supabase, companyId)
-    accountsForRuta.push(...accounts)
+  for (const [account, mapping] of dynamicVatAccounts.mappingByAccount) {
+    if (mapping.box === rutaKey) accountsForRuta.push(account)
   }
 
   if (accountsForRuta.length === 0) {
