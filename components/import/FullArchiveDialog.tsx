@@ -175,15 +175,24 @@ export function FullArchiveDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <SegmentedControl
-            value={scope}
-            onChange={setScope}
-            aria-label={t('archive_scope_label')}
-            options={[
-              { value: 'all', label: t('archive_scope_all') },
-              { value: 'period', label: t('archive_scope_period') },
-            ]}
-          />
+          <div className="space-y-2">
+            <SegmentedControl
+              value={scope}
+              onChange={setScope}
+              aria-label={t('archive_scope_label')}
+              options={[
+                { value: 'all', label: t('archive_scope_all') },
+                { value: 'period', label: t('archive_scope_period') },
+              ]}
+            />
+            {/* The two scopes count different document sets (all documents vs
+                only those linked to posted vouchers in the year), so a company
+                with unlinked inbox receipts sees very different counts. Say so,
+                or the gap reads as a pagination bug. */}
+            <p className="text-xs leading-5 text-muted-foreground">
+              {scope === 'all' ? t('archive_scope_all_note') : t('archive_scope_period_note')}
+            </p>
+          </div>
 
           {scope === 'period' && (
             <FiscalYearSelector
