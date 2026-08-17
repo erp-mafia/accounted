@@ -515,14 +515,25 @@ export const INK2R_ACCOUNT_MAPPINGS: INK2AccountMapping[] = [
     description: 'Av- och nedskrivningar materiella/immateriella',
     section: 'income_statement',
     normalBalance: 'debit',
-    accountRanges: [{ start: '7800', end: '7899' }],
+    // Official BAS kopplingstabell for INK2R 3.9: 7700-7739, 7750-7789,
+    // 7800-7899 (nedskrivningar of anläggningstillgångar + återföringar);
+    // only 774x/779x belong on 3.10. Mirrors K2_RR_MAPPINGS in
+    // lib/bokslut/ixbrl/k2-mapper.ts.
+    accountRanges: [
+      { start: '7700', end: '7739' },
+      { start: '7750', end: '7789' },
+      { start: '7800', end: '7899' },
+    ],
   },
   {
     sruCode: '7516',
     description: 'Nedskrivningar omsättningstillgångar',
     section: 'income_statement',
     normalBalance: 'debit',
-    accountRanges: [{ start: '7700', end: '7799' }],
+    accountRanges: [
+      { start: '7740', end: '7749' },
+      { start: '7790', end: '7799' },
+    ],
   },
   {
     sruCode: '7517',

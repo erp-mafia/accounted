@@ -87,12 +87,17 @@ export const K2_RR_MAPPINGS: PostMapping[] = [
   {
     concept: 'AvskrivningarNedskrivningarMateriellaImmateriellaAnlaggningstillgangar',
     balance: 'debit',
-    ranges: [r('7800', '7899')],
+    // 7710-7733 are nedskrivningar of anläggningstillgångar and 7760-7789
+    // their återföringar (credit-normal, netted within the line); only
+    // 774x/779x concern omsättningstillgångar. Intervals follow the official
+    // BAS kopplingstabell for INK2R 3.9/3.10 (fältkod 7515: 7700-7739,
+    // 7750-7789, 7800-7899; fältkod 7516: 774x, 779x).
+    ranges: [r('7700', '7739'), r('7750', '7789'), r('7800', '7899')],
   },
   {
     concept: 'NedskrivningarOmsattningstillgangarUtoverNormalaNedskrivningar',
     balance: 'debit',
-    ranges: [r('7700', '7799')],
+    ranges: [r('7740', '7749'), r('7790', '7799')],
   },
   { concept: 'OvrigaRorelsekostnader', balance: 'debit', ranges: [r('7900', '7999')] },
   { concept: 'ResultatAndelarKoncernforetag', balance: 'credit', ranges: [r('8000', '8099')] },
