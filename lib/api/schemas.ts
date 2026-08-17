@@ -20,8 +20,9 @@ import {
   deductionTypeForWorkType,
   normalizeHouseworkType,
 } from '@/lib/invoices/rot-rut-rules'
+import { NON_IBAN_CURRENCIES } from '@/lib/invoices/payment-accounts'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
-import type { AuditAction } from '@/types'
+import type { AuditAction, Currency } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
 // ============================================================
@@ -1927,19 +1928,42 @@ const InvoicePaymentAccountSchema = z.object({
     .nullable()
     .optional()
     .or(z.literal('')),
+  // Foreign non-IBAN routing (USD ABA routing number, GBP sort code): digits
+  // with optional dashes, 6-9 digits after stripping (ABA = 9, sort code = 6).
+  bank_code: z.string()
+    .transform((value) => value.replace(/\s/g, ''))
+    .pipe(z.string().regex(/^\d{2,3}(-?\d{2,3}){1,2}$|^\d{6,9}$/, 'Ogiltig bankkod'))
+    .nullable()
+    .optional()
+    .or(z.literal('')),
+  // Foreign account number: alphanumeric, distinct from the Swedish
+  // clearing+account pair (account_number is digits-only 6-12).
+  foreign_account_number: z.string()
+    .transform((value) => value.replace(/\s/g, ''))
+    .pipe(z.string().regex(/^[A-Za-z0-9-]{4,34}$/, 'Ogiltigt kontonummer'))
+    .nullable()
+    .optional()
+    .or(z.literal('')),
 })
 
 const InvoicePaymentAccountsSchema = z
   .partialRecord(CurrencySchema, InvoicePaymentAccountSchema)
   .superRefine((accounts, ctx) => {
     for (const [currency, account] of Object.entries(accounts)) {
-      if (currency !== 'SEK' && account && !account.iban) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [currency, 'iban'],
-          message: `IBAN krävs för betalningskonto i ${currency}`,
-        })
-      }
+      if (currency === 'SEK' || !account) continue
+      if (account.iban) continue
+      // Non-IBAN banking systems (US, UK): bank code + account number + BIC
+      // identifies the account. Requiring an IBAN there forced users to paste
+      // one from another currency, which then printed on the invoice.
+      const nonIban = NON_IBAN_CURRENCIES.includes(currency as Currency)
+      if (nonIban && account.bank_code && account.foreign_account_number && account.bic) continue
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [currency, 'iban'],
+        message: nonIban
+          ? `Ange IBAN eller bankkod, kontonummer och BIC/SWIFT för betalningskontot i ${currency}`
+          : `IBAN krävs för betalningskonto i ${currency}`,
+      })
     }
   })
 

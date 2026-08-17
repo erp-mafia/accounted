@@ -1400,6 +1400,54 @@ describe('UpdateSettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts a USD payment account with routing number + account number + BIC and no IBAN', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_payment_accounts: {
+        USD: {
+          bank_name: 'Wise US Inc',
+          bic: 'trwius35xxx',
+          bank_code: '084 009 519',
+          foreign_account_number: '9600 0012 3456 7890',
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      const usd = result.data.invoice_payment_accounts?.USD
+      expect(usd?.bic).toBe('TRWIUS35XXX')
+      expect(usd?.bank_code).toBe('084009519')
+      expect(usd?.foreign_account_number).toBe('9600001234567890')
+    }
+  })
+
+  it('accepts a GBP payment account with a dashed sort code', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_payment_accounts: {
+        GBP: { bic: 'NWBKGB2L', bank_code: '60-16-13', foreign_account_number: '31926819' },
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects a USD payment account with neither IBAN nor the full routing triple', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_payment_accounts: {
+        USD: { bank_code: '084009519', foreign_account_number: '9600001234567890' },
+      },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('still requires an IBAN for an EUR payment account even with a routing triple', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_payment_accounts: {
+        EUR: { bic: 'DEUTDEFF', bank_code: '37040044', foreign_account_number: '0532013000' },
+      },
+    })
+    expect(result.success).toBe(false)
+  })
+
   it('accepts null when clearing the legacy SEK bank account mirror', () => {
     const result = UpdateSettingsSchema.safeParse({
       bank_name: null,
