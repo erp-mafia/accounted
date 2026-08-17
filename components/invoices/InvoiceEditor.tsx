@@ -31,6 +31,7 @@ import {
 } from '@/components/invoices/line-vat-rates'
 import { AttnLine } from '@/components/ui/attn-line'
 import { sortArticles } from '@/lib/articles/sort'
+import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags, Copy } from 'lucide-react'
@@ -1755,22 +1756,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                             name={`items.${index}.article_id`}
                             control={control}
                             render={({ field }) => (
-                              <Select
-                                value={field.value ?? 'none'}
-                                onValueChange={(v) => applyArticle(index, v)}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue placeholder={t('article_placeholder')} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="none">{t('article_free_text')}</SelectItem>
-                                  {articles.map((a) => (
-                                    <SelectItem key={a.id} value={a.id}>
-                                      {a.article_number ? `${a.article_number}: ${a.name}` : a.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
+                              <ArticleCombobox
+                                value={field.value ?? null}
+                                articles={articles}
+                                onChange={(v) => applyArticle(index, v)}
+                                freeTextLabel={t('article_free_text')}
+                                placeholder={t('article_placeholder')}
+                                emptyLabel={t('article_search_empty')}
+                                ariaLabel={t('article_label')}
+                              />
                             )}
                           />
                         </div>

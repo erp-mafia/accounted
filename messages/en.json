@@ -3565,6 +3565,7 @@
     "validation_min_one_row": "At least one row required",
     "validation_toast_title": "Check the details",
     "validation_toast_description": "A field is missing or invalid. Fix the highlighted fields and try again.",
+    "article_search_empty": "No article matches your search",
     "deduction_menu_label": "Tax reduction",
     "deduction_none": "None",
     "deduction_rot": "ROT (30%)",

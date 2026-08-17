@@ -3565,6 +3565,7 @@
     "validation_min_one_row": "Minst en rad krävs",
     "validation_toast_title": "Kontrollera uppgifterna",
     "validation_toast_description": "Något fält saknas eller är felaktigt. Rätta de markerade fälten och försök igen.",
+    "article_search_empty": "Ingen artikel matchar sökningen",
     "deduction_menu_label": "Skattereduktion",
     "deduction_none": "Ingen",
     "deduction_rot": "ROT (30%)",
