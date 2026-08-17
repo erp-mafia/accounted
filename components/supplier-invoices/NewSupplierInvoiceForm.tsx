@@ -253,6 +253,7 @@ export default function NewSupplierInvoiceForm({
   const entryInputRef = useRef<HTMLInputElement | null>(null)
   const [entryResetKey, setEntryResetKey] = useState(0)
   const amountInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
+  const [pendingAmountFocus, setPendingAmountFocus] = useState<number | null>(null)
   const accountInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
 
   const { register, control, handleSubmit, watch, setValue, getValues, reset, formState: { isDirty } } = useForm<FormData>({
@@ -779,23 +780,21 @@ export default function NewSupplierInvoiceForm({
     if (!accountNumber) return
     const index = appendRowForAccount(accountNumber)
     setEntryResetKey((k) => k + 1)
-    // The appended row's input ref may not be mounted on the first frame
-    // after the state update; retry once on the next frame so the focus
-    // hand-off never silently no-ops.
-    requestAnimationFrame(() => {
-      const el = amountInputRefs.current[index]
-      if (el) {
-        el.focus()
-        el.select()
-        return
-      }
-      requestAnimationFrame(() => {
-        const retry = amountInputRefs.current[index]
-        retry?.focus()
-        retry?.select()
-      })
-    })
+    // Focus hand-off via effect, not requestAnimationFrame: the entry input
+    // remounts on commit while focused, and the dialog's focus scope
+    // re-parks focus before any frame callback can win. The effect below
+    // runs after the new row's input is mounted, deterministically.
+    setPendingAmountFocus(index)
   }
+
+  useEffect(() => {
+    if (pendingAmountFocus === null) return
+    const el = amountInputRefs.current[pendingAmountFocus]
+    if (!el) return
+    el.focus()
+    el.select()
+    setPendingAmountFocus(null)
+  }, [pendingAmountFocus, fields.length])
 
   // Periodisering per rad: kräver faktureringsmetoden; eget utlägg bokar
   // kostnaden direkt mot ägarkontot och kan inte periodiseras. Omvänd
