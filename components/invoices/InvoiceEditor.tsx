@@ -2913,7 +2913,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 {formatCurrency(displayedToPay, watchCurrency)}
               </span>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center justify-end gap-3">
               {showDraftAction && (
                 <button
                   type="button"
