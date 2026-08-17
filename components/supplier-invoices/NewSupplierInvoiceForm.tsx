@@ -12,7 +12,6 @@ import { Switch } from '@/components/ui/switch'
 import AiFilledIndicator from '@/components/ui/ai-filled-indicator'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
@@ -31,80 +30,26 @@ import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import DocumentUploadZone, { type UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
-import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import {
-  LEGAL_VAT_RATES,
-  findIllegalVatRateRow,
   findReverseChargeAccountWarningRows,
   findUnflaggedForeignZeroVatRows,
 } from '@/lib/vat/supplier-invoice-line-checks'
 import { SLP_RATE, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { roundOre } from '@/lib/money'
+import {
+  buildSupplierInvoicePayload,
+  type SupplierInvoiceFormData,
+} from '@/lib/supplier-invoices/form-payload'
+import { VatRateCell, RcRateSelect } from '@/components/supplier-invoices/supplier-invoice-cells'
+import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-supplier-invoice-data'
+import { useInboxPrefill } from '@/components/supplier-invoices/use-inbox-prefill'
+import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-supplier-invoice-submit'
 import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, Link2, CalendarClock, Tags, Paperclip } from 'lucide-react'
-import type { Supplier, BASAccount, VatTreatment, EntityType, InvoiceExtractionResult, FiscalPeriod } from '@/types'
+import type { Supplier } from '@/types'
 
-interface LineItem {
-  description: string
-  amount: number
-  account_number: string
-  vat_rate: number
-  // Self-assessed VAT rate for omvänd skattskyldighet (0.25/0.12/0.06). Only
-  // meaningful when reverse_charge is on; the line's vat_rate is then 0.
-  reverse_charge_rate?: number
-  // Periodisering (förutbetald kostnad): both dates + 17xx interim account.
-  // Present only while the row's periodisering panel is active.
-  accrual_period_start?: string
-  accrual_period_end?: string
-  accrual_balance_account?: string
-  // Per-item dimensions bag ({sie_dim_no: code}, dimensions PR7). Defined
-  // (possibly empty) while the row's dimensions panel is open; the server
-  // merges it over the invoice's default_dimensions at booking time.
-  dimensions?: Record<string, string>
-  // Särskild löneskatt på pensionskostnader: booking injects a self-balancing
-  // 7533 D / 2514 K pair at 24.26 % of the line amount. Only offered on 741x
-  // pension-premium accounts; never changes the invoice total.
-  apply_slp?: boolean
-}
-
-// The existing invoice surfaced on a duplicate-number conflict, used to drive
-// the resolution dialog (open it / uncredit-and-retry).
-interface ExistingSupplierInvoice {
-  id: string
-  supplier_invoice_number: string
-  status: string
-  credit_note_id: string | null
-}
-
-// Canonical create/convert response. On failure `error` is the structured
-// envelope's inner object ({ code, message, details }); a few legacy convert
-// paths still return a flat string, so accept both.
-interface CreateResult {
-  data?: { id: string; arrival_number: number }
-  warnings?: Array<{ code: string; message: string }>
-  error?:
-    | string
-    | {
-        code?: string
-        message?: string
-        message_en?: string
-        details?: { existing?: ExistingSupplierInvoice | null }
-      }
-}
-
-interface FormData {
-  supplier_id: string
-  supplier_invoice_number: string
-  invoice_date: string
-  due_date: string
-  delivery_date: string
-  currency: string
-  exchange_rate: string
-  reverse_charge: boolean
-  payment_reference: string
-  notes: string
-  paid_with_private_funds: boolean
-  items: LineItem[]
-}
+// The form's line/field shapes live in lib/supplier-invoices/form-payload.ts
+// next to the payload builder they feed, pinned there by parity tests.
+type FormData = SupplierInvoiceFormData
 
 interface NewSupplierForm {
   name: string
@@ -125,139 +70,6 @@ function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function inferVatTreatment(items: LineItem[], reverseCharge: boolean): VatTreatment {
-  if (reverseCharge) return 'reverse_charge'
-
-  const rates = new Set(items.map((i) => i.vat_rate))
-  if (rates.size === 1) {
-    const rate = rates.values().next().value!
-    if (rate === 0.25) return 'standard_25'
-    if (rate === 0.12) return 'reduced_12'
-    if (rate === 0.06) return 'reduced_6'
-    if (rate === 0) return 'exempt'
-  }
-
-  return 'standard_25'
-}
-
-// AI returns VAT as integer percent (25, 12, 6, 0). The form stores decimals.
-function vatRateFromAi(rate: number | null | undefined): number {
-  if (rate == null) return 0.25
-  if (rate === 25) return 0.25
-  if (rate === 12) return 0.12
-  if (rate === 6) return 0.06
-  return 0
-}
-
-function rateToPctString(rate: number): string {
-  const pct = Math.round(rate * 10000) / 100
-  return Number.isFinite(pct) ? String(pct) : ''
-}
-
-function VatRateCell({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const t = useTranslations('supplier_invoice_editor')
-  const inputRef = useRef<HTMLInputElement>(null)
-  // Local draft so the user can type "12," or "12." mid-keystroke without the
-  // controlled input snapping back to a parsed integer.
-  const [draft, setDraft] = useState(() => rateToPctString(value))
-
-  // Re-sync from form value only when the field isn't focused: keeps AI
-  // prefill / supplier defaults / dropdown picks flowing in without clobbering
-  // active typing.
-  useEffect(() => {
-    if (document.activeElement !== inputRef.current) {
-      setDraft(rateToPctString(value))
-    }
-  }, [value])
-
-  return (
-    <div className="flex items-center gap-1">
-      <div className="relative flex-1">
-        <Input
-          ref={inputRef}
-          type="text"
-          inputMode="decimal"
-          value={draft}
-          onFocus={(e) => e.currentTarget.select()}
-          onBlur={() => setDraft(rateToPctString(value))}
-          onChange={(e) => {
-            const raw = e.target.value
-            // Strict whitelist: digits with at most one decimal separator.
-            // Blocks "2-22", "100-2", "1.2.3", letters, signs: the keystroke
-            // is dropped before reaching the draft.
-            if (raw !== '' && !/^\d*[.,]?\d*$/.test(raw)) return
-            const normalized = raw.replace(',', '.')
-            if (normalized === '' || normalized === '.') {
-              setDraft(raw)
-              onChange(0)
-              return
-            }
-            const parsed = parseFloat(normalized)
-            if (!Number.isFinite(parsed)) {
-              setDraft(raw)
-              return
-            }
-            const clamped = Math.min(100, Math.max(0, parsed))
-            // Snap the draft back when the parsed value falls outside [0, 100]
-            // so the input can never display a rate the form won't apply.
-            setDraft(clamped === parsed ? raw : String(clamped))
-            onChange(clamped / 100)
-          }}
-          className="text-right tabular-nums pr-6"
-          aria-label={t('col_vat_rate')}
-        />
-        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
-          %
-        </span>
-      </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            aria-label={t('vat_rate_presets_aria')}
-          >
-            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[6rem]">
-          {LEGAL_VAT_RATES.map((preset) => (
-            <DropdownMenuItem
-              key={preset}
-              onSelect={() => onChange(preset)}
-              className="justify-end tabular-nums"
-            >
-              {Math.round(preset * 100)} %
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  )
-}
-
-// Self-assessment rate picker shown in place of the Momssats cell when an
-// invoice is reverse charge. The supplier charges no VAT (the line vat_rate is
-// 0); this is the Swedish statutory rate the buyer self-assesses at: 25%
-// huvudregeln for EU services, 12%/6% for reduced-rated services (ML 6 kap 34 §).
-function RcRateSelect({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const t = useTranslations('supplier_invoice_editor')
-  return (
-    <Select value={String(value ?? 0.25)} onValueChange={(v) => onChange(parseFloat(v))}>
-      <SelectTrigger className="h-9 tabular-nums" aria-label={t('col_rc_vat_rate')}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="0.25" className="tabular-nums">25 %</SelectItem>
-        <SelectItem value="0.12" className="tabular-nums">12 %</SelectItem>
-        <SelectItem value="0.06" className="tabular-nums">6 %</SelectItem>
-      </SelectContent>
-    </Select>
-  )
-}
-
 const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
   name: '',
   supplier_type: 'swedish_business',
@@ -268,6 +80,7 @@ const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
   plusgiro: '',
   default_expense_account: '',
 }
+
 
 export interface NewSupplierInvoiceFormProps {
   /** Invoice-inbox item to convert; prefills the form from its AI extraction. */
@@ -321,30 +134,22 @@ export default function NewSupplierInvoiceForm({
     else router.push(afterCreate(invoiceId))
   }
 
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
-  const [suppliersLoaded, setSuppliersLoaded] = useState(false)
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
-  const [entityType, setEntityType] = useState<EntityType>('enskild_firma')
-  const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
-  // Öresavrundning is display-only; defaults to the company-wide setting and is
-  // overridable per invoice via the toggle in the totals section.
-  const [oreRounding, setOreRounding] = useState<boolean>(true)
-  // Dimension tagging (kostnadsställe/projekt). Affordances render only when
-  // company_settings.dimensions_enabled: the same UI-visibility gate as
-  // JournalEntryForm. defaultDims is the invoice-level default bag; per-item
-  // bags live on the form's items and merge over it server-side.
-  const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
-  // Icke momsregistrerad verksamhet has no right to deduct input VAT: the
-  // moms controls disappear and every line books at 0 % (the gross amount IS
-  // the cost). Defaults true so registered companies keep the 25 % prefill
-  // while /api/settings is still in flight.
-  const [vatRegistered, setVatRegistered] = useState(true)
+  const {
+    suppliers,
+    setSuppliers,
+    suppliersLoaded,
+    accounts,
+    entityType,
+    accountingMethod,
+    oreRounding,
+    setOreRounding,
+    dimensionsEnabled,
+    vatRegistered,
+    periods,
+    periodsLoaded,
+  } = useSupplierInvoiceData()
+
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>({})
-  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
-  const [periodsLoaded, setPeriodsLoaded] = useState(false)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [showReview, setShowReview] = useState(false)
-  const [pendingData, setPendingData] = useState<FormData | null>(null)
   const [showNewSupplier, setShowNewSupplier] = useState(false)
   const [isCreatingSupplier, setIsCreatingSupplier] = useState(false)
   const [pendingSupplierSelect, setPendingSupplierSelect] = useState<string | null>(null)
@@ -353,29 +158,6 @@ export default function NewSupplierInvoiceForm({
   const [documentFiles, setDocumentFiles] = useState<UploadedFile[]>([])
   const documentFilesRef = useRef<UploadedFile[]>([])
   const createFinishedRef = useRef(false)
-
-  // Inbox/AI state
-  const [extractedData, setExtractedData] = useState<InvoiceExtractionResult | null>(null)
-  const [originalExtracted, setOriginalExtracted] = useState<InvoiceExtractionResult | null>(null)
-  const [hasMatchedSupplier, setHasMatchedSupplier] = useState(false)
-  const [isLoadingInbox, setIsLoadingInbox] = useState(!!inboxItemId)
-  const [hasPrefilled, setHasPrefilled] = useState(false)
-
-  // Match-on-create state
-  const [showBankPicker, setShowBankPicker] = useState(false)
-  const [pendingTransactionId, setPendingTransactionId] = useState<string | null>(null)
-  // The button's onClick and the form's onSubmit run in the same React event
-  // batch, so a `useState`-backed submitMode would still hold the previous
-  // render's value when onSubmit reads it. A ref bridges the two synchronous
-  // handlers; the matching state mirror only drives the review-dialog UI.
-  const submitModeRef = useRef<'register' | 'register_and_match'>('register')
-
-  // Conflict state for duplicate-supplier-invoice-number
-  const [conflict, setConflict] = useState<{
-    message: string
-    existing: ExistingSupplierInvoice | null
-  } | null>(null)
-  const [isResolvingConflict, setIsResolvingConflict] = useState(false)
   const invoiceNumberInputRef = useRef<HTMLInputElement | null>(null)
 
   const { register, control, handleSubmit, watch, setValue, getValues, reset, formState: { isDirty } } = useForm<FormData>({
@@ -431,6 +213,26 @@ export default function NewSupplierInvoiceForm({
   const documentUploadInProgress = documentFiles.some((file) => file.status === 'uploading')
   const documentUploadFailed = documentFiles.some((file) => file.status === 'error')
   const uploadedDocumentId = documentFiles.find((file) => file.status === 'uploaded')?.id
+
+  const {
+    extractedData,
+    originalExtracted,
+    hasMatchedSupplier,
+    setHasMatchedSupplier,
+    isLoadingInbox,
+    hasPrefilled,
+  } = useInboxPrefill({
+    inboxItemId,
+    suppliersLoaded,
+    suppliers,
+    setValue,
+    replace,
+    reset,
+    getValues,
+    toast,
+    t,
+  })
+
   // Returns true when the field currently matches whatever the AI wrote
   // when the form first loaded. Edits diverge it, hiding the dot.
   function stillFromAi(value: string | null | undefined, original: string | null | undefined): boolean {
@@ -480,148 +282,6 @@ export default function NewSupplierInvoiceForm({
     watchedReverseCharge,
     suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type,
   )
-
-  useEffect(() => {
-    fetchSuppliers()
-    fetchAccounts()
-    fetchEntityType()
-    fetchPeriods()
-  }, [])
-
-  // One-shot: load inbox item and prefill form. Runs after suppliers are
-  // loaded so we can resolve matched_supplier_id to a real picker value.
-  // Gate on `suppliersLoaded`, not `suppliers.length > 0`: otherwise the
-  // effect never fires for users who haven't booked a supplier yet and
-  // the "Laddar uppgifter från inkorgen…" spinner sticks forever.
-  useEffect(() => {
-    if (!inboxItemId || hasPrefilled || !suppliersLoaded) return
-    let cancelled = false
-
-    ;(async () => {
-      try {
-        const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${inboxItemId}`)
-        const json = await res.json()
-        if (cancelled) return
-        if (!res.ok) {
-          toast({
-            title: t('inbox_load_failed_title'),
-            description: json?.error || t('inbox_load_failed_description'),
-            variant: 'destructive',
-          })
-          setIsLoadingInbox(false)
-          return
-        }
-
-        const item = json.data as {
-          id: string
-          extracted_data: InvoiceExtractionResult | null
-          matched_supplier_id: string | null
-          document_id: string | null
-        }
-        const extracted = item.extracted_data
-        if (!extracted) {
-          setIsLoadingInbox(false)
-          setHasPrefilled(true)
-          return
-        }
-
-        setExtractedData(extracted)
-        setOriginalExtracted(extracted)
-
-        // Supplier
-        if (item.matched_supplier_id && suppliers.find((s) => s.id === item.matched_supplier_id)) {
-          setValue('supplier_id', item.matched_supplier_id)
-          setHasMatchedSupplier(true)
-        }
-
-        // Scalar invoice fields
-        if (extracted.invoice?.invoiceNumber) {
-          setValue('supplier_invoice_number', extracted.invoice.invoiceNumber)
-        }
-        if (extracted.invoice?.invoiceDate) {
-          setValue('invoice_date', extracted.invoice.invoiceDate)
-        }
-        if (extracted.invoice?.dueDate) {
-          setValue('due_date', extracted.invoice.dueDate)
-        }
-        if (extracted.invoice?.paymentReference) {
-          setValue('payment_reference', extracted.invoice.paymentReference)
-        }
-        if (extracted.invoice?.currency) {
-          setValue('currency', extracted.invoice.currency)
-        }
-
-        // Line items: keep the single empty default if AI returned nothing,
-        // otherwise replace it with the extracted lines. When the document
-        // states a service window of 2+ calendar months (insurance period,
-        // license term), pre-fill periodisering on every positive line: the
-        // user sees the panel and can remove it before booking.
-        if (extracted.lineItems && extracted.lineItems.length > 0) {
-          // AI-extracted values are untrusted input: only accept strict
-          // ISO-8601 dates before they reach form state (and later the API).
-          const isIsoDate = (v: unknown): v is string =>
-            typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
-          const spsRaw = extracted.invoice?.servicePeriodStart
-          const speRaw = extracted.invoice?.servicePeriodEnd
-          const sps = isIsoDate(spsRaw) ? spsRaw : null
-          const spe = isIsoDate(speRaw) ? speRaw : null
-          let prefillAccrual = false
-          if (sps && spe && spe >= sps) {
-            try {
-              prefillAccrual = countCalendarMonths(sps, spe) >= 2
-            } catch {
-              prefillAccrual = false
-            }
-          }
-          replace(
-            extracted.lineItems.map((li) => {
-              const amount = typeof li.lineTotal === 'number' ? li.lineTotal : 0
-              const withAccrual = prefillAccrual && amount > 0
-              return {
-                description: li.description || '',
-                amount,
-                // Extraction never suggests accounts (forcibly nulled at parse
-                // time) and a silent default misbooks: leave empty so the user
-                // (or the supplier default) makes the call.
-                account_number: '',
-                // Deliberately unconditional: for icke momsregistrerade the
-                // zeroing effect below grosses the net amount up by this rate
-                // before forcing it to 0, so the rate must arrive intact.
-                vat_rate: vatRateFromAi(li.vatRate),
-                accrual_period_start: withAccrual ? (sps as string) : undefined,
-                accrual_period_end: withAccrual ? (spe as string) : undefined,
-                // No account yet → generic 1790; toggleAccrual re-suggests the
-                // same way once the user picks one.
-                accrual_balance_account: withAccrual
-                  ? suggestBalanceAccount('expense', '')
-                  : undefined,
-              }
-            }),
-          )
-        }
-
-        // Treat the AI prefill as the new baseline: otherwise the unsaved-
-        // changes prompt fires the moment the user navigates away, even if
-        // they didn't touch anything.
-        reset(getValues())
-        setHasPrefilled(true)
-      } catch (err) {
-        if (cancelled) return
-        toast({
-          title: t('inbox_load_failed_title'),
-          description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
-          variant: 'destructive',
-        })
-      } finally {
-        if (!cancelled) setIsLoadingInbox(false)
-      }
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inboxItemId, suppliersLoaded, suppliers])
 
   // Auto-fill due date and defaults when supplier is selected: but never
   // overwrite a value the AI already filled in for us.
@@ -791,54 +451,6 @@ export default function NewSupplierInvoiceForm({
       setPendingSupplierSelect(null)
     }
   }, [suppliers, pendingSupplierSelect, setValue])
-
-  async function fetchSuppliers() {
-    try {
-      const res = await fetch('/api/suppliers')
-      const { data } = await res.json()
-      setSuppliers(data || [])
-    } finally {
-      setSuppliersLoaded(true)
-    }
-  }
-
-  async function fetchAccounts() {
-    const res = await fetch('/api/bookkeeping/accounts')
-    const { data } = await res.json()
-    setAccounts(data || [])
-  }
-
-  async function fetchEntityType() {
-    try {
-      const res = await fetch('/api/settings')
-      const { data } = await res.json()
-      if (data?.entity_type) setEntityType(data.entity_type)
-      // Cash method books at payment, not registration: drives whether the
-      // out-of-period warning is relevant (see willBookAtRegistration below).
-      if (data?.accounting_method === 'cash' || data?.accounting_method === 'accrual') {
-        setAccountingMethod(data.accounting_method)
-      }
-      if (typeof data?.ore_rounding === 'boolean') setOreRounding(data.ore_rounding)
-      setDimensionsEnabled(data?.dimensions_enabled === true)
-      // Only an explicit false gates: a missing column or failed fetch keeps
-      // the registered-company behavior.
-      if (data?.vat_registered === false) setVatRegistered(false)
-    } catch {
-      // Default to enskild_firma / accrual, dimension affordances hidden
-    }
-  }
-
-  async function fetchPeriods() {
-    try {
-      const res = await fetch('/api/bookkeeping/fiscal-periods')
-      const { data } = await res.json()
-      setPeriods(data || [])
-    } catch {
-      // Non-critical: the server still hard-blocks an out-of-period booking.
-    } finally {
-      setPeriodsLoaded(true)
-    }
-  }
 
   function handleAccountChange(index: number, accountNumber: string) {
     setValue(`items.${index}.account_number`, accountNumber)
@@ -1187,431 +799,48 @@ export default function NewSupplierInvoiceForm({
   }
 
   function buildPayload(data: FormData) {
-    const vatTreatment = inferVatTreatment(data.items, data.reverse_charge)
-    // When paid privately, due_date is irrelevant: but the API still requires
-    // a YYYY-MM-DD value. Default to invoice_date so the field passes validation.
-    const dueDate = data.paid_with_private_funds && !data.due_date
-      ? data.invoice_date
-      : data.due_date
-    return {
-      supplier_id: data.supplier_id,
-      ...(!inboxItemId && uploadedDocumentId ? { document_id: uploadedDocumentId } : {}),
-      supplier_invoice_number: data.supplier_invoice_number,
-      invoice_date: data.invoice_date,
-      due_date: dueDate,
-      delivery_date: data.delivery_date || undefined,
-      currency: data.currency,
-      exchange_rate: data.exchange_rate ? parseFloat(data.exchange_rate) : undefined,
-      vat_treatment: vatTreatment,
-      reverse_charge: data.reverse_charge,
-      payment_reference: data.payment_reference || undefined,
-      notes: data.notes || undefined,
-      paid_with_private_funds: data.paid_with_private_funds,
-      ore_rounding: oreRounding,
-      // Invoice-level default dimensions (kostnadsställe/projekt): only sent
-      // when the user actually picked something.
-      ...(Object.keys(defaultDims).length > 0 ? { default_dimensions: defaultDims } : {}),
-      items: data.items.map((item) => ({
-        description: item.description,
-        amount: item.amount,
-        account_number: item.account_number,
-        // Reverse charge: the supplier charges no VAT, so the line rate is 0 and
-        // the self-assessed rate travels on reverse_charge_rate (25% default).
-        vat_rate: data.reverse_charge ? 0 : item.vat_rate,
-        reverse_charge_rate: data.reverse_charge ? (item.reverse_charge_rate ?? 0.25) : undefined,
-        // Periodisering: only sent when the row has a complete period AND the
-        // flow supports it (kontantmetod/eget utlägg would be rejected by the
-        // API: an AI prefill must never block those submits).
-        ...(canUseAccrual && item.accrual_period_start && item.accrual_period_end
-          ? {
-              accrual_period_start: item.accrual_period_start,
-              accrual_period_end: item.accrual_period_end,
-              accrual_balance_account: item.accrual_balance_account || undefined,
-            }
-          : {}),
-        // Per-item dimensions override: only when the bag carries values
-        // (an open-but-empty panel means "inherit the invoice default").
-        ...(item.dimensions && Object.keys(item.dimensions).length > 0
-          ? { dimensions: item.dimensions }
-          : {}),
-        // Särskild löneskatt (SLP): only sent when the opt-in is valid for
-        // the row (741x account, no periodisering): a stale flag must never
-        // 400 the submit.
-        ...(item.apply_slp &&
-        isSlpPensionAccount(item.account_number) &&
-        !(canUseAccrual && item.accrual_period_start && item.accrual_period_end)
-          ? { apply_slp: true }
-          : {}),
-      })),
-    }
-  }
-
-  // Persist user edits back into the inbox item's extracted_data so the
-  // inbox stays in sync with what was actually booked. Best-effort: a
-  // failed PATCH never blocks the registration.
-  async function patchInboxFieldsIfChanged(data: FormData) {
-    if (!inboxItemId || !originalExtracted) return
-    const supplierField: Record<string, unknown> = {}
-    const invoiceField: Record<string, unknown> = {}
-
-    if (originalExtracted.invoice?.invoiceNumber !== data.supplier_invoice_number) {
-      invoiceField.invoiceNumber = data.supplier_invoice_number || null
-    }
-    if (originalExtracted.invoice?.invoiceDate !== data.invoice_date) {
-      invoiceField.invoiceDate = data.invoice_date || null
-    }
-    if (originalExtracted.invoice?.dueDate !== data.due_date) {
-      invoiceField.dueDate = data.due_date || null
-    }
-    if ((originalExtracted.invoice?.paymentReference || null) !== (data.payment_reference || null)) {
-      invoiceField.paymentReference = data.payment_reference || null
-    }
-    if (originalExtracted.invoice?.currency !== data.currency) {
-      invoiceField.currency = data.currency
-    }
-
-    if (Object.keys(supplierField).length === 0 && Object.keys(invoiceField).length === 0) return
-
-    try {
-      await fetch(`/api/extensions/ext/invoice-inbox/items/${inboxItemId}/fields`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...(Object.keys(supplierField).length ? { supplier: supplierField } : {}),
-          ...(Object.keys(invoiceField).length ? { invoice: invoiceField } : {}),
-        }),
-      })
-    } catch {
-      // Best-effort sync; don't block registration on this.
-    }
-  }
-
-  // Single submit endpoint chooser: convert when we came from inbox, plain
-  // POST otherwise. Both endpoints validate the same CreateSupplierInvoiceSchema
-  // and return the same canonical error envelope ({ error: { code, message,
-  // details } }): including the recoverable duplicate-number 409.
-  async function postCreate(data: FormData): Promise<{
-    ok: boolean
-    status: number
-    result: CreateResult
-  }> {
-    const url = inboxItemId
-      ? `/api/extensions/ext/invoice-inbox/items/${inboxItemId}/convert`
-      : '/api/supplier-invoices'
-
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildPayload(data)),
-    })
-    const result = await res.json()
-    if (
-      res.ok &&
-      (result as CreateResult).warnings?.some((warning) => warning.code === 'DOCUMENT_LINK_FAILED')
-    ) {
-      toast({
-        title: t('document_link_warning_title'),
-        description: t('document_link_warning_description'),
-        variant: 'destructive',
-      })
-    }
-    return { ok: res.ok, status: res.status, result }
-  }
-
-  function onSubmit(data: FormData) {
-    if (documentUploadInProgress) {
-      toast({
-        title: t('document_upload_in_progress_title'),
-        description: t('document_upload_in_progress_description'),
-        variant: 'destructive',
-      })
-      return
-    }
-    if (documentUploadFailed) {
-      toast({
-        title: t('document_upload_failed_title'),
-        description: t('document_upload_failed_description'),
-        variant: 'destructive',
-      })
-      return
-    }
-    // Hard block: under faktureringsmetoden (and for privately-paid kvitton) a
-    // verifikation is posted at registration, and BFL 5 kap kräver att
-    // verifikationsnumret ligger i en obruten serie inom ett räkenskapsår. No
-    // räkenskapsår for the invoice date → no compliant voucher can exist, so we
-    // refuse rather than register an unbooked invoice. Kontantmetoden books at
-    // payment, so it is intentionally not blocked here (see showNoPeriodWarning).
-    if (showNoPeriodWarning) {
-      toast({
-        title: t('warning_title'),
-        description: t('no_period_warning', { date: data.invoice_date }),
-        variant: 'destructive',
-      })
-      return
-    }
-    if (!data.supplier_id) {
-      toast({ title: t('supplier_missing_title'), description: t('supplier_missing_description'), variant: 'destructive' })
-      return
-    }
-    if (!data.supplier_invoice_number) {
-      toast({ title: t('invoice_number_missing_title'), description: t('invoice_number_missing_description'), variant: 'destructive' })
-      return
-    }
-    const rowWithoutAccount = data.items.findIndex((item) => !item.account_number)
-    if (rowWithoutAccount !== -1) {
-      toast({
-        title: t('account_missing_title'),
-        description: t('account_missing_description', { row: rowWithoutAccount + 1 }),
-        variant: 'destructive',
-      })
-      return
-    }
-    // Only 25/12/6/0 % are legal Swedish VAT rates (ML 2023:200). The free-text
-    // VatRateCell clamps to [0, 100] but accepts anything in between, so block
-    // illegal rates here. Reverse-charge invoices skip this: their line vat_rate
-    // is forced to 0 and RcRateSelect already restricts the self-assessed rate.
-    if (!data.reverse_charge) {
-      const rowWithIllegalRate = findIllegalVatRateRow(data.items)
-      if (rowWithIllegalRate !== -1) {
-        toast({
-          title: t('illegal_vat_rate_title'),
-          description: t('illegal_vat_rate_description', {
-            row: rowWithIllegalRate + 1,
-            rate: rateToPctString(data.items[rowWithIllegalRate].vat_rate),
-          }),
-          variant: 'destructive',
-        })
-        return
-      }
-    }
-    // A row with an open periodisering panel must carry a complete period of
-    // at least two calendar months before the invoice can be booked.
-    const invalidAccrual = canUseAccrual && data.items.some((item) => {
-      if (item.accrual_balance_account == null) return false
-      if (!item.accrual_period_start || !item.accrual_period_end) return true
-      if (item.accrual_period_end < item.accrual_period_start) return true
-      return countCalendarMonths(item.accrual_period_start, item.accrual_period_end) < 2
-    })
-    if (invalidAccrual) {
-      toast({
-        title: ta('incomplete_toast_title'),
-        description: ta('incomplete_toast_description'),
-        variant: 'destructive',
-      })
-      return
-    }
-
-    if (submitModeRef.current === 'register_and_match') {
-      // Open the bank-transaction picker; actual create happens on pick.
-      // For AB the review dialog is shown after a transaction is picked.
-      setPendingData(data)
-      setShowBankPicker(true)
-      return
-    }
-
-    // Privately-paid skips the AB review dialog: the toggle itself is the
-    // explicit user intent, and the resulting verifikat is just expense + VAT
-    // against the owner account (2893/2018). Same path for EF.
-    if (isEF || data.paid_with_private_funds) {
-      setPendingData(data)
-      handleDirectSubmit(data)
-    } else {
-      setPendingData(data)
-      setShowReview(true)
-    }
-  }
-
-  // EF: create + auto-approve, no review dialog. Privately-paid invoices land
-  // here too and skip auto-approve since they're already in status='paid'.
-  async function handleDirectSubmit(data: FormData) {
-    setIsSubmitting(true)
-    await patchInboxFieldsIfChanged(data)
-    const { ok, status, result } = await postCreate(data)
-
-    if (!ok) {
-      // EF/direct path also hits the duplicate-number 409 (e.g. converting an
-      // inbox receipt whose number was already registered): offer recovery
-      // instead of a dead-end toast.
-      if (!tryHandleDuplicateConflict(status, result)) {
-        handleCreateError(status, result)
-      }
-      setIsSubmitting(false)
-      return
-    }
-    if (!result.data) {
-      setIsSubmitting(false)
-      return
-    }
-
-    // Clear dirty state so useUnsavedChanges doesn't fire the
-    // beforeunload prompt while we navigate away on a successful submit.
-    reset(data)
-
-    if (data.paid_with_private_funds) {
-      toast({
-        title: t('expense_registered_title'),
-        description: t('arrival_number_label', { number: result.data.arrival_number }),
-      })
-      finishCreate()
-      setIsSubmitting(false)
-      return
-    }
-
-    // Auto-approve for EF
-    const approveRes = await fetch(`/api/supplier-invoices/${result.data.id}/approve`, { method: 'POST' })
-    if (!approveRes.ok) {
-      toast({
-        title: t('warning_title'),
-        description: t('auto_approve_failed_description'),
-        variant: 'destructive',
-      })
-      finishCreate(result.data.id)
-    } else {
-      toast({ title: t('invoice_registered_title'), description: t('arrival_number_label', { number: result.data.arrival_number }) })
-      finishCreate()
-    }
-    setIsSubmitting(false)
-  }
-
-  // AB: create after review dialog. If a bank transaction was picked first
-  // (register-and-match flow), also match the new invoice to it.
-  async function handleConfirm() {
-    if (!pendingData) return
-    setIsSubmitting(true)
-    await patchInboxFieldsIfChanged(pendingData)
-    const { ok, status, result } = await postCreate(pendingData)
-
-    if (ok && result.data) {
-      const invoiceId = result.data.id
-      const arrivalNumber = result.data.arrival_number
-      setShowReview(false)
-      // Clear dirty state: see comment in handleDirectSubmit.
-      reset(pendingData)
-
-      if (pendingTransactionId) {
-        const matchRes = await fetch(`/api/transactions/${pendingTransactionId}/match-supplier-invoice`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ supplier_invoice_id: invoiceId }),
-        })
-        const matchResult = await matchRes.json()
-        setPendingTransactionId(null)
-        submitModeRef.current = 'register'
-
-        if (matchRes.ok) {
-          toast({
-            title: t('invoice_registered_and_matched_title'),
-            description: t('invoice_registered_and_matched_description', { number: arrivalNumber }),
-          })
-        } else {
-          toast({
-            title: t('invoice_registered_match_failed_title'),
-            description: getErrorMessage(matchResult, { context: 'supplier_invoice', statusCode: matchRes.status }),
-            variant: 'destructive',
-          })
-        }
-      } else {
-        toast({ title: t('invoice_registered_title'), description: t('arrival_number_label', { number: arrivalNumber }) })
-      }
-
-      finishCreate(invoiceId)
-    } else {
-      // Treat duplicate-number as a recoverable conflict; everything else as a hard error.
-      if (!tryHandleDuplicateConflict(status, result)) {
-        handleCreateError(status, result)
-      }
-    }
-    setIsSubmitting(false)
-  }
-
-  // Detect the recoverable duplicate-supplier-invoice-number conflict and open
-  // the resolution dialog. Both the inbox `convert` route and the plain create
-  // route return the same structured 409 envelope, so this works for every
-  // submit path. Returns true when handled (caller should skip the error toast).
-  function tryHandleDuplicateConflict(status: number, result: CreateResult): boolean {
-    const err = result.error
-    if (
-      status !== 409 ||
-      typeof err !== 'object' ||
-      err === null ||
-      err.code !== 'SI_CREATE_DUPLICATE_INVOICE_NUMBER'
-    ) {
-      return false
-    }
-    // Close the review dialog if it was the path that triggered the conflict;
-    // a no-op for the EF/direct paths where it was never opened.
-    setShowReview(false)
-    setConflict({
-      message: err.message || t('duplicate_default_message'),
-      existing: err.details?.existing ?? null,
-    })
-    return true
-  }
-
-  // Shared error toast for non-conflict failures.
-  function handleCreateError(status: number, result: CreateResult) {
-    toast({
-      title: t('register_invoice_failed_title'),
-      description: getErrorMessage(result, { context: 'supplier_invoice', statusCode: status }),
-      variant: 'destructive',
+    return buildSupplierInvoicePayload(data, {
+      inboxItemId,
+      uploadedDocumentId,
+      oreRounding,
+      defaultDims,
+      canUseAccrual,
     })
   }
 
-  async function handleUncreditAndRetry() {
-    if (!conflict?.existing) return
-    const existingId = conflict.existing.id
-    const existingNumber = conflict.existing.supplier_invoice_number
-    setIsResolvingConflict(true)
-
-    const uncreditRes = await fetch(
-      `/api/supplier-invoices/${existingId}/uncredit`,
-      { method: 'POST' },
-    )
-    const uncreditResult = await uncreditRes.json()
-    if (!uncreditRes.ok) {
-      toast({
-        title: t('uncredit_failed_title'),
-        description: getErrorMessage(uncreditResult, { context: 'supplier_invoice', statusCode: uncreditRes.status }),
-        variant: 'destructive',
-      })
-      setIsResolvingConflict(false)
-      return
-    }
-
-    setConflict(null)
-
-    if (!pendingData) {
-      setIsResolvingConflict(false)
-      return
-    }
-
-    const { ok, status, result } = await postCreate(pendingData)
-    setIsResolvingConflict(false)
-
-    if (ok && result.data) {
-      toast({
-        title: t('uncredit_and_register_success_title'),
-        description: t('arrival_number_label', { number: result.data.arrival_number }),
-      })
-      reset(pendingData)
-      finishCreate(result.data.id)
-      return
-    }
-
-    toast({
-      title: t('uncredit_but_register_failed_title'),
-      description: t('uncredit_but_register_failed_description', {
-        number: existingNumber,
-        reason: getErrorMessage(result, { context: 'supplier_invoice', statusCode: status }),
-      }),
-      variant: 'destructive',
-    })
-  }
-
-  function handlePickNewNumber() {
-    setConflict(null)
-    setTimeout(() => invoiceNumberInputRef.current?.focus(), 0)
-  }
+  const {
+    isSubmitting,
+    showReview,
+    setShowReview,
+    pendingData,
+    showBankPicker,
+    setShowBankPicker,
+    setPendingTransactionId,
+    submitModeRef,
+    conflict,
+    setConflict,
+    isResolvingConflict,
+    onSubmit,
+    handleConfirm,
+    handleUncreditAndRetry,
+    handlePickNewNumber,
+    handlePickTransaction,
+  } = useSupplierInvoiceSubmit({
+    t,
+    ta,
+    toast,
+    isEF,
+    inboxItemId,
+    originalExtracted,
+    buildPayload,
+    reset,
+    finishCreate,
+    documentUploadInProgress,
+    documentUploadFailed,
+    showNoPeriodWarning,
+    canUseAccrual,
+    invoiceNumberInputRef,
+  })
 
   function handleDocumentFilesChange(nextFiles: UploadedFile[]) {
     const retainedKeys = new Set(nextFiles.map((file) => file.uploadKey))
@@ -1639,65 +868,6 @@ export default function NewSupplierInvoiceForm({
       if (onCancel) onCancel()
       else router.push(inboxItemId ? '/e/general/invoice-inbox' : '/supplier-invoices')
     })
-  }
-
-  // Match-on-create: register the invoice, then match the picked transaction.
-  // EF goes straight through (auto-approve included). AB stores the picked
-  // transaction and routes through the same review dialog as the plain
-  // register flow: handleConfirm picks up the match step on confirmation.
-  async function handlePickTransaction(transactionId: string) {
-    if (!pendingData) return
-    setShowBankPicker(false)
-
-    if (!isEF) {
-      setPendingTransactionId(transactionId)
-      setShowReview(true)
-      return
-    }
-
-    setIsSubmitting(true)
-    await patchInboxFieldsIfChanged(pendingData)
-    const { ok, status, result } = await postCreate(pendingData)
-
-    if (!ok || !result.data) {
-      if (!tryHandleDuplicateConflict(status, result)) {
-        handleCreateError(status, result)
-      }
-      setIsSubmitting(false)
-      return
-    }
-
-    const invoiceId = result.data.id
-    const arrivalNumber = result.data.arrival_number
-
-    // Auto-approve before matching, so the invoice is in the 'approved' state
-    // that match-supplier-invoice expects (it accepts registered too, but
-    // EF's expectation is fully-booked).
-    await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
-
-    const matchRes = await fetch(`/api/transactions/${transactionId}/match-supplier-invoice`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ supplier_invoice_id: invoiceId }),
-    })
-    const matchResult = await matchRes.json()
-    setIsSubmitting(false)
-    submitModeRef.current = 'register'
-
-    if (matchRes.ok) {
-      toast({
-        title: t('invoice_registered_and_matched_title'),
-        description: t('invoice_registered_and_matched_description', { number: arrivalNumber }),
-      })
-    } else {
-      toast({
-        title: t('invoice_registered_match_failed_title'),
-        description: getErrorMessage(matchResult, { context: 'supplier_invoice', statusCode: matchRes.status }),
-        variant: 'destructive',
-      })
-    }
-    reset(pendingData)
-    finishCreate(invoiceId)
   }
 
   return (
