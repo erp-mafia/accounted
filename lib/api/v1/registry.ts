@@ -292,11 +292,16 @@ function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
       }
     }
     // `.transform()` / `.pipe()` wrappers: describe the INPUT side, which is
-    // what an API caller must send.
+    // what an API caller must send. `z.preprocess()` is the mirror image:
+    // its input side IS the callable (a ZodTransform, no describable type),
+    // and the schema the cleaned value must satisfy sits on the output side.
     case 'pipe':
     case 'ZodPipeline': {
-      const input = (def as { in?: ZodTypeAny }).in
-      return input ? zodToJsonSchema(input) : {}
+      const pipeDef = def as { in?: ZodTypeAny; out?: ZodTypeAny }
+      const inDef = (pipeDef.in as unknown as { _def?: { type?: string; typeName?: string } } | undefined)?._def
+      const inDisc = inDef?.type ?? inDef?.typeName ?? ''
+      const side = ['transform', 'ZodEffects'].includes(inDisc) ? pipeDef.out : pipeDef.in
+      return side ? zodToJsonSchema(side) : {}
     }
     case 'effects':
     case 'ZodEffects': {
@@ -310,10 +315,11 @@ function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
       const required: string[] = []
       for (const [key, value] of Object.entries(shape)) {
         properties[key] = zodToJsonSchema(value)
-        const valueDef = (value as unknown as { _def: { typeName?: string; type?: string } })._def
-        const valueDisc = valueDef.type ?? valueDef.typeName ?? ''
-        // Optional and defaulted fields may be omitted by the caller.
-        const mayOmit = ['optional', 'ZodOptional', 'default', 'ZodDefault'].includes(valueDisc)
+        // A field may be omitted exactly when the schema accepts undefined:
+        // covers optional and defaulted fields, and wrappers that only carry
+        // optionality inside (e.g. a preprocess pipe over `.optional()`),
+        // which a top-level discriminator check misclassifies as required.
+        const mayOmit = value.safeParse(undefined).success
         if (!mayOmit) {
           required.push(key)
         }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
@@ -324,32 +324,73 @@ export default function PendingOperationsPage() {
     if (conv) setConversationFilter(conv)
   }, [])
 
+  // Which tab the rows in `operations` belong to, and whether anything is on
+  // screen: lets refetches decide between the first-load takeover and a
+  // background reconcile without making row state a useCallback dependency
+  // (which would re-subscribe the realtime channel on every data change).
+  const loadedTabRef = useRef<ViewTab | null>(null)
+  const hasRowsRef = useRef(false)
+  useEffect(() => {
+    hasRowsRef.current = operations.length > 0
+  }, [operations])
+  // Background reconcile in flight: drives the quiet toolbar cue.
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  // Monotonic request sequence: a fetch kicked off for a previous tab (or an
+  // older realtime echo) can resolve after the current one. Only the latest
+  // request may touch rows, counts, refs, toasts, or loading cues; stale
+  // responses bail out and leave the newer request's state alone.
+  const fetchSequenceRef = useRef(0)
+
   const fetchOperations = useCallback(async () => {
-    setIsLoading(true)
+    const sequence = ++fetchSequenceRef.current
+    const isCurrent = () => sequence === fetchSequenceRef.current
+    // The list-for-spinner swap is reserved for a first load or a tab whose
+    // rows aren't on screen yet. Approving/rejecting a row (and its realtime
+    // echo) used to run list → spinner → list → spinner → list: a whole-page
+    // layout collapse plus a full stagger-enter replay, twice, for a
+    // single-row change.
+    const takeover = !hasRowsRef.current || loadedTabRef.current !== activeTab
+    if (takeover) setIsLoading(true)
+    else setIsRefreshing(true)
     try {
       if (activeTab === 'pending') {
         const res = await fetch('/api/pending-operations?status=pending')
+        // A JSON error body parses fine but carries no data: without this
+        // check a failed refresh would blank the list and zero the badge
+        // instead of keeping current rows and surfacing the error toast.
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const json = await res.json()
+        if (!isCurrent()) return
         setOperations(json.data ?? [])
         setPendingCount(json.count ?? json.data?.length ?? 0)
+        loadedTabRef.current = 'pending'
       } else {
         // The API is single-status per fetch: Historik merges godkända and
         // avvisade, newest resolution first.
-        const [committed, rejected] = await Promise.all([
-          fetch('/api/pending-operations?status=committed').then((r) => r.json()),
-          fetch('/api/pending-operations?status=rejected').then((r) => r.json()),
+        const [committedRes, rejectedRes] = await Promise.all([
+          fetch('/api/pending-operations?status=committed'),
+          fetch('/api/pending-operations?status=rejected'),
         ])
+        if (!committedRes.ok || !rejectedRes.ok) {
+          throw new Error(`HTTP ${committedRes.status}/${rejectedRes.status}`)
+        }
+        const [committed, rejected] = await Promise.all([committedRes.json(), rejectedRes.json()])
+        if (!isCurrent()) return
         const merged = ([...(committed.data ?? []), ...(rejected.data ?? [])] as PendingOperation[]).sort(
           (a, b) => (b.resolved_at ?? b.created_at).localeCompare(a.resolved_at ?? a.created_at),
         )
         setOperations(merged)
         const pc = committed.counts?.pending ?? rejected.counts?.pending
         if (typeof pc === 'number') setPendingCount(pc)
+        loadedTabRef.current = 'history'
       }
     } catch {
+      if (!isCurrent()) return
       toast({ title: 'Kunde inte ladda operationer', variant: 'destructive' })
     }
+    if (!isCurrent()) return
     setIsLoading(false)
+    setIsRefreshing(false)
   }, [activeTab, toast])
 
   useEffect(() => {
@@ -743,6 +784,14 @@ export default function PendingOperationsPage() {
             count: tab === 'pending' ? pendingCount ?? 0 : undefined,
           }))}
         />
+        {/* Quiet cue that a background reconcile is running (post-action or
+            realtime): the list itself never swaps to a spinner for it. */}
+        {isRefreshing && !isLoading && (
+          <Loader2
+            className="h-3.5 w-3.5 animate-spin text-muted-foreground"
+            aria-label={t('refreshing')}
+          />
+        )}
         <div className="ml-auto">
           <ContextPicker
             value={sourceFilter}

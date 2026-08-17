@@ -716,7 +716,7 @@ Request body:
 Response `200`:
 ```ts
 {
-  data: { vacation_year_closure_id: string, adjustment_entry_id: string, report: unknown },
+  data: { vacation_year_closure_id: string, adjustment_entry_id: string, report?: unknown },
   meta: {
     request_id: string,
     api_version: string,

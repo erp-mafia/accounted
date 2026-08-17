@@ -191,7 +191,20 @@ const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
 // Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
 const ALL_PAGE_SIZE = 100000
 
-export default function JournalEntryList({ pristineSlot }: { pristineSlot?: ReactNode } = {}) {
+export default function JournalEntryList({
+  pristineSlot,
+  refreshToken,
+}: {
+  pristineSlot?: ReactNode
+  /**
+   * Parent-driven refresh: bump to re-fetch IN PLACE (list stays mounted,
+   * dims at opacity-60). Replaces the old key={refreshKey} remount on
+   * /bookkeeping, which reset hasLoaded and blanked the whole journal to a
+   * spinner after every created verifikat, destroying expanded rows,
+   * selection, pagination and scroll position.
+   */
+  refreshToken?: number
+} = {}) {
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -498,11 +511,15 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
   // response would overwrite the current sort's rows after they rendered.
   const fetchGenRef = useRef(0)
 
-  async function fetchEntries() {
+  // `preserveSelection` marks a parent-driven background refresh (the
+  // refreshToken contract: refresh in place, don't disturb the user's
+  // working state). User-initiated reloads (filter/sort/page/mode changes,
+  // commit, storno, retry) keep the default reset: selection is page-scoped.
+  async function fetchEntries({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
     const gen = ++fetchGenRef.current
     const isCurrent = () => fetchGenRef.current === gen
     setLoading(true)
-    setSelectedIds(new Set()) // selection is page-scoped, reset on reload
+    if (!preserveSelection) setSelectedIds(new Set()) // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
       limit: String(pageSize),
       offset: String(page * pageSize),
@@ -539,6 +556,16 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
       const loadedEntries = data || []
       setEntries(loadedEntries)
       setCount(total || 0)
+      if (preserveSelection) {
+        // Reconcile with the refreshed page: rows that left it (recommitted
+        // elsewhere, filtered out by the new data) must leave the selection
+        // too, or the bulk bar would act on rows no longer on screen.
+        const visibleIds = new Set(loadedEntries.map((e: JournalEntry) => e.id))
+        setSelectedIds((prev) => {
+          const next = new Set([...prev].filter((id) => visibleIds.has(id)))
+          return next.size === prev.size ? prev : next
+        })
+      }
 
       // The pristine empty card vs. the (toggle-bearing) "drafts exist" state hinges
       // on draftCount. When the committed list comes back empty, resolve the draft
@@ -616,6 +643,20 @@ export default function JournalEntryList({ pristineSlot }: { pristineSlot?: Reac
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
   }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, sortHydrated, periodHydrated, pageSizeHydrated])
+
+  // Parent-driven in-place refresh (see the refreshToken prop). Skips the
+  // mount value: the main effect above owns the initial fetch, and a token
+  // bump before hydration is covered by that same initial fetch.
+  const lastRefreshTokenRef = useRef(refreshToken)
+  useEffect(() => {
+    if (refreshToken === undefined || refreshToken === lastRefreshTokenRef.current) return
+    lastRefreshTokenRef.current = refreshToken
+    if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
+    // In-place refresh: the user didn't ask for a reload, so their current
+    // selection survives (reconciled against the refreshed page).
+    fetchEntries({ preserveSelection: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken, sortHydrated, periodHydrated, pageSizeHydrated])
 
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))

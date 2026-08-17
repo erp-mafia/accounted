@@ -280,7 +280,11 @@ export default function InvoicesPage() {
 
   async function fetchInvoices() {
     if (!company) return
-    setIsLoading(true)
+    // Skeleton takeover only while nothing is on screen: refetches after an
+    // action (bulk Bokför) reconcile BEHIND the rendered table. Collapsing
+    // hundreds of rows to 3 skeleton stubs and replaying the stagger-enter
+    // entrance for a row-scoped action was the "booking feels glitchy" jump.
+    if (invoices.length === 0) setIsLoading(true)
     const [invoicesResult, settingsResult] = await Promise.allSettled([
       fetchAllRows<Invoice>(
         ({ from, to }) =>

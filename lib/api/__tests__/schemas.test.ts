@@ -743,6 +743,24 @@ describe('CreateSupplierSchema', () => {
     const result = CreateSupplierSchema.safeParse(validSupplier({ default_expense_account: '6200' }))
     expect(result.success).toBe(true)
   })
+
+  // The web form submits untouched optional inputs as '' (Björn 2026-08-17:
+  // saving with the field left blank failed "Kontonummer måste vara 4 siffror").
+  it('treats empty-string expense account as absent', () => {
+    const result = CreateSupplierSchema.safeParse(validSupplier({ default_expense_account: '' }))
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.default_expense_account).toBeUndefined()
+    }
+  })
+
+  it('treats empty-string email as absent', () => {
+    const result = CreateSupplierSchema.safeParse(validSupplier({ email: '' }))
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.email).toBeUndefined()
+    }
+  })
 })
 
 // ============================================================
@@ -2204,6 +2222,39 @@ describe('UpdateSupplierSchema', () => {
       bankgiro: '999-8888',
     })
     expect(result.success).toBe(true)
+  })
+
+  // Update routes pass fields straight into .update(), where undefined keys
+  // are dropped (unchanged) and null writes NULL. An empty string from a
+  // cleared form field must therefore become null, or clearing does nothing.
+  it('maps empty-string expense account to null so clearing persists', () => {
+    const result = UpdateSupplierSchema.safeParse({ default_expense_account: '' })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.default_expense_account).toBeNull()
+    }
+  })
+
+  it('maps empty-string email to null so clearing persists', () => {
+    const result = UpdateSupplierSchema.safeParse({ email: '' })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.email).toBeNull()
+    }
+  })
+
+  it('leaves omitted fields absent', () => {
+    const result = UpdateSupplierSchema.safeParse({ name: 'New Supplier' })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect('default_expense_account' in result.data).toBe(false)
+      expect('email' in result.data).toBe(false)
+    }
+  })
+
+  it('still rejects a malformed expense account on update', () => {
+    const result = UpdateSupplierSchema.safeParse({ default_expense_account: '54' })
+    expect(result.success).toBe(false)
   })
 
   it('rejects invalid expense account format', () => {

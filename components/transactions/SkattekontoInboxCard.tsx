@@ -24,6 +24,7 @@ export default function SkattekontoInboxCard({
   row,
   matchSuggestion,
   bookingSuggestion,
+  isExiting = false,
   processing,
   selectable,
   isSelected,
@@ -34,6 +35,9 @@ export default function SkattekontoInboxCard({
   row: StoredSkattekontoTransaction
   matchSuggestion?: SkattekontoMatchSuggestion | null
   bookingSuggestion?: SkattekontoBookingSuggestion | null
+  /** The row was just booked and is animating out during the page's 350ms
+   *  removal window (.row-exit collapse; instant under reduced motion). */
+  isExiting?: boolean
   processing: boolean
   selectable?: boolean
   isSelected?: boolean
@@ -60,7 +64,12 @@ export default function SkattekontoInboxCard({
       className={cn(
         'group transition-colors duration-150 hover:bg-secondary/35',
         isSelected && 'bg-secondary/40',
+        isExiting && 'row-exit',
       )}
+      // .row-exit only blocks pointer input; `inert` also drops keyboard
+      // focus and activation (booking/matching controls) during the 350ms
+      // removal window.
+      inert={isExiting || undefined}
     >
       {/* Hover-revealed selection checkbox (concept .cb) */}
       {/* Zero-width cell: the checkbox hangs in the left page margin so
@@ -84,7 +93,7 @@ export default function SkattekontoInboxCard({
         {formatDate(row.transaktionsdatum)}
       </td>
       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="row-collapsible flex min-w-0 items-center gap-2">
           <span className="truncate">{row.transaktionstext}</span>
           <Badge variant="outline" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal">
             <Landmark className="h-3 w-3" />
@@ -121,7 +130,7 @@ export default function SkattekontoInboxCard({
         {formatCurrency(amount)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
-        <span className="inline-flex items-center justify-end gap-3">
+        <span className="row-collapsible inline-flex items-center justify-end gap-3">
           {matchSuggestion ? (
             <>
               {/* Likely duplicate: linking beats re-booking, so it leads. */}

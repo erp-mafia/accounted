@@ -40,6 +40,31 @@ const currentYear = new Date().getFullYear()
 /** Sparade dagar origin years: Semesterlagen allows saving max 5 years. */
 const SAVED_YEARS = Array.from({ length: 5 }, (_, i) => String(currentYear - 1 - i))
 
+interface PanelValues {
+  cutoverDate: string
+  ytdGross: string
+  ytdTax: string
+  ytdNet: string
+  daysRemaining: string
+  daysTaken: string
+  savedByYear: Record<string, string>
+  liability: string
+  liabilityAvgifter: string
+  karens: string
+}
+
+/**
+ * Stable serialization of the panel's field values, used to gate the save
+ * button on actual edits. Empty saved-days entries equal absent entries, so
+ * typing into a year and clearing it again returns the panel to clean.
+ */
+function fingerprint(v: PanelValues): string {
+  const saved = Object.entries(v.savedByYear)
+    .filter(([, days]) => days.trim() !== '')
+    .sort(([a], [b]) => a.localeCompare(b))
+  return JSON.stringify({ ...v, savedByYear: saved })
+}
+
 export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: string; canWrite: boolean }) {
   const t = useTranslations('salary_employee')
   const { toast } = useToast()
@@ -58,36 +83,82 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   const [liability, setLiability] = useState('')
   const [liabilityAvgifter, setLiabilityAvgifter] = useState('')
   const [karens, setKarens] = useState('')
+  // Fingerprint of the last loaded/saved values: the save button stays
+  // disabled until the fields actually differ from it.
+  const [baseline, setBaseline] = useState(() =>
+    fingerprint({
+      cutoverDate: `${currentYear}-01-01`,
+      ytdGross: '',
+      ytdTax: '',
+      ytdNet: '',
+      daysRemaining: '',
+      daysTaken: '',
+      savedByYear: {},
+      liability: '',
+      liabilityAvgifter: '',
+      karens: '',
+    }),
+  )
 
   useEffect(() => {
     async function load() {
       setLoading(true)
-      const res = await fetch(`/api/salary/employees/${employeeId}/opening-balances`)
-      if (res.ok) {
+      try {
+        const res = await fetch(`/api/salary/employees/${employeeId}/opening-balances`)
+        if (!res.ok) return
         const { data } = (await res.json()) as { data: OpeningBalancesData | null }
         if (data) {
-          setHasRow(true)
-          setLocked(data.locked)
-          setCutoverDate(data.cutover_date)
-          setYtdGross(String(data.ytd_gross))
-          setYtdTax(String(data.ytd_tax))
-          setYtdNet(String(data.ytd_net))
-          setDaysRemaining(String(data.vacation_paid_days_remaining))
-          setDaysTaken(String(data.vacation_days_taken_this_year ?? 0))
-          setSavedByYear(
-            Object.fromEntries(
+          const values: PanelValues = {
+            cutoverDate: data.cutover_date,
+            ytdGross: String(data.ytd_gross),
+            ytdTax: String(data.ytd_tax),
+            ytdNet: String(data.ytd_net),
+            daysRemaining: String(data.vacation_paid_days_remaining),
+            daysTaken: String(data.vacation_days_taken_this_year ?? 0),
+            savedByYear: Object.fromEntries(
               Object.entries(data.vacation_saved_days_by_year ?? {}).map(([y, d]) => [y, String(d)]),
             ),
-          )
-          setLiability(String(data.opening_semester_liability))
-          setLiabilityAvgifter(String(data.opening_semester_liability_avgifter))
-          setKarens(String(data.karens_periods_adjustment))
+            liability: String(data.opening_semester_liability),
+            liabilityAvgifter: String(data.opening_semester_liability_avgifter),
+            karens: String(data.karens_periods_adjustment),
+          }
+          setHasRow(true)
+          setLocked(data.locked)
+          setCutoverDate(values.cutoverDate)
+          setYtdGross(values.ytdGross)
+          setYtdTax(values.ytdTax)
+          setYtdNet(values.ytdNet)
+          setDaysRemaining(values.daysRemaining)
+          setDaysTaken(values.daysTaken)
+          setSavedByYear(values.savedByYear)
+          setLiability(values.liability)
+          setLiabilityAvgifter(values.liabilityAvgifter)
+          setKarens(values.karens)
+          setBaseline(fingerprint(values))
         }
+      } catch {
+        // Network failure: the panel falls back to its empty form rather
+        // than holding the skeleton forever; a retry happens on remount.
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
     }
     load()
   }, [employeeId])
+
+  const currentValues: PanelValues = {
+    cutoverDate,
+    ytdGross,
+    ytdTax,
+    ytdNet,
+    daysRemaining,
+    daysTaken,
+    savedByYear,
+    liability,
+    liabilityAvgifter,
+    karens,
+  }
+  const dirty = fingerprint(currentValues) !== baseline
 
   async function handleSave() {
     setSaving(true)
@@ -116,6 +187,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
 
     if (res.ok) {
       setHasRow(true)
+      setBaseline(fingerprint(currentValues))
       toast({ title: t('opening_balances_saved') })
     } else {
       const result = await res.json()
@@ -150,7 +222,15 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         <CardTitle className="text-base">{t('opening_balances_title')}</CardTitle>
         <p className="text-sm text-muted-foreground">{t('opening_balances_description')}</p>
       </CardHeader>
-      <CardContent className="space-y-6">
+      {/* Own form: this panel is its own save scope. It must never be nested
+          inside another form (invalid HTML, and its submit would leak). */}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          handleSave()
+        }}
+      >
+        <CardContent className="space-y-6">
         {locked && (
           <p className="text-sm text-muted-foreground border border-border rounded-lg p-3">
             {t('opening_balances_locked_notice')}
@@ -265,7 +345,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
 
         {!readOnly && (
           <div className="flex justify-end">
-            <Button onClick={handleSave} disabled={saving}>
+            <Button type="submit" disabled={saving || !dirty}>
               <Save className="h-4 w-4 mr-2" />
               {saving
                 ? t('opening_balances_saving')
@@ -275,7 +355,8 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
             </Button>
           </div>
         )}
-      </CardContent>
+        </CardContent>
+      </form>
     </Card>
   )
 }

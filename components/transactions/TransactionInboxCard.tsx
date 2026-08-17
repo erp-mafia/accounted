@@ -47,6 +47,10 @@ interface TransactionInboxCardProps {
   /** When set, this bank tx looks like the bank side of a 1930↔1630
    *  transfer that the user will later see on /skattekonto. */
   skvCounterpartDate?: string
+  /** The row was just booked/ignored/deleted and is animating out during the
+   *  page's 350ms removal window: .row-exit fades and collapses it, and
+   *  pointer events are off. Instant removal under prefers-reduced-motion. */
+  isExiting?: boolean
   processingId: string | null
   isSelected: boolean
   /** Row expansion (concept foldout): controlled by the page so only one
@@ -98,6 +102,7 @@ interface TransactionInboxCardProps {
 export default function TransactionInboxCard({
   transaction,
   skvCounterpartDate,
+  isExiting = false,
   processingId,
   isSelected,
   isExpanded,
@@ -231,7 +236,9 @@ export default function TransactionInboxCard({
     Boolean(skvCounterpartDate) ||
     (HAS_AI_EXTRACTION && (extraction.status === 'running' || extraction.status === 'failed'))
   const canExpand = hasFoldoutContent
-  const expanded = isExpanded && canExpand
+  // An exiting row's foldout closes with it: the foldout <tr> has no exit
+  // styling of its own and would otherwise linger un-animated.
+  const expanded = isExpanded && canExpand && !isExiting
 
   return (
     <>
@@ -243,7 +250,12 @@ export default function TransactionInboxCard({
           expanded ? 'bg-secondary/25' : 'hover:bg-secondary/35',
           isSelected && 'bg-secondary/40',
           isDisabled && 'opacity-50',
+          isExiting && 'row-exit',
         )}
+        // .row-exit only blocks pointer input; `inert` also drops keyboard
+        // focus and activation (row expand, Bokför, the ⋯ menu) during the
+        // 350ms removal window.
+        inert={isExiting || undefined}
         role={canExpand ? 'button' : undefined}
         tabIndex={canExpand ? 0 : undefined}
         aria-expanded={canExpand ? expanded : undefined}
@@ -288,7 +300,7 @@ export default function TransactionInboxCard({
           {formatDate(transaction.date)}
         </td>
         <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-          <span className="flex min-w-0 items-center gap-2">
+          <span className="row-collapsible flex min-w-0 items-center gap-2">
             <span className="truncate">{transaction.description}</span>
             <TransactionAttachmentIndicator documentId={attachedDocumentId} />
             {transaction.title_edited_at && (
@@ -325,7 +337,7 @@ export default function TransactionInboxCard({
           {formatCurrency(transaction.amount, transaction.currency)}
         </td>
         <td className={cn(TD_CLASS, 'relative whitespace-nowrap text-right !pr-0 py-[9px]')}>
-          <span className="inline-flex items-center justify-end gap-2">
+          <span className="row-collapsible inline-flex items-center justify-end gap-2">
             <Button
               size="sm"
               variant="outline"

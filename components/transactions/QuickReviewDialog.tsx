@@ -663,17 +663,19 @@ export default function QuickReviewDialog({
                 {/* Locked while the booking is in flight: handleConfirm captured
                     pickedInboxDocs when it started, so anything picked now would
                     never be linked and would then be cleared on completion,
-                    vanishing from the list with no error to explain it. */}
-                <Button
+                    vanishing from the list with no error to explain it.
+                    Styled as the dropzone's footer (same treatment as
+                    TransactionBookingDialog) so upload and inbox-pick read as
+                    one underlag surface. */}
+                <button
                   type="button"
-                  variant="outline"
-                  size="sm"
                   disabled={isProcessing}
                   onClick={() => setInboxPickerOpen(true)}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/25 px-3 py-2 text-[13px] text-muted-foreground transition-colors duration-150 hover:border-primary/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
                 >
-                  <Inbox className="mr-2 h-4 w-4" />
-                  {t('doc_pick_existing')}
-                </Button>
+                  <Inbox className="h-4 w-4" />
+                  <span>{t('doc_pick_existing_inline')}</span>
+                </button>
               </div>
             )}
           </div>

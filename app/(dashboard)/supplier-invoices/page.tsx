@@ -117,11 +117,27 @@ export default function SupplierInvoicesPage() {
   const openNewInvoice = () => router.push('/supplier-invoices?new=1', { scroll: false })
 
   async function fetchInvoices() {
-    setIsLoading(true)
-    const res = await fetch('/api/supplier-invoices?status=all')
-    const { data } = await res.json()
-    setInvoices(data || [])
-    setIsLoading(false)
+    // Skeleton takeover only while nothing is on screen: refetches after an
+    // action (register, betalfil, approve fallback) reconcile BEHIND the
+    // rendered table instead of collapsing it to 4 skeleton stubs and
+    // replaying the entrance animation.
+    if (invoices.length === 0) setIsLoading(true)
+    try {
+      const res = await fetch('/api/supplier-invoices?status=all')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const { data } = await res.json()
+      setInvoices(data || [])
+    } catch {
+      // Without this, a failed fetch either stuck the skeleton forever or
+      // silently rendered the empty state as if the invoices were gone.
+      toast({
+        title: t('load_failed_title'),
+        description: t('load_failed_description'),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   // Which invoices already sit in an active (not cancelled) betalfil: feeds
@@ -144,6 +160,9 @@ export default function SupplierInvoicesPage() {
   useEffect(() => {
     fetchInvoices()
     fetchActiveBatchMembership()
+    // Mount-only fetch (same pattern as /invoices): fetchInvoices reads state
+    // only to decide skeleton vs background refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Mirrors the old standalone page's post-create navigation: inbox
