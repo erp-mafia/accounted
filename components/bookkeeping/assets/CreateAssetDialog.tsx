@@ -67,6 +67,13 @@ const CATEGORY_OPTIONS: { value: AssetCategory; label: string; defaultYears: num
   { value: 'other_tangible', label: 'Övrig materiell tillgång', defaultYears: 5 },
 ]
 
+// No account override here on purpose. The server resolves the immaterial
+// default per framework (defaultAccountsForCategory in
+// lib/bokslut/assets/asset-service.ts): 1090/1099 for K2, 1010/1019 for K3.
+// Sending an explicit pair from this dialog would duplicate that rule on a
+// second surface, and the edit dialog (which has no account inputs at all)
+// could never mirror it. The hint below just tells the user where it lands.
+
 export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAssetDialogProps) {
   const { toast } = useToast()
   // useCompanyOptional so the dialog still works in tests / storyboards
@@ -250,6 +257,19 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                 ))}
               </SelectContent>
             </Select>
+            {category === 'immaterial' && !isK3 && (
+              <p className="text-xs text-muted-foreground">
+                Bokförs som förvärvad immateriell tillgång (konto 1090). Egenupparbetad
+                utveckling får inte aktiveras enligt K2 (BFNAR 2016:10 punkt 10.4): det kräver K3.
+              </p>
+            )}
+            {category === 'immaterial' && isK3 && (
+              <p className="text-xs text-muted-foreground">
+                För aktiebolag medför aktivering av egenupparbetad utveckling (konto 1010) att
+                motsvarande belopp sätts av till fond för utvecklingsutgifter (konto 2089) enligt
+                ÅRL 4 kap. 2 §.
+              </p>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
@@ -293,7 +313,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
             </p>
           </div>
           {isK3 && (
-            <div className="space-y-3 rounded-md border border-border bg-muted/20 p-4">
+            <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
                   <Label className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
@@ -320,7 +340,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                   {componentRows.map((row, idx) => (
                     <div
                       key={row.id}
-                      className="grid grid-cols-12 items-end gap-2 rounded-md border border-border bg-background p-2"
+                      className="grid grid-cols-12 items-end gap-2 rounded-lg border border-border bg-background p-2"
                     >
                       <div className="col-span-12 sm:col-span-4 space-y-1">
                         <Label
@@ -444,14 +464,14 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               )}
             </div>
           )}
-          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
             <strong className="text-foreground">Tips:</strong> Anskaffningen måste redan vara
             bokförd (debet på 1xxx-kontot mot t.ex. 1930/2440): registret bokför inte
             själva köpet. Det här registret styr enbart de planenliga avskrivningarna under
             bokslutet.
           </div>
           {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
               {error}
             </div>
           )}

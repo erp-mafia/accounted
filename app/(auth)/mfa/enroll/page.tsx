@@ -175,15 +175,15 @@ function MfaEnrollContent() {
   // Step 1: Show enroll button
   if (!qrCode) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up">
           <div className="text-center mb-10">
             <div className="flex justify-center mb-4">
-              <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
+              <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
                 <ShieldCheck className="h-7 w-7 text-primary" />
               </div>
             </div>
-            <h1 className="text-2xl font-medium tracking-tight">Aktivera tvåfaktorsautentisering</h1>
+            <h1 className="text-2xl tracking-tight">Aktivera tvåfaktorsautentisering</h1>
             <p className="text-muted-foreground text-sm mt-2">
               Skydda ditt konto med en autentiseringsapp som Google Authenticator eller Authy
             </p>
@@ -229,15 +229,15 @@ function MfaEnrollContent() {
 
   // Step 2: Show QR code and verification
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
-            <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
+            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
               <ShieldCheck className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-medium tracking-tight">Skanna QR-koden</h1>
+          <h1 className="text-2xl tracking-tight">Skanna QR-koden</h1>
           <p className="text-muted-foreground text-sm mt-2">
             Öppna din autentiseringsapp och skanna koden nedan
           </p>
@@ -258,7 +258,7 @@ function MfaEnrollContent() {
               Kan du inte skanna? Ange denna nyckel manuellt:
             </p>
             <div className="flex items-center gap-2">
-              <code className="flex-1 rounded-md border bg-muted/50 px-3 py-2 text-xs font-mono text-center break-all select-all">
+              <code className="flex-1 rounded-sm border bg-muted/50 px-3 py-2 text-xs font-mono text-center break-all select-all">
                 {secret}
               </code>
               <Button

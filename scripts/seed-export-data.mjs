@@ -377,7 +377,8 @@ async function main() {
       description: `Faktura ${inv.invoice_number}: ${customers.find(c => c.id === inv.customer_id).name}`,
       source_type: 'invoice_created',
       source_id: inv.id,
-      status: 'posted',
+      // Draft until the lines are inserted; posted in the batch UPDATE below.
+      status: 'draft',
       committed_at: new Date().toISOString(),
     })
 
@@ -420,7 +421,7 @@ async function main() {
     description: `Betalning ${invoices[4].invoice_number}: Suomen Softworks Oy`,
     source_type: 'invoice_paid',
     source_id: invoices[4].id,
-    status: 'posted',
+    status: 'draft',
     committed_at: new Date().toISOString(),
   })
 
@@ -457,7 +458,7 @@ async function main() {
     entry_date: daysAgo(25),
     description: 'Kursdifferens vid betalning',
     source_type: 'invoice_paid',
-    status: 'posted',
+    status: 'draft',
     committed_at: new Date().toISOString(),
   })
 
@@ -483,6 +484,10 @@ async function main() {
     sort_order: 2,
   })
 
+  // Headers go in as drafts and are posted after the lines land: supabase-js
+  // autocommits each request, and check_balance_on_posted_insert rejects a
+  // posted header whose transaction carries no lines. The draft-to-posted
+  // UPDATE fires check_balance_on_post against the finished verifikat instead.
   console.log(`\nCreating ${journalEntries.length} journal entries...`)
   const { error: jeError } = await supabase.from('journal_entries').insert(journalEntries)
   if (jeError) {
@@ -495,6 +500,15 @@ async function main() {
     console.error('Failed to create journal entry lines:', jlError.message)
     console.error('Cleaning up journal entries...')
     await supabase.from('journal_entries').delete().in('id', journalEntries.map(e => e.id))
+    process.exit(1)
+  }
+
+  const { error: postError } = await supabase
+    .from('journal_entries')
+    .update({ status: 'posted' })
+    .in('id', journalEntries.map(e => e.id))
+  if (postError) {
+    console.error('Failed to post journal entries:', postError.message)
     process.exit(1)
   }
 

@@ -269,3 +269,30 @@
 @media (prefers-reduced-motion: reduce) {
   .jny *, .jny *::before, .jny *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ── source step: where were the books before ────────────────────── */
+/* One grid, equal-weight tiles. Providers carry a real logo on a small
+   white mark (the LogoMark grammar); SIE and new-business are text tiles
+   in the same shape. Hover is a flat background shift, no lift. */
+.jny-srcgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-width: 440px; margin: 0 auto; }
+.jny-srcpick {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 52px; padding: 10px 16px;
+  border: 1px solid hsl(var(--border)); border-radius: 8px;
+  background: hsl(var(--background));
+  font-family: inherit; font-size: 13.5px; color: inherit; text-align: left;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-out);
+}
+.jny-srcpick:hover { background: hsl(var(--secondary) / 0.6); }
+.jny-srcpick.is-text { justify-content: center; text-align: center; }
+.jny-srcpick.is-span { grid-column: 1 / -1; }
+.jny-srcmark {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; overflow: hidden;
+  border: 1px solid hsl(var(--border)); border-radius: 4px; background: #fff;
+}
+.jny-srcmark img { width: 18px; height: 18px; object-fit: contain; }
+@media (max-height: 780px) {
+  .jny-srcpick { min-height: 46px; padding: 8px 14px; }
+}

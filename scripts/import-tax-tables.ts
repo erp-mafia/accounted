@@ -7,19 +7,20 @@
  * Output: lib/salary/tax-tables-fallback.ts
  *
  * Record format (49 chars per line):
- *   chars 0-4   (width 5): prefix : "30B29" = monthly/belopp, table 29
+ *   chars 0-4   (width 5): prefix : "30B29" = monthly/belopp, table 29;
+ *                          "30%29" = monthly/percent, table 29
  *   chars 5-11  (width 7): income_from
- *   chars 12-18 (width 7): income_to
- *   chars 19-23 (width 5): column 1 tax amount (SEK)
+ *   chars 12-18 (width 7): income_to (blank on the open-ended top %-row)
+ *   chars 19-23 (width 5): column 1 (SEK on B-rows, percent on %-rows)
  *   chars 24-28 (width 5): column 2
  *   chars 29-33 (width 5): column 3
  *   chars 34-38 (width 5): column 4
  *   chars 39-43 (width 5): column 5
  *   chars 44-48 (width 5): column 6
  *
- * We import only B-rows (absolute amounts). %-rows (percentage-based, used for
- * incomes above the highest B-row bracket) are skipped: matches the behavior
- * of the Skatteverket API path which also fetches only B-rows.
+ * Both B-rows (absolute amounts, incomes up to 80 000 kr/month) and %-rows
+ * (percent of the whole income, above 80 000 kr/month) are imported. The
+ * emitted tuple carries an isPercent flag as its last element.
  *
  * Usage:
  *   npx tsx scripts/import-tax-tables.ts --year 2026
@@ -27,8 +28,9 @@
 
 import { readFileSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
+import { fileURLToPath } from 'url'
 
-type TaxRow = readonly [number, number, number, number, number, number, number, number]
+type TaxRow = readonly [number, number, number, number, number, number, number, number, number]
 
 interface ParsedTable {
   tableNumber: number
@@ -48,38 +50,71 @@ function parseArgs(): { year: number } {
   return { year }
 }
 
-function parseLine(line: string): { table: number; row: TaxRow } | null {
+export function parseLine(line: string): { table: number; row: TaxRow } | null {
   // Strip BOM if present on the first line
   const clean = line.replace(/^\uFEFF/, '')
   if (clean.length < 49) return null
 
   const prefix = clean.slice(0, 5)
-  // B-rows only (absolute amounts). Skip %-rows.
-  if (prefix[2] !== 'B') return null
+  // B-rows carry absolute SEK amounts, %-rows carry percentages for incomes
+  // above the highest B-row bracket. Both are needed for correct withholding.
+  if (prefix[2] !== 'B' && prefix[2] !== '%') return null
+  // The day-count prefix must be "30" (monthly). Skatteverket also publishes
+  // two-week tables whose rows differ only in this prefix ("14B29" vs "30B29"):
+  // a two-week row must fail the import loudly, never merge silently into the
+  // monthly fallback data.
+  const dayCount = prefix.slice(0, 2)
+  if (dayCount === '14') {
+    throw new Error(
+      `Two-week table row (prefix "${prefix}") in monthly import: wrong source file? Line: ${clean}`
+    )
+  }
+  if (dayCount !== '30') return null
+  const isPercent = prefix[2] === '%'
 
   const tableStr = prefix.slice(3, 5)
   const table = parseInt(tableStr, 10)
   if (!Number.isInteger(table)) return null
 
-  const parseField = (start: number, width: number): number => {
-    const raw = clean.slice(start, start + width).trim()
-    if (raw === '') return 0
-    const n = parseInt(raw, 10)
-    return Number.isFinite(n) ? n : 0
+  // Column values must be well-formed whole numbers. A malformed value falling
+  // back to 0 would bake 0 kr / 0 % withholding into the emitted fallback data,
+  // so fail the import instead.
+  const parseColumn = (start: number): number => {
+    const raw = clean.slice(start, start + 5).trim()
+    if (!/^\d+$/.test(raw)) {
+      throw new Error(`Malformed column value "${raw}" in line: ${clean}`)
+    }
+    return parseInt(raw, 10)
   }
 
-  const incomeFrom = parseField(5, 7)
-  const incomeTo = parseField(12, 7)
-  const c1 = parseField(19, 5)
-  const c2 = parseField(24, 5)
-  const c3 = parseField(29, 5)
-  const c4 = parseField(34, 5)
-  const c5 = parseField(39, 5)
-  const c6 = parseField(44, 5)
+  // Income boundaries get the same digits-only rule: parseInt would accept
+  // "100abc" and turn other garbage into 0, silently corrupting bracket
+  // ranges. A blank income_to is legal only on the open-ended top %-row
+  // (emitted as 0, mapped to the open-ended sentinel by the loader).
+  const parseIncome = (start: number, allowBlank: boolean): number => {
+    const raw = clean.slice(start, start + 7).trim()
+    if (raw === '') {
+      if (!allowBlank) throw new Error(`Missing income boundary in line: ${clean}`)
+      return 0
+    }
+    if (!/^\d+$/.test(raw)) {
+      throw new Error(`Malformed income boundary "${raw}" in line: ${clean}`)
+    }
+    return parseInt(raw, 10)
+  }
+
+  const incomeFrom = parseIncome(5, false)
+  const incomeTo = parseIncome(12, isPercent)
+  const c1 = parseColumn(19)
+  const c2 = parseColumn(24)
+  const c3 = parseColumn(29)
+  const c4 = parseColumn(34)
+  const c5 = parseColumn(39)
+  const c6 = parseColumn(44)
 
   return {
     table,
-    row: [incomeFrom, incomeTo, c1, c2, c3, c4, c5, c6] as const,
+    row: [incomeFrom, incomeTo, c1, c2, c3, c4, c5, c6, isPercent ? 1 : 0] as const,
   }
 }
 
@@ -137,9 +172,15 @@ function emitModule(year: number, tables: ParsedTable[]): string {
  * Rows: ${totalRows} across tables ${tableNumbers}
  */
 
-/** [incomeFrom, incomeTo, col1, col2, col3, col4, col5, col6] */
+/**
+ * [incomeFrom, incomeTo, col1, col2, col3, col4, col5, col6, isPercent]
+ *
+ * isPercent 0: columns are SEK amounts (incomes up to 80 000 kr/month).
+ * isPercent 1: columns are percent of the whole monthly income (above
+ * 80 000 kr/month). incomeTo 0 marks the open-ended top row.
+ */
 export type FallbackTaxRow = readonly [
-  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number, number,
 ]
 
 /** Tables keyed by municipal tax rate number (29-42). */
@@ -166,15 +207,29 @@ function main() {
   const tables = parseFile(inputPath)
 
   if (tables.length === 0) {
-    throw new Error('No B-rows parsed: check input file format')
+    throw new Error('No rows parsed: check input file format')
+  }
+
+  // Every table must have both sections: a B-only table would clamp high
+  // incomes to the last krona bracket and silently under-withhold.
+  for (const t of tables) {
+    const percentRows = t.rows.filter(r => r[8] === 1).length
+    if (percentRows === 0 || percentRows === t.rows.length) {
+      throw new Error(`Table ${t.tableNumber}: expected both B-rows and %-rows, got ${percentRows}/${t.rows.length} percent rows`)
+    }
   }
 
   const totalRows = tables.reduce((sum, t) => sum + t.rows.length, 0)
-  console.log(`Parsed ${tables.length} tables (${tables.map(t => t.tableNumber).join(', ')}), ${totalRows} B-rows total`)
+  const percentTotal = tables.reduce((sum, t) => sum + t.rows.filter(r => r[8] === 1).length, 0)
+  console.log(`Parsed ${tables.length} tables (${tables.map(t => t.tableNumber).join(', ')}), ${totalRows} rows total (${percentTotal} percent rows)`)
 
   const moduleSource = emitModule(year, tables)
   writeFileSync(outputPath, moduleSource, 'utf-8')
   console.log(`Wrote ${outputPath} (${moduleSource.length.toLocaleString()} bytes)`)
 }
 
-main()
+// Run only when executed directly (npx tsx scripts/import-tax-tables.ts), not
+// when parseLine is imported by tests. Same pattern as generate-crontabs.ts.
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main()
+}

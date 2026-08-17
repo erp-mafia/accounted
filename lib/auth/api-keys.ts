@@ -19,8 +19,8 @@ export const API_KEY_SCOPES = {
   'suppliers:write':    { label: 'Leverantörer: skriv', description: 'Skapa leverantörer; godkänn, kreditera, betal-länka och hantera leverantörsfakturor (6 verktyg)' },
   'reports:read':       { label: 'Rapporter: läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export (12 verktyg)' },
   'bookkeeping:write':  { label: 'Bokföring: skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar, kontoplan (skapa/ändra konton), verifikat-anteckningar' },
-  'payroll:read':       { label: 'Löner: läs',          description: 'Lista anställda, lönekörningar, lönejournal (3 verktyg)' },
-  'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI (3 verktyg)' },
+  'payroll:read':       { label: 'Löner: läs',          description: 'Lista anställda, lönekörningar, lönejournal, körjournal' },
+  'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI, logga körjournalresor' },
   // v1 REST API: added Phase 1
   'companies:read':     { label: 'Företag: läs',        description: 'Lista och visa företagsprofiler som API-nyckeln har tillgång till' },
   'companies:write':    { label: 'Företag: skriv',      description: 'Uppdatera företagsinställningar via stagade verktyg eller REST-endpointen PATCH /api/v1/companies/{companyId}/settings' },
@@ -242,6 +242,11 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_attach_document_to_transaction:  'transactions:write',
   gnubok_link_document_to_voucher:        'bookkeeping:write',
   gnubok_link_documents_to_vouchers:      'bookkeeping:write',
+  // Körjournal (mileage): trip log reads/writes are payroll surface
+  // (milersättning, 7331); booking the verifikat is a journal write.
+  gnubok_list_mileage_trips:              'payroll:read',
+  gnubok_log_mileage_trip:                'payroll:write',
+  gnubok_book_mileage_period:             'bookkeeping:write',
   // Payroll
   gnubok_list_employees:                  'payroll:read',
   gnubok_get_salary_run:                  'payroll:read',
@@ -267,6 +272,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_lock_period:                     'bookkeeping:write',
   gnubok_unlock_period:                   'bookkeeping:write',
   gnubok_run_year_end:                    'bookkeeping:write',
+  gnubok_post_kontantmetod_cutoff:        'bookkeeping:write',
   gnubok_year_end_readiness:              'reports:read',
   gnubok_set_opening_balances:            'bookkeeping:write',
   gnubok_run_currency_revaluation:        'bookkeeping:write',

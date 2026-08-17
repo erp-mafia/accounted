@@ -11,10 +11,12 @@ import type { FiscalPeriod } from '@/types'
  */
 export default async function ReportSlugPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
-  const { slug } = await params
+  const [{ slug }, query] = await Promise.all([params, searchParams])
   const report = getReport(slug)
   if (!report) notFound()
   if (report.route) redirect(report.route)
@@ -37,6 +39,9 @@ export default async function ReportSlugPage({
       slug={slug}
       initialPeriods={(periods ?? []) as FiscalPeriod[]}
       initialCompanyId={companyId}
+      // ?autorun=1 deep-links (e.g. the transactions inbox banner) ask the
+      // bank-reconciliation view to run its dry-run preview once on load.
+      autoRun={query.autorun === '1'}
     />
   )
 }

@@ -9,7 +9,7 @@ meta:
   description: >-
     Betalning av preliminär F-skatt från skattekontot (enskild firma).
 lines:
-  - account: '2012'
+  - account: '2013'
     label: 'Egna skatter'
     side: debit
     type: business

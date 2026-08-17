@@ -189,6 +189,51 @@ describe('commitPendingOperation: update_account', () => {
     expect(result.status).toBe('committed')
   })
 
+  it('derives an omitted booking rate at commit when the stored rate is unset', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: { default_vat_rate: null } }) // current account
+    enqueue({ data: { account_number: '4056', account_name: 'EU-varor', is_active: true } }) // update
+    enqueue({ data: null }) // finalize update
+
+    const op = makePendingOp({
+      operation_type: 'update_account',
+      params: {
+        account_number: '4056',
+        default_vat_treatment: 'reverse_charge_eu_goods',
+      },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCalls('chart_of_accounts', 'update')[0]?.[0]).toMatchObject({
+      default_vat_treatment: 'reverse_charge_eu_goods',
+      default_vat_rate: 0.25,
+    })
+  })
+
+  it('preserves a stored booking rate when a staged treatment omits it', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: { default_vat_rate: 0.12 } }) // current account
+    enqueue({ data: { account_number: '4056', account_name: 'EU-varor', is_active: true } }) // update
+    enqueue({ data: null }) // finalize update
+
+    const op = makePendingOp({
+      operation_type: 'update_account',
+      params: {
+        account_number: '4056',
+        default_vat_treatment: 'reverse_charge_eu_goods',
+      },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCalls('chart_of_accounts', 'update')[0]?.[0]).toEqual({
+      default_vat_treatment: 'reverse_charge_eu_goods',
+    })
+  })
+
   it('unknown account (PGRST116) auto-rejects with 404', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' } }) // CAS claim

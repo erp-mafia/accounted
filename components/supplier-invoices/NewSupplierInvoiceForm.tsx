@@ -20,6 +20,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { SupplierInvoiceReviewContent } from '@/components/suppliers/SupplierInvoiceReviewContent'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
@@ -37,6 +38,8 @@ import {
   findReverseChargeAccountWarningRows,
   findUnflaggedForeignZeroVatRows,
 } from '@/lib/vat/supplier-invoice-line-checks'
+import { SLP_RATE, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
+import { roundOre } from '@/lib/money'
 import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, Link2, CalendarClock, Tags, Paperclip } from 'lucide-react'
 import type { Supplier, BASAccount, VatTreatment, EntityType, InvoiceExtractionResult, FiscalPeriod } from '@/types'
 
@@ -57,6 +60,10 @@ interface LineItem {
   // (possibly empty) while the row's dimensions panel is open; the server
   // merges it over the invoice's default_dimensions at booking time.
   dimensions?: Record<string, string>
+  // Särskild löneskatt på pensionskostnader: booking injects a self-balancing
+  // 7533 D / 2514 K pair at 24.26 % of the line amount. Only offered on 741x
+  // pension-premium accounts; never changes the invoice total.
+  apply_slp?: boolean
 }
 
 // The existing invoice surfaced on a duplicate-number conflict, used to drive
@@ -327,6 +334,11 @@ export default function NewSupplierInvoiceForm({
   // JournalEntryForm. defaultDims is the invoice-level default bag; per-item
   // bags live on the form's items and merge over it server-side.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
+  // Icke momsregistrerad verksamhet has no right to deduct input VAT: the
+  // moms controls disappear and every line books at 0 % (the gross amount IS
+  // the cost). Defaults true so registered companies keep the 25 % prefill
+  // while /api/settings is still in flight.
+  const [vatRegistered, setVatRegistered] = useState(true)
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>({})
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [periodsLoaded, setPeriodsLoaded] = useState(false)
@@ -572,6 +584,9 @@ export default function NewSupplierInvoiceForm({
                 // time) and a silent default misbooks: leave empty so the user
                 // (or the supplier default) makes the call.
                 account_number: '',
+                // Deliberately unconditional: for icke momsregistrerade the
+                // zeroing effect below grosses the net amount up by this rate
+                // before forcing it to 0, so the rate must arrive intact.
                 vat_rate: vatRateFromAi(li.vatRate),
                 accrual_period_start: withAccrual ? (sps as string) : undefined,
                 accrual_period_end: withAccrual ? (spe as string) : undefined,
@@ -610,10 +625,67 @@ export default function NewSupplierInvoiceForm({
 
   // Auto-fill due date and defaults when supplier is selected: but never
   // overwrite a value the AI already filled in for us.
+  const [templateAccountNote, setTemplateAccountNote] = useState<{ account: string; counterparty: string } | null>(null)
+  // Rows planted by the counterparty-history prefill, so a supplier SWITCH can
+  // un-plant them: without this, supplier A's history account survives into
+  // supplier B's invoice and silently blocks B's own default_expense_account
+  // (the fill branches only touch empty rows).
+  const plantedRef = useRef<{ account: string; rows: number[] } | null>(null)
+  // Automatic fill is requested, not applied inline: handleAccountChange
+  // needs the loaded BAS chart to apply the konto's default moms, and the
+  // requests originate in closures (the supplier effect and its async
+  // template fetch) that may hold a stale empty `accounts`. The applying
+  // effect below re-runs on both the request tick and the chart load with
+  // fresh closures, so whichever arrives last triggers the fill. Filling
+  // early would leave a VAT-free konto on the 25% row default, the exact
+  // mis-booking the fill exists to prevent.
+  const pendingAccountFillRef = useRef<{ account: string; plant: boolean; counterparty?: string } | null>(null)
+  const [accountFillTick, setAccountFillTick] = useState(0)
+
+  function requestAccountFill(account: string, plant: boolean, counterparty?: string) {
+    pendingAccountFillRef.current = { account, plant, counterparty }
+    setAccountFillTick((t) => t + 1)
+  }
+
+  useEffect(() => {
+    if (accounts.length === 0 || !pendingAccountFillRef.current) return
+    const { account, plant, counterparty } = pendingAccountFillRef.current
+    pendingAccountFillRef.current = null
+    const items = getValues('items')
+    const appliedRows: number[] = []
+    items.forEach((row, i) => {
+      if (!row.account_number) {
+        // Same path as a manual pick: konto default moms rides along.
+        handleAccountChange(i, account)
+        appliedRows.push(i)
+      }
+    })
+    if (appliedRows.length > 0 && plant && counterparty) {
+      plantedRef.current = { account, rows: appliedRows }
+      setTemplateAccountNote({ account, counterparty })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accounts, accountFillTick])
+
   useEffect(() => {
     if (!watchedSupplierId) return
     const supplier = suppliers.find((s) => s.id === watchedSupplierId)
     if (!supplier) return
+    setTemplateAccountNote(null)
+    pendingAccountFillRef.current = null
+    if (plantedRef.current) {
+      const { account, rows } = plantedRef.current
+      const planted = getValues('items')
+      rows.forEach((i) => {
+        if (planted[i]?.account_number === account) {
+          // Clear only the account; the rate is left for the next fill or
+          // manual pick to settle (handleAccountChange reapplies konto
+          // defaults), so an AI-extracted rate is never clobbered here.
+          setValue(`items.${i}.account_number`, '')
+        }
+      })
+      plantedRef.current = null
+    }
 
     const invoiceDate = watch('invoice_date')
     const currentDue = watch('due_date')
@@ -625,12 +697,9 @@ export default function NewSupplierInvoiceForm({
     if (supplier.default_expense_account && fields.length > 0) {
       // Fill every row the user hasn't assigned yet: an empty account is the
       // only signal needed (rows start empty by design, no seeded default).
-      const items = getValues('items')
-      items.forEach((row, i) => {
-        if (!row.account_number) {
-          setValue(`items.${i}.account_number`, supplier.default_expense_account!)
-        }
-      })
+      // Routed through the fill request so it waits for the BAS chart and the
+      // konto's default moms comes along exactly like a manual pick.
+      requestAccountFill(supplier.default_expense_account, false)
     }
     if (supplier.default_currency && watch('currency') === 'SEK') {
       setValue('currency', supplier.default_currency)
@@ -638,6 +707,36 @@ export default function NewSupplierInvoiceForm({
     if (supplier.supplier_type === 'eu_business') {
       setValue('reverse_charge', true)
     }
+
+    // No supplier default: fall back to the company's own booking history for
+    // this counterparty (the same tiered matcher the booking flows use). Fills
+    // empty rows only, never a generic seed, and only from expense-shaped
+    // templates (P&L cost on debit, settlement on credit; the 4-8 gate keeps
+    // private/balance-sheet templates like 2013 or 1630 out). Best-effort: on
+    // any miss the rows simply stay blank, exactly as before.
+    if (!supplier.default_expense_account && fields.length > 0 && supplier.name?.trim()) {
+      let cancelled = false
+      ;(async () => {
+        try {
+          const res = await fetch(
+            `/api/settings/counterparty-templates?counterparty=${encodeURIComponent(supplier.name.trim())}`
+          )
+          if (!res.ok) return
+          const json = await res.json()
+          if (cancelled) return
+          const match = json?.data
+          const debit: string | undefined = match?.template?.debit_account
+          const credit: string | undefined = match?.template?.credit_account
+          if (!match || (match.confidence ?? 0) < 0.5) return
+          if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
+          requestAccountFill(debit, true, match.template.counterparty_name)
+        } catch {
+          // Prefill is best-effort; the rows stay blank.
+        }
+      })()
+      return () => { cancelled = true }
+    }
+    return undefined
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedSupplierId, suppliers])
 
@@ -721,6 +820,9 @@ export default function NewSupplierInvoiceForm({
       }
       if (typeof data?.ore_rounding === 'boolean') setOreRounding(data.ore_rounding)
       setDimensionsEnabled(data?.dimensions_enabled === true)
+      // Only an explicit false gates: a missing column or failed fetch keeps
+      // the registered-company behavior.
+      if (data?.vat_registered === false) setVatRegistered(false)
     } catch {
       // Default to enskild_firma / accrual, dimension affordances hidden
     }
@@ -754,8 +856,13 @@ export default function NewSupplierInvoiceForm({
     // (inferVatTreatment) expect a number.
     const acct = accounts.find((a) => a.account_number === accountNumber)
     const defaultRate = acct?.default_vat_rate == null ? null : Number(acct.default_vat_rate)
-    if (!watchedReverseCharge && defaultRate != null && Number.isFinite(defaultRate)) {
+    if (vatRegistered && !watchedReverseCharge && defaultRate != null && Number.isFinite(defaultRate)) {
       setValue(`items.${index}.vat_rate`, defaultRate, { shouldDirty: true })
+    }
+    // Särskild löneskatt only applies to 741x pension premiums: leaving the
+    // range clears the flag so a stale opt-in can never reach the API.
+    if (watch(`items.${index}.apply_slp`) && !isSlpPensionAccount(accountNumber)) {
+      setValue(`items.${index}.apply_slp`, undefined, { shouldDirty: true })
     }
   }
 
@@ -786,6 +893,31 @@ export default function NewSupplierInvoiceForm({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedReverseCharge])
 
+  // Force every line to 0 % moms for icke momsregistrerade companies: the
+  // default line, AI prefills and konto defaults all assume 25 % otherwise.
+  // Re-runs after the inbox prefill lands so a late extraction can't
+  // reintroduce a rate.
+  //
+  // The amount is grossed up in the same pass: an amount paired with a
+  // non-zero rate is a NET amount (AI line totals are exkl moms, and the
+  // visible column said "Belopp (exkl.)" while the rate stood). For a company
+  // with no deduction right the moms is part of the cost, so net at 25 %
+  // becomes gross at 0 %; zeroing the rate alone would understate both the
+  // expense and 2440 by exactly the moms.
+  useEffect(() => {
+    if (vatRegistered) return
+    const items = getValues('items') ?? []
+    items.forEach((item, index) => {
+      if (item.vat_rate !== 0) {
+        if (item.amount) {
+          setValue(`items.${index}.amount`, roundOre(item.amount * (1 + item.vat_rate)))
+        }
+        setValue(`items.${index}.vat_rate`, 0)
+      }
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vatRegistered, hasPrefilled])
+
   function isAccrualOpen(index: number): boolean {
     return watchedItems?.[index]?.accrual_balance_account != null
   }
@@ -804,7 +936,69 @@ export default function NewSupplierInvoiceForm({
         suggestBalanceAccount('expense', account),
         { shouldDirty: true },
       )
+      // Periodisering + särskild löneskatt on the same row is rejected by the
+      // API (SI_CREATE_SLP_ACCRUAL): opening the accrual panel wins and the
+      // SLP opt-in is cleared (its confirmation row disappears with it).
+      if (watch(`items.${index}.apply_slp`)) {
+        setValue(`items.${index}.apply_slp`, undefined, { shouldDirty: true })
+      }
     }
+  }
+
+  // --- Särskild löneskatt på pensionskostnader (SLP, 24,26 %) ---
+  // A 741x pension-premium row gets an advisory hint (add the 7533/2514
+  // pair) or, once opted in, a quiet confirmation line. The pair nets to
+  // zero, so the totals box below is untouched: the invoice total IS the
+  // payable. Hidden while the row's periodisering panel is open (the API
+  // rejects the combination).
+  function slpRowVisible(index: number): boolean {
+    const item = watchedItems?.[index]
+    if (!item) return false
+    if (!isSlpPensionAccount(item.account_number || '')) return false
+    if (canUseAccrual && isAccrualOpen(index)) return false
+    return true
+  }
+
+  function setSlp(index: number, value: boolean) {
+    setValue(`items.${index}.apply_slp`, value ? true : undefined, { shouldDirty: true })
+  }
+
+  function renderSlpPanel(index: number) {
+    const item = watchedItems?.[index]
+    if (!item) return null
+    const slpAmount = roundOre((item.amount || 0) * SLP_RATE)
+    if (item.apply_slp) {
+      return (
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground tabular-nums">
+            {t('slp_applied_line', { amount: formatAmount(slpAmount) })}
+          </p>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setSlp(index, false)}>
+            {t('slp_remove_action')}
+          </Button>
+        </div>
+      )
+    }
+    return (
+      <div
+        role="status"
+        className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
+      >
+        <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
+        <p className="flex-1 text-sm text-attn">
+          {t('slp_hint', { amount: formatAmount(slpAmount) })}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          onClick={() => setSlp(index, true)}
+        >
+          {t('slp_add_action')}
+        </Button>
+      </div>
+    )
   }
 
   // --- Dimension tagging (kostnadsställe/projekt, dimensions PR7) ---
@@ -897,6 +1091,11 @@ export default function NewSupplierInvoiceForm({
       />
     )
   }
+
+  // Reverse charge keeps its rate controls even for icke momsregistrerade
+  // (self-assessment is a separate obligation from deduction); everything
+  // else moms-related disappears when the company isn't VAT-registered.
+  const vatColsVisible = vatRegistered || watchedReverseCharge
 
   const itemTotals = (watchedItems || []).map((item) => {
     const lineTotal = Math.round((item.amount || 0) * 100) / 100
@@ -1034,6 +1233,14 @@ export default function NewSupplierInvoiceForm({
         // (an open-but-empty panel means "inherit the invoice default").
         ...(item.dimensions && Object.keys(item.dimensions).length > 0
           ? { dimensions: item.dimensions }
+          : {}),
+        // Särskild löneskatt (SLP): only sent when the opt-in is valid for
+        // the row (741x account, no periodisering): a stale flag must never
+        // 400 the submit.
+        ...(item.apply_slp &&
+        isSlpPensionAccount(item.account_number) &&
+        !(canUseAccrual && item.accrual_period_start && item.accrual_period_end)
+          ? { apply_slp: true }
           : {}),
       })),
     }
@@ -1558,7 +1765,7 @@ export default function NewSupplierInvoiceForm({
             {/* Eget utlägg-toggle. När den är på bokas verifikatet direkt mot
                 skuld till ägare (2893/2018) istället för leverantörsskuld (2440),
                 och fakturan får status "Betalad" direkt. */}
-            <div className="flex items-start gap-3 p-3 rounded-md border bg-muted/30">
+            <div className="flex items-start gap-3 p-3 rounded-lg border bg-muted/30">
               <Controller
                 name="paid_with_private_funds"
                 control={control}
@@ -1671,7 +1878,6 @@ export default function NewSupplierInvoiceForm({
                   <Paperclip className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                   <div>
                     <Label>{t('document_label')}</Label>
-                    <p className="text-xs text-muted-foreground">{t('document_help')}</p>
                   </div>
                 </div>
                 <DocumentUploadZone
@@ -1696,7 +1902,6 @@ export default function NewSupplierInvoiceForm({
                     inputClassName="h-9"
                   />
                 </div>
-                <p className="text-xs text-muted-foreground">{t('dimensions_default_hint')}</p>
               </div>
             )}
 
@@ -1725,7 +1930,7 @@ export default function NewSupplierInvoiceForm({
               size="sm"
               className="w-full sm:w-auto"
               onClick={() =>
-                append({ description: '', amount: 0, account_number: '', vat_rate: 0.25, reverse_charge_rate: 0.25 })
+                append({ description: '', amount: 0, account_number: '', vat_rate: vatRegistered ? 0.25 : 0, reverse_charge_rate: 0.25 })
               }
             >
               <Plus className="mr-2 h-4 w-4" />
@@ -1733,6 +1938,16 @@ export default function NewSupplierInvoiceForm({
             </Button>
           </CardHeader>
           <CardContent>
+            {templateAccountNote &&
+              (watchedItems ?? []).some((r) => r.account_number === templateAccountNote.account) && (
+                <p className="mb-4 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
+                  {t('account_from_history', {
+                    account: templateAccountNote.account,
+                    counterparty: formatCounterpartyName(templateAccountNote.counterparty),
+                  })}
+                </p>
+              )}
             {/* Valuta & moms: kept inline with the line items because they
                 drive how each row is interpreted. Hidden defaults (SEK +
                 normal moms) collapse to nothing so most users don't see this. */}
@@ -1806,10 +2021,10 @@ export default function NewSupplierInvoiceForm({
             {rcAccountWarningRows.length > 0 && (
               <div
                 role="status"
-                className="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3"
+                className="mb-4 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
               >
-                <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
-                <p className="text-sm text-warning-foreground">
+                <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
+                <p className="text-sm text-attn">
                   {t('rc_account_warning', {
                     count: rcAccountWarningRows.length,
                     rows: rcAccountWarningRows.map((i) => i + 1).join(', '),
@@ -1824,10 +2039,10 @@ export default function NewSupplierInvoiceForm({
             {foreignZeroVatRows.length > 0 && (
               <div
                 role="status"
-                className="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3"
+                className="mb-4 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
               >
-                <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
-                <p className="text-sm text-warning-foreground">
+                <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
+                <p className="text-sm text-attn">
                   {t('foreign_zero_vat_warning', {
                     count: foreignZeroVatRows.length,
                     rows: foreignZeroVatRows.map((i) => i + 1).join(', '),
@@ -1843,16 +2058,20 @@ export default function NewSupplierInvoiceForm({
                   <tr className="border-b text-left">
                     <th className="pb-2 w-28">{t('col_account')}</th>
                     <th className="pb-2">{t('col_description')}</th>
-                    <th className="pb-2 w-32">{t('col_amount_excl')}</th>
-                    <th className="pb-2 w-36">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</th>
-                    <th className="pb-2 w-24 text-right">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</th>
+                    <th className="pb-2 w-32">{vatColsVisible ? t('col_amount_excl') : t('col_amount')}</th>
+                    {vatColsVisible && (
+                      <>
+                        <th className="pb-2 w-36">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</th>
+                        <th className="pb-2 w-24 text-right">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</th>
+                      </>
+                    )}
                     <th className="pb-2 w-8"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {fields.map((field, index) => (
                     <Fragment key={field.id}>
-                    <tr className={cn('align-top', (canUseAccrual && isAccrualOpen(index)) || (dimensionsEnabled && isDimOpen(index)) ? 'border-0' : 'border-b last:border-0')}>
+                    <tr className={cn('align-top', (canUseAccrual && isAccrualOpen(index)) || (dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) ? 'border-0' : 'border-b last:border-0')}>
                       <td className="py-2 pr-2">
                         <Controller
                           name={`items.${index}.account_number`}
@@ -1898,28 +2117,32 @@ export default function NewSupplierInvoiceForm({
                           )}
                         />
                       </td>
-                      <td className="py-2 pr-2">
-                        {watchedReverseCharge ? (
-                          <Controller
-                            name={`items.${index}.reverse_charge_rate`}
-                            control={control}
-                            render={({ field: f }) => (
-                              <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                      {vatColsVisible && (
+                        <>
+                          <td className="py-2 pr-2">
+                            {watchedReverseCharge ? (
+                              <Controller
+                                name={`items.${index}.reverse_charge_rate`}
+                                control={control}
+                                render={({ field: f }) => (
+                                  <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                                )}
+                              />
+                            ) : (
+                              <Controller
+                                name={`items.${index}.vat_rate`}
+                                control={control}
+                                render={({ field: f }) => (
+                                  <VatRateCell value={f.value} onChange={f.onChange} />
+                                )}
+                              />
                             )}
-                          />
-                        ) : (
-                          <Controller
-                            name={`items.${index}.vat_rate`}
-                            control={control}
-                            render={({ field: f }) => (
-                              <VatRateCell value={f.value} onChange={f.onChange} />
-                            )}
-                          />
-                        )}
-                      </td>
-                      <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
-                        {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
-                      </td>
+                          </td>
+                          <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
+                            {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
+                          </td>
+                        </>
+                      )}
                       <td className="py-2 pt-3">
                         <div className="flex items-center">
                           {dimensionsEnabled && (
@@ -1968,15 +2191,22 @@ export default function NewSupplierInvoiceForm({
                     </tr>
                     {canUseAccrual && isAccrualOpen(index) && (
                       <tr className={cn(dimensionsEnabled && isDimOpen(index) ? 'border-0' : 'border-b last:border-0')}>
-                        <td colSpan={6} className="pb-3">
+                        <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                           {renderAccrualPanel(index, `accrual-desktop-${index}`)}
                         </td>
                       </tr>
                     )}
                     {dimensionsEnabled && isDimOpen(index) && (
-                      <tr className="border-b last:border-0">
-                        <td colSpan={6} className="pb-3">
+                      <tr className={cn(slpRowVisible(index) ? 'border-0' : 'border-b last:border-0')}>
+                        <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                           {renderDimensionsPanel(index)}
+                        </td>
+                      </tr>
+                    )}
+                    {slpRowVisible(index) && (
+                      <tr className="border-b last:border-0">
+                        <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
+                          {renderSlpPanel(index)}
                         </td>
                       </tr>
                     )}
@@ -2062,9 +2292,9 @@ export default function NewSupplierInvoiceForm({
                       )}
                     />
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className={vatColsVisible ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
                     <div className="space-y-2">
-                      <Label className="text-xs text-muted-foreground">{t('col_amount_excl')}</Label>
+                      <Label className="text-xs text-muted-foreground">{vatColsVisible ? t('col_amount_excl') : t('col_amount')}</Label>
                       <Controller
                         name={`items.${index}.amount`}
                         control={control}
@@ -2081,36 +2311,41 @@ export default function NewSupplierInvoiceForm({
                         )}
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</Label>
-                      {watchedReverseCharge ? (
-                        <Controller
-                          name={`items.${index}.reverse_charge_rate`}
-                          control={control}
-                          render={({ field: f }) => (
-                            <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
-                          )}
-                        />
-                      ) : (
-                        <Controller
-                          name={`items.${index}.vat_rate`}
-                          control={control}
-                          render={({ field: f }) => (
-                            <VatRateCell value={f.value} onChange={f.onChange} />
-                          )}
-                        />
-                      )}
+                    {vatColsVisible && (
+                      <div className="space-y-2">
+                        <Label className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</Label>
+                        {watchedReverseCharge ? (
+                          <Controller
+                            name={`items.${index}.reverse_charge_rate`}
+                            control={control}
+                            render={({ field: f }) => (
+                              <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                            )}
+                          />
+                        ) : (
+                          <Controller
+                            name={`items.${index}.vat_rate`}
+                            control={control}
+                            render={({ field: f }) => (
+                              <VatRateCell value={f.value} onChange={f.onChange} />
+                            )}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {vatColsVisible && (
+                    <div className="pt-1 border-t flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</span>
+                      <span className="tabular-nums text-muted-foreground">
+                        {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
+                      </span>
                     </div>
-                  </div>
-                  <div className="pt-1 border-t flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</span>
-                    <span className="tabular-nums text-muted-foreground">
-                      {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
-                    </span>
-                  </div>
+                  )}
                   {canUseAccrual && isAccrualOpen(index) &&
                     renderAccrualPanel(index, `accrual-mobile-${index}`)}
                   {dimensionsEnabled && isDimOpen(index) && renderDimensionsPanel(index)}
+                  {slpRowVisible(index) && renderSlpPanel(index)}
                 </div>
               ))}
             </div>
@@ -2120,17 +2355,17 @@ export default function NewSupplierInvoiceForm({
               <div className="mt-4 pt-4 border-t flex flex-wrap gap-2 text-xs">
                 <span className="text-muted-foreground">{t('ai_totals_label')}</span>
                 {extractedData.totals.subtotal != null && (
-                  <span className="px-2 py-1 rounded bg-muted tabular-nums">
+                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
                     {t('ai_net', { amount: formatAmount(extractedData.totals.subtotal) })}
                   </span>
                 )}
                 {extractedData.totals.vatAmount != null && (
-                  <span className="px-2 py-1 rounded bg-muted tabular-nums">
+                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
                     {t('ai_vat', { amount: formatAmount(extractedData.totals.vatAmount) })}
                   </span>
                 )}
                 {extractedData.totals.total != null && (
-                  <span className="px-2 py-1 rounded bg-muted tabular-nums">
+                  <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
                     {t('ai_total', { amount: formatAmount(extractedData.totals.total) })}
                   </span>
                 )}
@@ -2139,16 +2374,20 @@ export default function NewSupplierInvoiceForm({
 
             {/* Computed totals */}
             <div className="mt-4 pt-4 border-t space-y-2">
-              <div className="flex justify-between sm:justify-end sm:gap-8">
-                <span className="text-muted-foreground">{t('net_excl_vat')}</span>
-                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(subtotal, watchedCurrency)}</span>
-              </div>
-              <div className="flex justify-between sm:justify-end sm:gap-8">
-                <span className="text-muted-foreground">
-                  {watchedReverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}
-                </span>
-                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(totalVat, watchedCurrency)}</span>
-              </div>
+              {vatColsVisible && (
+                <>
+                  <div className="flex justify-between sm:justify-end sm:gap-8">
+                    <span className="text-muted-foreground">{t('net_excl_vat')}</span>
+                    <span className="tabular-nums sm:w-32 text-right">{formatCurrency(subtotal, watchedCurrency)}</span>
+                  </div>
+                  <div className="flex justify-between sm:justify-end sm:gap-8">
+                    <span className="text-muted-foreground">
+                      {watchedReverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}
+                    </span>
+                    <span className="tabular-nums sm:w-32 text-right">{formatCurrency(totalVat, watchedCurrency)}</span>
+                  </div>
+                </>
+              )}
               {displayRounding.applies && (
                 <div className="flex justify-between sm:justify-end sm:gap-8">
                   <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
@@ -2416,7 +2655,8 @@ export default function NewSupplierInvoiceForm({
               <AlertCircle className="h-5 w-5 text-destructive" />
               {t('duplicate_dialog_title')}
             </DialogTitle>
-            <DialogDescription>{conflict?.message}</DialogDescription>
+            {/* data-ph-mask: the conflict message carries the invoice number */}
+            <DialogDescription data-ph-mask="">{conflict?.message}</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">
             {conflict?.existing && (

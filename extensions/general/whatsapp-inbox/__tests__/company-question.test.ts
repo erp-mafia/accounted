@@ -8,9 +8,9 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
-    sendReplyButtons: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
-    sendList: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendReplyButtons: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendList: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
   }
 })
 
@@ -24,7 +24,10 @@ import {
   askCompanyQuestion,
   applyCompanyChoice,
 } from '@/extensions/general/whatsapp-inbox/lib/company-question'
-import { STAGED_AWAITING_COMPANY } from '@/extensions/general/whatsapp-inbox/lib/conversation'
+import {
+  NO_COMPANY_OPTIONS,
+  STAGED_AWAITING_COMPANY,
+} from '@/extensions/general/whatsapp-inbox/lib/conversation'
 import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 
 const sendTextMock = vi.mocked(sendText)
@@ -103,7 +106,7 @@ describe('askCompanyQuestion', () => {
       stagedCount: 1,
     })
 
-    expect(asked).toBe(true)
+    expect(asked).toBe('asked')
     expect(sendButtonsMock).toHaveBeenCalledTimes(1)
     const args = sendButtonsMock.mock.calls[0][1]
     expect(args.buttons).toHaveLength(3)
@@ -175,9 +178,82 @@ describe('askCompanyQuestion', () => {
       stagedCount: 1,
     })
 
-    expect(asked).toBe(false)
+    expect(asked).toBe('not_asked')
     expect(sendButtonsMock).not.toHaveBeenCalled()
     expect(sendListMock).not.toHaveBeenCalled()
+    expect(sendTextMock).not.toHaveBeenCalled()
+  })
+
+  it('treats a failed membership query as transient: nothing sent, nothing marked', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ error: { message: 'connection reset' } }) // memberships query fails
+
+    const asked = await askCompanyQuestion(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation(),
+      link: makeLink(),
+      to: '46701234567',
+      replyBase,
+      stagedCount: 1,
+    })
+
+    expect(asked).toBe('transient_error')
+    expect(sendButtonsMock).not.toHaveBeenCalled()
+    expect(sendListMock).not.toHaveBeenCalled()
+    expect(sendTextMock).not.toHaveBeenCalled()
+    // Neither the question state nor the staged rows were touched: the
+    // CALLER releases its row for retry.
+    expect(findCalls('whatsapp_conversations', 'update')).toHaveLength(0)
+    expect(findCalls('whatsapp_messages', 'update')).toHaveLength(0)
+  })
+
+  it('genuinely zero options: re-marks the staged rows and sends ONE actionable M19', async () => {
+    const { supabase, enqueue, findCalls, calls } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // memberships: really none
+    enqueue({ data: null }) // staged rows re-marked no_company_options
+    enqueue({ data: null }) // M19 burst dedupe: none sent yet
+
+    const asked = await askCompanyQuestion(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation(),
+      link: makeLink(),
+      to: '46701234567',
+      replyBase,
+      stagedCount: 1,
+    })
+
+    expect(asked).toBe('no_options')
+    const marker = findCalls('whatsapp_messages', 'update')[0][0] as Record<string, unknown>
+    expect(marker.error_message).toBe(NO_COMPANY_OPTIONS)
+    // The re-mark targets exactly the rows parked behind this episode.
+    expect(
+      calls.some(
+        (c) =>
+          c.table === 'whatsapp_messages' &&
+          c.method === 'eq' &&
+          c.args[0] === 'error_message' &&
+          c.args[1] === STAGED_AWAITING_COMPANY,
+      ),
+    ).toBe(true)
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m19NoCompany)
+    // No question is ever parked: there is nothing to answer.
+    expect(findCalls('whatsapp_conversations', 'update')).toHaveLength(0)
+  })
+
+  it('suppresses a repeat M19 inside the burst window', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // memberships: none
+    enqueue({ data: null }) // staged rows re-mark
+    enqueue({ data: { id: 'm19-earlier' } }) // an M19 already went out
+
+    const asked = await askCompanyQuestion(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation(),
+      link: makeLink(),
+      to: '46701234567',
+      replyBase,
+      stagedCount: 2,
+    })
+
+    expect(asked).toBe('no_options')
     expect(sendTextMock).not.toHaveBeenCalled()
   })
 })

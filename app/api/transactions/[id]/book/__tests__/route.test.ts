@@ -10,7 +10,7 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -249,6 +249,85 @@ describe('POST /api/transactions/[id]/book', () => {
 
     expect(status).toBe(500)
     expect(body.error).toBe('Failed to update transaction')
+  })
+
+  // ── Underlag propagation (pinned document + matched inbox items) ──────
+  // Attach-before-book: a document pinned to the transaction (or an inbox
+  // item hand-matched to it) must land on the new verifikat, or every
+  // underlag surface reads "Underlag saknas" for a booking that HAS its
+  // underlag (the 2026-08-13 user report).
+
+  it('anchors the pinned document to the new verifikat (attach-before-book)', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+    const je = makeJournalEntry({ id: 'je-new' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    mockCreateJournalEntry.mockResolvedValue(je)
+    enqueue({ data: null, error: null }) // update transaction
+    enqueue({ data: { document_id: 'doc-1' } }) // propagate: tx pin lookup
+    enqueue({ data: { journal_entry_id: null } }) // pinned doc unanchored
+    enqueue({ data: { id: 'je-new' } }) // linkToJournalEntry: entry ownership check
+    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-new' } }) // doc update
+    enqueue({ data: [] }) // no matched inbox items
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: validBody,
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(findCalls('document_attachments', 'update')).toContainEqual([
+      { journal_entry_id: 'je-new', journal_entry_line_id: null },
+    ])
+  })
+
+  it('stamps a matched inbox item consumed by the booking', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+    const je = makeJournalEntry({ id: 'je-new' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    mockCreateJournalEntry.mockResolvedValue(je)
+    enqueue({ data: null, error: null }) // update transaction
+    enqueue({ data: { document_id: null } }) // propagate: nothing pinned
+    enqueue({ data: [{ id: 'i1', document_id: null }] }) // matched inbox item
+    enqueue({ data: null }) // stamp update
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: validBody,
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
+      { created_journal_entry_id: 'je-new' },
+    ])
+  })
+
+  it('still returns success when underlag propagation fails (best-effort)', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+    const je = makeJournalEntry({ id: 'je-new' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    mockCreateJournalEntry.mockResolvedValue(je)
+    enqueue({ data: null, error: null }) // update transaction
+    enqueue({ data: { document_id: 'doc-1' } }) // propagate: tx pin lookup
+    enqueue({ data: { journal_entry_id: null } }) // pinned doc unanchored
+    enqueue({ data: null }) // linkToJournalEntry: entry lookup fails -> throws
+    enqueue({ data: [] }) // no matched inbox items
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: validBody,
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+
+    // The verifikat is already posted: a propagation failure is logged and
+    // repaired by re-running, never allowed to fail the booking.
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(findCalls('document_attachments', 'update')).toEqual([])
   })
 
   // ── Booking-time duplicate guard ──────────────────────────────────────

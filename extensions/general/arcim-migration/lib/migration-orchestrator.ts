@@ -18,8 +18,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { MigrationProgress, MigrationResults, SkipReasons } from '../types'
+import type { MigrationProgress, MigrationResults, MigrationStepError, SkipReasons } from '../types'
 import type { ProviderName } from '@/lib/providers/types'
+import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import type { CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { normalizeVatNumber, isValidSwedishVatNumber } from '@/lib/vat/vat-number'
@@ -38,6 +40,7 @@ import {
   type CustomerMetadataEnrichment,
   type ExistingCustomerMetadata,
 } from './customer-metadata'
+import { insertWithPerRowFallback } from './insert-fallback'
 import {
   mapCustomer,
   mapSupplier,
@@ -81,6 +84,42 @@ function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
   return out
+}
+
+/**
+ * Codes that doom every remaining provider call in this run: dead/expired
+ * grant, missing integration license, API module not activated. Continuing
+ * would fail four more times with the same cause and then report a
+ * "successful" migration with zero rows (the failure mode that sent a real
+ * config issue to the bug tracker). Rethrow so /migrate answers with the
+ * structured code and the wizard shows the actual remediation.
+ */
+const FATAL_STEP_ERROR_CODES = new Set([
+  'PROVIDER_AUTH_EXPIRED',
+  'PROVIDER_LICENSE_MISSING',
+  'PROVIDER_API_MODULE_INACTIVE',
+])
+
+/**
+ * Record a failed step on the results so the UI can render it. Non-fatal
+ * failures keep the log-and-continue behavior (one bad step must not discard
+ * the others' already-persisted rows); fatal connection-level failures
+ * rethrow, see FATAL_STEP_ERROR_CODES.
+ */
+function recordStepError(
+  results: MigrationResults,
+  step: MigrationStepError['step'],
+  err: unknown,
+): void {
+  const code = classifyProviderError(err)
+  if (code && FATAL_STEP_ERROR_CODES.has(code)) throw err
+
+  const rawMessage = err instanceof Error ? err.message : String(err)
+  const entry = code ? getErrorEntry(code) : undefined
+  const message = entry?.message_sv ?? `Leverantören svarade med ett fel: ${rawMessage}`
+
+  results.stepErrors = results.stepErrors ?? []
+  results.stepErrors.push({ step, code, message })
 }
 
 function getOrgNumberFromParty(party: PartyDto): string | null {
@@ -177,6 +216,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       } catch (err) {
         console.error('Failed to import company info:', err)
         results.companyInfo = { imported: false }
+        recordStepError(results, 'companyInfo', err)
       }
     }
 
@@ -217,6 +257,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         let updated = 0
         let skipped = 0
         const skipReasons: SkipReasons = {}
+        let errorSample: string | null = null
 
         type PendingCustomer = {
           dto: CustomerDto
@@ -224,6 +265,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         }
         const pending: PendingCustomer[] = []
         const pendingEnrichments: { id: string; changes: CustomerMetadataEnrichment }[] = []
+        // Providers can hand back the same record more than once (a paging
+        // fault upstream, or genuine source duplicates). The DB-backed maps
+        // above only know rows that existed BEFORE this run, so without an
+        // in-run key set every repeat would be inserted again.
+        const pendingCustomerKeys = new Set<string>()
 
         for (const customer of customers) {
           if (!customer.active) {
@@ -258,32 +304,40 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             continue
           }
 
+          const pendingKey = (orgNumber ?? `name:${customer.party.name?.toLowerCase() ?? ''}`).trim()
+          if (pendingCustomerKeys.has(pendingKey)) {
+            skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+            skipped++
+            continue
+          }
+          pendingCustomerKeys.add(pendingKey)
+
           pending.push({ dto: customer, row: mapCustomer(customer, userId, companyId) })
         }
 
         for (const batch of chunk(pending, INSERT_CHUNK_SIZE)) {
-          const rows = batch.map((p) => p.row)
-          const { data: inserted, error } = await supabase
-            .from('customers')
-            .insert(rows)
-            .select('id, org_number, name')
+          const outcome = await insertWithPerRowFallback(
+            supabase, 'customers', batch.map((p) => p.row), 'id, org_number, name'
+          )
 
-          if (error) {
-            console.error(`[migration] Customer batch insert failed (${batch.length} rows):`, error.message)
-            skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
-            skipped += batch.length
-            continue
+          if (outcome.failedCount > 0) {
+            console.error(
+              `[migration] Customer insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+              outcome.firstError
+            )
+            skipReasons.failed = (skipReasons.failed ?? 0) + outcome.failedCount
+            skipped += outcome.failedCount
+            errorSample ??= outcome.firstError
           }
 
-          // PostgREST returns inserted rows in the same order as supplied,
-          // so we can pair them up by index to recover the provider id.
-          const insertedRows = inserted ?? []
-          for (let i = 0; i < batch.length && i < insertedRows.length; i++) {
+          for (let i = 0; i < batch.length; i++) {
+            const insertedRow = outcome.returned[i]
+            if (!insertedRow) continue
             const providerId = batch[i].dto.id
-            const newId = insertedRows[i].id
+            const newId = insertedRow.id as string
             customerIdMap.set(providerId, newId)
-            if (insertedRows[i].org_number) orgNumberToCustomerId.set(insertedRows[i].org_number!, newId)
-            if (insertedRows[i].name) nameToCustomerId.set(insertedRows[i].name!, newId)
+            if (insertedRow.org_number) orgNumberToCustomerId.set(insertedRow.org_number as string, newId)
+            if (insertedRow.name) nameToCustomerId.set(insertedRow.name as string, newId)
             imported++
           }
         }
@@ -313,6 +367,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             if (outcome.error || !outcome.data) {
               if (outcome.error) {
                 console.error('[migration] Customer metadata enrichment failed:', outcome.error.message)
+                errorSample ??= outcome.error.message
               }
               skipReasons.failed = (skipReasons.failed ?? 0) + 1
               skipped++
@@ -322,9 +377,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.customers = { total: customers.length, imported, updated, skipped, skipReasons }
+        results.customers = { total: customers.length, imported, updated, skipped, skipReasons, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import customers:', err)
+        recordStepError(results, 'customers', err)
       }
     }
 
@@ -354,9 +410,12 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         let imported = 0
         let skipped = 0
         const skipReasons: SkipReasons = {}
+        let errorSample: string | null = null
 
         type PendingSupplier = { dto: SupplierDto; row: Record<string, unknown> }
         const pending: PendingSupplier[] = []
+        // Same in-run repeat guard as customers.
+        const pendingSupplierKeys = new Set<string>()
 
         for (const supplier of suppliers) {
           if (!supplier.active) {
@@ -380,37 +439,48 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             continue
           }
 
+          const pendingKey = (orgNumber ?? `name:${supplier.party.name?.toLowerCase() ?? ''}`).trim()
+          if (pendingSupplierKeys.has(pendingKey)) {
+            skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+            skipped++
+            continue
+          }
+          pendingSupplierKeys.add(pendingKey)
+
           pending.push({ dto: supplier, row: mapSupplier(supplier, userId, companyId) })
         }
 
         for (const batch of chunk(pending, INSERT_CHUNK_SIZE)) {
-          const rows = batch.map((p) => p.row)
-          const { data: inserted, error } = await supabase
-            .from('suppliers')
-            .insert(rows)
-            .select('id, org_number, name')
+          const outcome = await insertWithPerRowFallback(
+            supabase, 'suppliers', batch.map((p) => p.row), 'id, org_number, name'
+          )
 
-          if (error) {
-            console.error(`[migration] Supplier batch insert failed (${batch.length} rows):`, error.message)
-            skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
-            skipped += batch.length
-            continue
+          if (outcome.failedCount > 0) {
+            console.error(
+              `[migration] Supplier insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+              outcome.firstError
+            )
+            skipReasons.failed = (skipReasons.failed ?? 0) + outcome.failedCount
+            skipped += outcome.failedCount
+            errorSample ??= outcome.firstError
           }
 
-          const insertedRows = inserted ?? []
-          for (let i = 0; i < batch.length && i < insertedRows.length; i++) {
+          for (let i = 0; i < batch.length; i++) {
+            const insertedRow = outcome.returned[i]
+            if (!insertedRow) continue
             const providerId = batch[i].dto.id
-            const newId = insertedRows[i].id
+            const newId = insertedRow.id as string
             supplierIdMap.set(providerId, newId)
-            if (insertedRows[i].org_number) orgNumberToSupplierId.set(insertedRows[i].org_number!, newId)
-            if (insertedRows[i].name) nameToSupplierId.set(insertedRows[i].name!, newId)
+            if (insertedRow.org_number) orgNumberToSupplierId.set(insertedRow.org_number as string, newId)
+            if (insertedRow.name) nameToSupplierId.set(insertedRow.name as string, newId)
             imported++
           }
         }
 
-        results.suppliers = { total: suppliers.length, imported, skipped, skipReasons }
+        results.suppliers = { total: suppliers.length, imported, skipped, skipReasons, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import suppliers:', err)
+        recordStepError(results, 'suppliers', err)
       }
     }
 
@@ -434,6 +504,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         let imported = 0
         let skipped = 0
         const skipReasons: SkipReasons = {}
+        let errorSample: string | null = null
+        // invoice_number carries a UNIQUE (company_id, invoice_number) index,
+        // so a repeated number WITHIN the fetched set (paging fault or source
+        // duplicate) must be skipped here: inside one insert statement it
+        // would reject the whole chunk. Empty numbers are exempt: they are
+        // stored as NULL, which the partial index does not cover.
+        const seenInvoiceNumbers = new Set<string>()
 
         // Phase A: resolve customer for each invoice; collect those that
         // need a minimal customer record to be created on-the-fly.
@@ -454,6 +531,14 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
             skipped++
             continue
+          }
+          if (inv.invoiceNumber) {
+            if (seenInvoiceNumbers.has(inv.invoiceNumber)) {
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+              continue
+            }
+            seenInvoiceNumbers.add(inv.invoiceNumber)
           }
 
           const customerOrgNumber = getOrgNumberFromParty(inv.customer)
@@ -503,30 +588,30 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         if (stubByKey.size > 0) {
           const stubList = [...stubByKey.values()]
           for (const batch of chunk(stubList, INSERT_CHUNK_SIZE)) {
-            const { data: inserted, error } = await supabase
-              .from('customers')
-              .insert(batch.map((s) => s.row))
-              .select('id, org_number, name')
+            const outcome = await insertWithPerRowFallback(
+              supabase, 'customers', batch.map((s) => s.row), 'id, org_number, name'
+            )
 
-            if (error) {
+            if (outcome.failedCount > 0) {
               console.error(
-                `[migration] Sales invoice customer stub insert failed (${batch.length} rows):`,
-                error.message
+                `[migration] Sales invoice customer stub insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+                outcome.firstError
               )
-              // Mark invoices waiting on failed stubs as no-match
-              for (const s of batch) {
-                for (const idx of s.waitingInvoiceIndices) {
-                  resolved[idx] = { ...resolved[idx], customerId: '__FAILED__' }
-                }
-              }
-              continue
+              errorSample ??= outcome.firstError
             }
 
-            const insertedRows = inserted ?? []
-            for (let i = 0; i < batch.length && i < insertedRows.length; i++) {
-              const newId = insertedRows[i].id
-              if (insertedRows[i].org_number) orgNumberToCustomerId.set(insertedRows[i].org_number!, newId)
-              if (insertedRows[i].name) nameToCustomerId.set(insertedRows[i].name!, newId)
+            for (let i = 0; i < batch.length; i++) {
+              const insertedRow = outcome.returned[i]
+              if (!insertedRow) {
+                // Mark invoices waiting on this failed stub as no-match
+                for (const idx of batch[i].waitingInvoiceIndices) {
+                  resolved[idx] = { ...resolved[idx], customerId: '__FAILED__' }
+                }
+                continue
+              }
+              const newId = insertedRow.id as string
+              if (insertedRow.org_number) orgNumberToCustomerId.set(insertedRow.org_number as string, newId)
+              if (insertedRow.name) nameToCustomerId.set(insertedRow.name as string, newId)
               for (const idx of batch[i].waitingInvoiceIndices) {
                 resolved[idx] = { ...resolved[idx], customerId: newId }
               }
@@ -534,10 +619,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        // Drop invoices whose customer couldn't be created.
+        // Drop invoices whose customer couldn't be created. That is a DB
+        // failure (the stub insert errored, errorSample carries it), not a
+        // matching miss: counting it as noMatch would render a green result
+        // row with the database error hidden.
         const ready = resolved.filter((r) => {
           if (r.customerId === '__FAILED__') {
-            skipReasons.noMatch = (skipReasons.noMatch ?? 0) + 1
+            skipReasons.failed = (skipReasons.failed ?? 0) + 1
             skipped++
             return false
           }
@@ -562,22 +650,25 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             dto: r.dto,
           }))
 
-          const { data: insertedInvoices, error: invErr } = await supabase
-            .from('invoices')
-            .insert(mappedBatch.map((m) => m.invoice))
-            .select('id')
+          const outcome = await insertWithPerRowFallback(
+            supabase, 'invoices', mappedBatch.map((m) => m.invoice), 'id'
+          )
 
-          if (invErr) {
-            console.error(`[migration] Sales invoice batch insert failed (${batch.length}):`, invErr.message)
-            skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
-            skipped += batch.length
-            continue
+          if (outcome.failedCount > 0) {
+            console.error(
+              `[migration] Sales invoice insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+              outcome.firstError
+            )
+            skipReasons.failed = (skipReasons.failed ?? 0) + outcome.failedCount
+            skipped += outcome.failedCount
+            errorSample ??= outcome.firstError
           }
 
-          const invoiceRows = insertedInvoices ?? []
           const allItems: Record<string, unknown>[] = []
-          for (let i = 0; i < mappedBatch.length && i < invoiceRows.length; i++) {
-            const invoiceId = invoiceRows[i].id
+          for (let i = 0; i < mappedBatch.length; i++) {
+            const insertedRow = outcome.returned[i]
+            if (!insertedRow) continue
+            const invoiceId = insertedRow.id
             for (const item of mappedBatch[i].items) {
               allItems.push({ ...item, invoice_id: invoiceId })
             }
@@ -599,9 +690,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved }
+        results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import sales invoices:', err)
+        recordStepError(results, 'salesInvoices', err)
       }
     }
 
@@ -644,6 +736,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         let imported = 0
         let skipped = 0
         const skipReasons: SkipReasons = {}
+        let errorSample: string | null = null
 
         type ResolvedSupplierInvoice = { dto: SupplierInvoiceDto; supplierId: string }
         const resolved: ResolvedSupplierInvoice[] = []
@@ -704,29 +797,29 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         if (stubByKey.size > 0) {
           const stubList = [...stubByKey.values()]
           for (const batch of chunk(stubList, INSERT_CHUNK_SIZE)) {
-            const { data: inserted, error } = await supabase
-              .from('suppliers')
-              .insert(batch.map((s) => s.row))
-              .select('id, org_number, name')
+            const outcome = await insertWithPerRowFallback(
+              supabase, 'suppliers', batch.map((s) => s.row), 'id, org_number, name'
+            )
 
-            if (error) {
+            if (outcome.failedCount > 0) {
               console.error(
-                `[migration] Supplier invoice supplier stub insert failed (${batch.length}):`,
-                error.message
+                `[migration] Supplier invoice supplier stub insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+                outcome.firstError
               )
-              for (const s of batch) {
-                for (const idx of s.waitingInvoiceIndices) {
-                  resolved[idx] = { ...resolved[idx], supplierId: '__FAILED__' }
-                }
-              }
-              continue
+              errorSample ??= outcome.firstError
             }
 
-            const insertedRows = inserted ?? []
-            for (let i = 0; i < batch.length && i < insertedRows.length; i++) {
-              const newId = insertedRows[i].id
-              if (insertedRows[i].org_number) orgNumberToSupplierId.set(insertedRows[i].org_number!, newId)
-              if (insertedRows[i].name) nameToSupplierId.set(insertedRows[i].name!, newId)
+            for (let i = 0; i < batch.length; i++) {
+              const insertedRow = outcome.returned[i]
+              if (!insertedRow) {
+                for (const idx of batch[i].waitingInvoiceIndices) {
+                  resolved[idx] = { ...resolved[idx], supplierId: '__FAILED__' }
+                }
+                continue
+              }
+              const newId = insertedRow.id as string
+              if (insertedRow.org_number) orgNumberToSupplierId.set(insertedRow.org_number as string, newId)
+              if (insertedRow.name) nameToSupplierId.set(insertedRow.name as string, newId)
               for (const idx of batch[i].waitingInvoiceIndices) {
                 resolved[idx] = { ...resolved[idx], supplierId: newId }
               }
@@ -735,20 +828,30 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         }
 
         // After stubs, do a final dedupe pass against existing supplier invoices
-        // using the now-resolved supplierId.
+        // using the now-resolved supplierId. The in-run key set catches the
+        // same (supplier, number) pair appearing twice in the fetched data,
+        // which the UNIQUE (company_id, supplier_id, supplier_invoice_number)
+        // index would otherwise reject mid-insert. NULL/empty numbers are
+        // exempt: the index treats NULLs as distinct.
+        const seenSuppInvKeys = new Set<string>()
         const ready = resolved.filter((r) => {
           if (r.supplierId === '__FAILED__' || !r.supplierId) {
+            // Failed stub insert = DB failure with errorSample set, so count
+            // it as failed; noMatch would hide the error in the result row.
             if (r.supplierId === '__FAILED__') {
-              skipReasons.noMatch = (skipReasons.noMatch ?? 0) + 1
+              skipReasons.failed = (skipReasons.failed ?? 0) + 1
               skipped++
             }
             return false
           }
-          const dupKey = `${r.supplierId}::${r.dto.invoiceNumber}`
-          if (existingSuppInvKeys.has(dupKey)) {
-            skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
-            skipped++
-            return false
+          if (r.dto.invoiceNumber) {
+            const dupKey = `${r.supplierId}::${r.dto.invoiceNumber}`
+            if (existingSuppInvKeys.has(dupKey) || seenSuppInvKeys.has(dupKey)) {
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+              return false
+            }
+            seenSuppInvKeys.add(dupKey)
           }
           return true
         })
@@ -770,24 +873,29 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             return { invoice, items, fxUnresolved: fx, dto: r.dto }
           })
 
-          const { data: insertedInvoices, error: invErr } = await supabase
-            .from('supplier_invoices')
-            .insert(mappedBatch.map((m) => m.invoice))
-            .select('id')
+          const outcome = await insertWithPerRowFallback(
+            supabase, 'supplier_invoices', mappedBatch.map((m) => m.invoice), 'id'
+          )
 
-          if (invErr) {
-            console.error(`[migration] Supplier invoice batch insert failed (${batch.length}):`, invErr.message)
-            skipReasons.failed = (skipReasons.failed ?? 0) + batch.length
-            skipped += batch.length
-            // Roll the counter back so we don't leave a huge gap on retry.
-            nextArrivalNumber -= batch.length
-            continue
+          if (outcome.failedCount > 0) {
+            console.error(
+              `[migration] Supplier invoice insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+              outcome.firstError
+            )
+            skipReasons.failed = (skipReasons.failed ?? 0) + outcome.failedCount
+            skipped += outcome.failedCount
+            errorSample ??= outcome.firstError
+            // A failed row leaves a hole in the arrival numbering. That is
+            // acceptable: ankomstnummer is an internal sequence, not a
+            // verifikationsnummer, and rewinding the counter after a PARTIAL
+            // success would hand out numbers that already landed.
           }
 
-          const invoiceRows = insertedInvoices ?? []
           const allItems: Record<string, unknown>[] = []
-          for (let i = 0; i < mappedBatch.length && i < invoiceRows.length; i++) {
-            const invoiceId = invoiceRows[i].id
+          for (let i = 0; i < mappedBatch.length; i++) {
+            const insertedRow = outcome.returned[i]
+            if (!insertedRow) continue
+            const invoiceId = insertedRow.id
             for (const item of mappedBatch[i].items) {
               allItems.push({ ...item, supplier_invoice_id: invoiceId })
             }
@@ -809,9 +917,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved }
+        results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import supplier invoices:', err)
+        recordStepError(results, 'supplierInvoices', err)
       }
     }
 
@@ -836,6 +945,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         )
       } catch (err) {
         console.error('Failed to reconcile supplier invoice payments:', err)
+        recordStepError(results, 'reconciliation', err)
       }
     }
 

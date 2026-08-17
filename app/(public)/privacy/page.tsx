@@ -12,14 +12,14 @@ export function generateMetadata(): Metadata {
 export default function PrivacyPolicyPage() {
   const { appName, legalEntity, privacyEmail } = getBranding()
   return (
-    <div className="min-h-screen bg-background py-12 px-4">
+    <div className="min-h-dvh bg-background py-12 px-4">
       <div className="max-w-3xl mx-auto space-y-6">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-foreground mb-2">
+          <h1 className="text-3xl text-foreground mb-2">
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-07-22
+            Senast uppdaterad: 2026-08-17
           </p>
         </div>
 
@@ -157,10 +157,14 @@ export default function PrivacyPolicyPage() {
                       enkäter och supportärenden. Överförda uppgifter:
                       användar-ID, e-postadress, namn och företagsnamn. Om du
                       själv skriver till supporten i appen skickas även ditt
-                      meddelande dit som ett ärende, så att vi kan svara. All text i
-                      sessionsinspelningar maskeras: vi spelar in var i
-                      gränssnittet du klickar, aldrig vad som står i din
-                      bokföring. Organisationsnummer överförs aldrig.
+                      meddelande dit som ett ärende, så att vi kan svara. I
+                      sessionsinspelningar maskeras allt du skriver och allt
+                      innehåll i din bokföring (namn, beskrivningar, belopp,
+                      person- och organisationsnummer); läsbart är endast
+                      appens eget gränssnitt, som rubriker, knappar, menyer
+                      och ledtexter, så att vi kan se var i appen du stöter
+                      på problem utan att se dina uppgifter.
+                      Organisationsnummer skickas aldrig som analysdata.
                       Identifiering sker endast för inloggade användare (ej
                       sandbox/demo). Inga kakor används, och själva analysdatan
                       lagras inte på din enhet. Två små tekniska värden sparas

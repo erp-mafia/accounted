@@ -6,13 +6,56 @@
  */
 
 // Matching configuration (re-exported for consumers)
-export const DATE_TOLERANCE_DAYS = 3
+/**
+ * How far a receipt's date may sit from the bank's before the date stops
+ * counting as agreement.
+ *
+ * Ten days, not three. A card purchase settles days after it happens, an
+ * international one routinely a week later, and a forwarded receipt carries
+ * the date of the purchase while the statement carries the date of the
+ * posting. At three days the signal scored zero for ordinary, correct pairs
+ * and took a quarter of the weight down with it: a receipt matching to within
+ * 1% from a merchant the matcher recognised still capped at 0.62, under every
+ * threshold that decides anything.
+ *
+ * The date remains real evidence at this width. A receipt from March still
+ * disagrees with a purchase in September.
+ */
+export const DATE_TOLERANCE_DAYS = 10
 export const AMOUNT_TOLERANCE_PERCENT = 0.05
+
+/**
+ * Tolerance for a total that had to be converted into kronor first.
+ *
+ * A same-currency comparison is two readings of one number, so 5% is generous.
+ * A converted one carries a second, known error: Riksbanken publishes a mid
+ * rate and a card issuer charges its own, typically a point or two away, on a
+ * settlement day that need not be the receipt's. Holding both to the same bar
+ * treats a rate spread as if it were a disagreement about the sum. Measured
+ * against real statements, the spread ran 1.2% to 3%.
+ */
+export const CONVERTED_AMOUNT_TOLERANCE_PERCENT = 0.09
 export const MIN_MATCH_CONFIDENCE = 0.4
 
 /**
  * Normalize a merchant name for comparison.
  * Removes special characters, Swedish company suffixes, and extra whitespace.
+ *
+ * FROZEN. This is not merely a helper: `normalizeCounterpartyName`
+ * (lib/bookkeeping/counterparty-templates.ts) ends in this function, and its
+ * output is PERSISTED as `categorization_templates.counterparty_name` under
+ * UNIQUE (company_id, counterparty_name), with a hand-written SQL mirror
+ * `public.normalize_counterparty_key()` that the ledger-context RPC recomputes
+ * at query time. Change this and stored keys stop equalling computed ones: the
+ * konteringskarta join misses, learned vat_treatment degrades to history, and
+ * `insertOrUpdateTemplate` silently inserts a SECOND row per merchant, orphaning
+ * the occurrence counts instead of migrating them.
+ *
+ * To improve MATCHING, edit `normalizeForMatch` below, which nothing persists.
+ * To improve the canonical KEY, it is a three-part atomic change: this function
+ * + CREATE OR REPLACE of the SQL mirror + a backfill/merge migration over
+ * categorization_templates, with tests/pg/ledger-usage-stats-rpc.pg.test.ts
+ * extended in the same commit.
  */
 export function normalizeMerchantName(name: string): string {
   return name
@@ -21,6 +64,81 @@ export function normalizeMerchantName(name: string): string {
     .replace(/\b(ab|hb|kb|ek|för|stiftelse)\b/g, '') // Remove company suffixes
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+/**
+ * Legal-form tokens that carry no identity. Deliberately wider than the frozen
+ * key normalizer's list: a receipt says "Adobe Systems Software Ireland Ltd"
+ * where the bank says "Adobe", and only the matcher needs to see through that.
+ */
+const LEGAL_FORM_TOKENS =
+  /\b(ab|hb|kb|ek|för|stiftelse|inc|llc|ltd|limited|gmbh|oy|oyj|ap|aps|pbc|plc|sarl|bv|nv|corp|corporation|company|filial|int|international)\b/g
+
+/**
+ * Noise the Swedish card rails staple onto a merchant, observed in production:
+ * `Ryde Sweden AB  K8066 Kortköp/uttag`, `Kortköp 260612 Prime Video-*NL5EK5W`,
+ * `ELGIGANTEN S/25-07-14`, `Qstar Lilla Edet 6531 K8781 Kortköp/uttag`.
+ */
+const CARD_TOKEN = /\bk\d{4}\b/g
+const CARD_VERB = /\bkort(kop|kop\/uttag)?\b|\buttag\b/g
+/**
+ * Swedish words a bank statement puts around a merchant name that are not part
+ * of it. "Utlägg Norwegian" is an expense reimbursement for a Norwegian
+ * ticket, not a company called Utlägg: leaving the word in cost the pair its
+ * token-subset match and dropped merchant similarity to 0.18, which was enough
+ * to keep an exact 1 998 kr match from ever being proposed.
+ */
+const PAYMENT_NOISE = /\butl[aä]gg\b|\b[oö]verf[oö]ring\b|\bvia internet\b|\bbg-?bet\b|\bautogiro\b/g
+const CARD_DATE_PREFIX = /^\s*kortkop\s+\d{6}\s*/
+const TRAILING_DATE = /\s*\/?\s*\d{2}-\d{2}-\d{2}\s*$/
+/**
+ * Reference numbers, which banks glue straight onto the name
+ * ("GOOGLE ADS8047863617"), so this deliberately has no word boundary. Runs of
+ * three digits or fewer stay: they are often part of the identity
+ * ("Rusta Lindingö 135", "7-Eleven").
+ */
+const LONG_DIGIT_RUN = /\d{4,}/g
+const DOMAIN_TAIL = /\.(com|se|io|ai|co|net|org|nu|dk|no|fi|de|uk)\b/g
+
+/**
+ * Fold a merchant string down to the part that actually identifies it, for
+ * SIMILARITY ONLY. Nothing persists this, so it can be aggressive where the
+ * frozen key normalizer must not be.
+ *
+ * Aggressive folding is safe here precisely because it is applied to BOTH sides
+ * of every comparison: an over-eager fold that turns "Boeing" into "boing" does
+ * so for the receipt and the bank row alike, so the pair still matches. The only
+ * real risk is two genuinely different merchants colliding, which the amount and
+ * date signals then have to disagree with.
+ */
+export function normalizeForMatch(name: string): string {
+  let s = name.toLowerCase()
+
+  // Banks disagree about diacritics: one writes "kött", another transliterates
+  // to "koett", a third mangles the encoding into "LINDING??". Fold all three
+  // to the same base letters so they stop being three different merchants.
+  s = s.normalize('NFD').replace(/[̀-ͯ]/g, '')
+  s = s.replace(/\?{2,}|�/g, ' ')
+  s = s.replace(/oe/g, 'o').replace(/ae/g, 'a').replace(/aa/g, 'a')
+
+  // A processor marker hides the merchant on one side or the other:
+  // GOOGLE*PLAY puts it first, K*IKEA GALLE puts it second. Keep both.
+  s = s.replace(/[*_]+/g, ' ')
+
+  s = s.replace(CARD_DATE_PREFIX, ' ')
+  s = s.replace(TRAILING_DATE, ' ')
+  s = s.replace(CARD_TOKEN, ' ')
+  s = s.replace(CARD_VERB, ' ')
+  s = s.replace(PAYMENT_NOISE, ' ')
+  s = s.replace(DOMAIN_TAIL, ' ')
+  s = s.replace(/\bwww\b/g, ' ')
+
+  // Punctuation to space rather than nothing, so "Word,and" stays two tokens.
+  s = s.replace(/[^\w\s]/g, ' ')
+  s = s.replace(LONG_DIGIT_RUN, ' ')
+  s = s.replace(LEGAL_FORM_TOKENS, ' ')
+
+  return s.replace(/\s+/g, ' ').trim()
 }
 
 /**
@@ -58,20 +176,34 @@ export function levenshteinDistance(str1: string, str2: string): number {
 export function calculateMerchantSimilarity(name1: string, name2: string): number {
   if (!name1 || !name2) return 0
 
-  const n1 = normalizeMerchantName(name1)
-  const n2 = normalizeMerchantName(name2)
+  // Matching-only folding: sees through card tokens, processor stars,
+  // transliterated diacritics and legal forms, none of which change identity.
+  const n1 = normalizeForMatch(name1)
+  const n2 = normalizeForMatch(name2)
+  if (!n1 || !n2) return 0
 
   // Exact match
   if (n1 === n2) return 1
 
-  // One contains the other
+  // One contains the other. Also covers the bank's fixed-width truncation
+  // ("apple com bi" inside "apple com bill"), which is a prefix by nature.
   if (n1.includes(n2) || n2.includes(n1)) return 0.9
 
-  // Word overlap
-  const words1 = n1.split(/\s+/)
-  const words2 = n2.split(/\s+/)
-  const commonWords = words1.filter((w) => words2.includes(w))
+  const words1 = n1.split(/\s+/).filter(Boolean)
+  const words2 = n2.split(/\s+/).filter(Boolean)
+  const set1 = new Set(words1)
+  const set2 = new Set(words2)
+  const commonWords = words1.filter((w) => set2.has(w))
 
+  // Every token of the shorter name appears in the longer one: "Adobe" against
+  // "Adobe Systems Software Ireland", or a receipt's legal name against the
+  // bank's trading name. Scored level with substring containment because it is
+  // the same claim, made token-wise instead of character-wise.
+  const smaller = set1.size <= set2.size ? set1 : set2
+  const larger = smaller === set1 ? set2 : set1
+  if (smaller.size > 0 && [...smaller].every((w) => larger.has(w))) return 0.9
+
+  // Word overlap
   if (commonWords.length > 0) {
     const overlapScore = commonWords.length / Math.max(words1.length, words2.length)
     if (overlapScore >= 0.5) return 0.7 + overlapScore * 0.2

@@ -30,6 +30,10 @@ export const CAPABILITY = {
   bolagsverket: 'bolagsverket',
   /** Stripe Connect: auto payment links on invoices + payment/payout sync. */
   stripe_payments: 'stripe_payments',
+  /** WooCommerce store sync: orders/refunds imported as a transaction feed. */
+  woocommerce_sync: 'woocommerce_sync',
+  /** Shopify store sync: orders/refunds imported as a transaction feed. */
+  shopify_sync: 'shopify_sync',
 } as const
 
 export type CapabilityKey = (typeof CAPABILITY)[keyof typeof CAPABILITY]
@@ -55,6 +59,8 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.skatteverket,
   CAPABILITY.email_send,
   CAPABILITY.stripe_payments,
+  CAPABILITY.woocommerce_sync,
+  CAPABILITY.shopify_sync,
 ] as const
 
 /**

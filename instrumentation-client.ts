@@ -1,6 +1,7 @@
 import posthog from 'posthog-js'
 import { isAnalyticsEnabled, warnIfAnalyticsMisconfigured } from '@/lib/analytics/enabled'
 import { purgeLegacyAnalyticsStorage } from '@/lib/analytics/purge-legacy-storage'
+import { replayMaskText } from '@/lib/analytics/replay-masking'
 
 // Clear anything Recapt left on the device. Runs unconditionally, BEFORE the
 // analytics gate: a browser carrying `__recapt_record_engine` must get cleaned
@@ -53,31 +54,23 @@ function tracingHosts(): string[] {
  *    `seenSurvey_*` flags straight to localStorage, bypassing this setting:
  *    that is functional UI state ("don't ask again"), not tracking.
  *
- * 3. Mask-by-default text masking. `maskTextSelector: '*'` routes EVERY text
- *    node through `maskTextFn`, which masks unless a `data-ph-unmask`
- *    ancestor opts the node back in. This is an accounting app: org numbers
- *    (which for a sole proprietorship ARE the owner's personal identity
- *    number), customer names, balances and invoice amounts are rendered as
- *    ordinary text, and PostHog masks inputs but NOT text by default.
- *    Replays are for seeing WHERE a user gets stuck, never WHAT their books
- *    say.
+ * 3. Deny-by-default replay masking (founder-approved 2026-08-17, supersedes
+ *    the 2026-08-06 pattern-based default where user content was visible).
+ *    Replays exist so support can see WHERE a user gets stuck: layout,
+ *    clicks and static chrome (headers, nav, labels, placeholders), never
+ *    what the user typed or what their books say.
  *
- *    `data-ph-unmask` is for static chrome only (nav labels, headings,
- *    button text from i18n). User data nested inside an unmasked container
- *    (active company name, user email, badge counts) gets `data-ph-mask`,
- *    which wins because `closest()` finds the NEAREST tagged ancestor: when
- *    both attributes land on the same element, mask still wins.
- *    Anything untagged stays masked, so a forgotten tag fails safe.
+ *    Inputs: `maskAllInputs: true` with NO `maskInputFn` means rrweb masks
+ *    every input value to asterisks, no exceptions. Placeholder text is an
+ *    attribute, not an input value, so it stays visible.
  *
- *    The shared form label primitive (`components/ui/label.tsx`) carries
- *    `data-ph-unmask` by default, so replays show WHICH field a user is
- *    filling in while `maskAllInputs` keeps the typed value hidden. A call
- *    site whose label text is user data (e.g. user-defined dimension names)
- *    must add `data-ph-mask`.
+ *    Text: `lib/analytics/replay-masking.ts` masks every text node unless
+ *    it sits under chrome (`data-ph-unmask`, tagged on the shared UI
+ *    primitives, or a `<th>`); chrome is still pattern-scrubbed for
+ *    currency-shaped spans and person-/organisationsnummer. `data-ph-mask`
+ *    force-masks a subtree and beats `data-ph-unmask`: the NEAREST tagged
+ *    ancestor wins, and mask wins when both land on the same element.
  */
-function maskText(text: string): string {
-  return text.replace(/\S/g, '*')
-}
 if (warnIfAnalyticsMisconfigured() && isAnalyticsEnabled()) {
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN!, {
     api_host: '/rl',
@@ -92,13 +85,7 @@ if (warnIfAnalyticsMisconfigured() && isAnalyticsEnabled()) {
     session_recording: {
       maskAllInputs: true,
       maskTextSelector: '*',
-      maskTextFn: (text: string, element?: HTMLElement): string => {
-        const tagged = element?.closest('[data-ph-unmask],[data-ph-mask]')
-        if (!tagged || tagged.hasAttribute('data-ph-mask')) {
-          return maskText(text)
-        }
-        return text
-      },
+      maskTextFn: replayMaskText,
     },
     debug: process.env.NODE_ENV === 'development',
   })

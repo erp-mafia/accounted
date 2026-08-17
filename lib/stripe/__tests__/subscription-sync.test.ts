@@ -115,7 +115,7 @@ describe('applySubscriptionState', () => {
     const grantUpsert = calls.find((c) => c.table === 'capability_grants')
     expect(grantUpsert?.op).toBe('upsert')
     const rows = grantUpsert?.payload as Array<{ capability_key: string; source: string }>
-    expect(rows.map((r) => r.capability_key).sort()).toEqual(['ai', 'bank_sync', 'email_send', 'skatteverket', 'stripe_payments'])
+    expect(rows.map((r) => r.capability_key).sort()).toEqual(['ai', 'bank_sync', 'email_send', 'shopify_sync', 'skatteverket', 'stripe_payments', 'woocommerce_sync'])
     expect(rows.every((r) => r.source === 'stripe')).toBe(true)
   })
 

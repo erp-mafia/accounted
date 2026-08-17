@@ -47,6 +47,74 @@ describe('POST /api/user/ui-state', () => {
     expect(res.status).toBe(400)
   })
 
+  it('returns 400 on unknown agent_panel keys (strict schema)', async () => {
+    const res = await POST(request({ agent_panel: { mode: 'docked', evil: 1 } }))
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 on an invalid agent_panel mode', async () => {
+    const res = await POST(request({ agent_panel: { mode: 'popup' } }))
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 on fractional float pixels', async () => {
+    const res = await POST(
+      request({ agent_panel: { float: { x: 10.5, y: 0, w: 400, h: 500 } } }),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 on an incomplete float rect', async () => {
+    const res = await POST(request({ agent_panel: { float: { x: 10, y: 0, w: 400 } } }))
+    expect(res.status).toBe(400)
+  })
+
+  it('merges agent_panel keys instead of replacing the object', async () => {
+    enqueue({
+      data: {
+        ui_state: {
+          agent_panel: { mode: 'docked', dock_width: 620 },
+        },
+      },
+    })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: { ui_state: { agent_panel: Record<string, unknown> } }
+    }>(await POST(request({ agent_panel: { mode: 'floating' } })))
+
+    expect(status).toBe(200)
+    // dock_width survives a mode-only patch: undocking must not forget the
+    // user's chosen docked width.
+    expect(body.data.ui_state.agent_panel).toEqual({ mode: 'floating', dock_width: 620 })
+  })
+
+  it('accepts a full agent_panel geometry payload', async () => {
+    enqueue({ data: null })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: { ui_state: { agent_panel: Record<string, unknown> } }
+    }>(
+      await POST(
+        request({
+          agent_panel: {
+            mode: 'floating',
+            dock_width: 480,
+            float: { x: 1200, y: 300, w: 420, h: 640 },
+          },
+        }),
+      ),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.ui_state.agent_panel).toEqual({
+      mode: 'floating',
+      dock_width: 480,
+      float: { x: 1200, y: 300, w: 420, h: 640 },
+    })
+  })
+
   it('merges the patch into the existing ui_state', async () => {
     // select existing row
     enqueue({

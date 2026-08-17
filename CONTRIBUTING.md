@@ -77,6 +77,10 @@ Constraints:
 - Core must build and run with zero extensions enabled
 - Never import from `@/extensions/` in core code
 
+## Community Registry
+
+The registry at [gnubok.se/community/registry](https://www.gnubok.se/community/registry) (skills, MCP servers, workflows and apps built on Accounted) is sourced from the [`registry/`](registry/) directory in this repo. To list something you built, add an MDX entry there by PR; see [registry/README.md](registry/README.md) for the format and run `npm run validate:registry` for the local check. No code changes needed.
+
 ## What Not to Do
 
 - **Don't modify enforcement triggers** in migration 017 (legally required for Swedish accounting law)

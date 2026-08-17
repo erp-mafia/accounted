@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect, Suspense } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import dynamic from 'next/dynamic'
+import Image from 'next/image'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -10,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Mail, ArrowLeft, ExternalLink } from 'lucide-react'
+import { Check, Loader2, Mail, ArrowLeft, ExternalLink, Eye, EyeOff } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
@@ -22,6 +23,12 @@ import {
   INVITE_PROBLEM_MESSAGE_KEYS,
 } from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
+import { AuthFormError } from '@/components/auth/AuthFormError'
+import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
+import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
+import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
+import { cn } from '@/lib/utils'
 
 const branding = getBranding()
 
@@ -55,19 +62,55 @@ function RegisterPageContent() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isCancelling, setIsCancelling] = useState(false)
   const [isRegistered, setIsRegistered] = useState(false)
   const [duplicateEmail, setDuplicateEmail] = useState<string | null>(null)
   const [inviteEmail, setInviteEmail] = useState<string | null>(null)
   const [bankIdUser, setBankIdUser] = useState<{ givenName?: string; surname?: string } | null>(null)
-  const [bankIdSessionId, setBankIdSessionId] = useState<string | null>(null)
+  const [bankIdFlowId, setBankIdFlowId] = useState<string | null>(null)
   const [bankIdEmail, setBankIdEmail] = useState('')
+  // Signup failures render inline next to the form (see AuthFormError), never
+  // as a toast. Field-level problems attach to their field; everything else
+  // goes to the form-level alert above the form.
+  const [formError, setFormError] = useState<{ kind: AuthErrorKind | 'bankid' | 'oauth'; message: string } | null>(null)
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [confirmError, setConfirmError] = useState<string | null>(null)
+  const [showPassword, setShowPassword] = useState(false)
+  const passwordInputRef = useRef<HTMLInputElement>(null)
+  const confirmInputRef = useRef<HTMLInputElement>(null)
+  const emailInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const router = useRouter()
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  const googleAuthEnabled = isGoogleAuthEnabled()
   const t = useTranslations('register')
+  const tAuth = useTranslations('auth')
   const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
+
+  // Which method owns the panel (mirrors the login page): BankID is the
+  // Swedish default for a fresh signup; the email form is one chip away.
+  const [method, setMethod] = useState<LoginMethod>(bankIdEnabled ? 'bankid' : 'email')
+  const prevMethodRef = useRef(method)
+
+  // Switching to the email form should land the caret in the first field,
+  // except when an invite pre-filled and locked it.
+  useEffect(() => {
+    if (prevMethodRef.current !== method) {
+      prevMethodRef.current = method
+      if (method === 'email' && !inviteEmail) emailInputRef.current?.focus()
+    }
+  }, [method, inviteEmail])
+
+  const switchMethod = (next: LoginMethod) => {
+    setFormError(null)
+    setMethod(next)
+  }
+
+  const showBankIdChip = method === 'email' && bankIdEnabled
+  const showEmailChip = method === 'bankid'
+  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + (googleAuthEnabled ? 1 : 0)
 
   // Accept a pending invite, if any, and report a non-definitive failure.
   // Returns true when the caller should land the user in the app directly.
@@ -116,61 +159,62 @@ function RegisterPageContent() {
   const handleBankIdComplete = (result: BankIdResult) => {
     if (result.error === 'service_unavailable') {
       setBankIdUnavailable(true)
+      setMethod('email')
       return
     }
 
     if (result.error) {
-      toast({
-        title: t('bankid_failed_title'),
-        description: t('bankid_failed_description'),
-        variant: 'destructive',
-      })
+      setFormError({ kind: 'bankid', message: t('bankid_failed_description') })
       return
     }
-    // BankID verified: store sessionId and show email form
+    // BankID verified: show the email form. The session itself stays in the
+    // server's HttpOnly flow cookie, so there is nothing to hold on to here.
+    setFormError(null)
     setBankIdUser({ givenName: result.givenName, surname: result.surname })
-    if (result.sessionId) setBankIdSessionId(result.sessionId)
+    setBankIdFlowId(result.flowId ?? null)
   }
 
   const handleBankIdSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    setIsLoading(true)
+    setFormError(null)
 
     const formData = new FormData(e.currentTarget)
     const emailValue = (formData.get('bankid_email') as string) || bankIdEmail
 
+    if (!bankIdFlowId) {
+      setFormError({ kind: 'bankid', message: t('bankid_failed_description') })
+      return
+    }
+
+    setIsLoading(true)
+
     try {
+      // Only the e-mail travels: the session and the fact that this is a
+      // signup are both pinned in the server's flow cookie.
       const res = await fetch('/api/extensions/ext/tic/bankid/complete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: bankIdSessionId,
-          mode: 'signup',
-          email: emailValue,
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-bankid-flow-id': bankIdFlowId,
+        },
+        body: JSON.stringify({ email: emailValue }),
       })
 
       const json = await res.json()
 
       if (!res.ok) {
         if (json.error === 'already_linked') {
-          toast({
-            title: t('bankid_already_linked_title'),
-            description: t('bankid_already_linked_description'),
-            variant: 'destructive',
-          })
+          // email_exists kind: the alert renders a sign-in link, which is the
+          // recovery path for both "BankID taken" and "email taken".
+          setFormError({ kind: 'email_exists', message: t('bankid_already_linked_description') })
         } else if (json.error === 'account_exists') {
-          toast({
-            title: t('account_exists_title'),
-            description: t('account_exists_description'),
-            variant: 'destructive',
-          })
-          router.push('/login')
+          // Inline with a sign-in link instead of yanking the user to /login
+          // mid-read: they keep the context and choose when to leave.
+          setFormError({ kind: 'email_exists', message: t('account_exists_description') })
         } else {
-          toast({
-            title: t('register_failed_title'),
-            description: json.message || json.error || t('register_failed_default'),
-            variant: 'destructive',
+          setFormError({
+            kind: 'unknown',
+            message: json.message || json.error || t('register_failed_default'),
           })
         }
         return
@@ -184,10 +228,9 @@ function RegisterPageContent() {
 
       if (error) {
         console.error('[register] BankID verifyOtp failed', error.message)
-        toast({
-          title: t('register_failed_complete'),
-          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-          variant: 'destructive',
+        setFormError({
+          kind: 'unknown',
+          message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
         })
         return
       }
@@ -197,6 +240,8 @@ function RegisterPageContent() {
       // invitee who registers with BankID lands on /select-company with no
       // membership and gets funneled into creating a company instead of
       // joining the one they were invited to.
+      persistLoginMethodHint('bankid')
+
       if (await acceptPendingInvite()) {
         window.location.href = '/'
         return
@@ -206,15 +251,23 @@ function RegisterPageContent() {
       router.refresh()
     } catch (error) {
       console.error('[register] BankID signup error', error instanceof Error ? error.message : String(error))
-      toast({
-        title: t('register_failed_title'),
-        description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-        variant: 'destructive',
+      setFormError({
+        kind: 'unknown',
+        message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
       setIsLoading(false)
     }
   }
+
+  // The live checklist under the password field mirrors these rules; the
+  // aggregate check gates submission.
+  const passwordChecks = [
+    { key: 'password_req_length', met: password.length >= 8 },
+    { key: 'password_req_case', met: /[a-z]/.test(password) && /[A-Z]/.test(password) },
+    { key: 'password_req_number', met: /[0-9]/.test(password) },
+    { key: 'password_req_special', met: /[^a-zA-Z0-9]/.test(password) },
+  ] as const
 
   function isStrongPassword(pw: string): boolean {
     return pw.length >= 8
@@ -226,32 +279,31 @@ function RegisterPageContent() {
 
   const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    setIsLoading(true)
+    setFormError(null)
+    setPasswordError(null)
+    setConfirmError(null)
 
     const formData = new FormData(e.currentTarget)
     const emailValue = (formData.get('email') as string) || email
     const passwordValue = (formData.get('password') as string) || password
     const confirmValue = (formData.get('confirm_password') as string) || confirmPassword
 
+    // Client-side checks run before isLoading so the inputs are still enabled
+    // when focus moves to the offending field.
     if (!isStrongPassword(passwordValue)) {
-      toast({
-        title: t('weak_password_title'),
-        description: t('weak_password_description'),
-        variant: 'destructive',
-      })
-      setIsLoading(false)
+      setPasswordError(t('password_error_requirements'))
+      passwordInputRef.current?.focus()
       return
     }
 
     if (passwordValue !== confirmValue) {
-      toast({
-        title: t('password_mismatch_title'),
-        description: t('password_mismatch_description'),
-        variant: 'destructive',
-      })
-      setIsLoading(false)
+      setConfirmError(t('password_mismatch_description'))
+      confirmInputRef.current?.focus()
+      confirmInputRef.current?.select()
       return
     }
+
+    setIsLoading(true)
 
     try {
       const { data, error } = await supabase.auth.signUp({
@@ -264,13 +316,29 @@ function RegisterPageContent() {
 
       if (error) {
         console.error('[register] signUp error', error.message)
-        toast({
-          title: t('register_failed_title'),
-          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-          variant: 'destructive',
-        })
+        const kind = classifyAuthError(error)
+        if (kind === 'weak_password') {
+          // Server-side password policy rejection: same field, same message
+          // as the client-side check.
+          setPasswordError(t('password_error_requirements'))
+        } else {
+          const messageByKind: Partial<Record<AuthErrorKind, string>> = {
+            email_exists: t('account_exists_description'),
+            email_invalid: t('error_email_invalid'),
+            rate_limited: t('error_rate_limited'),
+            signup_disabled: t('error_signup_disabled'),
+          }
+          setFormError({
+            kind,
+            message:
+              messageByKind[kind] ??
+              getErrorMessage(error, { context: 'auth', locale: errorLocale }),
+          })
+        }
         return
       }
+
+      persistLoginMethodHint('email')
 
       // If auto-confirmed (local dev), process invite immediately and redirect
       if (data.session) {
@@ -314,10 +382,9 @@ function RegisterPageContent() {
       setIsRegistered(true)
     } catch (error) {
       console.error('[register] unexpected exception', error instanceof Error ? error.message : String(error))
-      toast({
-        title: t('register_failed_title'),
-        description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-        variant: 'destructive',
+      setFormError({
+        kind: 'unknown',
+        message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
       setIsLoading(false)
@@ -326,23 +393,23 @@ function RegisterPageContent() {
 
   if (duplicateEmail) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
+            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
               <Mail className="h-7 w-7 text-primary" />
             </div>
           </div>
 
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-medium tracking-tight">{t('duplicate_title')}</h1>
+            <h1 className="text-2xl tracking-tight">{t('duplicate_title')}</h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
               {t('duplicate_body_prefix')}{' '}
               <span className="font-medium text-foreground">{duplicateEmail}</span>.
             </p>
           </div>
 
-          <div className="rounded-lg border bg-card p-4">
+          <div className="rounded-xl border border-border bg-background p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
               {t('duplicate_hint')}
             </p>
@@ -379,16 +446,16 @@ function RegisterPageContent() {
     const webmailHint = detectWebmailHint(email, branding.authEmailFrom)
 
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
-            <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
+            <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
               <Mail className="h-7 w-7 text-primary" />
             </div>
           </div>
 
           <div className="text-center space-y-2">
-            <h1 className="text-2xl font-medium tracking-tight">{t('confirm_email_title')}</h1>
+            <h1 className="text-2xl tracking-tight">{t('confirm_email_title')}</h1>
             <p className="text-muted-foreground text-sm leading-relaxed">
               {t.rich('confirm_email_body', {
                 email,
@@ -397,7 +464,7 @@ function RegisterPageContent() {
             </p>
           </div>
 
-          <div className="rounded-lg border bg-card p-4">
+          <div className="rounded-xl border border-border bg-background p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
               {t('confirm_email_hint')}
             </p>
@@ -427,42 +494,40 @@ function RegisterPageContent() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
       <div className="w-full max-w-sm animate-slide-up">
-        <div className="text-center mb-10">
-          <BrandWordmark size="hero" className="mb-2" />
-          <p className="text-muted-foreground text-sm mt-3">
-            {t('subtitle')}
-          </p>
-        </div>
+        <header className="text-center mb-8">
+          <h1 className="sr-only">{t('create_account')}</h1>
+          <BrandWordmark size="hero" />
+        </header>
 
-        <div className="rounded-lg border bg-card p-6">
-          {bankIdEnabled && !bankIdUser && (
-            <>
-              <div className="mb-5">
-                <BankIdAuth mode="signup" onComplete={handleBankIdComplete} />
-              </div>
-              <div className="relative mb-5">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">{t('or_email_divider')}</span>
-                </div>
-              </div>
-            </>
+        <div className="rounded-xl border border-border bg-background p-6">
+          {bankIdUnavailable && !bankIdUser && (
+            <p className="mb-4 text-[13px] leading-5 text-muted-foreground">
+              {t('bankid_unavailable_body')}
+            </p>
           )}
 
-          {bankIdUnavailable && !bankIdUser && (
-            <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950/30">
-              <p className="text-sm text-blue-700 dark:text-blue-300">
-                {t('bankid_unavailable_body')}
-              </p>
+          {formError && (
+            <div className="mb-4">
+              <AuthFormError
+                message={formError.message}
+                action={
+                  formError.kind === 'email_exists' ? (
+                    <Link
+                      href="/login"
+                      className="font-medium underline underline-offset-2"
+                    >
+                      {t('sign_in')}
+                    </Link>
+                  ) : undefined
+                }
+              />
             </div>
           )}
 
           {bankIdUser ? (
-            <form onSubmit={handleBankIdSignup} className="space-y-5">
+            <form onSubmit={handleBankIdSignup} className="space-y-4">
               <div className="rounded-lg border bg-muted/30 p-3">
                 <p className="text-sm font-medium">
                   {bankIdUser.givenName} {bankIdUser.surname}
@@ -490,7 +555,9 @@ function RegisterPageContent() {
                   {inviteEmail ? t('invite_email_hint') : t('bankid_email_hint')}
                 </p>
               </div>
-              <Button type="submit" className="w-full h-11" disabled={isLoading}>
+              {/* Also disabled while Back's /cancel is in flight: submitting
+                  then would race the cookie clear (recoverable, but pointless). */}
+              <Button type="submit" className="w-full h-11" disabled={isLoading || isCancelling}>
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -504,9 +571,35 @@ function RegisterPageContent() {
                 type="button"
                 variant="ghost"
                 className="w-full text-muted-foreground"
-                onClick={() => {
-                  setBankIdUser(null)
-                  setBankIdSessionId(null)
+                disabled={isLoading || isCancelling}
+                onClick={async () => {
+                  // AWAIT the cancel before remounting BankIdAuth. The flow
+                  // cookie outlives this component and BankIdAuth probes for a
+                  // live flow on mount, so clearing the form first would let it
+                  // find the still-completed session. Its own isCancelling
+                  // state, not isLoading: isLoading drives the submit button's
+                  // "Skapar konto...", and pressing Back should not claim an
+                  // account is being created.
+                  setIsCancelling(true)
+                  try {
+                    const res = await fetch('/api/extensions/ext/tic/bankid/cancel', {
+                      method: 'POST',
+                      headers: bankIdFlowId
+                        ? { 'x-bankid-flow-id': bankIdFlowId }
+                        : undefined,
+                    })
+                    if (!res.ok) throw new Error(`cancel failed: ${res.status}`)
+                    // Flow cleared server-side; the remounted BankIdAuth will
+                    // probe, find nothing, and show the start button.
+                    setBankIdUser(null)
+                    setBankIdFlowId(null)
+                  } catch {
+                    // The flow is still live, so resetting the form would just
+                    // bounce the user back here. Say so instead of looping.
+                    setFormError({ kind: 'bankid', message: t('bankid_cancel_failed') })
+                  } finally {
+                    setIsCancelling(false)
+                  }
                 }}
               >
                 <ArrowLeft className="mr-2 h-4 w-4" />
@@ -514,10 +607,15 @@ function RegisterPageContent() {
               </Button>
             </form>
           ) : (
-          <form onSubmit={handleRegister} className="space-y-5">
+          <div key={method} className="animate-fade-in">
+          {method === 'bankid' && bankIdEnabled ? (
+            <BankIdAuth mode="signup" hero onComplete={handleBankIdComplete} />
+          ) : (
+          <form onSubmit={handleRegister} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">{t('email_label')}</Label>
               <Input
+                ref={emailInputRef}
                 id="email"
                 name="email"
                 type="email"
@@ -538,35 +636,106 @@ function RegisterPageContent() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">{t('password_label')}</Label>
-              <Input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="new-password"
-                placeholder={t('password_placeholder')}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={8}
-                disabled={isLoading}
-                className="h-11"
-              />
+              <div className="relative">
+                <Input
+                  ref={passwordInputRef}
+                  id="password"
+                  name="password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  placeholder={t('password_placeholder')}
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value)
+                    if (passwordError && isStrongPassword(e.target.value)) {
+                      setPasswordError(null)
+                    }
+                  }}
+                  required
+                  minLength={8}
+                  disabled={isLoading}
+                  aria-invalid={passwordError ? true : undefined}
+                  aria-describedby="password-requirements"
+                  className="h-11 pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((visible) => !visible)}
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label={showPassword ? tAuth('hide_password') : tAuth('show_password')}
+                  aria-pressed={showPassword}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Eye className="h-4 w-4" aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+              <ul
+                id="password-requirements"
+                className="grid grid-cols-2 gap-x-3 gap-y-1 pt-1"
+              >
+                {passwordChecks.map((check) => (
+                  <li
+                    key={check.key}
+                    className={cn(
+                      'flex items-center gap-2 text-xs transition-colors duration-150',
+                      check.met ? 'text-foreground' : 'text-muted-foreground',
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className="flex h-3 w-3 items-center justify-center"
+                    >
+                      {check.met ? (
+                        <Check className="h-3 w-3" />
+                      ) : (
+                        <span className="h-1 w-1 rounded-full bg-current opacity-60" />
+                      )}
+                    </span>
+                    {t(check.key)}
+                  </li>
+                ))}
+              </ul>
+              {passwordError && (
+                <p role="alert" className="text-xs text-destructive">
+                  {passwordError}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="confirm_password">{t('confirm_password_label')}</Label>
               <Input
+                ref={confirmInputRef}
                 id="confirm_password"
                 name="confirm_password"
                 type="password"
                 autoComplete="new-password"
                 placeholder={t('confirm_password_placeholder')}
                 value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value)
+                  if (confirmError && e.target.value === password) {
+                    setConfirmError(null)
+                  }
+                }}
                 required
                 minLength={8}
                 disabled={isLoading}
+                aria-invalid={confirmError ? true : undefined}
+                aria-describedby={confirmError ? 'confirm-password-error' : undefined}
                 className="h-11"
               />
+              {confirmError && (
+                <p
+                  id="confirm-password-error"
+                  role="alert"
+                  className="text-xs text-destructive"
+                >
+                  {confirmError}
+                </p>
+              )}
             </div>
             <Button type="submit" className="w-full h-11" disabled={isLoading}>
               {isLoading ? (
@@ -580,19 +749,72 @@ function RegisterPageContent() {
             </Button>
           </form>
           )}
+          </div>
+          )}
+
+          {!bankIdUser && chipCount > 0 && (
+            <>
+              <div className="relative my-6">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-border" />
+                </div>
+                <div className="relative flex justify-center">
+                  <span className="bg-background px-3 text-xs text-muted-foreground">
+                    {tAuth('or_divider')}
+                  </span>
+                </div>
+              </div>
+              <div className={chipCount === 2 ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
+                {showBankIdChip && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full gap-2"
+                    onClick={() => switchMethod('bankid')}
+                  >
+                    <Image
+                      src="/logos/bankid-seeklogo.svg"
+                      alt=""
+                      width={18}
+                      height={18}
+                      className="dark:invert"
+                    />
+                    BankID
+                  </Button>
+                )}
+                {googleAuthEnabled && (
+                  <GoogleAuthButton
+                    compact
+                    onError={(message) => setFormError({ kind: 'oauth', message })}
+                  />
+                )}
+                {showEmailChip && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full gap-2"
+                    onClick={() => switchMethod('email')}
+                  >
+                    <Mail className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    {tAuth('method_email_chip')}
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
-        <p className="mt-6 text-center text-sm text-muted-foreground">
+        <p className="mt-6 text-center text-[13px] text-muted-foreground">
           {t('already_have_account')}{' '}
           <Link
             href="/login"
-            className="font-medium text-foreground underline underline-offset-2 hover:text-primary transition-colors"
+            className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
           >
             {t('sign_in')}
           </Link>
         </p>
 
-        <p className="mt-4 text-center text-xs text-muted-foreground leading-relaxed">
+        <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {t('terms_prefix')}{' '}
           <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
             {t('terms_link')}

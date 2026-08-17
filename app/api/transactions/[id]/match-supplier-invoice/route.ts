@@ -4,6 +4,7 @@ import {
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
@@ -243,6 +244,28 @@ export const POST = withRouteContext(
       })
     }
 
+    // Same-currency partials and part-paid completions are equally unbookable
+    // under kontantmetoden (createSupplierInvoiceCashEntry books the FULL
+    // invoice, so a partial bank amount would over-book the expense): reject
+    // them too, not only the FX case above. Custom lines are not exempt: the
+    // dialog pre-fills the same full-invoice shape.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked: siAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
+      paysRemainingInFull: fullSettlement,
+    })
+    if (cashBlock) {
+      return errorResponseFromCode('SI_CASH_PARTIAL_UNSUPPORTED', txLog, {
+        requestId,
+        details: {
+          reason: cashBlock,
+          payment_amount: txAmountAbs,
+          remaining_amount: invoice.remaining_amount,
+        },
+      })
+    }
+
     // Verifikat header description, shared by every booking branch below.
     const desc = invoice.supplier?.name
       ? `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}, ${invoice.supplier.name}`
@@ -478,7 +501,7 @@ export const POST = withRouteContext(
     // it is already anchored, e.g. on the registration verifikat.
     await anchorSupplierInvoiceDocument(supabase, companyId, supplier_invoice_id)
 
-    logMatchEvent(supabase, user.id, transactionId, 'matched', {
+    await logMatchEvent(supabase, user.id, transactionId, 'matched', {
       supplierInvoiceId: supplier_invoice_id,
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',

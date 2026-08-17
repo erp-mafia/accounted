@@ -57,6 +57,16 @@ vi.mock('@/lib/bookkeeping/mapping-engine', async () => {
   )
   return { ...actual, saveUserMappingRule: vi.fn().mockResolvedValue(undefined) }
 })
+// Underlag propagation: mocked to assert the WIRING (called after a booking
+// this request owns, skipped otherwise); the helper's own behavior (pin
+// anchoring, never-steal, failure isolation) is unit-tested in
+// lib/transactions/__tests__/inbox-underlag.test.ts.
+const { propagateUnderlagMock } = vi.hoisted(() => ({
+  propagateUnderlagMock: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/transactions/inbox-underlag', () => ({
+  propagateUnderlagForBookedTransaction: propagateUnderlagMock,
+}))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST } from '../route'
@@ -157,6 +167,82 @@ beforeEach(() => {
     apiKeyId: 'ak_1',
     scopes: ['transactions:write'],
     mode: 'live',
+  })
+})
+
+function happyPathSupabase() {
+  return makeFlexibleSupabase({
+    company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+    transactions: [
+      {
+        data: {
+          id: TX_ID,
+          company_id: COMPANY_ID,
+          date: '2026-05-12',
+          amount: -349.5,
+          currency: 'SEK',
+          merchant_name: 'ICA',
+          cash_account_id: null,
+          journal_entry_id: null,
+        },
+        error: null,
+      },
+      // The CAS update matches the row: this request owns the booking.
+      { data: [{ id: TX_ID }], error: null },
+    ],
+    company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+    fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+  })
+}
+
+describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', () => {
+  it('propagates underlag onto the fresh verifikat after a successful booking', async () => {
+    const { supabase } = happyPathSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'expense_office' }),
+      routeParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.success).toBe(true)
+    expect(body.data.journal_entry_id).toBe('je-fresh')
+    expect(propagateUnderlagMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      TX_ID,
+      'je-fresh',
+    )
+  })
+
+  it('does not propagate on the partial-success path (no journal entry was created)', async () => {
+    const { supabase } = happyPathSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+    createTxJE.mockRejectedValueOnce(new Error('transient engine failure'))
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'expense_office' }),
+      routeParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.journal_entry_created).toBe(false)
+    expect(propagateUnderlagMock).not.toHaveBeenCalled()
+  })
+
+  it('does not propagate when the CAS race is lost (the verifikat was stornoed)', async () => {
+    const { supabase } = casRaceSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'expense_office' }),
+      routeParams(),
+    )
+
+    const body = await res.json()
+    expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
+    expect(propagateUnderlagMock).not.toHaveBeenCalled()
   })
 })
 

@@ -5,10 +5,14 @@
  *  - executeRecurringSchedule: spawn one invoice from a schedule, optionally
  *    sending it. Used by the daily cron and by a manual "run now" admin
  *    action.
- *  - computeNextRunDate: pure date helper. Given today + day_of_month, return
- *    the next date the schedule should run. Day-of-month values >28 are
- *    clamped to the last day of shorter months; the schedule keeps its
- *    original day_of_month so it jumps back in months that have it.
+ *  - computeNextRunDate: pure date helper. Given a reference date,
+ *    day_of_month and interval_months, return the next date the schedule
+ *    should run. Day-of-month values >28 are clamped to the last day of
+ *    shorter months; the schedule keeps its original day_of_month so it
+ *    jumps back in months that have it.
+ *  - rollNextRunDateForward: pure date helper for stale schedules. Advances
+ *    a missed next_run_date in whole intervals so a quarterly or yearly
+ *    schedule keeps its month phase across an outage or a pause.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -76,33 +80,96 @@ function lastDayOfMonth(year: number, monthIndex0: number): number {
   return new Date(Date.UTC(year, monthIndex0 + 1, 0)).getUTCDate()
 }
 
+function isoFromParts(year: number, monthIndex0: number, day: number): string {
+  const yyyy = year.toString().padStart(4, '0')
+  const mm = (monthIndex0 + 1).toString().padStart(2, '0')
+  const dd = day.toString().padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+function assertValidCadence(dayOfMonth: number, intervalMonths: number): void {
+  if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+    throw new Error(`invalid day_of_month: ${dayOfMonth}`)
+  }
+  if (!Number.isInteger(intervalMonths) || intervalMonths < 1 || intervalMonths > 12) {
+    throw new Error(`invalid interval_months: ${intervalMonths}`)
+  }
+}
+
 /**
- * Compute the next run date for a schedule given a reference date and the
- * stored day_of_month. The reference is always interpreted in UTC to avoid
- * timezone surprises around the day boundary in Vercel cron.
+ * Compute the next run date for a schedule given a reference date, the
+ * stored day_of_month and interval_months. The reference is always
+ * interpreted in UTC to avoid timezone surprises around the day boundary in
+ * Vercel cron.
  *
  * Rules:
  *  - If reference is the same as a valid day_of_month occurrence, returns
- *    NEXT month's occurrence (callers compute the FIRST run via
+ *    the occurrence one interval later (callers compute the FIRST run via
  *    computeInitialRunDate).
  *  - Day 29-31 in shorter months clamps to that month's last day.
  *  - The schedule's stored day_of_month is unchanged: caller passes it in.
+ *  - interval_months (default 1 = monthly) is how many months to advance;
+ *    the cron passes the reference on the schedule's own due date, so the
+ *    month phase of a quarterly/yearly schedule is preserved.
  */
-export function computeNextRunDate(reference: Date, dayOfMonth: number): string {
-  if (dayOfMonth < 1 || dayOfMonth > 31) {
-    throw new Error(`invalid day_of_month: ${dayOfMonth}`)
-  }
+export function computeNextRunDate(
+  reference: Date,
+  dayOfMonth: number,
+  intervalMonths = 1,
+): string {
+  assertValidCadence(dayOfMonth, intervalMonths)
   const refY = reference.getUTCFullYear()
   const refM = reference.getUTCMonth()
-  // Advance to the next month.
-  const nextM = refM + 1
+  // Advance one interval.
+  const nextM = refM + intervalMonths
   const nextYear = refY + Math.floor(nextM / 12)
   const nextMonth = ((nextM % 12) + 12) % 12
   const clamped = Math.min(dayOfMonth, lastDayOfMonth(nextYear, nextMonth))
-  const yyyy = nextYear.toString().padStart(4, '0')
-  const mm = (nextMonth + 1).toString().padStart(2, '0')
-  const dd = clamped.toString().padStart(2, '0')
-  return `${yyyy}-${mm}-${dd}`
+  return isoFromParts(nextYear, nextMonth, clamped)
+}
+
+/**
+ * Roll a missed (or being-edited) next_run_date forward on the schedule's
+ * own month grid: start from the anchor's year-month, apply day_of_month
+ * (clamped per month), and advance in whole interval_months steps until the
+ * result is on-or-after today (allowToday, cron's stale roll-forward) or
+ * strictly after today (edits/reactivation, so nothing can trigger a
+ * same-hour surprise send).
+ *
+ * Anchoring on the stale date rather than on today is what keeps a
+ * quarterly schedule on its Jan/Apr/Jul/Oct phase: a Jan 15 run missed
+ * during an outage rolls to Apr 15, not to Feb 15. For interval 1 every
+ * month is on the grid, so this degenerates to the pre-interval behavior.
+ */
+export function rollNextRunDateForward(
+  anchorDate: string,
+  today: Date,
+  dayOfMonth: number,
+  intervalMonths = 1,
+  { allowToday = false }: { allowToday?: boolean } = {},
+): string {
+  assertValidCadence(dayOfMonth, intervalMonths)
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(anchorDate)
+  if (!match) {
+    throw new Error(`invalid anchor date: ${anchorDate}`)
+  }
+  let year = Number(match[1])
+  let month0 = Number(match[2]) - 1
+  // The regex only shapes the string; reject calendar-invalid anchors like
+  // 2026-13-05 or 2026-02-31 instead of silently normalizing them.
+  const anchorDay = Number(match[3])
+  if (month0 < 0 || month0 > 11 || anchorDay < 1 || anchorDay > lastDayOfMonth(year, month0)) {
+    throw new Error(`invalid anchor date: ${anchorDate}`)
+  }
+  const todayIso = isoFromParts(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+  let candidate = isoFromParts(year, month0, Math.min(dayOfMonth, lastDayOfMonth(year, month0)))
+  while (allowToday ? candidate < todayIso : candidate <= todayIso) {
+    const m = month0 + intervalMonths
+    year += Math.floor(m / 12)
+    month0 = m % 12
+    candidate = isoFromParts(year, month0, Math.min(dayOfMonth, lastDayOfMonth(year, month0)))
+  }
+  return candidate
 }
 
 /**

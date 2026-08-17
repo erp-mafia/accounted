@@ -1,15 +1,32 @@
 import type { Transaction, TransactionCategory, Invoice, Customer, SupplierInvoice, VatTreatment } from '@/types'
 
+/** Revalidated journal-entry match suggestion hung onto a row (mirrors
+ *  potential_invoice): present only when the suggested entry is still posted. */
+export interface PotentialVoucher {
+  journal_entry_id: string
+  voucher_series: string
+  voucher_number: number
+  entry_date: string
+  description: string | null
+}
+
 // Shared transaction type with potential invoice data
 export interface TransactionWithInvoice extends Transaction {
   potential_invoice?: Invoice & { customer?: Customer }
   potential_supplier_invoice?: SupplierInvoice
+  potential_voucher?: PotentialVoucher
 }
 
-// Page view modes
-export type ViewMode = 'inbox' | 'history'
+// Page view modes. 'review' is the migrator surface: rows whose sweep
+// suggestion awaits confirmation ("Granska migrerad historik"); the tab only
+// renders while such rows exist.
+export type ViewMode = 'inbox' | 'history' | 'review'
 export type HistoryFilter = 'all' | 'business' | 'private'
-export type SourceFilter = 'all' | 'bank' | 'skatteverket'
+// Source filter (concept scene 10 account chooser), shared by both view modes:
+// everything, one cash account ('acct:<id>'), bank rows not yet tied to a
+// registered cash account ('bank:other'), all bank rows ('bank': the fallback
+// split when no cash accounts are registered), or the skattekonto side.
+export type SourceFilter = 'all' | 'bank' | 'bank:other' | 'skatteverket' | `acct:${string}`
 
 // Handler types
 // Returns the journal_entry_id on success, null on failure

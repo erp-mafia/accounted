@@ -17,6 +17,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { VatDeclarationRutor } from '@/types'
 
+const { mockFindRcBasisGaps } = vi.hoisted(() => ({
+  mockFindRcBasisGaps: vi.fn(),
+}))
 const mockSkvRequest = vi.fn()
 vi.mock('@/extensions/general/skatteverket/lib/api-client', async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>
@@ -47,10 +50,8 @@ vi.mock('@/lib/reports/vat-declaration', async (importOriginal) => {
   }
 })
 
-// The per-verifikat FK004 scan has its own coverage in lib/reports/__tests__;
-// here it must simply not add findings of its own.
 vi.mock('@/lib/reports/rc-basis-gaps', () => ({
-  findRcBasisGaps: vi.fn(async () => []),
+  findRcBasisGaps: (...args: unknown[]) => mockFindRcBasisGaps(...args),
 }))
 
 import { tools } from '../server'
@@ -87,10 +88,12 @@ function makeRutor(partial: Partial<VatDeclarationRutor> = {}): VatDeclarationRu
 function setDeclaration(
   rutor: VatDeclarationRutor,
   rcInput?: Record<string, { debit: number; credit: number }>,
+  rcBasisByRate?: { r25: number; r12: number; r6: number },
 ) {
   mockCalculateVatDeclaration.mockResolvedValue({
     rutor,
     ...(rcInput ? { rcInputAccountTotals: rcInput } : {}),
+    ...(rcBasisByRate ? { rcBasisByRate } : {}),
   })
 }
 
@@ -116,6 +119,7 @@ function skvOk(body: unknown = { kontrollResultat: { status: 'OK', resultat: [] 
 let prevEnv: string | undefined
 beforeEach(() => {
   vi.clearAllMocks()
+  mockFindRcBasisGaps.mockResolvedValue([])
   prevEnv = process.env.SKATTEVERKET_ENABLED
   process.env.SKATTEVERKET_ENABLED = 'true'
 })
@@ -169,7 +173,7 @@ describe('gnubok_vat_declaration_validate', () => {
     expect(result.completeness_ok).toBe(true)
     expect(result.completeness_checks).toEqual([])
     expect(mockSkvRequest).toHaveBeenCalledTimes(1)
-    expect(mockSkvRequest.mock.calls[0][3]).toMatch(/^\/kontrollera\//)
+    expect(mockSkvRequest.mock.calls[0][4]).toMatch(/^\/kontrollera\//)
   })
 
   // The masking case: rutor 30-32 are compared against 2645/2647, so ordinary
@@ -212,6 +216,22 @@ describe('gnubok_vat_declaration_validate', () => {
     const result = await run()
 
     expect(result.completeness_checks).toEqual([])
+    expect(result.completeness_ok).toBe(true)
+  })
+
+  it('uses declaration rate evidence when a correction gap is covered in aggregate', async () => {
+    mockFindRcBasisGaps.mockResolvedValue([{}])
+    setDeclaration(
+      makeRutor({ ruta20: 5000, ruta30: 1250, ruta48: 1250 }),
+      rcInput({ '2645': 1250 }),
+      { r25: 5000, r12: 0, r6: 0 },
+    )
+    skvOk()
+
+    const result = await run()
+
+    expect(result.completeness_checks.find((c) => c.code === 'RC_BASIS_MISSING')?.status)
+      .toBe('WARNING')
     expect(result.completeness_ok).toBe(true)
   })
 

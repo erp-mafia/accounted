@@ -7,13 +7,13 @@ import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { Plus, Search, Package, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+import { Plus, Package, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import {
   useSubmitWithAccountActivation,
@@ -315,18 +315,15 @@ function ArticlesPageInner() {
 
       {/* Toolbar: search, plus the currency scope far right (convention 8) */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[190px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={t('search_placeholder')}
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value)
-              setVisibleCount(INITIAL_VISIBLE_ROWS)
-            }}
-            className="h-9 pl-10"
-          />
-        </div>
+        <ToolbarSearch
+          containerClassName="min-w-[190px]"
+          placeholder={t('search_placeholder')}
+          value={searchTerm}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            setVisibleCount(INITIAL_VISIBLE_ROWS)
+          }}
+        />
         {/* A single-currency register needs no scope: the chip would be a
             control with one meaningful position. */}
         {availableCurrencies.length > 1 && (
@@ -363,12 +360,15 @@ function ArticlesPageInner() {
               // The currency scope is part of why nothing matched, so it has to
               // be named: otherwise the register reads as empty of the term
               // when it is only empty inside the active scope.
-              currencyFilter === ALL_CURRENCIES
-                ? t('no_search_results_description', { term: searchTerm })
-                : t('no_search_results_in_currency_description', {
-                    term: searchTerm,
-                    currency: currencyFilter,
-                  })
+              // data-ph-mask: the search term is what the user typed.
+              <span data-ph-mask="">
+                {currencyFilter === ALL_CURRENCIES
+                  ? t('no_search_results_description', { term: searchTerm })
+                  : t('no_search_results_in_currency_description', {
+                      term: searchTerm,
+                      currency: currencyFilter,
+                    })}
+              </span>
             }
           />
         ) : (

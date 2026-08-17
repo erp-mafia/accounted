@@ -1037,4 +1037,34 @@ describe('estimateArchiveSize', () => {
     expect(result.document_count).toBe(0)
     expect(result.total_bytes).toBe(8 * 1024 * 1024)
   })
+
+  it('paginates the all-mode document read past the page cap', async () => {
+    const firstPage = Array.from({ length: 1000 }, () => ({ file_size_bytes: 1_000 }))
+    enqueueMany([
+      { data: firstPage }, // full first page forces a second fetch
+      { data: [{ file_size_bytes: 1_000 }] },
+    ])
+
+    const result = await estimateArchiveSize(supabase as any, 'company-1', 'all')
+
+    expect(result.document_count).toBe(1001)
+    expect(result.document_bytes).toBe(1_001_000)
+  })
+
+  it('chunks the period-mode entry-id filter and sums across chunks', async () => {
+    // 250 posted entries -> three IN() chunks of max 100 ids. An unchunked
+    // implementation consumes a single document response and undercounts.
+    const entryIds = Array.from({ length: 250 }, (_, i) => ({ id: `e${i}` }))
+    enqueueMany([
+      { data: entryIds }, // journal_entries for periodEntryIds
+      { data: [{ file_size_bytes: 100 }] }, // chunk 1
+      { data: [{ file_size_bytes: 200 }] }, // chunk 2
+      { data: [{ file_size_bytes: 300 }] }, // chunk 3
+    ])
+
+    const result = await estimateArchiveSize(supabase as any, 'company-1', 'period', 'p-1')
+
+    expect(result.document_count).toBe(3)
+    expect(result.document_bytes).toBe(600)
+  })
 })

@@ -17,6 +17,8 @@ import { BokioClient, BokioApiError } from './bokio/client';
 import { BOKIO_RESOURCE_CONFIGS } from './bokio/config';
 import { BjornLundenClient } from './bjornlunden/client';
 import { BL_RESOURCE_CONFIGS } from './bjornlunden/config';
+import { WintClient } from './wint/client';
+import { WINT_RESOURCE_CONFIGS } from './wint/config';
 import { ResourceType } from './dto';
 
 // Singleton clients (they hold rate limiters)
@@ -25,6 +27,7 @@ const vismaClient = new VismaClient();
 const brioxClient = new BrioxClient();
 const bokioClient = new BokioClient();
 const bjornLundenClient = new BjornLundenClient();
+const wintClient = new WintClient();
 
 // ── Helper to paginate Bokio (uses getPage with companyId) ──────────
 
@@ -110,6 +113,14 @@ export async function fetchCompanyInfoDirect(
       return config.mapper(response) as CompanyInformationDto;
     }
 
+    if (provider === 'wint') {
+      // The WINT token is company-scoped: GET /api/Auth describes the company
+      // the token opens, no providerCompanyId needed on the request.
+      const config = WINT_RESOURCE_CONFIGS[ResourceType.CompanyInformation]!;
+      const response = await wintClient.get<Record<string, unknown>>(accessToken, config.listEndpoint);
+      return config.mapper(response) as CompanyInformationDto;
+    }
+
     return null;
   } catch (error) {
     console.error(`[provider-data-fetcher] Failed to fetch company info from ${provider}:`, error);
@@ -159,6 +170,12 @@ export async function fetchCustomersDirect(
     const config = BL_RESOURCE_CONFIGS[ResourceType.Customers]!;
     if (!providerCompanyId) return [];
     const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
+    return items.map((item) => config.mapper(item) as CustomerDto);
+  }
+
+  if (provider === 'wint') {
+    const config = WINT_RESOURCE_CONFIGS[ResourceType.Customers]!;
+    const items = await wintClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint);
     return items.map((item) => config.mapper(item) as CustomerDto);
   }
 
@@ -212,6 +229,10 @@ export async function fetchSuppliersDirect(
     return items.map((item) => config.mapper(item) as SupplierDto);
   }
 
+  // WINT (Tier A): the supplier register lives on the IncomingInvoice surface,
+  // which exists only in WINT's internal Full spec. Deliberately not fetched:
+  // see lib/providers/wint/config.ts.
+
   return [];
 }
 
@@ -257,6 +278,12 @@ export async function fetchSalesInvoicesDirect(
     const config = BL_RESOURCE_CONFIGS[ResourceType.SalesInvoices]!;
     if (!providerCompanyId) return [];
     const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
+    return items.map((item) => config.mapper(item) as SalesInvoiceDto);
+  }
+
+  if (provider === 'wint') {
+    const config = WINT_RESOURCE_CONFIGS[ResourceType.SalesInvoices]!;
+    const items = await wintClient.getPaginated<Record<string, unknown>>(accessToken, config.listEndpoint);
     return items.map((item) => config.mapper(item) as SalesInvoiceDto);
   }
 
@@ -309,6 +336,10 @@ export async function fetchSupplierInvoicesDirect(
     const items = await blPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
     return items.map((item) => config.mapper(item) as SupplierInvoiceDto);
   }
+
+  // WINT (Tier A): supplier invoices (/api/IncomingInvoice) are Full-spec
+  // only; not fetched. The GL vouchers they produced still arrive via the
+  // SIE path, so the ledger stays complete: only the AP register is skipped.
 
   return [];
 }

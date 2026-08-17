@@ -266,7 +266,7 @@ export async function GET(request: Request) {
             .eq('company_id', companyId)
             .maybeSingle()
           if (tokenRow?.user_id) {
-            await markNeedsReconsent(supabase, tokenRow.user_id as string, err.code)
+            await markNeedsReconsent(supabase, tokenRow.user_id as string, companyId, err.code)
           }
         } catch (reconsentErr) {
           console.warn('[vat-kvittenser-cron] Failed to persist reconsent flag', {

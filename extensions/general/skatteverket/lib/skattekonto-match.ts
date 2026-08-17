@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { StoredSkattekontoTransaction } from '../types'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 
 /**
  * "Matcha mot befintligt verifikat"-flöde för skattekonto-rader.
@@ -25,7 +26,6 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
  * have identical totals.
  */
 
-const SKATTEKONTO_ACCOUNT = '1630'
 const DATE_WINDOW_DAYS = 14
 
 export class SkattekontoMatchError extends Error {

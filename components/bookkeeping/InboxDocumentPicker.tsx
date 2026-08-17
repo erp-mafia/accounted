@@ -172,7 +172,6 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>{t('picker_title')}</DialogTitle>
-            <DialogDescription>{t('picker_description')}</DialogDescription>
           </DialogHeader>
 
           <div className="relative">
@@ -217,7 +216,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                       onClick={() => void handlePick(it)}
                       disabled={!!linkingId}
                       className={cn(
-                        'flex-1 min-w-0 text-left flex items-center gap-3 py-3 px-2 -ml-2 rounded transition-colors hover:bg-secondary/60',
+                        'flex-1 min-w-0 text-left flex items-center gap-3 py-3 px-2 -ml-2 rounded-sm transition-colors hover:bg-secondary/60',
                         linkingId && !isLinking && 'opacity-50',
                       )}
                     >
@@ -269,9 +268,10 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
       <Dialog open={previewItem !== null} onOpenChange={(o) => !o && setPreviewItem(null)}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle className="truncate pr-6">{previewItem?.file_name}</DialogTitle>
+            {/* data-ph-mask: the file name and supplier details are user data */}
+            <DialogTitle data-ph-mask="" className="truncate pr-6">{previewItem?.file_name}</DialogTitle>
             {previewItem && (previewItem.supplier_name || previewItem.amount != null) && (
-              <DialogDescription className="flex items-center gap-2 tabular-nums">
+              <DialogDescription data-ph-mask="" className="flex items-center gap-2 tabular-nums">
                 {previewItem.supplier_name && <span>{previewItem.supplier_name}</span>}
                 {previewItem.amount != null && (
                   <span>{formatCurrency(previewItem.amount, previewItem.currency ?? 'SEK')}</span>

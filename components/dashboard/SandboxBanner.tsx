@@ -17,20 +17,22 @@ export function SandboxBanner() {
     router.push('/register')
   }
 
+  // Primary-on-secondary, not a solid amber bar: the sandbox notice is
+  // environment chrome, and chrome never wears the warning fill.
   return (
-    <div className="relative z-50 flex items-center justify-center gap-x-3 gap-y-1 bg-warning px-10 py-2 text-sm text-warning-foreground sm:px-4 flex-wrap">
+    <div className="relative z-50 flex items-center justify-center gap-x-3 gap-y-1 border-b border-border bg-secondary px-10 py-2 text-sm text-secondary-foreground sm:px-4 flex-wrap">
       <span className="font-medium text-center text-xs sm:text-sm">
         Sandlådemiljö: AI och externa tjänster är avstängda. Data raderas efter 24h.
       </span>
       <button
         onClick={handleCreateAccount}
-        className="shrink-0 rounded-md bg-warning-foreground/15 px-3 py-0.5 text-xs font-semibold hover:bg-warning-foreground/25 transition-colors"
+        className="shrink-0 rounded-full bg-foreground/10 px-3 py-0.5 text-xs font-semibold hover:bg-foreground/15 transition-colors"
       >
         Skapa konto
       </button>
       <button
         onClick={() => setDismissed(true)}
-        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 hover:bg-warning-foreground/15 transition-colors"
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 hover:bg-foreground/10 transition-colors"
         aria-label="Stäng"
       >
         <X className="h-3.5 w-3.5" />

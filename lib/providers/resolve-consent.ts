@@ -5,6 +5,7 @@ import { refreshFortnoxToken } from './fortnox/oauth';
 import { refreshVismaToken } from './visma/oauth';
 import { refreshBrioxToken } from './briox/oauth';
 import { refreshBjornLundenToken } from './bjornlunden/oauth';
+import { refreshWintToken } from './wint/oauth';
 import { ProviderCallError, isMissingLicenseError } from './with-provider-call';
 import { createLogger } from '@/lib/logger';
 
@@ -115,6 +116,10 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
         // refresh token; no app-level config involved. Both tokens rotate:
         // the new refresh_token is persisted below.
         refreshed = await refreshBrioxToken(tokens.refresh_token as string, tokens.access_token as string);
+      } else if (consent.provider === 'wint') {
+        // WINT rotates the pair on refresh (the response is a full login
+        // envelope); the guarded update below persists the new refresh_token.
+        refreshed = await refreshWintToken(tokens.refresh_token as string);
       } else {
         refreshed = await refreshVismaToken(getOAuthConfig(consent.provider as string), tokens.refresh_token as string);
       }

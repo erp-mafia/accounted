@@ -177,7 +177,7 @@ export default function SupplierInvoicePicker({
                       </span>
                     )}
                     {invoice.status === 'partially_paid' && (
-                      <span className="text-[10px] uppercase tracking-wide text-warning-foreground">
+                      <span className="text-[10px] uppercase tracking-wide text-attn">
                         Delbetald
                       </span>
                     )}

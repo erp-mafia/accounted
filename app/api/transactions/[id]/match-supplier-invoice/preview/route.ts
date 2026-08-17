@@ -11,7 +11,9 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { generateSlpLines, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { ORE_TOLERANCE } from '@/lib/money'
@@ -145,6 +147,22 @@ export const GET = withRouteContext(
       transaction.currency !== si.currency ||
       txAmountAbs >= remainingInvoiceCurrency - 0.005
 
+    // The POST handler rejects cash-method partials and part-paid completions
+    // for never-booked invoices (the cash builder books the full invoice), so
+    // refuse to preview lines it will never book.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked: siAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: (si as { paid_amount?: number | null }).paid_amount,
+      paysRemainingInFull: fullSettlement,
+    })
+    if (cashBlock) {
+      return errorResponseFromCode('SI_CASH_PARTIAL_UNSUPPORTED', log, {
+        requestId,
+        details: { reason: cashBlock },
+      })
+    }
+
     const lines: PreviewLine[] = []
     let entryType: 'clearing' | 'cash' = 'clearing'
     // Drives the dialog's "markeras som betald" / öresavrundning copy. Cash
@@ -222,6 +240,28 @@ export const GET = withRouteContext(
           credit_amount: 0,
           description: 'Ingående moms',
         })
+      }
+
+      // Mirror createSupplierInvoiceCashEntry's SLP pair: items flagged
+      // apply_slp on a 741x pension account book 7533 D / 2514 K at the same
+      // rate the expense lines above use. The pair nets to zero, so the bank
+      // credit below is untouched; without it the dialog shows fewer lines
+      // than the POST actually books.
+      let slpBase = 0
+      for (const it of items) {
+        if (it.apply_slp !== true) continue
+        if (!isSlpPensionAccount(it.account_number)) continue
+        slpBase += resolveSekAmount(it.line_total, null, si.currency, cashRate)
+      }
+      if (slpBase > 0) {
+        for (const l of generateSlpLines(slpBase)) {
+          lines.push({
+            account_number: l.account_number,
+            debit_amount: l.debit_amount,
+            credit_amount: l.credit_amount,
+            description: l.line_description ?? '',
+          })
+        }
       }
 
       lines.push({

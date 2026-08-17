@@ -14,7 +14,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Pencil, Plus, CalendarClock, Paperclip } from 'lucide-react'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
@@ -27,6 +26,9 @@ import { useCompanySettings } from '@/components/settings/useSettings'
 import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment, BASAccount } from '@/types'
 
 interface EditableLine {
@@ -82,8 +84,10 @@ export default function SupplierInvoiceDetailPage() {
   const { settings: companySettings } = useCompanySettings()
   const params = useParams()
   const router = useRouter()
+  const company = useCompanyOptional()?.company ?? null
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_detail')
+  const tCommon = useTranslations('common')
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
@@ -472,12 +476,29 @@ export default function SupplierInvoiceDetailPage() {
 
   return (
     <div className="space-y-8 max-w-4xl">
+      {/* Back link + prev/next record pager on their own quiet row, so the
+          title below keeps a stable position while stepping between records */}
+      <div className="flex items-center justify-between gap-4">
+        <button
+          type="button"
+          onClick={() => router.push('/supplier-invoices')}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          aria-label={t('back_aria')}
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {tCommon('back')}
+        </button>
+        <DetailPager
+          contextKey={listContextKey('supplier-invoices', company?.id)}
+          basePath="/supplier-invoices"
+          currentId={String(params.id)}
+          className="shrink-0"
+        />
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => router.push('/supplier-invoices')} aria-label={t('back_aria')}>
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <h1 className="font-display text-2xl leading-8 tracking-tight">
@@ -504,12 +525,6 @@ export default function SupplierInvoiceDetailPage() {
 
         {/* Actions */}
         <div className="flex flex-wrap gap-2">
-          <AgentSparkleButton
-            intentId="supplier_invoice.review"
-            intentArgs={{ supplier_invoice_id: invoice.id }}
-            contextRef={`supplier_invoice:${invoice.id}`}
-            size="default"
-          />
           {/* Attest keys off approved_at, not the status: the overdue cron
               flips unbooked invoices to 'overdue' just by aging, and gating on
               'registered' alone left them with no way through attest (#1206). */}
@@ -705,10 +720,13 @@ export default function SupplierInvoiceDetailPage() {
           <CardTitle className="text-base">{t('rows_title')}</CardTitle>
         </CardHeader>
         <CardContent>
-          {/* Desktop table */}
+          {/* Desktop table. The cells carry no horizontal padding of their
+              own, so every column after the first gets a pl-4 gutter: without
+              it a right-aligned column runs flush into the next left-aligned
+              one ("8 985 kr5010", "ANTALENHET"). */}
           <div className="hidden sm:block">
             <table className="w-full text-sm">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground [&_th:not(:first-child)]:pl-4">
                 <tr className="border-b text-left">
                   <th className="pb-2">{t('col_description')}</th>
                   <th className="pb-2 w-16 text-right">{t('col_quantity')}</th>
@@ -720,7 +738,7 @@ export default function SupplierInvoiceDetailPage() {
                   <th className="pb-2 w-24 text-right">{t('col_vat')}</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="[&_td:not(:first-child)]:pl-4">
                 {items.map((item) => (
                   <tr key={item.id} className="border-b last:border-0">
                     <td className="py-2">
@@ -788,10 +806,11 @@ export default function SupplierInvoiceDetailPage() {
             <CardTitle className="text-base">{t('payment_history_title')}</CardTitle>
           </CardHeader>
           <CardContent>
-            {/* Desktop table */}
+            {/* Desktop table: same non-first-column gutter as the line-item
+                table above ("11 231 krb9da9d7c" otherwise). */}
             <div className="hidden sm:block">
               <table className="w-full text-sm">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground [&_th:not(:first-child)]:pl-4">
                   <tr className="border-b text-left">
                     <th className="pb-2">{t('col_date')}</th>
                     <th className="pb-2 text-right">{t('col_amount_short')}</th>
@@ -799,7 +818,7 @@ export default function SupplierInvoiceDetailPage() {
                     <th className="pb-2">{t('col_note')}</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="[&_td:not(:first-child)]:pl-4">
                   {payments.map((p) => (
                     <tr key={p.id} className="border-b last:border-0">
                       <td className="py-2 tabular-nums">{formatDate(p.payment_date)}</td>
@@ -1061,7 +1080,7 @@ export default function SupplierInvoiceDetailPage() {
                               onChange={(e) => updateEditLine(i, { description: e.target.value })}
                               placeholder="Beskrivning"
                             />
-                            <div className="inline-flex rounded-md border bg-background overflow-hidden h-9">
+                            <div className="inline-flex rounded-lg border bg-background overflow-hidden h-9">
                               <button
                                 type="button"
                                 onClick={() => updateEditLine(i, { side: 'debit' })}
@@ -1178,7 +1197,7 @@ export default function SupplierInvoiceDetailPage() {
                 ? t('duplicate_payment_description_one')
                 : t('duplicate_payment_description_many')}
             </p>
-            <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
               {duplicateCandidates?.map((c) => (
                 <div key={c.id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">

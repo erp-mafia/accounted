@@ -30,7 +30,7 @@ later: much cheaper to ask the customer once at onboarding.
 
 **Special cases:**
 
-- **B2G (Swedish municipality/agency)**: still \`swedish_business\`, but the invoice must be Peppol-formatted (legal requirement since 2019-04-01). Accounted handles Peppol when the customer record has a Peppol endpoint configured.
+- **B2G (Swedish municipality/agency)**: still \`swedish_business\`. If the customer requires Peppol or another e-invoice format, deliver the invoice through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record delivery. Accounted currently creates PDF/email invoices and does not generate or send Peppol invoices.
 - **Consumer customer in another EU country (B2C distance sale)**: \`eu_business\` does NOT apply. Charge Swedish VAT (25/12/6 %) below the OSS threshold; above the threshold the company must register for OSS. This is rare for sole traders: flag the user if turnover suggests they're approaching the threshold.
 
 ## Workflow

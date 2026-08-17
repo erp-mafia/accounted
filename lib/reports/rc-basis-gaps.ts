@@ -5,6 +5,8 @@ import {
   type EntryLinesQuery,
 } from '@/lib/bookkeeping/entry-lines'
 import { resolvePeriodDates } from './vat-declaration'
+import { RC_BASIS_ACCOUNTS_BY_RATE } from './vat-filing-gate'
+import { fetchDynamicVatAccounts } from './vat-revenue-accounts'
 import type { VatPeriodType } from '@/types'
 
 /**
@@ -19,12 +21,14 @@ import type { VatPeriodType } from '@/types'
 const RC_OUTPUT_ACCOUNTS = ['2614', '2624', '2634'] as const
 type RcOutputAccount = typeof RC_OUTPUT_ACCOUNTS[number]
 
-const RC_BASIS_ACCOUNTS = new Set([
-  '4515', '4516', '4517', // EU goods 25/12/6%
-  '4531', '4532', '4533', // non-EU services 25/12/6%
-  '4535', '4536', '4537', // EU services 25/12/6%
-  '4415', '4416', '4417', // domestic goods RC
-  '4425', '4426', '4427', // domestic services RC
+// EU goods (4515-4517), non-EU services (4531-4533), EU services (4535-4537),
+// domestic goods RC (4415-4417), domestic services RC (4425-4427). Derived
+// from the rate-grouped single source in vat-filing-gate.ts so this scan and
+// the per-rate downgrade evidence can never disagree on the account set.
+const STATIC_RC_BASIS_RATE = new Map<string, number>([
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r25.map((account) => [account, 0.25] as const),
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r12.map((account) => [account, 0.12] as const),
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r6.map((account) => [account, 0.06] as const),
 ])
 
 const RATE_BY_OUTPUT: Record<RcOutputAccount, number> = {
@@ -116,6 +120,7 @@ export async function findRcBasisGaps(
   const { start, end } = await resolvePeriodDates(
     supabase, companyId, periodType, year, period, options.fiscalPeriodId
   )
+  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
 
   // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
   const rcLines = (await fetchEntryLines<unknown>({
@@ -143,12 +148,16 @@ export async function findRcBasisGaps(
     'id, journal_entry_id, account_number, debit_amount, credit_amount',
   )
 
-  const basisByEntry = new Map<string, number>()
+  const basisByEntryAndRate = new Map<string, number>()
   for (const line of siblingLines) {
-    if (RC_BASIS_ACCOUNTS.has(line.account_number)) {
-      const prev = basisByEntry.get(line.journal_entry_id) || 0
-      basisByEntry.set(
-        line.journal_entry_id,
+    const rate = dynamicVatAccounts.explicitAccounts.has(line.account_number)
+      ? dynamicVatAccounts.rcBasisRateByAccount.get(line.account_number)
+      : STATIC_RC_BASIS_RATE.get(line.account_number)
+    if (rate) {
+      const key = `${line.journal_entry_id}:${rate}`
+      const prev = basisByEntryAndRate.get(key) || 0
+      basisByEntryAndRate.set(
+        key,
         prev + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0),
       )
     }
@@ -176,7 +185,7 @@ export async function findRcBasisGaps(
     const rate = RATE_BY_OUTPUT[account]
     if (!rate) continue
     const expectedBasis = Math.round((amount / rate) * 100) / 100
-    const actualBasis = basisByEntry.get(row.journal_entry_id) || 0
+    const actualBasis = basisByEntryAndRate.get(`${row.journal_entry_id}:${rate}`) || 0
     if (actualBasis + eps >= expectedBasis) continue
 
     const entry = pickEntry(row)

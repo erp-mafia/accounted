@@ -241,7 +241,7 @@ export function KassaflodesanalysClient() {
           {/* Section 1: Löpande verksamhet */}
           <Card>
             <CardHeader>
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
                 Den löpande verksamheten
               </h2>
               <CardTitle className="text-base">
@@ -281,7 +281,7 @@ export function KassaflodesanalysClient() {
           {/* Section 2: Investeringsverksamhet */}
           <Card>
             <CardHeader>
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
                 Investeringsverksamheten
               </h2>
               <CardTitle className="text-base">
@@ -307,7 +307,7 @@ export function KassaflodesanalysClient() {
           {/* Section 3: Finansieringsverksamhet */}
           <Card>
             <CardHeader>
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
                 Finansieringsverksamheten
               </h2>
               <CardTitle className="text-base">

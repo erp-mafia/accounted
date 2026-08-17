@@ -147,8 +147,10 @@ DataListMetaSeparator.displayName = "DataListMetaSeparator"
 
 interface DataListEmptyProps {
   icon?: React.ReactNode
-  title: string
-  description?: string
+  /** Chrome in session replays (data-ph-unmask): wrap any user data (e.g. a
+      search term) in a data-ph-mask element. */
+  title: React.ReactNode
+  description?: React.ReactNode
   action?: React.ReactNode
   className?: string
 }
@@ -160,7 +162,9 @@ const DataListEmpty = ({
   action,
   className,
 }: DataListEmptyProps) => (
+  // data-ph-unmask: list empty states are static i18n chrome in session replays.
   <div
+    data-ph-unmask=""
     className={cn(
       "flex flex-col items-center justify-center px-6 py-16 text-center",
       className

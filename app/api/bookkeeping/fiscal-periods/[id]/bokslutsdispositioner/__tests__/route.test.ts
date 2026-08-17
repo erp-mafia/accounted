@@ -10,7 +10,6 @@ import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
 vi.mock('@/lib/bokslut/dispositions-proposal-builder', () => ({
   buildDispositionsProposal: vi.fn(),
-  buildLatentTaxProposal: vi.fn(),
 }))
 
 vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
@@ -105,6 +104,44 @@ function periodClient(period: unknown, error: unknown = null) {
   builder.select.mockReturnValue(builder)
   builder.eq.mockReturnValue(builder)
   return { from: vi.fn().mockReturnValue(builder) }
+}
+
+/** Like periodClient but also answers a companies.accounting_framework
+ *  lookup. Pass null to simulate a missing company row. */
+function frameworkClient(period: unknown, framework: string | null) {
+  const periodBuilder = {
+    select: vi.fn(),
+    eq: vi.fn(),
+    single: vi.fn().mockResolvedValue({ data: period, error: null }),
+  }
+  periodBuilder.select.mockReturnValue(periodBuilder)
+  periodBuilder.eq.mockReturnValue(periodBuilder)
+  const companyBuilder = {
+    select: vi.fn(),
+    eq: vi.fn(),
+    maybeSingle: vi.fn().mockResolvedValue({
+      data: framework === null ? null : { accounting_framework: framework },
+      error: null,
+    }),
+  }
+  companyBuilder.select.mockReturnValue(companyBuilder)
+  companyBuilder.eq.mockReturnValue(companyBuilder)
+  return {
+    from: vi.fn((table: string) =>
+      table === 'companies' ? companyBuilder : periodBuilder,
+    ),
+  }
+}
+
+const openPeriod = {
+  id: 'period-1',
+  name: '2025',
+  period_start: '2025-01-01',
+  period_end: '2025-12-31',
+  opening_balance_entry_id: null,
+  is_closed: false,
+  locked_at: null,
+  closing_entry_id: null,
 }
 
 beforeEach(() => {
@@ -623,6 +660,24 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
     expect(status).toBe(409)
     expect(body.error.code).toBe('CONFLICT')
     expect(body.error.details).toEqual({ bookedAmount: 123_181, expectedAmount: 123_180 })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects the removed uppskjuten_skatt kind as a validation error (K3 29.37)', async () => {
+    // The kind was removed 2026-08-05: in juridisk person obeskattade
+    // reserver stay at gross (K3 29.37), so no deferred-tax disposition
+    // exists for ANY framework. Old clients sending it get schema 400.
+    requireAuthMock.mockResolvedValue({
+      user: { id: 'user-1' },
+      supabase: frameworkClient(openPeriod, 'k3'),
+      error: null,
+    })
+
+    const { status } = await parseJsonResponse<{ error: { code: string } }>(
+      await post({ items: [{ kind: 'uppskjuten_skatt' }] }),
+    )
+
+    expect(status).toBe(400)
     expect(createJournalEntry).not.toHaveBeenCalled()
   })
 })

@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import {
   calculateBolagsskatt,
   getBookedBolagsskatt,
@@ -8,12 +7,6 @@ import {
 } from './tax-provision/bolagsskatt-calculator'
 import { loadTaxAdjustmentSnapshot } from './tax-provision/tax-adjustment-service'
 import { calculateSarskildLoneskatt } from './tax-provision/sarskild-loneskatt-calculator'
-import {
-  computeLatentTax,
-  LATENT_TAX_EXPENSE_ACCOUNT,
-  LATENT_TAX_LIABILITY_ACCOUNT,
-  proposeLatentTaxChange,
-} from './tax-provision/latent-tax-calculator'
 import {
   getPeriodiseringsfondCohortAccount,
   getSchablonintaktRate,
@@ -23,7 +16,6 @@ import {
 } from './reserves/periodiseringsfond-service'
 import { calculateOveravskrivningar } from './reserves/overavskrivningar-calculator'
 import type { CompletedDisposition, DispositionsProposal, ProposedDisposition } from './types'
-import type { AccountingFramework } from '@/types'
 
 /**
  * Shared core of the GET /bokslutsdispositioner endpoint, lifted out so the
@@ -70,19 +62,6 @@ export async function buildDispositionsProposal(
       proposals: [],
     }
   }
-
-  // Look up the accounting framework: K3 (BFNAR 2012:1) triggers the
-  // uppskjuten-skatt provision step; K2 skips it.
-  const { data: companyRow } = await supabase
-    .from('companies')
-    .select('accounting_framework')
-    .eq('id', companyId)
-    .maybeSingle()
-  const accountingFramework: AccountingFramework =
-    (companyRow as { accounting_framework?: AccountingFramework } | null)?.accounting_framework
-      === 'k3'
-      ? 'k3'
-      : 'k2'
 
   const fiscalYear = parseInt(period.period_end.slice(0, 4), 10)
   const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
@@ -239,21 +218,6 @@ export async function buildDispositionsProposal(
     proposals.push(bolagsskatt)
   }
 
-  // K3 only: split obeskattade reserver into the 79.4 % equity portion and
-  // the 20.6 % uppskjuten skatteskuld. We sum the projected 21xx balance
-  // AFTER the dispositions above have been applied so the latent-tax
-  // amount reflects the closing position: anything else would diverge
-  // from the BR the user sees in the preview.
-  if (accountingFramework === 'k3') {
-    const latentTax = await buildLatentTaxProposal({
-      supabase,
-      companyId,
-      fiscalPeriodId,
-      proposalsBeforeLatentTax: proposals,
-    })
-    if (latentTax) proposals.push(latentTax)
-  }
-
   return {
     entityType,
     fiscalPeriod: period,
@@ -265,77 +229,3 @@ export async function buildDispositionsProposal(
   }
 }
 
-/**
- * Compose the K3 uppskjuten-skatt proposal.
- *
- * The latent tax provision must reflect the *closing* obeskattade-reserver
- * balance, so we pull the current 21xx balance from the trial balance and
- * adjust it for any 21xx-touching dispositions that haven't yet posted
- * (avsättning ↑, återföring ↓). 2240's current balance is the existing
- * provision; the delta becomes the new verifikat.
- */
-export async function buildLatentTaxProposal(params: {
-  supabase: SupabaseClient
-  companyId: string
-  fiscalPeriodId: string
-  /** Optional: additional 21xx-touching dispositions that have NOT yet been
-   *  posted but will be in the same batch. The TB already reflects everything
-   *  posted, so leave this empty if the latent-tax run is sequenced after the
-   *  21xx postings (the API route's case). */
-  proposalsBeforeLatentTax?: ProposedDisposition[]
-}): Promise<ProposedDisposition | null> {
-  const { supabase, companyId, fiscalPeriodId, proposalsBeforeLatentTax = [] } = params
-
-  // Reads 21xx and 2240 only (class 2), which no resultatavslut touches.
-  const tb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
-    closingEntry: 'include',
-  })
-
-  // 21xx: obeskattade reserver (credit-normal, so we measure credit − debit).
-  let untaxedReserves = tb.rows
-    .filter((r) => r.account_number.startsWith('21'))
-    .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
-
-  // Pending 21xx postings from the proposals that will commit alongside
-  // latent tax. Credits add to reserves and debits remove them.
-  for (const p of proposalsBeforeLatentTax) {
-    for (const line of p.lines) {
-      if (!line.account_number.startsWith('21')) continue
-      untaxedReserves += (line.credit_amount ?? 0) - (line.debit_amount ?? 0)
-    }
-  }
-
-  // Current 2240 balance: credit-normal. Equal to existing latent tax.
-  const current2240 = tb.rows
-    .filter((r) => r.account_number === LATENT_TAX_LIABILITY_ACCOUNT)
-    .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
-
-  const split = computeLatentTax({ untaxedReserves })
-  const lines = proposeLatentTaxChange(current2240, split.liabilityPortion)
-  if (!lines) return null
-
-  const delta = Math.round((split.liabilityPortion - current2240) * 100) / 100
-  const amount = Math.abs(delta)
-  const direction = delta > 0 ? 'avsättning' : 'återföring'
-
-  return {
-    kind: 'uppskjuten_skatt',
-    label: 'Uppskjuten skatt (K3)',
-    description:
-      delta > 0
-        ? `Avsättning till uppskjuten skatteskuld 20,6 % av obeskattade reserver. Debet ${LATENT_TAX_EXPENSE_ACCOUNT}, kredit ${LATENT_TAX_LIABILITY_ACCOUNT}.`
-        : `Återföring av uppskjuten skatteskuld när obeskattade reserver minskar. Debet ${LATENT_TAX_LIABILITY_ACCOUNT}, kredit ${LATENT_TAX_EXPENSE_ACCOUNT}.`,
-    amount,
-    lines,
-    warnings: [],
-    computation: {
-      untaxedReserves,
-      taxRate: 0.206,
-      target2240: split.liabilityPortion,
-      current2240,
-      delta,
-      direction,
-      equityPortion: split.equityPortion,
-    },
-  }
-}

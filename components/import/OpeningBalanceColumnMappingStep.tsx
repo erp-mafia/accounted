@@ -195,12 +195,13 @@ export default function OpeningBalanceColumnMappingStep({
         {previewRows.length > 0 && (
           <div className="space-y-2">
             <Label className="text-muted-foreground">Förhandsgranskning (5 första raderna)</Label>
-            <div className="overflow-x-auto rounded-md border">
+            <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-sm">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b">
                     {headers.map((h, i) => (
-                      <th key={i} className="px-3 py-2 text-left whitespace-nowrap">
+                      /* data-ph-mask: CSV headers are user data */
+                      <th key={i} data-ph-mask="" className="px-3 py-2 text-left whitespace-nowrap">
                         {h || `Kolumn ${i + 1}`}
                       </th>
                     ))}

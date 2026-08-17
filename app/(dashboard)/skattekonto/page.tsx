@@ -1,6 +1,7 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -9,6 +10,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { EmptyState } from '@/components/ui/empty-state'
+import { StartCard } from '@/components/dashboard/StartCard'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   TH_CLASS,
@@ -27,6 +29,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { ToastAction } from '@/components/ui/toast'
+import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { cn } from '@/lib/utils'
 import {
   formatCurrency,
@@ -39,8 +43,6 @@ import { rowsNeedingInterestDate } from '@/lib/skatteverket/interest-period'
 import {
   AlertCircle,
   Copy,
-  ExternalLink,
-  Landmark,
   RefreshCw,
 } from 'lucide-react'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -50,7 +52,13 @@ import type {
   SkattekontoTransactionWithSuggestion,
   StoredSkattekontoTransaction,
 } from '@/extensions/general/skatteverket/types'
+import type { SkattekontoBatchRowResult } from '@/types/skatteverket'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+
+const SkattekontoBookDialog = dynamic(
+  () => import('@/components/skattekonto/SkattekontoBookDialog'),
+  { loading: DialogLoadingSkeleton },
+)
 
 interface SaldoEnvelope {
   data: SkatteverketSaldoResponse | null
@@ -80,13 +88,17 @@ interface MatchCandidate {
 export default function SkattekontoPage() {
   const { toast } = useToast()
   const t = useTranslations('skattekonto')
+  const tStart = useTranslations('start_cards')
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const [showPayment, setShowPayment] = useState(false)
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
   const [tx, setTx] = useState<TransaktionerEnvelope['data'] | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
-  const [bookingId, setBookingId] = useState<string | null>(null)
+  // Row whose inline booking dialog is open (null = closed).
+  const [bookTarget, setBookTarget] = useState<SkattekontoTransactionWithSuggestion | null>(
+    null,
+  )
   const [notConnected, setNotConnected] = useState(false)
   const [loadError, setLoadError] = useState(false)
   // Set when a sync fails with an auth error while a connection exists
@@ -111,6 +123,13 @@ export default function SkattekontoPage() {
 
       if (saldoRes.status === 401) {
         setNotConnected(true)
+        // A skattekontoutdrag file import populates the table without any
+        // SKV connection: keep rendering those rows. The StartCard only
+        // shows when the table is empty too.
+        if (txRes.ok) {
+          const txJson = (await txRes.json()) as TransaktionerEnvelope
+          setTx(txJson.data)
+        }
         return
       }
       // A non-401 response proves a connection now exists: clear a stale
@@ -222,37 +241,41 @@ export default function SkattekontoPage() {
     }
   }
 
-  async function bokfor(id: string) {
-    setBookingId(id)
-    try {
-      const res = await fetch(
-        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${id}/bokfor`,
-        { method: 'POST' },
-      )
-      const json = await res.json()
-      if (!res.ok) {
-        toast({
-          title: 'Kunde inte bokföra',
-          description: getUserErrorMessage(json, { statusCode: res.status }),
-          variant: 'destructive',
-        })
-        return
-      }
-      toast({
-        title: 'Utkast skapat',
-        description: 'Granska och bokför verifikatet i Bokföring.',
-      })
-      // Take the user to the draft so they can review.
-      window.location.href = `/bookkeeping/${json.data.entry.id}`
-    } catch (err) {
-      toast({
-        title: 'Kunde inte bokföra',
-        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
-        variant: 'destructive',
-      })
-    } finally {
-      setBookingId(null)
-    }
+  function bokfor(id: string) {
+    // Open the inline booking dialog instead of the old draft-then-navigate
+    // detour. The row may live in any bucket: genomförda rows carry the
+    // booking suggestion, kommande/förfallna open in plain draft mode.
+    const row =
+      tx?.booked.find((r) => r.id === id) ??
+      tx?.overdue.find((r) => r.id === id) ??
+      tx?.upcoming.find((r) => r.id === id) ??
+      null
+    if (row) setBookTarget(row)
+  }
+
+  function handleBooked(_rowId: string, result: SkattekontoBatchRowResult) {
+    setBookTarget(null)
+    const voucherLabel =
+      result.voucher_series && result.voucher_number != null
+        ? formatVoucher({
+            voucher_series: result.voucher_series,
+            voucher_number: result.voucher_number,
+          })
+        : null
+    toast({
+      title: t('booked_toast_title'),
+      description: voucherLabel
+        ? t('booked_toast_description', { voucher: voucherLabel })
+        : undefined,
+      action: result.journal_entry_id ? (
+        <ToastAction altText={t('booked_toast_show')} asChild>
+          <Link href={`/bookkeeping/${result.journal_entry_id}`}>
+            {t('booked_toast_show')}
+          </Link>
+        </ToastAction>
+      ) : undefined,
+    })
+    void reload()
   }
 
   async function openMatch(row: StoredSkattekontoTransaction) {
@@ -354,22 +377,23 @@ export default function SkattekontoPage() {
     </HelpPopover>
   )
 
-  if (notConnected) {
+  const hasLocalRows =
+    tx !== null && tx.booked.length + tx.overdue.length + tx.upcoming.length > 0
+
+  if (notConnected && !hasLocalRows) {
     return (
       <div className="space-y-8">
         <PageHeader title="Skattekonto" help={helpNode} />
-        <EmptyState
-          icon={Landmark}
-          title="Skatteverket är inte anslutet"
-          description="För att se saldo och transaktioner på skattekontot behöver du ansluta med BankID i inställningarna."
-        >
-          <Button asChild>
-            <Link href="/settings/tax">
-              <ExternalLink className="mr-2 h-4 w-4" />
-              Anslut Skatteverket
-            </Link>
-          </Button>
-        </EmptyState>
+        <div className="animate-fade-in">
+          <StartCard
+            card="abacus"
+            layout="side-right"
+            title={tStart('skattekonto_title')}
+            body={tStart('skattekonto_body')}
+            primary={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
+            secondary={{ label: t('import_statement_action'), href: '/import?mode=skattekonto' }}
+          />
+        </div>
       </div>
     )
   }
@@ -400,22 +424,47 @@ export default function SkattekontoPage() {
         title="Skattekonto"
         help={helpNode}
         action={
-          // The span carries the tooltip: `title` is suppressed on disabled elements.
-          <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
+          notConnected ? (
             <Button
               variant="ghost"
-              onClick={syncNow}
-              disabled={syncing || !hasSkvCapability}
+              asChild
               className="text-muted-foreground hover:text-foreground"
             >
-              <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
+              <Link href="/import?mode=skattekonto">{t('import_statement_action')}</Link>
             </Button>
-          </span>
+          ) : (
+            // The span carries the tooltip: `title` is suppressed on disabled elements.
+            <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
+              <Button
+                variant="ghost"
+                onClick={syncNow}
+                disabled={syncing || !hasSkvCapability}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+                {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
+              </Button>
+            </span>
+          )
         }
       />
 
-      {/* Saldo as compact stat tiles (house metric-card idiom, KPIHeroCards) */}
+      {/* File-imported rows without a connection: no saldo to show, but the
+          booking/matching flows below work on the local table. One ochre
+          sentence with the connect action, per the attn convention. */}
+      {notConnected && (
+        <AttnLine
+          action={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
+        >
+          {t('imported_not_connected_attn')}
+        </AttnLine>
+      )}
+
+      {/* Saldo as compact stat tiles (house metric-card idiom, KPIHeroCards).
+          Hidden entirely for unconnected companies rendering imported rows:
+          there is no saldo to fetch and the "Synkronisera nu" hint would
+          point at a button that cannot work. */}
+      {!notConnected && (
       <section className="space-y-4">
         {loading && !data ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -532,18 +581,34 @@ export default function SkattekontoPage() {
           </>
         )}
       </section>
+      )}
 
       {/* One dry table with band rows (concept): Kommande, Förfallna, Genomförda */}
       <SkattekontoTable
         tx={tx}
         onBokfor={bokfor}
         onMatch={openMatch}
-        bookingId={bookingId}
       />
 
       <p className="px-1 text-xs leading-5 text-muted-foreground">
         {t('pgnote', { amount: formatCurrency(data?.saldoKronofogden ?? 0) })}
       </p>
+
+      {bookTarget && (
+        <SkattekontoBookDialog
+          row={bookTarget}
+          open
+          onOpenChange={(o) => {
+            if (!o) setBookTarget(null)
+          }}
+          onBooked={handleBooked}
+          onMatch={() => {
+            const target = bookTarget
+            setBookTarget(null)
+            void openMatch(target)
+          }}
+        />
+      )}
 
       <MatchDialog
         row={matchOpenFor}
@@ -629,12 +694,10 @@ function SkattekontoTable({
   tx,
   onBokfor,
   onMatch,
-  bookingId,
 }: {
   tx: TransaktionerEnvelope['data'] | null
   onBokfor: (id: string) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
-  bookingId: string | null
 }) {
   const t = useTranslations('skattekonto')
 
@@ -698,7 +761,6 @@ function SkattekontoTable({
                   section={section.key}
                   onBokfor={onBokfor}
                   onMatch={onMatch}
-                  bookingId={bookingId}
                   showInterestDate={section.interestDateRowIds.has(row.id)}
                 />
               ))}
@@ -715,14 +777,12 @@ function SkattekontoRow({
   section,
   onBokfor,
   onMatch,
-  bookingId,
   showInterestDate,
 }: {
   row: SkattekontoTransactionWithSuggestion
   section: TableSection['key']
   onBokfor: (id: string) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
-  bookingId: string | null
   showInterestDate: boolean
 }) {
   const t = useTranslations('skattekonto')
@@ -750,7 +810,8 @@ function SkattekontoRow({
               unbooked deviates; upcoming rows are unbooked by nature. */}
           {section === 'booked' && !isBooked && (
             row.match_suggestion ? (
-              <Badge variant="warning" className="font-normal">
+              /* data-ph-mask: the voucher reference is user data */
+              <Badge variant="warning" className="font-normal" data-ph-mask="">
                 {t('chip_possible_duplicate', {
                   voucher:
                     row.match_suggestion.voucher_series && row.match_suggestion.voucher_number
@@ -802,10 +863,9 @@ function SkattekontoRow({
             <button
               type="button"
               onClick={() => onBokfor(row.id)}
-              disabled={bookingId === row.id}
               className={QUIET_LINK_CLASS}
             >
-              {bookingId === row.id ? t('action_booking') : t('action_book')}
+              {t('action_book')}
             </button>
           </span>
         )}
@@ -835,7 +895,8 @@ function MatchDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Matcha mot befintligt verifikat</DialogTitle>
-          <DialogDescription>
+          {/* data-ph-mask: transaction text and amount are user data */}
+          <DialogDescription data-ph-mask="">
             {row && (
               <>
                 {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
@@ -866,7 +927,7 @@ function MatchDialog({
         )}
 
         {!loading && candidates && candidates.length > 0 && (
-          <div className="max-h-[420px] overflow-y-auto rounded-md border">
+          <div className="max-h-[420px] overflow-y-auto rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow>

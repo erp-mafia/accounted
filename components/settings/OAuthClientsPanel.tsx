@@ -177,7 +177,7 @@ export function OAuthClientsPanel() {
             <DialogDescription>
               {t.rich('register_dialog_description', {
                 bold: (chunks) => <span className="font-medium">{chunks}</span>,
-                code: (chunks) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">{chunks}</code>,
+                code: (chunks) => <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[11px]">{chunks}</code>,
               })}
             </DialogDescription>
           </DialogHeader>

@@ -14,21 +14,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
-import { seedCompany, insertDraftJournalEntry } from './fixtures'
-
-async function insertLines(
-  journalEntryId: string,
-  lines: Array<{ account: string; debit: number; credit: number }>,
-): Promise<void> {
-  for (const line of lines) {
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount)
-       VALUES ($1, $2, $3, $4)`,
-      [journalEntryId, line.account, line.debit, line.credit],
-    )
-  }
-}
+import { seedCompany, insertPostedJournalEntry } from './fixtures'
 
 async function bookMerchant(params: {
   userId: string
@@ -46,19 +32,18 @@ async function bookMerchant(params: {
   /** transactions.exchange_rate: the rate recorded on the row. Null = none. */
   exchangeRate?: number | null
 }): Promise<void> {
-  const entryId = await insertDraftJournalEntry({
+  const entryId = await insertPostedJournalEntry({
     userId: params.userId,
     companyId: params.companyId,
     fiscalPeriodId: params.fiscalPeriodId,
     entryDate: params.date,
-    status: 'posted',
     voucherNumber: params.voucherNumber,
     sourceType: 'bank_transaction',
+    lines: [
+      { accountNumber: params.expenseAccount, debitAmount: params.amount, creditAmount: 0 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: params.amount },
+    ],
   })
-  await insertLines(entryId, [
-    { account: params.expenseAccount, debit: params.amount, credit: 0 },
-    { account: '1930', debit: 0, credit: params.amount },
-  ])
   await getPool().query(
     `INSERT INTO public.transactions
        (id, company_id, user_id, currency, amount, amount_sek, exchange_rate,

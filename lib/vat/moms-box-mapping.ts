@@ -82,6 +82,11 @@ export const ACCOUNT_TO_BOX: Record<string, MomsBox> = {
   // Non-EU services → Box 40
   '3305': '40',  // Försäljning tjänster export utanför EU
 
+  // Domestic reverse-charge sales (buyer liable for VAT) → Box 41
+  '3231': '41',  // Försäljning byggsektorn, omvänd betalningsskyldighet
+  '3232': '41',  // Omvänd betalningsskyldighet, övriga (skrot m.m.)
+  '3233': '41',  // Omvänd betalningsskyldighet, övriga
+
   // VAT-exempt sales → Box 42
   '3004': '42',  // Momsfri försäljning (AB)
   '3100': '42',  // Momsfria intäkter (EF)
@@ -128,6 +133,7 @@ export const ACCOUNT_TO_BOX: Record<string, MomsBox> = {
   '2645': '48',  // Beräknad ingående moms (EU/non-EU förvärv)
   '2646': '48',  // Uthyrning
   '2647': '48',  // Omvänd skattskyldighet i Sverige
+  '2648': '48',  // Vilande ingående moms vid bokslut
   '2649': '48',  // Blandad verksamhet
 
   // Reverse-charge purchase bases (debit on cost accounts) → Boxes 20-24

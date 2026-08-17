@@ -249,8 +249,28 @@ export function detectFileMagic(bytes: Uint8Array): string | null {
     bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
     bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
   ) return 'image/webp'
+  // HEIC/HEIF (ISO-BMFF): bytes 4-7 spell 'ftyp'; the brand at bytes 8-11
+  // names the container flavor. Brands outside the two image families
+  // (mp4, mov, ...) stay undetected on purpose.
+  if (
+    bytes.length >= 12 &&
+    bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70
+  ) {
+    const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11])
+    if (HEIC_BRANDS.has(brand)) return 'image/heic'
+    if (HEIF_BRANDS.has(brand)) return 'image/heif'
+  }
   return null
 }
+
+// ISO-BMFF ftyp brands for still images. The HEVC-coded variants (single
+// image, image sequence, and their extended forms) all read as image/heic;
+// the codec-agnostic MIAF brands read as image/heif. iOS labels the same
+// capture with either declared type, so validateDocumentMagicBytes accepts
+// the two families interchangeably.
+const HEIC_BRANDS = new Set(['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs'])
+const HEIF_BRANDS = new Set(['mif1', 'msf1'])
+const HEIC_FAMILY = new Set(['image/heic', 'image/heif'])
 
 /**
  * XHTML/XML has no binary magic number. For the declared type
@@ -289,15 +309,22 @@ function looksLikeJson(bytes: Uint8Array): boolean {
 
 /**
  * Verify the buffer actually contains a file of the declared type.
- * Returns an error string or null if valid. HEIC has many ftyp brands so
- * we skip the check for now: the UI path doesn't allow HEIC anyway, only
- * the MCP upload tool does, and corrupted HEIC has not been observed.
+ * Returns an error string or null if valid. HEIC/HEIF are verified through
+ * the ISO-BMFF ftyp brand (detectFileMagic): a declared image/heic or
+ * image/heif accepts a detected member of either family, because iOS labels
+ * the same capture with either type. Everything else is an exact match.
  */
 export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType: string): string | null {
-  if (declaredMimeType === 'image/heic') return null
   if (declaredMimeType === 'application/xhtml+xml') {
     if (looksLikeXhtml(new Uint8Array(buffer))) return null
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XHTML/XML-dokument.`
+  }
+  // HTML mail underlag from the invoice-inbox inbound pipeline. Same
+  // doctype/root-element check as XHTML: the pipeline wraps fragment-shaped
+  // mail bodies in a full document shell before upload.
+  if (declaredMimeType === 'text/html') {
+    if (looksLikeXhtml(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett HTML-dokument.`
   }
   if (declaredMimeType === 'application/json') {
     if (looksLikeJson(new Uint8Array(buffer))) return null
@@ -308,6 +335,10 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar vara skadad eller inte en riktig binärfil: vid uppladdning via API, kontrollera att file_content_base64 är base64-kodade råbytes, inte en textrepresentation.`
   }
   if (detected !== declaredMimeType) {
+    // iOS labels the HEIC/HEIF container inconsistently: a file declared as
+    // one family member routinely detects as the other. Same ISO-BMFF image
+    // container either way, so the pair is interchangeable here.
+    if (HEIC_FAMILY.has(declaredMimeType) && HEIC_FAMILY.has(detected)) return null
     return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ${detected}).`
   }
   return null
@@ -578,6 +609,20 @@ export async function computeSHA256(buffer: ArrayBuffer): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+async function deterministicDocumentId(
+  companyId: string,
+  idempotencyKey: string,
+  sha256Hash: string,
+): Promise<string> {
+  const input = new TextEncoder().encode(`${companyId}\u0000${idempotencyKey}\u0000${sha256Hash}`)
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input))
+  const bytes = digest.slice(0, 16)
+  bytes[6] = (bytes[6] & 0x0f) | 0x50
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 /**
  * Upload a document and create a record with SHA-256 integrity hash
  */
@@ -590,8 +635,19 @@ export async function uploadDocument(
     upload_source?: DocumentUploadSource
     journal_entry_id?: string
     journal_entry_line_id?: string
+    idempotency_key?: string
+    /**
+     * Content dedupe for intake channels: before storing, look for a
+     * current-version document in the same company with the same SHA-256 and
+     * return it (marked `deduplicated`) instead of archiving a copy. Opt-in,
+     * because archival callers (sent invoices, filings, bank exports) must
+     * store what they produced even when the bytes repeat. SELECT-then-insert
+     * leaves a small concurrent-upload race, accepted exactly as in the
+     * WhatsApp intake precedent: the loser stores a copy, nothing corrupts.
+     */
+    dedupeByContent?: boolean
   } = {}
-): Promise<DocumentAttachment> {
+): Promise<DocumentAttachment & { deduplicated?: boolean }> {
   await ensureDocumentsBucket()
 
   // Reject corrupt uploads at the boundary: see validateDocumentMagicBytes.
@@ -603,9 +659,44 @@ export async function uploadDocument(
   // Compute SHA-256 hash
   const sha256Hash = await computeSHA256(file.buffer)
 
+  if (metadata.dedupeByContent) {
+    // Oldest current-version match wins so repeated deliveries keep
+    // converging on the same archived original. Pre-dedupe data can hold
+    // several identical documents, hence limit(1) rather than maybeSingle.
+    const { data: existing, error: dedupeError } = await supabase
+      .from('document_attachments')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('sha256_hash', sha256Hash)
+      .eq('is_current_version', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
+    if (dedupeError) {
+      // Fail closed: treating a broken lookup as "no match" would archive
+      // the duplicate this flag exists to prevent, silently, on every
+      // transient DB error. Intake callers (webhooks, sweeps) retry.
+      throw new Error(`Content dedupe lookup failed: ${dedupeError.message}`)
+    }
+    const hit = (existing as DocumentAttachment[] | null)?.[0]
+    if (hit) return { ...hit, deduplicated: true }
+  }
+
+  // Callers importing immutable third-party records can provide a stable
+  // scope. The resulting row UUID makes the database primary key the atomic
+  // claim for (company, scope, content), so concurrent serverless requests
+  // converge without requiring a process-local lock.
+  const reservedDocumentId = metadata.idempotency_key
+    ? await deterministicDocumentId(companyId, metadata.idempotency_key, sha256Hash)
+    : null
+
   // Company-scoped storage key: the tenant id must be IN the key so the
   // storage RLS policy can revoke access when a membership is removed.
-  const storagePath = buildDocumentStoragePath(companyId, userId, file.name)
+  // Idempotent calls use a unique object key per attempt. Their deterministic
+  // document row, not Storage, arbitrates the race; the losing object is then
+  // removed with the service role before this function returns.
+  const storagePath = reservedDocumentId
+    ? buildReservedDocumentStoragePath(companyId, userId, crypto.randomUUID(), file.name)
+    : buildDocumentStoragePath(companyId, userId, file.name)
 
   // Upload to Supabase Storage
   const { error: uploadError } = await supabase.storage
@@ -623,6 +714,7 @@ export async function uploadDocument(
   const { data, error } = await supabase
     .from('document_attachments')
     .insert({
+      id: reservedDocumentId ?? crypto.randomUUID(),
       user_id: userId,
       company_id: companyId,
       storage_path: storagePath,
@@ -642,6 +734,30 @@ export async function uploadDocument(
     .single()
 
   if (error) {
+    if (reservedDocumentId && error.code === '23505') {
+      const { data: concurrent, error: concurrentError } = await supabase
+        .from('document_attachments')
+        .select('id, user_id, company_id, storage_path, file_name, file_size_bytes, mime_type, sha256_hash, version, original_id, superseded_by_id, is_current_version, uploaded_by, upload_source, digitization_date, journal_entry_id, journal_entry_line_id, prev_version_hash, last_integrity_check_at, created_at, updated_at')
+        .eq('id', reservedDocumentId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (!concurrentError && concurrent) {
+        const existing = concurrent as DocumentAttachment
+        await createServiceClientNoCookies()
+          .storage.from(DOCUMENTS_BUCKET)
+          .remove([storagePath])
+        if (
+          existing.sha256_hash !== sha256Hash ||
+          existing.journal_entry_id !== (metadata.journal_entry_id || null)
+        ) {
+          throw new Error('Idempotency key was already used for different document metadata')
+        }
+
+        return existing
+      }
+    }
+
     // Clean up the just-uploaded object on record creation failure. The
     // documents bucket is WORM by design: storage.objects has NO DELETE
     // policy, so remove() on the caller's cookie-bound client is silently

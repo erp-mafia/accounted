@@ -26,6 +26,14 @@
       "schedule": "30 3 * * *"
     },
     {
+      "path": "/api/extensions/woocommerce/orders/cron",
+      "schedule": "45 3 * * *"
+    },
+    {
+      "path": "/api/extensions/shopify/orders/cron",
+      "schedule": "15 3 * * *"
+    },
+    {
       "path": "/api/documents/verify/cron",
       "schedule": "0 3 * * *"
     },
@@ -74,8 +82,16 @@
       "schedule": "15 4 * * *"
     },
     {
+      "path": "/api/extensions/invoice-inbox/sweep/cron",
+      "schedule": "*/2 * * * *"
+    },
+    {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
+    },
+    {
+      "path": "/api/receipt-hunt/cron",
+      "schedule": "30 5 * * *"
     }
   ]
 }

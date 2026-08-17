@@ -11,18 +11,19 @@
 // the user can fill the fields in manually.
 
 import { createHash } from 'node:crypto'
-import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
 import { z } from 'zod'
 import type { InvoiceExtractionResult } from '@/types'
+import { createAiClient, hasAiCredentials, toProviderModelId } from '@/lib/ai/provider'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoice-inbox-extract')
 
 // Both overridable via env vars so ops can swap models / raise token caps
-// without a code deploy. Defaults match what's expected to be set in
-// production (eu.anthropic.claude-sonnet-5 in eu-north-1, 8192 tokens:
-// enough headroom for invoices with 20+ line items).
-const MODEL = process.env.BEDROCK_MODEL_ID || 'eu.anthropic.claude-sonnet-5'
+// without a code deploy. The model id is written bare and adapted to whichever
+// backend is configured (Bedrock in eu-north-1 on hosted, the direct Anthropic
+// API on self-hosted: see lib/ai/provider.ts). 8192 tokens is enough headroom
+// for invoices with 20+ line items.
+const MODEL = toProviderModelId(process.env.BEDROCK_MODEL_ID || 'claude-sonnet-5')
 const MAX_TOKENS = (() => {
   const parsed = Number(process.env.BEDROCK_MAX_TOKENS)
   // Use the env value only if it's a positive number: `||` would also
@@ -34,12 +35,15 @@ const MAX_TOKENS = (() => {
 // Bedrock supports these document/image media types directly. HEIC/HEIF
 // are not on the list, so we skip AI for those: the inbox row still
 // lands and the user can edit fields manually or replace the file.
+// text/html (mail-body invoices from the inbound pipeline) is not sent as
+// a document block: it is converted to plain text via htmlToText() first.
 const SUPPORTED_MEDIA_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
   'image/png',
   'image/webp',
   'image/gif',
+  'text/html',
 ])
 
 export interface ExtractionInput {
@@ -240,6 +244,61 @@ Rules:
 - lineItems: include every line. Empty array is fine if the document has no itemised lines.
 - vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.`
 
+// Sonnet 5 intermittently wraps its answer in markdown fences (```json ... ```)
+// or adds prose around it, despite the JSON-only instruction in the system
+// prompt. Scan for balanced top-level '{'..'}' candidates (string- and
+// escape-aware, so braces inside JSON string values don't end a candidate
+// early) and return the first one JSON.parse accepts; prose braces around the
+// object form unparseable candidates and are skipped. Returns the input
+// unchanged when no candidate parses, so the existing parse-failure path
+// handles prose-only refusals. Zod validation downstream still rejects
+// well-formed-but-wrong JSON.
+// Bounds for the candidate scan below. Real model output is already capped
+// by MAX_TOKENS (roughly 33 KB of text at 8192 tokens), so genuine responses
+// never come near these; they exist so pathological or adversarially
+// brace-laden text cannot make the scan quadratic (compliance review
+// A.8.28). Oversized or exhausted inputs fall through to the raw text and
+// land in the existing empty-result path.
+const MAX_SCAN_INPUT_LENGTH = 256 * 1024
+const MAX_CANDIDATE_ATTEMPTS = 50
+
+export function extractJsonObject(raw: string): string {
+  if (raw.length > MAX_SCAN_INPUT_LENGTH) return raw
+  let attempts = 0
+  let start = raw.indexOf('{')
+  while (start !== -1 && attempts < MAX_CANDIDATE_ATTEMPTS) {
+    attempts++
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < raw.length; i++) {
+      const ch = raw[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+      } else if (ch === '"') {
+        inString = true
+      } else if (ch === '{') {
+        depth++
+      } else if (ch === '}') {
+        depth--
+        if (depth === 0) {
+          const candidate = raw.slice(start, i + 1)
+          try {
+            JSON.parse(candidate)
+            return candidate
+          } catch {
+            break
+          }
+        }
+      }
+    }
+    start = raw.indexOf('{', start + 1)
+  }
+  return raw
+}
+
 export function emptyResult(): InvoiceExtractionResult {
   return {
     documentKind: null,
@@ -323,7 +382,62 @@ async function normalizeImageForExtraction(
   }
 }
 
+// Cap the text handed to the model. HTML mails can carry hundreds of KB of
+// framework markup; the invoice fields sit in the first fraction of the
+// visible text, and MAX_TOKENS bounds the output side anyway.
+const MAX_EXTRACTION_TEXT_LENGTH = 50_000
+
+/**
+ * Best-effort HTML-to-text for mail-body invoices. Not a sanitiser (the
+ * output is only ever sent to the model as plain text, never rendered):
+ * drops script/style/head blocks and comments, keeps block boundaries as
+ * newlines so amounts and labels stay line-separated, decodes the entities
+ * that occur in practice, and collapses whitespace.
+ */
+export function htmlToText(html: string): string {
+  const withoutBlocks = html
+    .replace(/<(script|style|head|title)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+  const withBreaks = withoutBlocks
+    .replace(/<\/(p|div|tr|li|h[1-6]|table|thead|tbody|section|article|blockquote|pre)\s*>/gi, '\n')
+    .replace(/<(br|hr)\b[^>]*\/?>/gi, '\n')
+  const stripped = withBreaks.replace(/<[^>]+>/g, ' ')
+  const decoded = stripped
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, n: string) => {
+      const code = Number(n)
+      return code > 31 && code <= 0x10ffff ? String.fromCodePoint(code) : ' '
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => {
+      const code = parseInt(n, 16)
+      return code > 31 && code <= 0x10ffff ? String.fromCodePoint(code) : ' '
+    })
+    // &amp; strictly last: decoding it earlier would double-decode
+    // "&amp;lt;" into "<" instead of the literal "&lt;".
+    .replace(/&amp;/gi, '&')
+  return decoded
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\s*\n\s*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, MAX_EXTRACTION_TEXT_LENGTH)
+}
+
 function buildContent(input: ExtractionInput) {
+  if (input.mimeType === 'text/html') {
+    const text = htmlToText(input.buffer.toString('utf8'))
+    return [
+      {
+        type: 'text' as const,
+        text: `The document is an HTML email invoice, converted to plain text:\n\n${text}`,
+      },
+      { type: 'text' as const, text: 'Extract the fields per the schema. JSON only.' },
+    ]
+  }
   const base64 = input.buffer.toString('base64')
   if (input.mimeType === 'application/pdf') {
     return [
@@ -363,18 +477,14 @@ export async function extractInvoiceFields(
     return { data: emptyResult(), rawText: null }
   }
 
-  if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-    log.warn('AWS Bedrock credentials missing: returning empty extraction', {
+  if (!hasAiCredentials()) {
+    log.warn('AI credentials missing: returning empty extraction', {
       file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
     })
     return { data: emptyResult(), rawText: null }
   }
 
-  const client = new AnthropicBedrock({
-    awsRegion: process.env.AWS_REGION || 'eu-north-1',
-    awsAccessKey: process.env.AWS_ACCESS_KEY_ID,
-    awsSecretKey: process.env.AWS_SECRET_ACCESS_KEY,
-  })
+  const client = createAiClient()
 
   let rawText: string | null = null
   try {
@@ -422,7 +532,7 @@ export async function extractInvoiceFields(
       })
     }
 
-    const parsed = JSON.parse(rawText)
+    const parsed = JSON.parse(extractJsonObject(rawText))
     const validated = ExtractionSchema.parse(parsed)
 
     return {

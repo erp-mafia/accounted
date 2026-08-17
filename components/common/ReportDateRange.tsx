@@ -195,7 +195,7 @@ export function ReportDateRange({
               type="button"
               onClick={() => handlePreset(p)}
               className={cn(
-                'px-3 py-1.5 text-xs rounded-md border transition-colors duration-150',
+                'px-3 py-1.5 text-xs rounded-full border transition-colors duration-150',
                 active
                   ? 'bg-secondary border-border text-foreground'
                   : 'bg-transparent border-border text-muted-foreground hover:bg-secondary/60 hover:text-foreground',

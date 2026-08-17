@@ -182,7 +182,7 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
                       </span>
                     )}
                     {invoice.status === 'partially_paid' && (
-                      <span className="text-[10px] uppercase tracking-wide text-warning-foreground">
+                      <span className="text-[10px] uppercase tracking-wide text-attn">
                         {t('status_partially_paid')}
                       </span>
                     )}

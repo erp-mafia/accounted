@@ -9,8 +9,10 @@ import {
   apiRequestSkipsSessionTimeout,
   createSessionTimeoutState,
   evaluateSessionTimeout,
+  fetchAutoLogoutPreference,
   getSessionTimeoutConfig,
   sessionStateMatchesUser,
+  sessionStateNeedsRemint,
   sessionTimeoutClearCookieOptions,
   sessionTimeoutCookieOptions,
   signSessionTimeoutState,
@@ -20,6 +22,7 @@ import {
   isSessionAuthMethod,
   SESSION_AUTH_METHOD_HINT_COOKIE,
   SESSION_TIMEOUT_COOKIE,
+  SESSION_TIMEOUT_REASON_HEADER,
   type SessionAuthMethod,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
@@ -103,9 +106,14 @@ export async function updateSession(request: NextRequest) {
       )
     }
 
+    const stateMatches =
+      verifiedState !== null &&
+      sessionStateMatchesUser(verifiedState, user.id, sessionId)
+
     if (
       !verifiedState ||
-      !sessionStateMatchesUser(verifiedState, user.id, sessionId)
+      !stateMatches ||
+      sessionStateNeedsRemint(verifiedState)
     ) {
       const hintedMethod = request.cookies.get(
         SESSION_AUTH_METHOD_HINT_COOKIE,
@@ -113,21 +121,32 @@ export async function updateSession(request: NextRequest) {
       const method = isSessionAuthMethod(hintedMethod)
         ? hintedMethod
         : 'password'
-      const state = createSessionTimeoutState({
-        userId: user.id,
-        sessionId,
-        method,
-      })
-      const signedState = await signSessionTimeoutState(state)
+      const autoLogout = await fetchAutoLogoutPreference(supabase, user.id)
 
-      if (signedState) {
-        request.cookies.set(SESSION_TIMEOUT_COOKIE, signedState)
-        supabaseResponse.cookies.set(
-          SESSION_TIMEOUT_COOKIE,
-          signedState,
-          sessionTimeoutCookieOptions(),
-        )
-        clearAuthMethodHint(request, supabaseResponse)
+      // Unknown preference (failed read): mint nothing, so no fail-open
+      // snapshot gets persisted; the next request retries the read.
+      if (autoLogout !== null) {
+        // A matching pre-toggle cookie keeps its timers: upgrading the shape
+        // must not restart the absolute window.
+        const state = verifiedState && stateMatches
+          ? { ...verifiedState, autoLogout }
+          : createSessionTimeoutState({
+              userId: user.id,
+              sessionId,
+              method,
+              autoLogout,
+            })
+        const signedState = await signSessionTimeoutState(state)
+
+        if (signedState) {
+          request.cookies.set(SESSION_TIMEOUT_COOKIE, signedState)
+          supabaseResponse.cookies.set(
+            SESSION_TIMEOUT_COOKIE,
+            signedState,
+            sessionTimeoutCookieOptions(),
+          )
+          clearAuthMethodHint(request, supabaseResponse)
+        }
       }
     } else {
       const timeoutReason = evaluateSessionTimeout(
@@ -198,6 +217,23 @@ export async function updateSession(request: NextRequest) {
   // fails. An already-logged-in user typing /reset-password directly just gets
   // the same "change password" experience as in settings: no security loss.
   if (pathname.startsWith('/reset-password')) {
+    return supabaseResponse
+  }
+
+  // Public agent-discovery + API docs surfaces. /llms.txt and /llms-full.txt
+  // exist FOR anonymous consumers (the llms.txt convention targets logged-out
+  // crawlers and IDE agents), and /docs is the public API documentation the
+  // OpenAPI spec and the installable accounted-api skill link to. None of it
+  // reads the session. Without this branch every anonymous hit 307-bounced to
+  // /login, which silently broke agent discovery on the hosted product
+  // (openapi.json only escaped because the proxy matcher skips .json paths).
+  // Logged-in users fall through to the same content: no redirect either way.
+  if (
+    pathname === '/llms.txt' ||
+    pathname === '/llms-full.txt' ||
+    pathname === '/docs' ||
+    pathname.startsWith('/docs/')
+  ) {
     return supabaseResponse
   }
 
@@ -469,7 +505,7 @@ function sessionTimeoutResponse(
       },
       { status: 401 },
     )
-    response.headers.set('X-Session-Timeout-Reason', reason)
+    response.headers.set(SESSION_TIMEOUT_REASON_HEADER, reason)
     response.headers.set('Cache-Control', 'no-store')
     copyResponseCookies(authResponse, response)
     return response

@@ -103,6 +103,7 @@ export const POST = withRouteContext(
         customer_id: input.customer_id,
         name: input.name,
         day_of_month: input.day_of_month,
+        interval_months: input.interval_months,
         send_hour: input.send_hour,
         payment_terms_days: input.payment_terms_days,
         currency: input.currency,

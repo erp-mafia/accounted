@@ -43,6 +43,63 @@ export function resolveBookedCoverage(
   }
 }
 
+export interface GapFillSuggestion {
+  /** Date of the newest transaction this connection has already imported. */
+  latestImportedDate: string
+  /**
+   * Suggested sync start: latestImportedDate minus GAP_FILL_OVERLAP_DAYS,
+   * clamped to today (UTC) so the backend accepts it.
+   */
+  suggestedStartDate: string
+}
+
+/**
+ * Overlap requested before the newest already-imported row. The external_id
+ * dedup makes re-imported rows no-ops, so the overlap costs nothing, and it
+ * catches transactions the bank booked late around the boundary.
+ */
+export const GAP_FILL_OVERLAP_DAYS = 7
+
+/**
+ * Turn the newest transaction a connection has already imported into a
+ * "continue where the last fetch stopped" suggestion for RENEWALS.
+ *
+ * A reconnect walks the same pending_selection → active flow as a first
+ * connect, and a fresh consent often makes the bank release history the first
+ * connect never delivered. Re-requesting a long lookback then floods the inbox
+ * with rows over already-bookkept periods (the 2026-08 renewal flood), so a
+ * renewal should default to fetching only the gap since the last import.
+ * Returns null when the connection has never imported anything: a first
+ * connect has no gap to fill.
+ */
+export function resolveGapFillStart(
+  latestImportedDate: string | null | undefined,
+  today: Date = new Date(),
+): GapFillSuggestion | null {
+  if (!latestImportedDate) return null
+  const d = new Date(latestImportedDate + 'T00:00:00Z')
+  if (!Number.isFinite(d.getTime())) return null
+  d.setUTCDate(d.getUTCDate() - GAP_FILL_OVERLAP_DAYS)
+  let start = d.toISOString().split('T')[0]
+  // The backend clamps every lookback to 365 days. A renewal staler than that
+  // must show the date the backfill will actually start from, not promise a
+  // gap it cannot fill (the >90-day helper already points at SIE/file import
+  // for older history).
+  const floor = new Date(today.getTime())
+  floor.setUTCDate(floor.getUTCDate() - 365)
+  const floorUtc = floor.toISOString().split('T')[0]
+  if (start < floorUtc) start = floorUtc
+  // The backend PATCH handler rejects initial_lookback_from_date unless it is
+  // strictly in the past; today (UTC) is the newest value it accepts. A
+  // latestImportedDate in the future can only come from bad bank data: clamp
+  // rather than propagate it.
+  const todayUtc = today.toISOString().split('T')[0]
+  return {
+    latestImportedDate,
+    suggestedStartDate: start <= todayUtc ? start : todayUtc,
+  }
+}
+
 /**
  * Resolve the start of the current fiscal year, preferring the actual
  * fiscal_periods row that contains today over the recurring

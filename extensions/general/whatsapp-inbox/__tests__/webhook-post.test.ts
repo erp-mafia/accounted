@@ -12,7 +12,7 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
     markReadWithTyping: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn(),
     getDisplayPhoneNumber: vi.fn().mockResolvedValue(null),
@@ -109,7 +109,7 @@ describe('POST /webhook', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT' })
+    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
     process.env.WHATSAPP_APP_SECRET = SECRET
     process.env.WHATSAPP_PHONE_HASH_KEY = 'test-pepper'
     process.env.WHATSAPP_PHONE_ENCRYPTION_KEY = 'a'.repeat(64)
@@ -153,6 +153,30 @@ describe('POST /webhook', () => {
     expect(response.status).toBe(200)
     const updateArgs = findCall('whatsapp_messages', 'update') as [Record<string, unknown>]
     expect(updateArgs[0]).toEqual({ delivery_status: 'delivered' })
+  })
+
+  it('keeps the Meta error detail on a failed delivery status (#1552)', async () => {
+    const { enqueue, findCall } = mockSupabase()
+    enqueue({ data: null }) // update chain
+
+    await route.handler(
+      signedRequest(
+        envelope({
+          statuses: [
+            {
+              id: 'wamid.OUT9',
+              status: 'failed',
+              errors: [{ code: 131026, title: 'Message undeliverable' }],
+            },
+          ],
+        }),
+      ),
+    )
+    const updateArgs = findCall('whatsapp_messages', 'update') as [Record<string, unknown>]
+    expect(updateArgs[0]).toEqual({
+      delivery_status: 'failed',
+      error_message: '131026: Message undeliverable',
+    })
   })
 
   it('persists a linked media message, arms the burst debounce and defers processing', async () => {
@@ -203,11 +227,12 @@ describe('POST /webhook', () => {
   })
 
   describe('unknown senders', () => {
-    it('greets once with M1: no media download, no message persistence', async () => {
+    it('greets once with M1: no media download, no CONTENT persistence', async () => {
       const { enqueue, findCalls } = mockSupabase()
       enqueue({ data: null }) // no active link
       enqueue({ data: { ok: true } }) // sender quota RPC
       enqueue({ data: [] }) // greeting throttle: nothing sent before
+      enqueue({ data: null, error: null }) // trace row insert ('done': no cap query)
 
       const response = await route.handler(
         signedRequest(envelope({ messages: [imageMessage()] })),
@@ -216,24 +241,118 @@ describe('POST /webhook', () => {
       expect(sendTextMock).toHaveBeenCalledTimes(1)
       expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m1Unlinked)
       expect(vi.mocked(downloadMedia)).not.toHaveBeenCalled()
-      expect(findCalls('whatsapp_messages', 'insert')).toHaveLength(0)
+      // #1552: a metadata-only trace row IS persisted, but it must carry no
+      // content: no body, no media reference, no raw payload, no link.
+      const inserts = findCalls('whatsapp_messages', 'insert')
+      expect(inserts).toHaveLength(1)
+      const [row] = inserts[0] as [Record<string, unknown>]
+      expect(row.processing_status).toBe('done')
+      expect(row.error_message).toContain('greeted')
+      expect(row.phone_link_id).toBeNull()
+      expect(row.body_text).toBeUndefined()
+      expect(row.media_id).toBeUndefined()
+      expect(row.raw_payload).toBeUndefined()
       expect(kickMock).toHaveBeenCalledWith([])
     })
 
-    it('stays silent when the M1 throttle window is exhausted', async () => {
+    it('does not re-greet a redelivered wamid (trace row dedupe)', async () => {
       const { enqueue } = mockSupabase()
       enqueue({ data: null })
       enqueue({ data: { ok: true } })
+      enqueue({ data: [] }) // throttle window clear
+      enqueue({ data: null, error: { code: '23505', message: 'duplicate key' } }) // trace insert
+
+      await route.handler(signedRequest(envelope({ messages: [imageMessage()] })))
+      expect(sendTextMock).not.toHaveBeenCalled()
+    })
+
+    it('records a declined trace row when the M1 throttle window is exhausted', async () => {
+      const { enqueue, findCalls } = mockSupabase()
+      enqueue({ data: null })
+      enqueue({ data: { ok: true } })
       enqueue({ data: [{ created_at: new Date().toISOString() }] }) // greeted within the hour
+      enqueue({ count: 0 }) // decline-trace day cap
+      enqueue({ data: null, error: null }) // trace row insert
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('hej')] })))
+      expect(sendTextMock).not.toHaveBeenCalled()
+      const inserts = findCalls('whatsapp_messages', 'insert')
+      expect(inserts).toHaveLength(1)
+      const [row] = inserts[0] as [Record<string, unknown>]
+      expect(row.processing_status).toBe('skipped')
+      expect(row.error_message).toContain('greeting throttled')
+      expect(row.body_text).toBeUndefined()
+    })
+
+    it('media inside the hour but outside the 10 min burst window still gets M1', async () => {
+      const { enqueue } = mockSupabase()
+      enqueue({ data: null }) // no active link
+      enqueue({ data: { ok: true } }) // sender quota RPC
+      enqueue({
+        data: [{ created_at: new Date(Date.now() - 30 * 60 * 1000).toISOString() }],
+      }) // one greeting 30 min ago: inside the text hour, outside the burst
+      enqueue({ data: null, error: null }) // trace row insert ('done')
+
+      await route.handler(signedRequest(envelope({ messages: [imageMessage()] })))
+
+      expect(sendTextMock).toHaveBeenCalledTimes(1)
+      expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m1Unlinked)
+      // The privacy invariant holds: still no media touch for unlinked senders.
+      expect(vi.mocked(downloadMedia)).not.toHaveBeenCalled()
+    })
+
+    it('media inside the 10 min burst window stays silent (one M1 per burst)', async () => {
+      const { enqueue } = mockSupabase()
+      enqueue({ data: null })
+      enqueue({ data: { ok: true } })
+      enqueue({
+        data: [{ created_at: new Date(Date.now() - 2 * 60 * 1000).toISOString() }],
+      }) // greeted 2 min ago: same burst
+      enqueue({ count: 0 }) // decline-trace day cap
+      enqueue({ data: null, error: null }) // declined trace insert
+
+      await route.handler(signedRequest(envelope({ messages: [imageMessage()] })))
+      expect(sendTextMock).not.toHaveBeenCalled()
+    })
+
+    it('a text message inside the hour stays silent (hour rule unchanged for text)', async () => {
+      const { enqueue } = mockSupabase()
+      enqueue({ data: null })
+      enqueue({ data: { ok: true } })
+      enqueue({
+        data: [{ created_at: new Date(Date.now() - 30 * 60 * 1000).toISOString() }],
+      }) // greeted 30 min ago: text keeps the 1/hour rule
+      enqueue({ count: 0 }) // decline-trace day cap
+      enqueue({ data: null, error: null }) // declined trace insert
 
       await route.handler(signedRequest(envelope({ messages: [textMessage('hej')] })))
       expect(sendTextMock).not.toHaveBeenCalled()
     })
 
-    it('stays silent when the pre-binding sender quota is exhausted', async () => {
+    it('the fourth media greeting of the day stays silent (daily cap kept)', async () => {
+      const { enqueue } = mockSupabase()
+      enqueue({ data: null })
+      enqueue({ data: { ok: true } })
+      enqueue({
+        data: [
+          { created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() },
+          { created_at: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString() },
+          { created_at: new Date(Date.now() - 9 * 60 * 60 * 1000).toISOString() },
+        ],
+      }) // GREETING_DAY_MAX greetings already sent today
+      enqueue({ count: 0 }) // decline-trace day cap
+      enqueue({ data: null, error: null }) // declined trace insert
+
+      await route.handler(signedRequest(envelope({ messages: [imageMessage()] })))
+      expect(sendTextMock).not.toHaveBeenCalled()
+    })
+
+    it('stays silent but records the decline when the pre-binding quota is exhausted', async () => {
       const mock = mockSupabase()
       mock.enqueue({ data: null })
       mock.enqueue({ data: { ok: false, scope: 'minute', retry_after_sec: 60 } })
+      mock.enqueue({ count: 0 }) // decline-trace day cap
+      mock.enqueue({ data: null, error: null }) // trace row insert
 
       await route.handler(signedRequest(envelope({ messages: [textMessage('hej')] })))
       expect(sendTextMock).not.toHaveBeenCalled()
@@ -241,9 +360,21 @@ describe('POST /webhook', () => {
         'check_and_increment_whatsapp_sender_quota',
         expect.objectContaining({ p_phone_hash: expect.any(String) }),
       )
-      // Only the link lookup ever touched a table.
+      // The link lookup plus the metadata-only decline trace (#1552).
       const tables = [...new Set(mock.calls.map((c) => c.table))]
-      expect(tables).toEqual(['whatsapp_phone_links'])
+      expect(tables).toEqual(['whatsapp_phone_links', 'whatsapp_messages'])
+      const [row] = mock.findCall('whatsapp_messages', 'insert') as [Record<string, unknown>]
+      expect(row.error_message).toContain('over pre-binding quota')
+    })
+
+    it('stops recording decline traces past the per-day cap', async () => {
+      const { enqueue, findCalls } = mockSupabase()
+      enqueue({ data: null })
+      enqueue({ data: { ok: false } })
+      enqueue({ count: 20 }) // cap reached
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('hej')] })))
+      expect(findCalls('whatsapp_messages', 'insert')).toHaveLength(0)
     })
   })
 

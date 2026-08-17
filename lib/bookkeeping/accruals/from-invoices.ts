@@ -15,6 +15,10 @@ import type { Invoice, InvoiceItem, SupplierInvoice, SupplierInvoiceItem } from 
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { createAccrualSchedule } from '@/lib/bookkeeping/accruals/service'
 import {
+  coerceDimensionsBag,
+  mergeDimensionBags,
+} from '@/lib/bookkeeping/dimension-resolver'
+import {
   itemHasAccrual,
   suggestBalanceAccount,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -53,6 +57,11 @@ export async function createSchedulesForSupplierInvoice(
     ),
   )
 
+  // Same merge the registration entry used for the item's interim 17xx line
+  // (groupExpenseBuckets): the schedule's bag must match the origin so the
+  // dissolutions keep the per-dimension interim balance at zero.
+  const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
+
   for (const item of accrualItems) {
     if (item.id && covered.has(item.id)) continue
     try {
@@ -77,6 +86,7 @@ export async function createSchedulesForSupplierInvoice(
           periodStart: item.accrual_period_start as string,
           periodEnd: item.accrual_period_end as string,
           description: `${item.description} (leverantörsfaktura ${invoice.supplier_invoice_number})`,
+          dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
         },
         {
           originJournalEntryId,
@@ -124,6 +134,10 @@ export async function createSchedulesForCustomerInvoice(
     ),
   )
 
+  // Same merge the revenue entry used for the item's interim 29xx line
+  // (generatePerRateLines): item bag wins per key over the invoice default.
+  const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
+
   for (const item of accrualItems) {
     if (item.id && covered.has(item.id)) continue
     const target = resolveRevenueTarget(item, invoice.vat_treatment, entityType)
@@ -153,6 +167,7 @@ export async function createSchedulesForCustomerInvoice(
           periodStart: item.accrual_period_start as string,
           periodEnd: item.accrual_period_end as string,
           description: `${item.description} (faktura ${invoice.invoice_number ?? ''})`.trim(),
+          dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
         },
         {
           originJournalEntryId,

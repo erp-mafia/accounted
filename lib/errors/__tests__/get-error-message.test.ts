@@ -374,6 +374,17 @@ describe('getErrorMessage: API response body vs new Error(body.error)', () => {
     expect(msg).not.toBe('Något gick fel. Försök igen.')
   })
 
+  // A body the platform rejects never reaches a route, and the 413 it answers
+  // with is plain text: the status is the only thing left to translate.
+  it('a payload-too-large rejection says so, with no body to read', () => {
+    expect(getErrorMessage(null, { statusCode: 413 })).toBe(
+      'Filen är för stor för att skickas. Försök igen med en mindre fil.',
+    )
+    expect(getErrorMessage(null, { statusCode: 413, locale: 'en' })).toBe(
+      'The file is too large to send. Try again with a smaller file.',
+    )
+  })
+
   it('new Error(body.error) stringifies the envelope to "[object Object]"', () => {
     // The defect in one line: the Error constructor calls String() on the object.
     expect(new Error(envelope.error as unknown as string).message).toBe('[object Object]')
@@ -459,6 +470,19 @@ describe('getErrorMessage: Swedish heuristic covers real route sentences', () =>
     expect(getErrorMessage({ error: 'Extension context required' }, { statusCode: 500 })).toBe(
       'Ett oväntat serverfel uppstod. Försök igen senare.',
     )
+  })
+
+  // The CashLeads Fortnox migration (2026-08-06): the sie-import finalizer's
+  // guard message reached the wizard as a thrown Error, matched none of the
+  // patterns, and the user saw the generic fallback instead of the reason the
+  // migration stopped. Pins the added patterns: verifikation / importen.
+  it('the 0-verifikationer import guard sentence passes through verbatim', () => {
+    const thrown = new Error(
+      'Importen skapade 0 verifikationer: markerar som misslyckad så filen kan importeras om utan replace/undo. Granska varningarna för att se vilka konton som behöver mappas.',
+    )
+    const msg = getErrorMessage(thrown)
+    expect(msg).toContain('0 verifikationer')
+    expect(msg).not.toBe('Något gick fel. Försök igen.')
   })
 })
 

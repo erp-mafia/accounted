@@ -25,8 +25,10 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
 import { Loader2, FileText, AlertTriangle, Check, Plus, Trash2, Paperclip } from 'lucide-react'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
+import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import type { TransactionWithInvoice } from './transaction-types'
 
 interface BulkBookDialogProps {
@@ -90,6 +92,12 @@ export default function BulkBookDialog({
   const [description, setDescription] = useState('')
   const [manualLines, setManualLines] = useState<ManualLine[]>([])
   const [submitting, setSubmitting] = useState(false)
+  // Booking-time duplicate guard fired for one of the selected txs
+  // (TRANSACTION_BOOK_POSSIBLE_DUPLICATE): surface the candidate for review
+  // with "Bokför ändå" (re-runs the whole batch with force=true) instead of
+  // dead-ending in a toast. Match/ignore are not offered here: resolving one
+  // row differently belongs on the transaction list, outside the batch.
+  const [duplicateCandidate, setDuplicateCandidate] = useState<BookedDuplicateCandidate | null>(null)
   // Dimension tagging (kostnadsställe/projekt): the pair renders only when
   // company_settings.dimensions_enabled, same gate as JournalEntryForm. One
   // header-level default bag applies to both tabs; the server tags the
@@ -384,8 +392,11 @@ export default function BulkBookDialog({
     ])
   }
 
-  async function handleConfirm() {
+  // `opts` is only ever passed by the duplicate-dialog retry; the footer
+  // button's onClick hands over a click event, which carries no `force`.
+  async function handleConfirm(opts?: { force?: boolean }) {
     if (!canConfirm) return
+    const force = opts?.force === true
     setSubmitting(true)
     try {
       // Build the payload per the active tab. Template path uses the
@@ -410,6 +421,7 @@ export default function BulkBookDialog({
                 line_description: l.line_description ?? undefined,
               })),
               ...defaultDimensions,
+              ...(force ? { force: true } : {}),
             }
           : {
               tx_ids: transactions.map((tx) => tx.id),
@@ -417,6 +429,7 @@ export default function BulkBookDialog({
               mode,
               entry_description: description.trim(),
               ...defaultDimensions,
+              ...(force ? { force: true } : {}),
             }
       const response = await fetch('/api/transactions/bulk-book', {
         method: 'POST',
@@ -425,6 +438,14 @@ export default function BulkBookDialog({
       })
       if (!response.ok) {
         const body = await response.json().catch(() => null)
+        const candidate = body?.error?.details?.candidate as BookedDuplicateCandidate | undefined
+        if (body?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' && candidate) {
+          // One of the selected txs already looks booked: open the review
+          // dialog instead of a dead-end toast. "Bokför ändå" re-runs the
+          // batch with force=true.
+          setDuplicateCandidate(candidate)
+          return
+        }
         toast({
           title: t('error_title'),
           description: getErrorMessage(body, { statusCode: response.status }),
@@ -777,7 +798,7 @@ export default function BulkBookDialog({
                   {t('preview_label', { count: previewLines.length })}
                 </Label>
                 {dimensionsEnabled && dimsSummary && (
-                  <Badge variant="secondary" className="font-mono tabular-nums">
+                  <Badge data-ph-mask="" variant="secondary" className="font-mono tabular-nums">
                     {dimsSummary}
                   </Badge>
                 )}
@@ -860,12 +881,28 @@ export default function BulkBookDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             {t('cancel')}
           </Button>
-          <Button onClick={handleConfirm} disabled={!canConfirm}>
+          <Button onClick={() => handleConfirm()} disabled={!canConfirm}>
             {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {t('confirm')}
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* Booking-time duplicate guard review. Rendered inside the bulk dialog
+          so cancelling it returns to the batch as-is; "Bokför ändå" re-runs
+          the whole batch with force=true (the server re-detects and records
+          the dismissal in behandlingshistorik). */}
+      {duplicateCandidate && (
+        <DuplicateBookingDialog
+          candidate={duplicateCandidate}
+          processing={submitting}
+          onCancel={() => setDuplicateCandidate(null)}
+          onBookAnyway={() => {
+            setDuplicateCandidate(null)
+            void handleConfirm({ force: true })
+          }}
+        />
+      )}
     </Dialog>
   )
 }

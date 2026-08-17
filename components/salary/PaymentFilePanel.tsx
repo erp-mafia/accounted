@@ -22,6 +22,15 @@ interface PaymentFilePanelProps {
   defaultFormat: PaymentFormat
   /** company_settings.salary_default_bank: sorts and auto-expands the matching bank's instructions. */
   defaultBank?: string | null
+  /**
+   * company_settings.bankgiro / iban: the sender account each format requires.
+   * null means missing as of the latest settings fetch (warn up front, the
+   * download would 400); undefined means unknown (settings not loaded), so no
+   * warning is shown. The caller must refetch after detours that can fix the
+   * setting (the warning links into the settings modal over this page).
+   */
+  senderBankgiro?: string | null
+  senderIban?: string | null
   readOnly?: boolean
   onDownloaded?: () => void
 }
@@ -49,6 +58,8 @@ export function PaymentFilePanel({
   paymentFileGeneratedAt,
   defaultFormat,
   defaultBank,
+  senderBankgiro,
+  senderIban,
   readOnly,
   onDownloaded,
 }: PaymentFilePanelProps) {
@@ -154,14 +165,14 @@ export function PaymentFilePanel({
                 file downloads fine and only fails at upload, on the pay date.
                 Say the delivery precondition up front instead. */}
             {format === 'pain001' && (
-              <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
+              <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span className="text-muted-foreground">{t('pain001_agreement_warning')}</span>
               </div>
             )}
 
             {format === 'bg_lb' && (
-              <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
+              <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span className="text-muted-foreground">
                   {t('sunset_warning')}{' '}
@@ -170,6 +181,26 @@ export function PaymentFilePanel({
                     className="underline underline-offset-2 hover:text-foreground"
                   >
                     {t('sunset_link')}
+                  </Link>
+                </span>
+              </div>
+            )}
+
+            {/* The sender account lives in company_settings, not in the
+                Bolagsverket snapshot shown on the settings overview: users see
+                a bankgiro there and reasonably believe it is configured. Say
+                the precondition here, before the download 400s on it. */}
+            {((format === 'bg_lb' && senderBankgiro === null) ||
+              (format === 'pain001' && senderIban === null)) && (
+              <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <span className="text-muted-foreground">
+                  {format === 'bg_lb' ? t('missing_bankgiro_warning') : t('missing_iban_warning')}{' '}
+                  <Link
+                    href="/settings/invoicing"
+                    className="underline underline-offset-2 hover:text-foreground"
+                  >
+                    {t('missing_sender_link')}
                   </Link>
                 </span>
               </div>
@@ -197,7 +228,7 @@ export function PaymentFilePanel({
             </button>
 
             {showInstructions && (
-              <div className="space-y-2 rounded-md border bg-muted/30 p-3 text-xs">
+              <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-xs">
                 {sortedBanks.map((bank) => (
                   <div key={bank}>
                     <strong className="text-foreground">
@@ -215,7 +246,7 @@ export function PaymentFilePanel({
               </div>
             )}
 
-            <div className="flex items-start gap-2 rounded-md border border-dashed bg-muted/20 p-3 text-xs text-muted-foreground">
+            <div className="flex items-start gap-2 rounded-lg border border-dashed bg-muted/20 p-3 text-xs text-muted-foreground">
               <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <span>{t('open_payments_note')}</span>
             </div>

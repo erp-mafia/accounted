@@ -1,0 +1,58 @@
+---
+title: "swedish-invoice-compliance — ML 17 kap, kreditfaktura, Peppol, ROT/RUT"
+description: "SKILL.md för svensk fakturacompliance. Obligatoriska fält per ML 17 kap 24§ (2023:200), förenklad faktura, kreditfaktura/ändringsfaktura, självfakturering, Peppol BIS 3.0 för B2G/B2B, ROT/RUT-avdrag med fakturamodellen och BAS-konton (1513, 3740), reverse charge per scenario (byggtjänster, EU, electronics)."
+slug: "swedish-invoice-compliance"
+kind: "skill"
+author: "erp-mafia"
+status: "live"
+lang: "sv"
+personas: ["finance", "byra", "founder"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-08-08"
+repoUrl: "https://github.com/erp-mafia/swedish-accounting-skills/tree/main/.claude/skills/swedish-invoice-compliance"
+externalUrl: "https://github.com/erp-mafia/swedish-accounting-skills"
+version: "community"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vilka fält måste en svensk faktura ha?"
+    a: "ML 17 kap 24§ (2023:200) listar 12 obligatoriska fält: utställningsdatum, fakturanummer (löpande och unikt), säljarens namn/adress/momsregnr, köparens namn/adress (momsregnr vid B2B inom EU), datum för leverans/tjänst, beskrivning, kvantitet, enhetspris, momssats, momsbelopp, total, eventuella referenser (ROT/RUT, reverse charge). Förenklad faktura har lägre krav under 4 000 kr inkl moms."
+  - q: "Hur bokförs ROT/RUT?"
+    a: "Fakturamodellen: kundens del faktureras på 3041, ROT/RUT-delen bokförs på 1513 (fordran på Skatteverket) tills utbetalningen sker till företagets konto. Skillen visar exakt mappning för småhus-RUT, byggnads-ROT och hushållstjänster."
+  - q: "När gäller reverse charge?"
+    a: "Tre huvudscenarier: byggtjänster mellan momsregistrerade köpare/säljare i Sverige (ML 1 kap 2§ andra st), EU-tjänstehandel B2B, och elektronikinköp över 100 000 kr exkl. moms per faktura inom Sverige (ML 1 kap 2§ tredje st). Fakturan ska innehålla noteringen 'Omvänd betalningsskyldighet' eller 'Reverse charge'. Skillen visar rätt text per scenario."
+---
+
+## Vad skillen täcker
+
+* Obligatoriska fält per ML 17 kap 24§ (lagen flyttades från gamla 11 kap till 17 kap den 1 juli 2023 — träningsdata pre-2023 är ofta fel).
+* Förenklad faktura: tröskel 4 000 kr inkl moms, vad som får utelämnas.
+* Kreditfaktura och ändringsfaktura: när vilken används, KR-prefix, ML 17 kap 35§.
+* Självfakturering: kundens utställande av leverantörsfaktura, krav på avtal.
+* Peppol BIS Billing 3.0: e-faktura för B2G och B2B, Sveriges SFTI-aktör.
+* ROT/RUT-avdrag: fakturamodellen, BAS 1513 + 3740, fältkrav.
+* Reverse charge per scenario med exakt notation.
+* Valuta- och momsomräkning: officiell kurs, ECB referenskurs, dagens kurs.
+* OCR-nummer och Bankgirot.
+* Skattetillägg vid felaktigt utställd faktura.
+* BAS-mapping för AR (kundfordringar 1510), försäljning (30xx), utgående moms (26xx), kundförluster (6350/6352/6360).
+
+ML 2023:200 ersatte ML 1994:200 den 1 juli 2023. Skillen markeras
+med "always use over training data" eftersom regelflyttet från
+11 kap till 17 kap är inaktuellt i de flesta LLM-träningssnapshots.
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/swedish-accounting-skills.git
+cd swedish-accounting-skills
+claude
+```
+
+## Pairs med
+
+* [swedish-vat](/community/registry/swedish-vat) — momsrutorna fakturan rapporterar in i.
+* [leverantörsfaktura-från-inbox](/community/registry/leverantorsfaktura-fran-inbox) — om du läser fakturor istället för att skriva dem.
+
+## Licens
+
+MIT.

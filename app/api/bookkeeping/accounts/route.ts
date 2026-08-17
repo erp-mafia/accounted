@@ -6,6 +6,10 @@ import { validateBody, validateQuery } from '@/lib/api/validate'
 import { CreateAccountSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import {
+  defaultRateForVatTreatment,
+  isVatTreatmentAllowedForAccountClass,
+} from '@/lib/vat/account-vat-treatment'
 
 // Response shapes are legacy `{ data }` / `{ error: string }` — several pages
 // (import, supplier-invoices, article form) consume the list directly.
@@ -87,6 +91,19 @@ export const POST = withRouteContext(
     })
     if (!validation.success) return validation.response
     const body = validation.data
+    const accountClass = parseInt(body.account_number[0])
+    if (
+      body.default_vat_treatment &&
+      !isVatTreatmentAllowedForAccountClass(body.default_vat_treatment, accountClass)
+    ) {
+      return NextResponse.json(
+        { error: 'Momskoden kan inte användas för den här kontoklassen.' },
+        { status: 400 },
+      )
+    }
+    const defaultVatRate = body.default_vat_treatment && body.default_vat_rate == null
+      ? defaultRateForVatTreatment(body.default_vat_treatment, accountClass)
+      : body.default_vat_rate ?? null
 
     const { data, error } = await supabase
       .from('chart_of_accounts')
@@ -95,7 +112,7 @@ export const POST = withRouteContext(
         company_id: companyId,
         account_number: body.account_number,
         account_name: body.account_name,
-        account_class: parseInt(body.account_number[0]),
+        account_class: accountClass,
         account_group: body.account_number.substring(0, 2),
         account_type: body.account_type,
         normal_balance: body.normal_balance,
@@ -103,7 +120,8 @@ export const POST = withRouteContext(
         is_system_account: false,
         description: body.description || null,
         default_vat_code: body.default_vat_code || null,
-        default_vat_rate: body.default_vat_rate ?? null,
+        default_vat_rate: defaultVatRate,
+        default_vat_treatment: body.default_vat_treatment ?? null,
         sru_code: body.sru_code || null,
         sort_order: parseInt(body.account_number),
       })

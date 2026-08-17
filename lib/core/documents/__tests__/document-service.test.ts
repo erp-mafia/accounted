@@ -63,6 +63,7 @@ import {
   createNewVersion,
   deleteDocument,
   verifyIntegrity,
+  detectFileMagic,
   validateDocumentMagicBytes,
   buildDocumentStoragePath,
   buildPendingDocumentStoragePath,
@@ -141,6 +142,33 @@ describe('validateDocumentMagicBytes: application/xhtml+xml', () => {
     )
     // And a real PDF still passes as PDF.
     expect(validateDocumentMagicBytes(pdfBuffer(), 'application/pdf')).toBeNull()
+  })
+})
+
+describe('validateDocumentMagicBytes: text/html', () => {
+  const toBuffer = (text: string): ArrayBuffer => {
+    const bytes = new TextEncoder().encode(text)
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  }
+
+  it('accepts a full HTML document (mail-body underlag from the invoice inbox)', () => {
+    expect(
+      validateDocumentMagicBytes(toBuffer('<!doctype html>\n<html><body>Faktura 123</body></html>'), 'text/html'),
+    ).toBeNull()
+    expect(
+      validateDocumentMagicBytes(toBuffer('<html><body>x</body></html>'), 'text/html'),
+    ).toBeNull()
+  })
+
+  it('rejects fragment-shaped or plain-text content', () => {
+    // The inbound pipeline wraps fragments before upload: an unwrapped
+    // fragment reaching the document service is a caller bug.
+    expect(validateDocumentMagicBytes(toBuffer('<div>Faktura 123</div>'), 'text/html')).toMatch(
+      /kunde inte verifieras/,
+    )
+    expect(validateDocumentMagicBytes(toBuffer('just some text'), 'text/html')).toMatch(
+      /kunde inte verifieras/,
+    )
   })
 })
 
@@ -246,6 +274,59 @@ describe('validateDocumentMagicBytes: PDF header offset tolerance', () => {
   })
 })
 
+describe('validateDocumentMagicBytes: HEIC/HEIF (ISO-BMFF ftyp brands)', () => {
+  // Minimal ISO-BMFF head: a 16-byte ftyp box whose major brand is `brand`.
+  // Real files carry compatible brands and media data after this, but the
+  // detector only reads the first 12 bytes.
+  const isoBmff = (brand: string): ArrayBuffer => {
+    const bytes = new Uint8Array(16)
+    bytes[3] = 16 // box size (big-endian 0x00000010)
+    bytes.set([0x66, 0x74, 0x79, 0x70], 4) // 'ftyp'
+    bytes.set(new TextEncoder().encode(brand), 8)
+    return bytes.buffer as ArrayBuffer
+  }
+  const jpegBytes = (): ArrayBuffer =>
+    new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46]).buffer as ArrayBuffer
+
+  it('detects HEVC-coded brands as image/heic and MIAF brands as image/heif', () => {
+    for (const brand of ['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs']) {
+      expect(detectFileMagic(new Uint8Array(isoBmff(brand)))).toBe('image/heic')
+    }
+    for (const brand of ['mif1', 'msf1']) {
+      expect(detectFileMagic(new Uint8Array(isoBmff(brand)))).toBe('image/heif')
+    }
+    // Other ISO-BMFF brands (video containers) stay undetected.
+    expect(detectFileMagic(new Uint8Array(isoBmff('isom')))).toBeNull()
+    expect(detectFileMagic(new Uint8Array(isoBmff('qt  ')))).toBeNull()
+  })
+
+  it('accepts a heic-brand file under both declared family members', () => {
+    expect(validateDocumentMagicBytes(isoBmff('heic'), 'image/heic')).toBeNull()
+    expect(validateDocumentMagicBytes(isoBmff('heic'), 'image/heif')).toBeNull()
+  })
+
+  it('accepts a mif1-brand file under both declared family members', () => {
+    expect(validateDocumentMagicBytes(isoBmff('mif1'), 'image/heif')).toBeNull()
+    expect(validateDocumentMagicBytes(isoBmff('mif1'), 'image/heic')).toBeNull()
+  })
+
+  it('rejects garbage bytes declared image/heic (formerly blanket-exempted)', () => {
+    const garbage = new TextEncoder().encode('this is not an image at all')
+    const buffer = garbage.buffer.slice(garbage.byteOffset, garbage.byteOffset + garbage.byteLength) as ArrayBuffer
+    expect(validateDocumentMagicBytes(buffer, 'image/heic')).toMatch(/kunde inte verifieras/)
+    expect(validateDocumentMagicBytes(buffer, 'image/heif')).toMatch(/kunde inte verifieras/)
+  })
+
+  it('rejects JPEG bytes declared image/heic as a type mismatch', () => {
+    expect(validateDocumentMagicBytes(jpegBytes(), 'image/heic')).toMatch(/matchar inte/)
+  })
+
+  it('does not loosen validation for other declared types', () => {
+    // HEIC bytes declared as JPEG must still be rejected as a mismatch.
+    expect(validateDocumentMagicBytes(isoBmff('heic'), 'image/jpeg')).toMatch(/matchar inte/)
+  })
+})
+
 describe('uploadDocument', () => {
   it('computes SHA-256 hash, stores metadata, emits document.uploaded', async () => {
     const doc = makeDocumentAttachment({
@@ -278,6 +359,72 @@ describe('uploadDocument', () => {
         companyId: 'company-1',
       })
     )
+  })
+
+  it('returns the existing document instead of storing a copy when dedupeByContent hits', async () => {
+    const existing = makeDocumentAttachment({ id: 'doc-orig', sha256_hash: 'same' })
+    results = [
+      { data: [existing], error: null }, // dedupe lookup
+    ]
+
+    const handler = vi.fn()
+    eventBus.on('document.uploaded', handler)
+
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+    const result = await uploadDocument(supabase as never, 'user-1', 'company-1', {
+      name: 'kvitto.pdf',
+      buffer: pdfBuffer(),
+      type: 'application/pdf',
+    }, { dedupeByContent: true })
+
+    expect(result.id).toBe('doc-orig')
+    expect(result.deduplicated).toBe(true)
+    // Nothing reaches storage and no document.uploaded fires: the archive
+    // already holds this content, so re-extraction must not run either.
+    expect(upload).not.toHaveBeenCalled()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('rejects when the dedupe lookup itself fails, touching nothing', async () => {
+    // Fail closed: treating a broken lookup as "no match" would archive the
+    // duplicate the flag exists to prevent, silently, on transient DB errors.
+    results = [{ data: null, error: { message: 'connection reset' } }]
+
+    const handler = vi.fn()
+    eventBus.on('document.uploaded', handler)
+
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+
+    await expect(
+      uploadDocument(supabase as never, 'user-1', 'company-1', {
+        name: 'kvitto.pdf',
+        buffer: pdfBuffer(),
+        type: 'application/pdf',
+      }, { dedupeByContent: true }),
+    ).rejects.toThrow(/dedupe lookup failed/i)
+    expect(upload).not.toHaveBeenCalled()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('stores normally when dedupeByContent finds no match', async () => {
+    results = [
+      { data: [], error: null }, // dedupe lookup: miss
+      { data: makeDocumentAttachment({ id: 'doc-new' }), error: null }, // insert
+    ]
+
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+    const result = await uploadDocument(supabase as never, 'user-1', 'company-1', {
+      name: 'kvitto.pdf',
+      buffer: pdfBuffer(),
+      type: 'application/pdf',
+    }, { dedupeByContent: true })
+
+    expect(result.id).toBe('doc-new')
+    expect(result.deduplicated).toBeUndefined()
+    expect(upload).toHaveBeenCalledOnce()
   })
 
   it('writes to the company-scoped key, not the legacy uploader-scoped key', async () => {
@@ -323,6 +470,110 @@ describe('uploadDocument', () => {
     const uploadedKey = upload.mock.calls[0]![0] as string
     expect(serviceRemove).toHaveBeenCalledWith([uploadedKey])
     expect(callerRemove).not.toHaveBeenCalled()
+  })
+
+  it('coalesces concurrent idempotent uploads on one immutable document row', async () => {
+    const rows = new Map<string, ReturnType<typeof makeDocumentAttachment>>()
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+
+    let arrivals = 0
+    let releaseInserts = () => {}
+    const insertBarrier = new Promise<void>((resolve) => {
+      releaseInserts = resolve
+    })
+
+    const client = {
+      from: vi.fn(() => {
+        let insertPayload: Record<string, unknown> | null = null
+        let queriedId = ''
+        const builder: Record<string, unknown> = {}
+        builder.insert = vi.fn((payload: Record<string, unknown>) => {
+          insertPayload = payload
+          return builder
+        })
+        builder.select = vi.fn(() => builder)
+        builder.eq = vi.fn((column: string, value: string) => {
+          if (column === 'id') queriedId = value
+          return builder
+        })
+        builder.single = vi.fn(async () => {
+          arrivals++
+          if (arrivals === 2) releaseInserts()
+          await insertBarrier
+          const payload = insertPayload as Record<string, unknown>
+          const id = payload.id as string
+          if (rows.has(id)) {
+            return { data: null, error: { code: '23505', message: 'duplicate key' } }
+          }
+          const row = makeDocumentAttachment(payload)
+          rows.set(id, row)
+          return { data: row, error: null }
+        })
+        builder.maybeSingle = vi.fn(async () => ({
+          data: rows.get(queriedId) ?? null,
+          error: null,
+        }))
+        return builder
+      }),
+      storage: {
+        getBucket: vi.fn().mockResolvedValue({ data: { id: 'documents' }, error: null }),
+        createBucket: vi.fn().mockResolvedValue({ data: { name: 'documents' }, error: null }),
+        from: vi.fn().mockReturnValue({ upload }),
+      },
+    }
+
+    const handler = vi.fn()
+    eventBus.on('document.uploaded', handler)
+    const file = {
+      name: 'kvitto.pdf',
+      buffer: pdfBuffer('same retained receipt'),
+      type: 'application/pdf',
+    }
+    const metadata = {
+      upload_source: 'api' as const,
+      journal_entry_id: 'je-1',
+      idempotency_key: 'je-1',
+    }
+
+    const documents = await Promise.all([
+      uploadDocument(client as never, 'user-1', 'company-1', file, metadata),
+      uploadDocument(client as never, 'user-1', 'company-1', file, metadata),
+    ])
+
+    expect(documents[0].id).toBe(documents[1].id)
+    expect(rows.size).toBe(1)
+    expect(upload).toHaveBeenCalledTimes(2)
+    expect(upload.mock.calls[0]![0]).not.toBe(upload.mock.calls[1]![0])
+    expect(serviceRemove).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat a non-unique insert error as an idempotent winner', async () => {
+    results = [
+      { data: null, error: { code: '42501', message: 'row-level security denied' } },
+    ]
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+    const supabase = makeClient()
+
+    await expect(
+      uploadDocument(
+        supabase as never,
+        'user-1',
+        'company-1',
+        {
+          name: 'kvitto.pdf',
+          buffer: pdfBuffer('retained receipt'),
+          type: 'application/pdf',
+        },
+        { journal_entry_id: 'je-1', idempotency_key: 'je-1' },
+      ),
+    ).rejects.toThrow('Failed to create document record: row-level security denied')
+
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(serviceRemove).toHaveBeenCalledTimes(1)
   })
 })
 

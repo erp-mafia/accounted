@@ -127,6 +127,9 @@ export function buildMigrationSql(atoms: DiscoveredAtom[], versions: Record<stri
 -- in-app agent read skill content from the DB (works on Vercel, Docker, self-hosted).
 -- Idempotent: ON CONFLICT refreshes content fields but leaves is_active and
 -- mcp_exposed under manual control (they take column defaults on first insert).
+-- The WHERE guard skips rows whose registry version is newer than this seed's:
+-- two branches can each carry a full seed, and the one that applies last can
+-- no longer downgrade atoms the other already bumped.
 `
 
   const values = atoms.map((a) => buildValuesRow(a, versions[a.id])).join(',\n')
@@ -147,7 +150,8 @@ ON CONFLICT (id) DO UPDATE SET
   parent_atom_id = EXCLUDED.parent_atom_id,
   version = EXCLUDED.version,
   schema_version = EXCLUDED.schema_version,
-  updated_at = now();
+  updated_at = now()
+WHERE public.agent_atom_registry.version <= EXCLUDED.version;
 `
 
   return `${header}\n${insert}\nNOTIFY pgrst, 'reload schema';\n`

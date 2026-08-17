@@ -123,7 +123,7 @@ export default function EmployeeTaxCard({
                 checked={sido}
                 onChange={(e) => setSido(e.target.checked)}
                 disabled={disabled}
-                className="rounded border-border"
+                className="rounded-sm border-border"
               />
               <InfoTooltip content={t('tax_sidoinkomst_tooltip')}>
                 {t('tax_sidoinkomst_label')}
@@ -185,7 +185,7 @@ export default function EmployeeTaxCard({
                     disabled={disabled}
                   />
                 ) : tableNumber ? (
-                  <div className="flex items-baseline gap-2 rounded-md border border-input px-3 py-2">
+                  <div className="flex items-baseline gap-2 rounded-lg border border-input px-3 py-2">
                     <span className="font-sans text-xl tabular-nums">{tableNumber}</span>
                     {(municipality || rate != null) && (
                       <span className="text-xs text-muted-foreground">
@@ -195,7 +195,7 @@ export default function EmployeeTaxCard({
                     )}
                   </div>
                 ) : (
-                  <p className="rounded-md border border-dashed border-input px-3 py-2 text-sm text-muted-foreground">
+                  <p className="rounded-lg border border-dashed border-input px-3 py-2 text-sm text-muted-foreground">
                     {t('tax_table_pick_municipality')}
                   </p>
                 )}
@@ -241,7 +241,7 @@ export default function EmployeeTaxCard({
                     {t('tax_column_suggested_under_66')}
                   </p>
                 ) : isSenior && !columnTouched ? (
-                  <p className="text-xs text-warning-foreground">
+                  <p className="text-xs text-attn">
                     {t('tax_column_senior_warning')}
                   </p>
                 ) : null}
@@ -249,7 +249,7 @@ export default function EmployeeTaxCard({
             </div>
           </>
         ) : (
-          <p className="rounded-md border border-dashed border-input px-3 py-3 text-sm text-muted-foreground">
+          <p className="rounded-lg border border-dashed border-input px-3 py-3 text-sm text-muted-foreground">
             {sido
               ? t('tax_no_table_sidoinkomst')
               : t('tax_no_table_f_skatt')}

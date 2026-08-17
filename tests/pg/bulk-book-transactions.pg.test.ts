@@ -5,6 +5,7 @@ import {
   insertCompany,
   insertCompanyMember,
   insertFiscalPeriod,
+  insertPostedJournalEntry,
 } from '@/tests/pg/fixtures'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 
@@ -422,21 +423,20 @@ describe('bulk_book_transactions: document inheritance (PR #608)', () => {
 
     // Manually pre-post a day-summary verifikat the user wants the txs
     // linked to. Bank net must equal sum(tx.amount) = 300.
-    const jeId = randomUUID()
-    await getPool().query(
-      `INSERT INTO public.journal_entries
-         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-          entry_date, description, source_type, status)
-       VALUES ($1, $2, $3, $4, 1, 'A', '2026-06-05', 'Manual day summary', 'manual', 'posted')`,
-      [jeId, userId, companyId, fiscalPeriodId],
-    )
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount, currency, sort_order)
-       VALUES ($1, '1930', 300, 0, 'SEK', 0),
-              ($1, '3001', 0, 240, 'SEK', 1),
-              ($1, '2611', 0, 60,  'SEK', 2)`,
-      [jeId],
-    )
+    const jeId = await insertPostedJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      voucherNumber: 1,
+      entryDate: '2026-06-05',
+      description: 'Manual day summary',
+      sourceType: 'manual',
+      lines: [
+        { accountNumber: '1930', debitAmount: 300, creditAmount: 0, currency: 'SEK', sortOrder: 0 },
+        { accountNumber: '3001', debitAmount: 0, creditAmount: 240, currency: 'SEK', sortOrder: 1 },
+        { accountNumber: '2611', debitAmount: 0, creditAmount: 60, currency: 'SEK', sortOrder: 2 },
+      ],
+    })
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ bulk_book_transactions: RpcResult & { docs_linked?: number } }>(

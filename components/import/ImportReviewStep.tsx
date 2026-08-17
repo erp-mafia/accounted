@@ -27,7 +27,9 @@ import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
+import ImportTheater from '@/components/import/ImportTheater'
 import type { ImportPreview, AccountMapping } from '@/lib/import/types'
+import type { TheaterModel } from '@/lib/import/theater-model'
 
 const SERIES_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
@@ -37,6 +39,9 @@ interface ImportReviewStepProps {
   onExecute: (options: ImportExecuteOptions) => Promise<void>
   onBack: () => void
   isLoading: boolean
+  /** Client-parsed graph model for the import theater; null falls back to
+   *  the plain spinner takeover (parse failed, oversized file, or pending). */
+  theaterModel?: TheaterModel | null
 }
 
 export interface ImportExecuteOptions {
@@ -54,6 +59,7 @@ export default function ImportReviewStep({
   onExecute,
   onBack,
   isLoading,
+  theaterModel = null,
 }: ImportReviewStepProps) {
   const { canWrite } = useCanWrite()
   const { company } = useCompany()
@@ -168,27 +174,38 @@ export default function ImportReviewStep({
       m.sourceName.trim() !== m.targetName?.trim()
   ).length
 
-  // Full-screen loading takeover during import execution
+  // Full-screen loading takeover during import execution. With a client-parsed
+  // model the theater plays (the graph draws itself while the server writes);
+  // without one, the plain spinner takeover remains the fallback.
   if (isLoading) {
     return (
       <div className="space-y-6">
         <Card>
           <CardContent className="pt-8 pb-8">
-            <div className="flex flex-col items-center text-center space-y-6">
-              <Loader2 className="h-10 w-10 text-primary animate-spin" />
-              <div className="space-y-1">
-                <p className="font-medium text-lg">Importerar bokföring...</p>
-                <p className="text-sm text-muted-foreground">
-                  {preview.voucherCount} verifikationer bearbetas
+            {theaterModel ? (
+              <div className="space-y-6">
+                <ImportTheater model={theaterModel} preview={preview} elapsed={elapsed} />
+                <p className="text-center text-sm text-muted-foreground">
+                  Stäng inte sidan. Importen kan ta upp till några minuter beroende på antalet verifikationer.
                 </p>
               </div>
-              <div className="text-2xl font-display tabular-nums text-muted-foreground">
-                {elapsed}s
+            ) : (
+              <div className="flex flex-col items-center text-center space-y-6">
+                <Loader2 className="h-10 w-10 text-primary animate-spin" />
+                <div className="space-y-1">
+                  <p className="font-medium text-lg">Importerar bokföring...</p>
+                  <p className="text-sm text-muted-foreground">
+                    {preview.voucherCount} verifikationer bearbetas
+                  </p>
+                </div>
+                <div className="text-2xl font-display tabular-nums text-muted-foreground">
+                  {elapsed}s
+                </div>
+                <p className="text-sm text-muted-foreground max-w-sm">
+                  Stäng inte sidan. Importen kan ta upp till några minuter beroende på antalet verifikationer.
+                </p>
               </div>
-              <p className="text-sm text-muted-foreground max-w-sm">
-                Stäng inte sidan. Importen kan ta upp till några minuter beroende på antalet verifikationer.
-              </p>
-            </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -396,7 +413,7 @@ export default function ImportReviewStep({
 
       {/* Warnings */}
       {!preview.trialBalance.isBalanced && (
-        <Card className="border-warning/50 bg-warning/5">
+        <Card className="border-border bg-muted/30">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-warning">
               <AlertCircle className="h-5 w-5" />

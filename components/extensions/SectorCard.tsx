@@ -17,14 +17,14 @@ export default async function SectorCard({ sector }: { sector: Sector }) {
 
   return (
     <Link href={`/extensions/${sector.slug}`} className="h-full">
-      <Card className="group hover:border-primary/30 transition-colors cursor-pointer h-full">
-        <CardContent className="pt-6">
+      <Card className="group h-full cursor-pointer transition-colors duration-150 hover:bg-secondary/60">
+        <CardContent className="p-6">
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 flex-shrink-0">
-              <Icon className="h-5 w-5 text-primary" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-secondary flex-shrink-0">
+              <Icon className="h-5 w-5 text-foreground" />
             </div>
             <div>
-              <h3 className="text-sm font-medium group-hover:text-primary transition-colors">
+              <h3 className="text-sm">
                 {name}
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{description}</p>

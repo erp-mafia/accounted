@@ -38,6 +38,7 @@ import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/m
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import type {
@@ -506,6 +507,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('TX_CATEGORIZE_RACE', txLog, {
         requestId: ctx.requestId,
       })
+    }
+
+    // Propagate the underlag onto the new verifikat: anchor the transaction's
+    // pinned document and stamp matched inbox items so they leave the active
+    // inbox. Same shared step the dashboard categorize, /book and bulk-book
+    // paths run; without it a v1 booking of a tx with attached underlag reads
+    // "Underlag saknas" forever. Best-effort by contract (logged inside),
+    // never fails the booking. Runs only when THIS request won the CAS write.
+    if (journalEntryId) {
+      await propagateUnderlagForBookedTransaction(
+        ctx.supabase,
+        ctx.companyId!,
+        txId,
+        journalEntryId,
+      )
     }
 
     try {

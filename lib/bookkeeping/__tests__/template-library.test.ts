@@ -50,16 +50,70 @@ describe('applyTemplate', () => {
       { account: '2645', label: 'Ingående moms', side: 'debit', type: 'vat', vat_rate: 0.25 },
       { account: '1930', label: 'Företagskonto', side: 'credit', type: 'settlement', ratio: 1.0 },
     ]
-    // Total payment is 10000 SEK (no VAT on the payment itself for reverse charge)
+    // Total payment is 10000 SEK. The supplier charged no VAT, so the payment
+    // IS the beskattningsunderlag: fiktiv moms = 10000 * 0.25 on top, never
+    // extracted out of the total.
     const result = applyTemplate(lines, 10000)
     expect(result).toHaveLength(4)
     // Business line = 10000 * 1.0
     expect(result[0].debit_amount).toBe('10000.00')
-    // VAT = 10000 * 0.25 / (1 + 0.25) = 2000
-    expect(result[1].credit_amount).toBe('2000.00')
-    expect(result[2].debit_amount).toBe('2000.00')
+    // VAT = 10000 * 0.25 = 2500 on both offsetting legs
+    expect(result[1].credit_amount).toBe('2500.00')
+    expect(result[2].debit_amount).toBe('2500.00')
     // Settlement = 10000
     expect(result[3].credit_amount).toBe('10000.00')
+  })
+
+  it('reverse charge regression: 807.99 gives 202.00, not 161.60 (20%)', () => {
+    // User-reported bug: the seeded "Inköp EU-tjänster, omvänd moms 25%"
+    // template produced 807.99 * 0.25 / 1.25 = 161.60 (the inclusive
+    // back-calculation, i.e. 20% of the amount) instead of 807.99 * 0.25.
+    const lines: BookingTemplateLibraryLine[] = [
+      { account: '6540', label: 'IT-tjänster', side: 'debit', type: 'business', ratio: 1.0 },
+      { account: '2614', label: 'Utgående moms omvänd skattskyldighet 25%', side: 'credit', type: 'vat', vat_rate: 0.25 },
+      { account: '2645', label: 'Beräknad ingående moms 25%', side: 'debit', type: 'vat', vat_rate: 0.25 },
+      { account: '1930', label: 'Företagskonto', side: 'credit', type: 'settlement', ratio: 1.0 },
+    ]
+    const result = applyTemplate(lines, 807.99)
+    const byAccount = Object.fromEntries(result.map((l) => [l.account_number, l]))
+    expect(byAccount['6540'].debit_amount).toBe('807.99')
+    expect(byAccount['2614'].credit_amount).toBe('202.00')
+    expect(byAccount['2645'].debit_amount).toBe('202.00')
+    expect(byAccount['1930'].credit_amount).toBe('807.99')
+    // The entry balances: the fiktiv legs net to zero.
+    const sumDebit = result.reduce((s, l) => s + (parseFloat(l.debit_amount || '0') || 0), 0)
+    const sumCredit = result.reduce((s, l) => s + (parseFloat(l.credit_amount || '0') || 0), 0)
+    expect(sumDebit).toBeCloseTo(sumCredit, 2)
+  })
+
+  it('applies reduced-rate reverse charge (2624/2645 at 12%) on top of the base', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      { account: '4010', label: 'Varuinköp', side: 'debit', type: 'business', ratio: 1.0 },
+      { account: '2624', label: 'Utgående moms omvänd 12%', side: 'credit', type: 'vat', vat_rate: 0.12 },
+      { account: '2645', label: 'Beräknad ingående moms 12%', side: 'debit', type: 'vat', vat_rate: 0.12 },
+      { account: '1930', label: 'Företagskonto', side: 'credit', type: 'settlement', ratio: 1.0 },
+    ]
+    const result = applyTemplate(lines, 1000)
+    expect(result[1].credit_amount).toBe('120.00')
+    expect(result[2].debit_amount).toBe('120.00')
+  })
+
+  it('save-as-mall then apply round-trips a correct reverse-charge booking', () => {
+    // A correctly booked RC purchase saved via "Spara som mall" and re-applied
+    // must reproduce the 25%-of-base fiktiv moms, not shrink it to 20%.
+    const source = [
+      { account_number: '6540', debit_amount: '807.99', credit_amount: '' },
+      { account_number: '2645', debit_amount: '202.00', credit_amount: '' },
+      { account_number: '2614', debit_amount: '', credit_amount: '202.00' },
+      { account_number: '1930', debit_amount: '', credit_amount: '807.99' },
+    ]
+    const derived = deriveTemplateLinesFromBooking(source)
+    expect(derived.find((l) => l.account === '2614')!.vat_rate).toBe(0.25)
+    const applied = applyTemplate(derived, 807.99)
+    const byAccount = Object.fromEntries(applied.map((l) => [l.account_number, l]))
+    expect(byAccount['2614'].credit_amount).toBe('202.00')
+    expect(byAccount['2645'].debit_amount).toBe('202.00')
+    expect(byAccount['6540'].debit_amount).toBe('807.99')
   })
 
   it('handles representation with 25% input VAT', () => {
@@ -171,9 +225,9 @@ describe('deriveTemplateLinesFromBooking', () => {
   })
 
   it('snaps a 12% VAT line to the reduced rate', () => {
-    // Hotel: 5820 net 1000, 2641 VAT 120, 1930 gross 1120.
+    // Hotel: 5830 net 1000, 2641 VAT 120, 1930 gross 1120.
     const lines = deriveTemplateLinesFromBooking([
-      { account_number: '5820', debit_amount: '1000', credit_amount: '' },
+      { account_number: '5830', debit_amount: '1000', credit_amount: '' },
       { account_number: '2641', debit_amount: '120', credit_amount: '' },
       { account_number: '1930', debit_amount: '', credit_amount: '1120' },
     ])

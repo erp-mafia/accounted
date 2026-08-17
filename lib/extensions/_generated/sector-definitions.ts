@@ -113,7 +113,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "icon": "MessageCircle",
           "dataPattern": "both",
           "description": "Läser kvitton och fakturor med AI och fyller i leverantör, belopp, moms och datum automatiskt",
-          "longDescription": "Lyssnar på document.uploaded-händelser och kör Sonnet 4.6 via AWS Bedrock på varje uppladdat kvitto eller faktura (PDF eller bild). De extraherade fälten skrivs till document_attachments.extracted_data så att den specialiserade bokföringsassistenten kan föreslå rätt BAS-konto utan att fråga användaren om sådant som redan står på underlaget. Hoppar över dokument som redan extraherats av andra extensions (t.ex. invoice-inbox) för att undvika dubbla AI-anrop.",
+          "longDescription": "Lyssnar på document.uploaded-händelser och kör Claude på varje uppladdat kvitto eller faktura (PDF eller bild), via AWS Bedrock eller Anthropics API beroende på vilka nycklar som är satta. De extraherade fälten skrivs till document_attachments.extracted_data så att den specialiserade bokföringsassistenten kan föreslå rätt BAS-konto utan att fråga användaren om sådant som redan står på underlaget. Hoppar över dokument som redan extraherats av andra extensions (t.ex. invoice-inbox) för att undvika dubbla AI-anrop.",
           "readsCoreTables": [
                 "document_attachments",
                 "invoice_inbox_items"
@@ -146,6 +146,40 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
                 "invoice_inbox_items"
           ],
           "hasOwnData": true
+    },
+    {
+          "slug": "woocommerce",
+          "name": "WooCommerce",
+          "sector": "general",
+          "category": "import",
+          "icon": "ShoppingCart",
+          "dataPattern": "manual",
+          "description": "Hämta betalda ordrar och återbetalningar från din WooCommerce-butik till transaktionsinkorgen",
+          "longDescription": "Anslut din WooCommerce-butik så hämtas betalda ordrar och återbetalningar automatiskt varje natt till transaktionsinkorgen, som ett bankflöde för butiken. Inget bokförs automatiskt: du bokför raderna själv precis som vanliga banktransaktioner.",
+          "hasOwnData": true
+    },
+    {
+          "slug": "shopify",
+          "name": "Shopify",
+          "sector": "general",
+          "category": "import",
+          "icon": "ShoppingBag",
+          "dataPattern": "manual",
+          "description": "Hämta betalda ordrar och återbetalningar från din Shopify-butik till transaktionsinkorgen",
+          "longDescription": "Anslut din Shopify-butik så hämtas betalda ordrar och återbetalningar automatiskt varje natt till transaktionsinkorgen, som ett bankflöde för butiken. Inget bokförs automatiskt: du bokför raderna själv precis som vanliga banktransaktioner.",
+          "hasOwnData": true
+    },
+    {
+          "slug": "mail",
+          "name": "Brevlådor",
+          "sector": "general",
+          "category": "operations",
+          "icon": "Mail",
+          "dataPattern": "manual",
+          "description": "Låt Kvittojakten leta upp kvitton i era brevlådor",
+          "longDescription": "Koppla en eller flera brevlådor, så letar Kvittojakten själv upp kvitton till kortköp som saknar underlag. Åtkomsten är läsbehörighet: agenten kan aldrig skicka, ändra eller radera något i din mejl. Inkorgen kopieras aldrig, utan bara mejl som kan vara ett kvitto till ett visst köp hämtas i stunden och släpps igen. Det som blir underlag arkiveras i ert vanliga sjuåriga arkiv, efter att du godkänt det.",
+          "hasOwnData": true,
+          "subscriptionNotice": "Kräver ett Google-konto. Varje brevlåda kopplas av sin egen ägare och kan kopplas från när som helst."
     },
   ],
 }

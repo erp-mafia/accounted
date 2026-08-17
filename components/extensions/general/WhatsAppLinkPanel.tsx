@@ -6,16 +6,22 @@
  * Unlinked: mint a one-time code (10 min TTL) + wa.me deep link; the user
  * sends the code from their phone and the webhook binds the number.
  * Linked: masked phone, default-company select (multi-company routing),
- * revoke. Muted (user sent *stopp* in chat) shows a hint: unmuting happens
- * in the chat with *start*, not here.
+ * revoke. Muted (user sent *stopp* in chat) can be lifted here (or with
+ * *start* in the chat); no proactive confirmation is possible afterwards
+ * (24h service window, v1 sends no templates), so the hint says to just
+ * send the next receipt. A nonzero 7-day failure count from the health
+ * object renders as one attention line.
  */
 
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2, MessageCircle, ExternalLink } from 'lucide-react'
+import { Loader2, ExternalLink } from 'lucide-react'
+import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useFormat } from '@/lib/hooks/use-format'
 import {
   SettingsGroup,
   SettingsRow,
@@ -25,11 +31,32 @@ import {
 
 const BASE = '/api/extensions/ext/whatsapp-inbox'
 
+/** Closed enum from the server (lib/last-event.ts); translated here. */
+const LAST_EVENT_KINDS = new Set([
+  'filed',
+  'handled',
+  'processing',
+  'awaiting_company',
+  'duplicate',
+  'rate_limited',
+  'unsupported',
+  'muted',
+  'declined',
+  'failed',
+])
+
 interface LinkStatus {
   linked: boolean
   phoneMasked?: string
   defaultCompanyId?: string | null
   muted?: boolean
+  lastInboundAt?: string | null
+  lastInboundEvent?: string | null
+  lastReplyFailed?: boolean
+  health?: {
+    outboundFailed7d: number
+    parkedInbound7d: number
+  } | null
 }
 
 interface MintedCode {
@@ -42,6 +69,7 @@ export function WhatsAppLinkPanel() {
   const t = useTranslations('settings_whatsapp')
   const { toast } = useToast()
   const { companies } = useCompany()
+  const { locale, formatDateLong } = useFormat()
 
   const [isLoading, setIsLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -133,6 +161,20 @@ export function WhatsAppLinkPanel() {
     }
   }
 
+  const unmute = async () => {
+    setIsSaving(true)
+    try {
+      const response = await fetch(`${BASE}/link/unmute`, { method: 'POST' })
+      if (!response.ok) throw new Error('unmute failed')
+      toast({ title: t('unmuted_toast') })
+      await fetchStatus()
+    } catch {
+      toast({ title: t('unmute_failed'), variant: 'destructive' })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 px-1 py-6 text-sm text-muted-foreground">
@@ -153,16 +195,55 @@ export function WhatsAppLinkPanel() {
     )
   }
 
+  const healthIssues =
+    (status?.health?.outboundFailed7d ?? 0) + (status?.health?.parkedInbound7d ?? 0)
+
   if (status?.linked) {
     return (
       <SettingsGroup label={t('group_label')}>
+        {healthIssues > 0 ? (
+          <div className="px-1 pt-3">
+            <AttnLine>{t('health_warning', { count: healthIssues })}</AttnLine>
+          </div>
+        ) : null}
+
         <SettingsRow label={t('linked_number_label')}>
           <span className="font-mono text-sm">{status.phoneMasked}</span>
         </SettingsRow>
 
         {status.muted ? (
           <SettingsRow label={t('muted_label')}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isSaving}
+              onClick={() => void unmute()}
+            >
+              {t('unmute_button')}
+            </Button>
             <SettingsRowNote>{t('muted_hint')}</SettingsRowNote>
+          </SettingsRow>
+        ) : null}
+
+        {status.lastInboundAt ? (
+          <SettingsRow label={t('last_event_label')}>
+            <div className="space-y-1">
+              <span className="text-sm">
+                {formatDateLong(status.lastInboundAt)}{' '}
+                {new Date(status.lastInboundAt).toLocaleTimeString(
+                  locale === 'en' ? 'en-GB' : 'sv-SE',
+                  { hour: '2-digit', minute: '2-digit' },
+                )}
+                {' · '}
+                {t(
+                  status.lastInboundEvent && LAST_EVENT_KINDS.has(status.lastInboundEvent)
+                    ? `last_event_${status.lastInboundEvent}`
+                    : 'last_event_handled',
+                )}
+              </span>
+              {status.lastReplyFailed ? <AttnLine>{t('last_reply_failed')}</AttnLine> : null}
+            </div>
           </SettingsRow>
         ) : null}
 
@@ -200,13 +281,13 @@ export function WhatsAppLinkPanel() {
         {minted ? (
           <div className="space-y-3">
             <div className="flex items-center gap-3">
-              <span className="rounded-md border border-border bg-muted/50 px-3 py-1.5 font-mono text-base tracking-wider">
+              <span className="rounded-sm border border-border bg-muted/50 px-3 py-1.5 font-mono text-base tracking-wider">
                 {minted.code}
               </span>
               {minted.waLink ? (
                 <Button asChild type="button" size="sm">
                   <a href={minted.waLink} target="_blank" rel="noreferrer">
-                    <MessageCircle className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                    <WhatsAppMark size={16} className="mr-1.5" />
                     {t('open_whatsapp')}
                     <ExternalLink className="ml-1.5 h-3.5 w-3.5" aria-hidden="true" />
                   </a>

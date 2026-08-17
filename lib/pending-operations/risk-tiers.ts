@@ -112,6 +112,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   unlock_period: 'high',
   set_opening_balances: 'high',
   run_year_end: 'high',
+  post_kontantmetod_cutoff: 'high',
   run_currency_revaluation: 'high',
   // Planenlig avskrivning: one journal entry per asset, each independently
   // reversible (storno). Mid-stakes bokslut posting: staged and human-reviewed,
@@ -199,6 +200,16 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // invoice_payments row: sits next to link_invoice_voucher semantically;
   // both attach an existing booking to a different entity.
   link_transaction_journal_entry: 'medium',
+
+  // ── Körjournal (mileage) ───────────────────────────────────────────
+  // A trip row is pure travel documentation: no booking impact until a
+  // separate book operation. Same tier as create_customer.
+  log_mileage_trip: 'low',
+  // Books one verifikat with fixed lines derived from logged trips (7331 +
+  // whitelisted counter account) at the DB-configured schablon rate: not the
+  // arbitrary-line surface that makes create_voucher 'high'. Reversible via
+  // storno: same tier as post_annual_depreciation.
+  book_mileage_period: 'medium',
 
   // ── Skatteverket filing (PR5) ──────────────────────────────────────
   // External + irreversible once signed. Commit sends the declaration for

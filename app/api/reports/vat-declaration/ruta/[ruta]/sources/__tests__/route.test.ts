@@ -31,10 +31,19 @@ function buildSupabase(
   chartAccounts: Array<{
     account_number: string
     account_name?: string
+    account_class?: number
     default_vat_rate: number | null
+    default_vat_treatment?: string | null
   }> = []
 ): SupabaseShape {
-  const chartResult = { data: chartAccounts, error: null }
+  const chartResult = {
+    data: chartAccounts.map((account) => ({
+      account_class: 3,
+      default_vat_treatment: null,
+      ...account,
+    })),
+    error: null,
+  }
   return {
     rpc: vi.fn().mockResolvedValue(linesResult),
     from: vi.fn().mockImplementation((table: string) => {
@@ -44,6 +53,8 @@ function buildSupabase(
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
+          gte: vi.fn().mockReturnThis(),
+          lte: vi.fn().mockReturnThis(),
           in: vi.fn().mockReturnThis(),
           not: vi.fn().mockReturnThis(),
           order: vi.fn().mockReturnThis(),
@@ -228,7 +239,7 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
   })
 })
 
-describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources: ruta 05 accounts', () => {
+describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources: account overrides', () => {
   /** The p_accounts array the route handed to get_vat_ruta_source_lines. */
   function rpcAccounts(supabase: SupabaseShape): string[] {
     return (supabase.rpc.mock.calls[0][1] as { p_accounts: string[] }).p_accounts
@@ -280,7 +291,23 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources: ruta 05 accounts
     const accounts = rpcAccounts(supabase)
     expect(accounts).toContain('2611')
     expect(accounts).not.toContain('3013')
-    expect(supabase.from).not.toHaveBeenCalledWith('chart_of_accounts')
+    // Every ruta resolves explicit account overrides before the static BAS
+    // fallback, but a ruta 05-only custom account still stays out of ruta 10.
+    expect(supabase.from).toHaveBeenCalledWith('chart_of_accounts')
+  })
+
+  it('drills into a custom EU purchase account in ruta 20', async () => {
+    const supabase = buildSupabase({ data: [], error: null }, { data: null, error: null }, [{
+      account_number: '4056',
+      account_name: 'Inköp varor 25% EU',
+      account_class: 4,
+      default_vat_rate: 0.25,
+      default_vat_treatment: 'reverse_charge_eu_goods',
+    }])
+    authOk(supabase)
+
+    expect((await get('20')).status).toBe(200)
+    expect(rpcAccounts(supabase)).toContain('4056')
   })
 })
 

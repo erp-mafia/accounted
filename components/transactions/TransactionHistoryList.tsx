@@ -6,8 +6,8 @@ import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DataListEmpty } from '@/components/ui/data-list'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { ContextPicker } from '@/components/common/ContextPicker'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -46,9 +46,13 @@ type HistoryRow =
 interface TransactionHistoryListProps {
   transactions: TransactionWithInvoice[]
   skvRows?: SkattekontoTransactionWithSuggestion[]
+  /** Rows animating out during the page's 350ms removal window (delete):
+   *  rendered with .row-exit so the departure is visible, not a hard jump. */
+  exitingIds?: Set<string>
   searchTerm?: string
+  /** Page-level source chip selection (the toolbar ContextPicker on
+   *  /transactions, shared with the inbox mode). */
   sourceFilter: SourceFilter
-  onSourceFilterChange: (sourceFilter: SourceFilter) => void
   /** Underlag status per journal_entry_id (computeJeUnderlagStatus): drives
    *  the per-row "Underlag"/"Underlag saknas" badges on booked rows. */
   jeUnderlagStatus?: Record<string, JeUnderlagStatus>
@@ -77,9 +81,9 @@ interface TransactionHistoryListProps {
 export default function TransactionHistoryList({
   transactions,
   skvRows = [],
+  exitingIds,
   searchTerm = '',
   sourceFilter,
-  onSourceFilterChange,
   jeUnderlagStatus,
   onOpenMatchDialog,
   onOpenCategoryDialog,
@@ -99,6 +103,13 @@ export default function TransactionHistoryList({
   // is_business flag. So when the filter is 'business' or 'private' we
   // implicitly hide SKV.
   const bankFiltered = transactions.filter((tx) => {
+    if (
+      sourceFilter.startsWith('acct:') &&
+      tx.cash_account_id !== sourceFilter.slice('acct:'.length)
+    ) {
+      return false
+    }
+    if (sourceFilter === 'bank:other' && tx.cash_account_id != null) return false
     const matchesSearch = tx.description.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesFilter =
       filter === 'all' ||
@@ -118,7 +129,9 @@ export default function TransactionHistoryList({
       merged.push({ source: 'bank', date: tx.date, data: tx })
     }
   }
-  if (sourceFilter !== 'bank') {
+  // Skattekonto rows belong to no cash account: any bank-side narrowing
+  // ('bank', 'bank:other', 'acct:<id>') hides them.
+  if (sourceFilter === 'all' || sourceFilter === 'skatteverket') {
     for (const r of skvFiltered) {
       merged.push({ source: 'skatteverket', date: r.transaktionsdatum, data: r })
     }
@@ -128,7 +141,6 @@ export default function TransactionHistoryList({
     return a.source === 'bank' ? -1 : 1
   })
 
-  const showSourceFilter = sourceFilter !== 'all' || (skvRows.length > 0 && transactions.length > 0)
   const filtered = merged
 
   const FILTERS: Array<{ key: HistoryFilter; labelKey: string }> = [
@@ -139,47 +151,13 @@ export default function TransactionHistoryList({
 
   return (
     <div className="space-y-4">
-      {/* Business/private seg + source chip, mirroring the inbox toolbar. */}
+      {/* Business/private seg; the source chip lives in the page toolbar. */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          {FILTERS.map(({ key, labelKey }) => (
-            <button
-              key={key}
-              type="button"
-              role="tab"
-              aria-selected={filter === key}
-              onClick={() => setFilter(key)}
-              className={cn(
-                'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-                filter === key
-                  ? 'border border-border bg-card font-medium text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t(labelKey)}
-            </button>
-          ))}
-        </div>
-        {showSourceFilter && (
-          <div className="ml-auto">
-            <ContextPicker
-              value={sourceFilter}
-              onChange={(id) => onSourceFilterChange(id as SourceFilter)}
-              triggerLabel={
-                sourceFilter === 'all'
-                  ? t('source_all')
-                  : sourceFilter === 'bank'
-                    ? t('source_bank')
-                    : t('source_skatteverket')
-              }
-              items={[
-                { id: 'all', label: t('source_all') },
-                { id: 'bank', label: t('source_bank') },
-                { id: 'skatteverket', label: t('source_skatteverket') },
-              ]}
-            />
-          </div>
-        )}
+        <SegmentedControl
+          value={filter}
+          onChange={setFilter}
+          options={FILTERS.map(({ key, labelKey }) => ({ value: key, label: t(labelKey) }))}
+        />
       </div>
 
       {filtered.length === 0 ? (
@@ -208,6 +186,7 @@ export default function TransactionHistoryList({
                   <BankHistoryRow
                     key={`bank-${item.data.id}`}
                     transaction={item.data}
+                    isExiting={exitingIds?.has(item.data.id) ?? false}
                     jeUnderlagStatus={jeUnderlagStatus}
                     onOpenMatchDialog={onOpenMatchDialog}
                     onOpenCategoryDialog={onOpenCategoryDialog}
@@ -229,7 +208,12 @@ export default function TransactionHistoryList({
         </div>
       )}
 
-      {hasMore && onLoadMore && !searchTerm && filtered.length > 0 && (
+      {/* Pagination pages BANK rows: keep it reachable whenever more exist,
+          even when the current page has no rows matching an acct:/bank:other
+          scope (filtered.length would hide the only way to older matches),
+          and drop it for the skattekonto scope where it cannot change the
+          visible list. */}
+      {hasMore && onLoadMore && !searchTerm && sourceFilter !== 'skatteverket' && (
         <div className="flex justify-center">
           <Button variant="outline" onClick={onLoadMore} disabled={isLoadingMore}>
             {isLoadingMore ? (
@@ -249,6 +233,7 @@ export default function TransactionHistoryList({
 
 function BankHistoryRow({
   transaction,
+  isExiting = false,
   jeUnderlagStatus,
   onOpenMatchDialog,
   onOpenCategoryDialog,
@@ -257,6 +242,7 @@ function BankHistoryRow({
   onDelete,
 }: {
   transaction: TransactionWithInvoice
+  isExiting?: boolean
   jeUnderlagStatus?: Record<string, JeUnderlagStatus>
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
@@ -303,14 +289,21 @@ function BankHistoryRow({
   return (
     <tr
       data-tx-id={transaction.id}
-      className="group transition-colors duration-150 hover:bg-secondary/35"
+      className={cn(
+        'group transition-colors duration-150 hover:bg-secondary/35',
+        isExiting && 'row-exit',
+      )}
+      // .row-exit only blocks pointer input; `inert` also drops keyboard
+      // focus and activation (booking, delete, the ⋯ menu) during the 350ms
+      // removal window.
+      inert={isExiting || undefined}
     >
       <td className={cn(TD_CLASS, 'w-0 !p-0')} aria-hidden="true"></td>
       <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(transaction.date)}
       </td>
       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="row-collapsible flex min-w-0 items-center gap-2">
           <span className="truncate">{transaction.description}</span>
           <TransactionAttachmentIndicator
             documentId={transaction.document_id}
@@ -333,7 +326,7 @@ function BankHistoryRow({
             </span>
           )}
           {hasInvoiceMatch && (
-            <Badge variant="secondary" className="hidden shrink-0 gap-1 font-normal md:inline-flex">
+            <Badge data-ph-mask="" variant="secondary" className="hidden shrink-0 gap-1 font-normal md:inline-flex">
               <FileText className="h-3 w-3" />
               {t('possible_match_invoice', {
                 number: transaction.potential_invoice!.invoice_number ?? '',
@@ -358,7 +351,7 @@ function BankHistoryRow({
         {formatCurrency(transaction.amount, transaction.currency)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
-        <span className="inline-flex items-center justify-end gap-2">
+        <span className="row-collapsible inline-flex items-center justify-end gap-2">
           {isBooked ? (
             <>
               <span className="text-muted-foreground">

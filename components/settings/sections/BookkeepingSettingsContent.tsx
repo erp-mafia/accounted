@@ -13,6 +13,7 @@ import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSer
 import { applyDefaultSeriesToMap } from '@/lib/bookkeeping/voucher-series-resolver'
 import { PeriodiseringAutoDetectToggle } from '@/components/settings/PeriodiseringAutoDetectToggle'
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
+import { MileageToggle } from '@/components/settings/MileageToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import {
   SettingsGroup,
@@ -174,12 +175,13 @@ export function BookkeepingSettingsContent() {
       <SettingsGroup label={t('group_automation')}>
         <PeriodiseringAutoDetectToggle />
         <DimensionsToggle />
+        <MileageToggle />
       </SettingsGroup>
 
       <SettingsGroup>
         <SettingsRow label={t('related_heading')} borderless>
           <Link
-            href="/bookkeeping?tab=accounts"
+            href="/chart-of-accounts"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ExternalLink className="h-3.5 w-3.5" />

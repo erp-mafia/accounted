@@ -23,21 +23,11 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     sru_code: '7221',
     k2_excluded: false,
   },
-  {
-    account_number: '2012',
-    account_name: 'Avräkning för skatter och avgifter',
-    account_class: 2,
-    account_group: '20',
-    account_type: 'equity',
-    normal_balance: 'debit',
-    description:
-      'Enskild firma: ägarens egna skatter och avgifter (t.ex. preliminär F-skatt) som betalas ' +
-      'av företaget. Ett eget uttag, inte en företagskostnad. Nollas mot 2010 Eget kapital vid ' +
-      'nytt räkenskapsår. Ska inte förväxlas med 1630 Avräkning för skatter och avgifter ' +
-      '(skattekonto), som är tillgångssidans saldo mot Skatteverket.',
-    sru_code: '7221',
-    k2_excluded: false,
-  },
+  // 2012 is deliberately absent: the official BAS kontoplan (bas.se, BAS 2026 v2)
+  // has no 2012; the enskild firma equity block runs 2010, 2011, 2013, 2017,
+  // 2018, 2019. "Avräkning för skatter och avgifter" as 2012 is a program
+  // convention (Visma, Bokio, Björn Lundén), not standard BAS; owner taxes are
+  // booked as eget uttag on 2013. Verified against the primary source in #1409.
   {
     account_number: '2013',
     account_name: 'Övriga egna uttag',

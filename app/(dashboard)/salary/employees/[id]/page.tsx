@@ -481,17 +481,11 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               </div>
             </div>
             {showChecksumWarning && (
-              <p className="mt-2 text-xs text-warning-foreground">{t('bank_warn_checksum')}</p>
+              <p className="mt-2 text-xs text-attn">{t('bank_warn_checksum')}</p>
             )}
             <p className="text-xs text-muted-foreground mt-2">{t('form_bank_hint')}</p>
           </CardContent>
         </Card>
-
-        {/* Benefits */}
-        <EmployeeBenefitsPanel employeeId={id} canWrite={canWrite} />
-
-        {/* Ingående saldon (payroll cutover) */}
-        <OpeningBalancesPanel employeeId={id} canWrite={canWrite} />
 
         {canWrite && (
           <div className="flex justify-end gap-3">
@@ -505,6 +499,25 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
           </div>
         )}
       </form>
+
+      {/* Self-saving sections. These live OUTSIDE the employee form on purpose:
+          benefits and opening balances write to their own endpoints, so the
+          page-level "Spara ändringar" never touches them, and their buttons can
+          no longer implicitly submit the employee form (default type="submit"). */}
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+            {t('detail_self_saving_heading')}
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">{t('detail_self_saving_hint')}</p>
+        </div>
+
+        {/* Benefits */}
+        <EmployeeBenefitsPanel employeeId={id} canWrite={canWrite} />
+
+        {/* Ingående saldon (payroll cutover) */}
+        <OpeningBalancesPanel employeeId={id} canWrite={canWrite} />
+      </section>
 
       <DestructiveConfirmDialog {...dialogProps} />
     </div>

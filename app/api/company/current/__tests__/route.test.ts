@@ -73,7 +73,6 @@ describe('PATCH /api/company/current', () => {
   it('updates the framework for an aktiebolag', async () => {
     enqueue({ data: { entity_type: 'aktiebolag' } }) // entity check
     enqueue({ data: { id: 'company-1', accounting_framework: 'k3', entity_type: 'aktiebolag' } }) // update
-    enqueue({ data: null }) // K3 latent-tax account upsert
 
     const req = createMockRequest('/api/company/current', {
       method: 'PATCH',

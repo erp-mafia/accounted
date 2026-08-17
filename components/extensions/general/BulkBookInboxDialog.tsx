@@ -27,6 +27,9 @@ interface BulkBookInboxItem {
   matched_transaction_id: string | null
   created_journal_entry_id: string | null
   created_supplier_invoice_id: string | null
+  // Server-derived: the verifikat anchoring an already-booked matched
+  // transaction (see InvoiceInboxWorkspace's InboxItem).
+  matched_transaction_journal_entry_id?: string | null
   extracted_data: InvoiceExtractionResult | null
 }
 
@@ -71,7 +74,11 @@ const CATEGORY_OPTIONS: { value: string; label: string }[] = [
 // here by `reduced_12` / `reduced_6`: there is deliberately no `standard_12` /
 // `standard_6` (no such treatment exists; the backend would reject it). Keep
 // this list in sync with the union, not with rate labels.
-const VAT_OPTIONS: { value: VatTreatment; label: string }[] = [
+const VAT_OPTIONS: { value: VatTreatment | 'auto'; label: string }[] = [
+  // 'auto' sends no explicit treatment: the bulk-book route derives the
+  // default from the picked category (exempt for bank/card fees, 12%
+  // representation, else 25%). Reverse charge is never derived; see below.
+  { value: 'auto', label: 'Enligt kategori' },
   { value: 'standard_25', label: 'Moms 25%' },
   { value: 'reduced_12', label: 'Moms 12%' },
   { value: 'reduced_6', label: 'Moms 6%' },
@@ -81,14 +88,21 @@ const VAT_OPTIONS: { value: VatTreatment; label: string }[] = [
 ]
 
 function isBookable(it: BulkBookInboxItem): boolean {
-  return Boolean(it.matched_transaction_id) && !it.created_journal_entry_id && !it.created_supplier_invoice_id
+  return (
+    Boolean(it.matched_transaction_id) &&
+    !it.created_journal_entry_id &&
+    !it.created_supplier_invoice_id &&
+    // A matched transaction that is already booked has nothing left to book:
+    // the server would only skip it as already_booked_or_duplicate.
+    !it.matched_transaction_journal_entry_id
+  )
 }
 
 export default function BulkBookInboxDialog({ open, onOpenChange, items, onSuccess }: Props) {
   const { toast } = useToast()
   const t = useTranslations('inbox_bulk_book')
   const [category, setCategory] = useState<string>('')
-  const [vatTreatment, setVatTreatment] = useState<VatTreatment>('standard_25')
+  const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'auto'>('auto')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const bookable = useMemo(() => items.filter(isBookable), [items])
@@ -97,19 +111,26 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
     [items],
   )
   const alreadyBooked = useMemo(
-    () => items.filter((it) => it.created_journal_entry_id || it.created_supplier_invoice_id).length,
+    () =>
+      items.filter(
+        (it) =>
+          it.created_journal_entry_id ||
+          it.created_supplier_invoice_id ||
+          it.matched_transaction_journal_entry_id,
+      ).length,
     [items],
   )
 
-  // Reset to the safe default (25% svensk moms) each time the dialog opens.
+  // Reset to the category-derived default each time the dialog opens.
   // Currency is deliberately NOT used to preselect omvänd skattskyldighet: a
   // foreign currency does not imply a foreign seller: a Swedish supplier can
   // invoice in EUR and still debit 25% moms. Reverse charge is a property of
-  // the seller (utländsk, utan svenskt momsnr), never of the currency, so
-  // defaulting to it from currency alone would silently mis-book domestic VAT.
-  // The advisory rendered under the Moms picker spells this out to the user.
+  // the seller (utländsk, utan svenskt momsnr), never of the currency, and the
+  // server-side derivation never produces it either, so it is only ever an
+  // explicit user choice. The advisory rendered under the Moms picker spells
+  // this out to the user.
   useEffect(() => {
-    if (open) setVatTreatment('standard_25')
+    if (open) setVatTreatment('auto')
   }, [open])
 
   // Underlag subtotals, split per currency. This used to be a single scalar
@@ -140,7 +161,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
         body: JSON.stringify({
           item_ids: bookable.map((it) => it.id),
           category,
-          vat_treatment: vatTreatment,
+          ...(vatTreatment !== 'auto' ? { vat_treatment: vatTreatment } : {}),
         }),
       })
       const json = await res.json().catch(() => ({}))
@@ -217,7 +238,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
                 }
               />
             </div>
-            <Select value={vatTreatment} onValueChange={(v) => setVatTreatment(v as VatTreatment)}>
+            <Select value={vatTreatment} onValueChange={(v) => setVatTreatment(v as VatTreatment | 'auto')}>
               <SelectTrigger id="bulk-vat">
                 <SelectValue />
               </SelectTrigger>
@@ -231,7 +252,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
             </Select>
 
             {vatTreatment === 'reverse_charge' && (
-              <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+              <div className="rounded-lg border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
                 <strong className="font-medium text-foreground">Kontrollera säljaren.</strong>{' '}
                 Omvänd skattskyldighet gäller bara köp från en <strong className="font-medium text-foreground">utländsk
                 säljare utan svenskt momsregistreringsnummer</strong>: t.ex. EU-tjänster, EU-varor,
@@ -251,7 +272,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
           )}
 
           {isMixedCurrency && (
-            <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+            <div className="rounded-lg border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
               <p className="font-medium text-foreground">{t('mixed_currency_totals_label')}</p>
               <ul className="mt-2 space-y-1">
                 {underlagTotals.map(({ currency, total }) => (

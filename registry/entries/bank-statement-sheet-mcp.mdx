@@ -1,0 +1,137 @@
+---
+title: "Bank Statement Sheet MCP-server"
+description: "MCP-server som läser PDF-kontoutdrag och lämnar tillbaka transaktionerna tillsammans med en avstämningsdom. Varje konvertering kontrollräknas mot utdragets egna tryckta siffror: löpande saldo där banken skriver ut ett, kontosummor där den inte gör det. Går det inte ihop hålls raderna tillbaka helt och en agent måste be om dem explicit. Tänkt som steget före bankimporten: CSV:n som kommer ut läses in under Bankfil."
+slug: "bank-statement-sheet-mcp"
+kind: "mcp"
+author: "alimpolat"
+status: "beta"
+lang: "sv"
+personas: ["developer", "byra", "finance"]
+publishedAt: "2026-08-08"
+updatedAt: "2026-08-08"
+installCommand: "npx -y bank-statement-sheet-mcp"
+externalUrl: "https://bankstatementsheet.com"
+version: "0.1.0"
+requiresWriteScope: false
+related: ["gnubok-mcp"]
+ogImageEyebrow: "MCP-server"
+faq:
+  - q: "Vad gör den som en vanlig PDF-extraktion inte gör?"
+    a: "Den kontrollräknar. Där utdraget skriver ut ett löpande saldo kontrolleras varje angränsande radpar: saldo plus belopp ska bli föregående saldo. Där det inte finns något saldo summeras raderna mot utdragets egna kontosummor. Domen följer med i svaret, och under tröskeln lämnas inga rader ut."
+  - q: "Skriver den något till accounted?"
+    a: "Nej. Servern anropar inga accounted-verktyg och behöver inga scopes. Den producerar en fil som du själv läser in under Bankfil. Kedjan mot gnubok_create_voucher är nästa steg och är inte byggd."
+  - q: "Var hamnar min PDF?"
+    a: "Den laddas upp över HTTPS till Bank Statement Sheets API, som kör i EU. Filen behandlas i minnet, uppladdningsposter raderas inom 24 timmar och transaktioner sparas inte permanent. Vill du inte att en fil lämnar maskinen ska du inte skicka in den."
+  - q: "Vad kostar det?"
+    a: "Utan API-nyckel gäller gratisnivån: 5 konverteringar per månad, Excel och CSV. Med nyckel gäller samma plan och dagliga sidgräns som kontot den tillhör. Nyckeln skapas på bankstatementsheet.com/dashboard."
+  - q: "Hur vet jag att den funkar mot accounted?"
+    a: "Testat mot sandlådan 2026-08-07: 14 av 14 transaktioner in under Bankfil, inkomster 35 500 kr och utgifter −23 540,86 kr på öret. Med semikolon som avgränsare och kommadecimal blev det noll varningar och noll överhoppade rader."
+---
+
+## Vad den gör
+
+Servern tar en sökväg till ett PDF-kontoutdrag och returnerar transaktionerna
+plus en dom om huruvida siffrorna går ihop. Ett anrop räcker: uppladdning,
+avstämning, rader och eventuella filer i samma svar.
+
+Poängen är inte extraktionen. Poängen är att du får veta när extraktionen är fel,
+innan raderna används till något. Ett utdrag där en rad tappats bort ger tal som
+ser rimliga ut, och det upptäcks först långt senare.
+
+## Avstämningen
+
+Två metoder, och vilken som används beror på utdraget:
+
+| Metod | När | Vad som kontrolleras |
+|---|---|---|
+| `balance-continuity` | Banken skriver ut ett löpande saldo | För varje angränsande radpar ska saldo plus belopp bli föregående saldo. Minst 99 procent av paren måste stämma. |
+| `control-total` | Inget saldo per rad | Raderna summeras mot utdragets egna kontosummor: ingående saldo, in, ut, utgående saldo. |
+
+Domen gäller **filen**, inte enskilda rader. Varje rad i MCP-svaret bär med sig
+filens dom, så att en agent som delar upp raderna inte tappar bort den på vägen.
+Det är vidarebefordran av filens dom, inte en kontroll per rad.
+
+Men domen lever bara i MCP-svaret. Så fort raderna skrivs till en fil finns ingen
+markering kvar per rad, och ingenting som importeras till accounted bär med sig
+domen. Den som läser in filen måste alltså ha sett domen innan, inte förvänta sig
+att hitta den i bokföringen efteråt.
+
+Går det inte ihop är `transactions` satt till null. Raderna finns kvar, men en
+agent måste be om dem explicit med `include_unverified_rows`, och det syns i
+transkriptet. Det är avsiktligt: en agent som skickar vidare det den fick ska
+inte kunna råka skicka vidare något overifierat.
+
+På vårt referensutdrag från Handelsbanken på 16 sidor går 742 av 742 kontroller
+ihop. Det är ett resultat på ett utdrag, inte en träffsäkerhetssiffra, och
+Handelsbanken är den enda bank vi publicerar en siffra för.
+
+## Installera
+
+Kräver Node 20 eller senare. Servern är stdio.
+
+```json
+{
+  "mcpServers": {
+    "bank-statement-sheet": {
+      "command": "npx",
+      "args": ["-y", "bank-statement-sheet-mcp"],
+      "env": {
+        "BSS_API_KEY": "bss_live_..."
+      }
+    }
+  }
+}
+```
+
+`BSS_API_KEY` är valfri. Utan nyckel körs gratisnivån, som är fullt fungerande
+för att prova. Nyckel skapas på bankstatementsheet.com/dashboard.
+
+Vill du se den köra utan att skicka in egna bankdata finns ett påhittat
+exempelutdrag inbyggt: sätt `use_demo_statement` till true.
+
+## Verktygen
+
+| Verktyg | Vad det gör |
+|---|---|
+| `convert_bank_statement` | PDF in, dom plus rader plus valfria filer ut, i ett anrop. |
+| `export_conversion` | Skriver en tidigare konvertering till fil i ett annat format. |
+| `check_account_status` | Vilken nivå och kvot anropet faktiskt körs på. |
+
+`check_account_status` finns för ett specifikt fel: en felstavad nyckel som tyst
+degraderas till anonym ger en server som verkar fungera tills kvoten tar slut
+utan förklaring. Kör den en gång per session.
+
+## Så använder du den mot accounted idag
+
+Manuellt, och det är värt att vara tydlig med:
+
+1. Konvertera utdraget. Be om CSV med semikolon och kommadecimal. Det är vad
+   svenska importer läser utan varningar.
+2. Kontrollera domen. Är den `unverified` ska filen inte läsas in.
+3. Läs in CSV:n under Bankfil i accounted.
+4. Godkänn de stagade transaktionerna som vanligt.
+
+Steg 3 är en människa som flyttar en fil mellan två produkter. Det är hela
+integrationen i dagsläget.
+
+## Vad den inte gör
+
+- **Den skriver inget till accounted.** Inga accounted-verktyg anropas, inga
+  scopes begärs, ingenting stagas åt dig. Kedjan mot `gnubok_create_voucher` är
+  nästa steg och är inte byggd.
+- **Konverteringen sker inte lokalt.** Själva MCP-servern kör på din maskin över
+  stdio, men den är en tunn HTTP-klient under MIT: PDF:en laddas upp till ett API
+  i EU, och motorn ligger kvar på serversidan.
+- **Den läser inte från URL.** Bara lokala sökvägar, och bara inom en
+  tillåten katalog. En agent som blivit promptinjicerad ska inte kunna be
+  servern ladda upp en godtycklig fil från din disk.
+- **Den producerar ingen SIE och ingen CAMT.053.** Excel, CSV, JSON, OFX och
+  Fortnox-CSV är vad som finns. PDF till CAMT.053 vore en rakare väg in än CSV,
+  särskilt för utländska banker, men är inte byggt.
+
+## En ärlig begränsning
+
+Versionen är 0.1.0 och publicerades 2026-08-08. Den är verifierad mot
+produktion och mot accounteds sandlåda, men den har inga externa användare än.
+Hittar du något som inte stämmer vill jag gärna veta det. Det är hela
+anledningen till att domen finns med i svaret istället för i marknadsföringen.

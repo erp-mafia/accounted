@@ -627,16 +627,16 @@ describe('gnubok_create_invoice: dimensions bag', () => {
   it('stages resolved default_dimensions top-level and per-item bags (default NOT merged into items)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inserts = captureInserts(supabase)
+    // customers fetch (now FIRST: article-rate adoption needs the customer)
+    enqueue({
+      data: { id: 'cust-1', name: 'Acme AB', customer_type: 'swedish_business', vat_number_validated: false, default_payment_terms: 30 },
+      error: null,
+    })
     // resolveDimensionBags: settings → ensure rpc → dimensions → dimension_values
     enqueue({ data: { dimensions_enabled: true }, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: REGISTRY_ROWS, error: null })
     enqueue({ data: VALUE_ROWS, error: null })
-    // customers fetch
-    enqueue({
-      data: { id: 'cust-1', name: 'Acme AB', customer_type: 'swedish_business', vat_number_validated: false, default_payment_terms: 30 },
-      error: null,
-    })
     // resolvePeriodStatusForDate (auto-extracted from invoice_date): 2 layers
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })

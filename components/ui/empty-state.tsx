@@ -9,7 +9,6 @@ import {
   ReceiptText,
   Users,
   ArrowLeftRight,
-  Camera,
   Building2,
   FileText,
   Calendar,
@@ -20,8 +19,13 @@ import { SupportLink } from '@/components/ui/support-link'
 
 interface EmptyStateProps {
   icon?: LucideIcon
-  title: string
-  description: string
+  /**
+   * Usually static i18n strings. The empty state is data-ph-unmask chrome in
+   * session replays, so a title or description carrying user data (e.g. an
+   * interpolated search term) must wrap that part in a data-ph-mask element.
+   */
+  title: React.ReactNode
+  description: React.ReactNode
   actionLabel?: string
   actionHref?: string
   onAction?: () => void
@@ -50,7 +54,8 @@ export function EmptyState({
 }: EmptyStateProps) {
   const t = useTranslations('empty')
   return (
-    <div className={cn('flex flex-col items-center justify-center py-12 px-4 text-center', className)}>
+    // data-ph-unmask: empty states are static i18n chrome in session replays.
+    <div data-ph-unmask="" className={cn('flex flex-col items-center justify-center py-12 px-4 text-center', className)}>
       {Icon && (
         <div className="mb-6">
           <div className="p-4 rounded-full bg-muted">
@@ -58,7 +63,7 @@ export function EmptyState({
           </div>
         </div>
       )}
-      <h3 className="text-lg font-medium mb-2">{title}</h3>
+      <h3 className="text-lg mb-2">{title}</h3>
       <p className="text-sm text-muted-foreground max-w-sm mb-6 text-balance">{description}</p>
 
       {supportHint && (
@@ -137,19 +142,6 @@ export function EmptyTransactions() {
       actionLabel={t('preset_transactions_action')}
       actionHref="/import"
       supportHint
-    />
-  )
-}
-
-export function EmptyReceipts() {
-  const t = useTranslations('empty')
-  return (
-    <EmptyState
-      icon={Camera}
-      title={t('preset_receipts_title')}
-      description={t('preset_receipts_description')}
-      actionLabel={t('preset_receipts_action')}
-      actionHref="/receipts/scan"
     />
   )
 }

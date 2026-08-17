@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { ChevronLeft } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -67,10 +68,13 @@ function FocusedReportInner({
   slug,
   initialPeriods,
   initialCompanyId,
+  autoRun,
 }: {
   slug: string
   initialPeriods: FiscalPeriod[]
   initialCompanyId: string | null
+  /** ?autorun=1: the bank-reconciliation view runs its preview once on load. */
+  autoRun?: boolean
 }) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -119,6 +123,20 @@ function FocusedReportInner({
       {!isStandalone && (
         <PageHeader
           title={reportName}
+          // Page help behind a "?" (UI-migration convention 7): the report
+          // bodies carry no instructional copy in the page flow.
+          help={
+            slug === 'bank-reconciliation' ? (
+              <HelpPopover>
+                <div className="space-y-2">
+                  <p>{t('help_bank_reconciliation_scope')}</p>
+                  <p>{t('help_bank_reconciliation_preview')}</p>
+                  <p>{t('help_bank_reconciliation_ib')}</p>
+                  <p>{t('help_bank_reconciliation_ignored')}</p>
+                </div>
+              </HelpPopover>
+            ) : undefined
+          }
           action={
             <FyPicker
               value={selectedPeriod || null}
@@ -171,6 +189,7 @@ function FocusedReportInner({
           isEnskildFirma={isEnskildFirma}
           isAktiebolag={isAktiebolag}
           onNavigateToAccount={navigateToAccount}
+          autoRun={autoRun}
         />
       ) : (
         <EmptyState
@@ -195,6 +214,7 @@ function FocusedView({
   isEnskildFirma,
   isAktiebolag,
   onNavigateToAccount,
+  autoRun,
 }: {
   slug: string
   reportName: string
@@ -206,6 +226,7 @@ function FocusedView({
   isEnskildFirma: boolean
   isAktiebolag: boolean
   onNavigateToAccount: (account: string) => void
+  autoRun?: boolean
 }) {
   switch (slug) {
     case 'resultatrapport':
@@ -237,7 +258,7 @@ function FocusedView({
     case 'supplier-ledger':
       return <SupplierLedgerView periodId={periodId} />
     case 'bank-reconciliation':
-      return <BankReconciliationView periodId={periodId} periodBounds={periodBounds} />
+      return <BankReconciliationView periodId={periodId} periodBounds={periodBounds} autoRun={autoRun} />
     default:
       return null
   }
@@ -247,10 +268,13 @@ export function FocusedReport({
   slug,
   initialPeriods,
   initialCompanyId,
+  autoRun,
 }: {
   slug: string
   initialPeriods: FiscalPeriod[]
   initialCompanyId: string | null
+  /** ?autorun=1: the bank-reconciliation view runs its preview once on load. */
+  autoRun?: boolean
 }) {
   return (
     <Suspense fallback={<div className="space-y-8" />}>
@@ -258,6 +282,7 @@ export function FocusedReport({
         slug={slug}
         initialPeriods={initialPeriods}
         initialCompanyId={initialCompanyId}
+        autoRun={autoRun}
       />
     </Suspense>
   )

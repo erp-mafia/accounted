@@ -1,6 +1,7 @@
 import type { BookingTemplateCategory, BookingTemplateLibrary, BookingTemplateLibraryLine, VatTreatment } from '@/types'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { isReverseChargeVatAccount } from '@/lib/bookkeeping/vat-entries'
 import { roundOre } from '@/lib/money'
 
 /**
@@ -30,9 +31,16 @@ export const TEMPLATE_CATEGORY_LABELS: Record<BookingTemplateCategory, string> =
  * ready for the JournalEntryForm.
  *
  * The algorithm:
- *   1. VAT lines: amount = totalAmount × vat_rate / (1 + vat_rate)
- *   2. Settlement lines: amount = totalAmount (the full payment)
- *   3. Business lines: amount = totalAmount × ratio (cost/revenue net of VAT handled separately)
+ *   1. VAT lines on ordinary accounts: amount = totalAmount × vat_rate / (1 + vat_rate)
+ *      (the total is VAT-inclusive; the VAT is extracted out of it)
+ *   2. VAT lines on fiktiv-moms accounts (reverse charge/import, 2614 etc.):
+ *      amount = totalAmount × vat_rate. Under omvänd skattskyldighet the
+ *      supplier charged no VAT, so the total IS the beskattningsunderlag and
+ *      the self-assessed VAT goes on top, netting to zero across the
+ *      offsetting 2645/2614 pair. Extracting rate/(1+rate) here understates
+ *      Ruta 30-32 and Ruta 48 by rate/(1+rate) (25% became 20%).
+ *   3. Settlement lines: amount = totalAmount (the full payment)
+ *   4. Business lines: amount = totalAmount × ratio (cost/revenue net of VAT handled separately)
  *
  * For simple two-line templates (no VAT), the ratio is typically 1.0
  * on both sides and totalAmount is used directly.
@@ -47,8 +55,11 @@ export function applyTemplate(
     let amount = 0
 
     if (line.type === 'vat' && line.vat_rate) {
-      // VAT calculated on the total inclusive amount
-      amount = Math.round(totalAmount * line.vat_rate / (1 + line.vat_rate) * 100) / 100
+      amount = isReverseChargeVatAccount(line.account)
+        ? // Self-assessed VAT on top of the base (the total)
+          roundOre(totalAmount * line.vat_rate)
+        : // VAT extracted from the total inclusive amount
+          roundOre(totalAmount * line.vat_rate / (1 + line.vat_rate))
     } else if (line.type === 'settlement') {
       amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
     } else {
@@ -185,13 +196,15 @@ export interface BookingRowInput {
 const STANDARD_VAT_RATES = [0.25, 0.12, 0.06, 0] as const
 
 /**
- * Snap a VAT line's implied rate to the nearest standard rate. The implied rate
- * is vatAmount / net where net = total − vatAmount (the same relationship
- * applyTemplate inverts: vat = total × rate / (1 + rate)).
+ * Snap a VAT line's implied rate to the nearest standard rate. For an ordinary
+ * VAT line the implied rate is vatAmount / net where net = total − vatAmount
+ * (the same relationship applyTemplate inverts: vat = total × rate / (1 + rate)).
+ * For a fiktiv-moms line (reverse charge/import) the total IS the base, so the
+ * implied rate is vatAmount / total (applyTemplate inverts: vat = total × rate).
  */
-function snapVatRate(vatAmount: number, total: number): number {
-  const net = total - vatAmount
-  const implied = net > 0 ? vatAmount / net : 0
+function snapVatRate(vatAmount: number, total: number, isReverseCharge: boolean): number {
+  const base = isReverseCharge ? total : total - vatAmount
+  const implied = base > 0 ? vatAmount / base : 0
   return STANDARD_VAT_RATES.reduce<number>(
     (best, rate) => (Math.abs(rate - implied) < Math.abs(best - implied) ? rate : best),
     0.25,
@@ -204,7 +217,10 @@ function snapVatRate(vatAmount: number, total: number): number {
  *
  * A booking stores literal debit/credit amounts; a template stores ratios of a
  * total plus VAT rates. The mapping:
- *   - total = the larger of Σdebit / Σcredit (equal when the entry balances)
+ *   - total = the larger of Σdebit / Σcredit (equal when the entry balances),
+ *     excluding fiktiv-moms legs (reverse charge/import): they net to zero and
+ *     are no part of the payment, so counting them would inflate the total and
+ *     shrink every derived business ratio
  *   - a 26xx line → a VAT line, its rate snapped to the nearest standard rate
  *   - the single non-VAT line closest to the total → the settlement leg (the
  *     bank / counter account), ratio 1
@@ -235,8 +251,9 @@ export function deriveTemplateLinesFromBooking(
 
   if (parsed.length < 2) return []
 
-  const sumDebit = parsed.reduce((s, r) => (r.side === 'debit' ? s + r.amount : s), 0)
-  const sumCredit = parsed.reduce((s, r) => (r.side === 'credit' ? s + r.amount : s), 0)
+  const countsTowardTotal = (r: { account: string }) => !isReverseChargeVatAccount(r.account)
+  const sumDebit = parsed.reduce((s, r) => (r.side === 'debit' && countsTowardTotal(r) ? s + r.amount : s), 0)
+  const sumCredit = parsed.reduce((s, r) => (r.side === 'credit' && countsTowardTotal(r) ? s + r.amount : s), 0)
   const total = roundOre(Math.max(sumDebit, sumCredit))
   if (total <= 0) return []
 
@@ -270,7 +287,7 @@ export function deriveTemplateLinesFromBooking(
         label: label(row.account),
         side: row.side,
         type: 'vat',
-        vat_rate: snapVatRate(row.amount, total),
+        vat_rate: snapVatRate(row.amount, total, isReverseChargeVatAccount(row.account)),
       }
     }
     if (index === settlementIndex) {

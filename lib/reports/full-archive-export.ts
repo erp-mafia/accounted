@@ -262,10 +262,7 @@ export async function estimateArchiveSize(
   periodId?: string
 ): Promise<{ total_bytes: number; document_bytes: number; document_count: number }> {
   // Scope=all counts every document (linked or not), mirroring writeDocuments.
-  let query = supabase
-    .from('document_attachments')
-    .select('file_size_bytes, journal_entry_id', { count: 'exact' })
-    .eq('company_id', companyId)
+  let rows: { file_size_bytes: number | null }[]
 
   if (scope === 'period') {
     if (!periodId) {
@@ -286,15 +283,35 @@ export async function estimateArchiveSize(
     if (ids.length === 0) {
       return { total_bytes: ARCHIVE_OVERHEAD_BYTES, document_bytes: 0, document_count: 0 }
     }
-    query = query.in('journal_entry_id', ids)
+    // A busy year holds thousands of entries and can hold more than a page of
+    // documents: chunk the IN() list (PostgREST URL limit) and paginate every
+    // chunk (PostgREST row cap). One flat IN() + single read undercounts as
+    // soon as either limit is hit.
+    rows = []
+    for (let i = 0; i < ids.length; i += CHILD_FK_CHUNK) {
+      const chunk = ids.slice(i, i + CHILD_FK_CHUNK)
+      const chunkRows = await fetchAllRows<{ file_size_bytes: number | null }>(({ from, to }) =>
+        supabase
+          .from('document_attachments')
+          .select('id, file_size_bytes')
+          .eq('company_id', companyId)
+          .in('journal_entry_id', chunk)
+          .order('id', { ascending: true })
+          .range(from, to)
+      )
+      rows.push(...chunkRows)
+    }
+  } else {
+    rows = await fetchAllRows<{ file_size_bytes: number | null }>(({ from, to }) =>
+      supabase
+        .from('document_attachments')
+        .select('id, file_size_bytes')
+        .eq('company_id', companyId)
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
   }
 
-  const { data, error } = await query
-  if (error) {
-    throw new Error(`Failed to estimate archive size: ${error.message}`)
-  }
-
-  const rows = (data as { file_size_bytes: number | null }[]) || []
   const documentBytes = rows.reduce((sum, r) => sum + (Number(r.file_size_bytes) || 0), 0)
 
   return {
@@ -840,6 +857,15 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Delivery metadata proves which recipient received the archived PDF and
   // when, so it is räkenskapsinformation alongside the invoice itself.
   { name: 'invoice_deliveries', file: 'invoice_deliveries.json', orderBy: 'created_at' },
+  // Peppol archive evidence is split so the exact staged UBL, every verified
+  // asynchronous event, and provider evidence stay independently auditable.
+  { name: 'peppol_deliveries', file: 'peppol_deliveries.json', orderBy: 'created_at' },
+  { name: 'peppol_delivery_events', file: 'peppol_delivery_events.json', orderBy: 'created_at' },
+  {
+    name: 'peppol_delivery_evidence',
+    file: 'peppol_delivery_evidence.json',
+    orderBy: 'created_at',
+  },
   { name: 'recurring_invoice_schedules', file: 'recurring_invoice_schedules.json' },
   // Supplier invoicing
   { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },
@@ -850,6 +876,19 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     denormalize: { prefix: 'supplier_invoice_', columns: ['currency', 'exchange_rate'] },
   },
   { name: 'supplier_invoice_payments', file: 'supplier_invoice_payments.json' },
+  // Payment batches (betalfil): the immutable instruction snapshots a
+  // generated bank payment file derives from; underlag for the payments it
+  // initiated, so they leave with the archive.
+  {
+    name: 'supplier_payment_batches',
+    file: 'supplier_payment_batches.json',
+    orderBy: 'created_at',
+  },
+  {
+    name: 'supplier_payment_batch_items',
+    file: 'supplier_payment_batch_items.json',
+    orderBy: 'created_at',
+  },
   // Underlag intake: the chat answers behind a verifikat.
   //
   // A projection, not the whole table. `channel_context` holds the human
@@ -886,6 +925,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // NOTE: the date column on transactions is `date` (a previous spec said
   // booking_date, which does not exist: every backup got an error stub).
   { name: 'transactions', file: 'transactions.json', orderBy: 'date' },
+  // Webshop order rows are booking underlag (and carry customer personal
+  // data), so they belong in the archive like transactions do.
+  { name: 'webshop_orders', file: 'webshop_orders.json', orderBy: 'order_date' },
+  { name: 'webshop_store_settings', file: 'webshop_store_settings.json' },
   { name: 'transaction_voucher_links', file: 'transaction_voucher_links.json' },
   { name: 'bank_file_imports', file: 'bank_file_imports.json', orderBy: 'created_at' },
   { name: 'cash_accounts', file: 'cash_accounts.json' },
@@ -912,6 +955,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'salary_payslip_links', file: 'salary_payslip_links.json' },
   { name: 'shift_premium_rules', file: 'shift_premium_rules.json' },
   { name: 'agi_declarations', file: 'agi_declarations.json', orderBy: 'created_at' },
+  // Körjournal: trip log underlag for milersättning verifikat (BFL 7-year
+  // retention per Skatteverket's körjournal documentation requirement).
+  { name: 'mileage_trips', file: 'mileage_trips.json', orderBy: 'trip_date' },
   // Assets and accruals
   { name: 'assets', file: 'assets.json', orderBy: 'created_at' },
   { name: 'depreciation_schedules', file: 'depreciation_schedules.json', orderBy: 'created_at' },
@@ -994,6 +1040,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   graph_transaction_counterparties: 'derived AI context graph, regenerable',
   idempotency_keys: 'infrastructure',
   inbox_rate_counters: 'infrastructure',
+  mail_connections:
+    'mailbox OAuth grants (live refresh tokens), not portable. The receipts they find are archived as documents.',
   mcp_tasks: 'MCP task handles: transient tool-call state with a 1-hour TTL',
   metered_events: 'billing telemetry',
   notification_log: 'notification dedup log',
@@ -1003,6 +1051,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   processing_history: 'internal processing log; behandlingshistorik exports from audit_log',
   provider_consents: 'consent tokens, not portable',
   salary_payslip_deliveries: 'delivery log',
+  skattekonto_file_imports:
+    'import log for the skattekonto mirror below; the statement is re-downloadable from Skatteverket',
   skattekonto_transactions: 'mirror of Skatteverket skattekonto, re-fetchable at source',
   skatteverket_api_audit_log: 'integration audit log',
   skatteverket_company_connections: 'integration connection state',
@@ -1014,6 +1064,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   whatsapp_conversations:
     'WhatsApp bot conversation state (company_id is only a which-company pin); receipts live in document_attachments',
   webhooks: 'automation config with signing secrets',
+  woocommerce_connections: 'WooCommerce connection state (encrypted API secrets)',
+  shopify_connections: 'Shopify connection state (encrypted API secrets)',
 }
 
 /** Max parent ids per `IN (...)` chunk: keeps the PostgREST URL well under limits. */

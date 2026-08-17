@@ -183,6 +183,167 @@ describe('gnubok_create_account: staging behaviour (dry_run)', () => {
   })
 })
 
+describe('list tools: PostgREST 1000-row cap (fetchAllRows paging)', () => {
+  const listAccounts = tools.find((t) => t.name === 'gnubok_list_accounts')!
+  const listCustomers = tools.find((t) => t.name === 'gnubok_list_customers')!
+  const listSuppliers = tools.find((t) => t.name === 'gnubok_list_suppliers')!
+  const listArticles = tools.find((t) => t.name === 'gnubok_list_articles')!
+
+  function makeChartRow(n: number, sortOrder: number | null = n) {
+    return {
+      account_number: String(n),
+      account_name: `Konto ${n}`,
+      account_class: Math.floor(n / 1000),
+      account_group: String(n).slice(0, 2),
+      account_type: 'asset',
+      normal_balance: 'debit',
+      is_active: true,
+      description: null,
+      sort_order: sortOrder,
+    }
+  }
+
+  it('gnubok_list_accounts returns all 1290 accounts across two pages, ordered on account_number', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    // Page 1: exactly PAGE_SIZE rows so fetchAllRows requests a second page.
+    // Account 1000 gets a null sort_order (custom account): the JS re-sort
+    // must put it last (Postgres nulls-last semantics).
+    const page1 = Array.from({ length: 1000 }, (_, i) =>
+      makeChartRow(1000 + i, i === 0 ? null : 1000 + i),
+    )
+    const page2 = Array.from({ length: 290 }, (_, i) => makeChartRow(2000 + i))
+    enqueue({ data: page1 })
+    enqueue({ data: page2 })
+
+    const result = (await listAccounts.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      accounts: { account_number: string }[]
+      count: number
+    }
+
+    expect(result.count).toBe(1290)
+    expect(result.accounts).toHaveLength(1290)
+    // Paging invariant: ordered on the UNIQUE account_number, two ranges.
+    expect(findCalls('chart_of_accounts', 'order')).toEqual([
+      ['account_number', { ascending: true }],
+      ['account_number', { ascending: true }],
+    ])
+    expect(findCalls('chart_of_accounts', 'range')).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ])
+    // Visible order: sort_order ascending with nulls last, as before the fix.
+    expect(result.accounts[0].account_number).toBe('1001')
+    expect(result.accounts[1288].account_number).toBe('2289')
+    expect(result.accounts[1289].account_number).toBe('1000')
+    // sort_order was fetched only for the re-sort and must not leak out.
+    expect('sort_order' in result.accounts[0]).toBe(false)
+  })
+
+  it('gnubok_list_customers pages on id and re-sorts by name', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    // Names descend while ids ascend, so the output order proves the re-sort.
+    const makeCustomer = (i: number) => ({
+      id: `c${String(i).padStart(4, '0')}`,
+      name: `Kund ${String(1002 - i).padStart(4, '0')}`,
+    })
+    enqueue({ data: Array.from({ length: 1000 }, (_, i) => makeCustomer(i)) })
+    enqueue({ data: Array.from({ length: 2 }, (_, i) => makeCustomer(1000 + i)) })
+
+    const result = (await listCustomers.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      customers: { id: string; name: string }[]
+      count: number
+    }
+
+    expect(result.count).toBe(1002)
+    expect(findCalls('customers', 'order')).toEqual([
+      ['id', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
+    expect(findCalls('customers', 'range')).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ])
+    expect(result.customers[0].name).toBe('Kund 0001')
+    expect(result.customers[1001].name).toBe('Kund 1002')
+  })
+
+  it('gnubok_list_suppliers pages on id and re-sorts by name', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const makeSupplier = (i: number) => ({
+      id: `s${String(i).padStart(4, '0')}`,
+      name: `Leverantör ${String(1002 - i).padStart(4, '0')}`,
+    })
+    enqueue({ data: Array.from({ length: 1000 }, (_, i) => makeSupplier(i)) })
+    enqueue({ data: Array.from({ length: 2 }, (_, i) => makeSupplier(1000 + i)) })
+
+    const result = (await listSuppliers.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      suppliers: { id: string; name: string }[]
+      count: number
+    }
+
+    expect(result.count).toBe(1002)
+    expect(findCalls('suppliers', 'order')).toEqual([
+      ['id', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
+    expect(findCalls('suppliers', 'range')).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ])
+    expect(result.suppliers[0].name).toBe('Leverantör 0001')
+  })
+
+  it('gnubok_list_articles pages on id and re-sorts by name', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const makeArticle = (i: number) => ({
+      id: `a${String(i).padStart(4, '0')}`,
+      name: `Artikel ${String(1002 - i).padStart(4, '0')}`,
+    })
+    enqueue({ data: Array.from({ length: 1000 }, (_, i) => makeArticle(i)) })
+    enqueue({ data: Array.from({ length: 2 }, (_, i) => makeArticle(1000 + i)) })
+
+    const result = (await listArticles.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      articles: { id: string; name: string }[]
+      count: number
+    }
+
+    expect(result.count).toBe(1002)
+    expect(findCalls('articles', 'order')).toEqual([
+      ['id', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
+    expect(findCalls('articles', 'range')).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ])
+    expect(result.articles[0].name).toBe('Artikel 0001')
+  })
+
+  it('gnubok_list_accounts returns a single short page unchanged', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [makeChartRow(1930), makeChartRow(1910)] })
+
+    const result = (await listAccounts.execute(
+      { account_class: 1 },
+      'company-1', 'user-1', supabase as never,
+    )) as { accounts: { account_number: string }[]; count: number }
+
+    expect(result.count).toBe(2)
+    // One page only: 2 < PAGE_SIZE stops the loop.
+    expect(findCalls('chart_of_accounts', 'range')).toEqual([[0, 999]])
+    // Filters still applied inside the paged query builder.
+    expect(findCalls('chart_of_accounts', 'eq')).toEqual(
+      expect.arrayContaining([
+        ['company_id', 'company-1'],
+        ['is_active', true],
+        ['account_class', 1],
+      ]),
+    )
+    // Re-sorted by sort_order: 1910 before 1930.
+    expect(result.accounts.map((a) => a.account_number)).toEqual(['1910', '1930'])
+  })
+})
+
 describe('gnubok_update_account', () => {
   it('rejects a non-4-digit account number before any DB call', async () => {
     await expect(
@@ -230,5 +391,39 @@ describe('gnubok_update_account', () => {
     expect(result.dry_run).toBe(true)
     expect(result.preview.current.account_name).toBe('Förbrukningsinventarier')
     expect(result.preview.changes).toEqual({ account_name: 'Verktyg', is_active: false })
+  })
+
+  it('preserves an existing booking rate when only treatment changes', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '4056', account_name: 'EU-varor', default_vat_rate: 0.12,
+        default_vat_treatment: null, is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '4056', default_vat_treatment: 'reverse_charge_eu_goods', dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+
+    expect(result.preview.changes).toEqual({
+      default_vat_treatment: 'reverse_charge_eu_goods',
+    })
+  })
+
+  it('can clear a treatment to restore BAS fallback', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '3041', account_name: 'Försäljning', default_vat_rate: 0.25,
+        default_vat_treatment: 'standard_25', is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '3041', default_vat_treatment: null, dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+
+    expect(result.preview.changes).toEqual({ default_vat_treatment: null })
   })
 })

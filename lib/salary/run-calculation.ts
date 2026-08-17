@@ -146,6 +146,19 @@ export async function runSalaryCalculation(
   // 2. Load year config.
   const config = await loadPayrollConfig(supabase, paymentYear)
 
+  // 2b. Company-level öresavrundning toggle: round each net payout up to a
+  //     whole krona (banks that reject öre in salary files). maybeSingle: a
+  //     company without a settings row keeps the default (off).
+  const { data: companySettings, error: settingsError } = await supabase
+    .from('company_settings')
+    .select('salary_net_rounding')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (settingsError) {
+    return { ok: false, code: 'DATABASE_ERROR', details: settingsError }
+  }
+  const roundNetToWholeKrona = companySettings?.salary_net_rounding === true
+
   // 3. Load roster: `salary_run_employees` joined with employees + line items.
   // Defense-in-depth: filter by company_id too even though salary_run_id is a
   // foreign key. RLS already constrains the table per-company, but per
@@ -642,6 +655,7 @@ export async function runSalaryCalculation(
         if (DERIVED_PREMIUM_TYPES.includes(li.item_type as ShiftPremiumItemType)) return false
         if (li.source_benefit_id) return false
         if (li.item_type === 'semesterersattning') return false
+        if (li.item_type === 'oresavrundning') return false
         return true
       })
       .map((li: Record<string, unknown>) => ({
@@ -715,16 +729,10 @@ export async function runSalaryCalculation(
         periodEnd,
         employmentStart: emp.employment_start,
         employmentEnd: emp.employment_end,
+        roundNetToWholeKrona,
       },
       config,
-      taxRates.map((r) => ({
-        tableYear: r.tableYear,
-        tableNumber: r.tableNumber,
-        columnNumber: r.columnNumber,
-        incomeFrom: r.incomeFrom,
-        incomeTo: r.incomeTo,
-        taxAmount: r.taxAmount,
-      })),
+      taxRates.map((r) => ({ ...r })),
     )
 
     // Aggregated absence counts derived from per-day records.
@@ -817,6 +825,40 @@ export async function runSalaryCalculation(
       })
       if (insSemErr) {
         return { ok: false, code: 'DATABASE_ERROR', details: insSemErr }
+      }
+    }
+
+    // 8i. Replace the derived 'oresavrundning' line item. All flags false: the
+    //     rounding is not pay, not tax base, not avgift basis; it exists so
+    //     the payslip shows the whole-krona step and the booking gets its 3740
+    //     debit. Deleted unconditionally so toggling the setting off (or a net
+    //     that lands on a whole krona) leaves no stale row behind.
+    const { error: delRoundErr } = await supabase
+      .from('salary_line_items')
+      .delete()
+      .eq('salary_run_employee_id', sre.id)
+      .eq('item_type', 'oresavrundning')
+    if (delRoundErr) {
+      return { ok: false, code: 'DATABASE_ERROR', details: delRoundErr }
+    }
+    if (result.netRounding > 0) {
+      const { error: insRoundErr } = await supabase.from('salary_line_items').insert({
+        salary_run_employee_id: sre.id,
+        company_id: companyId,
+        item_type: 'oresavrundning',
+        description: 'Öresavrundning',
+        quantity: 1,
+        amount: Math.round(result.netRounding * 100) / 100,
+        is_taxable: false,
+        is_avgift_basis: false,
+        is_vacation_basis: false,
+        is_gross_deduction: false,
+        is_net_deduction: false,
+        account_number: getLineItemAccount('oresavrundning', emp.employment_type),
+        sort_order: 900,
+      })
+      if (insRoundErr) {
+        return { ok: false, code: 'DATABASE_ERROR', details: insRoundErr }
       }
     }
 

@@ -36,7 +36,7 @@ export default async function NewCompanyPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-dvh bg-background">
       <SessionTimeoutController />
       <OnboardingBackdrop />
       <OnboardingJourney teamId={teamId} mode="add" />

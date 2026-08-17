@@ -82,4 +82,43 @@ describe('POST /api/salary/employees/[id]/absence', () => {
     const response = await POST(post({ absence_date: '2026-07-01', absence_type: 'sick', hours: 8 }), params)
     expect(response.status).toBe(404)
   })
+
+  it('does not leak raw PG text for DB failures (42501)', async () => {
+    enqueue({ data: { id: 'emp-1' } }) // loadEmployee
+    enqueue({
+      data: null,
+      error: {
+        code: '42501',
+        message:
+          'new row violates row-level security policy for table "salary_absence_franvaro_audit"',
+      },
+    }) // upsert denied
+
+    const response = await POST(post({ absence_date: '2026-07-01', absence_type: 'parental', hours: 8 }), params)
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
+
+    expect(status).toBe(500)
+    expect(body.code).toBe('DB_PERMISSION_DENIED')
+    expect(body.error).not.toMatch(/row-level security/)
+    // The registry's Swedish message is shown instead.
+    expect(body.error).toContain('behörighetsfel')
+  })
+
+  it('still passes the 24h-cap trigger detail through (Swedish, user-facing)', async () => {
+    enqueue({ data: { id: 'emp-1' } }) // loadEmployee
+    enqueue({
+      data: null,
+      error: {
+        code: '23514',
+        message: 'Total tid (arbete + frånvaro) för 2026-07-01 får inte överstiga 24 timmar',
+      },
+    }) // 24h cap trips
+
+    const response = await POST(post({ absence_date: '2026-07-01', absence_type: 'sick', hours: 20 }), params)
+    const { status, body } = await parseJsonResponse<{ error: string; code: string }>(response)
+
+    expect(status).toBe(409)
+    expect(body.code).toBe('ABSENCE_HOURS_CONFLICT')
+    expect(body.error).toContain('Total tid')
+  })
 })

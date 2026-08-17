@@ -1,0 +1,142 @@
+---
+title: "Runway-dashboard från huvudboken, dagligen"
+description: "SKILL.md som beräknar runway varje morgon från cash_position i gnubok_get_kpi_report plus en 90-dagars kostnad/intäkts-summa via gnubok_query_journal. Postar i Slack med veckotrend."
+slug: "runway-fran-huvudboken"
+kind: "skill"
+author: "gnubok"
+status: "live"
+lang: "sv"
+personas: ["founder"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/skills-v1/runway-fran-huvudboken.zip"
+repoUrl: "https://github.com/erp-mafia/accounted/tree/main/skills/runway-fran-huvudboken"
+gnubokTools:
+  - "gnubok_get_balance_sheet"
+  - "gnubok_get_kpi_report"
+  - "gnubok_query_journal"
+  - "gnubok_get_income_statement"
+oauthScopes:
+  - "reports:read"
+requiresWriteScope: false
+version: "1.0.0"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vad räknas som 'burn', räknar du in periodiseringar?"
+    a: "Skillen räknar burn som rena utflöden, inte bokföringsmässiga periodiseringar. Konkret: klass 5 (kostnader för varor och tjänster), klass 6 (övriga externa kostnader), klass 7 (personal) minus klass 3 (intäkter). Avskrivningar (7831, 7832) ingår eftersom de speglar kapitalförbrukning. Avsättningar och kalkylmässiga räntor exkluderas, de är inga utflöden av kassa."
+  - q: "Är runway-siffran dagsfärsk?"
+    a: "Beroende på bankfeeden. PSD2-feeden via Tink uppdaterar 1930-saldot var 4:e timme. Skillen läser timestamp på senaste tx från `gnubok_query_journal(account: '1930', limit: 1)` och varnar i sin output om feed-datat är äldre än 24 timmar."
+  - q: "Kan jag få en alert när runway går under 6 månader?"
+    a: "Ja, men inte i själva skillen. Koppla den till [daglig-runway-till-slack workflow](/community/registry/daglig-runway-till-slack). Workflowet jämför mot tröskel och larmar via Slack-block. Default-tröskel: 6 mån = orange, 3 mån = röd. Konfigurerbart per företag."
+  - q: "Vad är skillnaden mellan denna och `gnubok_get_kpi_report`?"
+    a: "`gnubok_get_kpi_report` returnerar bland annat `cash_position`, `total_revenue`, `total_expenses` och `months[]` (rullande snapshots). Skillen läser dessa och beräknar runway själv (cash_position dividerat med snittburn över 90 dagar). Det finns ingen färdig `runway_months`-fält idag, skillen är den som komponerar siffran."
+  - q: "Funkar det för bolag med flera bankkonton?"
+    a: "Ja. Skillen läser alla konton i klass 19 (1910 kassa, 1920 plusgiro, 1930 företagskonto, 1940 specialinlåning, 1950 utländsk valuta etc.) via balansräkningen. Du kan via konfiguration exkludera spärrade konton eller utländska konton som inte ska räknas som tillgänglig likviditet."
+---
+
+## Anropen
+
+Runway är basal för varje grundare som inte är cash-flow positiv,
+men kalkylen kräver dagsfärsk data och korrekt avgränsning.
+Skillen kör fyra anrop, alla läsande:
+
+1. `gnubok_get_balance_sheet(date: today)`. Drar saldon för klass 19 (kassa) plus 18 (kortfristiga placeringar).
+2. `gnubok_get_kpi_report`. Returnerar `cash_position`, `total_revenue`, `total_expenses`, `months[]`, plus relaterade KPI-fält.
+3. `gnubok_get_income_statement(period_start: today - 90d, period_end: today)`. Sammanställd 90-dagars resultaträkning.
+4. `gnubok_query_journal(accounts_class: [3, 5, 6, 7], period_start: today - 90d)`. Verifierar att intäkter ligger på 3xxx och kostnader på 5xxx/6xxx/7xxx.
+
+Formeln:
+
+```
+kassa     = sum(saldo[1910..1979], 1810..1819)
+            (eller cash_position från kpi_report)
+burn_90d  = sum(klass_5_7) - sum(klass_3) över senaste 90 dagar
+burn_per_manad = burn_90d / 90 * 30.4
+runway    = kassa / burn_per_manad
+```
+
+Skillen beräknar `runway` lokalt. Accounteds KPI-rapport returnerar inte
+en färdig `runway_months`-siffra idag, bara råmaterialet.
+
+## Kontoplan-mappning
+
+| Område | BAS-konto | Notering |
+|---|---|---|
+| Kassa | 1910 (kontant), 1920 (plusgiro), 1930 (företagskonto), 1940 (specialinlåning) | Klass 19 hela |
+| Kortfristiga placeringar | 1810–1819 | Likvida medel, läggs till kassa |
+| Försäljning | 3001, 3002, 3041 | Klass 3, dras av från burn |
+| Inköp / direkta kostnader | 4xxx | Klass 4 räknas in (varuinköp) |
+| Övriga externa kostnader | 5xxx, 6xxx | Klass 5–6 hela |
+| Personal | 7010, 7090, 7210, 7280, 7330, 7385, 7410, 7510 | Klass 7 utom avskrivningar |
+| Avskrivningar | 7831, 7832 | Räknas in (kapitalförbrukning) |
+| Räntor och finansiella poster | 8313, 8410 | EJ med i burn, finansiering räknas separat |
+
+För enskild firma och kommanditbolag används BAS 2026 sole-trader-mappning.
+Skillen detekterar bolagsform via `gnubok_list_accounts` och anpassar.
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/accounted
+cd gnubok/skills/runway-fran-huvudboken
+```
+
+I Claude Desktop:
+
+```
+Cmd-Shift-P → Skills: Add from folder → välj mappen
+```
+
+Kräver bara `reports:read`. Ingen skriv-scope behövs. En API-nyckel
+eller OAuth-grant utan write-scopes räcker.
+
+## Köra skillen
+
+Manuellt:
+
+```
+@runway-fran-huvudboken visa läget
+```
+
+Agenten svarar:
+
+```
+Kassa:           1 247 380 SEK (1930: 1 198 220 + 1810: 49 160)
+Burn 90d:        - 412 800 SEK (kostnader 612k − intäkter 199k)
+Burn / månad:    137 600 SEK
+Runway:          9.06 månader
+Trend:           ↓ 0.4 mån sedan förra veckan (kassa -52k, burn ±)
+```
+
+Frågar du "varför sjönk det?" går skillen tillbaka till
+`gnubok_query_journal` med detaljnivå och returnerar de tre största
+posterna sedan förra körningen.
+
+## Automatiserad körning
+
+Schemalägg via [daglig-runway-till-slack workflow](/community/registry/daglig-runway-till-slack).
+Samma motor men paketerad som n8n-cron plus Slack-post.
+Eller skapa egen cron-trigger som anropar skillen och postar svaret
+till valfri kanal.
+
+## Inget data warehouse behövs
+
+Du behöver inte ett data warehouse för det här. Skillen läser
+samma data som en revisor läser, huvudboken, med dagsfärska tx
+från PSD2. Det är inte aggregerade analytics-data; det är
+deterministiska konto-saldon vid ett givet ögonblick.
+
+Därför funkar skillen utan ETL-pipeline, utan månads-batch, utan dbt.
+Fyra anrop mot en open ledger med en bankuppdatering i botten.
+
+## Sånt skillen inte gör
+
+* Skillen förutspår inte framtida burn. Den läser historiskt 90-dagars-snitt. Vill du ha forecast-modell, koppla skillen till en separat verktygskedja (t.ex. Vercel AI SDK plus skillens output).
+* Skillen jämför inte mot peers eller benchmark. Bara mot din egen historik.
+* Skillen tar inte hänsyn till commitments, alltså kommande inflöden från fakturor som inte gått ut än, eller framtida payouts som är konfirmerade men inte träffat banken.
+* Skillen skickar inte alerts. Det gör workflowet, eller du själv när du läser siffran.
+
+## Vad du får
+
+En runway-siffra du kan lita på, dagligen, beräknad mot rätt
+BAS-konton, med en trend och en orsak. Inte ett estimat. En mätning.

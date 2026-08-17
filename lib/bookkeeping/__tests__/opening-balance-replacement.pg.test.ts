@@ -52,50 +52,60 @@ async function seedOpeningBalance(params: {
   expect(accountIds.get('2010')).toBeTruthy()
 
   const oldEntryId = randomUUID()
-  const voucher = await getPool().query<{ next_number: number }>(
-    `SELECT COALESCE(max(voucher_number), 0)::int + 1 AS next_number
-       FROM public.journal_entries
-      WHERE company_id = $1
-        AND fiscal_period_id = $2
-        AND voucher_series = 'A'`,
-    [params.companyId, params.fiscalPeriodId],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number,
-        voucher_series, entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2026-01-01',
-             'Old opening balance', 'opening_balance', 'posted')`,
-    [
-      oldEntryId,
-      params.userId,
-      params.companyId,
-      params.fiscalPeriodId,
-      voucher.rows[0]!.next_number,
-    ],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
-       (journal_entry_id, account_number, account_id, debit_amount,
-        credit_amount, currency, dimensions, sort_order)
-     VALUES
-       ($1, '1930', $2, $4, 0, 'SEK', '{}'::jsonb, 0),
-       ($1, '2010', $3, 0, $4, 'SEK', '{}'::jsonb, 1)`,
-    [oldEntryId, accountIds.get('1930'), accountIds.get('2010'), amount],
-  )
-  await getPool().query(
-     `INSERT INTO public.voucher_sequences
-       (company_id, user_id, fiscal_period_id, voucher_series, last_number)
-     VALUES ($1, $2, $3, 'A', $4)
-     ON CONFLICT (company_id, fiscal_period_id, voucher_series)
-     DO UPDATE SET last_number = GREATEST(public.voucher_sequences.last_number, $4)`,
-    [
-      params.companyId,
-      params.userId,
-      params.fiscalPeriodId,
-      voucher.rows[0]!.next_number,
-    ],
-  )
+  const client = await getClient()
+  try {
+    await client.query('BEGIN')
+    const voucher = await client.query<{ next_number: number }>(
+      `SELECT COALESCE(max(voucher_number), 0)::int + 1 AS next_number
+         FROM public.journal_entries
+        WHERE company_id = $1
+          AND fiscal_period_id = $2
+          AND voucher_series = 'A'`,
+      [params.companyId, params.fiscalPeriodId],
+    )
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number,
+          voucher_series, entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-01-01',
+               'Old opening balance', 'opening_balance', 'posted')`,
+      [
+        oldEntryId,
+        params.userId,
+        params.companyId,
+        params.fiscalPeriodId,
+        voucher.rows[0]!.next_number,
+      ],
+    )
+    await client.query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, account_id, debit_amount,
+          credit_amount, currency, dimensions, sort_order)
+       VALUES
+         ($1, '1930', $2, $4, 0, 'SEK', '{}'::jsonb, 0),
+         ($1, '2010', $3, 0, $4, 'SEK', '{}'::jsonb, 1)`,
+      [oldEntryId, accountIds.get('1930'), accountIds.get('2010'), amount],
+    )
+    await client.query(
+      `INSERT INTO public.voucher_sequences
+         (company_id, user_id, fiscal_period_id, voucher_series, last_number)
+       VALUES ($1, $2, $3, 'A', $4)
+       ON CONFLICT (company_id, fiscal_period_id, voucher_series)
+       DO UPDATE SET last_number = GREATEST(public.voucher_sequences.last_number, $4)`,
+      [
+        params.companyId,
+        params.userId,
+        params.fiscalPeriodId,
+        voucher.rows[0]!.next_number,
+      ],
+    )
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
   if (params.link !== false) {
     await getPool().query(
       `UPDATE public.fiscal_periods

@@ -33,6 +33,7 @@ import {
   lockPeriod,
   unlockPeriod,
   closePeriod,
+  markPeriodClosedExternally,
   createNextPeriod,
   findNextPeriod,
   resolvePeriodStatusForDate,
@@ -646,6 +647,122 @@ describe('closePeriod', () => {
     await expect(closePeriod(supabase as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
       'Year-end closing must be executed'
     )
+  })
+})
+
+describe('markPeriodClosedExternally', () => {
+  it('closes, locks and stamps closed_externally without a closing entry', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      locked_at: null,
+      is_closed: false,
+      closing_entry_id: null,
+      period_end: '2024-12-31',
+    })
+    const updated = {
+      ...period,
+      is_closed: true,
+      closed_at: '2025-01-15T10:00:00Z',
+      closed_externally: true,
+      locked_at: '2025-01-15T10:00:00Z',
+    }
+
+    results = [
+      { data: period, error: null },          // fetch
+      { count: 3, data: null, error: null },  // imported-verifikat count (migrated year)
+      { count: 0, data: null, error: null },  // guard leg 1: untriaged count
+      { data: [], error: null },              // guard leg 2: business-unbooked candidates
+      { data: updated, error: null },         // update
+      { data: null, error: null },            // audit_log insert
+    ]
+
+    const supabase = makeClient()
+    const result = await markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.is_closed).toBe(true)
+    expect(result.closed_externally).toBe(true)
+    expect(result.locked_at).toBeTruthy()
+  })
+
+  it('allows an empty period (year closed elsewhere, never imported)', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31' })
+    const updated = { ...period, is_closed: true, closed_externally: true }
+    results = [
+      { data: period, error: null },          // fetch
+      { count: 0, data: null, error: null },  // imported-verifikat count
+      { count: 0, data: null, error: null },  // total-verifikat count
+      { count: 0, data: null, error: null },  // guard leg 1: untriaged count
+      { data: [], error: null },              // guard leg 2: business-unbooked candidates
+      { data: updated, error: null },         // update
+      { data: null, error: null },            // audit_log insert
+    ]
+
+    const supabase = makeClient()
+    const result = await markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.closed_externally).toBe(true)
+  })
+
+  it('refuses a period bookkept natively in Accounted (no imported verifikat)', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31' })
+    results = [
+      { data: period, error: null },          // fetch
+      { count: 0, data: null, error: null },  // imported-verifikat count
+      { count: 7, data: null, error: null },  // total-verifikat count: native entries
+    ]
+
+    const supabase = makeClient()
+    await expect(
+      markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('vanliga årsbokslutet')
+  })
+
+  it('rejects an already-closed period', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: true })
+    results = [{ data: period, error: null }]
+
+    const supabase = makeClient()
+    await expect(
+      markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('already closed')
+  })
+
+  it('rejects a period with its own closing entry (normal close applies)', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', closing_entry_id: 'ce-1' })
+    results = [{ data: period, error: null }]
+
+    const supabase = makeClient()
+    await expect(
+      markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('closing entry')
+  })
+
+  it('rejects a period that has not ended yet', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      period_start: '2999-01-01',
+      period_end: '2999-12-31',
+    })
+    results = [{ data: period, error: null }]
+
+    const supabase = makeClient()
+    await expect(
+      markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('has not ended')
+  })
+
+  it('blocks when the period still holds unbooked bank transactions', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31' })
+    results = [
+      { data: period, error: null },
+      { count: 1, data: null, error: null },  // imported-verifikat count
+      { count: 2, data: null, error: null },  // untriaged
+      { data: [], error: null },              // business-unbooked candidates
+    ]
+
+    const supabase = makeClient()
+    await expect(
+      markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1')
+    ).rejects.toThrow('Kan inte klarmarkera period')
   })
 })
 

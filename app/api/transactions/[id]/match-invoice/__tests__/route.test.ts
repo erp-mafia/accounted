@@ -702,6 +702,72 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     )
   })
 
+  it('rejects a cash-method partial match on a never-booked invoice (no negative 1510, no silent moms)', async () => {
+    // Regression: the old fallback booked an accrual-style clearing entry
+    // against an EMPTY 1510 (negative receivable, no revenue, no moms), and
+    // the final payment then booked the FULL total via createInvoiceCashEntry,
+    // double-debiting the bank account.
+    const tx = makeTransaction({ id: 'tx-1', amount: 5000, invoice_id: null, date: '2024-06-15' })
+    const invoice = {
+      ...makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+        paid_amount: 0,
+      }),
+      journal_entry_id: null,
+    }
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects completing a previously part-paid never-booked cash invoice (cash entry books the full total)', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 7500, invoice_id: null, date: '2024-06-15' })
+    const invoice = {
+      ...makeInvoice({
+        id: VALID_UUID,
+        status: 'partially_paid',
+        total: 12500,
+        remaining_amount: 7500,
+        paid_amount: 5000,
+      }),
+      journal_entry_id: null,
+    }
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    // No hard-duplicate check here: it only runs for 'sent'/'overdue', so the
+    // next query is the settings fetch.
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+    expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+  })
+
   it('cash method ignores cash entry when invoice was already booked (accrual→cash migration)', async () => {
     // Regression: customer sent invoices under accrual (1510 was debited on
     // send), then switched to kontantmetoden before the bank receipt arrived.
@@ -987,15 +1053,22 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(details.excess).toBe(7000)
   })
 
-  it('cash method partial payment uses clearing entry with note', async () => {
+  it('cash setting still allows a partial on an accrual-booked invoice (clearing entry)', async () => {
+    // Pure kontantmetoden partials are rejected (see the rejection tests
+    // above), but an invoice booked at send under accrual keeps its normal
+    // partial clearing path even after the company switches to cash: 1510
+    // has a real balance to clear.
     const tx = makeTransaction({ id: 'tx-1', amount: 5000, invoice_id: null, date: '2024-06-15' })
-    const invoice = makeInvoice({
-      id: VALID_UUID,
-      status: 'sent',
-      total: 12500,
-      remaining_amount: 12500,
-      paid_amount: 0,
-    })
+    const invoice = {
+      ...makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+        paid_amount: 0,
+      }),
+      journal_entry_id: 'je-send-on-accrual',
+    }
 
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
@@ -1004,6 +1077,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
+    // PDF re-attach lookup (invoice.journal_entry_id set; null result skips)
+    enqueue({ data: null, error: null })
     // Update invoice
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     // Insert invoice_payments
@@ -1022,8 +1097,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     expect(status).toBe(200)
     expect(body.invoice_status).toBe('partially_paid')
-    // Cash partial uses accrual-style clearing entry (now via the shared
-    // helper + createJournalEntry), NOT createInvoiceCashEntry.
+    // Accrual-booked partial uses the clearing entry (via the shared helper +
+    // createJournalEntry), NOT createInvoiceCashEntry.
     expect(mockCreateJournalEntry).toHaveBeenCalled()
     expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
   })
