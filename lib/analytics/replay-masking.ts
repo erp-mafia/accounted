@@ -14,9 +14,11 @@
  *   primitives (nav, PageHeader, Label, Button, tabs, dialog/sheet titles,
  *   card titles, badges, tooltips, empty states), so page code gets readable
  *   chrome without per-page tagging.
- * - `<th>` elements: table column headers are static chrome, but the
- *   page-level dry-table pattern writes raw `<th className={TH_CLASS}>`
- *   per page, so there is no shared component to tag.
+ * - `<th>` elements with NO explicit tag anywhere above them: table column
+ *   headers are static chrome, but the page-level dry-table pattern writes
+ *   raw `<th className={TH_CLASS}>` per page, so there is no shared
+ *   component to tag. An explicit data-ph-mask (on the th or any ancestor)
+ *   always wins over this fallback.
  *
  * Chrome is still pattern-scrubbed (belt and braces): an i18n string that
  * interpolates an amount or a person-/organisationsnummer into a title or
@@ -32,11 +34,13 @@
  * over-masking (asterisks where chrome should be readable), never leaking
  * a user's books.
  *
- * Known limit, accepted deliberately: rrweb masks text nodes and input
- * values, not ATTRIBUTES. posthog-js exposes no attribute mask hook, so a
- * title/aria-label/placeholder attribute is recorded as-is. Placeholders
- * are chrome by definition; do not put user data in title or aria-label
- * attributes (aria-labels are i18n chrome today).
+ * Known limit: rrweb masks text nodes and input values, not ATTRIBUTES.
+ * posthog-js exposes no attribute mask hook, so a title/aria-label/
+ * placeholder attribute is recorded as-is. An element whose attributes
+ * carry user data (e.g. a placeholder prefilled with an effective value)
+ * must carry the `ph-no-capture` class instead: rrweb's blockClass removes
+ * the whole element from the recording while the app UX is untouched. Do
+ * not put user data in title or aria-label attributes.
  */
 
 /**
@@ -60,13 +64,6 @@ const IDENTITY_TEXT_PATTERN = /(?<!\d)\d{6}(?:\d{2})?[-+]\d{4}(?!\d)/g
 
 const TAG_SELECTOR = '[data-ph-mask],[data-ph-unmask]'
 
-/**
- * What replayMaskText treats as potentially-chrome: an explicit tag, or a
- * table column header. Nearest match decides, so a `data-ph-mask` inside a
- * `<th>` (or on the `<th>` itself) still masks.
- */
-const CHROME_SELECTOR = `${TAG_SELECTOR},th`
-
 /** Length-preserving mask: whitespace survives so table layout stays legible. */
 function maskAll(text: string): string {
   return text.replace(/\S/g, '*')
@@ -88,13 +85,17 @@ export function maskSensitiveText(text: string): string {
 /**
  * `session_recording.maskTextFn`. Runs on EVERY text node because
  * `maskTextSelector: '*'` flags them all; this function then decides.
- * Default is masked; only chrome (see CHROME_SELECTOR) shows through,
- * and even chrome is pattern-scrubbed.
+ * Default is masked; only chrome shows through, and even chrome is
+ * pattern-scrubbed.
+ *
+ * Explicit tags are resolved FIRST, and only then the th fallback: a single
+ * closest() over tags-plus-th would let a th nested inside a data-ph-mask
+ * container win on DOM proximity and unmask it.
  */
 export function replayMaskText(text: string, element?: HTMLElement): string {
-  const tagged = element?.closest?.(CHROME_SELECTOR)
-  if (tagged && !tagged.hasAttribute('data-ph-mask')) {
-    return maskSensitiveText(text)
+  const tagged = element?.closest?.(TAG_SELECTOR)
+  if (tagged) {
+    return tagged.hasAttribute('data-ph-mask') ? maskAll(text) : maskSensitiveText(text)
   }
-  return maskAll(text)
+  return element?.closest?.('th') ? maskSensitiveText(text) : maskAll(text)
 }

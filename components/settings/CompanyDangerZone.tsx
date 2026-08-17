@@ -140,6 +140,9 @@ export function CompanyDangerZone() {
               onChange={(e) => setConfirmText(e.target.value)}
               placeholder={company.name}
               autoComplete="off"
+              // ph-no-capture: the placeholder is the company name, and
+              // replay masking covers values, not attributes.
+              className="ph-no-capture"
             />
           </div>
           <DialogFooter>

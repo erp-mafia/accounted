@@ -332,7 +332,9 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
               <span data-ph-mask="">{profile.companyName}</span>
             </CardTitle>
             <CardDescription>
-              {profile.orgNumber} &middot; {profile.legalEntityType}
+              {/* data-ph-mask: TIC serves the orgnr in unnormalized format, so
+                  the separator-based pattern scrub cannot be relied on */}
+              <span data-ph-mask="">{profile.orgNumber}</span> &middot; {profile.legalEntityType}
               {!isActive && (
                 <span className="ml-2 text-destructive">&middot; {t('deregistered')}</span>
               )}

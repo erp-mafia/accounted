@@ -379,12 +379,14 @@ export default function DimensionsManager() {
             options={dimensions.map((dim) => ({
               value: dim.id,
               label: (
-                <>
+                // data-ph-mask: dimension names are user data; the wrapper
+                // keeps the segment button's inline gap between name and count.
+                <span data-ph-mask="" className="inline-flex items-center gap-1.5">
                   {dim.name}
                   {dim.values.length > 0 && (
                     <span className="text-muted-foreground tabular-nums">{dim.values.length}</span>
                   )}
-                </>
+                </span>
               ),
             }))}
           />

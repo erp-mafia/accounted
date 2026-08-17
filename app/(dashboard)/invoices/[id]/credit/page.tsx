@@ -347,7 +347,8 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
           <CardTitle>{t('confirm_card_title')}</CardTitle>
           <CardDescription>
             {t('confirm_card_description_1')}
-            <span className="font-mono font-semibold text-foreground">{invoice.invoice_number}</span>
+            {/* data-ph-mask: the invoice number is user data */}
+            <span data-ph-mask="" className="font-mono font-semibold text-foreground">{invoice.invoice_number}</span>
             {t('confirm_card_description_2')}
           </CardDescription>
         </CardHeader>
@@ -358,6 +359,9 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
             placeholder={invoice.invoice_number ?? ''}
             disabled={!invoice.invoice_number}
             className={cn(
+              // ph-no-capture: the placeholder carries the invoice number, and
+              // replay masking covers input values, not attributes.
+              'ph-no-capture',
               confirmText && confirmText !== invoice.invoice_number && 'border-destructive'
             )}
           />

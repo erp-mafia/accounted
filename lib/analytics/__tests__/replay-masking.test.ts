@@ -9,13 +9,12 @@ beforeEach(() => {
 
 /**
  * Minimal stand-ins for the DOM elements rrweb hands to the masking
- * functions (tests run in the node environment, no jsdom). `closest`
- * returns what a real DOM lookup against CHROME_SELECTOR would: null for
- * untagged nodes, an element carrying the matched attributes otherwise,
- * and a bare th matches the selector while carrying neither attribute.
+ * functions (tests run in the node environment, no jsdom). `closest` is
+ * called once with the explicit-tag selector and, when that misses, once
+ * with 'th'; the fake answers each selector like a real DOM lookup would.
  */
 function fakeElement(
-  opts: { tagged?: 'mask' | 'unmask' | 'both' | 'th' | null } = {}
+  opts: { tagged?: 'mask' | 'unmask' | 'both' | null; th?: boolean } = {}
 ): HTMLElement {
   const attrs =
     opts.tagged === 'mask'
@@ -24,12 +23,11 @@ function fakeElement(
         ? ['data-ph-unmask']
         : opts.tagged === 'both'
           ? ['data-ph-mask', 'data-ph-unmask']
-          : opts.tagged === 'th'
-            ? []
-            : null
+          : null
   const tagged = attrs ? { hasAttribute: (name: string) => attrs.includes(name) } : null
+  const thAncestor = opts.th ? { hasAttribute: () => false } : null
   return {
-    closest: (_selector: string) => tagged,
+    closest: (selector: string) => (selector.includes('data-ph') ? tagged : thAncestor),
   } as unknown as HTMLElement
 }
 
@@ -96,7 +94,11 @@ describe('replayMaskText', () => {
   })
 
   it('shows table column headers (th) without a tag', () => {
-    expect(replayMaskText('Datum', fakeElement({ tagged: 'th' }))).toBe('Datum')
+    expect(replayMaskText('Datum', fakeElement({ th: true }))).toBe('Datum')
+  })
+
+  it('lets an explicit data-ph-mask beat the th fallback (th inside a masked container, or masked th)', () => {
+    expect(replayMaskText('Acme AB', fakeElement({ tagged: 'mask', th: true }))).toBe('**** **')
   })
 
   it('pattern-scrubs amounts and identity numbers even inside chrome', () => {

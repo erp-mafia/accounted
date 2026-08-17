@@ -3532,8 +3532,10 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
                   <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
                   <th className="text-left font-medium px-4 py-2">Kontonamn</th>
                   {data.columns.map((c, i) => (
-                    /* data-ph-mask: the pivot column header is a user dimension value */
-                    <th key={i} data-ph-mask="" className="text-right font-medium px-4 py-2 w-32 tabular-nums" title={c.name ?? undefined}>
+                    /* data-ph-mask: the pivot column header is a user dimension
+                       value. No title attribute: replay masking covers text
+                       nodes, not attributes. */
+                    <th key={i} data-ph-mask="" className="text-right font-medium px-4 py-2 w-32 tabular-nums">
                       {columnLabel(c)}
                     </th>
                   ))}
