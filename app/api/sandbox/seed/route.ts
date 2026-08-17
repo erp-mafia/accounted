@@ -342,6 +342,10 @@ export async function POST(request: Request) {
           subtotal: 8000,
           vat_amount: 2000,
           total: 10000,
+          // PostgREST normalises a bulk insert to the union of keys: every row in
+          // this batch carries both columns so none arrives as NULL.
+          remaining_amount: 10000,
+          paid_amount: 0,
           vat_treatment: 'standard_25',
           vat_rate: 25,
           moms_ruta: '10',
