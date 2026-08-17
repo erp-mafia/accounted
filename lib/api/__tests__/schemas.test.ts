@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { HouseworkTypeSchema } from '../schemas'
 import {
   // Enums
   EntityTypeSchema,
@@ -2869,5 +2870,30 @@ describe('CreateSalaryLineItemSchema: derived-only item types', () => {
     ).toBe(true)
     expect(UpdateSalaryLineItemSchema.safeParse({ item_type: 'oresavrundning' }).success).toBe(false)
     expect(UpdateSalaryLineItemSchema.safeParse({ item_type: 'bonus' }).success).toBe(true)
+  })
+})
+
+describe('HouseworkTypeSchema (articles.housework_type)', () => {
+  it('stores a Skatteverket work-type code upper-cased', () => {
+    expect(HouseworkTypeSchema.parse('stad')).toBe('STAD')
+    expect(HouseworkTypeSchema.parse('BYGG')).toBe('BYGG')
+  })
+
+  it('accepts the bare kind ROT / RUT (deduction only, no arbetstyp pre-fill)', () => {
+    expect(HouseworkTypeSchema.parse('rut')).toBe('RUT')
+    expect(HouseworkTypeSchema.parse('ROT')).toBe('ROT')
+  })
+
+  it('treats empty string as clear and passes null/undefined through', () => {
+    expect(HouseworkTypeSchema.parse('')).toBeNull()
+    expect(HouseworkTypeSchema.parse('   ')).toBeNull()
+    expect(HouseworkTypeSchema.parse(null)).toBeNull()
+    expect(HouseworkTypeSchema.parse(undefined)).toBeUndefined()
+  })
+
+  it('rejects values the invoice editor could never interpret', () => {
+    for (const bad of ['1', '0', 'Ja', 'SNICKERI', 'RUT-städning']) {
+      expect(HouseworkTypeSchema.safeParse(bad).success).toBe(false)
+    }
   })
 })

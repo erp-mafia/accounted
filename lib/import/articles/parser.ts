@@ -4,6 +4,7 @@ import { cellOrNull } from '../shared/column-utils'
 import { parseAmount } from '../opening-balance/parser'
 import { readBestSheet } from '../shared/workbook-reader'
 import type { DetectedArticleColumns, ParsedArticleRow } from './types'
+import { normalizeHouseworkType } from '@/lib/invoices/rot-rut-rules'
 
 const VALID_VAT_RATES = [0, 6, 12, 25] as const
 
@@ -183,7 +184,10 @@ export function parseArticlesFile(
     const costPrice = costRaw !== null ? parseAmount(costRaw) : null
 
     const ean = cell(row, columns.ean_col)
-    const houseworkType = cell(row, columns.housework_type_col)
+    // Canonical work-type code / bare ROT-RUT, or null: a boolean "Rot" column
+    // ('0'/'1'/'Ja') mapped by the keyword detector must not land as a value
+    // the invoice editor can never interpret.
+    const houseworkType = normalizeHouseworkType(cell(row, columns.housework_type_col))
     const notes = cell(row, columns.notes_col)
 
     const validationErrors: string[] = []

@@ -146,6 +146,57 @@ export function deductionTypeForWorkType(code: string | null | undefined): Deduc
   return null
 }
 
+/** Human label for a Skatteverket work-type code, or null for unknown codes. */
+export function workTypeLabel(code: string | null | undefined): string | null {
+  if (!code) return null
+  const hit = [...ROT_WORK_TYPES, ...RUT_WORK_TYPES].find((w) => w.code === code)
+  return hit ? hit.label : null
+}
+
+/**
+ * The two vocabularies `articles.housework_type` has been written in:
+ * - a Skatteverket work-type code (`BYGG`, `STAD`, ...): the intended value,
+ *   decides both the deduction kind and the line's arbetstyp;
+ * - the bare kind `ROT` / `RUT`: what the article form stored before it
+ *   offered real work types (legacy rows), decides the kind only.
+ * Anything else (free text, `0`/`1` from a mis-mapped CSV column) is not a
+ * housework flag at all and normalizes to null.
+ */
+export interface ArticleHousework {
+  deductionType: DeductionType | null
+  /** Skatteverket work-type code, or null when only the kind is known. */
+  workType: string | null
+}
+
+export function parseArticleHouseworkType(value: string | null | undefined): ArticleHousework {
+  const raw = value?.trim().toUpperCase() ?? ''
+  if (!raw) return { deductionType: null, workType: null }
+  const kindFromCode = deductionTypeForWorkType(raw)
+  if (kindFromCode) return { deductionType: kindFromCode, workType: raw }
+  if (raw === 'ROT' || raw === 'RUT') return { deductionType: raw.toLowerCase() as DeductionType, workType: null }
+  return { deductionType: null, workType: null }
+}
+
+/**
+ * Canonical stored form of a housework_type input: the work-type code, the
+ * bare kind (`ROT`/`RUT`), or null. Case-insensitive; unknown values are
+ * null so the column never accumulates a third vocabulary again.
+ */
+export function normalizeHouseworkType(value: string | null | undefined): string | null {
+  const parsed = parseArticleHouseworkType(value)
+  if (parsed.workType) return parsed.workType
+  if (parsed.deductionType) return parsed.deductionType.toUpperCase()
+  return null
+}
+
+/** Accepted housework_type values: every work-type code plus the bare kinds. */
+export const HOUSEWORK_TYPE_VALUES: readonly string[] = [
+  'ROT',
+  'RUT',
+  ...ROT_WORK_TYPES.map((w) => w.code),
+  ...RUT_WORK_TYPES.map((w) => w.code),
+]
+
 export interface ItemForDeduction {
   /** Unit price (per `quantity`). Same field as invoice_items.unit_price. */
   unit_price: number

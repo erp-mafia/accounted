@@ -20,6 +20,7 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import { ArrowLeft, Loader2, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
+import { parseArticleHouseworkType, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
 
 const ARTICLE_TYPE_KEY: Record<ArticleType, string> = {
@@ -206,6 +207,15 @@ export default function ArticleDetailPage({
 
   if (!article) return null
 
+  // "RUT · Städning" for a work-type code, "RUT" for a legacy kind-only row,
+  // nothing for values that are not a housework flag (mis-mapped imports).
+  const houseworkDisplay = (() => {
+    const { deductionType, workType } = parseArticleHouseworkType(article.housework_type)
+    if (!deductionType) return null
+    const label = workTypeLabel(workType)
+    return label ? `${deductionType.toUpperCase()} · ${label}` : deductionType.toUpperCase()
+  })()
+
   return (
     <div className="max-w-2xl space-y-8 stagger-enter">
       {/* Header: serif name over a quiet type/status kicker, quiet actions right */}
@@ -307,8 +317,8 @@ export default function ArticleDetailPage({
             <span className="text-muted-foreground">{t('revenue_account_auto')}</span>
           )}
         </DefRow>
-        {article.type === 'tjanst' && article.housework_type && (
-          <DefRow label={t('label_housework')}>{article.housework_type}</DefRow>
+        {article.type === 'tjanst' && houseworkDisplay && (
+          <DefRow label={t('label_housework')}>{houseworkDisplay}</DefRow>
         )}
       </DetailSection>
 

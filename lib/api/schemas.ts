@@ -13,6 +13,7 @@ import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import { HOUSEWORK_TYPE_VALUES, normalizeHouseworkType } from '@/lib/invoices/rot-rut-rules'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
 import type { AuditAction } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
@@ -637,6 +638,32 @@ export const RotRutBeslutFileSchema = z.object({
 
 export const ArticleTypeSchema = z.enum(['vara', 'tjanst'])
 
+/**
+ * articles.housework_type: a Skatteverket arbetstypskod (BYGG, EL, ..., STAD,
+ * TRADGARD, ...) or the bare kind ROT / RUT (deduction only, no arbetstyp
+ * pre-fill). Case-insensitive, stored upper-case; '' clears to null. The
+ * invoice editor derives a line's skattereduktion from this value, so any
+ * other string is a silently dead flag and is rejected here.
+ */
+export const HouseworkTypeSchema = z
+  .string()
+  .max(64)
+  .nullable()
+  .optional()
+  .transform((v, ctx) => {
+    if (v == null) return v
+    if (v.trim() === '') return null
+    const normalized = normalizeHouseworkType(v)
+    if (!normalized) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Ogiltig ROT/RUT-arbetstyp. Tillåtna värden: ${HOUSEWORK_TYPE_VALUES.join(', ')}`,
+      })
+      return z.NEVER
+    }
+    return normalized
+  })
+
 export const CreateArticleSchema = z.object({
   name: z.string().min(1, 'Article name is required').max(200),
   type: ArticleTypeSchema.optional(),
@@ -655,7 +682,7 @@ export const CreateArticleSchema = z.object({
   cost_price: nonNegativeAmount.nullable().optional(),
   ean: z.string().max(32).nullable().optional(),
   // ROT/RUT arbetstyp; only meaningful for type === 'tjanst'.
-  housework_type: z.string().max(64).nullable().optional(),
+  housework_type: HouseworkTypeSchema,
   name_en: z.string().max(200).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
   // Manual article number; omit to auto-generate via generate_article_number.
