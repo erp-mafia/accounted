@@ -652,7 +652,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           // deduction the next time it is picked: the arbetstypskod when the
           // row has one, otherwise the bare kind.
           housework_type: item.deduction_type
-            ? item.work_type ?? item.deduction_type.toUpperCase()
+            ? deductionTypeForWorkType(item.work_type) === item.deduction_type
+              ? item.work_type
+              : item.deduction_type.toUpperCase()
             : null,
         }),
       })
@@ -1714,6 +1716,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                             onValueChange={(v) => {
                               const next = v === 'none' ? null : (v as 'rot' | 'rut')
                               setValue(`items.${index}.deduction_type`, next, { shouldDirty: true })
+                              // The arbetstyp lists are per kind: a ROT code
+                              // must not survive a switch to RUT (the select
+                              // would show it as empty while the payload kept
+                              // the wrong code).
+                              if (
+                                next !== null &&
+                                deductionTypeForWorkType(watchItems[index]?.work_type) !== next
+                              ) {
+                                setValue(`items.${index}.work_type`, null)
+                              }
                               if (next === null) {
                                 setValue(`items.${index}.work_type`, null)
                                 setValue(`items.${index}.labor_hours`, null)

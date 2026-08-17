@@ -41,8 +41,9 @@ describe('CreateArticleParamsSchema housework_type', () => {
     expect(CreateArticleParamsSchema.parse({ ...base, housework_type: 'rut' }).housework_type).toBe('RUT')
   })
 
-  it('treats empty string and null as unset', () => {
+  it('treats empty, whitespace and null as unset', () => {
     expect(CreateArticleParamsSchema.parse({ ...base, housework_type: '' }).housework_type).toBeUndefined()
+    expect(CreateArticleParamsSchema.parse({ ...base, housework_type: '  ' }).housework_type).toBeUndefined()
     expect(CreateArticleParamsSchema.parse({ ...base, housework_type: null }).housework_type).toBeUndefined()
   })
 
@@ -61,5 +62,15 @@ describe('UpdateArticleParamsSchema housework_type', () => {
 
   it('leaves housework_type undefined when omitted (sparse update)', () => {
     expect(UpdateArticleParamsSchema.parse({ ...id, name: 'Nytt namn' }).housework_type).toBeUndefined()
+  })
+
+  it('null, empty and whitespace-only clear the flag (commit drops only undefined keys)', () => {
+    expect(UpdateArticleParamsSchema.parse({ ...id, housework_type: null }).housework_type).toBeNull()
+    expect(UpdateArticleParamsSchema.parse({ ...id, housework_type: '' }).housework_type).toBeNull()
+    expect(UpdateArticleParamsSchema.parse({ ...id, housework_type: '  ' }).housework_type).toBeNull()
+  })
+
+  it('rejects free text on update too', () => {
+    expect(() => UpdateArticleParamsSchema.parse({ ...id, housework_type: 'Snickeri' })).toThrow()
   })
 })

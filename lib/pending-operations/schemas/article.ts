@@ -19,23 +19,27 @@ const optString = (max: number) =>
 
 // Same vocabulary as HouseworkTypeSchema in lib/api/schemas.ts: work-type code
 // or bare ROT/RUT, upper-cased; empty → undefined; anything else rejected.
-const houseworkType = z.preprocess(
-  (v) => (v == null || v === '' ? undefined : v),
-  z
-    .string()
-    .max(64)
-    .transform((v, ctx) => {
-      const normalized = normalizeHouseworkType(v)
-      if (!normalized) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `Invalid housework_type. Allowed: ${HOUSEWORK_TYPE_VALUES.join(', ')}`,
-        })
-        return z.NEVER
-      }
-      return normalized
+const houseworkCode = z.string().max(64).transform((v, ctx) => {
+  const normalized = normalizeHouseworkType(v)
+  if (!normalized) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Invalid housework_type. Allowed: ${HOUSEWORK_TYPE_VALUES.join(', ')}`,
     })
-    .optional(),
+    return z.NEVER
+  }
+  return normalized
+})
+// Create: empty / null / omitted all mean "no flag" (column stays NULL).
+const houseworkTypeCreate = z.preprocess(
+  (v) => (v == null || (typeof v === 'string' && v.trim() === '') ? undefined : v),
+  houseworkCode.optional(),
+)
+// Update: commitUpdateArticle drops undefined keys, so a clear must arrive as
+// null. Omitted stays undefined (untouched); null / '' / whitespace clear.
+const houseworkTypeUpdate = z.preprocess(
+  (v) => (v == null || (typeof v === 'string' && v.trim() === '') ? (v === undefined ? undefined : null) : v),
+  houseworkCode.nullable().optional(),
 )
 
 const trimmedName = z.preprocess(
@@ -61,7 +65,7 @@ export const CreateArticleParamsSchema = z.object({
   revenue_account: invoicePostingAccount.nullable().optional(),
   cost_price: z.number().nonnegative().nullable().optional(),
   ean: optString(32),
-  housework_type: houseworkType,
+  housework_type: houseworkTypeCreate,
   name_en: optString(200),
   notes: optString(2000),
   article_number: optString(64),
@@ -78,7 +82,7 @@ export const UpdateArticleParamsSchema = z.object({
   revenue_account: invoicePostingAccount.nullable().optional(),
   cost_price: z.number().nonnegative().nullable().optional(),
   ean: optString(32),
-  housework_type: houseworkType,
+  housework_type: houseworkTypeUpdate,
   name_en: optString(200),
   notes: optString(2000),
   article_number: optString(64),

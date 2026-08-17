@@ -5702,7 +5702,7 @@
     "housework_none": "Ingen",
     "housework_rot": "ROT",
     "housework_rut": "RUT",
-    "housework_hint": "Förifyller skattereduktion och arbetstyp på fakturaraden när artikeln väljs.",
+    "housework_hint": "Förifyller skattereduktionen på fakturaraden när artikeln väljs, och arbetstypen när en sådan är vald här.",
     "housework_legacy_rot": "ROT (arbetstyp ej vald)",
     "housework_legacy_rut": "RUT (arbetstyp ej vald)",
     "notes_label": "Anteckningar",

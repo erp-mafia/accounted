@@ -260,5 +260,7 @@ describe('parseArticlesFile ROT/RUT (housework) column', () => {
     expect(result.rows[1].housework_type).toBe('RUT')
     expect(result.rows[2].housework_type).toBeNull()
     expect(result.rows[3].housework_type).toBeNull()
+    // Dropping a non-empty value is surfaced, never silent.
+    expect(result.warnings.some((w) => w.includes('2 rader hade ett ROT/RUT-värde'))).toBe(true)
   })
 })

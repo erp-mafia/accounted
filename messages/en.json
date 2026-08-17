@@ -5702,7 +5702,7 @@
     "housework_none": "None",
     "housework_rot": "ROT",
     "housework_rut": "RUT",
-    "housework_hint": "Pre-fills the tax reduction and work type on the invoice row when the article is picked.",
+    "housework_hint": "Pre-fills the tax reduction on the invoice row when the article is picked, and the work type when one is chosen here.",
     "housework_legacy_rot": "ROT (work type not chosen)",
     "housework_legacy_rut": "RUT (work type not chosen)",
     "notes_label": "Notes",
