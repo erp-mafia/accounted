@@ -123,6 +123,13 @@ export default function SkattekontoPage() {
 
       if (saldoRes.status === 401) {
         setNotConnected(true)
+        // A skattekontoutdrag file import populates the table without any
+        // SKV connection: keep rendering those rows. The StartCard only
+        // shows when the table is empty too.
+        if (txRes.ok) {
+          const txJson = (await txRes.json()) as TransaktionerEnvelope
+          setTx(txJson.data)
+        }
         return
       }
       // A non-401 response proves a connection now exists: clear a stale
@@ -370,7 +377,10 @@ export default function SkattekontoPage() {
     </HelpPopover>
   )
 
-  if (notConnected) {
+  const hasLocalRows =
+    tx !== null && tx.booked.length + tx.overdue.length + tx.upcoming.length > 0
+
+  if (notConnected && !hasLocalRows) {
     return (
       <div className="space-y-8">
         <PageHeader title="Skattekonto" help={helpNode} />
@@ -381,6 +391,7 @@ export default function SkattekontoPage() {
             title={tStart('skattekonto_title')}
             body={tStart('skattekonto_body')}
             primary={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
+            secondary={{ label: t('import_statement_action'), href: '/import?mode=skattekonto' }}
           />
         </div>
       </div>
@@ -413,22 +424,47 @@ export default function SkattekontoPage() {
         title="Skattekonto"
         help={helpNode}
         action={
-          // The span carries the tooltip: `title` is suppressed on disabled elements.
-          <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
+          notConnected ? (
             <Button
               variant="ghost"
-              onClick={syncNow}
-              disabled={syncing || !hasSkvCapability}
+              asChild
               className="text-muted-foreground hover:text-foreground"
             >
-              <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
+              <Link href="/import?mode=skattekonto">{t('import_statement_action')}</Link>
             </Button>
-          </span>
+          ) : (
+            // The span carries the tooltip: `title` is suppressed on disabled elements.
+            <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
+              <Button
+                variant="ghost"
+                onClick={syncNow}
+                disabled={syncing || !hasSkvCapability}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+                {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
+              </Button>
+            </span>
+          )
         }
       />
 
-      {/* Saldo as compact stat tiles (house metric-card idiom, KPIHeroCards) */}
+      {/* File-imported rows without a connection: no saldo to show, but the
+          booking/matching flows below work on the local table. One ochre
+          sentence with the connect action, per the attn convention. */}
+      {notConnected && (
+        <AttnLine
+          action={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
+        >
+          {t('imported_not_connected_attn')}
+        </AttnLine>
+      )}
+
+      {/* Saldo as compact stat tiles (house metric-card idiom, KPIHeroCards).
+          Hidden entirely for unconnected companies rendering imported rows:
+          there is no saldo to fetch and the "Synkronisera nu" hint would
+          point at a button that cannot work. */}
+      {!notConnected && (
       <section className="space-y-4">
         {loading && !data ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -545,6 +581,7 @@ export default function SkattekontoPage() {
           </>
         )}
       </section>
+      )}
 
       {/* One dry table with band rows (concept): Kommande, Förfallna, Genomförda */}
       <SkattekontoTable

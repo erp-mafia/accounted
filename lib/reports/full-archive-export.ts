@@ -1051,6 +1051,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   processing_history: 'internal processing log; behandlingshistorik exports from audit_log',
   provider_consents: 'consent tokens, not portable',
   salary_payslip_deliveries: 'delivery log',
+  skattekonto_file_imports:
+    'import log for the skattekonto mirror below; the statement is re-downloadable from Skatteverket',
   skattekonto_transactions: 'mirror of Skatteverket skattekonto, re-fetchable at source',
   skatteverket_api_audit_log: 'integration audit log',
   skatteverket_company_connections: 'integration connection state',

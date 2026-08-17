@@ -3516,3 +3516,28 @@ export const BankFileCheckDuplicatesSchema = z.object({
     .max(20000),
   format: z.enum(BANK_FILE_FORMAT_IDS),
 })
+
+/**
+ * POST /api/import/skattekonto-file/execute
+ *
+ * Rows are client-confirmed but the route recomputes dedup keys and
+ * re-partitions against the table server-side: the payload can only choose
+ * WHICH parsed rows to import, never what they dedup as. closing_saldo comes
+ * from the statement's "Utgående saldo" marker (not derivable from rows).
+ */
+export const SkattekontoFileExecuteSchema = z.object({
+  rows: z
+    .array(
+      z.object({
+        transaktionsdatum: isoDate,
+        transaktionstext: z.string().min(1).max(500),
+        belopp: z.number().finite(),
+      })
+    )
+    .min(1)
+    .max(20000),
+  filename: z.string().min(1).max(255),
+  file_hash: z.string().regex(/^[0-9a-f]{64}$/),
+  variant: z.enum(['csv', 'skv']),
+  closing_saldo: z.number().finite().nullable().optional(),
+})

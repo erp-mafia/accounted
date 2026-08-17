@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback } from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -45,6 +46,8 @@ interface BankFileUploadStepProps {
   errorTitle?: string | null
   detectedFormat?: string | null
   detectedFormatName?: string | null
+  /** The uploaded file was recognized as a Skatteverket skattekontoutdrag. */
+  skattekontoDetected?: boolean
 }
 
 export default function BankFileUploadStep({
@@ -54,6 +57,7 @@ export default function BankFileUploadStep({
   errorTitle,
   detectedFormat,
   detectedFormatName,
+  skattekontoDetected,
 }: BankFileUploadStepProps) {
   const t = useTranslations('import')
   const [isDragging, setIsDragging] = useState(false)
@@ -203,6 +207,22 @@ export default function BankFileUploadStep({
               </div>
             )}
           </div>
+
+          {/* Skattekonto redirect: not an error, a pointer to the right flow */}
+          {skattekontoDetected && (
+            <div className="p-4 bg-muted/30 border border-border rounded-lg flex gap-3">
+              <AlertCircle className="h-5 w-5 text-warning flex-shrink-0 mt-0.5" />
+              <div className="text-sm">
+                <p className="font-medium">{t('skattekonto_detected_title')}</p>
+                <p className="mt-1 text-muted-foreground">
+                  {t('skattekonto_detected_body')}{' '}
+                  <Link href="/import?mode=skattekonto" className="underline underline-offset-2">
+                    {t('skattekonto_detected_link')}
+                  </Link>
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Error display */}
           {error && (

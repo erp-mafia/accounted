@@ -18,6 +18,8 @@ function makeRow(
     belopp_kronofogden: 0,
     status: 'upcoming',
     journal_entry_id: null,
+    source: 'api',
+    file_import_id: null,
     imported_at: '2026-05-15T10:00:00Z',
     updated_at: '2026-05-15T10:00:00Z',
     ...overrides,

@@ -1686,6 +1686,65 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bankfilsimporten misslyckades.',
     message_en: 'Bank file import failed.',
   },
+  BANK_FILE_SKATTEKONTO_DETECTED: {
+    httpStatus: 400,
+    message_sv:
+      'Filen ser ut som ett skattekontoutdrag från Skatteverket. Använd Skattekonto-importen i stället.',
+    message_en:
+      'This file looks like a Skatteverket tax account statement. Use the skattekonto import instead.',
+  },
+}
+
+const SKATTEKONTO_FILE: Record<string, StructuredErrorEntry> = {
+  SKATTEKONTO_FILE_NO_FILE: {
+    httpStatus: 400,
+    message_sv: 'Ingen fil bifogad i förfrågan.',
+    message_en: 'No file attached to the request.',
+  },
+  SKATTEKONTO_FILE_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv: 'Filen är för stor. Maxstorlek är 10 MB.',
+    message_en: 'File exceeds the 10 MB size limit.',
+  },
+  SKATTEKONTO_FILE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Det här kontoutdraget har redan importerats.',
+    message_en: 'This tax account statement has already been imported.',
+  },
+  SKATTEKONTO_FILE_PARSE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte tolka skattekontoutdraget.',
+    message_en: 'Failed to parse the tax account statement.',
+  },
+  SKATTEKONTO_FILE_NOT_RECOGNIZED: {
+    httpStatus: 400,
+    message_sv:
+      'Filen känns inte igen som ett skattekontoutdrag. Ladda ner kontohändelserna från Skatteverkets e-tjänst Skattekonto och försök igen.',
+    message_en:
+      'The file was not recognized as a tax account statement. Download the account events from Skatteverket and try again.',
+  },
+  SKATTEKONTO_FILE_SUM_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Utdraget summerar inte: ingående saldo plus händelser stämmer inte med utgående saldo. Filen kan vara ofullständig.',
+    message_en:
+      'The statement does not sum: opening balance plus events does not equal the closing balance. The file may be incomplete.',
+  },
+  SKATTEKONTO_FILE_NO_ROWS: {
+    httpStatus: 400,
+    message_sv: 'Kontoutdraget innehåller inga händelser att importera.',
+    message_en: 'No account events to import.',
+  },
+  SKATTEKONTO_FILE_IMPORT_RECORD_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte skapa importpost.',
+    message_en: 'Failed to create the import record.',
+  },
+  SKATTEKONTO_FILE_EXECUTE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Importen av skattekontoutdraget misslyckades.',
+    message_en: 'Tax account statement import failed.',
+  },
 }
 
 const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
@@ -3584,6 +3643,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...TAX_DECL,
   ...SIE_IMPORT,
   ...BANK_FILE,
+  ...SKATTEKONTO_FILE,
   ...OPENING_BALANCE_IMPORT,
   ...REGISTER_IMPORT,
   ...PROVIDER_MIGRATION,
