@@ -116,11 +116,13 @@ export function AmountCell({
   className?: string
 }) {
   const innerRef = useRef<HTMLInputElement | null>(null)
-  const [draft, setDraft] = useState(() => (value ? String(value) : ''))
+  // Display Swedish comma decimals; parsing accepts both comma and dot.
+  const toDisplay = (v: number) => (v ? String(v).replace('.', ',') : '')
+  const [draft, setDraft] = useState(() => toDisplay(value))
 
   useEffect(() => {
     if (document.activeElement !== innerRef.current) {
-      setDraft(value ? String(value) : '')
+      setDraft(toDisplay(value))
     }
   }, [value])
 
@@ -136,7 +138,7 @@ export function AmountCell({
       className={className}
       value={draft}
       onFocus={(e) => e.currentTarget.select()}
-      onBlur={() => setDraft(value ? String(value) : '')}
+      onBlur={() => setDraft(toDisplay(value))}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           e.preventDefault()
