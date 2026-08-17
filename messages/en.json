@@ -3556,6 +3556,7 @@
     "deduction_personnummer_placeholder": "YYYYMMDD-NNNN",
     "deduction_personnummer_hint": "Encrypted before storage. Only the last four digits are shown on the invoice.",
     "deduction_personnummer_kept_hint": "The saved personal number (****{last4}) is kept if the field is left empty. Enter one only to replace it.",
+    "deduction_personnummer_customer_hint": "Taken from the customer card if left empty. Encrypted before storage; only the last four digits are shown on the invoice.",
     "deduction_housing_label": "Property designation (fastighetsbeteckning)",
     "deduction_housing_placeholder": "e.g. Stockholm Vasastan 1:23",
     "deduction_housing_hint": "Required for ROT deductions (not needed for RUT).",

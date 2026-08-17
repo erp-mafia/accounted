@@ -133,6 +133,19 @@ export const RUT_WORK_TYPES = [
   { code: 'TVATT', label: 'Tvätt vid tvättinrättning (schablon)' },
 ] as const
 
+/**
+ * Which deduction kind a Skatteverket work-type code belongs to. The two code
+ * lists are disjoint, so the code alone decides ROT vs RUT: this is what lets
+ * an article's housework_type pre-fill both the invoice line's work_type and
+ * its deduction_type. Unknown or absent codes map to null (no deduction).
+ */
+export function deductionTypeForWorkType(code: string | null | undefined): DeductionType | null {
+  if (!code) return null
+  if (ROT_WORK_TYPES.some((w) => w.code === code)) return 'rot'
+  if (RUT_WORK_TYPES.some((w) => w.code === code)) return 'rut'
+  return null
+}
+
 export interface ItemForDeduction {
   /** Unit price (per `quantity`). Same field as invoice_items.unit_price. */
   unit_price: number

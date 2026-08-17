@@ -3556,6 +3556,7 @@
     "deduction_personnummer_placeholder": "ÅÅÅÅMMDD-NNNN",
     "deduction_personnummer_hint": "Krypteras innan lagring. Endast de fyra sista siffrorna visas på fakturan.",
     "deduction_personnummer_kept_hint": "Sparat personnummer (****{last4}) behålls om fältet lämnas tomt. Fyll i endast för att byta.",
+    "deduction_personnummer_customer_hint": "Hämtas från kundkortet om fältet lämnas tomt. Krypteras innan lagring; endast de fyra sista siffrorna visas på fakturan.",
     "deduction_housing_label": "Fastighetsbeteckning",
     "deduction_housing_placeholder": "t.ex. Stockholm Vasastan 1:23",
     "deduction_housing_hint": "Krävs för ROT-avdrag (RUT behöver inte detta fält).",
