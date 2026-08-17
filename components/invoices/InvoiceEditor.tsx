@@ -1203,6 +1203,24 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }
 
+  // A failed Zod validation is otherwise invisible: handleSubmit never reaches
+  // onSubmit, the buttons stay enabled and look normal, and the only signal is
+  // inline error text the user may have scrolled past. Toast + scroll so a
+  // blocked "Granska & skapa" / "Spara som utkast" never reads as a dead button.
+  function onInvalidSubmit(_errors: unknown, event?: React.BaseSyntheticEvent) {
+    toast({
+      title: t('validation_toast_title'),
+      description: t('validation_toast_description'),
+      variant: 'destructive',
+    })
+    const root = (event?.target as HTMLElement | null)?.closest('form')
+    // The inline error paragraphs render on the next React commit; scroll after.
+    setTimeout(() => {
+      const firstError = (root ?? document).querySelector('p.text-destructive')
+      firstError?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 100)
+  }
+
   // "Spara som utkast": save an unnumbered draft (save_as_draft) without the
   // review dialog. The invoice gets no F-number and fires no invoice.created
   // until the user opens it and clicks "Granska & skapa" (finalize). Same
@@ -1499,7 +1517,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         </div>
       )}
 
-      <form onSubmit={handleSubmit(onSubmit)} className={bare ? 'space-y-6' : 'space-y-6 pb-28 md:pb-0'}>
+      <form onSubmit={handleSubmit(onSubmit, onInvalidSubmit)} className={bare ? 'space-y-6' : 'space-y-6 pb-28 md:pb-0'}>
         <div className="grid gap-6 lg:grid-cols-3 lg:items-start">
           {/* Main content */}
           <div className="lg:col-span-2 space-y-6">
@@ -1803,6 +1821,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                             className="text-right tabular-nums"
                             {...register(`items.${index}.quantity`, { valueAsNumber: true })}
                           />
+                          {errors.items?.[index]?.quantity && (
+                            <p className="text-sm text-destructive">
+                              {errors.items[index].quantity?.message}
+                            </p>
+                          )}
                         </div>
                         <div className="space-y-1 md:col-span-2 md:space-y-2">
                           <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('unit_label')}</Label>
@@ -1824,6 +1847,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               </Select>
                             )}
                           />
+                          {errors.items?.[index]?.unit && (
+                            <p className="text-sm text-destructive">
+                              {errors.items[index].unit?.message}
+                            </p>
+                          )}
                         </div>
                         <div className="space-y-1 md:col-span-2 md:space-y-2">
                           <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('unit_price_label')}</Label>
@@ -2499,7 +2527,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   size="lg"
                   disabled={isSubmitting || isSavingDraft || isFormSubmitting || !canWrite}
                   title={!canWrite ? t('viewer_disabled_tooltip') : t('save_as_draft_tooltip')}
-                  onClick={handleSubmit(saveDraftData)}
+                  onClick={handleSubmit(saveDraftData, onInvalidSubmit)}
                 >
                   {isSavingDraft ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   {t('save_as_draft')}
@@ -2527,7 +2555,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   type="button"
                   variant="outline"
                   disabled={isSubmitting || isSavingDraft || isFormSubmitting || !canWrite}
-                  onClick={handleSubmit(saveDraftData)}
+                  onClick={handleSubmit(saveDraftData, onInvalidSubmit)}
                 >
                   {isSavingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : t('save_as_draft_short')}
                 </Button>
