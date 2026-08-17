@@ -4946,13 +4946,17 @@ export const tools: McpTool[] = [
               unit: { type: 'string', description: 'st, tim, dag, mån' },
               unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
               vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
+              article_id: {
+                type: 'string',
+                description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, vat_rate and revenue account from the article; values set on the line win.',
+              },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
                 description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
               },
             },
-            required: ['description', 'quantity', 'unit', 'unit_price'],
+            required: ['quantity'],
           },
           description: 'Invoice line items',
         },
@@ -4982,24 +4986,83 @@ export const tools: McpTool[] = [
     },
     async execute(args, companyId, userId, supabase, actor) {
       const customerId = args.customer_id as string
-      const items = args.items as Array<{
-        description: string
+      const rawItems = args.items as Array<{
+        description?: string
         quantity: number
-        unit: string
-        unit_price: number
+        unit?: string
+        unit_price?: number
         vat_rate?: number
+        article_id?: string
+        revenue_account?: string | null
         dimensions?: unknown
       }>
 
       if (!customerId) throw new Error('customer_id is required. Use gnubok_list_customers to find IDs.')
-      if (!items?.length) throw new Error('At least one item is required.')
+      if (!rawItems?.length) throw new Error('At least one item is required.')
 
-      for (const [i, item] of items.entries()) {
-        if (!item.description?.trim()) throw new Error(`Item ${i + 1}: description is required`)
-        if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${i + 1}: quantity must be positive`)
-        if (!item.unit?.trim()) throw new Error(`Item ${i + 1}: unit is required (st, tim, dag)`)
-        if (item.unit_price == null) throw new Error(`Item ${i + 1}: unit_price is required`)
+      const today = new Date().toISOString().split('T')[0]
+      const currency = ((args.currency as string) || 'SEK') as Currency
+      const invoiceDate = (args.invoice_date as string) || today
+
+      // Article prefill (same semantics as the web line picker): the line's own
+      // values win, the referenced article fills whatever the agent left out.
+      const articleIds = Array.from(new Set(rawItems.map((i) => i.article_id).filter((a): a is string => !!a)))
+      const articlesById = new Map<string, {
+        id: string
+        name: string
+        unit: string | null
+        price_excl_vat: number | null
+        vat_rate: number | null
+        revenue_account: string | null
+        currency: string | null
+        active: boolean
+      }>()
+      if (articleIds.length > 0) {
+        const { data: articleRows, error: articleError } = await supabase
+          .from('articles')
+          .select('id, name, unit, price_excl_vat, vat_rate, revenue_account, currency, active')
+          .eq('company_id', companyId)
+          .in('id', articleIds)
+        if (articleError) throw new Error(`Failed to load articles: ${articleError.message}`)
+        for (const row of articleRows ?? []) articlesById.set(row.id, row)
       }
+
+      const items = rawItems.map((item, i) => {
+        if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${i + 1}: quantity must be positive`)
+        const article = item.article_id ? articlesById.get(item.article_id) : undefined
+        if (item.article_id && !article) {
+          throw new Error(`Item ${i + 1}: article ${item.article_id} not found in this company. Use gnubok_list_articles to find valid IDs.`)
+        }
+        if (article && !article.active) {
+          throw new Error(`Item ${i + 1}: article "${article.name}" is deactivated. Reactivate it with gnubok_update_article (active: true) or drop article_id.`)
+        }
+        const description = item.description?.trim() || article?.name
+        if (!description) throw new Error(`Item ${i + 1}: description is required (or set article_id)`)
+        const unit = item.unit?.trim() || (article ? article.unit || 'st' : undefined)
+        if (!unit) throw new Error(`Item ${i + 1}: unit is required (st, tim, dag)`)
+        let unitPrice = item.unit_price
+        if (unitPrice == null && article) {
+          if (article.price_excl_vat == null) {
+            throw new Error(`Item ${i + 1}: article "${article.name}" has no price; pass unit_price explicitly.`)
+          }
+          if (article.currency && article.currency !== currency) {
+            throw new Error(
+              `Item ${i + 1}: article "${article.name}" is priced in ${article.currency} but the invoice is in ${currency}. ` +
+              `Set the invoice currency to ${article.currency} or pass unit_price explicitly.`
+            )
+          }
+          unitPrice = article.price_excl_vat
+        }
+        if (unitPrice == null) throw new Error(`Item ${i + 1}: unit_price is required (or set article_id)`)
+        return {
+          ...item,
+          description,
+          unit,
+          unit_price: unitPrice,
+          ...(item.vat_rate == null && article?.vat_rate != null ? { vat_rate: article.vat_rate } : {}),
+          ...(item.revenue_account == null && article?.revenue_account ? { revenue_account: article.revenue_account } : {}),
+        }
+      })
 
       // Resolve-don't-select: parse the invoice-level default bag + each item's
       // own bag, then resolve codes AND natural-language names against the
@@ -5034,10 +5097,6 @@ export const tools: McpTool[] = [
           throw new Error('payment_link_url must be a valid https URL (max 2048 chars).')
         }
       }
-
-      const today = new Date().toISOString().split('T')[0]
-      const currency = ((args.currency as string) || 'SEK') as Currency
-      const invoiceDate = (args.invoice_date as string) || today
 
       // Fetch customer (full row for VAT rules)
       const { data: customer, error: custError } = await supabase
