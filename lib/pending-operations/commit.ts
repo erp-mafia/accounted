@@ -36,6 +36,8 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { cashPartialBlockReason, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
@@ -2615,13 +2617,76 @@ async function commitMatchTransactionInvoice(
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
 
+  // FX resolution: parity with the dashboard and v1 match routes. paidAmount
+  // MUST be denominated in the INVOICE's currency (the unit of
+  // invoices.paid_amount / remaining_amount and invoice_payments.amount).
+  // This path previously fed the raw bank amount straight in, which (a)
+  // rejected exact whole-krona settlements of öre-carrying invoices and (b)
+  // would corrupt the column units on a cross-currency match.
+  const txIsForeign = !!transaction.currency && transaction.currency !== 'SEK'
+  if (
+    txIsForeign &&
+    transaction.amount_sek == null &&
+    !(transaction.exchange_rate != null && transaction.exchange_rate > 0)
+  ) {
+    return {
+      error:
+        getErrorEntry('MATCH_INVOICE_TX_FX_RATE_MISSING')?.message_sv ??
+        'Transaktionen saknar valutakurs och SEK-belopp.',
+      status: 400,
+    }
+  }
+  const txAbsSek =
+    Math.round(
+      resolveSekAmount(
+        Math.abs(transaction.amount),
+        transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
+        transaction.currency,
+        transaction.exchange_rate,
+      ) * 100,
+    ) / 100
+
+  let fx: { required: false } | { required: true; rate: number; paidInInvoiceCurrency: number } = {
+    required: false,
+  }
+  if (transaction.currency !== invoice.currency) {
+    let rate: number | null = null
+    try {
+      const rateInfo = await fetchExchangeRate(
+        invoice.currency as Currency,
+        new Date(transaction.date),
+        supabase,
+      )
+      if (rateInfo && rateInfo.rate > 0) rate = rateInfo.rate
+    } catch {
+      rate = null
+    }
+    if (rate == null) {
+      return {
+        error:
+          getErrorEntry('MATCH_INVOICE_FX_RATE_UNAVAILABLE')?.message_sv ??
+          'Ingen valutakurs tillgänglig för betalningsdatumet.',
+        status: 400,
+      }
+    }
+    fx = {
+      required: true,
+      rate,
+      paidInInvoiceCurrency: Math.round((txAbsSek / rate) * 10000) / 10000,
+    }
+  }
+  const paidAmount = fx.required ? fx.paidInInvoiceCurrency : transaction.amount
+
   // Overshoot guard + paid/remaining math: shared with the dashboard and v1
   // routes via planInvoicePayment. This agent/MCP path previously had NO guard,
   // so a 1500 payment on a 1000 invoice was silently accepted (paid_amount >
-  // total, AR over-credited). Runs BEFORE the storno + JE below, so a rejected
-  // match leaves the transaction untouched and never burns a voucher number.
-  const paidAmount = transaction.amount
-  const payment = planInvoicePayment(invoice, paidAmount)
+  // total, AR over-credited). Pure-SEK settlements absorb sub-krona
+  // öresavrundning (booked to 3740 by buildInvoicePaymentClearingLines) so a
+  // whole-krona payment settles in full, exactly as on the other two routes.
+  // Runs BEFORE the storno + JE below, so a rejected match leaves the
+  // transaction untouched and never burns a voucher number.
+  const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
+  const payment = planInvoicePayment(invoice, paidAmount, { absorbOreRounding: pureSek })
   if (!payment.ok) {
     return {
       error:
@@ -2696,11 +2761,60 @@ async function commitMatchTransactionInvoice(
       )
       journalEntryId = je?.id ?? null
     } else {
-      const je = await createInvoicePaymentJournalEntry(
-        supabase, companyId, userId, invoice as Invoice, transaction.date, undefined, invoice.customer?.name, paidAmount,
-        paymentAccount,
-      )
-      journalEntryId = je?.id ?? null
+      // Clearing entry against 1510, built by the SAME shared helper the
+      // dashboard and v1 routes use, so all three produce byte-identical
+      // lines: bank leg = the actual SEK that hit the account, 1510 credited
+      // at the invoice's booking rate, and a 3960/7960 FX-diff line (or a
+      // 3740 öresavrundning line on pure SEK) making the verifikat balance.
+      // The old createInvoicePaymentJournalEntry(paidAmount) shape could not
+      // carry either residual, so öre-settled and cross-currency matches
+      // left 1510 unclean. Failure semantics preserved: no fiscal period
+      // still soft-fails to journalEntryId = null like the old builder did.
+      const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
+      if (!fiscalPeriodId) {
+        log.warn('No open fiscal period found for payment date:', transaction.date)
+      } else {
+        const desc = invoice.customer?.name
+          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
+          : `Inbetalning kundfaktura ${invoice.invoice_number}`
+        const { lines: clearingLines } = buildInvoicePaymentClearingLines(
+          {
+            amount: transaction.amount,
+            amount_sek: transaction.amount_sek ?? null,
+            currency: transaction.currency,
+            exchange_rate: transaction.exchange_rate ?? null,
+          },
+          {
+            currency: invoice.currency,
+            exchange_rate: invoice.exchange_rate ?? null,
+            remaining_amount: invoice.remaining_amount ?? null,
+            total: invoice.total,
+            paid_amount: invoice.paid_amount ?? null,
+          },
+          desc,
+          fx.required ? fx.paidInInvoiceCurrency : undefined,
+          paymentAccount,
+        )
+        // Re-propagate the invoice's default dimension bag onto every leg,
+        // including the FX result lines, so a project's kursvinst/kursförlust
+        // stays inside the project P&L: the shared line-builder is
+        // dimension-agnostic.
+        const defaultDimensions = coerceDimensionsBag(
+          (invoice as { default_dimensions?: unknown }).default_dimensions,
+        )
+        if (defaultDimensions) {
+          for (const line of clearingLines) line.dimensions = { ...defaultDimensions }
+        }
+        const je = await createJournalEntry(supabase, companyId, userId, {
+          fiscal_period_id: fiscalPeriodId,
+          entry_date: transaction.date,
+          description: desc,
+          source_type: 'invoice_paid',
+          source_id: invoice.id,
+          lines: clearingLines,
+        })
+        journalEntryId = je?.id ?? null
+      }
     }
   } catch (err) {
     // Recoverable: the dispatcher releases the op back to 'pending' and this
@@ -2761,7 +2875,7 @@ async function commitMatchTransactionInvoice(
     payment_date: transaction.date,
     amount: paidAmount,
     currency: invoice.currency,
-    exchange_rate: invoice.exchange_rate,
+    exchange_rate: fx.required ? fx.rate : invoice.exchange_rate,
     journal_entry_id: journalEntryId,
     transaction_id: transactionId,
     notes: null,
