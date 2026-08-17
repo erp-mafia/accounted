@@ -947,28 +947,26 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     let cancelled = false
     // The ceiling follows the year the buyer PAID (Skatteverket attributes the
     // skattereduktion to the payment year), so paid invoices count by paid_at
-    // and open ones by invoice_date. Paginated: PostgREST caps plain selects.
-    const yearStart = `${invoiceYear}-01-01`
-    const yearEnd = `${invoiceYear}-12-31`
+    // and open ones by invoice_date. A customer has few deduction invoices, so
+    // fetch them all (paginated: PostgREST caps plain selects) and pick the
+    // year here rather than through a runtime-built OR filter.
     fetchAllRows<{
       id: string
       currency: string | null
       exchange_rate: number | null
+      paid_at: string | null
+      invoice_date: string
       invoice_items: Array<{ deduction_type: 'rot' | 'rut' | null; deduction_amount: number | null }> | null
     }>(({ from, to }) =>
       supabase
         .from('invoices')
-        .select('id, currency, exchange_rate, invoice_items(deduction_type, deduction_amount)')
+        .select('id, currency, exchange_rate, paid_at, invoice_date, invoice_items(deduction_type, deduction_amount)')
         .eq('company_id', company.id)
         .eq('customer_id', watchCustomerId)
         .eq('document_type', 'invoice')
         .is('credited_invoice_id', null)
         .not('status', 'in', '(draft,cancelled,credited)')
         .gt('deduction_total', 0)
-        .or(
-          `and(paid_at.gte.${yearStart},paid_at.lte.${yearEnd}T23:59:59),` +
-            `and(paid_at.is.null,invoice_date.gte.${yearStart},invoice_date.lte.${yearEnd})`,
-        )
         .order('id')
         .range(from, to),
     )
@@ -977,6 +975,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         const totals: PriorYearDeductions = { rot: 0, rut: 0 }
         for (const inv of data) {
           if (initial?.id && inv.id === initial.id) continue
+          if ((inv.paid_at ?? inv.invoice_date ?? '').slice(0, 4) !== invoiceYear) continue
           const isSek = !inv.currency || inv.currency === 'SEK'
           const rate = inv.exchange_rate
           if (!isSek && !(typeof rate === 'number' && rate > 0)) continue
