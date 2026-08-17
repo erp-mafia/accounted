@@ -3538,8 +3538,6 @@
     "toast_draft_updated_title": "Utkast uppdaterat",
     "toast_draft_updated_description": "Ändringarna har sparats.",
     "update_failed_title": "Kunde inte spara ändringarna",
-    "mode_invoice": "Faktura",
-    "mode_self_billed": "Självfaktura",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
     "review_dialog_title_invoice": "Granska faktura",
     "review_dialog_title_proforma": "Granska proformafaktura",

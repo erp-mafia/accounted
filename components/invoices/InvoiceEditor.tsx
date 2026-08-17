@@ -17,7 +17,6 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency } from '@/lib/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
@@ -173,12 +172,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const ts = useTranslations('self_billing')
   const ta = useTranslations('accruals')
   const tCommon = useTranslations('common')
-  // Toggle between a normal customer invoice (default) and registering a
-  // self-billing invoice we received (mottagen självfaktura, ML 17 kap 15§).
-  // Self-billing is never available when editing an existing draft.
-  const [mode, setMode] = useState<'invoice' | 'self_billed'>(
-    props.initialSelfBilled && !isEditMode ? 'self_billed' : 'invoice',
-  )
+  // Normal customer invoice (default) or a received self-billing invoice
+  // (mottagen självfaktura, ML 17 kap 15§). The mode is chosen upstream in
+  // the Ny faktura split button (?self=1) and is fixed for the editor's
+  // lifetime: the two flows are separate views, not tabs (founder call
+  // 2026-08-17). Self-billing is never available when editing a draft.
+  const mode: 'invoice' | 'self_billed' =
+    props.initialSelfBilled && !isEditMode ? 'self_billed' : 'invoice'
   // Company-wide opt-in from the invoice settings page: the whole payment
   // link section (manual field + Stripe auto toggle) stays hidden until the
   // company enables it. The send routes enforce the same setting server-side
@@ -1793,15 +1793,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             )}
           </Heading>
         </div>
-
-        {!isEditMode && !isCopyMode && (
-          <Tabs value={mode} onValueChange={(v) => setMode(v as 'invoice' | 'self_billed')} className="mt-4">
-            <TabsList>
-              <TabsTrigger value="invoice">{t('mode_invoice')}</TabsTrigger>
-              <TabsTrigger value="self_billed">{t('mode_self_billed')}</TabsTrigger>
-            </TabsList>
-          </Tabs>
-        )}
 
         {isCopyMode && copyInitial && (
           <div className="mt-4 flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm">

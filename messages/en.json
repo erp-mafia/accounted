@@ -3538,8 +3538,6 @@
     "toast_draft_updated_title": "Draft updated",
     "toast_draft_updated_description": "Your changes have been saved.",
     "update_failed_title": "Could not save your changes",
-    "mode_invoice": "Invoice",
-    "mode_self_billed": "Self-billing",
     "viewer_disabled_tooltip": "You only have read-only access to this company",
     "review_dialog_title_invoice": "Review invoice",
     "review_dialog_title_proforma": "Review proforma invoice",
