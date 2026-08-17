@@ -761,8 +761,21 @@ export async function getReconciliationStatus(
   // dateFrom and that IB date; it only ever RAISES the lower bound, so the
   // dateFrom SQL pre-filter on both queries above stays valid. In normal use the
   // UI passes dateFrom = period_start = the IB date, so this is a no-op there.
+  //
+  // Only a POSTED opening balance is an IB. A stornerad IB (status 'reversed')
+  // has been economically nulled by its storno: both lines still sit in
+  // countedLines and cancel inside glBalance, exactly as on the balansräkning,
+  // but neither may be treated as the period's IB. Counting the reversed one
+  // here (and in glOpeningBalance below) re-added the cancelled amount once
+  // more and manufactured a phantom difference equal to the IB after a
+  // perfectly correct rättelse. Same rule the canonical opening-balance RPC
+  // applies (compute_prior_opening_balances, 20260421180000).
+  const isLiveOpeningBalanceLine = (l: GlLineRow): boolean => {
+    const entry = entryOf(l)
+    return entry?.source_type === 'opening_balance' && entry?.status === 'posted'
+  }
   const ibDates = fetchedLines
-    .filter((l) => entryOf(l)?.source_type === 'opening_balance')
+    .filter(isLiveOpeningBalanceLine)
     .map((l) => entryOf(l)?.entry_date)
     .filter((d): d is string => typeof d === 'string' && d.length > 0)
   // Take the LATEST IB date. The invariant is one opening_balance entry per
@@ -811,8 +824,10 @@ export async function getReconciliationStatus(
   const glBalance = countedLines.reduce((sum, line) => sum + lineAmount(line), 0)
   // IB is last year's closing position, not a movement with a bank-feed
   // counterpart, surfaced separately and excluded from the period movement.
+  // Posted IB lines only (see isLiveOpeningBalanceLine): a reversed IB and its
+  // storno stay in glBalance where they net to zero.
   const glOpeningBalance = countedLines
-    .filter((l) => entryOf(l)?.source_type === 'opening_balance')
+    .filter(isLiveOpeningBalanceLine)
     .reduce((sum, line) => sum + lineAmount(line), 0)
   // Net storno/correction activity on the account this period. Surfaced for
   // transparency ONLY: it is part of the ledger balance and is INCLUDED in the
