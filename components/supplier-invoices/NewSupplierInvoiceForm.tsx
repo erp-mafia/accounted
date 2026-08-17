@@ -1469,8 +1469,11 @@ export default function NewSupplierInvoiceForm({
       ? t('register_invoice')
       : t('review_and_register')
 
+  // min-w-0 on the root: DialogContent is display:grid; without it this grid
+  // item's min-width:auto lets the kontering table's min-w force the whole
+  // column wider than small viewports and the dialog clips it.
   return (
-    <div className={bare ? 'relative' : 'relative max-w-2xl'}>
+    <div className={bare ? 'relative min-w-0' : 'relative min-w-0 max-w-2xl'}>
       {/* In bare (dialog) mode the dialog renders the title. */}
       {!bare && (
         <div className="mb-6 flex items-center gap-4">
@@ -2393,7 +2396,7 @@ export default function NewSupplierInvoiceForm({
                 {formatCurrency(displayRounding.displayed, watchedCurrency)}
               </strong>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center justify-end gap-3">
               <button
                 type="button"
                 className={cn(QUIET_LINK_CLASS, 'disabled:opacity-50')}
