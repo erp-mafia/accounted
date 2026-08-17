@@ -174,6 +174,28 @@ export const POST = withRouteContext(
       }
     }
 
+    // Icke momsregistrerad verksamhet has no deduction right for input VAT
+    // (ML 8 kap. 3 §): a line carrying moms would book 2641 the company can
+    // never reclaim. The form hides the moms controls; this rejects the same
+    // input arriving via API/MCP. Reverse charge stays allowed: self-assessment
+    // is a separate obligation from deduction.
+    const { data: vatSettings } = await supabase
+      .from('company_settings')
+      .select('vat_registered')
+      .eq('company_id', companyId)
+      .single()
+    const vatRegistered = vatSettings?.vat_registered !== false
+    if (
+      !vatRegistered &&
+      !body.reverse_charge &&
+      body.items.some((item) => (item.vat_rate ?? 0) > 0 || (item.vat_amount ?? 0) > 0)
+    ) {
+      return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+        requestId,
+        details: { reason: 'company is not VAT-registered; supplier invoice lines cannot carry moms' },
+      })
+    }
+
     const { data: supplier, error: supplierError } = await supabase
       .from('suppliers')
       .select('*')
@@ -236,7 +258,9 @@ export const POST = withRouteContext(
     }
 
     const items = body.items.map((item, index) => {
-      const vatRate = item.vat_rate ?? 0.25
+      // An omitted rate defaults to 25 % only for VAT-registered companies;
+      // icke momsregistrerade book the gross amount with no moms line.
+      const vatRate = item.vat_rate ?? (vatRegistered ? 0.25 : 0)
       const lineTotal = item.amount != null
         ? Math.round(item.amount * 100) / 100
         : Math.round((item.quantity ?? 1) * (item.unit_price ?? 0) * 100) / 100
