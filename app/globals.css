@@ -616,6 +616,18 @@ summary,
 .stagger-enter > *:nth-child(9) { animation-delay: 320ms; }
 .stagger-enter > *:nth-child(n+10) { animation-delay: 360ms; }
 
+/* Quiet settle for a freshly committed row (invoice editor line entry): a
+   brief beige wash that fades to transparent, confirming where the row
+   landed without moving anything. The global reduced-motion rule above
+   collapses it to an instant no-op. */
+@keyframes row-settle {
+  from { background-color: hsl(var(--secondary) / 0.7); }
+  to { background-color: transparent; }
+}
+.row-settle {
+  animation: row-settle 0.6s ease-out both;
+}
+
 /* Row exit (booking/ignore/delete in dry-table lists). The page keeps the
    row rendered for a 350ms window (see finishBooking on /transactions) and
    marks it .row-exit; the row fades fast, then the space closes by

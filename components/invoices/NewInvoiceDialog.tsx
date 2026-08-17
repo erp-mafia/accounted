@@ -139,7 +139,10 @@ export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogVeil />
       <DialogContent
-        className="sm:max-w-5xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
+        // p-0/gap-0: the bare editor carries its own padding so its sticky
+        // action bar can sit flush against the dialog's bottom edge (position
+        // sticky binds to this DialogContent, the scroll container).
+        className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto p-0 gap-0"
         // A half-typed invoice must survive an accidental backdrop click or a
         // stray Escape (nested comboboxes and date pickers portal outside the
         // dialog). Closing is explicit: the header X. Same convention as
