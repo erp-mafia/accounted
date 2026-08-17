@@ -4,6 +4,7 @@ import {
   generateReminderEmailHtml,
   generateReminderEmailText,
   generateReminderEmailSubject,
+  reminderPrincipal,
   getReminderDaysConfig,
   type ReminderDaysConfig,
 } from '@/lib/email/reminder-templates'
@@ -291,8 +292,11 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     // Compute statutory late-payment interest (Räntelagen §6) using the
     // company override if set, else Riksbankens referensränta + 8 pp.
     const asOfDate = new Date().toISOString().split('T')[0]
+    // Interest accrues on what the customer actually owes: the invoice's
+    // "Att betala" (öre-rounded total minus any ROT/RUT-avdrag), never on the
+    // Skatteverket share sitting on 1513.
     const interest = calculateLatePaymentInterest({
-      overdueAmount: invoice.total,
+      overdueAmount: reminderPrincipal(invoice as Invoice, company as CompanySettings),
       dueDate: invoice.due_date,
       asOfDate,
       overrideRate: company.reminder_interest_rate_override,

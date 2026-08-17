@@ -496,6 +496,23 @@ describe('CreateInvoiceItemSchema', () => {
     expect(result.success).toBe(false)
   })
 
+  it('ROT/RUT line: requires a same-kind arbetstyp and hours > 0 (schablon exempt from hours)', () => {
+    const paths = (r: ReturnType<typeof CreateInvoiceItemSchema.safeParse>) =>
+      r.success ? [] : r.error.issues.map((i) => i.path.join('.'))
+    // Missing both
+    expect(paths(CreateInvoiceItemSchema.safeParse(validInvoiceItem({ deduction_type: 'rut' })))).toEqual(
+      expect.arrayContaining(['work_type', 'labor_hours']),
+    )
+    // Wrong list
+    expect(paths(CreateInvoiceItemSchema.safeParse(validInvoiceItem({ deduction_type: 'rut', work_type: 'BYGG', labor_hours: 2 })))).toEqual(['work_type'])
+    // Complete
+    expect(CreateInvoiceItemSchema.safeParse(validInvoiceItem({ deduction_type: 'rut', work_type: 'STAD', labor_hours: 2 })).success).toBe(true)
+    // Schablontjänst: no hours needed
+    expect(CreateInvoiceItemSchema.safeParse(validInvoiceItem({ deduction_type: 'rut', work_type: 'TVATT' })).success).toBe(true)
+    // No deduction: fields irrelevant
+    expect(CreateInvoiceItemSchema.safeParse(validInvoiceItem({ deduction_type: null })).success).toBe(true)
+  })
+
   it('accepts orgnr-shaped brf_org_number values', () => {
     for (const value of ['769600-0000', '7696000000', '167696000000']) {
       const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ brf_org_number: value }))

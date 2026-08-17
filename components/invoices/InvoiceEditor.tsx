@@ -60,13 +60,16 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import {
   ROT_WORK_TYPES,
   RUT_WORK_TYPES,
-  ROT_MAX,
-  RUT_MAX,
   computeDeduction,
+  deductionCapWarnings,
   deductionTypeForWorkType,
   parseArticleHouseworkType,
+  SCHABLON_WORK_TYPES,
+  type PriorYearDeductions,
 } from '@/lib/invoices/rot-rut-rules'
 import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
+import { roundOre } from '@/lib/money'
+import { isFiscalYear } from '@/lib/invariants'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
@@ -225,6 +228,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             path: ['accrual_period_end'],
             message: ta('validation_period'),
           })
+        }
+      }
+      // ROT/RUT claim completeness, mirrored from CreateInvoiceItemSchema:
+      // arbetstyp + arbetstimmar are what the Skatteverket claim needs, and
+      // creation is the last moment the line is editable.
+      if (item.deduction_type) {
+        const workType = item.work_type?.trim() || null
+        if (!workType) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['work_type'], message: t('deduction_work_type_required') })
+        } else if (deductionTypeForWorkType(workType) !== item.deduction_type) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['work_type'], message: t('deduction_work_type_mismatch') })
+        }
+        const isSchablon = workType != null && SCHABLON_WORK_TYPES.includes(workType)
+        if (!isSchablon && !(typeof item.labor_hours === 'number' && item.labor_hours > 0)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['labor_hours'], message: t('deduction_hours_required') })
         }
       }
       if (item.line_type === 'text') return
@@ -903,6 +921,60 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const isSelfBilled = mode === 'self_billed'
   // ROT/RUT is an own-issued, B2C concept: never shown for a received self-bill.
   const isInvoiceDoc = watchDocumentType === 'invoice' && !isSelfBilled
+
+  const watchInvoiceDate = watch('invoice_date')
+
+  // ROT/RUT yearly-ceiling context: what this customer has already been
+  // granted in the invoice's calendar year (SEK), across issued invoices with
+  // a deduction. Per customer, not per personnummer (the number is only ever
+  // ciphertext here), and blind to other providers, so it feeds a warning,
+  // never a block: the customer still owns their remaining headroom.
+  const [priorYearDeductions, setPriorYearDeductions] = useState<PriorYearDeductions | null>(null)
+  const invoiceYear = (watchInvoiceDate || '').slice(0, 4)
+  useEffect(() => {
+    if (!isInvoiceDoc || !company?.id || !watchCustomerId || !isFiscalYear(invoiceYear)) {
+      setPriorYearDeductions(null)
+      return
+    }
+    let cancelled = false
+    supabase
+      .from('invoices')
+      .select('id, currency, exchange_rate, invoice_items(deduction_type, deduction_amount)')
+      .eq('company_id', company.id)
+      .eq('customer_id', watchCustomerId)
+      .eq('document_type', 'invoice')
+      .is('credited_invoice_id', null)
+      .not('status', 'in', '(draft,cancelled,credited)')
+      .gt('deduction_total', 0)
+      .gte('invoice_date', `${invoiceYear}-01-01`)
+      .lte('invoice_date', `${invoiceYear}-12-31`)
+      .then(({ data }) => {
+        if (cancelled || !data) return
+        const totals: PriorYearDeductions = { rot: 0, rut: 0 }
+        for (const inv of data as Array<{
+          id: string
+          currency: string | null
+          exchange_rate: number | null
+          invoice_items: Array<{ deduction_type: 'rot' | 'rut' | null; deduction_amount: number | null }> | null
+        }>) {
+          if (initial?.id && inv.id === initial.id) continue
+          const isSek = !inv.currency || inv.currency === 'SEK'
+          const rate = inv.exchange_rate
+          if (!isSek && !(typeof rate === 'number' && rate > 0)) continue
+          for (const it of inv.invoice_items ?? []) {
+            if (!it.deduction_type || !it.deduction_amount) continue
+            const sek = isSek ? it.deduction_amount : it.deduction_amount * (rate as number)
+            totals[it.deduction_type] += roundOre(sek)
+          }
+        }
+        setPriorYearDeductions(totals)
+      })
+    return () => {
+      cancelled = true
+    }
+    // supabase client is stable; initial?.id only changes with the invoice.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isInvoiceDoc, company?.id, watchCustomerId, invoiceYear, initial?.id])
   const deductionByKind = { rot: 0, rut: 0 }
   if (isInvoiceDoc) {
     for (const item of watchItems) {
@@ -920,7 +992,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }
   const deductionTotal = Math.round((deductionByKind.rot + deductionByKind.rut) * 100) / 100
-  const hasAnyDeduction = deductionTotal > 0
+  // Same helper as the server validator (validateInvoice → deductionCapWarnings):
+  // per-kind and shared yearly ceilings, on top of what this customer already
+  // has this year. Statutory Swedish text (Skatteverket wording, stays Swedish
+  // in both locales like the server warnings it mirrors).
+  const capWarnings = isInvoiceDoc && deductionTotal > 0
+    ? deductionCapWarnings(deductionByKind, { currency: watchCurrency }, priorYearDeductions)
+    : []
+  // Any flagged row, not only rows with a positive amount yet: the payload
+  // sanitizer and the server both key on deduction_type, so the card (with
+  // the personnummer the server will demand) must appear on the same predicate.
+  const hasAnyDeduction = deductionTotal > 0 || (isInvoiceDoc && watchItems.some((i) => Boolean(i.deduction_type)))
   const hasAnyRotLine = isInvoiceDoc && watchItems.some((i) => i.deduction_type === 'rot')
   // The kundkort's personnummer reaches this component as ciphertext (direct
   // table read) or as the masked display form (rows from the API), so the
@@ -1994,7 +2076,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                     value={workField.value ?? ''}
                                     onValueChange={(v) => workField.onChange(v || null)}
                                   >
-                                    <SelectTrigger className="h-8 w-56">
+                                    <SelectTrigger
+                                      className="h-8 w-56"
+                                      aria-label={t('deduction_work_type_placeholder')}
+                                      aria-invalid={Boolean(errors.items?.[index]?.work_type) || undefined}
+                                    >
                                       <SelectValue placeholder={t('deduction_work_type_placeholder')} />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -2014,10 +2100,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               inputMode="decimal"
                               placeholder={t('deduction_hours_placeholder')}
                               className="h-8 w-32 text-right tabular-nums"
+                              aria-label={t('deduction_hours_placeholder')}
+                              aria-invalid={Boolean(errors.items?.[index]?.labor_hours) || undefined}
                               {...register(`items.${index}.labor_hours`, {
-                                valueAsNumber: true,
-                                setValueAs: (v) =>
-                                  v === '' || Number.isNaN(v) ? null : Number(v),
+                                // valueAsNumber would override setValueAs and
+                                // turn an emptied field into NaN, which the
+                                // schema rejects with no visible error.
+                                setValueAs: (v) => {
+                                  if (v === '' || v == null) return null
+                                  const n = Number(v)
+                                  return Number.isFinite(n) ? n : null
+                                },
                               })}
                             />
                             {(() => {
@@ -2036,6 +2129,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               ) : null
                             })()}
                           </div>
+                          {(errors.items?.[index]?.work_type || errors.items?.[index]?.labor_hours) && (
+                            <p className="mt-1 text-sm text-destructive">
+                              {errors.items?.[index]?.work_type?.message ?? errors.items?.[index]?.labor_hours?.message}
+                            </p>
+                          )}
                           {/* Labor-only disclosure (Skatteverket fakturamodellen).
                               30%/50% applies to the full line total: the seller
                               must ensure the line is 100% labor; material has
@@ -2283,13 +2381,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       </p>
                     </div>
                   )}
-                  {(deductionByKind.rot > ROT_MAX || deductionByKind.rut > RUT_MAX) && (
-                    <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                      {t('deduction_cap_over')}
-                      {deductionByKind.rot > ROT_MAX && ` (ROT ${ROT_MAX.toLocaleString('sv-SE')} kr)`}
-                      {deductionByKind.rut > RUT_MAX && ` (RUT ${RUT_MAX.toLocaleString('sv-SE')} kr)`}
-                      {'. '}
-                      {t('deduction_cap_check')}
+                  {capWarnings.length > 0 && (
+                    <div className="space-y-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                      {capWarnings.map((w) => (
+                        <p key={w}>{w}</p>
+                      ))}
                     </div>
                   )}
                 </CardContent>

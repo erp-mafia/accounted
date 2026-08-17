@@ -165,6 +165,7 @@ export default function PaymentBookingDialog({
             items: invoice.items,
             default_dimensions: invoice.default_dimensions,
             ore_rounding: invoice.ore_rounding,
+            deduction_total: invoice.deduction_total,
           },
           accountingMethod,
           entityType,

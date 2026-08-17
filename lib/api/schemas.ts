@@ -13,7 +13,13 @@ import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
-import { HOUSEWORK_TYPE_VALUES, normalizeHouseworkType } from '@/lib/invoices/rot-rut-rules'
+import {
+  DEDUCTION_LINE_ERRORS,
+  HOUSEWORK_TYPE_VALUES,
+  SCHABLON_WORK_TYPES,
+  deductionTypeForWorkType,
+  normalizeHouseworkType,
+} from '@/lib/invoices/rot-rut-rules'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
 import type { AuditAction } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
@@ -451,6 +457,21 @@ export const CreateInvoiceItemSchema = z
           path: ['accrual_period_start'],
           message: 'Endast rader med positivt belopp kan periodiseras',
         })
+      }
+    }
+    // ROT/RUT claim completeness (HUSFL: art av arbete + antal arbetstimmar).
+    // Field-level here so the editor can point at the row; the same rules run
+    // again in validateInvoice for callers that bypass this schema.
+    if (item.deduction_type) {
+      const workType = item.work_type?.trim() || null
+      if (!workType) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['work_type'], message: DEDUCTION_LINE_ERRORS.workTypeMissing })
+      } else if (deductionTypeForWorkType(workType) !== item.deduction_type) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['work_type'], message: DEDUCTION_LINE_ERRORS.workTypeMismatch })
+      }
+      const isSchablon = workType != null && SCHABLON_WORK_TYPES.includes(workType)
+      if (!isSchablon && !(typeof item.labor_hours === 'number' && item.labor_hours > 0)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['labor_hours'], message: DEDUCTION_LINE_ERRORS.hoursMissing })
       }
     }
     // Free-text rows skip the product-line requirements (description may be
