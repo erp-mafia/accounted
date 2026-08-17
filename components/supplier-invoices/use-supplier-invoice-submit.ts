@@ -56,7 +56,10 @@ interface UseSupplierInvoiceSubmitParams {
    * in the same priority order as the next-step line. Optional so the hook
    * can ship before the shell rebuild wires it.
    */
-  onMissingField?: (field: 'supplier' | 'invoice_number' | 'row_account', rowIndex?: number) => void
+  onMissingField?: (
+    field: 'supplier' | 'invoice_number' | 'rows' | 'row_account',
+    rowIndex?: number,
+  ) => void
 }
 
 /**
@@ -215,6 +218,20 @@ export function useSupplierInvoiceSubmit({
     if (!data.supplier_invoice_number) {
       if (onMissingField) onMissingField('invoice_number')
       else toast({ title: t('invoice_number_missing_title'), description: t('invoice_number_missing_description'), variant: 'destructive' })
+      return
+    }
+    // The dokument-först table starts with zero rows (the ghost entry row is
+    // never part of form state): an empty items array must route to the entry
+    // input instead of slipping past the per-row account check below.
+    if (data.items.length === 0) {
+      if (onMissingField) onMissingField('rows')
+      else {
+        toast({
+          title: t('account_missing_title'),
+          description: t('account_missing_description', { row: 1 }),
+          variant: 'destructive',
+        })
+      }
       return
     }
     const rowWithoutAccount = data.items.findIndex((item) => !item.account_number)

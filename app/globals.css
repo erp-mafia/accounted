@@ -825,3 +825,16 @@ input[type="number"] {
     opacity: 0.35;
   }
 }
+
+/* Brief sage settle tint on tolkning-filled fields (supplier-invoice
+   dokument-först flow): the field flashes softly as the extraction lands and
+   fades back to its normal surface. Runs once per class application; the
+   global prefers-reduced-motion block collapses the animation, so reduced
+   motion sees the filled value with no flash. */
+@keyframes prefill-settle {
+  0% { background-color: hsl(var(--success) / 0.16); }
+  100% { background-color: transparent; }
+}
+.prefill-settle {
+  animation: prefill-settle 0.9s ease-out both;
+}

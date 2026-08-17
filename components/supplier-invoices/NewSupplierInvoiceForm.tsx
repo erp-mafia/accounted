@@ -1,34 +1,41 @@
 'use client'
 
-import { Fragment, useState, useEffect, useRef } from 'react'
+import { Fragment, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { useForm, Controller, useFieldArray } from 'react-hook-form'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import AiFilledIndicator from '@/components/ui/ai-filled-indicator'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { SupplierInvoiceReviewContent } from '@/components/suppliers/SupplierInvoiceReviewContent'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
-import DocumentUploadZone, { type UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
+import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import {
   findReverseChargeAccountWarningRows,
@@ -44,8 +51,8 @@ import { VatRateCell, RcRateSelect } from '@/components/supplier-invoices/suppli
 import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-supplier-invoice-data'
 import { useInboxPrefill } from '@/components/supplier-invoices/use-inbox-prefill'
 import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-supplier-invoice-submit'
-import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, Link2, CalendarClock, Tags, Paperclip } from 'lucide-react'
-import type { Supplier } from '@/types'
+import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, Link2, CalendarClock, Tags, FileText } from 'lucide-react'
+import type { Supplier, InvoiceExtractionResult } from '@/types'
 
 // The form's line/field shapes live in lib/supplier-invoices/form-payload.ts
 // next to the payload builder they feed, pinned there by parity tests.
@@ -70,6 +77,15 @@ function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+// Accepts sv-SE formatted numbers ("12 345,67" with regular, no-break or
+// narrow no-break group separators) as well as plain "12345.67".
+function parseFlexibleNumber(s: string): number | null {
+  const cleaned = s.replace(/[\s  ]/g, '').replace(',', '.')
+  if (!cleaned) return null
+  const n = parseFloat(cleaned)
+  return Number.isFinite(n) ? n : null
+}
+
 const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
   name: '',
   supplier_type: 'swedish_business',
@@ -81,6 +97,38 @@ const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
   default_expense_account: '',
 }
 
+// Dense in-table inputs: leaf tier inside the Kontering table surface.
+const CELL_INPUT_CLASS =
+  'h-8 rounded-sm border-transparent bg-transparent px-2 text-[13px] hover:bg-secondary/60 focus-visible:bg-card'
+// Row controls: 24x24 hit area (pre-approved dense-row exception to the 40px
+// icon-button floor), revealed on hover/focus-within, always on coarse pointers.
+const ROW_ICON_BTN_CLASS =
+  'inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground'
+
+const UNDERLAG_ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
+const UNDERLAG_ACCEPT_ATTR = '.pdf,.jpg,.jpeg,.png,.webp'
+const UNDERLAG_MAX_SIZE = 10 * 1024 * 1024
+
+// A deferred web upload returns an empty extraction skeleton (confidence 0)
+// while processing; only apply a prefill that actually carries content.
+function hasExtractionContent(e: InvoiceExtractionResult | null | undefined): boolean {
+  if (!e) return false
+  return Boolean(
+    e.supplier?.name ||
+      e.invoice?.invoiceNumber ||
+      e.invoice?.invoiceDate ||
+      (e.lineItems && e.lineItems.length > 0) ||
+      e.totals?.total != null,
+  )
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <div className="mb-3 text-[11px] uppercase tracking-[0.07em] text-muted-foreground">
+      {children}
+    </div>
+  )
+}
 
 export interface NewSupplierInvoiceFormProps {
   /** Invoice-inbox item to convert; prefills the form from its AI extraction. */
@@ -153,12 +201,53 @@ export default function NewSupplierInvoiceForm({
   const [showNewSupplier, setShowNewSupplier] = useState(false)
   const [isCreatingSupplier, setIsCreatingSupplier] = useState(false)
   const [pendingSupplierSelect, setPendingSupplierSelect] = useState<string | null>(null)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [newSupplier, setNewSupplier] = useState<NewSupplierForm>(EMPTY_NEW_SUPPLIER)
   const [documentFiles, setDocumentFiles] = useState<UploadedFile[]>([])
   const documentFilesRef = useRef<UploadedFile[]>([])
   const createFinishedRef = useRef(false)
   const invoiceNumberInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Dokument-först state: a standalone upload routed through the invoice-inbox
+  // pipeline gets an inbox item id (extraction + convert endpoint); a fallback
+  // upload through /api/documents stays a plain attached document.
+  const [uploadedInboxItemId, setUploadedInboxItemId] = useState<string | null>(null)
+  const uploadedInboxItemIdRef = useRef<string | null>(null)
+  const [extractionPhase, setExtractionPhase] = useState<'idle' | 'processing' | 'done'>('idle')
+  const extractionPollTokenRef = useRef(0)
+  const underlagInputRef = useRef<HTMLInputElement | null>(null)
+  const [isDraggingUnderlag, setIsDraggingUnderlag] = useState(false)
+
+  // Fields the tolkning just filled: they get the brief settle tint (the CSS
+  // animation is gated on prefers-reduced-motion in globals.css).
+  const [settledFields, setSettledFields] = useState<Set<string>>(() => new Set())
+
+  // Terms-based due date (change 4): auto-filled from the supplier's
+  // default_payment_terms until the user (or the AI) sets it explicitly.
+  const dueDateManualRef = useRef(false)
+  const lastAutoDueRef = useRef<string | null>(null)
+  const [dueDateCaption, setDueDateCaption] = useState<
+    { type: 'terms'; days: number } | { type: 'on_invoice' } | null
+  >(null)
+
+  // Pre-submit duplicate advisory (change 3): debounced lookup against
+  // GET /api/supplier-invoices/exists; the create route's 409 stays the backstop.
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    number: string
+    existingId: string | null
+  } | null>(null)
+  const duplicateSeqRef = useRef(0)
+
+  // Total cross-check (change 2): client-only compare, never in the payload.
+  const [fakturaTotalStr, setFakturaTotalStr] = useState('')
+
+  // Shell state
+  const [forvalOpen, setForvalOpen] = useState(false)
+  const [supplierMenuOpen, setSupplierMenuOpen] = useState(false)
+  const supplierTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const entryInputRef = useRef<HTMLInputElement | null>(null)
+  const [entryResetKey, setEntryResetKey] = useState(0)
+  const amountInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
+  const accountInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
 
   const { register, control, handleSubmit, watch, setValue, getValues, reset, formState: { isDirty } } = useForm<FormData>({
     defaultValues: {
@@ -173,11 +262,10 @@ export default function NewSupplierInvoiceForm({
       payment_reference: '',
       notes: '',
       paid_with_private_funds: false,
-      // account_number is deliberately empty: a silent prefilled expense
-      // account (the old '5010' Lokalhyra seed) produced legally wrong
-      // verifikat whenever the user didn't notice it. An explicit choice is
-      // required; the supplier's default_expense_account fills it when set.
-      items: [{ description: '', amount: 0, account_number: '', vat_rate: 0.25, reverse_charge_rate: 0.25 }],
+      // The table starts empty: the ghost entry row (never part of form
+      // state) is the only way rows are born, so no silent prefilled expense
+      // account can ever reach a verifikat unnoticed.
+      items: [],
     },
   })
 
@@ -187,8 +275,27 @@ export default function NewSupplierInvoiceForm({
     documentFilesRef.current = documentFiles
   }, [documentFiles])
 
+  useEffect(() => {
+    uploadedInboxItemIdRef.current = uploadedInboxItemId
+  }, [uploadedInboxItemId])
+
+  // Stop any in-flight extraction poll on unmount.
+  useEffect(() => () => {
+    extractionPollTokenRef.current += 1
+  }, [])
+
   useEffect(() => () => {
     if (inboxItemId || createFinishedRef.current) return
+    // A standalone upload that went through the inbox pipeline created an
+    // inbox item alongside the document: clean up both (same orphan-cleanup
+    // contract as the plain path; the item DELETE 409s if it was converted).
+    const itemId = uploadedInboxItemIdRef.current
+    if (itemId) {
+      void fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`, {
+        method: 'DELETE',
+        keepalive: true,
+      })
+    }
     for (const file of documentFilesRef.current) {
       if (file.status === 'uploaded' && file.id) {
         void fetch(`/api/documents/${file.id}`, { method: 'DELETE', keepalive: true })
@@ -210,9 +317,39 @@ export default function NewSupplierInvoiceForm({
   const watchedInvoiceDate = watch('invoice_date')
   const watchedDueDate = watch('due_date')
   const watchedPaymentReference = watch('payment_reference')
+  const watchedDeliveryDate = watch('delivery_date')
+  const watchedNotes = watch('notes')
   const documentUploadInProgress = documentFiles.some((file) => file.status === 'uploading')
   const documentUploadFailed = documentFiles.some((file) => file.status === 'error')
   const uploadedDocumentId = documentFiles.find((file) => file.status === 'uploaded')?.id
+
+  // Settle-tint bookkeeping: applyInboxItem reports every field it fills.
+  const markSettled = useCallback((field: string) => {
+    setSettledFields((prev) => {
+      const next = new Set(prev)
+      next.add(field)
+      return next
+    })
+  }, [])
+
+  const handleFieldPrefilled = useCallback(
+    (field: string) => {
+      if (field === 'due_date') {
+        // An AI-extracted due date is an explicit value: the terms-based
+        // auto-update must never overwrite it.
+        dueDateManualRef.current = true
+        setDueDateCaption(null)
+      }
+      markSettled(field)
+    },
+    [markSettled],
+  )
+
+  useEffect(() => {
+    if (settledFields.size === 0) return
+    const timer = setTimeout(() => setSettledFields(new Set()), 1200)
+    return () => clearTimeout(timer)
+  }, [settledFields])
 
   const {
     extractedData,
@@ -221,6 +358,7 @@ export default function NewSupplierInvoiceForm({
     setHasMatchedSupplier,
     isLoadingInbox,
     hasPrefilled,
+    applyInboxItem,
   } = useInboxPrefill({
     inboxItemId,
     suppliersLoaded,
@@ -231,6 +369,7 @@ export default function NewSupplierInvoiceForm({
     getValues,
     toast,
     t,
+    onFieldPrefilled: handleFieldPrefilled,
   })
 
   // Returns true when the field currently matches whatever the AI wrote
@@ -283,8 +422,8 @@ export default function NewSupplierInvoiceForm({
     suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type,
   )
 
-  // Auto-fill due date and defaults when supplier is selected: but never
-  // overwrite a value the AI already filled in for us.
+  // Auto-fill defaults when supplier is selected: but never overwrite a value
+  // the AI already filled in for us.
   const [templateAccountNote, setTemplateAccountNote] = useState<{ account: string; counterparty: string } | null>(null)
   // Rows planted by the counterparty-history prefill, so a supplier SWITCH can
   // un-plant them: without this, supplier A's history account survives into
@@ -313,13 +452,21 @@ export default function NewSupplierInvoiceForm({
     pendingAccountFillRef.current = null
     const items = getValues('items')
     const appliedRows: number[] = []
-    items.forEach((row, i) => {
-      if (!row.account_number) {
-        // Same path as a manual pick: konto default moms rides along.
-        handleAccountChange(i, account)
-        appliedRows.push(i)
-      }
-    })
+    if (items.length === 0) {
+      // Dokument-först model: the table starts with no rows, so a supplier
+      // default (or history) account plants the first row instead of filling
+      // an empty one. Same side effects as a manual pick (konto default moms,
+      // description from the account name).
+      appliedRows.push(appendRowForAccount(account))
+    } else {
+      items.forEach((row, i) => {
+        if (!row.account_number) {
+          // Same path as a manual pick: konto default moms rides along.
+          handleAccountChange(i, account)
+          appliedRows.push(i)
+        }
+      })
+    }
     if (appliedRows.length > 0 && plant && counterparty) {
       plantedRef.current = { account, rows: appliedRows }
       setTemplateAccountNote({ account, counterparty })
@@ -336,27 +483,29 @@ export default function NewSupplierInvoiceForm({
     if (plantedRef.current) {
       const { account, rows } = plantedRef.current
       const planted = getValues('items')
-      rows.forEach((i) => {
+      // Planted rows the user never touched (amount still 0) are removed
+      // outright: in the empty-start table a planted row IS the row, not just
+      // an account on one. Rows the user gave an amount keep their data; only
+      // the stale account is cleared (handleAccountChange reapplies konto
+      // defaults on the next fill or manual pick). Descending order keeps the
+      // remaining indices valid while removing.
+      ;[...rows].sort((a, b) => b - a).forEach((i) => {
         if (planted[i]?.account_number === account) {
-          // Clear only the account; the rate is left for the next fill or
-          // manual pick to settle (handleAccountChange reapplies konto
-          // defaults), so an AI-extracted rate is never clobbered here.
-          setValue(`items.${i}.account_number`, '')
+          if (!planted[i]?.amount) {
+            remove(i)
+          } else {
+            setValue(`items.${i}.account_number`, '')
+          }
         }
       })
       plantedRef.current = null
     }
 
-    const invoiceDate = watch('invoice_date')
-    const currentDue = watch('due_date')
-    if (invoiceDate && !currentDue) {
-      const due = new Date(invoiceDate)
-      due.setDate(due.getDate() + supplier.default_payment_terms)
-      setValue('due_date', due.toISOString().split('T')[0])
-    }
-    if (supplier.default_expense_account && fields.length > 0) {
-      // Fill every row the user hasn't assigned yet: an empty account is the
-      // only signal needed (rows start empty by design, no seeded default).
+    applySupplierTerms(supplier)
+
+    if (supplier.default_expense_account) {
+      // Fill every row the user hasn't assigned yet (or plant the first row
+      // when the table is empty): an empty account is the only signal needed.
       // Routed through the fill request so it waits for the BAS chart and the
       // konto's default moms comes along exactly like a manual pick.
       requestAccountFill(supplier.default_expense_account, false)
@@ -374,7 +523,7 @@ export default function NewSupplierInvoiceForm({
     // templates (P&L cost on debit, settlement on credit; the 4-8 gate keeps
     // private/balance-sheet templates like 2013 or 1630 out). Best-effort: on
     // any miss the rows simply stay blank, exactly as before.
-    if (!supplier.default_expense_account && fields.length > 0 && supplier.name?.trim()) {
+    if (!supplier.default_expense_account && supplier.name?.trim()) {
       let cancelled = false
       ;(async () => {
         try {
@@ -399,6 +548,91 @@ export default function NewSupplierInvoiceForm({
     return undefined
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedSupplierId, suppliers])
+
+  function computeDueDate(invoiceDate: string, days: number): string {
+    const due = new Date(invoiceDate)
+    due.setDate(due.getDate() + days)
+    return due.toISOString().split('T')[0]
+  }
+
+  // Terms-based förfallodatum (change 4). Auto-set from the supplier's
+  // default_payment_terms with an honest caption; stops updating the moment
+  // the user (or the AI extraction) supplies an explicit date.
+  function applySupplierTerms(supplier: Supplier) {
+    if (dueDateManualRef.current) return
+    const invoiceDate = watch('invoice_date')
+    const currentDue = watch('due_date')
+    // Never overwrite a due date we did not auto-set ourselves (the AI
+    // prefill flips the manual flag, but keep the value guard as defense
+    // in depth).
+    if (currentDue && currentDue !== lastAutoDueRef.current) return
+    const days = supplier.default_payment_terms
+    if (days && days > 0) {
+      if (invoiceDate) {
+        const due = computeDueDate(invoiceDate, days)
+        setValue('due_date', due)
+        lastAutoDueRef.current = due
+      }
+      setDueDateCaption({ type: 'terms', days })
+    } else {
+      // default_payment_terms is non-null in the DB (default 30), so 30 IS
+      // terms; only an explicit 0 means the supplier has none and the due
+      // date stands on the invoice.
+      if (currentDue) setValue('due_date', '')
+      lastAutoDueRef.current = null
+      setDueDateCaption({ type: 'on_invoice' })
+    }
+  }
+
+  // Re-derive an auto-set due date when the invoice date changes: manual or
+  // AI-set dates are left alone via the same guards as applySupplierTerms.
+  useEffect(() => {
+    if (!watchedSupplierId || dueDateManualRef.current) return
+    const supplier = suppliers.find((s) => s.id === watchedSupplierId)
+    if (!supplier) return
+    const currentDue = getValues('due_date')
+    if (currentDue && currentDue !== lastAutoDueRef.current) return
+    const days = supplier.default_payment_terms
+    if (days && days > 0 && watchedInvoiceDate) {
+      const due = computeDueDate(watchedInvoiceDate, days)
+      setValue('due_date', due)
+      lastAutoDueRef.current = due
+      setDueDateCaption({ type: 'terms', days })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchedInvoiceDate])
+
+  // Pre-submit duplicate advisory (change 3): debounced, sequence-guarded and
+  // purely advisory: the create route's structured 409 stays the enforcement
+  // point, and the exists endpoint mirrors the unique index's
+  // credited/reversed exclusion so re-issues never warn.
+  useEffect(() => {
+    const supplierId = watchedSupplierId
+    const number = (watchedInvoiceNumber || '').trim()
+    if (!supplierId || !number) {
+      setDuplicateWarning(null)
+      return
+    }
+    const seq = ++duplicateSeqRef.current
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/supplier-invoices/exists?supplier_id=${encodeURIComponent(supplierId)}&number=${encodeURIComponent(number)}`,
+        )
+        if (!res.ok) return
+        const json = await res.json()
+        if (duplicateSeqRef.current !== seq) return
+        setDuplicateWarning(
+          json?.data?.exists
+            ? { number, existingId: json.data.existing?.id ?? null }
+            : null,
+        )
+      } catch {
+        // Advisory only; the 409 backstop still catches real duplicates.
+      }
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [watchedSupplierId, watchedInvoiceNumber])
 
   // Auto-fetch Riksbanken exchange rate when currency switches to non-SEK and
   // the user hasn't typed a custom rate yet. Re-fetches when the invoice
@@ -476,6 +710,44 @@ export default function NewSupplierInvoiceForm({
     if (watch(`items.${index}.apply_slp`) && !isSlpPensionAccount(accountNumber)) {
       setValue(`items.${index}.apply_slp`, undefined, { shouldDirty: true })
     }
+  }
+
+  // Append a new kontering row for a committed account: the same side effects
+  // as a manual pick on an existing row (description from the account name,
+  // konto default moms), used by the ghost entry row and the supplier-default
+  // plant. Returns the new row's index.
+  function appendRowForAccount(accountNumber: string): number {
+    const acct = accounts.find((a) => a.account_number === accountNumber)
+    const defaultRate = acct?.default_vat_rate == null ? null : Number(acct.default_vat_rate)
+    const vatRate = !vatRegistered
+      ? 0
+      : !watchedReverseCharge && defaultRate != null && Number.isFinite(defaultRate)
+        ? defaultRate
+        : 0.25
+    const description =
+      accountNumber.length === 4 ? getAccountDescription(accountNumber)?.name ?? '' : ''
+    const index = getValues('items').length
+    append({
+      description,
+      amount: 0,
+      account_number: accountNumber,
+      vat_rate: vatRate,
+      reverse_charge_rate: 0.25,
+    })
+    return index
+  }
+
+  // Ghost entry row commit: append the row, clear the entry input (remount)
+  // and move focus to the new row's amount cell.
+  function commitEntryAccount(accountNumber: string) {
+    if (!accountNumber) return
+    const index = appendRowForAccount(accountNumber)
+    setEntryResetKey((k) => k + 1)
+    requestAnimationFrame(() => {
+      const el = amountInputRefs.current[index]
+      el?.focus()
+      el?.select()
+    })
   }
 
   // Periodisering per rad: kräver faktureringsmetoden; eget utlägg bokar
@@ -596,8 +868,8 @@ export default function NewSupplierInvoiceForm({
         role="status"
         className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
       >
-        <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
-        <p className="flex-1 text-sm text-attn">
+        <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+        <p className="flex-1 text-sm">
           {t('slp_hint', { amount: formatAmount(slpAmount) })}
         </p>
         <Button
@@ -732,7 +1004,14 @@ export default function NewSupplierInvoiceForm({
     { ore_rounding: false },
   )
 
-  // Show the AI-suggested supplier card when we have an inbox item, the AI
+  // Total cross-check (change 2): client-only compare against the displayed
+  // payable; a mismatch renders field-adjacent, never blocks, never travels.
+  const enteredFakturaTotal = parseFlexibleNumber(fakturaTotalStr)
+  const crosscheckDiff =
+    enteredFakturaTotal == null ? null : roundOre(enteredFakturaTotal - displayRounding.displayed)
+  const crosscheckMatches = crosscheckDiff != null && Math.abs(crosscheckDiff) <= 0.005
+
+  // Show the AI-suggested supplier card when we have an extraction, the AI
   // surfaced a supplier name, and we couldn't match it to an existing record.
   const showAISupplierHint =
     !!extractedData?.supplier?.name &&
@@ -798,14 +1077,193 @@ export default function NewSupplierInvoiceForm({
     setIsCreatingSupplier(false)
   }
 
+  // --- Dokument-först upload (change 1) ---
+  // The standalone form's upload tries the invoice-inbox pipeline (upload +
+  // AI tolkning) over plain HTTP first: core never imports the extension, so
+  // a disabled extension just 404s and the upload degrades to the plain
+  // /api/documents path with no extraction. Manual entry is never blocked.
+
+  function afterUploadExtraction(extracted: InvoiceExtractionResult | null) {
+    setExtractionPhase('done')
+    if (extracted?.totals?.total != null) {
+      setFakturaTotalStr(formatAmount(extracted.totals.total))
+      markSettled('faktura_total')
+    }
+  }
+
+  async function pollExtraction(itemId: string, documentId: string) {
+    const token = ++extractionPollTokenRef.current
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < 90_000) {
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      if (extractionPollTokenRef.current !== token) return
+      try {
+        const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`)
+        if (!res.ok) break
+        const { data } = await res.json()
+        if (extractionPollTokenRef.current !== token) return
+        if (data?.status !== 'processing') {
+          if (hasExtractionContent(data?.extracted_data)) {
+            applyInboxItem({
+              id: itemId,
+              extracted_data: data.extracted_data,
+              matched_supplier_id: data.matched_supplier_id ?? null,
+              document_id: documentId,
+            })
+            afterUploadExtraction(data.extracted_data)
+          } else {
+            // Extraction failed or read nothing: keep the plain attachment.
+            setExtractionPhase('idle')
+          }
+          return
+        }
+      } catch {
+        break
+      }
+    }
+    if (extractionPollTokenRef.current === token) setExtractionPhase('idle')
+  }
+
+  async function uploadPlainDocument(entry: UploadedFile) {
+    const formData = new FormData()
+    formData.append('file', entry.file)
+    formData.append('upload_source', 'file_upload')
+    try {
+      const res = await fetch('/api/documents', { method: 'POST', body: formData })
+      let result: { data?: { id?: string }; error?: unknown } = {}
+      try {
+        result = await res.json()
+      } catch {
+        setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
+        return
+      }
+      if (!res.ok || result.error || !result.data?.id) {
+        setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
+        return
+      }
+      setDocumentFiles([{ ...entry, status: 'uploaded', id: result.data.id }])
+    } catch {
+      setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_upload_failed') }])
+    }
+  }
+
+  async function handleUnderlagFile(file: File) {
+    const uploadKey = `underlag-${Date.now()}`
+    const entry: UploadedFile = {
+      file,
+      status: 'uploading',
+      fileName: file.name,
+      fileSize: file.size,
+      uploadKey,
+    }
+    if (!UNDERLAG_ACCEPTED_TYPES.includes(file.type)) {
+      setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_unsupported_type') }])
+      return
+    }
+    if (file.size > UNDERLAG_MAX_SIZE) {
+      setDocumentFiles([{ ...entry, status: 'error', error: t('underlag_too_large') }])
+      return
+    }
+    setDocumentFiles([entry])
+    setExtractionPhase('idle')
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
+        method: 'POST',
+        body: formData,
+      })
+      if (res.ok) {
+        const json = await res.json().catch(() => null)
+        const data = json?.data as
+          | {
+              document_id?: string
+              inbox_item_id?: string
+              status?: string
+              extracted_data?: InvoiceExtractionResult | null
+              matched_supplier_id?: string | null
+            }
+          | undefined
+        if (data?.document_id && data.inbox_item_id) {
+          setDocumentFiles([{ ...entry, status: 'uploaded', id: data.document_id }])
+          setUploadedInboxItemId(data.inbox_item_id)
+          if (data.status === 'processing') {
+            setExtractionPhase('processing')
+            void pollExtraction(data.inbox_item_id, data.document_id)
+          } else if (hasExtractionContent(data.extracted_data)) {
+            applyInboxItem({
+              id: data.inbox_item_id,
+              extracted_data: data.extracted_data ?? null,
+              matched_supplier_id: data.matched_supplier_id ?? null,
+              document_id: data.document_id,
+            })
+            afterUploadExtraction(data.extracted_data ?? null)
+          }
+          return
+        }
+      }
+    } catch {
+      // Extension unreachable: fall through to the plain upload below.
+    }
+    await uploadPlainDocument(entry)
+  }
+
+  function handleRemoveUnderlag() {
+    extractionPollTokenRef.current += 1
+    const itemId = uploadedInboxItemId
+    const docIds = documentFiles
+      .filter((file) => file.status === 'uploaded' && file.id)
+      .map((file) => file.id as string)
+    setDocumentFiles([])
+    setUploadedInboxItemId(null)
+    setExtractionPhase('idle')
+    void (async () => {
+      // Delete the inbox item first (it references the document), then the
+      // document. Both best-effort: the same orphan-cleanup contract as before.
+      if (itemId) {
+        try {
+          await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`, { method: 'DELETE' })
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
+      await Promise.allSettled(
+        docIds.map((documentId) => fetch(`/api/documents/${documentId}`, { method: 'DELETE' })),
+      )
+    })()
+  }
+
   function buildPayload(data: FormData) {
     return buildSupplierInvoicePayload(data, {
-      inboxItemId,
+      inboxItemId: effectiveInboxItemId,
       uploadedDocumentId,
       oreRounding,
       defaultDims,
       canUseAccrual,
     })
+  }
+
+  // An upload that went through the inbox pipeline submits through the same
+  // convert endpoint as an inbox arrival: document linking and the item's
+  // created_supplier_invoice_id stamp come for free, and the inbox never
+  // shows an already-registered document as pending.
+  const effectiveInboxItemId = inboxItemId ?? uploadedInboxItemId
+
+  function focusMissingField(
+    field: 'supplier' | 'invoice_number' | 'rows' | 'row_account',
+    rowIndex?: number,
+  ) {
+    if (field === 'supplier') {
+      setSupplierMenuOpen(true)
+      supplierTriggerRef.current?.focus()
+    } else if (field === 'invoice_number') {
+      invoiceNumberInputRef.current?.focus()
+    } else if (field === 'rows') {
+      entryInputRef.current?.focus()
+    } else if (field === 'row_account' && rowIndex != null) {
+      accountInputRefs.current[rowIndex]?.focus()
+    }
   }
 
   const {
@@ -830,7 +1288,7 @@ export default function NewSupplierInvoiceForm({
     ta,
     toast,
     isEF,
-    inboxItemId,
+    inboxItemId: effectiveInboxItemId,
     originalExtracted,
     buildPayload,
     reset,
@@ -840,21 +1298,19 @@ export default function NewSupplierInvoiceForm({
     showNoPeriodWarning,
     canUseAccrual,
     invoiceNumberInputRef,
+    onMissingField: focusMissingField,
   })
 
-  function handleDocumentFilesChange(nextFiles: UploadedFile[]) {
-    const retainedKeys = new Set(nextFiles.map((file) => file.uploadKey))
-    const removedDocuments = documentFiles.filter(
-      (file) => file.id && !retainedKeys.has(file.uploadKey),
-    )
-
-    setDocumentFiles(nextFiles)
-    for (const document of removedDocuments) {
-      void fetch(`/api/documents/${document.id}`, { method: 'DELETE' })
-    }
-  }
-
   async function discardUploadedDocument() {
+    extractionPollTokenRef.current += 1
+    const itemId = uploadedInboxItemId
+    if (itemId) {
+      try {
+        await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`, { method: 'DELETE' })
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
     const ids = documentFiles
       .filter((file) => file.status === 'uploaded' && file.id)
       .map((file) => file.id as string)
@@ -870,11 +1326,82 @@ export default function NewSupplierInvoiceForm({
     })
   }
 
+  // --- Derived shell state ---
+
+  const selectedSupplier = suppliers.find((s) => s.id === watchedSupplierId)
+  const supplierHasGiro = Boolean(selectedSupplier?.bankgiro || selectedSupplier?.plusgiro)
+  const underlagFile = documentFiles[0]
+  const underlagAttached = Boolean(inboxItemId || uploadedDocumentId)
+
+  const detailsFilled = Boolean((watchedInvoiceNumber || '').trim() && watchedInvoiceDate)
+
+  // Next-step line (the page's ONLY ochre line): same predicates and order as
+  // the submit-time checks in useSupplierInvoiceSubmit, so the always-enabled
+  // primary's focus routing and this line always agree.
+  type MissingField = 'supplier' | 'invoice_number' | 'rows' | 'row_account'
+  const nextStep = ((): { field: MissingField; rowIndex?: number; label: string } | null => {
+    if (!watchedSupplierId) {
+      return { field: 'supplier', label: t('next_step_supplier') }
+    }
+    if (!(watchedInvoiceNumber || '').trim()) {
+      return { field: 'invoice_number', label: t('next_step_invoice_number') }
+    }
+    if (!watchedItems || watchedItems.length === 0) {
+      return { field: 'rows', label: t('next_step_add_row') }
+    }
+    const rowMissingAccount = watchedItems.findIndex((item) => !item.account_number)
+    if (rowMissingAccount !== -1) {
+      return {
+        field: 'row_account',
+        rowIndex: rowMissingAccount,
+        label: t('next_step_row_account', { row: rowMissingAccount + 1 }),
+      }
+    }
+    return null
+  })()
+  const readyLineText =
+    watchedPaidPrivately || isEF
+      ? willBookAtRegistration
+        ? t('ready_line_register')
+        : t('ready_line_register_cash')
+      : t('ready_line_review')
+
+  const forvalChips: string[] = [
+    willBookAtRegistration ? t('forval_books_at_registration') : t('forval_books_at_payment'),
+  ]
+  if (watchedPaidPrivately) forvalChips.push(t('chip_paid_privately'))
+  if (watchedReverseCharge) forvalChips.push(t('reverse_charge_label'))
+  if ((watchedCurrency || 'SEK') !== 'SEK') {
+    forvalChips.push(
+      watchedExchangeRate
+        ? t('chip_currency_rate', { currency: watchedCurrency, rate: watchedExchangeRate })
+        : watchedCurrency,
+    )
+  }
+  if ((watchedCurrency || 'SEK') === 'SEK' && !oreRounding) forvalChips.push(t('chip_ore_rounding_off'))
+  if (watchedDeliveryDate) forvalChips.push(t('chip_delivery_date', { date: formatDate(watchedDeliveryDate) }))
+  if ((watchedNotes || '').trim()) forvalChips.push(t('chip_notes'))
+  if (dimensionsEnabled && defaultDimsSummary) forvalChips.push(defaultDimsSummary)
+
+  const underlagCaption = inboxItemId
+    ? null
+    : extractionPhase === 'done'
+      ? t('underlag_caption_done')
+      : underlagFile?.status === 'uploaded' && extractionPhase === 'idle'
+        ? t('underlag_caption_attached')
+        : t('underlag_caption_default')
+
+  const primaryLabel = watchedPaidPrivately
+    ? t('register_expense')
+    : isEF
+      ? t('register_invoice')
+      : t('review_and_register')
+
   return (
-    <div className={bare ? 'space-y-6' : 'space-y-6 max-w-4xl'}>
+    <div className={bare ? 'relative' : 'relative max-w-2xl'}>
       {/* In bare (dialog) mode the dialog renders the title. */}
       {!bare && (
-        <div className="flex items-center gap-4">
+        <div className="mb-6 flex items-center gap-4">
           <Button
             variant="ghost"
             size="icon"
@@ -890,7 +1417,7 @@ export default function NewSupplierInvoiceForm({
       )}
 
       {isLoadingInbox && (
-        <Card>
+        <Card className="mb-6">
           <CardContent className="py-4 flex items-center gap-3 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             {t('loading_inbox')}
@@ -898,106 +1425,222 @@ export default function NewSupplierInvoiceForm({
         </Card>
       )}
 
-      {showAISupplierHint && (
-        <Card className="border-primary/30 bg-primary/[0.02]">
-          <CardContent className="py-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-start gap-3">
-                <MessageCircle className="h-5 w-5 text-primary shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium">
-                    {t('ai_suggested_supplier', { name: extractedData?.supplier?.name ?? '' })}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {extractedData?.supplier?.orgNumber
-                      ? t('ai_org_number', { orgNumber: extractedData.supplier.orgNumber })
-                      : t('ai_no_org_number')}
-                    {t('ai_supplier_not_in_system')}
-                  </p>
+      <form onSubmit={handleSubmit(onSubmit)}>
+        <div className="divide-y divide-border">
+          {/* ── Underlag (first: dokument-först) ─────────────────── */}
+          <section className="pb-6">
+            <SectionLabel>
+              {t('section_underlag')}
+              <span className="ml-2 normal-case tracking-normal">({t('underlag_recommended')})</span>
+              {underlagAttached && (
+                <span className="ml-2 normal-case tracking-normal text-success">
+                  {'✓'} {t('mark_attached')}
+                </span>
+              )}
+            </SectionLabel>
+            {inboxItemId ? (
+              <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px] text-muted-foreground">
+                <FileText className="h-4 w-4 shrink-0" />
+                {t('underlag_caption_inbox')}
+              </div>
+            ) : underlagFile ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-4 py-3">
+                <div className="flex min-w-0 items-center gap-3">
+                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <p className="truncate text-[13px]">{underlagFile.fileName}</p>
+                    {(underlagFile.status === 'uploading' || extractionPhase === 'processing') && (
+                      <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        {underlagFile.status === 'uploading'
+                          ? t('underlag_uploading')
+                          : t('underlag_processing')}
+                      </p>
+                    )}
+                    {underlagFile.status === 'error' && (
+                      <p className="text-xs text-destructive">{underlagFile.error}</p>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={cn(QUIET_LINK_CLASS, 'shrink-0 disabled:opacity-50')}
+                  onClick={handleRemoveUnderlag}
+                  disabled={underlagFile.status === 'uploading'}
+                  aria-label={t('underlag_remove_aria')}
+                >
+                  {t('underlag_remove')}
+                </button>
+              </div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className={cn(
+                    'w-full rounded-lg border border-dashed border-border px-4 py-6 text-center text-[13px] text-muted-foreground transition-colors hover:bg-secondary/60',
+                    isDraggingUnderlag && 'border-foreground/40 bg-secondary/60',
+                  )}
+                  onClick={() => underlagInputRef.current?.click()}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    setIsDraggingUnderlag(true)
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault()
+                    setIsDraggingUnderlag(false)
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    setIsDraggingUnderlag(false)
+                    const file = e.dataTransfer.files?.[0]
+                    if (file) void handleUnderlagFile(file)
+                  }}
+                >
+                  {t('underlag_drop_prompt')}
+                </button>
+                <input
+                  ref={underlagInputRef}
+                  type="file"
+                  accept={UNDERLAG_ACCEPT_ATTR}
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) void handleUnderlagFile(file)
+                    if (underlagInputRef.current) underlagInputRef.current.value = ''
+                  }}
+                />
+              </>
+            )}
+            {underlagCaption && (
+              <p className="mt-2 text-xs text-muted-foreground">{underlagCaption}</p>
+            )}
+          </section>
+
+          {/* ── Leverantör ───────────────────────────────────────── */}
+          <section className="py-6">
+            <SectionLabel>
+              {t('section_supplier')}
+              <RequiredMark />
+              {watchedSupplierId && (
+                <span className="ml-2 normal-case tracking-normal text-success">
+                  {'✓'} {t('mark_selected')}
+                </span>
+              )}
+            </SectionLabel>
+
+            {showAISupplierHint && (
+              <div className="mb-3 rounded-lg border border-border bg-muted/30 p-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <MessageCircle className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium">
+                        {t('ai_suggested_supplier', { name: extractedData?.supplier?.name ?? '' })}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {extractedData?.supplier?.orgNumber
+                          ? t('ai_org_number', { orgNumber: extractedData.supplier.orgNumber })
+                          : t('ai_no_org_number')}
+                        {t('ai_supplier_not_in_system')}
+                      </p>
+                    </div>
+                  </div>
+                  <Button type="button" size="sm" onClick={openSupplierDialogPrefilled}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    {t('create_and_select')}
+                  </Button>
                 </div>
               </div>
-              <Button type="button" size="sm" onClick={openSupplierDialogPrefilled}>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('create_and_select')}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+            )}
 
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        {/* Section 1: Faktura */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('section_invoice')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Eget utlägg-toggle. När den är på bokas verifikatet direkt mot
-                skuld till ägare (2893/2018) istället för leverantörsskuld (2440),
-                och fakturan får status "Betalad" direkt. */}
-            <div className="flex items-start gap-3 p-3 rounded-lg border bg-muted/30">
-              <Controller
-                name="paid_with_private_funds"
-                control={control}
-                render={({ field }) => (
-                  <Checkbox
-                    id="paid_with_private_funds"
-                    checked={field.value}
-                    onCheckedChange={field.onChange}
-                    className="mt-0.5"
-                  />
-                )}
-              />
-              <Label htmlFor="paid_with_private_funds" className="cursor-pointer flex-1">
-                <span className="text-sm font-medium">{t('paid_privately_label')}</span>
-                <span className="block text-[11px] text-muted-foreground font-normal mt-0.5">
-                  {isEF ? t('paid_privately_help_ef') : t('paid_privately_help_ab')}
-                </span>
-              </Label>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>{t('supplier_label')}<RequiredMark /></Label>
-                <Controller
-                  name="supplier_id"
-                  control={control}
-                  render={({ field }) => (
-                    <Select
-                      value={field.value}
-                      onValueChange={(v) => {
-                        if (v === '__new__') {
-                          openSupplierDialogBlank()
-                        } else {
-                          field.onChange(v)
-                        }
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('supplier_placeholder')} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {suppliers.map((s) => (
-                          <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                        ))}
-                        <SelectItem value="__new__" className="text-primary font-medium">
-                          {t('add_new_supplier')}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
+            <DropdownMenu open={supplierMenuOpen} onOpenChange={setSupplierMenuOpen}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  ref={supplierTriggerRef}
+                  className={cn(
+                    'w-full rounded-lg border border-border px-4 py-4 text-left transition-colors hover:bg-secondary/60',
+                    settledFields.has('supplier_id') && 'prefill-settle',
                   )}
-                />
-              </div>
+                  aria-haspopup="menu"
+                  aria-expanded={supplierMenuOpen}
+                >
+                  <span className="flex items-center justify-between gap-3">
+                    <span
+                      className={cn(
+                        'font-display text-lg leading-snug',
+                        selectedSupplier ? 'text-foreground' : 'text-muted-foreground',
+                      )}
+                    >
+                      {selectedSupplier?.name ?? t('supplier_placeholder')}
+                    </span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </span>
+                  {selectedSupplier?.org_number && (
+                    <span className="mt-1 block text-[13px] text-muted-foreground">
+                      {t('org_number_prefix', { number: selectedSupplier.org_number })}
+                    </span>
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className="max-h-80 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto"
+              >
+                {suppliers.map((s) => (
+                  <DropdownMenuItem
+                    key={s.id}
+                    onSelect={() => {
+                      setValue('supplier_id', s.id, { shouldDirty: true })
+                      requestAnimationFrame(() => invoiceNumberInputRef.current?.focus())
+                    }}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm">{s.name}</div>
+                      {s.org_number && (
+                        <div className="text-xs text-muted-foreground">
+                          {t('org_number_prefix', { number: s.org_number })}
+                        </div>
+                      )}
+                    </div>
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={openSupplierDialogBlank} className="text-muted-foreground">
+                  {t('add_new_supplier')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </section>
+
+          {/* ── Fakturauppgifter ─────────────────────────────────── */}
+          <section className="py-6">
+            <SectionLabel>
+              {t('section_details')}
+              <RequiredMark />
+              {detailsFilled && (
+                <span className="ml-2 normal-case tracking-normal text-success">
+                  {'✓'} {t('mark_filled')}
+                </span>
+              )}
+            </SectionLabel>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label>{t('supplier_invoice_number_label')}<RequiredMark /></Label>
+                  <Label htmlFor="si-invoice-number" className="text-xs font-normal text-muted-foreground">
+                    {t('supplier_invoice_number_label')}
+                    <RequiredMark />
+                  </Label>
                   <AiFilledIndicator active={aiFlags.invoiceNumber} label="AI-fyllt" />
                 </div>
                 {(() => {
                   const { ref: rhfRef, ...rest } = register('supplier_invoice_number')
                   return (
                     <Input
+                      id="si-invoice-number"
                       placeholder={t('supplier_invoice_number_placeholder')}
+                      autoComplete="off"
+                      className={cn('h-9', settledFields.has('supplier_invoice_number') && 'prefill-settle')}
                       {...rest}
                       ref={(el) => {
                         rhfRef(el)
@@ -1006,79 +1649,93 @@ export default function NewSupplierInvoiceForm({
                     />
                   )
                 })()}
+                {duplicateWarning && (
+                  <p className="text-xs text-destructive" data-ph-mask="">
+                    {t('duplicate_warning_line', { number: duplicateWarning.number })}
+                    {duplicateWarning.existingId && (
+                      <>
+                        {' '}
+                        <button
+                          type="button"
+                          className="underline underline-offset-2"
+                          onClick={() => router.push(`/supplier-invoices/${duplicateWarning.existingId}`)}
+                        >
+                          {t('duplicate_warning_link')}
+                        </button>
+                      </>
+                    )}
+                  </p>
+                )}
               </div>
-            </div>
-            <div className={cn(
-              'grid grid-cols-1 gap-4',
-              watchedPaidPrivately ? 'sm:grid-cols-1' : 'sm:grid-cols-3',
-            )}>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label>{t('invoice_date_label')}<RequiredMark /></Label>
+                  <Label htmlFor="si-invoice-date" className="text-xs font-normal text-muted-foreground">
+                    {t('invoice_date_label')}
+                    <RequiredMark />
+                  </Label>
                   <AiFilledIndicator active={aiFlags.invoiceDate} label="AI-fyllt" />
                 </div>
-                <Input type="date" {...register('invoice_date')} />
+                <Input
+                  id="si-invoice-date"
+                  type="date"
+                  className={cn('h-9 tabular-nums', settledFields.has('invoice_date') && 'prefill-settle')}
+                  {...register('invoice_date')}
+                />
               </div>
               {!watchedPaidPrivately && (
                 <>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <Label>{t('due_date_label')}<RequiredMark /></Label>
+                      <Label htmlFor="si-due-date" className="text-xs font-normal text-muted-foreground">
+                        {t('due_date_label')}
+                      </Label>
                       <AiFilledIndicator active={aiFlags.dueDate} label="AI-fyllt" />
                     </div>
-                    <Input type="date" {...register('due_date')} />
+                    <Input
+                      id="si-due-date"
+                      type="date"
+                      className={cn('h-9 tabular-nums', settledFields.has('due_date') && 'prefill-settle')}
+                      {...register('due_date', {
+                        onChange: () => {
+                          dueDateManualRef.current = true
+                          setDueDateCaption(null)
+                        },
+                      })}
+                    />
+                    {dueDateCaption && (
+                      <p className="text-xs text-muted-foreground">
+                        {dueDateCaption.type === 'terms'
+                          ? t('due_from_terms_caption', { days: dueDateCaption.days })
+                          : t('due_on_invoice_caption')}
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <Label>{t('payment_reference_label')}</Label>
-                      <AiFilledIndicator
-                        active={aiFlags.paymentReference}
-                        label="AI-fyllt"
-                      />
+                      <Label htmlFor="si-payment-reference" className="text-xs font-normal text-muted-foreground">
+                        {t('payment_reference_label')}
+                      </Label>
+                      <AiFilledIndicator active={aiFlags.paymentReference} label="AI-fyllt" />
                     </div>
-                    <Input placeholder={t('payment_reference_placeholder')} {...register('payment_reference')} />
+                    <Input
+                      id="si-payment-reference"
+                      placeholder={t('payment_reference_placeholder')}
+                      autoComplete="off"
+                      className={cn('h-9', settledFields.has('payment_reference') && 'prefill-settle')}
+                      {...register('payment_reference')}
+                    />
+                    {supplierHasGiro && (
+                      <p className="text-xs text-muted-foreground">{t('ocr_payment_file_caption')}</p>
+                    )}
                   </div>
                 </>
               )}
             </div>
 
-            {!inboxItemId && (
-              <div className="space-y-3 rounded-lg border border-border p-4">
-                <div className="flex items-start gap-3">
-                  <Paperclip className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div>
-                    <Label>{t('document_label')}</Label>
-                  </div>
-                </div>
-                <DocumentUploadZone
-                  files={documentFiles}
-                  onFilesChange={handleDocumentFilesChange}
-                  maxFiles={1}
-                  disabled={isSubmitting}
-                  compact
-                />
-              </div>
-            )}
-
-            {/* Invoice-level default dims (kostnadsställe/projekt): applied to
-                every generated journal line; per-row bags in Kontering merge on
-                top. Renders only when dimensions are enabled for the company. */}
-            {dimensionsEnabled && (
-              <div className="space-y-1">
-                <div className="max-w-md">
-                  <LineDimensionFields
-                    dimensions={defaultDims}
-                    onChange={setDefaultDimension}
-                    inputClassName="h-9"
-                  />
-                </div>
-              </div>
-            )}
-
             {showNoPeriodWarning && (
               <div
                 role="alert"
-                className="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3"
+                className="mt-4 flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3"
               >
                 <AlertCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
                 <div className="flex-1 text-sm text-destructive">
@@ -1087,30 +1744,23 @@ export default function NewSupplierInvoiceForm({
                 </div>
               </div>
             )}
-          </CardContent>
-        </Card>
+          </section>
 
-        {/* Section 2: Kontering */}
-        <Card>
-          <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <CardTitle className="text-base">{t('section_accounting')}</CardTitle>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-full sm:w-auto"
-              onClick={() =>
-                append({ description: '', amount: 0, account_number: '', vat_rate: vatRegistered ? 0.25 : 0, reverse_charge_rate: 0.25 })
-              }
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              {t('add_row')}
-            </Button>
-          </CardHeader>
-          <CardContent>
+          {/* ── Kontering ────────────────────────────────────────── */}
+          <section className="py-6">
+            <SectionLabel>
+              {t('section_accounting')}
+              <RequiredMark />
+              {fields.length > 0 && (
+                <span className="ml-2 normal-case tracking-normal">
+                  {t('rows_count', { count: fields.length })}
+                </span>
+              )}
+            </SectionLabel>
+
             {templateAccountNote &&
               (watchedItems ?? []).some((r) => r.account_number === templateAccountNote.account) && (
-                <p className="mb-4 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <p className="mb-3 flex items-center gap-2 text-[11px] text-muted-foreground">
                   <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
                   {t('account_from_history', {
                     account: templateAccountNote.account,
@@ -1118,83 +1768,15 @@ export default function NewSupplierInvoiceForm({
                   })}
                 </p>
               )}
-            {/* Valuta & moms: kept inline with the line items because they
-                drive how each row is interpreted. Hidden defaults (SEK +
-                normal moms) collapse to nothing so most users don't see this. */}
-            <div className="mb-4 pb-4 border-b grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-xs">{t('currency_label')}</Label>
-                <Controller
-                  name="currency"
-                  control={control}
-                  render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <SelectTrigger className="h-9">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="SEK">SEK</SelectItem>
-                        <SelectItem value="EUR">EUR</SelectItem>
-                        <SelectItem value="USD">USD</SelectItem>
-                        <SelectItem value="GBP">GBP</SelectItem>
-                        <SelectItem value="NOK">NOK</SelectItem>
-                        <SelectItem value="DKK">DKK</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </div>
-              {watchedCurrency !== 'SEK' && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs">
-                    {t('exchange_rate_label')} <span className="text-muted-foreground">{t('exchange_rate_to_sek')}</span>
-                  </Label>
-                  <Input
-                    type="number"
-                    step="0.0001"
-                    inputMode="decimal"
-                    placeholder={t('exchange_rate_placeholder')}
-                    className="h-9 text-right tabular-nums"
-                    {...register('exchange_rate', {
-                      onChange: () => { userTouchedRateRef.current = true },
-                    })}
-                  />
-                </div>
-              )}
-              <div
-                className={cn(
-                  'flex items-center gap-2',
-                  watchedCurrency === 'SEK' ? 'sm:col-span-2' : ''
-                )}
-              >
-                <Controller
-                  name="reverse_charge"
-                  control={control}
-                  render={({ field }) => (
-                    <Checkbox
-                      id="reverse_charge"
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  )}
-                />
-                <Label htmlFor="reverse_charge" className="text-xs cursor-pointer">
-                  {t('reverse_charge_label')}
-                  <span className="block text-[11px] text-muted-foreground font-normal mt-0.5">
-                    {t('reverse_charge_help')}
-                  </span>
-                </Label>
-              </div>
-            </div>
 
             {/* Non-blocking account-range hint for reverse charge (#863 item 2) */}
             {rcAccountWarningRows.length > 0 && (
               <div
                 role="status"
-                className="mb-4 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
+                className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
               >
-                <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
-                <p className="text-sm text-attn">
+                <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <p className="text-sm text-muted-foreground">
                   {t('rc_account_warning', {
                     count: rcAccountWarningRows.length,
                     rows: rcAccountWarningRows.map((i) => i + 1).join(', '),
@@ -1209,10 +1791,10 @@ export default function NewSupplierInvoiceForm({
             {foreignZeroVatRows.length > 0 && (
               <div
                 role="status"
-                className="mb-4 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
+                className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
               >
-                <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
-                <p className="text-sm text-attn">
+                <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <p className="text-sm text-muted-foreground">
                   {t('foreign_zero_vat_warning', {
                     count: foreignZeroVatRows.length,
                     rows: foreignZeroVatRows.map((i) => i + 1).join(', '),
@@ -1221,308 +1803,456 @@ export default function NewSupplierInvoiceForm({
               </div>
             )}
 
-            {/* Desktop table */}
-            <div className="hidden sm:block">
-              <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px] border-collapse text-[13px]">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                  <tr className="border-b text-left">
-                    <th className="pb-2 w-28">{t('col_account')}</th>
-                    <th className="pb-2">{t('col_description')}</th>
-                    <th className="pb-2 w-32">{vatColsVisible ? t('col_amount_excl') : t('col_amount')}</th>
+                  <tr className="border-b border-border text-left">
+                    <th className="w-28 pb-2 pr-2">{t('col_account')}</th>
+                    <th className="pb-2 pr-2">{t('col_description')}</th>
+                    <th className="w-28 pb-2 pr-2 text-right">
+                      {vatColsVisible ? t('col_amount_excl') : t('col_amount')}
+                    </th>
                     {vatColsVisible && (
                       <>
-                        <th className="pb-2 w-36">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</th>
-                        <th className="pb-2 w-24 text-right">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</th>
+                        <th className="w-32 pb-2 pr-2">
+                          {watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}
+                        </th>
+                        <th className="w-24 pb-2 pr-2 text-right">
+                          {watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}
+                        </th>
                       </>
                     )}
-                    <th className="pb-2 w-8"></th>
+                    <th className="w-20 pb-2"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {fields.map((field, index) => (
                     <Fragment key={field.id}>
-                    <tr className={cn('align-top', (canUseAccrual && isAccrualOpen(index)) || (dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) ? 'border-0' : 'border-b last:border-0')}>
-                      <td className="py-2 pr-2">
-                        <Controller
-                          name={`items.${index}.account_number`}
-                          control={control}
-                          render={({ field: f }) => (
-                            <AccountCombobox
-                              value={f.value}
-                              accounts={accounts}
-                              onChange={(val) => handleAccountChange(index, val)}
-                            />
-                          )}
-                        />
-                      </td>
-                      <td className="py-2 pr-2">
-                        <Controller
-                          name={`items.${index}.description`}
-                          control={control}
-                          render={({ field }) => (
-                            <Input
-                              placeholder={t('description_placeholder')}
-                              ref={field.ref}
-                              value={field.value ?? ''}
-                              onChange={field.onChange}
-                              onBlur={field.onBlur}
-                            />
-                          )}
-                        />
-                      </td>
-                      <td className="py-2 pr-2">
-                        <Controller
-                          name={`items.${index}.amount`}
-                          control={control}
-                          render={({ field }) => (
-                            <Input
-                              type="number"
-                              step="0.01"
-                              inputMode="decimal"
-                              placeholder="0,00"
-                              className="text-right tabular-nums"
-                              value={field.value || ''}
-                              onChange={(e) => field.onChange(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
-                            />
-                          )}
-                        />
-                      </td>
-                      {vatColsVisible && (
-                        <>
-                          <td className="py-2 pr-2">
-                            {watchedReverseCharge ? (
-                              <Controller
-                                name={`items.${index}.reverse_charge_rate`}
-                                control={control}
-                                render={({ field: f }) => (
-                                  <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
-                                )}
-                              />
-                            ) : (
-                              <Controller
-                                name={`items.${index}.vat_rate`}
-                                control={control}
-                                render={({ field: f }) => (
-                                  <VatRateCell value={f.value} onChange={f.onChange} />
-                                )}
+                      <tr
+                        className={cn(
+                          'group align-middle',
+                          (canUseAccrual && isAccrualOpen(index)) ||
+                            (dimensionsEnabled && isDimOpen(index)) ||
+                            slpRowVisible(index)
+                            ? 'border-0'
+                            : 'border-b border-border',
+                          settledFields.has('items') && 'prefill-settle',
+                        )}
+                      >
+                        <td className="py-1 pr-2">
+                          <Controller
+                            name={`items.${index}.account_number`}
+                            control={control}
+                            render={({ field: f }) => (
+                              <AccountCombobox
+                                value={f.value}
+                                accounts={accounts}
+                                onChange={(val) => handleAccountChange(index, val)}
+                                className="h-8 px-2 text-[13px]"
+                                inputRef={(el) => {
+                                  accountInputRefs.current[index] = el
+                                }}
                               />
                             )}
+                          />
+                        </td>
+                        <td className="py-1 pr-2">
+                          <Controller
+                            name={`items.${index}.description`}
+                            control={control}
+                            render={({ field }) => (
+                              <Input
+                                placeholder={t('description_placeholder')}
+                                className={CELL_INPUT_CLASS}
+                                ref={field.ref}
+                                value={field.value ?? ''}
+                                onChange={field.onChange}
+                                onBlur={field.onBlur}
+                              />
+                            )}
+                          />
+                        </td>
+                        <td className="py-1 pr-2">
+                          <Controller
+                            name={`items.${index}.amount`}
+                            control={control}
+                            render={({ field }) => (
+                              <Input
+                                type="number"
+                                step="0.01"
+                                inputMode="decimal"
+                                placeholder="0,00"
+                                className={cn(CELL_INPUT_CLASS, 'text-right tabular-nums')}
+                                value={field.value || ''}
+                                onChange={(e) =>
+                                  field.onChange(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)
+                                }
+                                ref={(el) => {
+                                  amountInputRefs.current[index] = el
+                                }}
+                              />
+                            )}
+                          />
+                        </td>
+                        {vatColsVisible && (
+                          <>
+                            <td className="py-1 pr-2">
+                              {watchedReverseCharge ? (
+                                <Controller
+                                  name={`items.${index}.reverse_charge_rate`}
+                                  control={control}
+                                  render={({ field: f }) => (
+                                    <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                                  )}
+                                />
+                              ) : (
+                                <Controller
+                                  name={`items.${index}.vat_rate`}
+                                  control={control}
+                                  render={({ field: f }) => (
+                                    <VatRateCell value={f.value} onChange={f.onChange} />
+                                  )}
+                                />
+                              )}
+                            </td>
+                            <td className="py-1 pr-2 text-right tabular-nums text-muted-foreground">
+                              {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
+                            </td>
+                          </>
+                        )}
+                        <td className="py-1 text-right whitespace-nowrap">
+                          <span className={cn('inline-flex items-center justify-end gap-1', HOVER_REVEAL_CLASS)}>
+                            {dimensionsEnabled && (
+                              <button
+                                type="button"
+                                onClick={() => toggleDimensions(index)}
+                                aria-label={t('row_dimensions_aria', { index: index + 1 })}
+                                aria-pressed={isDimOpen(index)}
+                                title={t('row_dimensions_title')}
+                                className={ROW_ICON_BTN_CLASS}
+                              >
+                                <Tags
+                                  className={cn(
+                                    'h-3.5 w-3.5',
+                                    isDimOpen(index) ? 'text-foreground' : undefined,
+                                  )}
+                                />
+                              </button>
+                            )}
+                            {canUseAccrual && (
+                              <button
+                                type="button"
+                                onClick={() => toggleAccrual(index)}
+                                aria-label={ta('row_toggle_aria', { index: index + 1 })}
+                                aria-pressed={isAccrualOpen(index)}
+                                title={ta('row_toggle')}
+                                className={ROW_ICON_BTN_CLASS}
+                              >
+                                <CalendarClock
+                                  className={cn(
+                                    'h-3.5 w-3.5',
+                                    isAccrualOpen(index) ? 'text-foreground' : undefined,
+                                  )}
+                                />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => remove(index)}
+                              aria-label={t('remove_row_named_aria', {
+                                index: index + 1,
+                                description:
+                                  watchedItems?.[index]?.description || t('row_no_description'),
+                              })}
+                              className={cn(ROW_ICON_BTN_CLASS, 'hover:text-destructive')}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
+                        </td>
+                      </tr>
+                      {canUseAccrual && isAccrualOpen(index) && (
+                        <tr className={cn(dimensionsEnabled && isDimOpen(index) ? 'border-0' : 'border-b border-border')}>
+                          <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
+                            {renderAccrualPanel(index, `accrual-${index}`)}
                           </td>
-                          <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
-                            {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
-                          </td>
-                        </>
+                        </tr>
                       )}
-                      <td className="py-2 pt-3">
-                        <div className="flex items-center">
-                          {dimensionsEnabled && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => toggleDimensions(index)}
-                              aria-label={t('row_dimensions_aria', { index: index + 1 })}
-                              aria-pressed={isDimOpen(index)}
-                              title={t('row_dimensions_title')}
-                            >
-                              <Tags
-                                className={cn(
-                                  'h-4 w-4',
-                                  isDimOpen(index) ? 'text-foreground' : 'text-muted-foreground',
-                                )}
-                              />
-                            </Button>
-                          )}
-                          {canUseAccrual && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => toggleAccrual(index)}
-                              aria-label={ta('row_toggle_aria', { index: index + 1 })}
-                              aria-pressed={isAccrualOpen(index)}
-                              title={ta('row_toggle')}
-                            >
-                              <CalendarClock
-                                className={cn(
-                                  'h-4 w-4',
-                                  isAccrualOpen(index) ? 'text-foreground' : 'text-muted-foreground',
-                                )}
-                              />
-                            </Button>
-                          )}
-                          {fields.length > 1 && (
-                            <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)} aria-label={t('remove_row_aria', { index: index + 1 })}>
-                              <Trash2 className="h-4 w-4 text-muted-foreground" />
-                            </Button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                    {canUseAccrual && isAccrualOpen(index) && (
-                      <tr className={cn(dimensionsEnabled && isDimOpen(index) ? 'border-0' : 'border-b last:border-0')}>
-                        <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
-                          {renderAccrualPanel(index, `accrual-desktop-${index}`)}
-                        </td>
-                      </tr>
-                    )}
-                    {dimensionsEnabled && isDimOpen(index) && (
-                      <tr className={cn(slpRowVisible(index) ? 'border-0' : 'border-b last:border-0')}>
-                        <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
-                          {renderDimensionsPanel(index)}
-                        </td>
-                      </tr>
-                    )}
-                    {slpRowVisible(index) && (
-                      <tr className="border-b last:border-0">
-                        <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
-                          {renderSlpPanel(index)}
-                        </td>
-                      </tr>
-                    )}
+                      {dimensionsEnabled && isDimOpen(index) && (
+                        <tr className={cn(slpRowVisible(index) ? 'border-0' : 'border-b border-border')}>
+                          <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
+                            {renderDimensionsPanel(index)}
+                          </td>
+                        </tr>
+                      )}
+                      {slpRowVisible(index) && (
+                        <tr className="border-b border-border">
+                          <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
+                            {renderSlpPanel(index)}
+                          </td>
+                        </tr>
+                      )}
                     </Fragment>
                   ))}
                 </tbody>
+                <tfoot>
+                  {/* Ghost entry row: never part of form state until committed.
+                      The autocomplete opens on focus; Enter (or a full 4-digit
+                      number) commits and moves focus to the new row's amount. */}
+                  <tr>
+                    <td className="py-2 pr-2">
+                      <AccountCombobox
+                        key={entryResetKey}
+                        value=""
+                        accounts={accounts}
+                        onChange={() => {}}
+                        onCommit={commitEntryAccount}
+                        className="h-8 px-2 text-[13px]"
+                        inputRef={(el) => {
+                          entryInputRef.current = el
+                        }}
+                      />
+                    </td>
+                    <td className="py-2 pr-2 italic text-muted-foreground/50">
+                      {t('ghost_description')}
+                    </td>
+                    <td className="py-2 pr-2 text-right italic tabular-nums text-muted-foreground/50">
+                      0
+                    </td>
+                    {vatColsVisible && (
+                      <>
+                        <td className="py-2 pr-2 italic tabular-nums text-muted-foreground/50">
+                          25 %
+                        </td>
+                        <td className="py-2 pr-2 text-right italic text-muted-foreground/50">-</td>
+                      </>
+                    )}
+                    <td></td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
+          </section>
 
-            {/* Mobile cards */}
-            <div className="sm:hidden space-y-4">
-              {fields.map((field, index) => (
-                <div key={field.id} className="border rounded-lg p-3 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-muted-foreground">{t('row_label', { index: index + 1 })}</span>
-                    <div className="flex items-center">
-                      {dimensionsEnabled && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => toggleDimensions(index)}
-                          aria-label={t('row_dimensions_aria', { index: index + 1 })}
-                          aria-pressed={isDimOpen(index)}
-                          title={t('row_dimensions_title')}
-                        >
-                          <Tags
-                            className={cn(
-                              'h-4 w-4',
-                              isDimOpen(index) ? 'text-foreground' : 'text-muted-foreground',
-                            )}
-                          />
-                        </Button>
-                      )}
-                      {canUseAccrual && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => toggleAccrual(index)}
-                          aria-label={ta('row_toggle_aria', { index: index + 1 })}
-                          aria-pressed={isAccrualOpen(index)}
-                          title={ta('row_toggle')}
-                        >
-                          <CalendarClock
-                            className={cn(
-                              'h-4 w-4',
-                              isAccrualOpen(index) ? 'text-foreground' : 'text-muted-foreground',
-                            )}
-                          />
-                        </Button>
-                      )}
-                      {fields.length > 1 && (
-                        <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)} aria-label={t('remove_row_aria', { index: index + 1 })}>
-                          <Trash2 className="h-4 w-4 text-muted-foreground" />
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs text-muted-foreground">{t('col_account')}</Label>
-                    <Controller
-                      name={`items.${index}.account_number`}
-                      control={control}
-                      render={({ field: f }) => (
-                        <AccountCombobox value={f.value} accounts={accounts} onChange={(val) => handleAccountChange(index, val)} />
-                      )}
+          {/* ── Förval ───────────────────────────────────────────── */}
+          <section className="py-6">
+            <SectionLabel>{t('section_forval')}</SectionLabel>
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px] text-muted-foreground">
+              <span>{forvalChips.join(' · ')}</span>
+              <span aria-hidden="true">{'·'}</span>
+              <button
+                type="button"
+                className="whitespace-nowrap rounded-sm text-foreground underline underline-offset-[3px] transition-colors hover:bg-secondary/60"
+                aria-expanded={forvalOpen}
+                onClick={() => setForvalOpen((open) => !open)}
+              >
+                {forvalOpen ? `${t('forval_toggle_close')} ▴` : `${t('forval_toggle_open')} ▾`}
+              </button>
+            </div>
+            {forvalOpen && (
+              <div className="mt-4 border-t border-border">
+                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                  <label htmlFor="paid_with_private_funds" className="cursor-pointer">
+                    {t('paid_privately_label')}
+                    <span className="block text-xs text-muted-foreground">
+                      {isEF ? t('paid_privately_help_ef') : t('paid_privately_help_ab')}
+                    </span>
+                  </label>
+                  <Controller
+                    name="paid_with_private_funds"
+                    control={control}
+                    render={({ field }) => (
+                      <Switch
+                        id="paid_with_private_funds"
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    )}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                  <label htmlFor="reverse_charge" className="cursor-pointer">
+                    {t('reverse_charge_label')}
+                    <span className="block text-xs text-muted-foreground">
+                      {t('reverse_charge_help')}
+                    </span>
+                  </label>
+                  <Controller
+                    name="reverse_charge"
+                    control={control}
+                    render={({ field }) => (
+                      <Switch id="reverse_charge" checked={field.value} onCheckedChange={field.onChange} />
+                    )}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                  <span>{t('currency_label')}</span>
+                  <Controller
+                    name="currency"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger className="h-8 w-28">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="SEK">SEK</SelectItem>
+                          <SelectItem value="EUR">EUR</SelectItem>
+                          <SelectItem value="USD">USD</SelectItem>
+                          <SelectItem value="GBP">GBP</SelectItem>
+                          <SelectItem value="NOK">NOK</SelectItem>
+                          <SelectItem value="DKK">DKK</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </div>
+                {watchedCurrency !== 'SEK' && (
+                  <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                    <span>
+                      {t('exchange_rate_label')}{' '}
+                      <span className="text-muted-foreground">{t('exchange_rate_to_sek')}</span>
+                    </span>
+                    <Input
+                      type="number"
+                      step="0.0001"
+                      inputMode="decimal"
+                      placeholder={t('exchange_rate_placeholder')}
+                      className="h-8 w-36 text-right tabular-nums"
+                      {...register('exchange_rate', {
+                        onChange: () => { userTouchedRateRef.current = true },
+                      })}
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs text-muted-foreground">{t('col_description')}</Label>
-                    <Controller
-                      name={`items.${index}.description`}
-                      control={control}
-                      render={({ field }) => (
-                        <Input
-                          placeholder={t('description_placeholder')}
-                          ref={field.ref}
-                          value={field.value ?? ''}
-                          onChange={field.onChange}
-                          onBlur={field.onBlur}
-                        />
-                      )}
+                )}
+                {(watchedCurrency || 'SEK') === 'SEK' && (
+                  <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                    <label htmlFor="ore-rounding" className="cursor-pointer">
+                      {t('ore_rounding_label')}
+                      <span className="block text-xs text-muted-foreground">{t('ore_rounding_help')}</span>
+                    </label>
+                    <Switch
+                      id="ore-rounding"
+                      checked={oreRounding}
+                      onCheckedChange={setOreRounding}
+                      aria-label={t('ore_rounding_label')}
                     />
                   </div>
-                  <div className={vatColsVisible ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
-                    <div className="space-y-2">
-                      <Label className="text-xs text-muted-foreground">{vatColsVisible ? t('col_amount_excl') : t('col_amount')}</Label>
-                      <Controller
-                        name={`items.${index}.amount`}
-                        control={control}
-                        render={({ field }) => (
-                          <Input
-                            type="number"
-                            step="0.01"
-                            inputMode="decimal"
-                            placeholder="0,00"
-                            className="text-right tabular-nums"
-                            value={field.value || ''}
-                            onChange={(e) => field.onChange(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
-                          />
-                        )}
+                )}
+                <div className="flex items-center justify-between gap-4 border-b border-border py-3 text-[13px]">
+                  <Label htmlFor="si-delivery-date" className="text-[13px] font-normal">
+                    {t('delivery_date_label')}
+                  </Label>
+                  <Input
+                    id="si-delivery-date"
+                    type="date"
+                    className="h-8 w-40 tabular-nums"
+                    {...register('delivery_date')}
+                  />
+                </div>
+                {dimensionsEnabled && (
+                  <div className="border-b border-border py-3 text-[13px]">
+                    <span>{t('row_dimensions_title')}</span>
+                    <div className="mt-2 max-w-md">
+                      <LineDimensionFields
+                        dimensions={defaultDims}
+                        onChange={setDefaultDimension}
+                        inputClassName="h-8"
                       />
                     </div>
-                    {vatColsVisible && (
-                      <div className="space-y-2">
-                        <Label className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</Label>
-                        {watchedReverseCharge ? (
-                          <Controller
-                            name={`items.${index}.reverse_charge_rate`}
-                            control={control}
-                            render={({ field: f }) => (
-                              <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
-                            )}
-                          />
-                        ) : (
-                          <Controller
-                            name={`items.${index}.vat_rate`}
-                            control={control}
-                            render={({ field: f }) => (
-                              <VatRateCell value={f.value} onChange={f.onChange} />
-                            )}
-                          />
-                        )}
-                      </div>
-                    )}
                   </div>
-                  {vatColsVisible && (
-                    <div className="pt-1 border-t flex items-center justify-between">
-                      <span className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</span>
-                      <span className="tabular-nums text-muted-foreground">
-                        {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
-                      </span>
-                    </div>
-                  )}
-                  {canUseAccrual && isAccrualOpen(index) &&
-                    renderAccrualPanel(index, `accrual-mobile-${index}`)}
-                  {dimensionsEnabled && isDimOpen(index) && renderDimensionsPanel(index)}
-                  {slpRowVisible(index) && renderSlpPanel(index)}
+                )}
+                <div className="py-3 text-[13px]">
+                  <Label htmlFor="si-notes" className="text-[13px] font-normal">
+                    {t('notes_label')}
+                  </Label>
+                  <Textarea
+                    id="si-notes"
+                    placeholder={t('notes_placeholder')}
+                    className="mt-2"
+                    {...register('notes')}
+                  />
                 </div>
-              ))}
+              </div>
+            )}
+          </section>
+
+          {/* ── Summering ────────────────────────────────────────── */}
+          <section className="pt-6">
+            <SectionLabel>{t('section_summary')}</SectionLabel>
+            {vatColsVisible && (
+              <>
+                <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+                  <span className="text-muted-foreground">{t('net_excl_vat')}</span>
+                  <span className="tabular-nums">{formatCurrency(subtotal, watchedCurrency)}</span>
+                </div>
+                <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+                  <span className="text-muted-foreground">
+                    {watchedReverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}
+                  </span>
+                  <span className="tabular-nums">{formatCurrency(totalVat, watchedCurrency)}</span>
+                </div>
+              </>
+            )}
+            {displayRounding.applies && (
+              <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
+                <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
+                <span className="tabular-nums">
+                  {formatCurrency(displayRounding.roundingDelta, watchedCurrency)}
+                </span>
+              </div>
+            )}
+            <div className="flex items-baseline justify-between pt-4">
+              <span className="font-display text-lg">{t('total_payable_label')}</span>
+              <span className="font-display text-xl tabular-nums">
+                {formatCurrency(displayRounding.displayed, watchedCurrency)}
+              </span>
             </div>
+
+            {/* Total cross-check (client-only, never sent) */}
+            <div className="mt-4 flex items-center justify-between gap-4">
+              <Label htmlFor="si-faktura-total" className="text-[13px] font-normal text-muted-foreground">
+                {t('crosscheck_label')}{' '}
+                <span className="text-muted-foreground">({t('crosscheck_optional')})</span>
+              </Label>
+              <Input
+                id="si-faktura-total"
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder="0,00"
+                className={cn(
+                  'h-8 w-32 text-right tabular-nums',
+                  settledFields.has('faktura_total') && 'prefill-settle',
+                )}
+                value={fakturaTotalStr}
+                onChange={(e) => setFakturaTotalStr(e.target.value)}
+                onBlur={() => {
+                  const parsed = parseFlexibleNumber(fakturaTotalStr)
+                  if (parsed != null) setFakturaTotalStr(formatAmount(parsed))
+                }}
+              />
+            </div>
+            {crosscheckDiff != null && (
+              <p
+                className={cn(
+                  'mt-2 text-right text-xs',
+                  crosscheckMatches ? 'text-success' : 'text-destructive',
+                )}
+              >
+                {crosscheckMatches
+                  ? t('crosscheck_match')
+                  : t('crosscheck_diff', {
+                      diff:
+                        (crosscheckDiff > 0 ? '+' : '') +
+                        formatCurrency(crosscheckDiff, watchedCurrency),
+                    })}
+              </p>
+            )}
 
             {/* AI totals comparison: only when extracted */}
             {extractedData?.totals && (extractedData.totals.subtotal != null || extractedData.totals.total != null) && (
-              <div className="mt-4 pt-4 border-t flex flex-wrap gap-2 text-xs">
+              <div className="mt-4 flex flex-wrap gap-2 text-xs">
                 <span className="text-muted-foreground">{t('ai_totals_label')}</span>
                 {extractedData.totals.subtotal != null && (
                   <span className="px-2 py-1 rounded-sm bg-muted tabular-nums">
@@ -1542,135 +2272,101 @@ export default function NewSupplierInvoiceForm({
               </div>
             )}
 
-            {/* Computed totals */}
-            <div className="mt-4 pt-4 border-t space-y-2">
-              {vatColsVisible && (
-                <>
-                  <div className="flex justify-between sm:justify-end sm:gap-8">
-                    <span className="text-muted-foreground">{t('net_excl_vat')}</span>
-                    <span className="tabular-nums sm:w-32 text-right">{formatCurrency(subtotal, watchedCurrency)}</span>
-                  </div>
-                  <div className="flex justify-between sm:justify-end sm:gap-8">
-                    <span className="text-muted-foreground">
-                      {watchedReverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}
-                    </span>
-                    <span className="tabular-nums sm:w-32 text-right">{formatCurrency(totalVat, watchedCurrency)}</span>
-                  </div>
-                </>
-              )}
-              {displayRounding.applies && (
-                <div className="flex justify-between sm:justify-end sm:gap-8">
-                  <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
-                  <span className="tabular-nums sm:w-32 text-right">{formatCurrency(displayRounding.roundingDelta, watchedCurrency)}</span>
-                </div>
-              )}
-              <div className="flex justify-between sm:justify-end sm:gap-8 font-bold text-lg">
-                <span>{t('total_label')}</span>
-                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(displayRounding.displayed, watchedCurrency)}</span>
-              </div>
-              {/* Öresavrundning: display-only rounding of the displayed total to
-                  whole kronor (SEK only). The registered amount and the booked
-                  verifikat keep the exact öre; this only changes what's shown. */}
-              {(watchedCurrency || 'SEK') === 'SEK' && (
-                <div className="flex items-center justify-between gap-4 pt-3 mt-1 border-t">
-                  <div className="space-y-0.5">
-                    <Label htmlFor="ore-rounding" className="text-sm">{t('ore_rounding_label')}</Label>
-                    <p className="text-xs text-muted-foreground">{t('ore_rounding_help')}</p>
-                  </div>
-                  <Switch
-                    id="ore-rounding"
-                    checked={oreRounding}
-                    onCheckedChange={setOreRounding}
-                    aria-label={t('ore_rounding_label')}
-                  />
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Section 3: Övrigt (collapsible) */}
-        <Card>
-          <CardHeader
-            className="cursor-pointer hover:bg-muted/30 transition-colors"
-            onClick={() => setAdvancedOpen(!advancedOpen)}
-          >
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base">{t('section_other')}</CardTitle>
-              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
-            </div>
-          </CardHeader>
-          {advancedOpen && (
-            <CardContent className="space-y-4 pt-0">
-              <div className="space-y-2">
-                <Label>{t('delivery_date_label')}</Label>
-                <Input type="date" {...register('delivery_date')} />
-              </div>
-              <div className="space-y-2">
-                <Label>{t('notes_label')}</Label>
-                <Textarea placeholder={t('notes_placeholder')} {...register('notes')} />
-              </div>
-            </CardContent>
-          )}
-        </Card>
-
-        {/* Submit */}
-        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-3 sm:gap-4">
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full sm:w-auto"
-            onClick={handleCancel}
-            disabled={isSubmitting || documentUploadInProgress}
-          >
-            {t('cancel')}
-          </Button>
-          {!watchedPaidPrivately && (
-            <Button
-              type="submit"
-              variant="outline"
-              className="w-full sm:w-auto"
-              disabled={isSubmitting || documentUploadInProgress || !canWrite || showNoPeriodWarning}
-              onClick={() => { submitModeRef.current = 'register_and_match' }}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            {/* The page's single ochre line: what stands between the user and
+                a registered invoice, sage once nothing does. */}
+            <p
+              aria-live="polite"
+              className={cn('pt-6 text-[12.5px]', nextStep ? 'text-attn' : 'text-success')}
             >
-              <Link2 className="mr-2 h-4 w-4" />
-              {t('register_and_mark_paid')}
-            </Button>
+              {nextStep ? (
+                <>
+                  {t('next_step_prefix')}
+                  <button
+                    type="button"
+                    className="underline underline-offset-[3px] hover:opacity-80"
+                    onClick={() => focusMissingField(nextStep.field, nextStep.rowIndex)}
+                  >
+                    {nextStep.label}
+                  </button>
+                  .
+                </>
+              ) : (
+                readyLineText
+              )}
+            </p>
+          </section>
+        </div>
+
+        {/* ── Sticky action bar (binds to the dialog scroll container in bare
+            mode, to the page panel scroll on the standalone page) ── */}
+        <div
+          className={cn(
+            'sticky bottom-0 z-10 mt-6 border-t border-border bg-background',
+            bare && '-mx-6 -mb-6 rounded-b-xl px-6',
           )}
-          <Button
-            type="submit"
-            disabled={isSubmitting || documentUploadInProgress || !canWrite || showNoPeriodWarning}
-            className="w-full sm:w-auto"
-            onClick={() => { submitModeRef.current = 'register' }}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {t('registering')}
-              </>
-            ) : !canWrite ? (
-              <>
-                <Lock className="mr-2 h-4 w-4" />
-                {watchedPaidPrivately ? t('register_expense') : isEF ? t('register_invoice') : t('review_and_register')}
-              </>
-            ) : watchedPaidPrivately ? (
-              t('register_expense')
-            ) : isEF ? (
-              t('register_invoice')
-            ) : (
-              t('review_and_register')
-            )}
-          </Button>
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="whitespace-nowrap text-[13px] text-muted-foreground">
+              {t('total_label')}
+              <strong className="ml-2 text-[15px] font-semibold tabular-nums text-foreground">
+                {formatCurrency(displayRounding.displayed, watchedCurrency)}
+              </strong>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className={cn(QUIET_LINK_CLASS, 'disabled:opacity-50')}
+                onClick={handleCancel}
+                disabled={isSubmitting || documentUploadInProgress}
+              >
+                {t('cancel')}
+              </button>
+              {!watchedPaidPrivately && (
+                <Button
+                  type="submit"
+                  variant="outline"
+                  disabled={isSubmitting || !canWrite}
+                  onClick={() => { submitModeRef.current = 'register_and_match' }}
+                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+                >
+                  <Link2 className="mr-2 h-4 w-4" />
+                  {t('register_and_mark_paid')}
+                </Button>
+              )}
+              {/* Always enabled pre-click for writable users: clicking with
+                  something missing routes focus to the first missing field
+                  (submit-time hard blocks stay in onSubmit). Viewers keep the
+                  disabled + lock treatment: authorization, not validation. */}
+              <Button
+                type="submit"
+                disabled={isSubmitting || !canWrite}
+                onClick={() => { submitModeRef.current = 'register' }}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {t('registering')}
+                  </>
+                ) : !canWrite ? (
+                  <>
+                    <Lock className="mr-2 h-4 w-4" />
+                    {primaryLabel}
+                  </>
+                ) : (
+                  primaryLabel
+                )}
+              </Button>
+            </div>
+          </div>
         </div>
       </form>
 
       {/* Review dialog (AB only: also shown after a bank transaction is picked
           in the register-and-match flow). */}
       {pendingData && !isEF && showReview && (() => {
-        const selectedSupplier = suppliers.find((s) => s.id === pendingData.supplier_id)
-        if (!selectedSupplier) return null
+        const reviewSupplier = suppliers.find((s) => s.id === pendingData.supplier_id)
+        if (!reviewSupplier) return null
         return (
           <ConfirmationDialog
             open={showReview}
@@ -1682,7 +2378,7 @@ export default function NewSupplierInvoiceForm({
             confirmLabel={t('review_dialog_confirm')}
           >
             <SupplierInvoiceReviewContent
-              supplier={selectedSupplier}
+              supplier={reviewSupplier}
               invoiceNumber={pendingData.supplier_invoice_number}
               invoiceDate={pendingData.invoice_date}
               dueDate={pendingData.due_date}

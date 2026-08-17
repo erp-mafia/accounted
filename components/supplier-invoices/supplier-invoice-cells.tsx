@@ -59,7 +59,7 @@ export function VatRateCell({ value, onChange }: { value: number; onChange: (v: 
             setDraft(clamped === parsed ? raw : String(clamped))
             onChange(clamped / 100)
           }}
-          className="text-right tabular-nums pr-6"
+          className="h-8 px-2 pr-6 text-right text-[13px] tabular-nums"
           aria-label={t('col_vat_rate')}
         />
         <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
@@ -102,7 +102,7 @@ export function RcRateSelect({ value, onChange }: { value: number; onChange: (v:
   const t = useTranslations('supplier_invoice_editor')
   return (
     <Select value={String(value ?? 0.25)} onValueChange={(v) => onChange(parseFloat(v))}>
-      <SelectTrigger className="h-9 tabular-nums" aria-label={t('col_rc_vat_rate')}>
+      <SelectTrigger className="h-8 tabular-nums" aria-label={t('col_rc_vat_rate')}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
