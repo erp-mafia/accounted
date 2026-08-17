@@ -98,6 +98,67 @@ export function VatRateCell({ value, onChange }: { value: number; onChange: (v: 
 // invoice is reverse charge. The supplier charges no VAT (the line vat_rate is
 // 0); this is the Swedish statutory rate the buyer self-assesses at: 25%
 // huvudregeln for EU services, 12%/6% for reduced-rated services (ML 6 kap 34 §).
+/**
+ * Money amount cell: text input with decimal inputMode so Swedish comma
+ * decimals work (type=number rejects them and adds spinner arrows that
+ * decrement money on ArrowDown). Enter commits via blur instead of
+ * triggering the form's implicit submit.
+ */
+export function AmountCell({
+  value,
+  onChange,
+  inputRef,
+  className,
+}: {
+  value: number
+  onChange: (v: number) => void
+  inputRef?: (el: HTMLInputElement | null) => void
+  className?: string
+}) {
+  const innerRef = useRef<HTMLInputElement | null>(null)
+  const [draft, setDraft] = useState(() => (value ? String(value) : ''))
+
+  useEffect(() => {
+    if (document.activeElement !== innerRef.current) {
+      setDraft(value ? String(value) : '')
+    }
+  }, [value])
+
+  return (
+    <Input
+      ref={(el) => {
+        innerRef.current = el
+        inputRef?.(el)
+      }}
+      type="text"
+      inputMode="decimal"
+      placeholder="0,00"
+      className={className}
+      value={draft}
+      onFocus={(e) => e.currentTarget.select()}
+      onBlur={() => setDraft(value ? String(value) : '')}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          e.currentTarget.blur()
+        }
+      }}
+      onChange={(e) => {
+        const raw = e.target.value
+        if (raw !== '' && !/^-?\d*[.,]?\d*$/.test(raw)) return
+        setDraft(raw)
+        const normalized = raw.replace(',', '.')
+        if (normalized === '' || normalized === '.' || normalized === '-') {
+          onChange(0)
+          return
+        }
+        const parsed = parseFloat(normalized)
+        onChange(Number.isFinite(parsed) ? parsed : 0)
+      }}
+    />
+  )
+}
+
 export function RcRateSelect({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   const t = useTranslations('supplier_invoice_editor')
   return (

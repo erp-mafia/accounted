@@ -49,7 +49,7 @@ import {
   type SupplierInvoiceLineItem,
 } from '@/lib/supplier-invoices/form-payload'
 import { plantedRowTouched, snapshotPlantedRow } from '@/lib/supplier-invoices/planted-rows'
-import { VatRateCell, RcRateSelect } from '@/components/supplier-invoices/supplier-invoice-cells'
+import { VatRateCell, RcRateSelect, AmountCell } from '@/components/supplier-invoices/supplier-invoice-cells'
 import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-supplier-invoice-data'
 import { useInboxPrefill, type InboxItemData } from '@/components/supplier-invoices/use-inbox-prefill'
 import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-supplier-invoice-submit'
@@ -1667,6 +1667,12 @@ export default function NewSupplierInvoiceForm({
               <DropdownMenuContent
                 align="start"
                 className="max-h-80 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto"
+                onCloseAutoFocus={(e) => {
+                  // Picking a supplier routes focus to the invoice-number
+                  // field; the menu's default close behavior would yank it
+                  // back to the trigger.
+                  e.preventDefault()
+                }}
               >
                 {suppliers.map((s) => (
                   <DropdownMenuItem
@@ -1958,17 +1964,11 @@ export default function NewSupplierInvoiceForm({
                             name={`items.${index}.amount`}
                             control={control}
                             render={({ field }) => (
-                              <Input
-                                type="number"
-                                step="0.01"
-                                inputMode="decimal"
-                                placeholder="0,00"
+                              <AmountCell
+                                value={field.value}
+                                onChange={field.onChange}
                                 className={cn(CELL_INPUT_CLASS, 'text-right tabular-nums')}
-                                value={field.value || ''}
-                                onChange={(e) =>
-                                  field.onChange(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)
-                                }
-                                ref={(el) => {
+                                inputRef={(el) => {
                                   amountInputRefs.current[index] = el
                                 }}
                               />
