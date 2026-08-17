@@ -341,7 +341,8 @@ export default function MockDataImportDialog<T>({
                   <TableHeader>
                     <TableRow>
                       {csvHeaders.map(h => (
-                        <TableHead key={h} className="text-xs whitespace-nowrap">{h}</TableHead>
+                        /* data-ph-mask: CSV headers are user data */
+                        <TableHead key={h} data-ph-mask="" className="text-xs whitespace-nowrap">{h}</TableHead>
                       ))}
                     </TableRow>
                   </TableHeader>

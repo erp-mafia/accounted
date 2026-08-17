@@ -167,7 +167,7 @@ export function PaymentMethodMappingForm({
         const mode = policy?.mode ?? 'book'
         const account = policy?.mode === 'book' ? policy.account : ''
         return (
-          <SettingsRow key={method} label={title || method}>
+          <SettingsRow key={method} label={<span data-ph-mask="">{title || method}</span>}>
             <SettingsRowEnd>
               <select
                 value={policy ? mode : 'unmapped'}

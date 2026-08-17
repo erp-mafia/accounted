@@ -54,6 +54,8 @@ import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
 import { applyMappingOverride } from '@/lib/import/account-mapper'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileParseResult, BankFileFormatId, BankFileDuplicateInfo, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
+import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
+import type { SkattekontoFileImportResult } from '@/components/import/SkattekontoFileResultStep'
 import type { IngestResult } from '@/lib/transactions/ingest'
 import type {
   ImportWizardStep,
@@ -78,6 +80,7 @@ import type { BASAccount } from '@/types'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import dynamic from 'next/dynamic'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { FullArchiveDialog } from '@/components/import/FullArchiveDialog'
 import CloudBackupCard from '@/extensions/general/cloud-backup/components/CloudBackupCard'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 
@@ -109,6 +112,9 @@ const CustomersEditStep = dynamic(() => import('@/components/import/CustomersEdi
 const SuppliersEditStep = dynamic(() => import('@/components/import/SuppliersEditStep'), { loading: ImportStepLoading })
 const ArticlesEditStep = dynamic(() => import('@/components/import/ArticlesEditStep'), { loading: ImportStepLoading })
 const RegisterResultStep = dynamic(() => import('@/components/import/RegisterResultStep'), { loading: ImportStepLoading })
+const SkattekontoFileUploadStep = dynamic(() => import('@/components/import/SkattekontoFileUploadStep'), { loading: ImportStepLoading })
+const SkattekontoFilePreviewStep = dynamic(() => import('@/components/import/SkattekontoFilePreviewStep'), { loading: ImportStepLoading })
+const SkattekontoFileResultStep = dynamic(() => import('@/components/import/SkattekontoFileResultStep'), { loading: ImportStepLoading })
 const SIEUploadStep = dynamic(() => import('@/components/import/SIEUploadStep'), { loading: ImportStepLoading })
 const SIEPreviewStep = dynamic(() => import('@/components/import/SIEPreviewStep'), { loading: ImportStepLoading })
 const AccountMappingStep = dynamic(() => import('@/components/import/AccountMappingStep'), { loading: ImportStepLoading })
@@ -143,6 +149,9 @@ function BankFileImportWizard() {
   const [bankIsLoading, setBankIsLoading] = useState(false)
   const [bankError, setBankError] = useState<string | null>(null)
   const [bankErrorTitle, setBankErrorTitle] = useState<string | null>(null)
+  // The uploaded file was recognized as a skattekontoutdrag: the upload step
+  // renders a pointer to the dedicated importer instead of a parse error.
+  const [skattekontoDetected, setSkattekontoDetected] = useState(false)
 
   // Parse results
   const [parseResult, setParseResult] = useState<BankFileParseResult | null>(null)
@@ -215,6 +224,7 @@ function BankFileImportWizard() {
   const handleFileSelect = useCallback(async (file: File, formatOverride?: BankFileFormatId) => {
     setBankError(null)
     setBankErrorTitle(null)
+    setSkattekontoDetected(false)
     setBankIsLoading(true)
 
     try {
@@ -246,6 +256,8 @@ function BankFileImportWizard() {
               `Den här filen är redan importerad${when}. Transaktionerna finns redan under Transaktioner. ` +
                 'Exportera en ny fil från banken om du vill lägga till fler transaktioner.'
             )
+          } else if (err.code === 'BANK_FILE_SKATTEKONTO_DETECTED') {
+            setSkattekontoDetected(true)
           } else {
             setBankError(getErrorMessage(err) || 'Kunde inte läsa filen')
           }
@@ -373,6 +385,7 @@ function BankFileImportWizard() {
     setIngestResult(null)
     setBankError(null)
     setBankErrorTitle(null)
+    setSkattekontoDetected(false)
     setRawFileContent('')
     setDuplicateInfo(null)
   }
@@ -432,6 +445,7 @@ function BankFileImportWizard() {
           errorTitle={bankErrorTitle}
           detectedFormat={detectedFormat}
           detectedFormatName={detectedFormatName}
+          skattekontoDetected={skattekontoDetected}
         />
       )}
 
@@ -479,6 +493,192 @@ function BankFileImportWizard() {
           result={ingestResult}
           onNewImport={handleNewImport}
         />
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+// Skattekonto File Import Wizard
+// ============================================================
+
+type SkattekontoFileStep = 'upload' | 'preview' | 'result'
+
+const SKATTEKONTO_STEPS: SkattekontoFileStep[] = ['upload', 'preview', 'result']
+
+const SKATTEKONTO_STEP_LABELS: Record<SkattekontoFileStep, string> = {
+  upload: 'Ladda upp',
+  preview: 'Förhandsgranskning',
+  result: 'Resultat',
+}
+
+function SkattekontoImportWizard() {
+  const { toast } = useToast()
+  const t = useTranslations('import')
+
+  const [step, setStep] = useState<SkattekontoFileStep>('upload')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [errorTitle, setErrorTitle] = useState<string | null>(null)
+
+  const [parseResult, setParseResult] = useState<SkattekontoFileParseResult | null>(null)
+  const [fileHash, setFileHash] = useState('')
+  const [filename, setFilename] = useState('')
+  const [duplicateIndexes, setDuplicateIndexes] = useState<number[]>([])
+  const [promotionIndexes, setPromotionIndexes] = useState<number[]>([])
+  const [orgNumberMismatch, setOrgNumberMismatch] = useState(false)
+  const [importResult, setImportResult] = useState<SkattekontoFileImportResult | null>(null)
+
+  const currentStepIndex = SKATTEKONTO_STEPS.indexOf(step)
+  const progress = ((currentStepIndex + 1) / SKATTEKONTO_STEPS.length) * 100
+
+  const handleFileSelect = useCallback(
+    async (file: File) => {
+      setError(null)
+      setErrorTitle(null)
+      setIsLoading(true)
+      try {
+        const formData = new FormData()
+        formData.append('file', file)
+        const res = await fetch('/api/import/skattekonto-file/parse', {
+          method: 'POST',
+          body: formData,
+        })
+        const data = await res.json()
+
+        if (!res.ok) {
+          const err = data?.error
+          if (err?.code === 'SKATTEKONTO_FILE_DUPLICATE') {
+            setErrorTitle(t('skattekonto_duplicate_file_title'))
+          }
+          setError(getErrorMessage(data, { statusCode: res.status }))
+          return
+        }
+
+        setParseResult(data.data.parse_result)
+        setFileHash(data.data.file_hash)
+        setFilename(data.data.filename)
+        setDuplicateIndexes(data.data.duplicate_row_indexes ?? [])
+        setPromotionIndexes(data.data.promotion_row_indexes ?? [])
+        setOrgNumberMismatch(Boolean(data.data.org_number_mismatch))
+        setStep('preview')
+      } catch (err) {
+        setError(err instanceof Error ? getErrorMessage(err) : t('skattekonto_error_title'))
+      } finally {
+        setIsLoading(false)
+      }
+    },
+    [t],
+  )
+
+  const handleExecute = useCallback(async () => {
+    if (!parseResult) return
+    setIsLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/import/skattekonto-file/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rows: parseResult.rows.map((row) => ({
+            transaktionsdatum: row.transaktionsdatum,
+            transaktionstext: row.transaktionstext,
+            belopp: row.belopp,
+          })),
+          filename,
+          file_hash: fileHash,
+          variant: parseResult.variant,
+          closing_saldo: parseResult.closing_saldo,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(getErrorMessage(data, { statusCode: res.status }))
+        return
+      }
+      setImportResult(data.data)
+      setStep('result')
+      toast({
+        title: t('skattekonto_result_title'),
+        description: t('skattekonto_result_summary', {
+          imported: data.data.imported,
+          duplicates: data.data.duplicates,
+        }),
+      })
+    } catch (err) {
+      setError(err instanceof Error ? getErrorMessage(err) : t('skattekonto_error_title'))
+    } finally {
+      setIsLoading(false)
+    }
+  }, [parseResult, filename, fileHash, toast, t])
+
+  const handleNewImport = () => {
+    setStep('upload')
+    setParseResult(null)
+    setFileHash('')
+    setFilename('')
+    setDuplicateIndexes([])
+    setPromotionIndexes([])
+    setOrgNumberMismatch(false)
+    setImportResult(null)
+    setError(null)
+    setErrorTitle(null)
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardContent className="pt-6">
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="sm:hidden text-primary font-medium">
+                Steg {currentStepIndex + 1}/{SKATTEKONTO_STEPS.length}:{' '}
+                {SKATTEKONTO_STEP_LABELS[step]}
+              </span>
+              {SKATTEKONTO_STEPS.map((s, i) => (
+                <span
+                  key={s}
+                  className={cn(
+                    'hidden sm:inline',
+                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
+                  )}
+                >
+                  {SKATTEKONTO_STEP_LABELS[s]}
+                </span>
+              ))}
+            </div>
+            <Progress value={progress} className="h-2" />
+          </div>
+        </CardContent>
+      </Card>
+
+      {step === 'upload' && (
+        <SkattekontoFileUploadStep
+          onFileSelect={handleFileSelect}
+          isLoading={isLoading}
+          error={error}
+          errorTitle={errorTitle}
+        />
+      )}
+
+      {step === 'preview' && parseResult && (
+        <SkattekontoFilePreviewStep
+          parseResult={parseResult}
+          duplicateIndexes={duplicateIndexes}
+          promotionIndexes={promotionIndexes}
+          orgNumberMismatch={orgNumberMismatch}
+          isLoading={isLoading}
+          onExecute={handleExecute}
+          onBack={handleNewImport}
+        />
+      )}
+
+      {step === 'preview' && error && (
+        <p className="text-sm text-destructive">{error}</p>
+      )}
+
+      {step === 'result' && importResult && (
+        <SkattekontoFileResultStep result={importResult} onNewImport={handleNewImport} />
       )}
     </div>
   )
@@ -2108,14 +2308,15 @@ const ShopifyPanel = getSettingsPanel('shopify')
 // Import Page with Selection Cards
 // ============================================================
 
-type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'bank' | 'sie' | 'underlag' | 'csv_data' | 'migration'
+type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'bank' | 'skattekonto' | 'sie' | 'underlag' | 'csv_data' | 'migration'
 
 export default function ImportPage() {
-  const { isSandbox } = useCompany()
+  const { isSandbox, role } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
   const [initialProvider, setInitialProvider] = useState<string | null>(null)
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
   const [sieHistoryOpen, setSieHistoryOpen] = useState(false)
   const [userId, setUserId] = useState('')
@@ -2141,8 +2342,8 @@ export default function ImportPage() {
     // third-party credentials, so their deep links are ignored in the sandbox.
     // Manual file-import modes (bank file, CSV/Excel, SIE) stay reachable.
     const allowedModes = isSandbox
-      ? ['bank', 'sie', 'underlag', 'csv_data']
-      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'bank', 'sie', 'underlag', 'csv_data', 'migration']
+      ? ['bank', 'skattekonto', 'sie', 'underlag', 'csv_data']
+      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'bank', 'skattekonto', 'sie', 'underlag', 'csv_data', 'migration']
     if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
@@ -2163,14 +2364,18 @@ export default function ImportPage() {
     }
   }, [isSandbox, searchParams])
 
-  // Hash-based deep links: both live on the export tab; #sie-export opens
-  // the SIE dialog, #cloud-backup expands the cloud panel and scrolls to it.
+  // Hash-based deep links: all live on the export tab; #sie-export opens
+  // the SIE dialog, #full-archive opens the archive download dialog, and
+  // #cloud-backup expands the cloud panel and scrolls to it.
   useEffect(() => {
     if (typeof window === 'undefined') return
     const hash = window.location.hash
     if (hash === '#sie-export') {
       setView('export')
       setSieDialogOpen(true)
+    } else if (hash === '#full-archive') {
+      setView('export')
+      setArchiveDialogOpen(true)
     } else if (hash === '#cloud-backup') {
       setView('export')
       setCloudOpen(true)
@@ -2297,6 +2502,11 @@ export default function ImportPage() {
                   onClick={() => setMode('bank')}
                 />
                 <ImportRow
+                  title={t('skattekonto_title')}
+                  sub={t('skattekonto_description')}
+                  onClick={() => setMode('skattekonto')}
+                />
+                <ImportRow
                   title={t('csv_data_title')}
                   sub={t('csv_data_description')}
                   onClick={() => setMode('csv_data')}
@@ -2336,6 +2546,17 @@ export default function ImportPage() {
                   sub={t('export_sie_description')}
                   onClick={() => setSieDialogOpen(true)}
                 />
+                {/* The full-archive route is owner/admin-only (double-checked
+                    server-side), so the row hides for members and viewers
+                    instead of offering a download that can only 403. */}
+                {(role === 'owner' || role === 'admin') && (
+                  <ImportRow
+                    id="full-archive"
+                    title={t('export_archive_title')}
+                    sub={t('export_archive_description')}
+                    onClick={() => setArchiveDialogOpen(true)}
+                  />
+                )}
                 {hasCloudBackup && (
                   <ImportRow
                     title={t('cloud_row_title')}
@@ -2352,6 +2573,10 @@ export default function ImportPage() {
               )}
             </div>
           )}
+
+          {/* Full archive (SIE + reports + all documents) as the same kind of
+              small centered dialog as the SIE export below. */}
+          <FullArchiveDialog open={archiveDialogOpen} onOpenChange={setArchiveDialogOpen} />
 
           {/* SIE export as a small centered dialog (concept overlay convention) */}
           <Dialog open={sieDialogOpen} onOpenChange={setSieDialogOpen}>
@@ -2484,6 +2709,7 @@ export default function ImportPage() {
         )
       )}
       {mode === 'bank' && <BankFileImportWizard />}
+      {mode === 'skattekonto' && <SkattekontoImportWizard />}
       {mode === 'sie' && <SIEImportWizard />}
       {mode === 'underlag' && <UnderlagImportWizard />}
       {mode === 'csv_data' && <CSVDataImportWizard />}

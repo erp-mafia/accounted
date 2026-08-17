@@ -91,7 +91,9 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
 
   if (!settings?.bankgiro) {
     return NextResponse.json(
-      { error: 'Bankgironummer saknas i företagsinställningar.' },
+      // Same wording as the salary LB route: the settings overview shows a
+      // registry bankgiro that this route does not read.
+      { error: 'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturering för att skapa betalfilen.' },
       { status: 400 }
     )
   }

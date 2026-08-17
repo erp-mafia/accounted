@@ -269,6 +269,9 @@ export function AccountDangerZone() {
               onChange={(e) => setConfirmText(e.target.value)}
               placeholder={email ?? ''}
               autoComplete="off"
+              // ph-no-capture: the placeholder is the user's email, and
+              // replay masking covers values, not attributes.
+              className="ph-no-capture"
             />
             {error && <p className="text-sm text-destructive">{error}</p>}
           </div>

@@ -441,11 +441,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           const prefix = DIM_BADGE_PREFIX[dimNo] ?? dim?.name ?? `Dim ${dimNo}`
           const hasName = !!value && value.name !== '' && value.name !== value.code
           return (
+            // data-ph-mask: dimension names and codes are user data. No title
+            // attribute: replay masking covers text nodes, not attributes, so
+            // a title tooltip would ship the masked content in the clear.
             <Badge
               key={dimNo}
+              data-ph-mask=""
               variant="outline"
               className="font-mono text-[11px] font-normal"
-              title={`${dim?.name ?? prefix} ${code}${hasName ? `: ${value.name}` : ''}`}
             >
               {prefix}: {hasName ? value.name : code}
             </Badge>

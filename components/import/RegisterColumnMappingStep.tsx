@@ -91,7 +91,8 @@ export default function RegisterColumnMappingStep<K extends string>({
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b">
                     {headers.map((h, i) => (
-                      <th key={i} className="px-3 py-2 text-left whitespace-nowrap">
+                      /* data-ph-mask: CSV headers are user data */
+                      <th key={i} data-ph-mask="" className="px-3 py-2 text-left whitespace-nowrap">
                         {h || `Kolumn ${i + 1}`}
                       </th>
                     ))}

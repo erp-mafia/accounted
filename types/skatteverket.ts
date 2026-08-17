@@ -24,7 +24,31 @@ export interface StoredSkattekontoTransaction {
   belopp_kronofogden: number | null
   status: 'booked' | 'upcoming'
   journal_entry_id: string | null
+  source: 'api' | 'file_import'
+  file_import_id: string | null
   imported_at: string
+  updated_at: string
+}
+
+/** Row shape for the `skattekonto_file_imports` tracking table (DB → app). */
+export interface SkattekontoFileImportRecord {
+  id: string
+  company_id: string
+  /** Importing user; null after that user's account is deleted. */
+  user_id: string | null
+  filename: string
+  file_hash: string
+  file_variant: 'csv' | 'skv'
+  row_count: number
+  imported_count: number
+  duplicate_count: number
+  promoted_count: number
+  date_from: string | null
+  date_to: string | null
+  closing_saldo: number | null
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  error_message: string | null
+  created_at: string
   updated_at: string
 }
 

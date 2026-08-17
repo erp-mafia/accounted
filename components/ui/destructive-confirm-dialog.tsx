@@ -68,11 +68,14 @@ export function DestructiveConfirmDialog({
               <AlertTriangle className="h-5 w-5" />
             </div>
             <div className="space-y-1">
-              <DialogTitle>{title}</DialogTitle>
+              {/* data-ph-mask: confirm dialogs describe the object being
+                  acted on (convention 10), so title and description are user
+                  data in session replays, not chrome. */}
+              <DialogTitle data-ph-mask="">{title}</DialogTitle>
               {/* pre-line so callers can pass newline-separated paragraphs
                   (e.g. the salary unapprove confirm assembles its copy
                   dynamically); single-line descriptions render unchanged. */}
-              <DialogDescription className="whitespace-pre-line">
+              <DialogDescription data-ph-mask="" className="whitespace-pre-line">
                 {description}
               </DialogDescription>
             </div>

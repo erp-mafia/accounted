@@ -1763,6 +1763,10 @@ export interface FiscalPeriod {
   period_end: string
   is_closed: boolean
   closed_at: string | null
+  // Closed via "klarmarkera": the bokslut was done in a previous bookkeeping
+  // system, so the period is closed here without a closing entry of its own.
+  // Optional: rows predate the column on some cached readers.
+  closed_externally?: boolean
   locked_at: string | null
   retention_expires_at: string | null
   opening_balances_set: boolean

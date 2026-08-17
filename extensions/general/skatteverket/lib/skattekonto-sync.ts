@@ -1,9 +1,10 @@
-import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { formatRedovisare } from '@/lib/skatteverket/format'
+import { computeDedupKey, contentSignature } from '@/lib/skatteverket/skattekonto-dedup'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { getSaldo, getTransaktioner } from './skattekonto-client'
 import { SkatteverketAuthError, type SkvAuth } from './api-client'
@@ -32,29 +33,11 @@ export interface SkattekontoSyncResult {
   syncedAt: string
 }
 
-/**
- * Compute the dedup key for a transaction.
- *
- * - When `transaktionsidentitet` is present (always on tidigare, sometimes
- *   on kommande), use it directly. It's stable across syncs.
- * - Otherwise compute a sha256 hex over (date|amount|text): stable enough
- *   for kommande, which graduate to tidigare with the same content.
- *
- * The point of this function is reproducibility: the same logical
- * transaction must always produce the same dedup_key.
- */
-export function computeDedupKey(tx: {
-  transaktionsidentitet?: number | null
-  transaktionsdatum: string
-  beloppSkatteverket: number
-  transaktionstext: string
-}): string {
-  if (tx.transaktionsidentitet != null) {
-    return `id:${tx.transaktionsidentitet}`
-  }
-  const material = `${tx.transaktionsdatum}|${tx.beloppSkatteverket}|${tx.transaktionstext}`
-  return `h:${crypto.createHash('sha256').update(material).digest('hex')}`
-}
+// Dedup key computation moved to core (lib/skatteverket/skattekonto-dedup):
+// the skattekontoutdrag file importer is a second producer of this table and
+// must compute byte-identical keys. Re-exported so existing extension-side
+// imports keep working.
+export { computeDedupKey }
 
 /**
  * Resolve the org/personnummer to send to Skatteverket as `omfragad`.
@@ -81,10 +64,15 @@ async function resolveOmfragad(
 /**
  * Build the row to insert/upsert into skattekonto_transactions.
  */
-function bookedToRow(
-  companyId: string,
-  tx: SkatteverketBookedTransaction,
-): Omit<StoredSkattekontoTransaction, 'id' | 'imported_at' | 'updated_at' | 'journal_entry_id'> {
+// file_import_id is excluded from the upsert payload on purpose: when the
+// sync takes over a file-imported row (see below) the provenance link back
+// to the uploaded file should survive the conflict-update.
+type SyncRow = Omit<
+  StoredSkattekontoTransaction,
+  'id' | 'imported_at' | 'updated_at' | 'journal_entry_id' | 'file_import_id'
+>
+
+function bookedToRow(companyId: string, tx: SkatteverketBookedTransaction): SyncRow {
   return {
     company_id: companyId,
     transaktionsidentitet: tx.transaktionsidentitet,
@@ -96,13 +84,11 @@ function bookedToRow(
     belopp_skatteverket: tx.beloppSkatteverket,
     belopp_kronofogden: tx.beloppKronofogden,
     status: 'booked',
+    source: 'api',
   }
 }
 
-function upcomingToRow(
-  companyId: string,
-  tx: SkatteverketUpcomingTransaction,
-): Omit<StoredSkattekontoTransaction, 'id' | 'imported_at' | 'updated_at' | 'journal_entry_id'> {
+function upcomingToRow(companyId: string, tx: SkatteverketUpcomingTransaction): SyncRow {
   return {
     company_id: companyId,
     transaktionsidentitet: tx.transaktionsidentitet ?? null,
@@ -114,6 +100,7 @@ function upcomingToRow(
     belopp_skatteverket: tx.beloppSkatteverket,
     belopp_kronofogden: tx.beloppKronofogden,
     status: 'upcoming',
+    source: 'api',
   }
 }
 
@@ -202,10 +189,117 @@ export async function syncSkattekonto(
     })
   }
 
-  if (allRows.length > 0) {
+  // Take over hash-keyed rows for transactions the API now identifies.
+  //
+  // The skattekontoutdrag file importer writes booked rows with `h:` keys
+  // (statement exports carry no transaktionsidentitet); the API keys the
+  // same logical transactions `id:`. Without this step, connecting the API
+  // after a file import would duplicate every imported row. Pair each
+  // incoming id-keyed booked row that is NOT yet in the table against an
+  // unconsumed existing `h:` row with equal content and rewrite that row's
+  // identity in place: the row (and any journal_entry_id link on it)
+  // survives, and the upsert below then resolves onto the new key.
+  const newIdBooked = bookedRows.filter(
+    r => r.transaktionsidentitet != null && !existingMap.has(r.dedup_key),
+  )
+  if (newIdBooked.length > 0) {
+    const dates = newIdBooked.map(r => r.transaktionsdatum).sort()
+    // Paged: PostgREST silently caps unpaged reads at 1000 rows, and a file
+    // import covering several years can leave more hash rows than that in
+    // the window; unadopted candidates would duplicate on the upsert below.
+    const hashRows = await fetchAllRows<{
+      id: string
+      dedup_key: string
+      status: string
+      transaktionsdatum: string
+      transaktionstext: string
+      belopp_skatteverket: number
+    }>(({ from, to }) =>
+      ctx.supabase
+        .from('skattekonto_transactions')
+        .select('id, dedup_key, status, transaktionsdatum, transaktionstext, belopp_skatteverket')
+        .eq('company_id', ctx.companyId)
+        .like('dedup_key', 'h:%')
+        .gte('transaktionsdatum', dates[0])
+        .lte('transaktionsdatum', dates[dates.length - 1])
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+
+    if (hashRows.length > 0) {
+      // Multiset pairing by content signature; booked (imported) rows are
+      // preferred over stale upcoming rows with identical content.
+      const bySig = new Map<string, { id: string; status: string }[]>()
+      for (const row of hashRows) {
+        const sig = contentSignature(
+          row.transaktionsdatum,
+          row.belopp_skatteverket,
+          row.transaktionstext,
+        )
+        const queue = bySig.get(sig)
+        if (queue) queue.push({ id: row.id, status: row.status })
+        else bySig.set(sig, [{ id: row.id, status: row.status }])
+      }
+      // A proper two-argument comparator: the earlier `sort(a => ...)` form
+      // is an inconsistent relation and could leave an upcoming row at the
+      // head of a 3+ candidate queue, adopting the wrong row.
+      for (const queue of bySig.values()) {
+        queue.sort((a, b) =>
+          a.status === b.status ? 0 : a.status === 'booked' ? -1 : 1,
+        )
+      }
+
+      let takenOver = 0
+      for (const incoming of newIdBooked) {
+        const sig = contentSignature(
+          incoming.transaktionsdatum,
+          incoming.belopp_skatteverket,
+          incoming.transaktionstext,
+        )
+        const queue = bySig.get(sig)
+        const match = queue?.shift()
+        if (!match) continue
+        const { error } = await ctx.supabase
+          .from('skattekonto_transactions')
+          .update({
+            dedup_key: incoming.dedup_key,
+            transaktionsidentitet: incoming.transaktionsidentitet,
+            source: 'api',
+          })
+          .eq('id', match.id)
+          .eq('company_id', ctx.companyId)
+        if (error) {
+          // Non-fatal: the upsert below will then insert a fresh row, which
+          // is the pre-takeover behavior (a duplicate, but never data loss).
+          log.warn('hash-row takeover failed', {
+            companyId: ctx.companyId,
+            rowId: match.id,
+            message: error.message,
+          })
+          continue
+        }
+        existingMap.set(incoming.dedup_key, { status: 'booked' })
+        takenOver++
+      }
+      if (takenOver > 0) {
+        log.info('took over file-imported rows', { companyId: ctx.companyId, takenOver })
+      }
+    }
+  }
+
+  // A booked row must never be flipped back to upcoming. The API's booked
+  // rows always carry transaktionsidentitet, but a file-imported booked row
+  // hash-keys on the same material an id-less kommande row would, so an
+  // upcoming row colliding with an existing booked row is dropped rather
+  // than upserted.
+  const safeRows = allRows.filter(
+    r => r.status !== 'upcoming' || existingMap.get(r.dedup_key)?.status !== 'booked',
+  )
+
+  if (safeRows.length > 0) {
     const { error } = await ctx.supabase
       .from('skattekonto_transactions')
-      .upsert(allRows, {
+      .upsert(safeRows, {
         onConflict: 'company_id,dedup_key',
         // Don't return rows: we already know what we wrote.
         ignoreDuplicates: false,

@@ -31,7 +31,7 @@ Multipart upload of a document (PDF / image) under the BFL 7 kap retention regim
 Request body (`multipart/form-data`):
 ```ts
 {
-  file: string,
+  file?: string,
   upload_source?: "file_upload" | "camera" | "email" | "api",
   journal_entry_id?: string,
   journal_entry_line_id?: string

@@ -360,12 +360,15 @@ function ArticlesPageInner() {
               // The currency scope is part of why nothing matched, so it has to
               // be named: otherwise the register reads as empty of the term
               // when it is only empty inside the active scope.
-              currencyFilter === ALL_CURRENCIES
-                ? t('no_search_results_description', { term: searchTerm })
-                : t('no_search_results_in_currency_description', {
-                    term: searchTerm,
-                    currency: currencyFilter,
-                  })
+              // data-ph-mask: the search term is what the user typed.
+              <span data-ph-mask="">
+                {currencyFilter === ALL_CURRENCIES
+                  ? t('no_search_results_description', { term: searchTerm })
+                  : t('no_search_results_in_currency_description', {
+                      term: searchTerm,
+                      currency: currencyFilter,
+                    })}
+              </span>
             }
           />
         ) : (

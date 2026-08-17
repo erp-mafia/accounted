@@ -86,6 +86,8 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
             ref={panelRef}
             role="note"
             data-help-popover=""
+            // data-ph-unmask: page help is static i18n chrome in session replays.
+            data-ph-unmask=""
             className="fixed z-[60] w-[300px] rounded-lg border border-border bg-popover p-4 text-[13px] leading-relaxed text-foreground shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
             style={{ top: pos.top, left: pos.left }}
           >

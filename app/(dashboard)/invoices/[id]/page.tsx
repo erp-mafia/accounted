@@ -1856,7 +1856,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   {t('delete_dialog_desc_with_number_1')}
                   <strong>{t('delete_dialog_status_makulerad')}</strong>
                   {t('delete_dialog_desc_with_number_2')}
-                  <span className="mt-2 block text-muted-foreground">
+                  {/* data-ph-mask: interpolates the invoice number */}
+                  <span data-ph-mask="" className="mt-2 block text-muted-foreground">
                     {t('delete_dialog_number_kept', { number: invoice.invoice_number })}
                   </span>
                 </>
