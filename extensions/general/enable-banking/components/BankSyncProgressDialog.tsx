@@ -135,7 +135,8 @@ export function BankSyncProgressDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>
+          {/* data-ph-mask: the bank name reveals which bank the user uses */}
+          <DialogTitle data-ph-mask="">
             {state.kind === 'syncing' && `Hämtar transaktioner från ${bankName}`}
             {state.kind === 'done' && 'Klart'}
             {state.kind === 'failed' && 'Synkningen misslyckades'}

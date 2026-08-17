@@ -759,7 +759,7 @@ export default function BankingSettingsPanel() {
           }
         >
           {reusableSessions.map((offer) => (
-            <SettingsRow key={offer.connection_id} label={offer.bank_name ?? 'Bank'}>
+            <SettingsRow key={offer.connection_id} label={<span data-ph-mask="">{offer.bank_name ?? 'Bank'}</span>}>
               <SettingsRowNote>
                 Ansluten för{' '}
                 <span className="font-medium text-foreground">

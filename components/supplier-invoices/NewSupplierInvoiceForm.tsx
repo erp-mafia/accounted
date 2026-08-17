@@ -2598,7 +2598,8 @@ export default function NewSupplierInvoiceForm({
               <AlertCircle className="h-5 w-5 text-destructive" />
               {t('duplicate_dialog_title')}
             </DialogTitle>
-            <DialogDescription>{conflict?.message}</DialogDescription>
+            {/* data-ph-mask: the conflict message carries the invoice number */}
+            <DialogDescription data-ph-mask="">{conflict?.message}</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">
             {conflict?.existing && (

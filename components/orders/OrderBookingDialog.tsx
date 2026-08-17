@@ -114,7 +114,8 @@ export default function OrderBookingDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>
+          {/* data-ph-mask: the order number is user data */}
+          <DialogTitle data-ph-mask="">
             {isRefund
               ? t('book_refund_title', { number: order.order_number })
               : t('book_title', { number: order.order_number })}

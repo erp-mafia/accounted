@@ -100,8 +100,11 @@ const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
 >(({ className, ...props }, ref) => (
+  // data-ph-unmask: dialog titles are static i18n chrome in session replays;
+  // a title carrying user data adds data-ph-mask at the call site.
   <DialogPrimitive.Title
     ref={ref}
+    data-ph-unmask=""
     className={cn(
       "text-lg leading-none tracking-tight",
       className
@@ -117,6 +120,7 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
+    data-ph-unmask=""
     className={cn("text-sm text-muted-foreground", className)}
     {...props}
   />

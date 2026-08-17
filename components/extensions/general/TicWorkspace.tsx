@@ -328,7 +328,8 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Building2 className="h-4 w-4" />
-              {profile.companyName}
+              {/* data-ph-mask: the looked-up company name is user data */}
+              <span data-ph-mask="">{profile.companyName}</span>
             </CardTitle>
             <CardDescription>
               {profile.orgNumber} &middot; {profile.legalEntityType}
@@ -477,7 +478,8 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
               {profile.statuses.slice(0, 6).map((status, i) => (
                 <li key={i} className="flex items-center justify-between gap-3 text-sm">
                   <div className="flex items-center gap-2">
-                    <Badge variant={statusColorToVariant(status.color)}>
+                    {/* data-ph-mask: the Bolagsverket status text is user data */}
+                    <Badge variant={statusColorToVariant(status.color)} data-ph-mask="">
                       {status.description ?? status.code ?? '-'}
                     </Badge>
                     {status.isCeased && (

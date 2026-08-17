@@ -120,7 +120,8 @@ export function CompanyDangerZone() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('danger_dialog_title', { companyName: company.name })}</DialogTitle>
+            {/* data-ph-mask: the title interpolates the company name */}
+            <DialogTitle data-ph-mask="">{t('danger_dialog_title', { companyName: company.name })}</DialogTitle>
             <DialogDescription>
               {t('danger_dialog_description', { appName: branding.appName.toLowerCase() })}
             </DialogDescription>

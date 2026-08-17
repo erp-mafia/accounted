@@ -250,7 +250,8 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
       <Card>
         <CardHeader>
           <CardTitle>{t('preview_card_title')}</CardTitle>
-          <CardDescription>
+          {/* data-ph-mask: the invoice number is user data */}
+          <CardDescription data-ph-mask="">
             {t('preview_card_description', { number: invoice.invoice_number ?? '' })}
           </CardDescription>
         </CardHeader>

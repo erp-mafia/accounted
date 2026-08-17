@@ -191,7 +191,7 @@ export default function SuppliersPage() {
           <EmptyState
             icon={Building2}
             title={t('no_search_results_title')}
-            description={t('no_search_results_description', { term: searchTerm })}
+            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
         ) : (
           <EmptyState
