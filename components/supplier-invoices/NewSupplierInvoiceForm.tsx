@@ -779,10 +779,21 @@ export default function NewSupplierInvoiceForm({
     if (!accountNumber) return
     const index = appendRowForAccount(accountNumber)
     setEntryResetKey((k) => k + 1)
+    // The appended row's input ref may not be mounted on the first frame
+    // after the state update; retry once on the next frame so the focus
+    // hand-off never silently no-ops.
     requestAnimationFrame(() => {
       const el = amountInputRefs.current[index]
-      el?.focus()
-      el?.select()
+      if (el) {
+        el.focus()
+        el.select()
+        return
+      }
+      requestAnimationFrame(() => {
+        const retry = amountInputRefs.current[index]
+        retry?.focus()
+        retry?.select()
+      })
     })
   }
 
