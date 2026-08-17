@@ -427,6 +427,39 @@ export async function markPeriodClosedExternally(
     throw new Error('Cannot mark a period that has not ended yet as closed')
   }
 
+  // Klarmarkera exists for MIGRATED years. A period bookkept natively in
+  // Accounted must go through the real year-end: closing it without a
+  // bokslutsverifikat leaves 3xxx-8xxx untransferred (BFL 5-6 kap) with no
+  // clean way back once locked. "Migrated" is read from the ledger itself:
+  // the period either contains SIE-imported verifikat (source_type='import')
+  // or no verifikat at all (year closed elsewhere and never imported here).
+  const { count: importedCount, error: importedError } = await supabase
+    .from('journal_entries')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('source_type', 'import')
+    .gte('entry_date', period.period_start)
+    .lte('entry_date', period.period_end)
+  if (importedError) {
+    throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
+  }
+  if ((importedCount ?? 0) === 0) {
+    const { count: totalCount, error: totalError } = await supabase
+      .from('journal_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .gte('entry_date', period.period_start)
+      .lte('entry_date', period.period_end)
+    if (totalError) {
+      throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
+    }
+    if ((totalCount ?? 0) > 0) {
+      throw new Error(
+        'Perioden innehåller bokföring skapad i Accounted och inga importerade verifikat. Använd det vanliga årsbokslutet i stället.'
+      )
+    }
+  }
+
   // Same stranding guard as lockPeriod: closing makes unbooked
   // affärshändelser in the period unbookable in place. Fail closed if the
   // guard cannot run.
@@ -477,6 +510,11 @@ export async function markPeriodClosedExternally(
     })
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
+    // TOCTOU guard: a concurrent normal close between the fetch above and
+    // this update must not be overwritten with closed_externally=true (and a
+    // clobbered closed_at). The predicate makes that race a 0-row update,
+    // which .single() surfaces as an error.
+    .eq('is_closed', false)
     .select()
     .single()
 

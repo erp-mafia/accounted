@@ -308,7 +308,9 @@ export default function YearEndPage() {
             {selectedOption?.name ?? 'Perioden'} markeras som avslutad i ett tidigare
             bokföringsprogram. Perioden stängs och låses: inga nya verifikat kan bokföras i den,
             och inget bokslutsverifikat skapas här eftersom bokslutet redan finns i det gamla
-            programmet. Åtgärden loggas i behandlingshistoriken.
+            programmet. Rapporter som bygger på periodens bokslut (t.ex. jämförelseår i nästa
+            årsredovisning och INK2 för perioden) kan sakna uppgifter och behöver i så fall
+            hämtas från det tidigare programmet. Åtgärden loggas i behandlingshistoriken.
           </>
         }
         confirmLabel="Klarmarkera"

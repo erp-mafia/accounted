@@ -584,7 +584,10 @@ export default function NewSupplierInvoiceForm({
                 // time) and a silent default misbooks: leave empty so the user
                 // (or the supplier default) makes the call.
                 account_number: '',
-                vat_rate: vatRegistered ? vatRateFromAi(li.vatRate) : 0,
+                // Deliberately unconditional: for icke momsregistrerade the
+                // zeroing effect below grosses the net amount up by this rate
+                // before forcing it to 0, so the rate must arrive intact.
+                vat_rate: vatRateFromAi(li.vatRate),
                 accrual_period_start: withAccrual ? (sps as string) : undefined,
                 accrual_period_end: withAccrual ? (spe as string) : undefined,
                 // No account yet → generic 1790; toggleAccrual re-suggests the
@@ -894,11 +897,26 @@ export default function NewSupplierInvoiceForm({
   // default line, AI prefills and konto defaults all assume 25 % otherwise.
   // Re-runs after the inbox prefill lands so a late extraction can't
   // reintroduce a rate.
+  //
+  // The amount is grossed up in the same pass: an amount paired with a
+  // non-zero rate is a NET amount (AI line totals are exkl moms, and the
+  // visible column said "Belopp (exkl.)" while the rate stood). For a company
+  // with no deduction right the moms is part of the cost, so net at 25 %
+  // becomes gross at 0 %; zeroing the rate alone would understate both the
+  // expense and 2440 by exactly the moms.
   useEffect(() => {
     if (vatRegistered) return
     const items = getValues('items') ?? []
     items.forEach((item, index) => {
-      if (item.vat_rate !== 0) setValue(`items.${index}.vat_rate`, 0)
+      if (item.vat_rate !== 0) {
+        if (item.amount) {
+          setValue(
+            `items.${index}.amount`,
+            Math.round(item.amount * (1 + item.vat_rate) * 100) / 100,
+          )
+        }
+        setValue(`items.${index}.vat_rate`, 0)
+      }
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vatRegistered, hasPrefilled])

@@ -62,6 +62,11 @@ export default function ArticleCombobox({
   const [hasTyped, setHasTyped] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  // True while a pointer interaction is what is about to focus the field.
+  // Keyboard focus (Tab) must NOT auto-open: with the list open a bare Enter
+  // would select the highlighted row, and the old Select treated Tab+Enter as
+  // a no-op. Pointer focus keeps the click-to-browse behavior.
+  const pointerDownRef = useRef(false)
 
   // Sync external value changes (applyArticle, draft restore) into the field.
   useEffect(() => {
@@ -89,9 +94,21 @@ export default function ArticleCombobox({
     [filtered, freeTextLabel],
   )
 
+  // While typing, highlight the first actual match (index 1: index 0 is the
+  // pinned "Egen rad"), so type-and-Enter picks the searched article instead
+  // of silently detaching the line to free text.
   useEffect(() => {
-    setHighlightedIndex(0)
-  }, [options.length, search])
+    setHighlightedIndex(hasTyped && filtered.length > 0 ? 1 : 0)
+  }, [options.length, search, hasTyped, filtered.length])
+
+  // Opening on a committed selection starts the highlight ON that selection,
+  // like the Select this replaces, so Enter re-confirms instead of switching.
+  const openList = useCallback(() => {
+    const currentKey = value ?? 'none'
+    const idx = options.findIndex((o) => o.key === currentKey)
+    setHighlightedIndex(idx >= 0 ? idx : 0)
+    setIsOpen(true)
+  }, [options, value])
 
   useEffect(() => {
     if (!isOpen || !listRef.current) return
@@ -116,19 +133,26 @@ export default function ArticleCombobox({
 
   const select = useCallback(
     (option: Option) => {
-      onChange(option.key)
+      // Re-selecting the committed value is a no-op close: applyArticle
+      // re-applies the article's description/price/unit, which would clobber
+      // per-line edits, and re-selecting "Egen rad" on a free-text line would
+      // needlessly null the article link. The old Radix Select behaved the
+      // same (onValueChange only fires on an actual change).
+      if (option.key !== (value ?? 'none')) {
+        onChange(option.key)
+      }
       setSearch(option.label)
       setHasTyped(false)
       setIsOpen(false)
     },
-    [onChange],
+    [onChange, value],
   )
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (!isOpen) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter') {
         e.preventDefault()
-        setIsOpen(true)
+        openList()
       }
       return
     }
@@ -171,9 +195,18 @@ export default function ArticleCombobox({
           setHasTyped(true)
           if (!isOpen) setIsOpen(true)
         }}
+        onPointerDown={() => {
+          pointerDownRef.current = true
+        }}
+        onClick={() => {
+          // Clicking an already-focused field reopens the list (onFocus will
+          // not fire again in that case).
+          if (!isOpen) openList()
+        }}
         onFocus={(e) => {
           setHasTyped(false)
-          setIsOpen(true)
+          if (pointerDownRef.current) openList()
+          pointerDownRef.current = false
           // Typing should replace the committed label, not append to it.
           e.currentTarget.select()
         }}

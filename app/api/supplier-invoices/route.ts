@@ -175,10 +175,12 @@ export const POST = withRouteContext(
     }
 
     // Icke momsregistrerad verksamhet has no deduction right for input VAT
-    // (ML 8 kap. 3 §): a line carrying moms would book 2641 the company can
-    // never reclaim. The form hides the moms controls; this rejects the same
-    // input arriving via API/MCP. Reverse charge stays allowed: self-assessment
-    // is a separate obligation from deduction.
+    // (avdragsrätt, 13 kap. ML 2023:200): a line carrying moms would book
+    // 2641 the company can never reclaim. The form hides the moms controls;
+    // this guard covers THIS route only. The v1 REST route, the inbox convert
+    // route and the MCP staged executor still default 25 % and need the same
+    // treatment in a follow-up sweep. Reverse charge stays allowed:
+    // self-assessment is a separate obligation from deduction.
     const { data: vatSettings } = await supabase
       .from('company_settings')
       .select('vat_registered')
