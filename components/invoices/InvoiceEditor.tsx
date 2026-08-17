@@ -68,6 +68,7 @@ import {
   RUT_MAX,
   computeDeduction,
   deductionTypeForWorkType,
+  parseArticleHouseworkType,
 } from '@/lib/invoices/rot-rut-rules'
 import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
@@ -611,17 +612,27 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // The account override rides along regardless of rate; the engine ignores it
     // for reverse-charge/export and validates it against the chart of accounts.
     setValue(`items.${index}.revenue_account`, a.revenue_account ?? null, { shouldDirty: true })
-    // ROT/RUT: the article's housework_type (Skatteverket arbetstypskod)
-    // decides both the line's deduction kind and its work type. An article
-    // WITHOUT one re-defaults the row to no deduction, the same overwrite
-    // semantics as description/price above: a material article picked onto a
-    // previously RUT-flagged row must not keep claiming a deduction on
-    // material. Proformas/delivery notes/self-billing have no deduction model
-    // (their rows keep no ⋮ menu either), so they are left untouched.
+    // ROT/RUT: the article's housework_type decides the line's deduction kind
+    // and, when it is a Skatteverket arbetstypskod, its work type too. Legacy
+    // articles carry only the kind (`ROT`/`RUT`): those pre-fill the deduction
+    // and keep a same-kind arbetstyp already chosen on the row. An article
+    // WITHOUT any housework flag re-defaults the row to no deduction, the same
+    // overwrite semantics as description/price above: a material article
+    // picked onto a previously RUT-flagged row must not keep claiming a
+    // deduction on material. Proformas/delivery notes/self-billing have no
+    // deduction model (their rows keep no ⋮ menu either), so they are left
+    // untouched.
     if (isInvoiceDoc) {
-      const kind = deductionTypeForWorkType(a.housework_type)
+      const { deductionType: kind, workType } = parseArticleHouseworkType(a.housework_type)
+      const currentWorkType = getValues(`items.${index}.work_type`) ?? null
+      const keepCurrentWorkType =
+        kind != null && !workType && deductionTypeForWorkType(currentWorkType) === kind
       setValue(`items.${index}.deduction_type`, kind, { shouldDirty: true })
-      setValue(`items.${index}.work_type`, kind ? a.housework_type : null, { shouldDirty: true })
+      setValue(
+        `items.${index}.work_type`,
+        workType ?? (keepCurrentWorkType ? currentWorkType : null),
+        { shouldDirty: true },
+      )
       if (kind) {
         // Same rule as the manual ⋮ menu: ROT/RUT och periodisering
         // kombineras aldrig på samma rad; avdraget vinner.
@@ -680,9 +691,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           // The typed unit price is in the invoice's currency: without this an
           // EUR invoice line becomes an SEK article with the EUR number.
           currency: getValues('currency'),
-          // Round-trip the ROT/RUT arbetstypskod so the saved article
-          // pre-fills the deduction the next time it is picked.
-          housework_type: item.deduction_type ? item.work_type ?? null : null,
+          // Round-trip the ROT/RUT flag so the saved article pre-fills the
+          // deduction the next time it is picked: the arbetstypskod when the
+          // row has one, otherwise the bare kind.
+          housework_type: item.deduction_type
+            ? deductionTypeForWorkType(item.work_type) === item.deduction_type
+              ? item.work_type
+              : item.deduction_type.toUpperCase()
+            : null,
         }),
       })
       const result = await response.json()
@@ -2097,6 +2113,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                           onValueChange={(v) => {
                                             const next = v === 'none' ? null : (v as 'rot' | 'rut')
                                             setValue(`items.${index}.deduction_type`, next, { shouldDirty: true })
+                                            // The arbetstyp lists are per kind: a ROT code
+                                            // must not survive a switch to RUT (the select
+                                            // would show it as empty while the payload kept
+                                            // the wrong code).
+                                            if (
+                                              next !== null &&
+                                              deductionTypeForWorkType(item?.work_type) !== next
+                                            ) {
+                                              setValue(`items.${index}.work_type`, null)
+                                            }
                                             if (next === null) {
                                               setValue(`items.${index}.work_type`, null)
                                               setValue(`items.${index}.labor_hours`, null)

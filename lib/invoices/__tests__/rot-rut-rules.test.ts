@@ -11,6 +11,12 @@ import {
   deductionSekConverter,
   deductionToSek,
   deductionTypeForWorkType,
+  parseArticleHouseworkType,
+  normalizeHouseworkType,
+  workTypeLabel,
+  HOUSEWORK_TYPE_VALUES,
+  ROT_WORK_TYPES,
+  RUT_WORK_TYPES,
   type ItemForDeduction,
   type ValidateInvoiceItem,
 } from '../rot-rut-rules'
@@ -378,5 +384,52 @@ describe('deductionTypeForWorkType', () => {
     expect(deductionTypeForWorkType(undefined)).toBeNull()
     expect(deductionTypeForWorkType('')).toBeNull()
     expect(deductionTypeForWorkType('SNICKERI')).toBeNull()
+  })
+})
+
+describe('parseArticleHouseworkType (articles.housework_type vocabularies)', () => {
+  it('a Skatteverket code decides both kind and work type', () => {
+    expect(parseArticleHouseworkType('STAD')).toEqual({ deductionType: 'rut', workType: 'STAD' })
+    expect(parseArticleHouseworkType('BYGG')).toEqual({ deductionType: 'rot', workType: 'BYGG' })
+    // Case-insensitive: the API stores upper-case, but older writers did not.
+    expect(parseArticleHouseworkType(' malning ')).toEqual({ deductionType: 'rot', workType: 'MALNING' })
+  })
+
+  it('the bare kind (what the article form stored before it offered work types) decides the kind only', () => {
+    // This is the exact prod value behind the 2026-08-17 report: picking a
+    // "RUT" article pre-filled nothing because only codes were recognised.
+    expect(parseArticleHouseworkType('RUT')).toEqual({ deductionType: 'rut', workType: null })
+    expect(parseArticleHouseworkType('rot')).toEqual({ deductionType: 'rot', workType: null })
+  })
+
+  it('anything else is not a housework flag', () => {
+    // '0'/'1' are what a boolean "Rot" CSV column produced on prod.
+    for (const v of ['0', '1', 'Ja', 'SNICKERI', '', null, undefined]) {
+      expect(parseArticleHouseworkType(v)).toEqual({ deductionType: null, workType: null })
+    }
+  })
+})
+
+describe('normalizeHouseworkType / HOUSEWORK_TYPE_VALUES', () => {
+  it('canonicalises to the code, the bare kind, or null', () => {
+    expect(normalizeHouseworkType('stad')).toBe('STAD')
+    expect(normalizeHouseworkType('Rut')).toBe('RUT')
+    expect(normalizeHouseworkType('1')).toBeNull()
+    expect(normalizeHouseworkType('')).toBeNull()
+    expect(normalizeHouseworkType(null)).toBeNull()
+  })
+
+  it('accepts exactly the two kinds plus every code in both lists', () => {
+    expect(HOUSEWORK_TYPE_VALUES).toHaveLength(2 + ROT_WORK_TYPES.length + RUT_WORK_TYPES.length)
+    for (const v of HOUSEWORK_TYPE_VALUES) expect(normalizeHouseworkType(v)).toBe(v)
+  })
+})
+
+describe('workTypeLabel', () => {
+  it('returns the Skatteverket label for known codes and null otherwise', () => {
+    expect(workTypeLabel('STAD')).toBe('Städning')
+    expect(workTypeLabel('VVS')).toBe('VVS-arbete')
+    expect(workTypeLabel('RUT')).toBeNull()
+    expect(workTypeLabel(null)).toBeNull()
   })
 })
