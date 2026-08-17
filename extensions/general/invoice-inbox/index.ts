@@ -1,6 +1,6 @@
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { z } from 'zod'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -1373,7 +1373,7 @@ export const invoiceInboxExtension: Extension = {
         // the user pressing "Kontrollera igen" (requires the event type to be
         // subscribed on the Resend webhook; harmless when it isn't).
         if (event.type === 'domain.updated') {
-          const domainServiceSupabase = createClient(
+          const domainServiceSupabase = createServiceRoleClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.SUPABASE_SERVICE_ROLE_KEY!
           )
@@ -1391,7 +1391,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { email_id, to, from, subject, message_id, created_at } = event.data
 
-        const serviceSupabase = createClient(
+        const serviceSupabase = createServiceRoleClient(
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
           process.env.SUPABASE_SERVICE_ROLE_KEY!
         )

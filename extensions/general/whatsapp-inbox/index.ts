@@ -28,7 +28,7 @@
 
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -90,7 +90,7 @@ const DefaultCompanySchema = z.object({
 })
 
 function buildServiceClient(): SupabaseClient {
-  return createClient(
+  return createServiceRoleClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
   )

@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -50,7 +50,7 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
     })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
   const now = new Date()
   const origin = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 

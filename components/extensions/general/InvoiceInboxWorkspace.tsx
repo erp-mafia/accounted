@@ -360,10 +360,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [docUrl, setDocUrl] = useState<string | null>(null)
   const [docMime, setDocMime] = useState<string | null>(null)
   const [docState, setDocState] = useState<DocumentLoadState>('none')
-  // Which selection the in-flight document read belongs to. The user can click
-  // another row while it is running, and a late resolution must not paint its
-  // outcome (a URL, or an error) onto the row that is now selected.
-  const docRequestRef = useRef<string | null>(null)
+  // Monotonic tokens for the in-flight detail and document reads. The user
+  // can click another row while one is running, but also re-request the SAME
+  // item (action refreshes, the processing->received re-select effect), so an
+  // id comparison is not enough: only the newest request of each kind may
+  // paint its outcome (a detail snapshot, a URL, or an error) onto the pane.
+  const detailRequestRef = useRef(0)
+  const docRequestRef = useRef(0)
   const [inboxAddress, setInboxAddress] = useState<InboxAddress | null>(null)
   // We asked for the inbox address and did not get an answer we can trust
   // (5xx, network, unparseable). Distinct from a 404, which honestly means no
@@ -727,8 +730,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // document, still loading, ready, or "we could not load it". The pane must
   // never fall back to "Inget underlag bifogat" for a row that has a
   // document_id, which is what the old silent catch produced.
-  const loadDocument = useCallback(async (itemId: string, documentId: string | null) => {
-    docRequestRef.current = itemId
+  const loadDocument = useCallback(async (documentId: string | null) => {
+    const request = ++docRequestRef.current
     setDocUrl(null)
     setDocMime(null)
     if (!documentId) {
@@ -742,13 +745,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         { method: 'GET' },
         { timeoutMs: DOCUMENT_FETCH_TIMEOUT_MS, description: `document ${documentId}` },
       )
-      if (docRequestRef.current !== itemId) return
+      if (docRequestRef.current !== request) return
       if (!res.ok) {
         setDocState('error')
         return
       }
       const { data } = await res.json()
-      if (docRequestRef.current !== itemId) return
+      if (docRequestRef.current !== request) return
       const url: string | null = data?.download_url ?? null
       // HTML mail underlag renders via the same-origin inline proxy: it
       // serves text/html with a CSP sandbox header and guaranteed inline
@@ -767,39 +770,66 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } catch {
       // Timeout, offline, or an unparseable body. The document itself is
       // untouched, so the retry in the preview pane is the whole recovery.
-      if (docRequestRef.current !== itemId) return
+      if (docRequestRef.current !== request) return
       setDocState('error')
     }
   }, [])
 
   const handleSelect = useCallback(async (id: string) => {
+    const request = ++detailRequestRef.current
     setSelectedId(id)
     setSelectedPurchaseId(null)
-    setSelected(null)
-    setDocUrl(null)
-    setDocMime(null)
-    setDocState('none')
-    docRequestRef.current = id
     // Intentionally no auto-scroll: in the vertical-stack layout (below xl)
     // scrolling the preview into view pushes the list off-screen, and the
     // user has no obvious way back to pick another item. The row-highlight
     // + the preview content update are enough feedback that the tap took.
+
+    // Seed the detail pane synchronously from the list row already in hand
+    // (fetchItems returns full rows: status, amounts, extracted fields), and
+    // start the document load in parallel with the detail GET. Clearing
+    // `selected` first made every row click flash the no-selection branch
+    // (onboarding card / "Välj en post") for a full round trip, then run a
+    // second serialized round trip before the PDF even started loading.
+    const listRow = items.find((it) => it.id === id) ?? null
+    if (listRow) {
+      setSelected(listRow)
+      void loadDocument(listRow.document_id)
+    } else {
+      // Invalidate any in-flight document read: the pane is being cleared,
+      // and a late resolution must not paint a URL or error onto it.
+      docRequestRef.current++
+      setSelected(null)
+      setDocUrl(null)
+      setDocMime(null)
+      setDocState('none')
+    }
 
     try {
       const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${id}`)
       if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
       const item = json.data as InboxItem
+      // A newer selection owns the pane now: dropping this response keeps a
+      // slower earlier fetch (same item or another) from overwriting the
+      // newest request's detail snapshot.
+      if (detailRequestRef.current !== request) return
       setSelected(item)
-      await loadDocument(id, item.document_id)
+      if (!listRow) {
+        await loadDocument(item.document_id)
+      } else if (item.document_id !== listRow.document_id) {
+        // The detail row knows a different underlag than the list row we
+        // seeded from (e.g. processing finished between paint and click).
+        void loadDocument(item.document_id)
+      }
     } catch (err) {
+      if (detailRequestRef.current !== request) return
       toast({
         title: 'Kunde inte ladda dokumentet',
         description: failureText(err),
         variant: 'destructive',
       })
     }
-  }, [toast, loadDocument])
+  }, [items, toast, loadDocument])
 
   // The detail pane renders from its own fetched snapshot (`selected`), so
   // the realtime refetch updates the list row but would leave a selected
@@ -1758,7 +1788,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               docMime={docMime}
               isProcessing={!!selected.isPlaceholder}
               loadState={docState}
-              onRetry={() => { void loadDocument(selected.id, selected.document_id) }}
+              onRetry={() => { void loadDocument(selected.document_id) }}
             />
           ) : showOnboarding ? (
             <div className="h-full flex flex-col justify-center px-4 py-6">

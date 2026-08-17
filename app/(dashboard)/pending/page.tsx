@@ -387,6 +387,12 @@ export default function PendingOperationsPage() {
     } catch {
       if (!isCurrent()) return
       toast({ title: 'Kunde inte ladda operationer', variant: 'destructive' })
+      // The rows on screen belong to another tab (or no load has succeeded
+      // yet): dropping the loading state here would render those foreign rows
+      // under this tab's header as if they were its content. Hold the loading
+      // state instead; the toast says why, and the next tab switch or
+      // realtime echo retries.
+      if (loadedTabRef.current !== activeTab) return
     }
     if (!isCurrent()) return
     setIsLoading(false)

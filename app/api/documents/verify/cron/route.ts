@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
@@ -33,7 +33,7 @@ export const GET = withCronContext('cron.documents_verify', async (_request, ctx
     })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   const { data: documents, error: fetchError } = await supabase
     .from('document_attachments')
