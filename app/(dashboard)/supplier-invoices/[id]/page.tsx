@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -119,6 +119,13 @@ export default function SupplierInvoiceDetailPage() {
   const [editLines, setEditLines] = useState<EditableLine[]>([])
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
+  // Latest-request guard for fetchInvoice. A mutation refetch can overlap the
+  // pager stepping to a sibling invoice (the component stays mounted, only
+  // params.id changes), and without it the older response would commit
+  // invoice A's row and payment-form defaults under invoice B's URL. Only the
+  // newest request may write state.
+  const fetchSeqRef = useRef(0)
+
   const statusLabels = useMemo<Record<string, string>>(() => ({
     registered: t('status_registered'),
     approved: t('status_approved'),
@@ -131,6 +138,7 @@ export default function SupplierInvoiceDetailPage() {
   }), [t])
 
   async function fetchInvoice() {
+    const seq = ++fetchSeqRef.current
     // Blocking skeleton only before the first paint (or when the pager steps
     // to a different invoice). Attest/Bokför/Markera betald/kreditera each
     // refetch after their mutation: those reconcile behind the mounted page
@@ -142,6 +150,8 @@ export default function SupplierInvoiceDetailPage() {
     try {
       const res = await fetch(`/api/supplier-invoices/${params.id}`)
       const body = await res.json().catch(() => null)
+      // A newer fetch owns the page now: commit nothing from this one.
+      if (seq !== fetchSeqRef.current) return
       // See the identical fix in suppliers/[id]: `body.error` is the canonical
       // envelope object, and rendering an object as a toast description throws
       // out of the root layout into global-error.
@@ -157,13 +167,16 @@ export default function SupplierInvoiceDetailPage() {
         setPaymentDate(new Date().toISOString().split('T')[0])
       }
     } catch (err) {
+      if (seq !== fetchSeqRef.current) return
       toast({
         title: t('load_failed_title'),
         description: getErrorMessage(err, { context: 'supplier_invoice' }),
         variant: 'destructive',
       })
     } finally {
-      setIsLoading(false)
+      // A stale request must not stop the newest one's skeleton early: only
+      // the request that still owns the page resolves the loading state.
+      if (seq === fetchSeqRef.current) setIsLoading(false)
     }
   }
 
@@ -304,35 +317,48 @@ export default function SupplierInvoiceDetailPage() {
 
   async function handleApprove() {
     setProcessingAction('approve')
-    const res = await fetch(`/api/supplier-invoices/${params.id}/approve`, { method: 'POST' })
-    const result = await res.json()
-    if (!res.ok) {
-      toast({ title: t('approve_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
-    } else {
-      toast({ title: t('approved_title'), description: t('approved_description') })
-      // Awaited: the Attestera button keeps its spinner until the page shows
-      // the approved state (the refetch runs behind the mounted content).
-      await fetchInvoice()
+    // try/catch/finally like handleDelete: a rejected fetch()/res.json()
+    // must not skip the reset below, or isProcessing keeps every invoice
+    // action disabled until a full page reload.
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}/approve`, { method: 'POST' })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({ title: t('approve_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+      } else {
+        toast({ title: t('approved_title'), description: t('approved_description') })
+        // Awaited: the Attestera button keeps its spinner until the page shows
+        // the approved state (the refetch runs behind the mounted content).
+        await fetchInvoice()
+      }
+    } catch (err) {
+      toast({ title: t('approve_failed_title'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
+    } finally {
+      setProcessingAction(null)
     }
-    setProcessingAction(null)
   }
 
   // #967: deferred booking: create the registration verifikat afterwards.
   async function handleBook() {
     setProcessingAction('book')
-    const res = await fetch(`/api/supplier-invoices/${params.id}/book`, { method: 'POST' })
-    const result = await res.json()
-    if (!res.ok) {
-      toast({ title: t('book_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
-    } else if (Array.isArray(result.warnings) && result.warnings.length > 0) {
-      // Booked, but a follow-up is needed (e.g. periodiseringar failed).
-      toast({ title: t('booked_title'), description: t('booked_with_warnings_description'), variant: 'destructive' })
-      await fetchInvoice()
-    } else {
-      toast({ title: t('booked_title'), description: t('booked_description') })
-      await fetchInvoice()
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}/book`, { method: 'POST' })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({ title: t('book_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+      } else if (Array.isArray(result.warnings) && result.warnings.length > 0) {
+        // Booked, but a follow-up is needed (e.g. periodiseringar failed).
+        toast({ title: t('booked_title'), description: t('booked_with_warnings_description'), variant: 'destructive' })
+        await fetchInvoice()
+      } else {
+        toast({ title: t('booked_title'), description: t('booked_description') })
+        await fetchInvoice()
+      }
+    } catch (err) {
+      toast({ title: t('book_failed_title'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
+    } finally {
+      setProcessingAction(null)
     }
-    setProcessingAction(null)
   }
 
   async function handleMarkPaid(force: boolean = false) {
@@ -354,39 +380,44 @@ export default function SupplierInvoiceDetailPage() {
           })
         : undefined
 
-    const res = await fetch(`/api/supplier-invoices/${params.id}/mark-paid`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount: parseFloat(payAmount),
-        payment_date: paymentDate,
-        payment_account: paymentAccount,
-        ...(force ? { force: true } : {}),
-        ...(linesPayload ? { lines: linesPayload } : {}),
-      }),
-    })
-    const result = await res.json()
-    if (!res.ok) {
-      if (result?.error?.code === 'SI_PAID_LIKELY_DUPLICATE' && Array.isArray(result.error.details?.candidates)) {
-        setDuplicateCandidates(result.error.details.candidates)
-        setIsPayDialogOpen(false)
-      } else {
-        toast({ title: t('payment_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
-      }
-    } else {
-      toast({
-        title: result.status === 'paid' ? t('paid_title') : t('partial_payment_title'),
-        // The paid amount is in the invoice's currency (the dialog's helper
-        // text says so): the toast must not relabel it as kr.
-        description: t('amount_registered_description', {
-          amount: formatCurrency(parseFloat(payAmount), invoice?.currency || 'SEK'),
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}/mark-paid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: parseFloat(payAmount),
+          payment_date: paymentDate,
+          payment_account: paymentAccount,
+          ...(force ? { force: true } : {}),
+          ...(linesPayload ? { lines: linesPayload } : {}),
         }),
       })
-      setIsPayDialogOpen(false)
-      setDuplicateCandidates(null)
-      await fetchInvoice()
+      const result = await res.json()
+      if (!res.ok) {
+        if (result?.error?.code === 'SI_PAID_LIKELY_DUPLICATE' && Array.isArray(result.error.details?.candidates)) {
+          setDuplicateCandidates(result.error.details.candidates)
+          setIsPayDialogOpen(false)
+        } else {
+          toast({ title: t('payment_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+        }
+      } else {
+        toast({
+          title: result.status === 'paid' ? t('paid_title') : t('partial_payment_title'),
+          // The paid amount is in the invoice's currency (the dialog's helper
+          // text says so): the toast must not relabel it as kr.
+          description: t('amount_registered_description', {
+            amount: formatCurrency(parseFloat(payAmount), invoice?.currency || 'SEK'),
+          }),
+        })
+        setIsPayDialogOpen(false)
+        setDuplicateCandidates(null)
+        await fetchInvoice()
+      }
+    } catch (err) {
+      toast({ title: t('payment_failed_title'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
+    } finally {
+      setProcessingAction(null)
     }
-    setProcessingAction(null)
   }
 
   async function handleCredit() {
@@ -398,15 +429,20 @@ export default function SupplierInvoiceDetailPage() {
     })
     if (!ok) return
     setProcessingAction('credit')
-    const res = await fetch(`/api/supplier-invoices/${params.id}/credit`, { method: 'POST' })
-    const result = await res.json()
-    if (!res.ok) {
-      toast({ title: t('credit_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
-    } else {
-      toast({ title: t('credit_success_title') })
-      await fetchInvoice()
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}/credit`, { method: 'POST' })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({ title: t('credit_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+      } else {
+        toast({ title: t('credit_success_title') })
+        await fetchInvoice()
+      }
+    } catch (err) {
+      toast({ title: t('credit_failed_title'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
+    } finally {
+      setProcessingAction(null)
     }
-    setProcessingAction(null)
   }
 
   async function handleDelete() {
@@ -453,22 +489,31 @@ export default function SupplierInvoiceDetailPage() {
     })
     if (!ok) return
     setProcessingAction('uncredit')
-    const res = await fetch(`/api/supplier-invoices/${params.id}/uncredit`, { method: 'POST' })
-    const result = await res.json()
-    if (!res.ok) {
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}/uncredit`, { method: 'POST' })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({
+          title: t('uncredit_failed_title'),
+          description: getErrorMessage(result, { context: 'supplier_invoice' }),
+          variant: 'destructive',
+        })
+      } else {
+        toast({
+          title: t('uncredit_success_title'),
+          description: t('uncredit_success_description'),
+        })
+        await fetchInvoice()
+      }
+    } catch (err) {
       toast({
         title: t('uncredit_failed_title'),
-        description: getErrorMessage(result, { context: 'supplier_invoice' }),
+        description: getErrorMessage(err, { context: 'supplier_invoice' }),
         variant: 'destructive',
       })
-    } else {
-      toast({
-        title: t('uncredit_success_title'),
-        description: t('uncredit_success_description'),
-      })
-      await fetchInvoice()
+    } finally {
+      setProcessingAction(null)
     }
-    setProcessingAction(null)
   }
 
   if (isLoading) {

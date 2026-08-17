@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, use } from 'react'
+import { useState, useEffect, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -181,6 +181,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
   const reminderLevelLabel = (level: 1 | 2 | 3): string => t(`reminder_level_${level}`)
 
+  // Latest-request guard for fetchInvoice. A mutation refresh can overlap the
+  // pager stepping to a sibling invoice (the component stays mounted, only
+  // `id` changes), and without it the older response would commit invoice A's
+  // state under invoice B's URL. Only the newest request may write state.
+  const fetchSeqRef = useRef(0)
+
   useEffect(() => {
     fetchInvoice()
   }, [id])
@@ -214,6 +220,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   }
 
   async function fetchInvoice() {
+    const seq = ++fetchSeqRef.current
     // The blocking spinner is reserved for the first load (or stepping to a
     // different invoice via the pager). Refetches after Bokför / status
     // change / finalize / payment / send reconcile BEHIND the mounted page:
@@ -265,6 +272,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         deliveriesPromise,
       ])
 
+    // A newer fetch owns the page now (pager step or later refresh): commit
+    // nothing from this one, not even the not-found redirect.
+    if (seq !== fetchSeqRef.current) return
+
     if (error || !data) {
       toast({
         title: t('load_failed_title'),
@@ -311,6 +322,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
 
     const settingsRes = await settingsPromise
+    if (seq !== fetchSeqRef.current) return
     if (settingsRes) {
       const settings = settingsRes.data
       setOreRounding(settings?.ore_rounding ?? true)
@@ -357,6 +369,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               .single()
           : Promise.resolve(null),
       ]).then(([creditNoteRes, originalRes, convertedRes]) => {
+        // Deferred writes need the same guard: they land after first paint
+        // and would otherwise attach the previous invoice's related documents
+        // to the one the pager has since navigated to.
+        if (seq !== fetchSeqRef.current) return
         setCreditNote(creditNoteRes?.data ? (creditNoteRes.data as Invoice) : null)
         if (originalRes?.data) {
           setOriginalInvoice(originalRes.data as Invoice)
