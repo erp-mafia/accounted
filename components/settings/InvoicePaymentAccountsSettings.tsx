@@ -83,7 +83,9 @@ export function InvoicePaymentAccountsSettings({
   const { role, company } = useCompany()
   // Bolagsverket knows most companies' bankgiro (companies.tic_snapshot), but
   // the payment files read this form's field. Offer the registry number as a
-  // one-click prefill when the SEK field is empty; the user still saves.
+  // one-click prefill when the SEK field is empty; the user still saves. The
+  // helper only suggests when the snapshot's orgNumber matches the company's
+  // org_number: stale fuzzy-matched snapshots can describe another entity.
   const [snapshotBankgiro, setSnapshotBankgiro] = useState<string | null>(null)
   const legacySekAccount = useMemo(
     () => legacySekInvoicePaymentAccount({
@@ -145,12 +147,12 @@ export function InvoicePaymentAccountsSettings({
     let cancelled = false
     supabase
       .from('companies')
-      .select('tic_snapshot')
+      .select('tic_snapshot, org_number')
       .eq('id', company.id)
       .maybeSingle()
       .then(({ data }) => {
         if (cancelled) return
-        setSnapshotBankgiro(bankgiroFromTicSnapshot(data?.tic_snapshot))
+        setSnapshotBankgiro(bankgiroFromTicSnapshot(data?.tic_snapshot, data?.org_number))
       })
     return () => {
       cancelled = true

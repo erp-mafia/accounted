@@ -1,7 +1,7 @@
 'use client'
 
-import { use, useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { use, useEffect, useRef, useState } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -47,6 +47,7 @@ import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
 export default function SalaryRunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
+  const pathname = usePathname()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('salary_run')
@@ -108,36 +109,52 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  async function loadSettings() {
+    const settingsRes = await fetch('/api/settings')
+    if (!settingsRes.ok) return
+    const { data } = await settingsRes.json()
+    if (data?.preferred_payment_format === 'pain001' || data?.preferred_payment_format === 'bg_lb') {
+      setPreferredPaymentFormat(data.preferred_payment_format)
+    }
+    setDefaultBank(typeof data?.salary_default_bank === 'string' ? data.salary_default_bank : null)
+    setSenderBankgiro(
+      typeof data?.bankgiro === 'string' && data.bankgiro.trim() ? data.bankgiro : null,
+    )
+    setSenderIban(typeof data?.iban === 'string' && data.iban.trim() ? data.iban : null)
+    setDimensionsEnabled(data?.dimensions_enabled === true)
+  }
+
   useEffect(() => {
     async function load() {
       // Employees and settings don't depend on the run - load all three in
       // parallel instead of serially.
-      const [, empRes, settingsRes] = await Promise.all([
+      const [, empRes] = await Promise.all([
         loadRun(),
         fetch('/api/salary/employees'),
-        fetch('/api/settings'),
+        loadSettings(),
       ])
       if (empRes.ok) {
         const { data } = await empRes.json()
         setAvailableEmployees(data || [])
-      }
-      if (settingsRes.ok) {
-        const { data } = await settingsRes.json()
-        if (data?.preferred_payment_format === 'pain001' || data?.preferred_payment_format === 'bg_lb') {
-          setPreferredPaymentFormat(data.preferred_payment_format)
-        }
-        setDefaultBank(typeof data?.salary_default_bank === 'string' ? data.salary_default_bank : null)
-        setSenderBankgiro(
-          typeof data?.bankgiro === 'string' && data.bankgiro.trim() ? data.bankgiro : null,
-        )
-        setSenderIban(typeof data?.iban === 'string' && data.iban.trim() ? data.iban : null)
-        setDimensionsEnabled(data?.dimensions_enabled === true)
       }
       setLoading(false)
     }
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
+
+  // The payment-file warning links to settings, which opens as an intercepting
+  // modal over this still-mounted page. When the URL returns here after that
+  // detour, refetch settings so a bankgiro/IBAN saved in the modal clears the
+  // warning instead of leaving it asserting a stale "file cannot be created".
+  const pathnameSeen = useRef(false)
+  useEffect(() => {
+    if (!pathnameSeen.current) {
+      pathnameSeen.current = true
+      return
+    }
+    if (pathname === `/salary/runs/${id}`) loadSettings()
+  }, [pathname, id])
 
   // Refetch when the tab regains focus. AGI can be generated out-of-band (via
   // the MCP server, the public API, or another browser tab) and this page

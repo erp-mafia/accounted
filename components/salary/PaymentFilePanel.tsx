@@ -24,8 +24,10 @@ interface PaymentFilePanelProps {
   defaultBank?: string | null
   /**
    * company_settings.bankgiro / iban: the sender account each format requires.
-   * null means confirmed missing (warn up front, the download would 400);
-   * undefined means unknown (settings not loaded), so no warning is shown.
+   * null means missing as of the latest settings fetch (warn up front, the
+   * download would 400); undefined means unknown (settings not loaded), so no
+   * warning is shown. The caller must refetch after detours that can fix the
+   * setting (the warning links into the settings modal over this page).
    */
   senderBankgiro?: string | null
   senderIban?: string | null
