@@ -28,7 +28,7 @@ Returns the customer-receivable ledger as of `as_of_date` (defaults to today). E
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -62,7 +62,7 @@ Returns the annual avgifter basis per employee for `year`, summed across booked 
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -96,7 +96,7 @@ Returns assets / liabilities / equity grouped into BAS sections, with the period
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -130,7 +130,7 @@ Validates that the target period's opening balances (IB) equal the prior period'
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -165,7 +165,7 @@ Returns every posted journal line in the period grouped by account, with opening
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -199,7 +199,7 @@ Returns the period's revenue and expenses grouped by BAS class with subtotals (g
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -234,7 +234,7 @@ Returns every committed journal entry in the period with its voucher number, dat
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -267,7 +267,7 @@ Returns revenue + expenses + net result per calendar month inside the fiscal per
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -303,7 +303,7 @@ Returns per-employee salary figures (gross / tax / net / avgifter / vacation acc
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -361,7 +361,7 @@ Returns the supplier-payable ledger as of `as_of_date` (defaults to today). Each
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -435,7 +435,7 @@ Returns per-employee semesterlöneskuld balances as of year-end based on their v
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,
@@ -471,7 +471,7 @@ Computes momsdeklaration rutor for the given period_type / year / period. The re
 Response `200`:
 ```ts
 {
-  data: unknown,
+  data?: unknown,
   meta: {
     request_id: string,
     api_version: string,

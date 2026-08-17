@@ -75,11 +75,13 @@ describe('transactions page booking feedback', () => {
 
   it('decrements the unbooked count on every path that removes a row', () => {
     // finishBooking, handleTransactionBooked (manual booking dialog / voucher
-    // match), the three other single-row exits already on the page, and the
-    // duplicate-dialog "Ignorera transaktionen" tail.
+    // match), the three other single-row exits already on the page, the
+    // duplicate-dialog "Ignorera transaktionen" tail, and
+    // handleDeleteTransaction (deleting a pending row must not leave the
+    // inbox badge stale: the realtime echo is not guaranteed for DELETE).
     expect(
       PAGE_SRC.match(/setTotalUncategorizedCount\(\(prev\) => Math\.max\(0, \(prev \?\? 1\) - 1\)\)/g) ?? [],
-    ).toHaveLength(6)
+    ).toHaveLength(7)
   })
 
   it('ships the undo strings it renders in both locales', () => {
