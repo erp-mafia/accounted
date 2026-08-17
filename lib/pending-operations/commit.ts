@@ -5624,16 +5624,19 @@ async function commitSubmitAgi(
 
 async function commitMatchBatchAllocate(
   supabase: SupabaseClient,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   // Trust boundary (compliance-swarm V8.2.1, A.8.2):
   // Tenant isolation is enforced authoritatively inside the SQL RPC
-  // `match_batch_allocate` (supabase/migrations/20260601122000_*.sql):
+  // `match_batch_allocate` (supabase/migrations/20260817150000_*.sql):
   //   - `transactions` row fetched WHERE id = p_tx_id AND company_id = p_company_id
   //   - `invoices` and `supplier_invoices` rows fetched WHERE id = ? AND company_id = p_company_id
-  //   - `auth.uid()` resolves the caller; membership checked against
-  //     `company_members.company_id = p_company_id`
+  //   - the actor resolves from auth.uid(), with p_user_id honored only for
+  //     service_role callers (this commit path runs on the cookieless
+  //     service client, where auth.uid() is NULL); membership checked
+  //     against `company_members.company_id = p_company_id`
   // The MCP execute() handler additionally pre-checks the same IDs to
   // surface clean errors before staging. This commit handler is a thin
   // pass-through by design: re-querying here would triple the same
@@ -5648,6 +5651,7 @@ async function commitMatchBatchAllocate(
     p_tx_id: txId,
     p_allocations: allocations,
     p_company_id: companyId,
+    p_user_id: userId,
   })
   if (error) {
     // Sanitised log (A.8.11, CC7.2): only error code + message, no
@@ -6118,7 +6122,7 @@ async function commitPendingOperationInner(
         result = await commitVacationYearClose(supabase, userId, companyId, pendingOp.params)
         break
       case 'match_batch_allocate':
-        result = await commitMatchBatchAllocate(supabase, companyId, pendingOp.params)
+        result = await commitMatchBatchAllocate(supabase, userId, companyId, pendingOp.params)
         break
       case 'bulk_book_transactions':
         result = await commitBulkBookTransactions(supabase, companyId, pendingOp.params)
