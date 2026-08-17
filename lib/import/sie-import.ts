@@ -2043,8 +2043,12 @@ export async function executeSIEImport(
     if (onExistingPeriod === 'block') {
       const duplicate = await checkDuplicateImport(supabase, companyId, options.fileContent)
       if (duplicate) {
+        // Name the way out. A completed import (including one that created
+        // zero verifikat, e.g. mappings that skipped everything) holds the
+        // (company_id, file_hash) slot until it is undone; agents reported
+        // being stuck here without knowing undo-then-retry is the path.
         result.errors.push(
-          `This file has already been imported on ${duplicate.imported_at ? new Date(duplicate.imported_at).toLocaleDateString('sv-SE') : 'okänt datum'}`
+          `Den här filen har redan importerats ${duplicate.imported_at ? new Date(duplicate.imported_at).toLocaleDateString('sv-SE') : 'vid okänt datum'} (import ${duplicate.id}, ${duplicate.transactions_count} verifikat). Ångra den importen först (Ångra import i webbappen, eller gnubok_undo_sie_import via MCP) och importera sedan igen.`
         )
         return result
       }
@@ -2129,7 +2133,7 @@ export async function executeSIEImport(
       )
       if (periodDuplicate) {
         result.errors.push(
-          `En SIE-import för ett överlappande räkenskapsår (${periodDuplicate.fiscal_year_start} till ${periodDuplicate.fiscal_year_end}) finns redan`
+          `En SIE-import för ett överlappande räkenskapsår (${periodDuplicate.fiscal_year_start} till ${periodDuplicate.fiscal_year_end}) finns redan (import ${periodDuplicate.id}, ${periodDuplicate.transactions_count} verifikat). Ångra den importen först (Ångra import i webbappen, eller gnubok_undo_sie_import via MCP) och importera sedan igen.`
         )
         return result
       }

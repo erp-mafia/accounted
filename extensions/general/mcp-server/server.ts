@@ -3420,7 +3420,7 @@ export const tools: McpTool[] = [
 
       return {
         recorded: true,
-        message: 'Thanks. Feedback queued for product-team review. We aggregate signal weekly.',
+        message: 'Thanks. Feedback recorded for product-team triage; it is read and has led to fixes. Include ids and expected vs actual so it can be verified.',
       }
     },
   },
@@ -3621,6 +3621,18 @@ export const tools: McpTool[] = [
             },
             required: ['workflow', 'description', 'skill', 'tools'],
           },
+        },
+        feedback_channel: {
+          type: 'object',
+          additionalProperties: false,
+          description:
+            'How to report a missing tool, a misleading description or a wrong result: the tool is read by the product team and has fixed real bugs.',
+          properties: {
+            tool: { type: 'string' },
+            when: { type: 'string' },
+            include: { type: 'string' },
+          },
+          required: ['tool', 'when', 'include'],
         },
       },
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
@@ -3902,6 +3914,14 @@ export const tools: McpTool[] = [
           skill: w.skill,
           tools: [...w.tools],
         })),
+        // The feedback tool was previously discoverable only by scanning
+        // tools/list; agents that never scan never report. Surface it here,
+        // once, in the call every session starts with.
+        feedback_channel: {
+          tool: 'gnubok_feedback',
+          when: 'A tool is missing, a description misled you, a result looks wrong, or something worked unusually well.',
+          include: 'context (what you tried, ids, expected vs actual), suggestion, and tool_name. Rate-limited 1/min/key: batch a session\'s findings into one call.',
+        },
       }
     },
   },
@@ -17445,6 +17465,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId}); when selecting another company, repeat company_id on every company-data call, including approval.`,
             '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
+            '• When a tool is missing, a description misled you, a result looks wrong, or something worked unusually well, call gnubok_feedback (context + suggestion, optional tool_name). It is read by the product team and has fixed real bugs; include ids and what you expected. Rate-limited 1/min/key, so batch a session\'s findings into one call.',
             '',
             'Common workflows:',
             '• Before categorizing or creating vouchers, consult ledger_context in gnubok_get_agent_briefing (full picture: the Accounted://ledger/context resource): it shows how THIS company has booked each counterparty and supplier (dominant account, VAT treatment, evidence = historical frequency). Prefer these observed patterns over guesses; explicit mapping rules outrank them. Frequency is not permission to auto-post: still stage for approval.',
