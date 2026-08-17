@@ -910,10 +910,7 @@ export default function NewSupplierInvoiceForm({
     items.forEach((item, index) => {
       if (item.vat_rate !== 0) {
         if (item.amount) {
-          setValue(
-            `items.${index}.amount`,
-            Math.round(item.amount * (1 + item.vat_rate) * 100) / 100,
-          )
+          setValue(`items.${index}.amount`, roundOre(item.amount * (1 + item.vat_rate)))
         }
         setValue(`items.${index}.vat_rate`, 0)
       }
