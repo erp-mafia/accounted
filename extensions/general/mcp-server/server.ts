@@ -29,7 +29,7 @@ import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCount
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
-import { getVatRules, getPermittedVatRates, getAvailableVatRates } from '@/lib/invoices/vat-rules'
+import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { getBranding } from '@/lib/branding/service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
@@ -5096,10 +5096,9 @@ export const tools: McpTool[] = [
       // The DEFAULT set governs article-rate adoption (web parity: the picker
       // only adopts a rate the customer could have picked themselves); a
       // customer locked to a single rate (foreign business 0%) adopts nothing.
-      const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
-      const adoptableVatRates: ReadonlySet<number> = new Set(
-        availableRates.length > 1 ? availableRates.map((r) => r.rate) : [],
-      )
+      // Gating below stays on the PERMITTED set: adoption and validation are
+      // deliberately different sets.
+      const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated)
 
       // Article prefill (web line picker parity): the line's own values win,
       // the referenced article fills whatever the agent left out.
