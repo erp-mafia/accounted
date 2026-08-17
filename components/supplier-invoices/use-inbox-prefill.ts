@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import type { UseFormGetValues, UseFormReset, UseFormSetValue } from 'react-hook-form'
 import { useToast } from '@/components/ui/use-toast'
@@ -61,6 +61,20 @@ export function useInboxPrefill({
   const [hasMatchedSupplier, setHasMatchedSupplier] = useState(false)
   const [isLoadingInbox, setIsLoadingInbox] = useState(!!inboxItemId)
   const [hasPrefilled, setHasPrefilled] = useState(false)
+  // Bumped once per applied extraction. Effects that must re-run after every
+  // apply (not just the first: a remove + re-upload applies again) depend on
+  // this instead of the one-shot `hasPrefilled` flag.
+  const [applyCount, setApplyCount] = useState(0)
+
+  // The dokument-forst upload path calls applyInboxItem from long-lived
+  // closures (the 90 s extraction poll captures the starting render), so the
+  // supplier list is read through a ref: otherwise an extraction that lands
+  // after the suppliers finished loading resolves against a stale [] and the
+  // matched supplier is silently dropped.
+  const suppliersRef = useRef(suppliers)
+  useEffect(() => {
+    suppliersRef.current = suppliers
+  }, [suppliers])
 
   const applyInboxItem = useCallback(
     (item: InboxItemData): boolean => {
@@ -71,7 +85,10 @@ export function useInboxPrefill({
       setOriginalExtracted(extracted)
 
       // Supplier
-      if (item.matched_supplier_id && suppliers.find((s) => s.id === item.matched_supplier_id)) {
+      if (
+        item.matched_supplier_id &&
+        suppliersRef.current.find((s) => s.id === item.matched_supplier_id)
+      ) {
         setValue('supplier_id', item.matched_supplier_id)
         setHasMatchedSupplier(true)
         onFieldPrefilled?.('supplier_id')
@@ -154,9 +171,10 @@ export function useInboxPrefill({
       // they didn't touch anything.
       reset(getValues())
       setHasPrefilled(true)
+      setApplyCount((c) => c + 1)
       return true
     },
-    [suppliers, setValue, replace, reset, getValues, onFieldPrefilled],
+    [setValue, replace, reset, getValues, onFieldPrefilled],
   )
 
   // One-shot: load inbox item and prefill form. Runs after suppliers are
@@ -216,6 +234,7 @@ export function useInboxPrefill({
     setHasMatchedSupplier,
     isLoadingInbox,
     hasPrefilled,
+    applyCount,
     applyInboxItem,
   }
 }

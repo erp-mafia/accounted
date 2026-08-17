@@ -46,10 +46,12 @@ import { roundOre } from '@/lib/money'
 import {
   buildSupplierInvoicePayload,
   type SupplierInvoiceFormData,
+  type SupplierInvoiceLineItem,
 } from '@/lib/supplier-invoices/form-payload'
+import { plantedRowTouched, snapshotPlantedRow } from '@/lib/supplier-invoices/planted-rows'
 import { VatRateCell, RcRateSelect } from '@/components/supplier-invoices/supplier-invoice-cells'
 import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-supplier-invoice-data'
-import { useInboxPrefill } from '@/components/supplier-invoices/use-inbox-prefill'
+import { useInboxPrefill, type InboxItemData } from '@/components/supplier-invoices/use-inbox-prefill'
 import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-supplier-invoice-submit'
 import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, Link2, CalendarClock, Tags, FileText } from 'lucide-react'
 import type { Supplier, InvoiceExtractionResult } from '@/types'
@@ -216,6 +218,10 @@ export default function NewSupplierInvoiceForm({
   const extractionPollTokenRef = useRef(0)
   const underlagInputRef = useRef<HTMLInputElement | null>(null)
   const [isDraggingUnderlag, setIsDraggingUnderlag] = useState(false)
+  // Deferred tolkning that landed while the user was already typing: buffered
+  // instead of applied, surfaced as a quiet click-to-apply line (see
+  // applyExtractionIfPristine below).
+  const [pendingExtraction, setPendingExtraction] = useState<InboxItemData | null>(null)
 
   // Fields the tolkning just filled: they get the brief settle tint (the CSS
   // animation is gated on prefers-reduced-motion in globals.css).
@@ -270,6 +276,13 @@ export default function NewSupplierInvoiceForm({
   })
 
   useUnsavedChanges(isDirty)
+
+  // Live dirty flag for long-lived closures (the 90 s extraction poll):
+  // the destructured `isDirty` in that closure is frozen at poll start.
+  const isDirtyRef = useRef(false)
+  useEffect(() => {
+    isDirtyRef.current = isDirty
+  }, [isDirty])
 
   useEffect(() => {
     documentFilesRef.current = documentFiles
@@ -357,7 +370,7 @@ export default function NewSupplierInvoiceForm({
     hasMatchedSupplier,
     setHasMatchedSupplier,
     isLoadingInbox,
-    hasPrefilled,
+    applyCount: prefillApplyCount,
     applyInboxItem,
   } = useInboxPrefill({
     inboxItemId,
@@ -425,11 +438,18 @@ export default function NewSupplierInvoiceForm({
   // Auto-fill defaults when supplier is selected: but never overwrite a value
   // the AI already filled in for us.
   const [templateAccountNote, setTemplateAccountNote] = useState<{ account: string; counterparty: string } | null>(null)
-  // Rows planted by the counterparty-history prefill, so a supplier SWITCH can
-  // un-plant them: without this, supplier A's history account survives into
-  // supplier B's invoice and silently blocks B's own default_expense_account
-  // (the fill branches only touch empty rows).
-  const plantedRef = useRef<{ account: string; rows: number[] } | null>(null)
+  // Rows planted by a supplier default or the counterparty-history prefill, so
+  // a supplier SWITCH can un-plant them: without this, supplier A's account
+  // survives into supplier B's invoice and silently blocks B's own
+  // default_expense_account (the fill branches only touch empty rows). Each
+  // row carries a plant-time snapshot (dirtyFields is unreliable for appended
+  // array rows: they are born all-dirty) plus whether the plant created the
+  // row, so un-planting can tell an untouched planted row from one the user
+  // has edited.
+  const plantedRef = useRef<{
+    account: string
+    rows: { index: number; appended: boolean; snapshot: SupplierInvoiceLineItem }[]
+  } | null>(null)
   // Automatic fill is requested, not applied inline: handleAccountChange
   // needs the loaded BAS chart to apply the konto's default moms, and the
   // requests originate in closures (the supplier effect and its async
@@ -438,38 +458,48 @@ export default function NewSupplierInvoiceForm({
   // fresh closures, so whichever arrives last triggers the fill. Filling
   // early would leave a VAT-free konto on the 25% row default, the exact
   // mis-booking the fill exists to prevent.
-  const pendingAccountFillRef = useRef<{ account: string; plant: boolean; counterparty?: string } | null>(null)
+  const pendingAccountFillRef = useRef<{ account: string; counterparty?: string } | null>(null)
   const [accountFillTick, setAccountFillTick] = useState(0)
 
-  function requestAccountFill(account: string, plant: boolean, counterparty?: string) {
-    pendingAccountFillRef.current = { account, plant, counterparty }
+  function requestAccountFill(account: string, counterparty?: string) {
+    pendingAccountFillRef.current = { account, counterparty }
     setAccountFillTick((t) => t + 1)
   }
 
   useEffect(() => {
     if (accounts.length === 0 || !pendingAccountFillRef.current) return
-    const { account, plant, counterparty } = pendingAccountFillRef.current
+    const { account, counterparty } = pendingAccountFillRef.current
     pendingAccountFillRef.current = null
     const items = getValues('items')
-    const appliedRows: number[] = []
+    const appliedRows: { index: number; appended: boolean }[] = []
     if (items.length === 0) {
       // Dokument-först model: the table starts with no rows, so a supplier
       // default (or history) account plants the first row instead of filling
       // an empty one. Same side effects as a manual pick (konto default moms,
       // description from the account name).
-      appliedRows.push(appendRowForAccount(account))
+      appliedRows.push({ index: appendRowForAccount(account), appended: true })
     } else {
       items.forEach((row, i) => {
         if (!row.account_number) {
           // Same path as a manual pick: konto default moms rides along.
           handleAccountChange(i, account)
-          appliedRows.push(i)
+          appliedRows.push({ index: i, appended: false })
         }
       })
     }
-    if (appliedRows.length > 0 && plant && counterparty) {
-      plantedRef.current = { account, rows: appliedRows }
-      setTemplateAccountNote({ account, counterparty })
+    // Every plant registers in plantedRef: default_expense_account plants must
+    // follow the same un-plant rules on a supplier switch as history plants
+    // (only the history plant gets the counterparty note).
+    if (appliedRows.length > 0) {
+      plantedRef.current = {
+        account,
+        rows: appliedRows.map(({ index, appended }) => ({
+          index,
+          appended,
+          snapshot: snapshotPlantedRow(getValues(`items.${index}`)),
+        })),
+      }
+      if (counterparty) setTemplateAccountNote({ account, counterparty })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts, accountFillTick])
@@ -483,19 +513,22 @@ export default function NewSupplierInvoiceForm({
     if (plantedRef.current) {
       const { account, rows } = plantedRef.current
       const planted = getValues('items')
-      // Planted rows the user never touched (amount still 0) are removed
-      // outright: in the empty-start table a planted row IS the row, not just
-      // an account on one. Rows the user gave an amount keep their data; only
-      // the stale account is cleared (handleAccountChange reapplies konto
-      // defaults on the next fill or manual pick). Descending order keeps the
-      // remaining indices valid while removing.
-      ;[...rows].sort((a, b) => b - a).forEach((i) => {
-        if (planted[i]?.account_number === account) {
-          if (!planted[i]?.amount) {
-            remove(i)
-          } else {
-            setValue(`items.${i}.account_number`, '')
-          }
+      // Rows the plant itself created and the user never touched since
+      // (snapshot compare: belopp, beskrivning, moms, periodisering,
+      // dimensioner, SLP) are removed outright: in the empty-start table a
+      // planted row IS the row, not just an account on one. Any user edit,
+      // not just an amount, keeps the row's data and only the stale account
+      // is cleared (handleAccountChange reapplies konto defaults on the next
+      // fill or manual pick). Rows that existed before the fill are never
+      // removed, only un-planted. Descending order keeps the remaining
+      // indices valid while removing.
+      ;[...rows].sort((a, b) => b.index - a.index).forEach(({ index, appended, snapshot }) => {
+        const row = planted[index]
+        if (row?.account_number !== account) return
+        if (appended && !plantedRowTouched(row, snapshot)) {
+          remove(index)
+        } else {
+          setValue(`items.${index}.account_number`, '')
         }
       })
       plantedRef.current = null
@@ -508,7 +541,7 @@ export default function NewSupplierInvoiceForm({
       // when the table is empty): an empty account is the only signal needed.
       // Routed through the fill request so it waits for the BAS chart and the
       // konto's default moms comes along exactly like a manual pick.
-      requestAccountFill(supplier.default_expense_account, false)
+      requestAccountFill(supplier.default_expense_account)
     }
     if (supplier.default_currency && watch('currency') === 'SEK') {
       setValue('currency', supplier.default_currency)
@@ -538,7 +571,7 @@ export default function NewSupplierInvoiceForm({
           const credit: string | undefined = match?.template?.credit_account
           if (!match || (match.confidence ?? 0) < 0.5) return
           if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
-          requestAccountFill(debit, true, match.template.counterparty_name)
+          requestAccountFill(debit, match.template.counterparty_name)
         } catch {
           // Prefill is best-effort; the rows stay blank.
         }
@@ -610,6 +643,9 @@ export default function NewSupplierInvoiceForm({
     const supplierId = watchedSupplierId
     const number = (watchedInvoiceNumber || '').trim()
     if (!supplierId || !number) {
+      // Advance the seq so an in-flight exists response cannot resurrect the
+      // warning under a field the user just cleared.
+      duplicateSeqRef.current += 1
       setDuplicateWarning(null)
       return
     }
@@ -779,8 +815,10 @@ export default function NewSupplierInvoiceForm({
 
   // Force every line to 0 % moms for icke momsregistrerade companies: the
   // default line, AI prefills and konto defaults all assume 25 % otherwise.
-  // Re-runs after the inbox prefill lands so a late extraction can't
-  // reintroduce a rate.
+  // Re-runs after EVERY applied extraction (prefillApplyCount bumps per
+  // apply), not just the first: a remove + re-upload applies a fresh
+  // extraction whose 25 % rates would otherwise reach the convert endpoint
+  // silently, with the moms columns hidden.
   //
   // The amount is grossed up in the same pass: an amount paired with a
   // non-zero rate is a NET amount (AI line totals are exkl moms, and the
@@ -800,7 +838,7 @@ export default function NewSupplierInvoiceForm({
       }
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vatRegistered, hasPrefilled])
+  }, [vatRegistered, prefillApplyCount])
 
   function isAccrualOpen(index: number): boolean {
     return watchedItems?.[index]?.accrual_balance_account != null
@@ -1091,6 +1129,30 @@ export default function NewSupplierInvoiceForm({
     }
   }
 
+  // Standalone-path guard: an extraction can land up to 90 s after upload,
+  // and applyInboxItem overwrites scalars and replaces ALL rows. Auto-apply
+  // only while the form is still pristine; once the user has typed, buffer
+  // the result and offer a quiet click-to-apply line instead of silently
+  // wiping their input. The inbox-arrival path (?inbox_item_id) never routes
+  // through here: there the prefill IS the entry state.
+  function applyExtractionIfPristine(item: InboxItemData) {
+    if (isDirtyRef.current) {
+      setPendingExtraction(item)
+      setExtractionPhase('done')
+      return
+    }
+    applyInboxItem(item)
+    afterUploadExtraction(item.extracted_data)
+  }
+
+  function applyPendingExtraction() {
+    const item = pendingExtraction
+    if (!item) return
+    setPendingExtraction(null)
+    applyInboxItem(item)
+    afterUploadExtraction(item.extracted_data)
+  }
+
   async function pollExtraction(itemId: string, documentId: string) {
     const token = ++extractionPollTokenRef.current
     const startedAt = Date.now()
@@ -1104,13 +1166,12 @@ export default function NewSupplierInvoiceForm({
         if (extractionPollTokenRef.current !== token) return
         if (data?.status !== 'processing') {
           if (hasExtractionContent(data?.extracted_data)) {
-            applyInboxItem({
+            applyExtractionIfPristine({
               id: itemId,
               extracted_data: data.extracted_data,
               matched_supplier_id: data.matched_supplier_id ?? null,
               document_id: documentId,
             })
-            afterUploadExtraction(data.extracted_data)
           } else {
             // Extraction failed or read nothing: keep the plain attachment.
             setExtractionPhase('idle')
@@ -1166,6 +1227,7 @@ export default function NewSupplierInvoiceForm({
     }
     setDocumentFiles([entry])
     setExtractionPhase('idle')
+    setPendingExtraction(null)
 
     try {
       const formData = new FormData()
@@ -1192,13 +1254,12 @@ export default function NewSupplierInvoiceForm({
             setExtractionPhase('processing')
             void pollExtraction(data.inbox_item_id, data.document_id)
           } else if (hasExtractionContent(data.extracted_data)) {
-            applyInboxItem({
+            applyExtractionIfPristine({
               id: data.inbox_item_id,
               extracted_data: data.extracted_data ?? null,
               matched_supplier_id: data.matched_supplier_id ?? null,
               document_id: data.document_id,
             })
-            afterUploadExtraction(data.extracted_data ?? null)
           }
           return
         }
@@ -1218,6 +1279,7 @@ export default function NewSupplierInvoiceForm({
     setDocumentFiles([])
     setUploadedInboxItemId(null)
     setExtractionPhase('idle')
+    setPendingExtraction(null)
     void (async () => {
       // Delete the inbox item first (it references the document), then the
       // document. Both best-effort: the same orphan-cleanup contract as before.
@@ -1511,9 +1573,18 @@ export default function NewSupplierInvoiceForm({
                 />
               </>
             )}
-            {underlagCaption && (
+            {pendingExtraction ? (
+              // Deferred tolkning landed after the user started typing: never
+              // auto-overwrite; offer the fill as a quiet choice instead.
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t('extraction_ready_line')}{' '}
+                <button type="button" className={QUIET_LINK_CLASS} onClick={applyPendingExtraction}>
+                  {t('extraction_ready_apply')}
+                </button>
+              </p>
+            ) : underlagCaption ? (
               <p className="mt-2 text-xs text-muted-foreground">{underlagCaption}</p>
-            )}
+            ) : null}
           </section>
 
           {/* ── Leverantör ───────────────────────────────────────── */}
