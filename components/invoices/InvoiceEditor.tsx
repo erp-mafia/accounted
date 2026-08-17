@@ -31,6 +31,7 @@ import {
 import {
   deriveNextStep,
   deriveForvalChips,
+  deriveRequiresHousing,
   filterArticleSuggestions,
   type NextStep,
 } from '@/components/invoices/invoice-editor-flow'
@@ -1691,7 +1692,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     requiresPersonnummer:
       hasAnyDeduction && !(initial?.deduction_personnummer_last4 || customerHasPersonalNumber),
     personnummer: watchPersonnummer || '',
-    requiresHousing: hasAnyRotLine,
+    // Gated on the claimed amount to match the claim card's mount condition
+    // (hasAnyDeduction): a ROT-flagged line with a zero amount renders no
+    // card, so the housing field the next-step link would focus does not
+    // exist yet.
+    requiresHousing: deriveRequiresHousing({ hasRotLine: hasAnyRotLine, deductionTotal }),
     housingDesignation: watchHousingDesignation || '',
   })
 
@@ -2423,6 +2428,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                             : undefined
                         }
                         aria-label={t('entry_aria')}
+                        aria-describedby={entryOpen ? `${entryListId}-hint` : undefined}
                         className={cn(CELL_INPUT_CLASS, 'w-full')}
                       />
                       <div className="whitespace-nowrap px-2 text-right text-[13px] italic text-muted-foreground/50 tabular-nums">
@@ -2444,38 +2450,42 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               {/* Suggestion popover: anchored below the whole table wrap so it
                   never clips inside the horizontal scroll container. */}
               {entryOpen && (
-                <div
-                  id={entryListId}
-                  role="listbox"
-                  className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-lg border border-input bg-card shadow-md"
-                >
-                  {entryMatches.map((a, i) => (
-                    <button
-                      key={a.id}
-                      id={`${entryListId}-opt-${i}`}
-                      type="button"
-                      role="option"
-                      aria-selected={i === entryActiveIdx}
-                      tabIndex={-1}
-                      className={cn(
-                        'flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left',
-                        i === entryActiveIdx ? 'bg-secondary/60' : 'hover:bg-secondary/40',
-                      )}
-                      onMouseDown={(e) => {
-                        e.preventDefault()
-                        commitEntryArticle(a.id)
-                      }}
-                      onMouseEnter={() => setEntryActiveIdx(i)}
-                    >
-                      <span className="text-[13px]">
-                        {a.article_number ? `${a.article_number}: ${a.name}` : a.name}
-                      </span>
-                      <span className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
-                        {formatCurrency(Number(a.price_excl_vat) || 0, (a.currency as Currency) || watchCurrency)}/{a.unit || 'st'} &middot; {a.vat_rate} %
-                      </span>
-                    </button>
-                  ))}
-                  <div className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+                <div className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-lg border border-input bg-card shadow-md">
+                  {/* The hint is a sibling of the listbox (listbox children
+                      must be options); the input references it via
+                      aria-describedby. */}
+                  <div id={entryListId} role="listbox" className="max-h-72 overflow-y-auto">
+                    {entryMatches.map((a, i) => (
+                      <button
+                        key={a.id}
+                        id={`${entryListId}-opt-${i}`}
+                        type="button"
+                        role="option"
+                        aria-selected={i === entryActiveIdx}
+                        tabIndex={-1}
+                        className={cn(
+                          'flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left',
+                          i === entryActiveIdx ? 'bg-secondary/60' : 'hover:bg-secondary/40',
+                        )}
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          commitEntryArticle(a.id)
+                        }}
+                        onMouseEnter={() => setEntryActiveIdx(i)}
+                      >
+                        <span className="text-[13px]">
+                          {a.article_number ? `${a.article_number}: ${a.name}` : a.name}
+                        </span>
+                        <span className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
+                          {formatCurrency(Number(a.price_excl_vat) || 0, (a.currency as Currency) || watchCurrency)}/{a.unit || 'st'} &middot; {a.vat_rate} %
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <div
+                    id={`${entryListId}-hint`}
+                    className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground"
+                  >
                     {entryMatches.length > 0 ? t('entry_hint_matches') : t('entry_hint_free')}
                   </div>
                 </div>

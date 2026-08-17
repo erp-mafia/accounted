@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   deriveNextStep,
   deriveForvalChips,
+  deriveRequiresHousing,
   filterArticleSuggestions,
   type NextStepInput,
   type ForvalChipsInput,
@@ -125,6 +126,20 @@ describe('deriveNextStep priority order', () => {
     expect(
       deriveNextStep(stepInput({ requiresHousing: true, housingDesignation: 'Berga 2:11' })),
     ).toEqual({ kind: 'ready' })
+  })
+
+  it('skips the housing step for a ROT row whose amount is still zero (transient state)', () => {
+    // The claim card only mounts while a deduction amount is claimed, so a
+    // ROT-flagged row with price 0 must not produce a housing step: the
+    // next-step link would try to focus an unmounted field.
+    const requiresHousing = deriveRequiresHousing({ hasRotLine: true, deductionTotal: 0 })
+    expect(requiresHousing).toBe(false)
+    expect(deriveNextStep(stepInput({ requiresHousing }))).toEqual({ kind: 'ready' })
+  })
+
+  it('requires housing once the ROT deduction carries an amount, but never for RUT alone', () => {
+    expect(deriveRequiresHousing({ hasRotLine: true, deductionTotal: 360 })).toBe(true)
+    expect(deriveRequiresHousing({ hasRotLine: false, deductionTotal: 500 })).toBe(false)
   })
 
   it('self-billed extras come last: external number then received date', () => {

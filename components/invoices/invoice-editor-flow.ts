@@ -53,9 +53,27 @@ export interface NextStepInput {
   /** A deduction is claimed and neither draft last4 nor kundkort covers it. */
   requiresPersonnummer: boolean
   personnummer: string
-  /** Any ROT line exists (fastighetsbeteckning is then required). */
+  /**
+   * A ROT line exists AND a deduction amount is claimed (fastighetsbeteckning
+   * is then required). Derive via deriveRequiresHousing so the gate provably
+   * matches the ROT/RUT claim card's mount condition.
+   */
   requiresHousing: boolean
   housingDesignation: string
+}
+
+/**
+ * The housing (fastighetsbeteckning) requirement behind NextStepInput. A ROT
+ * line alone is not enough: the claim card only mounts while a deduction
+ * amount is claimed (deductionTotal > 0), so a ROT-flagged line whose amount
+ * is still zero (transient state while typing) must not produce a housing
+ * step, or the next-step link would try to focus an unmounted field.
+ */
+export function deriveRequiresHousing(input: {
+  hasRotLine: boolean
+  deductionTotal: number
+}): boolean {
+  return input.hasRotLine && input.deductionTotal > 0
 }
 
 /**
