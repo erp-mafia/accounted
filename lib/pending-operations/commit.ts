@@ -1671,6 +1671,11 @@ async function commitCreateInvoice(
       vat_amount_sek: vatAmountSek,
       total,
       total_sek: totalSek,
+      // Fresh unpaid receivable: remaining_amount is what every payment
+      // surface reads as the open balance; leaving the NOT NULL DEFAULT 0
+      // made every agent-created invoice look settled.
+      remaining_amount: total,
+      paid_amount: 0,
       vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
       vat_rate: isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate),
       moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
@@ -4438,6 +4443,8 @@ async function commitConvertInvoice(
       vat_amount: proforma.vat_amount,
       vat_amount_sek: proforma.vat_amount_sek,
       total: proforma.total,
+      remaining_amount: proforma.total,
+      paid_amount: 0,
       total_sek: proforma.total_sek,
       vat_treatment: proforma.vat_treatment,
       vat_rate: proforma.vat_rate,
