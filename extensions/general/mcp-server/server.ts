@@ -3625,8 +3625,7 @@ export const tools: McpTool[] = [
         feedback_channel: {
           type: 'object',
           additionalProperties: false,
-          description:
-            'How to report a missing tool, a misleading description or a wrong result: the tool is read by the product team and has fixed real bugs.',
+          description: 'How to report a missing tool, misleading description or wrong result.',
           properties: {
             tool: { type: 'string' },
             when: { type: 'string' },
