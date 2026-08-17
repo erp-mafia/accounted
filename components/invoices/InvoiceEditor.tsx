@@ -73,7 +73,12 @@ import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/acc
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
-import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem, BASAccount } from '@/types'
+import {
+  buildInvoiceWritePayload,
+  buildSelfBilledPayload,
+  hasDimensionValues,
+} from '@/lib/invoices/editor-payload'
+import type { Customer, Currency, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem, BASAccount } from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
@@ -106,11 +111,6 @@ type ArticleOption = Pick<
 
 function RequiredMark() {
   return <span className="text-destructive ml-0.5" aria-hidden="true">*</span>
-}
-
-// True when a dimensions bag ({sie_dim_no: code}) carries at least one value.
-function hasDimensionValues(dims: Record<string, string> | null | undefined): boolean {
-  return !!dims && Object.keys(dims).length > 0
 }
 
 // Compact display of a dimensions bag, e.g. "KS01 · P001" (dim-number order).
@@ -1006,58 +1006,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     })
   }
 
-  // Per-item bags ride the payload only when they carry values: the server
-  // treats an absent bag as "inherit the invoice's default_dimensions".
-  function pruneItemDimensions<T extends { dimensions?: Record<string, string> | null }>(
-    items: T[],
-  ): T[] {
-    return items.map((item) =>
-      hasDimensionValues(item.dimensions) ? item : { ...item, dimensions: undefined },
-    )
-  }
-
-  // The form always carries the self-billing fields (they default to '' in both
-  // create and edit mode). This editor's normal create/draft/edit flows never
-  // use self-billing, that goes through the dedicated /api/invoices/self-billed
-  // path, so drop these empty carriers before spreading the form data into the
-  // /api/invoices (or PATCH) body: a bare external_invoice_number: '' otherwise
-  // trips the shared CreateInvoiceSchema's min(1). Belt-and-suspenders; the
-  // server schema also coerces '' to undefined for these fields.
-  function stripSelfBillingFields(data: FormData): FormData {
-    const {
-      external_invoice_number: _ein,
-      self_billing_agreement_ref: _sbar,
-      received_date: _rd,
-      ...rest
-    } = data
-    return rest
-  }
-
   // Self-billing path: no review dialog, no PDF, no send: it arrives already
   // booked. POST straight to the dedicated endpoint and open the verifikat.
+  // Body mapping lives in lib/invoices/editor-payload.ts (payload-parity
+  // tested), together with the shared create/draft/edit body builder.
   async function handleSelfBilledSubmit(data: FormData) {
     setIsSubmitting(true)
     try {
       const response = await fetch('/api/invoices/self-billed', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customer_id: data.customer_id,
-          external_invoice_number: data.external_invoice_number,
-          self_billing_agreement_ref: data.self_billing_agreement_ref || undefined,
-          invoice_date: data.invoice_date,
-          received_date: data.received_date,
-          due_date: data.due_date,
-          currency: data.currency,
-          notes: data.notes,
-          items: data.items.map((i) => ({
-            description: i.description,
-            quantity: i.quantity,
-            unit: i.unit,
-            unit_price: i.unit_price,
-            vat_rate: i.vat_rate,
-          })),
-        }),
+        body: JSON.stringify(buildSelfBilledPayload(data)),
       })
       const result = await response.json()
       if (!response.ok) {
@@ -1169,36 +1128,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (!pendingData) return
     setIsSubmitting(true)
 
-    // Privacy by default: ROT/RUT line fields and the invoice-level
-    // personnummer / housing designation are only sent to the API when the
-    // user actually claims a deduction. Defaults are pre-instantiated as
-    // null in the form state, but null personal-data fields shouldn't ride
-    // along on every regular invoice.
-    const anyDeduction = pendingData.items.some((i) => i.deduction_type)
-    const sanitizedItems = pruneItemDimensions(pendingData.items).map((item) => {
-      if (item.deduction_type) return item
-      const {
-        deduction_type: _dt,
-        labor_hours: _lh,
-        work_type: _wt,
-        housing_designation: _hd,
-        apartment_number: _an,
-        brf_org_number: _bn,
-        ...rest
-      } = item
-      return rest
+    // Shared body builder (lib/invoices/editor-payload.ts): dimension pruning,
+    // ROT/RUT privacy strip, self-billing-carrier removal and the always-sent
+    // ore_rounding / default_dimensions all live there, pinned by parity tests.
+    const sanitizedPayload = buildInvoiceWritePayload(pendingData, {
+      oreRounding,
+      defaultDims,
     })
-    const sanitizedPayload: CreateInvoiceInput & { default_dimensions: Record<string, string> } = {
-      ...(stripSelfBillingFields(pendingData) as CreateInvoiceInput),
-      ore_rounding: oreRounding,
-      // Invoice-level default dims: always sent so an edited draft can clear
-      // them; {} means "no defaults".
-      default_dimensions: defaultDims,
-      items: sanitizedItems as CreateInvoiceInput['items'],
-      ...(anyDeduction
-        ? {}
-        : { deduction_personnummer: undefined, deduction_housing_designation: undefined }),
-    }
 
     try {
       const response = await fetch('/api/invoices', {
@@ -1269,30 +1205,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   async function saveDraftData(data: FormData) {
     setIsSavingDraft(true)
 
-    const anyDeduction = data.items.some((i) => i.deduction_type)
-    const sanitizedItems = pruneItemDimensions(data.items).map((item) => {
-      if (item.deduction_type) return item
-      const {
-        deduction_type: _dt,
-        labor_hours: _lh,
-        work_type: _wt,
-        housing_designation: _hd,
-        apartment_number: _an,
-        brf_org_number: _bn,
-        ...rest
-      } = item
-      return rest
+    const payload = buildInvoiceWritePayload(data, {
+      saveAsDraft: true,
+      oreRounding,
+      defaultDims,
     })
-    const payload: CreateInvoiceInput & { default_dimensions: Record<string, string> } = {
-      ...(stripSelfBillingFields(data) as CreateInvoiceInput),
-      save_as_draft: true,
-      ore_rounding: oreRounding,
-      default_dimensions: defaultDims,
-      items: sanitizedItems as CreateInvoiceInput['items'],
-      ...(anyDeduction
-        ? {}
-        : { deduction_personnummer: undefined, deduction_housing_designation: undefined }),
-    }
 
     try {
       const response = await fetch('/api/invoices', {
@@ -1331,29 +1248,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (!initial) return
     setIsSubmitting(true)
 
-    const anyDeduction = data.items.some((i) => i.deduction_type)
-    const sanitizedItems = pruneItemDimensions(data.items).map((item) => {
-      if (item.deduction_type) return item
-      const {
-        deduction_type: _dt,
-        labor_hours: _lh,
-        work_type: _wt,
-        housing_designation: _hd,
-        apartment_number: _an,
-        brf_org_number: _bn,
-        ...rest
-      } = item
-      return rest
+    const payload = buildInvoiceWritePayload(data, {
+      oreRounding,
+      defaultDims,
     })
-    const payload: CreateInvoiceInput & { default_dimensions: Record<string, string> } = {
-      ...(stripSelfBillingFields(data) as CreateInvoiceInput),
-      ore_rounding: oreRounding,
-      default_dimensions: defaultDims,
-      items: sanitizedItems as CreateInvoiceInput['items'],
-      ...(anyDeduction
-        ? {}
-        : { deduction_personnummer: undefined, deduction_housing_designation: undefined }),
-    }
 
     try {
       const response = await fetch(`/api/invoices/${initial.id}`, {
