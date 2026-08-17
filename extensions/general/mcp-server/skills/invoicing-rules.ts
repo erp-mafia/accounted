@@ -71,7 +71,9 @@ Use \`getAvailableVatRates(customerType, vatNumberValidated)\` semantics: Accoun
 
 ### Step 3: Create the invoice
 
-\`gnubok_create_invoice({ customer_id, items: [{ description, quantity, unit, unit_price, vat_rate? }], invoice_date?, due_date?, currency? })\`
+\`gnubok_create_invoice({ customer_id, items: [{ description?, quantity, unit?, unit_price?, vat_rate?, article_id? }], invoice_date?, due_date?, currency? })\`
+
+Set \`article_id\` (from \`gnubok_list_articles\`) to invoice a catalog article: it prefills description, unit, unit_price and revenue account from the article, and any value set on the line wins. Without \`article_id\`, description, unit and unit_price are required. The article's stored \`vat_rate\` is a DOMESTIC rate: it is adopted only when it is in the customer's default VAT set, so a reverse-charge or export customer keeps 0% unless the line sets \`vat_rate\` explicitly (taxed-where-performed supplies like hotel nights).
 
 Returns staged operation. User approves in web app → invoice number is allocated atomically (gap-free) and journal entry posted (under accrual / faktureringsmetoden).
 
