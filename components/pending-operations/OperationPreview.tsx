@@ -46,9 +46,21 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
   const vatLines = (data.vat_lines as Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>) || []
 
   if (lines.length > 0) {
+    // Journal lines are always SEK (BFL 5 kap 2 §). When the bank row itself
+    // is in another currency, say so next to the lines: a 2 500 USD receipt
+    // booked as 24 292,50 kr read as a wrong SEK figure to an approver who
+    // only saw one of the two numbers.
+    const txCurrency = (data.currency as string) || 'SEK'
+    const txAmount = typeof data.amount === 'number' && Number.isFinite(data.amount) ? data.amount : null
     return (
       <div className="space-y-1 text-sm">
         <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
+        {txCurrency !== 'SEK' && txAmount !== null && (
+          <div className="flex justify-between gap-4 text-xs text-muted-foreground mb-1">
+            <span>Banktransaktion</span>
+            <span className="tabular-nums shrink-0">{formatCurrency(txAmount, txCurrency)}</span>
+          </div>
+        )}
         {lines.map((line, i) => {
           const debitAmt = typeof line.debit_amount === 'number' ? line.debit_amount : 0
           const creditAmt = typeof line.credit_amount === 'number' ? line.credit_amount : 0
@@ -291,6 +303,69 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
   )
 }
 
+function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
+  // Samlingsverifikat over N bank rows. The staged kontering IS what the RPC
+  // posts on approval, so it is the load-bearing part of this card; the
+  // aggregates alone ("-720, 2 tx, expense") cannot tell a right booking from
+  // a wrong one. Journal lines are SEK; the bank sum is shown in the rows'
+  // own currency so a foreign batch is never misread as SEK.
+  const lines = (data.lines as VoucherLine[]) || []
+  const txCount = typeof data.tx_count === 'number' ? data.tx_count : null
+  const txSum = typeof data.tx_sum === 'number' && Number.isFinite(data.tx_sum) ? data.tx_sum : null
+  const currency = (data.currency as string) || 'SEK'
+  const linkExisting = data.mode === 'link_existing'
+  const totalDebit = lines.reduce((s, l) => s + (l.debit_amount > 0 ? l.debit_amount : 0), 0)
+  const totalCredit = lines.reduce((s, l) => s + (l.credit_amount > 0 ? l.credit_amount : 0), 0)
+
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        <span className="text-muted-foreground">Datum</span>
+        <span className="font-mono">{String(data.tx_date ?? '')}</span>
+        <span className="text-muted-foreground">Transaktioner</span>
+        <span className="font-mono tabular-nums">
+          {txCount ?? '-'}
+          {txSum !== null ? ` · ${formatCurrency(txSum, currency)}` : ''}
+        </span>
+        <span className="text-muted-foreground">Åtgärd</span>
+        <span>{linkExisting ? 'Länka till befintligt verifikat' : 'Ny samlingsverifikation'}</span>
+        {data.entry_description ? (
+          <>
+            <span className="text-muted-foreground">Beskrivning</span>
+            <span className="truncate">{String(data.entry_description)}</span>
+          </>
+        ) : null}
+      </div>
+      {lines.length > 0 && (
+        <div>
+          <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-[11px] uppercase tracking-wider text-muted-foreground pb-1">
+            <span>Konto</span>
+            <span>Text</span>
+            <span className="text-right w-24">Debet</span>
+            <span className="text-right w-24">Kredit</span>
+          </div>
+          <VoucherLinesTable lines={lines} />
+          <div className="border-t pt-2 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs">
+            <span></span>
+            <span className="text-muted-foreground">Summa</span>
+            <span className="font-mono tabular-nums text-right w-24 font-medium">
+              {formatCurrency(totalDebit)}
+            </span>
+            <span className="font-mono tabular-nums text-right w-24 font-medium">
+              {formatCurrency(totalCredit)}
+            </span>
+          </div>
+        </div>
+      )}
+      {linkExisting && lines.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          Transaktionerna kopplas till ett redan bokfört verifikat; ingen ny kontering skapas.
+        </p>
+      )}
+    </div>
+  )
+}
+
 function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
   const original = (data.original as {
     voucher?: string
@@ -451,6 +526,8 @@ export function OperationPreview({ op }: { op: OperationPreviewInput }) {
         return <CreateTransactionPreview data={op.preview_data} />
       case 'create_voucher':
         return <VoucherPreview data={op.preview_data} />
+      case 'bulk_book_transactions':
+        return <BulkBookPreview data={op.preview_data} />
       case 'correct_entry':
         return <CorrectEntryPreview data={op.preview_data} />
       case 'attach_document_to_transaction':

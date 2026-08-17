@@ -8756,6 +8756,43 @@ export const tools: McpTool[] = [
         periodCheckDate = (je.entry_date as string) > txDate ? (je.entry_date as string) : txDate
       }
 
+      // The staged kontering, named for the approver. Same shape and account-
+      // name lookup as gnubok_create_voucher's preview: the approval card is
+      // the human-in-the-loop control on an irreversible BFL posting, and a
+      // card that shows "-720, 2 tx, expense" without the debit/credit lines
+      // is compatible with both a correct booking and a wrong one. The
+      // executor's RPC posts new_entry.lines verbatim, so this preview is
+      // exactly what gets committed. Nothing beyond what create_voucher
+      // already exposes: BAS account + name, amounts, and the agent-authored
+      // line text; still no per-tx descriptions or counterparty identifiers.
+      let previewLines: Array<Record<string, unknown>> | null = null
+      if (stagedNewEntry) {
+        const stagedLines = stagedNewEntry.lines as Array<Record<string, unknown>>
+        const accountNumbers = [...new Set(stagedLines.map((l) => String(l.account_number)))]
+        const { data: accountRows } = await supabase
+          .from('chart_of_accounts')
+          .select('account_number, account_name')
+          .eq('company_id', companyId)
+          .in('account_number', accountNumbers)
+        const accountNames = new Map<string, string>()
+        for (const a of accountRows || []) {
+          accountNames.set(String(a.account_number), (a.account_name as string) ?? '')
+        }
+        previewLines = stagedLines.map((l) => {
+          const accountNumber = String(l.account_number)
+          return {
+            account_number: accountNumber,
+            account_name:
+              accountNames.get(accountNumber) ??
+              getBASReference(accountNumber)?.account_name ??
+              null,
+            debit_amount: Number(l.debit_amount) || 0,
+            credit_amount: Number(l.credit_amount) || 0,
+            line_description: (l.line_description as string | undefined) ?? null,
+          }
+        })
+      }
+
       return stagePendingOperation(supabase, companyId, userId, 'bulk_book_transactions',
         existingJeId
           ? `Länka ${txIds.length} transaktioner till verifikat (${txDate})`
@@ -8765,18 +8802,23 @@ export const tools: McpTool[] = [
           existing_journal_entry_id: existingJeId,
           new_entry: stagedNewEntry,
         },
-        // GDPR Art.25: preview_data carries only aggregate counts + the
-        // shared date/direction: no per-tx descriptions, no per-line
-        // descriptions, no counterparty IDs. The user-facing approval
-        // dialog reconstructs detail from the tx_ids list at render time
-        // rather than persisting denormalized PII here. Same privacy-by-
-        // design rationale as gnubok_link_transaction_to_journal_entry.
+        // GDPR Art.25: preview_data carries aggregate counts, the shared
+        // date/direction/currency, and the staged kontering (see previewLines
+        // above): no per-tx descriptions, no counterparty IDs. Same privacy-
+        // by-design rationale as gnubok_link_transaction_to_journal_entry.
         {
           tx_count: txIds.length,
           tx_date: txDate,
           tx_sum: txSum,
+          currency: txs[0]!.currency ?? 'SEK',
           direction,
           mode: existingJeId ? 'link_existing' : 'create_new',
+          ...(previewLines
+            ? {
+                entry_description: (stagedNewEntry as Record<string, unknown>).description ?? null,
+                lines: previewLines,
+              }
+            : {}),
           // Echoed for every non-exact dimension resolution (resolve-don't-
           // select) so the agent can verify what a name attached to.
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
