@@ -128,17 +128,20 @@ export async function executeSkattekontoFileImport(
   }
 
   for (const promotion of partition.promotions) {
-    const { error } = await supabase
+    // Return the updated rows: when a concurrent sync already flipped the
+    // row, zero rows match and the promotion must not be counted.
+    const { data: updated, error } = await supabase
       .from('skattekonto_transactions')
       .update({ status: 'booked' })
       .eq('id', promotion.existingId)
       .eq('company_id', companyId)
       .eq('status', 'upcoming')
-    if (!error) {
-      outcome.promoted++
-    } else {
+      .select('id')
+    if (error) {
       outcome.errors++
       outcome.first_error = outcome.first_error ?? error.message
+    } else if (updated && updated.length > 0) {
+      outcome.promoted++
     }
   }
 

@@ -34,7 +34,8 @@ export interface StoredSkattekontoTransaction {
 export interface SkattekontoFileImportRecord {
   id: string
   company_id: string
-  user_id: string
+  /** Importing user; null after that user's account is deleted. */
+  user_id: string | null
   filename: string
   file_hash: string
   file_variant: 'csv' | 'skv'

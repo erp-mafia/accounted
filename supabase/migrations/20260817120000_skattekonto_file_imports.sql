@@ -18,7 +18,11 @@
 CREATE TABLE public.skattekonto_file_imports (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   company_id UUID NOT NULL REFERENCES public.companies ON DELETE CASCADE,
-  user_id UUID NOT NULL REFERENCES auth.users ON DELETE CASCADE,
+  -- Importer provenance. Nullable + SET NULL so the import record (and the
+  -- file-hash dedup it provides) survives the importing user's deletion;
+  -- the INSERT policy below binds it to auth.uid() so a member cannot
+  -- attribute an import to a colleague.
+  user_id UUID REFERENCES auth.users ON DELETE SET NULL,
 
   filename TEXT NOT NULL,
   file_hash TEXT NOT NULL,
@@ -58,7 +62,10 @@ CREATE POLICY "Users see skattekonto file imports for their companies"
 
 CREATE POLICY "Users insert skattekonto file imports for their companies"
   ON public.skattekonto_file_imports FOR INSERT
-  WITH CHECK (company_id IN (SELECT public.user_company_ids()));
+  WITH CHECK (
+    company_id IN (SELECT public.user_company_ids())
+    AND user_id = auth.uid()
+  );
 
 CREATE POLICY "Users update skattekonto file imports for their companies"
   ON public.skattekonto_file_imports FOR UPDATE

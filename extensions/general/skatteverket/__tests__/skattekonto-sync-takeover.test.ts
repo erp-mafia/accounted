@@ -117,6 +117,40 @@ describe('syncSkattekonto: takeover of file-imported rows', () => {
     expect(rows[0].dedup_key).toBe('id:9001')
   })
 
+  it('prefers the booked candidate even when it is last in a 3-candidate queue', async () => {
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: [AGI_BOOKED],
+      kommandeTransaktioner: [],
+    })
+
+    const candidate = {
+      dedup_key: FILE_ROW_HASH_KEY,
+      transaktionsdatum: '2026-07-13',
+      transaktionstext: 'Arbetsgivaravgift juni 2026',
+      belopp_skatteverket: -15710,
+    }
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // existing dedup_key lookup
+    enqueue({
+      data: [
+        { id: 'stale-upcoming-1', status: 'upcoming', ...candidate },
+        { id: 'stale-upcoming-2', status: 'upcoming', ...candidate },
+        { id: 'file-row-booked', status: 'booked', ...candidate },
+      ],
+    }) // takeover candidate scan
+    enqueue({ data: null }) // takeover update
+    enqueue({ data: null }) // upsert
+
+    await syncSkattekonto(makeCtx())
+
+    const updates = findCalls('skattekonto_transactions', 'update')
+    expect(updates).toHaveLength(1)
+    // The eq('id', ...) filter must target the booked file row, not a stale
+    // upcoming candidate that happened to sort first.
+    const eqCalls = findCalls('skattekonto_transactions', 'eq')
+    expect(eqCalls).toContainEqual(['id', 'file-row-booked'])
+  })
+
   it('does not scan for takeover candidates when the id keys already exist', async () => {
     getTransaktionerMock.mockResolvedValue({
       tidigareTransaktioner: [AGI_BOOKED],

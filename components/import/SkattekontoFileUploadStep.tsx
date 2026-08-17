@@ -56,6 +56,9 @@ export default function SkattekontoFileUploadStep({
         </CardHeader>
         <CardContent className="space-y-4">
           <div
+            role="button"
+            tabIndex={isLoading ? -1 : 0}
+            aria-label={t('skattekonto_tap_select')}
             className={`
               relative border-2 border-dashed rounded-lg p-8 text-center transition-colors
               ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
@@ -72,6 +75,12 @@ export default function SkattekontoFileUploadStep({
             }}
             onDrop={handleDrop}
             onClick={() => document.getElementById('skattekonto-file-input')?.click()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                document.getElementById('skattekonto-file-input')?.click()
+              }
+            }}
           >
             <input
               id="skattekonto-file-input"

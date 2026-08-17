@@ -4,6 +4,7 @@ import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { computeDedupKey, contentSignature } from '@/lib/skatteverket/skattekonto-dedup'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { getSaldo, getTransaktioner } from './skattekonto-client'
 import { SkatteverketAuthError, type SkvAuth } from './api-client'
@@ -203,30 +204,49 @@ export async function syncSkattekonto(
   )
   if (newIdBooked.length > 0) {
     const dates = newIdBooked.map(r => r.transaktionsdatum).sort()
-    const { data: hashRows } = await ctx.supabase
-      .from('skattekonto_transactions')
-      .select('id, dedup_key, status, transaktionsdatum, transaktionstext, belopp_skatteverket')
-      .eq('company_id', ctx.companyId)
-      .like('dedup_key', 'h:%')
-      .gte('transaktionsdatum', dates[0])
-      .lte('transaktionsdatum', dates[dates.length - 1])
+    // Paged: PostgREST silently caps unpaged reads at 1000 rows, and a file
+    // import covering several years can leave more hash rows than that in
+    // the window; unadopted candidates would duplicate on the upsert below.
+    const hashRows = await fetchAllRows<{
+      id: string
+      dedup_key: string
+      status: string
+      transaktionsdatum: string
+      transaktionstext: string
+      belopp_skatteverket: number
+    }>(({ from, to }) =>
+      ctx.supabase
+        .from('skattekonto_transactions')
+        .select('id, dedup_key, status, transaktionsdatum, transaktionstext, belopp_skatteverket')
+        .eq('company_id', ctx.companyId)
+        .like('dedup_key', 'h:%')
+        .gte('transaktionsdatum', dates[0])
+        .lte('transaktionsdatum', dates[dates.length - 1])
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
 
-    if (hashRows && hashRows.length > 0) {
+    if (hashRows.length > 0) {
       // Multiset pairing by content signature; booked (imported) rows are
       // preferred over stale upcoming rows with identical content.
       const bySig = new Map<string, { id: string; status: string }[]>()
       for (const row of hashRows) {
         const sig = contentSignature(
-          row.transaktionsdatum as string,
-          row.belopp_skatteverket as number,
-          row.transaktionstext as string,
+          row.transaktionsdatum,
+          row.belopp_skatteverket,
+          row.transaktionstext,
         )
         const queue = bySig.get(sig)
-        if (queue) queue.push({ id: row.id as string, status: row.status as string })
-        else bySig.set(sig, [{ id: row.id as string, status: row.status as string }])
+        if (queue) queue.push({ id: row.id, status: row.status })
+        else bySig.set(sig, [{ id: row.id, status: row.status }])
       }
+      // A proper two-argument comparator: the earlier `sort(a => ...)` form
+      // is an inconsistent relation and could leave an upcoming row at the
+      // head of a 3+ candidate queue, adopting the wrong row.
       for (const queue of bySig.values()) {
-        queue.sort(a => (a.status === 'booked' ? -1 : 1))
+        queue.sort((a, b) =>
+          a.status === b.status ? 0 : a.status === 'booked' ? -1 : 1,
+        )
       }
 
       let takenOver = 0

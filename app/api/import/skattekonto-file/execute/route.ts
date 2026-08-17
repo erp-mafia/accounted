@@ -72,7 +72,7 @@ export const POST = withRouteContext(
         })
       }
 
-      await supabase
+      const { error: statusError } = await supabase
         .from('skattekonto_file_imports')
         .update({
           imported_count: outcome.imported,
@@ -85,6 +85,10 @@ export const POST = withRouteContext(
               : null,
         })
         .eq('id', importRecord.id)
+      if (statusError) {
+        // The rows are written; only the record would misreport "processing".
+        opLog.error('failed to finalize skattekonto_file_imports record', statusError)
+      }
 
       return NextResponse.json({
         data: {

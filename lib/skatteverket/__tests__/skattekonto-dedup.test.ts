@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   computeDedupKey,
   contentSignature,
@@ -6,6 +6,10 @@ import {
   partitionFileRows,
   type ExistingSkattekontoRow,
 } from '../skattekonto-dedup'
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 describe('computeDedupKey', () => {
   it('uses transaktionsidentitet when present', () => {

@@ -138,6 +138,7 @@ export function parseSkattekontoFile(
   let orgNumber: string | null = null
   let openingSaldo: number | null = null
   let closingSaldo: number | null = null
+  let sawSaldoMarker = false
   let totalRows = 0
   let skippedRows = 0
 
@@ -161,6 +162,7 @@ export function parseSkattekontoFile(
     // that date the marker row. Never import a marker as a transaction.
     const markerText = cells[1] ?? ''
     if (OPENING_MARKER_RE.test(markerText) || CLOSING_MARKER_RE.test(markerText)) {
+      sawSaldoMarker = true
       const amount = parseAmount(cells[2] ?? '')
       if (amount === null) {
         issues.push({
@@ -223,6 +225,10 @@ export function parseSkattekontoFile(
 
   // Integrity: the statement must sum. A mismatch means a truncated or
   // hand-edited file: surfaced as an error so the route refuses the import.
+  // A file that HAS saldo markers but not both valid balances is equally
+  // suspect (cut off before "Utgående saldo", or a garbled amount): fail it
+  // rather than silently skipping the check. Only marker-less legacy files
+  // legitimately have no balances to check (sum_valid stays null).
   let sumValid: boolean | null = null
   if (openingSaldo !== null && closingSaldo !== null) {
     const sum = rows.reduce((acc, row) => roundOre(acc + row.belopp), openingSaldo)
@@ -234,6 +240,14 @@ export function parseSkattekontoFile(
         severity: 'error',
       })
     }
+  } else if (sawSaldoMarker) {
+    sumValid = false
+    issues.push({
+      row: 0,
+      message:
+        'Utdraget saknar ett läsbart ingående eller utgående saldo. Filen kan vara ofullständig; ladda ner den på nytt från Skatteverket.',
+      severity: 'error',
+    })
   }
 
   const dates = rows.map((row) => row.transaktionsdatum).sort()

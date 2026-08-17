@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { detectSkattekontoFile, parseSkattekontoFile } from '../parser'
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 // Structure-exact mirror of a real 2026-08 export from Skatteverket's
 // skattekonto e-service (name, orgnr and amounts sanitized; the real file is
@@ -152,6 +156,20 @@ describe('parseSkattekontoFile: legacy .skv', () => {
 })
 
 describe('parseSkattekontoFile: robustness', () => {
+  it('fails a statement whose closing saldo marker is missing', () => {
+    const cutOff = MODERN_CSV.replace('"";"Utgående saldo 2026-08-01";"35 087"\r\n', '')
+    const result = parseSkattekontoFile(cutOff, MODERN_FILENAME)
+    expect(result.sum_valid).toBe(false)
+    expect(result.issues.some((i) => i.severity === 'error')).toBe(true)
+  })
+
+  it('fails a statement whose saldo amount is unreadable', () => {
+    const garbled = MODERN_CSV.replace('"35 087"', '"trasigt"')
+    const result = parseSkattekontoFile(garbled, MODERN_FILENAME)
+    expect(result.sum_valid).toBe(false)
+    expect(result.issues.some((i) => i.severity === 'error')).toBe(true)
+  })
+
   it('flags a sum mismatch as an error', () => {
     const truncated = MODERN_CSV.replace(
       '"2026-07-28";"Inbetalning bokförd 260727";"35 000"\r\n',

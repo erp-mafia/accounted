@@ -144,7 +144,7 @@ describe('POST /api/import/skattekonto-file/execute', () => {
       ],
     }) // existing rows
     enqueue({ data: null }) // insert batch (remaining row)
-    enqueue({ data: null }) // promotion update
+    enqueue({ data: [{ id: 'upcoming-1' }] }) // promotion update returns the row
     enqueue({ data: null }) // final record update
     const { status, body } = await parseJsonResponse<{
       data: { imported: number; promoted: number }
