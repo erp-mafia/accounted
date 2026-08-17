@@ -24,7 +24,8 @@ export function DetailSection({
   return (
     <section className={className}>
       <div className="flex items-baseline justify-between gap-4 border-b border-border pb-2">
-        <h2 className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        {/* data-ph-unmask: kickers are static i18n chrome in session replays. */}
+        <h2 data-ph-unmask="" className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
           {kicker}
         </h2>
         {aside}
@@ -50,7 +51,9 @@ export function DefRow({
         className,
       )}
     >
-      <div className="text-muted-foreground">{label}</div>
+      {/* data-ph-unmask on the label only: values (children) are user data
+          and stay masked in session replays. */}
+      <div data-ph-unmask="" className="text-muted-foreground">{label}</div>
       <div className="min-w-0">{children}</div>
     </div>
   )

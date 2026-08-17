@@ -1,31 +1,46 @@
 /**
- * Pattern-based masking for PostHog session replay.
+ * Deny-by-default masking for PostHog session replay.
  *
- * Replays are visible by default so support can see WHERE a user gets stuck
- * and WHAT they typed while getting there. What must never be readable in a
- * replay is the content of a user's books and identity numbers:
+ * Everything is masked unless it is app chrome (founder-approved 2026-08-17,
+ * supersedes the 2026-08-06 pattern-based default where user content was
+ * visible). Replays show layout, clicks and static UI text: headers, nav,
+ * form labels, placeholders, buttons. They never show user data: not what a
+ * user typed (input values are masked wholesale by rrweb, see
+ * instrumentation-client.ts) and not user content rendered as text
+ * (counterparty names, descriptions, amounts, identity numbers).
  *
- * 1. Monetary amounts. Every amount in the app renders through
- *    `formatCurrency()` (Intl sv-SE currency style, e.g. "1 234,56 kr"), so a
- *    currency-shaped text pattern covers transactions, vouchers, reports,
- *    invoices and dashboards in one place, including future code, without
- *    tagging hundreds of render sites.
- * 2. Person- and organisationsnummer. For an enskild firma the orgnr IS the
- *    owner's personnummer. Masked both as rendered text (formatOrgNumber()
- *    output, "556677-8899") and as typed input values.
- * 3. Passwords. Always masked, never overridable.
+ * What counts as chrome, i.e. renders readable in a replay:
+ * - Any subtree tagged `data-ph-unmask`. Tags live on the shared UI
+ *   primitives (nav, PageHeader, Label, Button, tabs, dialog/sheet titles,
+ *   card titles, badges, tooltips, empty states), so page code gets readable
+ *   chrome without per-page tagging.
+ * - `<th>` elements with NO explicit tag anywhere above them: table column
+ *   headers are static chrome, but the page-level dry-table pattern writes
+ *   raw `<th className={TH_CLASS}>` per page, so there is no shared
+ *   component to tag. An explicit data-ph-mask (on the th or any ancestor)
+ *   always wins over this fallback.
  *
- * Tag overrides (nearest tagged ancestor wins, mask wins on a tie):
- * - `data-ph-mask` force-masks an element's whole subtree (used on deliberate
- *   PII spots: company name / email in danger-zone labels, user-defined
- *   dimension names, nav count bubbles).
- * - `data-ph-unmask` exempts a subtree from pattern masking (static chrome
- *   such as form labels and nav). It never unmasks a password input.
+ * Chrome is still pattern-scrubbed (belt and braces): an i18n string that
+ * interpolates an amount or a person-/organisationsnummer into a title or
+ * button label gets that span masked even inside an unmasked subtree.
  *
- * Known limits, accepted deliberately: masking is length-preserving (star
- * count reveals magnitude, layout stays stable in the replay), bare numbers
- * without a currency marker stay visible, and an identity number rendered
- * WITHOUT its separator is only caught on the input side.
+ * `data-ph-mask` force-masks a subtree and wins over `data-ph-unmask`: the
+ * NEAREST tagged ancestor decides, and mask wins when both attributes land
+ * on the same element. Use it where user data flows into a chrome primitive
+ * (e.g. a Label interpolating the user's email, a dialog title carrying a
+ * counterparty name).
+ *
+ * Untagged text is fully masked, so the failure mode for new UI is
+ * over-masking (asterisks where chrome should be readable), never leaking
+ * a user's books.
+ *
+ * Known limit: rrweb masks text nodes and input values, not ATTRIBUTES.
+ * posthog-js exposes no attribute mask hook, so a title/aria-label/
+ * placeholder attribute is recorded as-is. An element whose attributes
+ * carry user data (e.g. a placeholder prefilled with an effective value)
+ * must carry the `ph-no-capture` class instead: rrweb's blockClass removes
+ * the whole element from the recording while the app UX is untouched. Do
+ * not put user data in title or aria-label attributes.
  */
 
 /**
@@ -47,16 +62,6 @@ const AMOUNT_PATTERN = new RegExp(
  */
 const IDENTITY_TEXT_PATTERN = /(?<!\d)\d{6}(?:\d{2})?[-+]\d{4}(?!\d)/g
 
-/**
- * A typed input value that is (or is on its way to becoming) a person-/
- * organisationsnummer: 6 or more leading digits, optionally a separator and
- * up to 4 more. Matching from the 6th digit means intermediate keystroke
- * snapshots never ship the birthdate prefix of a personnummer. Accepted
- * over-masking: any bare 6-12 digit value (e.g. a raw amount over 99 999)
- * is masked too; amounts with decimals or thousand separators stay visible.
- */
-const IDENTITY_INPUT_PATTERN = /^\s*\d{6,8}[-+ ]?\d{0,4}\s*$/
-
 const TAG_SELECTOR = '[data-ph-mask],[data-ph-unmask]'
 
 /** Length-preserving mask: whitespace survives so table layout stays legible. */
@@ -70,7 +75,8 @@ function maskSpan(span: string): string {
 
 /**
  * Masks currency amounts and separator-formatted identity numbers inside a
- * text node, leaving the surrounding text readable.
+ * text node, leaving the surrounding text readable. Applied to CHROME text:
+ * non-chrome text never gets here, it is masked wholesale.
  */
 export function maskSensitiveText(text: string): string {
   return text.replace(AMOUNT_PATTERN, maskSpan).replace(IDENTITY_TEXT_PATTERN, maskSpan)
@@ -79,31 +85,17 @@ export function maskSensitiveText(text: string): string {
 /**
  * `session_recording.maskTextFn`. Runs on EVERY text node because
  * `maskTextSelector: '*'` flags them all; this function then decides.
+ * Default is masked; only chrome shows through, and even chrome is
+ * pattern-scrubbed.
+ *
+ * Explicit tags are resolved FIRST, and only then the th fallback: a single
+ * closest() over tags-plus-th would let a th nested inside a data-ph-mask
+ * container win on DOM proximity and unmask it.
  */
 export function replayMaskText(text: string, element?: HTMLElement): string {
-  const tagged = element?.closest(TAG_SELECTOR)
-  if (tagged) {
-    return tagged.hasAttribute('data-ph-mask') ? maskAll(text) : text
-  }
-  return maskSensitiveText(text)
-}
-
-/**
- * `session_recording.maskInputFn`. rrweb only invokes this on inputs flagged
- * by `maskInputOptions`, so the config sets `maskAllInputs: true` to flag
- * every input and this function selectively passes values through. Password
- * checks come first: not even `data-ph-unmask` may reveal one.
- */
-export function replayMaskInput(text: string, element?: HTMLElement): string {
-  if ((element as HTMLInputElement | undefined)?.type === 'password') {
-    return maskAll(text)
-  }
   const tagged = element?.closest?.(TAG_SELECTOR)
   if (tagged) {
-    return tagged.hasAttribute('data-ph-mask') ? maskAll(text) : text
+    return tagged.hasAttribute('data-ph-mask') ? maskAll(text) : maskSensitiveText(text)
   }
-  if (IDENTITY_INPUT_PATTERN.test(text)) {
-    return maskAll(text)
-  }
-  return text
+  return element?.closest?.('th') ? maskSensitiveText(text) : maskAll(text)
 }

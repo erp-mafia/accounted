@@ -314,7 +314,7 @@ function CustomersPageInner() {
           <EmptyState
             icon={Users}
             title={t('no_search_results_title')}
-            description={t('no_search_results_description', { term: searchTerm })}
+            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
         ) : (
           <EmptyCustomers onAction={() => setIsDialogOpen(true)} />

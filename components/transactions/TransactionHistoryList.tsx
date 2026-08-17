@@ -326,7 +326,7 @@ function BankHistoryRow({
             </span>
           )}
           {hasInvoiceMatch && (
-            <Badge variant="secondary" className="hidden shrink-0 gap-1 font-normal md:inline-flex">
+            <Badge data-ph-mask="" variant="secondary" className="hidden shrink-0 gap-1 font-normal md:inline-flex">
               <FileText className="h-3 w-3" />
               {t('possible_match_invoice', {
                 number: transaction.potential_invoice!.invoice_number ?? '',

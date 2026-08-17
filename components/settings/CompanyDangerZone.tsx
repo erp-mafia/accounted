@@ -120,7 +120,8 @@ export function CompanyDangerZone() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('danger_dialog_title', { companyName: company.name })}</DialogTitle>
+            {/* data-ph-mask: the title interpolates the company name */}
+            <DialogTitle data-ph-mask="">{t('danger_dialog_title', { companyName: company.name })}</DialogTitle>
             <DialogDescription>
               {t('danger_dialog_description', { appName: branding.appName.toLowerCase() })}
             </DialogDescription>
@@ -139,6 +140,9 @@ export function CompanyDangerZone() {
               onChange={(e) => setConfirmText(e.target.value)}
               placeholder={company.name}
               autoComplete="off"
+              // ph-no-capture: the placeholder is the company name, and
+              // replay masking covers values, not attributes.
+              className="ph-no-capture"
             />
           </div>
           <DialogFooter>

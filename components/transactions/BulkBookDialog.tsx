@@ -798,7 +798,7 @@ export default function BulkBookDialog({
                   {t('preview_label', { count: previewLines.length })}
                 </Label>
                 {dimensionsEnabled && dimsSummary && (
-                  <Badge variant="secondary" className="font-mono tabular-nums">
+                  <Badge data-ph-mask="" variant="secondary" className="font-mono tabular-nums">
                     {dimsSummary}
                   </Badge>
                 )}

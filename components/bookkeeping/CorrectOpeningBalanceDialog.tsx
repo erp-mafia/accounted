@@ -130,7 +130,8 @@ export default function CorrectOpeningBalanceDialog({
           <DialogTitle>Korrigera ingående balanser</DialogTitle>
           <DialogDescription>
             Ändra beloppen nedan och spara. Den befintliga IB-verifikationen (
-            {formatVoucher(entry)}) makuleras och en ny bokförs med de korrigerade beloppen.
+            <span data-ph-mask="">{formatVoucher(entry)}</span>) makuleras och en ny bokförs med
+            de korrigerade beloppen.
           </DialogDescription>
         </DialogHeader>
 

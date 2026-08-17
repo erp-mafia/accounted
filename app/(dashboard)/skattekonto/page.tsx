@@ -773,7 +773,8 @@ function SkattekontoRow({
               unbooked deviates; upcoming rows are unbooked by nature. */}
           {section === 'booked' && !isBooked && (
             row.match_suggestion ? (
-              <Badge variant="warning" className="font-normal">
+              /* data-ph-mask: the voucher reference is user data */
+              <Badge variant="warning" className="font-normal" data-ph-mask="">
                 {t('chip_possible_duplicate', {
                   voucher:
                     row.match_suggestion.voucher_series && row.match_suggestion.voucher_number
@@ -857,7 +858,8 @@ function MatchDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Matcha mot befintligt verifikat</DialogTitle>
-          <DialogDescription>
+          {/* data-ph-mask: transaction text and amount are user data */}
+          <DialogDescription data-ph-mask="">
             {row && (
               <>
                 {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}

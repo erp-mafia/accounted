@@ -449,7 +449,7 @@ export default function QuickReviewDialog({
               {template ? template.name_sv : categoryLabel}
             </span>
             {patternDimsLabel && (
-              <Badge variant="secondary" className="font-mono tabular-nums">
+              <Badge data-ph-mask="" variant="secondary" className="font-mono tabular-nums">
                 {patternDimsLabel}
               </Badge>
             )}

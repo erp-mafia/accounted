@@ -321,7 +321,10 @@ export default function PaymentBookingDialog({
       <DialogContent className="sm:max-w-[680px]">
         <DialogHeader>
           <DialogTitle>
-            {t('title')}{invoice.invoice_number ? t('title_suffix', { number: invoice.invoice_number }) : ''}
+            {/* data-ph-mask: the invoice number is user data */}
+            {t('title')}{invoice.invoice_number ? (
+              <span data-ph-mask="">{t('title_suffix', { number: invoice.invoice_number })}</span>
+            ) : ''}
             {nextVoucher && (
               <span className="ml-1 text-muted-foreground tabular-nums">
                 ({nextVoucher.series}{nextVoucher.next})

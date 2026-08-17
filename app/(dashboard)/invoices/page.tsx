@@ -693,7 +693,7 @@ export default function InvoicesPage() {
           <DataListEmpty
             icon={<ReceiptText className="h-6 w-6" />}
             title={t('no_search_results_title')}
-            description={t('no_search_results_description', { term: searchTerm })}
+            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
         ) : invoices.length === 0 ? (
           <div className="animate-fade-in">

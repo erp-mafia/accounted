@@ -78,8 +78,9 @@ export default function CreateInvoiceFromOrderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{t('invoice_title', { number: order.order_number })}</DialogTitle>
-          <DialogDescription>
+          {/* data-ph-mask: order number and customer name are user data */}
+          <DialogTitle data-ph-mask="">{t('invoice_title', { number: order.order_number })}</DialogTitle>
+          <DialogDescription data-ph-mask="">
             {t('invoice_description', { customer: customerLabel })}
           </DialogDescription>
         </DialogHeader>

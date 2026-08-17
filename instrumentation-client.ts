@@ -1,7 +1,7 @@
 import posthog from 'posthog-js'
 import { isAnalyticsEnabled, warnIfAnalyticsMisconfigured } from '@/lib/analytics/enabled'
 import { purgeLegacyAnalyticsStorage } from '@/lib/analytics/purge-legacy-storage'
-import { replayMaskInput, replayMaskText } from '@/lib/analytics/replay-masking'
+import { replayMaskText } from '@/lib/analytics/replay-masking'
 
 // Clear anything Recapt left on the device. Runs unconditionally, BEFORE the
 // analytics gate: a browser carrying `__recapt_record_engine` must get cleaned
@@ -54,26 +54,22 @@ function tracingHosts(): string[] {
  *    `seenSurvey_*` flags straight to localStorage, bypassing this setting:
  *    that is functional UI state ("don't ask again"), not tracking.
  *
- * 3. Pattern-based replay masking (founder-approved 2026-08-06, supersedes
- *    the 2026-07-27 mask-everything default that made replays wall-to-wall
- *    asterisks). Replays exist so support can see WHERE a user gets stuck
- *    and WHAT they typed while getting there; what stays unreadable is the
- *    content of their books. `lib/analytics/replay-masking.ts` masks
- *    currency-shaped text (every amount renders through `formatCurrency()`,
- *    so one pattern covers all surfaces including future code), person-/
- *    organisationsnummer (for an enskild firma the orgnr IS the owner's
- *    personnummer) in both text and typed input, and password inputs.
- *    Everything else, typed input included, is visible in the replay.
+ * 3. Deny-by-default replay masking (founder-approved 2026-08-17, supersedes
+ *    the 2026-08-06 pattern-based default where user content was visible).
+ *    Replays exist so support can see WHERE a user gets stuck: layout,
+ *    clicks and static chrome (headers, nav, labels, placeholders), never
+ *    what the user typed or what their books say.
  *
- *    `data-ph-mask` force-masks a subtree (deliberate PII spots: danger-zone
- *    labels, user-defined dimension names, nav count bubbles) and
- *    `data-ph-unmask` exempts one from pattern masking; the NEAREST tagged
+ *    Inputs: `maskAllInputs: true` with NO `maskInputFn` means rrweb masks
+ *    every input value to asterisks, no exceptions. Placeholder text is an
+ *    attribute, not an input value, so it stays visible.
+ *
+ *    Text: `lib/analytics/replay-masking.ts` masks every text node unless
+ *    it sits under chrome (`data-ph-unmask`, tagged on the shared UI
+ *    primitives, or a `<th>`); chrome is still pattern-scrubbed for
+ *    currency-shaped spans and person-/organisationsnummer. `data-ph-mask`
+ *    force-masks a subtree and beats `data-ph-unmask`: the NEAREST tagged
  *    ancestor wins, and mask wins when both land on the same element.
- *
- *    rrweb only calls `maskInputFn` on inputs flagged by `maskInputOptions`,
- *    so `maskAllInputs: true` stays set to flag every input and the function
- *    decides per value. posthog-js force-merges `password: true` into
- *    `maskInputOptions` on top of that.
  */
 if (warnIfAnalyticsMisconfigured() && isAnalyticsEnabled()) {
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN!, {
@@ -88,7 +84,6 @@ if (warnIfAnalyticsMisconfigured() && isAnalyticsEnabled()) {
     tracing_headers: tracingHosts(),
     session_recording: {
       maskAllInputs: true,
-      maskInputFn: replayMaskInput,
       maskTextSelector: '*',
       maskTextFn: replayMaskText,
     },

@@ -59,7 +59,11 @@ export function ConfirmationDialog({
               <ClipboardCheck className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <DialogTitle className="text-lg sm:text-xl">{title}</DialogTitle>
+              {/* data-ph-mask on the title: confirm dialogs describe the
+                  object being acted on (convention 10), so the title is user
+                  data in session replays. The description is a static
+                  sentence and stays readable. */}
+              <DialogTitle data-ph-mask="" className="text-lg sm:text-xl">{title}</DialogTitle>
               <DialogDescription>Granska uppgifterna innan du bekräftar</DialogDescription>
             </div>
           </div>

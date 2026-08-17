@@ -2690,7 +2690,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t('send_now_dialog_title')}</DialogTitle>
-            <DialogDescription>
+            {/* data-ph-mask: the customer email is user data */}
+            <DialogDescription data-ph-mask="">
               {t('send_now_dialog_description', { email: selectedCustomer?.email ?? '' })}
             </DialogDescription>
           </DialogHeader>

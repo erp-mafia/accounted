@@ -299,7 +299,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
       <DialogContent className="max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            Redigera konto {account.account_number}
+            Redigera konto <span data-ph-mask="">{account.account_number}</span>
           </DialogTitle>
         </DialogHeader>
 

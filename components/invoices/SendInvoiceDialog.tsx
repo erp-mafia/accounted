@@ -455,9 +455,13 @@ export default function SendInvoiceDialog({
                     ? 'title_email'
                     : 'title_manual',
             )}
-            {invoice.invoice_number ? t('title_suffix', { number: invoice.invoice_number }) : ''}
+            {/* data-ph-mask: the invoice number is user data */}
+            {invoice.invoice_number ? (
+              <span data-ph-mask="">{t('title_suffix', { number: invoice.invoice_number })}</span>
+            ) : ''}
           </DialogTitle>
-          <DialogDescription>
+          {/* data-ph-mask: amount and customer email are user data */}
+          <DialogDescription data-ph-mask="">
             {formatCurrency(invoice.total, invoice.currency)}
             {invoice.currency !== 'SEK' && invoice.total_sek && (
               <>{t('description_sek_suffix', { amount: formatCurrency(invoice.total_sek) })}</>
