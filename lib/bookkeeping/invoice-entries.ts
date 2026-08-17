@@ -557,12 +557,22 @@ export async function createInvoiceJournalEntry(
  * share. Never falls back to the bare total when paid_amount is present.
  */
 function invoiceOutstandingAmount(invoice: Invoice): number {
-  const inv = invoice as Invoice & { remaining_amount?: number | null; paid_amount?: number | null }
-  if (typeof inv.remaining_amount === 'number' && Number.isFinite(inv.remaining_amount)) {
+  const inv = invoice as Invoice & {
+    remaining_amount?: number | null
+    paid_amount?: number | null
+    deduction_total?: number | null
+  }
+  // A payment is being booked, so a stored 0 cannot mean "settled": rows
+  // written by paths that bypass buildInvoiceWriteData (imports, sandbox seed,
+  // legacy migrations) leave the NOT NULL DEFAULT 0 in place. Treat 0 as
+  // unmaintained and derive: total minus prior payments minus the ROT/RUT
+  // share that was never the customer's to pay.
+  if (typeof inv.remaining_amount === 'number' && Number.isFinite(inv.remaining_amount) && inv.remaining_amount > 0) {
     return roundOre(inv.remaining_amount)
   }
   const paid = typeof inv.paid_amount === 'number' ? inv.paid_amount : 0
-  return roundOre(invoice.total - paid)
+  const deduction = typeof inv.deduction_total === 'number' ? inv.deduction_total : 0
+  return roundOre(invoice.total - paid - deduction)
 }
 
 /**

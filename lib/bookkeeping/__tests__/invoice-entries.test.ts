@@ -1911,6 +1911,20 @@ describe('createInvoicePaymentJournalEntry: settles the outstanding amount, not 
     expect(input.lines.find((l) => l.account_number === '1510')!.credit_amount).toBe(750)
   })
 
+  it('remaining_amount left at the DEFAULT 0 (import / seed paths) is treated as unmaintained', async () => {
+    const invoice = makeInvoice({
+      total: 12500,
+      deduction_total: 3750,
+      paid_amount: null,
+      remaining_amount: 0,
+    } as Partial<Invoice>)
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '1510')!.credit_amount).toBe(8750)
+  })
+
   it('legacy row without remaining_amount derives it from total minus paid_amount', async () => {
     const invoice = makeInvoice({ total: 1250, paid_amount: 250 } as Partial<Invoice>)
     ;(invoice as unknown as { remaining_amount?: number }).remaining_amount = undefined
