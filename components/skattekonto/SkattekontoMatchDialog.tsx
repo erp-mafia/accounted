@@ -147,7 +147,8 @@ export function SkattekontoMatchDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
-          <DialogDescription>
+          {/* data-ph-mask: transaction text and amount are user data */}
+          <DialogDescription data-ph-mask="">
             {row && (
               <>
                 {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}

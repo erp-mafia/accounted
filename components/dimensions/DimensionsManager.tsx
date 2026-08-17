@@ -379,12 +379,14 @@ export default function DimensionsManager() {
             options={dimensions.map((dim) => ({
               value: dim.id,
               label: (
-                <>
+                // data-ph-mask: dimension names are user data; the wrapper
+                // keeps the segment button's inline gap between name and count.
+                <span data-ph-mask="" className="inline-flex items-center gap-1.5">
                   {dim.name}
                   {dim.values.length > 0 && (
                     <span className="text-muted-foreground tabular-nums">{dim.values.length}</span>
                   )}
-                </>
+                </span>
               ),
             }))}
           />
@@ -427,13 +429,15 @@ export default function DimensionsManager() {
           <EmptyState
             icon={Search}
             title={t('no_search_results_title')}
-            description={t('no_search_results_description', { term: searchTerm })}
+            /* data-ph-mask: the search term is user data */
+            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
         ) : (
           <EmptyState
             icon={Tags}
             title={t('empty_title')}
-            description={t('empty_description', { dimension: activeDim?.name ?? '' })}
+            /* data-ph-mask: the dimension name is user data */
+            description={<span data-ph-mask="">{t('empty_description', { dimension: activeDim?.name ?? '' })}</span>}
             actionLabel={canWrite ? t('new_value') : undefined}
             onAction={canWrite ? () => setDialog({ mode: 'create' }) : undefined}
           />
@@ -497,7 +501,8 @@ export default function DimensionsManager() {
       <Dialog open={dialog !== null} onOpenChange={(open) => !open && setDialog(null)}>
         <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>
+            {/* data-ph-mask: the dimension name is user data */}
+            <DialogTitle data-ph-mask="">
               {dialog?.mode === 'edit'
                 ? t('edit_value_title')
                 : t('new_value_title', { dimension: activeDim?.name ?? '' })}

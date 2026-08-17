@@ -1250,7 +1250,8 @@ export default function PendingOperationsPage() {
                 ? t('reject_bulk_title', { count: selectedCount })
                 : 'Avvisa operation'}
             </DialogTitle>
-            <DialogDescription>
+            {/* data-ph-mask: the operation title carries counterparty and amount */}
+            <DialogDescription data-ph-mask="">
               {rejectTarget === 'bulk'
                 ? t('reject_bulk_description')
                 : rejectTarget?.title}

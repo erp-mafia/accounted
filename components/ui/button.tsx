@@ -52,8 +52,14 @@ export interface ButtonProps
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, asChild = false, ...props }, ref) => {
     const Comp = asChild ? Slot : "button"
+    // data-ph-unmask: button labels are static i18n chrome in session
+    // replays. Combobox-style triggers render a selected VALUE (user data),
+    // so they stay masked; a call site whose label carries user data adds
+    // data-ph-mask, which wins over unmask on the same element.
+    const phUnmask = props.role === "combobox" ? {} : { "data-ph-unmask": "" }
     return (
       <Comp
+        {...phUnmask}
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
         {...props}

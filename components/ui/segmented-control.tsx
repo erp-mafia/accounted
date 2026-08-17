@@ -42,12 +42,16 @@ export function SegmentedControl<T extends string>({
       aria-label={aria['aria-label']}
     >
       {options.map((opt) => (
+        // data-ph-unmask: segment labels are static i18n chrome in session
+        // replays; the count chip inside is data and carries data-ph-mask
+        // (nearest tag wins), matching the nav count bubbles.
         <button
           key={opt.value}
           type="button"
           role="tab"
           aria-selected={value === opt.value}
           onClick={() => onChange(opt.value)}
+          data-ph-unmask=""
           className={cn(
             'inline-flex h-full items-center gap-1.5 rounded-full px-3.5 text-[12.5px] transition-colors duration-150',
             value === opt.value
@@ -57,7 +61,7 @@ export function SegmentedControl<T extends string>({
         >
           {opt.label}
           {typeof opt.count === 'number' && opt.count > 0 && (
-            <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
+            <span data-ph-mask="" className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
               {opt.count}
             </span>
           )}

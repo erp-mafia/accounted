@@ -148,7 +148,7 @@ export function ActivateAccountsDialog({
                       onClick={() => onCreateUnknown(r.account_number)}
                     >
                       <Plus className="mr-1 h-3 w-3" />
-                      Skapa {r.account_number}
+                      Skapa <span data-ph-mask="">{r.account_number}</span>
                     </Button>
                   ))}
                 </div>

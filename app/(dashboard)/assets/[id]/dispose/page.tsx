@@ -277,7 +277,8 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
       />
 
       <Card>
-        <CardHeader><CardTitle className="text-base">{asset.name}</CardTitle></CardHeader>
+        {/* data-ph-mask: the asset name is user data */}
+        <CardHeader><CardTitle data-ph-mask="" className="text-base">{asset.name}</CardTitle></CardHeader>
         <CardContent className="space-y-2 p-6 pt-0 text-sm">
           <SummaryRow label={t('acquisition_cost')} value={formatCurrency(Number(asset.acquisition_cost))} />
           <SummaryRow label={t('acquired')} value={formatDate(asset.acquisition_date)} />

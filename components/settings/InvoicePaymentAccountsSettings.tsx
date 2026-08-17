@@ -15,7 +15,9 @@ import {
 } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
-import { validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
+import { createClient } from '@/lib/supabase/client'
+import { bankgiroFromTicSnapshot } from '@/lib/company/snapshot-bank'
+import { formatBankgiroNumber, validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
   INVOICE_PAYMENT_ACCOUNT_CURRENCIES,
@@ -78,7 +80,13 @@ export function InvoicePaymentAccountsSettings({
 }: InvoicePaymentAccountsSettingsProps) {
   const t = useTranslations('settings_invoice_payment_accounts')
   const { toast } = useToast()
-  const { role } = useCompany()
+  const { role, company } = useCompany()
+  // Bolagsverket knows most companies' bankgiro (companies.tic_snapshot), but
+  // the payment files read this form's field. Offer the registry number as a
+  // one-click prefill when the SEK field is empty; the user still saves. The
+  // helper only suggests when the snapshot's orgNumber matches the company's
+  // org_number: stale fuzzy-matched snapshots can describe another entity.
+  const [snapshotBankgiro, setSnapshotBankgiro] = useState<string | null>(null)
   const legacySekAccount = useMemo(
     () => legacySekInvoicePaymentAccount({
       bank_name: settings.bank_name,
@@ -132,6 +140,24 @@ export function InvoicePaymentAccountsSettings({
     }
     previousServerAccountsKey.current = serverAccountsKey
   }, [serverAccounts, serverAccountsKey])
+
+  useEffect(() => {
+    if (!company?.id) return
+    const supabase = createClient()
+    let cancelled = false
+    supabase
+      .from('companies')
+      .select('tic_snapshot, org_number')
+      .eq('id', company.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return
+        setSnapshotBankgiro(bankgiroFromTicSnapshot(data?.tic_snapshot, data?.org_number))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [company?.id])
 
   const configuredCurrencies = useMemo(
     () => INVOICE_PAYMENT_ACCOUNT_CURRENCIES.filter((currency) => !!accounts[currency]),
@@ -397,6 +423,15 @@ export function InvoicePaymentAccountsSettings({
           onChange={(event) => updateField('bankgiro', event.target.value)}
           className="max-w-40 flex-none tabular-nums"
         />
+        {activeCurrency === 'SEK' && !value(activeAccount, 'bankgiro') && snapshotBankgiro && (
+          <button
+            type="button"
+            onClick={() => updateField('bankgiro', formatBankgiroNumber(snapshotBankgiro))}
+            className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+          >
+            {t('bankgiro_prefill', { value: formatBankgiroNumber(snapshotBankgiro) })}
+          </button>
+        )}
       </SettingsRow>
       <SettingsRow
         label={t('plusgiro_label')}

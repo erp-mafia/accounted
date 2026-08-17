@@ -160,7 +160,7 @@ export function RunEmployeesTable({
                       {name}
                     </Link>
                     {dimensionsEnabled && dimLabel && (
-                      <Badge variant="secondary">{dimLabel}</Badge>
+                      <Badge data-ph-mask="" variant="secondary">{dimLabel}</Badge>
                     )}
                     {showDiff && diffNode(sre)}
                   </div>

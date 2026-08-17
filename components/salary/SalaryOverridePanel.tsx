@@ -165,7 +165,9 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
                 value={taxStr}
                 onChange={(e) => setTaxStr(e.target.value)}
                 disabled={props.disabled || saving}
-                className="tabular-nums"
+                // ph-no-capture: the placeholder is the employee's effective
+                // amount, and replay masking covers values, not attributes.
+                className="tabular-nums ph-no-capture"
               />
               <p className="text-[11px] text-muted-foreground">
                 {t('calculated')} <span className="tabular-nums">{formatCurrency(props.taxWithheld)}</span>
@@ -183,7 +185,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
                 value={avgStr}
                 onChange={(e) => setAvgStr(e.target.value)}
                 disabled={props.disabled || saving}
-                className="tabular-nums"
+                className="tabular-nums ph-no-capture"
               />
               <p className="text-[11px] text-muted-foreground">
                 {t('calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterAmount)}</span>
@@ -201,7 +203,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
                 value={basisStr}
                 onChange={(e) => setBasisStr(e.target.value)}
                 disabled={props.disabled || saving}
-                className="tabular-nums"
+                className="tabular-nums ph-no-capture"
               />
               <p className="text-[11px] text-muted-foreground">
                 {t('calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterBasis)}</span>
