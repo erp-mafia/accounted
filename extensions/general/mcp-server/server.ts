@@ -29,7 +29,7 @@ import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCount
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { eventBus } from '@/lib/events/bus'
-import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
+import { getVatRules, getPermittedVatRates, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { getBranding } from '@/lib/branding/service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
@@ -218,6 +218,88 @@ import { getUserCompanies } from '@/lib/company/context'
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, YearEndBlockerCode } from '@/types'
 
 // ── Actor context ────────────────────────────────────────────
+
+type StagedInvoiceLineInput = {
+  description?: string
+  quantity: number
+  unit?: string
+  unit_price?: number
+  vat_rate?: number
+  article_id?: string
+  revenue_account?: string | null
+  dimensions?: unknown
+}
+
+type ResolvedInvoiceLine = StagedInvoiceLineInput & {
+  description: string
+  unit: string
+  unit_price: number
+}
+
+type InvoiceLineArticle = {
+  id: string
+  name: string
+  unit: string | null
+  price_excl_vat: number | null
+  vat_rate: number | null
+  revenue_account: string | null
+  currency: string | null
+  active: boolean
+}
+
+/**
+ * Article prefill for one staged invoice line (web line picker parity,
+ * InvoiceEditor's applyArticle): the line's own values win and the article
+ * fills whatever the agent left out. The article's VAT rate is adopted ONLY
+ * when it is in the customer's DEFAULT rate set (adoptableVatRates, empty for
+ * a customer locked to a single rate): an article's stored rate is its
+ * domestic rate, and adopting it against the wider permitted set would
+ * silently put Swedish VAT on a reverse-charge or export invoice.
+ */
+function resolveInvoiceLineFromArticle(
+  item: StagedInvoiceLineInput,
+  article: InvoiceLineArticle | undefined,
+  currency: string,
+  adoptableVatRates: ReadonlySet<number>,
+  index: number,
+): ResolvedInvoiceLine {
+  const lineNo = index + 1
+  if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${lineNo}: quantity must be positive`)
+  if (item.article_id && !article) {
+    throw new Error(`Item ${lineNo}: article ${item.article_id} not found in this company. Use gnubok_list_articles to find valid IDs.`)
+  }
+  if (article && !article.active) {
+    throw new Error(`Item ${lineNo}: article "${article.name}" is deactivated. Reactivate it with gnubok_update_article (active: true) or drop article_id.`)
+  }
+  const description = item.description?.trim() || article?.name
+  if (!description) throw new Error(`Item ${lineNo}: description is required (or set article_id)`)
+  const unit = item.unit?.trim() || (article ? article.unit || 'st' : undefined)
+  if (!unit) throw new Error(`Item ${lineNo}: unit is required (st, tim, dag)`)
+  let unitPrice = item.unit_price
+  if (unitPrice == null && article) {
+    if (article.price_excl_vat == null) {
+      throw new Error(`Item ${lineNo}: article "${article.name}" has no price; pass unit_price explicitly.`)
+    }
+    if (article.currency && article.currency !== currency) {
+      throw new Error(
+        `Item ${lineNo}: article "${article.name}" is priced in ${article.currency} but the invoice is in ${currency}. ` +
+        `Set the invoice currency to ${article.currency} or pass unit_price explicitly.`
+      )
+    }
+    unitPrice = article.price_excl_vat
+  }
+  if (unitPrice == null) throw new Error(`Item ${lineNo}: unit_price is required (or set article_id)`)
+  return {
+    ...item,
+    description,
+    unit,
+    unit_price: unitPrice,
+    ...(item.vat_rate == null && article?.vat_rate != null && adoptableVatRates.has(article.vat_rate)
+      ? { vat_rate: article.vat_rate }
+      : {}),
+    ...(item.revenue_account == null && article?.revenue_account ? { revenue_account: article.revenue_account } : {}),
+  }
+}
 
 interface ActorContext {
   type: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
@@ -4948,7 +5030,7 @@ export const tools: McpTool[] = [
               vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
               article_id: {
                 type: 'string',
-                description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, vat_rate and revenue account from the article; values set on the line win.',
+                description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, revenue account and, only when compatible with the customer VAT rules, vat_rate. Values set on the line win.',
               },
               dimensions: {
                 type: 'object',
@@ -4986,16 +5068,7 @@ export const tools: McpTool[] = [
     },
     async execute(args, companyId, userId, supabase, actor) {
       const customerId = args.customer_id as string
-      const rawItems = args.items as Array<{
-        description?: string
-        quantity: number
-        unit?: string
-        unit_price?: number
-        vat_rate?: number
-        article_id?: string
-        revenue_account?: string | null
-        dimensions?: unknown
-      }>
+      const rawItems = args.items as StagedInvoiceLineInput[]
 
       if (!customerId) throw new Error('customer_id is required. Use gnubok_list_customers to find IDs.')
       if (!rawItems?.length) throw new Error('At least one item is required.')
@@ -5004,19 +5077,34 @@ export const tools: McpTool[] = [
       const currency = ((args.currency as string) || 'SEK') as Currency
       const invoiceDate = (args.invoice_date as string) || today
 
-      // Article prefill (same semantics as the web line picker): the line's own
-      // values win, the referenced article fills whatever the agent left out.
+      // Fetch customer (full row for VAT rules) BEFORE the article prefill:
+      // an article's stored rate may only be adopted against this customer's
+      // default rate set (see resolveInvoiceLineFromArticle).
+      const { data: customer, error: custError } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('id', customerId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (custError || !customer) {
+        throw new Error('Customer not found. Use gnubok_list_customers to find valid IDs.')
+      }
+
+      // VAT rules from customer type (same logic as web UI)
+      const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+      // The DEFAULT set governs article-rate adoption (web parity: the picker
+      // only adopts a rate the customer could have picked themselves); a
+      // customer locked to a single rate (foreign business 0%) adopts nothing.
+      const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
+      const adoptableVatRates: ReadonlySet<number> = new Set(
+        availableRates.length > 1 ? availableRates.map((r) => r.rate) : [],
+      )
+
+      // Article prefill (web line picker parity): the line's own values win,
+      // the referenced article fills whatever the agent left out.
       const articleIds = Array.from(new Set(rawItems.map((i) => i.article_id).filter((a): a is string => !!a)))
-      const articlesById = new Map<string, {
-        id: string
-        name: string
-        unit: string | null
-        price_excl_vat: number | null
-        vat_rate: number | null
-        revenue_account: string | null
-        currency: string | null
-        active: boolean
-      }>()
+      const articlesById = new Map<string, InvoiceLineArticle>()
       if (articleIds.length > 0) {
         const { data: articleRows, error: articleError } = await supabase
           .from('articles')
@@ -5027,42 +5115,15 @@ export const tools: McpTool[] = [
         for (const row of articleRows ?? []) articlesById.set(row.id, row)
       }
 
-      const items = rawItems.map((item, i) => {
-        if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${i + 1}: quantity must be positive`)
-        const article = item.article_id ? articlesById.get(item.article_id) : undefined
-        if (item.article_id && !article) {
-          throw new Error(`Item ${i + 1}: article ${item.article_id} not found in this company. Use gnubok_list_articles to find valid IDs.`)
-        }
-        if (article && !article.active) {
-          throw new Error(`Item ${i + 1}: article "${article.name}" is deactivated. Reactivate it with gnubok_update_article (active: true) or drop article_id.`)
-        }
-        const description = item.description?.trim() || article?.name
-        if (!description) throw new Error(`Item ${i + 1}: description is required (or set article_id)`)
-        const unit = item.unit?.trim() || (article ? article.unit || 'st' : undefined)
-        if (!unit) throw new Error(`Item ${i + 1}: unit is required (st, tim, dag)`)
-        let unitPrice = item.unit_price
-        if (unitPrice == null && article) {
-          if (article.price_excl_vat == null) {
-            throw new Error(`Item ${i + 1}: article "${article.name}" has no price; pass unit_price explicitly.`)
-          }
-          if (article.currency && article.currency !== currency) {
-            throw new Error(
-              `Item ${i + 1}: article "${article.name}" is priced in ${article.currency} but the invoice is in ${currency}. ` +
-              `Set the invoice currency to ${article.currency} or pass unit_price explicitly.`
-            )
-          }
-          unitPrice = article.price_excl_vat
-        }
-        if (unitPrice == null) throw new Error(`Item ${i + 1}: unit_price is required (or set article_id)`)
-        return {
-          ...item,
-          description,
-          unit,
-          unit_price: unitPrice,
-          ...(item.vat_rate == null && article?.vat_rate != null ? { vat_rate: article.vat_rate } : {}),
-          ...(item.revenue_account == null && article?.revenue_account ? { revenue_account: article.revenue_account } : {}),
-        }
-      })
+      const items = rawItems.map((item, i) =>
+        resolveInvoiceLineFromArticle(
+          item,
+          item.article_id ? articlesById.get(item.article_id) : undefined,
+          currency,
+          adoptableVatRates,
+          i,
+        ),
+      )
 
       // Resolve-don't-select: parse the invoice-level default bag + each item's
       // own bag, then resolve codes AND natural-language names against the
@@ -5098,20 +5159,6 @@ export const tools: McpTool[] = [
         }
       }
 
-      // Fetch customer (full row for VAT rules)
-      const { data: customer, error: custError } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('id', customerId)
-        .eq('company_id', companyId)
-        .single()
-
-      if (custError || !customer) {
-        throw new Error('Customer not found. Use gnubok_list_customers to find valid IDs.')
-      }
-
-      // VAT rules from customer type (same logic as web UI)
-      const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
       // Gate on the PERMITTED set, not the picker default, exactly like
       // buildInvoiceWriteData and commitCreateInvoice: huvudregeln (ML 6 kap.
       // 34 §) taxes a B2B service where the buyer is established, so 0% is the
