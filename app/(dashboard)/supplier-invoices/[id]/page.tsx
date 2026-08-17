@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Pencil, Plus, CalendarClock, Paperclip } from 'lucide-react'
+import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Loader2, Pencil, Plus, CalendarClock, Paperclip } from 'lucide-react'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
@@ -97,7 +97,13 @@ export default function SupplierInvoiceDetailPage() {
   const [paymentAccount, setPaymentAccount] = useState('1930')
   const [accounts, setAccounts] = useState<BASAccount[]>([])
   const [areAccountsLoading, setAreAccountsLoading] = useState(false)
-  const [isProcessing, setIsProcessing] = useState(false)
+  // Which action is in flight, not just whether one is: the acting button
+  // shows the spinner while the others only disable. A single boolean put
+  // identical pending feedback (none) on every button at once.
+  const [processingAction, setProcessingAction] = useState<
+    'approve' | 'book' | 'mark_paid' | 'credit' | 'uncredit' | 'delete' | null
+  >(null)
+  const isProcessing = processingAction !== null
   const [duplicateCandidates, setDuplicateCandidates] = useState<
     Array<{
       id: string
@@ -125,7 +131,11 @@ export default function SupplierInvoiceDetailPage() {
   }), [t])
 
   async function fetchInvoice() {
-    setIsLoading(true)
+    // Blocking skeleton only before the first paint (or when the pager steps
+    // to a different invoice). Attest/Bokför/Markera betald/kreditera each
+    // refetch after their mutation: those reconcile behind the mounted page
+    // instead of swapping the whole detail for a skeleton and back.
+    if (!invoice || invoice.id !== params.id) setIsLoading(true)
     // try/finally: a dropped connection or a non-JSON error page makes
     // res.json() throw, and this runs from an effect, so the rejection is
     // unhandled and isLoading would stay true: a spinner that never resolves.
@@ -293,21 +303,23 @@ export default function SupplierInvoiceDetailPage() {
   }, [accounts.length, isPayDialogOpen])
 
   async function handleApprove() {
-    setIsProcessing(true)
+    setProcessingAction('approve')
     const res = await fetch(`/api/supplier-invoices/${params.id}/approve`, { method: 'POST' })
     const result = await res.json()
     if (!res.ok) {
       toast({ title: t('approve_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
     } else {
       toast({ title: t('approved_title'), description: t('approved_description') })
-      fetchInvoice()
+      // Awaited: the Attestera button keeps its spinner until the page shows
+      // the approved state (the refetch runs behind the mounted content).
+      await fetchInvoice()
     }
-    setIsProcessing(false)
+    setProcessingAction(null)
   }
 
   // #967: deferred booking: create the registration verifikat afterwards.
   async function handleBook() {
-    setIsProcessing(true)
+    setProcessingAction('book')
     const res = await fetch(`/api/supplier-invoices/${params.id}/book`, { method: 'POST' })
     const result = await res.json()
     if (!res.ok) {
@@ -315,16 +327,16 @@ export default function SupplierInvoiceDetailPage() {
     } else if (Array.isArray(result.warnings) && result.warnings.length > 0) {
       // Booked, but a follow-up is needed (e.g. periodiseringar failed).
       toast({ title: t('booked_title'), description: t('booked_with_warnings_description'), variant: 'destructive' })
-      fetchInvoice()
+      await fetchInvoice()
     } else {
       toast({ title: t('booked_title'), description: t('booked_description') })
-      fetchInvoice()
+      await fetchInvoice()
     }
-    setIsProcessing(false)
+    setProcessingAction(null)
   }
 
   async function handleMarkPaid(force: boolean = false) {
-    setIsProcessing(true)
+    setProcessingAction('mark_paid')
     // When the user has edited the booking rows in this session, forward
     // them so the server validates balance and posts via createJournalEntry
     // directly. Otherwise the server picks the default routing (clearing
@@ -372,9 +384,9 @@ export default function SupplierInvoiceDetailPage() {
       })
       setIsPayDialogOpen(false)
       setDuplicateCandidates(null)
-      fetchInvoice()
+      await fetchInvoice()
     }
-    setIsProcessing(false)
+    setProcessingAction(null)
   }
 
   async function handleCredit() {
@@ -385,34 +397,51 @@ export default function SupplierInvoiceDetailPage() {
       variant: 'warning',
     })
     if (!ok) return
-    setIsProcessing(true)
+    setProcessingAction('credit')
     const res = await fetch(`/api/supplier-invoices/${params.id}/credit`, { method: 'POST' })
     const result = await res.json()
     if (!res.ok) {
       toast({ title: t('credit_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
     } else {
       toast({ title: t('credit_success_title') })
-      fetchInvoice()
+      await fetchInvoice()
     }
-    setIsProcessing(false)
+    setProcessingAction(null)
   }
 
   async function handleDelete() {
-    const ok = await confirmAction({
+    // The DELETE runs as the confirm's action: the dialog holds open with its
+    // pending spinner until the server answers (it used to close on click and
+    // leave the destructive icon button active with no feedback until the
+    // route swap, permitting duplicate DELETEs).
+    await confirmAction({
       title: t('delete_confirm_title'),
       description: t('delete_confirm_description'),
       confirmLabel: t('delete_confirm_label'),
       variant: 'destructive',
+    }, async () => {
+      setProcessingAction('delete')
+      try {
+        const res = await fetch(`/api/supplier-invoices/${params.id}`, { method: 'DELETE' })
+        const result = await res.json()
+        if (!res.ok) {
+          toast({ title: t('delete_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+        } else {
+          toast({ title: t('deleted_title') })
+          router.push('/supplier-invoices')
+          return
+        }
+      } catch (err) {
+        toast({
+          title: t('delete_failed_title'),
+          description: getErrorMessage(err, { context: 'supplier_invoice' }),
+          variant: 'destructive',
+        })
+      }
+      // Only cleared on failure: on success the pending state rides through
+      // the route swap instead of re-enabling the button mid-navigation.
+      setProcessingAction(null)
     })
-    if (!ok) return
-    const res = await fetch(`/api/supplier-invoices/${params.id}`, { method: 'DELETE' })
-    const result = await res.json()
-    if (!res.ok) {
-      toast({ title: t('delete_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
-    } else {
-      toast({ title: t('deleted_title') })
-      router.push('/supplier-invoices')
-    }
   }
 
   async function handleUncredit() {
@@ -423,7 +452,7 @@ export default function SupplierInvoiceDetailPage() {
       variant: 'warning',
     })
     if (!ok) return
-    setIsProcessing(true)
+    setProcessingAction('uncredit')
     const res = await fetch(`/api/supplier-invoices/${params.id}/uncredit`, { method: 'POST' })
     const result = await res.json()
     if (!res.ok) {
@@ -437,9 +466,9 @@ export default function SupplierInvoiceDetailPage() {
         title: t('uncredit_success_title'),
         description: t('uncredit_success_description'),
       })
-      fetchInvoice()
+      await fetchInvoice()
     }
-    setIsProcessing(false)
+    setProcessingAction(null)
   }
 
   if (isLoading) {
@@ -534,7 +563,13 @@ export default function SupplierInvoiceDetailPage() {
               disabled={isProcessing || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {processingAction === 'approve' ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : canWrite ? (
+                <CheckCircle className="mr-2 h-4 w-4" />
+              ) : (
+                <Lock className="mr-2 h-4 w-4" />
+              )}
               {t('approve')}
             </Button>
           )}
@@ -554,7 +589,13 @@ export default function SupplierInvoiceDetailPage() {
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
                 aria-label={t('delete_confirm_label')}
               >
-                {canWrite ? <Trash2 className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                {processingAction === 'delete' ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : canWrite ? (
+                  <Trash2 className="h-4 w-4" />
+                ) : (
+                  <Lock className="h-4 w-4" />
+                )}
               </Button>
             )}
           {['approved', 'overdue', 'partially_paid'].includes(invoice.status) && (
@@ -574,7 +615,13 @@ export default function SupplierInvoiceDetailPage() {
                   disabled={isProcessing || !canWrite}
                   title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
                 >
-                  {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+                  {processingAction === 'credit' ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : canWrite ? (
+                    <FileText className="mr-2 h-4 w-4" />
+                  ) : (
+                    <Lock className="mr-2 h-4 w-4" />
+                  )}
                   {t('credit_note_button')}
                 </Button>
               )}
@@ -587,7 +634,13 @@ export default function SupplierInvoiceDetailPage() {
               disabled={isProcessing || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {canWrite ? <Undo2 className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {processingAction === 'uncredit' ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : canWrite ? (
+                <Undo2 className="mr-2 h-4 w-4" />
+              ) : (
+                <Lock className="mr-2 h-4 w-4" />
+              )}
               {t('uncredit_button')}
             </Button>
           )}
@@ -908,7 +961,13 @@ export default function SupplierInvoiceDetailPage() {
                 disabled={isProcessing || !canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
-                {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+                {processingAction === 'book' ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : canWrite ? (
+                  <CheckCircle className="mr-2 h-4 w-4" />
+                ) : (
+                  <Lock className="mr-2 h-4 w-4" />
+                )}
                 {t('book_action')}
               </Button>
             </div>

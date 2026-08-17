@@ -775,31 +775,54 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const handleSelect = useCallback(async (id: string) => {
     setSelectedId(id)
     setSelectedPurchaseId(null)
-    setSelected(null)
-    setDocUrl(null)
-    setDocMime(null)
-    setDocState('none')
     docRequestRef.current = id
     // Intentionally no auto-scroll: in the vertical-stack layout (below xl)
     // scrolling the preview into view pushes the list off-screen, and the
     // user has no obvious way back to pick another item. The row-highlight
     // + the preview content update are enough feedback that the tap took.
 
+    // Seed the detail pane synchronously from the list row already in hand
+    // (fetchItems returns full rows: status, amounts, extracted fields), and
+    // start the document load in parallel with the detail GET. Clearing
+    // `selected` first made every row click flash the no-selection branch
+    // (onboarding card / "Välj en post") for a full round trip, then run a
+    // second serialized round trip before the PDF even started loading.
+    const listRow = items.find((it) => it.id === id) ?? null
+    if (listRow) {
+      setSelected(listRow)
+      void loadDocument(id, listRow.document_id)
+    } else {
+      setSelected(null)
+      setDocUrl(null)
+      setDocMime(null)
+      setDocState('none')
+    }
+
     try {
       const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${id}`)
       if (!res.ok) throw await resolveFailure(res)
       const json = await res.json()
       const item = json.data as InboxItem
+      // A newer selection owns the pane now: dropping this response keeps a
+      // slow item A fetch from overwriting item B's seeded detail.
+      if (docRequestRef.current !== id) return
       setSelected(item)
-      await loadDocument(id, item.document_id)
+      if (!listRow) {
+        await loadDocument(id, item.document_id)
+      } else if (item.document_id !== listRow.document_id) {
+        // The detail row knows a different underlag than the list row we
+        // seeded from (e.g. processing finished between paint and click).
+        void loadDocument(id, item.document_id)
+      }
     } catch (err) {
+      if (docRequestRef.current !== id) return
       toast({
         title: 'Kunde inte ladda dokumentet',
         description: failureText(err),
         variant: 'destructive',
       })
     }
-  }, [toast, loadDocument])
+  }, [items, toast, loadDocument])
 
   // The detail pane renders from its own fetched snapshot (`selected`), so
   // the realtime refetch updates the list row but would leave a selected

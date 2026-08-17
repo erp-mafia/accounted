@@ -214,7 +214,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   }
 
   async function fetchInvoice() {
-    setIsLoading(true)
+    // The blocking spinner is reserved for the first load (or stepping to a
+    // different invoice via the pager). Refetches after Bokför / status
+    // change / finalize / payment / send reconcile BEHIND the mounted page:
+    // a one-field state change must not collapse the whole detail view to a
+    // spinner, reset scroll, and remount every card.
+    if (!invoice || invoice.id !== id) setIsLoading(true)
 
     // Settings depend only on the active company, so start them with the main
     // invoice batch instead of waiting for the invoice row first.
@@ -400,7 +405,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       } else {
         toast({ title: t('booked_title'), description: t('booked_description') })
       }
-      fetchInvoice()
+      // Awaited so the Bokför button's pending state covers the in-place
+      // refresh: the spinner stops when the page shows the booked state.
+      await fetchInvoice()
     } catch (error) {
       toast({
         title: t('book_failed_title'),
@@ -453,7 +460,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         title: t('status_update_toast_title'),
         description: t('status_update_toast_description', { status: statusLabel(status).toLowerCase() }),
       })
-      fetchInvoice()
+      // Awaited: the acting button keeps its pending state until the page
+      // reflects the new status (the refetch runs behind the mounted content).
+      await fetchInvoice()
     } catch (error) {
       toast({
         title: t('status_update_failed_title'),
@@ -810,7 +819,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       })
 
       setShowFinalizeDialog(false)
-      fetchInvoice()
+      await fetchInvoice()
     } catch (error) {
       toast({
         title: t('finalize_failed_title'),
@@ -1073,7 +1082,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               disabled={isUpdating || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {canWrite ? <Send className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {isUpdating ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : canWrite ? (
+                <Send className="mr-2 h-4 w-4" />
+              ) : (
+                <Lock className="mr-2 h-4 w-4" />
+              )}
               {t('mark_as_sent')}
             </Button>
           )}
@@ -1451,6 +1466,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       <span className="text-sm text-muted-foreground">{t('not_booked_yet')}</span>
                       {canWrite && (
                         <Button size="sm" onClick={openBookConfirm} disabled={isUpdating}>
+                          {isUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                           {t('book_action')}
                         </Button>
                       )}
@@ -1774,7 +1790,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     onClick={() => updateStatus('cancelled')}
                     disabled={isUpdating}
                   >
-                    <XCircle className="mr-2 h-4 w-4" />
+                    {isUpdating ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <XCircle className="mr-2 h-4 w-4" />
+                    )}
                     {t('cancel_action')}
                   </Button>
                 )}
