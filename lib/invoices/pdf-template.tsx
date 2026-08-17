@@ -91,6 +91,10 @@ const LABELS = {
     swish: 'Swish:',
     iban: 'IBAN:',
     bic: 'BIC/SWIFT:',
+    routingNumber: 'Routing number (ABA):',
+    sortCode: 'Sort code:',
+    bankCode: 'Bankkod:',
+    foreignAccount: 'Kontonummer:',
     ocr: 'OCR/Referens:',
     paymentReference: 'Betalningsreferens:',
     invoiceNumber: 'Fakturanummer:',
@@ -159,6 +163,10 @@ const LABELS = {
     swish: 'Swish:',
     iban: 'IBAN:',
     bic: 'BIC/SWIFT:',
+    routingNumber: 'Routing number (ABA):',
+    sortCode: 'Sort code:',
+    bankCode: 'Bank code:',
+    foreignAccount: 'Account number:',
     ocr: 'Reference:',
     paymentReference: 'Payment reference:',
     invoiceNumber: 'Invoice number:',
@@ -1118,6 +1126,26 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.swish}</Text>
                 <Text style={styles.paymentValue}>{company.swish}</Text>
+              </View>
+            )}
+            {/* Non-IBAN foreign routing (USD ABA / GBP sort code): the label
+                names the identifier the customer's bank asks for. */}
+            {company.bank_code && (
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>
+                  {invoice.currency === 'USD'
+                    ? L.routingNumber
+                    : invoice.currency === 'GBP'
+                      ? L.sortCode
+                      : L.bankCode}
+                </Text>
+                <Text style={styles.paymentValue}>{company.bank_code}</Text>
+              </View>
+            )}
+            {company.foreign_account_number && (
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>{L.foreignAccount}</Text>
+                <Text style={styles.paymentValue}>{company.foreign_account_number}</Text>
               </View>
             )}
             {company.iban && (

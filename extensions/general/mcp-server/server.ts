@@ -3420,7 +3420,7 @@ export const tools: McpTool[] = [
 
       return {
         recorded: true,
-        message: 'Thanks. Feedback queued for product-team review. We aggregate signal weekly.',
+        message: 'Thanks. Feedback recorded for product-team triage; it is read and has led to fixes. Include ids and expected vs actual so it can be verified.',
       }
     },
   },
@@ -3621,6 +3621,17 @@ export const tools: McpTool[] = [
             },
             required: ['workflow', 'description', 'skill', 'tools'],
           },
+        },
+        feedback_channel: {
+          type: 'object',
+          additionalProperties: false,
+          description: 'How to report a missing tool, misleading description or wrong result.',
+          properties: {
+            tool: { type: 'string' },
+            when: { type: 'string' },
+            include: { type: 'string' },
+          },
+          required: ['tool', 'when', 'include'],
         },
       },
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
@@ -3902,6 +3913,14 @@ export const tools: McpTool[] = [
           skill: w.skill,
           tools: [...w.tools],
         })),
+        // The feedback tool was previously discoverable only by scanning
+        // tools/list; agents that never scan never report. Surface it here,
+        // once, in the call every session starts with.
+        feedback_channel: {
+          tool: 'gnubok_feedback',
+          when: 'A tool is missing, a description misled you, a result looks wrong, or something worked unusually well.',
+          include: 'context (what you tried, ids, expected vs actual), suggestion, and tool_name. Rate-limited 1/min/key: batch a session\'s findings into one call.',
+        },
       }
     },
   },
@@ -8756,6 +8775,43 @@ export const tools: McpTool[] = [
         periodCheckDate = (je.entry_date as string) > txDate ? (je.entry_date as string) : txDate
       }
 
+      // The staged kontering, named for the approver. Same shape and account-
+      // name lookup as gnubok_create_voucher's preview: the approval card is
+      // the human-in-the-loop control on an irreversible BFL posting, and a
+      // card that shows "-720, 2 tx, expense" without the debit/credit lines
+      // is compatible with both a correct booking and a wrong one. The
+      // executor's RPC posts new_entry.lines verbatim, so this preview is
+      // exactly what gets committed. Nothing beyond what create_voucher
+      // already exposes: BAS account + name, amounts, and the agent-authored
+      // line text; still no per-tx descriptions or counterparty identifiers.
+      let previewLines: Array<Record<string, unknown>> | null = null
+      if (stagedNewEntry) {
+        const stagedLines = stagedNewEntry.lines as Array<Record<string, unknown>>
+        const accountNumbers = [...new Set(stagedLines.map((l) => String(l.account_number)))]
+        const { data: accountRows } = await supabase
+          .from('chart_of_accounts')
+          .select('account_number, account_name')
+          .eq('company_id', companyId)
+          .in('account_number', accountNumbers)
+        const accountNames = new Map<string, string>()
+        for (const a of accountRows || []) {
+          accountNames.set(String(a.account_number), (a.account_name as string) ?? '')
+        }
+        previewLines = stagedLines.map((l) => {
+          const accountNumber = String(l.account_number)
+          return {
+            account_number: accountNumber,
+            account_name:
+              accountNames.get(accountNumber) ??
+              getBASReference(accountNumber)?.account_name ??
+              null,
+            debit_amount: Number(l.debit_amount) || 0,
+            credit_amount: Number(l.credit_amount) || 0,
+            line_description: (l.line_description as string | undefined) ?? null,
+          }
+        })
+      }
+
       return stagePendingOperation(supabase, companyId, userId, 'bulk_book_transactions',
         existingJeId
           ? `Länka ${txIds.length} transaktioner till verifikat (${txDate})`
@@ -8765,18 +8821,23 @@ export const tools: McpTool[] = [
           existing_journal_entry_id: existingJeId,
           new_entry: stagedNewEntry,
         },
-        // GDPR Art.25: preview_data carries only aggregate counts + the
-        // shared date/direction: no per-tx descriptions, no per-line
-        // descriptions, no counterparty IDs. The user-facing approval
-        // dialog reconstructs detail from the tx_ids list at render time
-        // rather than persisting denormalized PII here. Same privacy-by-
-        // design rationale as gnubok_link_transaction_to_journal_entry.
+        // GDPR Art.25: preview_data carries aggregate counts, the shared
+        // date/direction/currency, and the staged kontering (see previewLines
+        // above): no per-tx descriptions, no counterparty IDs. Same privacy-
+        // by-design rationale as gnubok_link_transaction_to_journal_entry.
         {
           tx_count: txIds.length,
           tx_date: txDate,
           tx_sum: txSum,
+          currency: txs[0]!.currency ?? 'SEK',
           direction,
           mode: existingJeId ? 'link_existing' : 'create_new',
+          ...(previewLines
+            ? {
+                entry_description: (stagedNewEntry as Record<string, unknown>).description ?? null,
+                lines: previewLines,
+              }
+            : {}),
           // Echoed for every non-exact dimension resolution (resolve-don't-
           // select) so the agent can verify what a name attached to.
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
@@ -17445,6 +17506,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId}); when selecting another company, repeat company_id on every company-data call, including approval.`,
             '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
+            '• When a tool is missing, a description misled you, a result looks wrong, or something worked unusually well, call gnubok_feedback (context + suggestion, optional tool_name). It is read by the product team and has fixed real bugs; include ids and what you expected. Rate-limited 1/min/key, so batch a session\'s findings into one call.',
             '',
             'Common workflows:',
             '• Before categorizing or creating vouchers, consult ledger_context in gnubok_get_agent_briefing (full picture: the Accounted://ledger/context resource): it shows how THIS company has booked each counterparty and supplier (dominant account, VAT treatment, evidence = historical frequency). Prefer these observed patterns over guesses; explicit mapping rules outrank them. Frequency is not permission to auto-post: still stage for approval.',

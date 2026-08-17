@@ -1637,6 +1637,94 @@ describe('getReconciliationStatus', () => {
   })
 
   // ----------------------------------------------------------------
+  // A stornerad opening balance is not an IB
+  // ----------------------------------------------------------------
+
+  it('does not count a reversed opening balance (or its storno) as the IB', async () => {
+    // gnubok_feedback 2026-08-16: aktiekapital was double-booked as an IB on
+    // A1 (is_opening_balance), then correctly stornerad and re-booked. The
+    // balansräkning and huvudbok were right, yet the widget kept showing a
+    // difference of exactly the reversed IB: source_type='opening_balance'
+    // was summed with no status filter, so the cancelled 25 000 was subtracted
+    // from the period movement while its storno (source_type 'storno') stayed
+    // in. difference = (bank - gl) + reversed_ib. Ledger here: reversed IB
+    // +25 000, storno -25 000, live IB +100 000, one 5 000 receipt.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: [
+        { date: '2026-01-15', amount: 5000, journal_entry_id: 'je-recv', reconciliation_method: 'manual' },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'je-ib-wrong', status: 'reversed', source_type: 'opening_balance', entry_date: '2026-01-01' },
+        { id: 'je-ib-storno', status: 'posted', source_type: 'storno', entry_date: '2026-01-01' },
+        { id: 'je-ib', status: 'posted', source_type: 'opening_balance', entry_date: '2026-01-01' },
+        { id: 'je-recv', status: 'posted', source_type: 'bank_transaction', entry_date: '2026-01-15' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 25000, credit_amount: 0, journal_entry_id: 'je-ib-wrong' },
+        { debit_amount: 0, credit_amount: 25000, journal_entry_id: 'je-ib-storno' },
+        { debit_amount: 100000, credit_amount: 0, journal_entry_id: 'je-ib' },
+        { debit_amount: 5000, credit_amount: 0, journal_entry_id: 'je-recv' },
+      ],
+    })
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1', '2026-01-01')
+
+    // The reversed pair nets to zero inside the ledger balance, as on the BR.
+    expect(status.gl_1930_balance).toBe(105000)
+    // Only the live IB counts as the opening balance.
+    expect(status.gl_1930_opening_balance).toBe(100000)
+    expect(status.gl_1930_period_movement).toBe(5000)
+    expect(status.difference).toBe(0)
+    expect(status.is_reconciled).toBe(true)
+  })
+
+  it('does not floor the window at a reversed opening balance dated after the live one', async () => {
+    // A stray reversed IB dated mid-period must not raise effectiveFrom past
+    // the real IB and silently drop the period's early movements.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: [
+        { date: '2026-01-10', amount: 1000, journal_entry_id: 'je-jan', reconciliation_method: 'manual' },
+        { date: '2026-02-10', amount: 2000, journal_entry_id: 'je-feb', reconciliation_method: 'manual' },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'je-ib', status: 'posted', source_type: 'opening_balance', entry_date: '2026-01-01' },
+        { id: 'je-jan', status: 'posted', source_type: 'bank_transaction', entry_date: '2026-01-10' },
+        { id: 'je-ib-wrong', status: 'reversed', source_type: 'opening_balance', entry_date: '2026-02-01' },
+        { id: 'je-ib-storno', status: 'posted', source_type: 'storno', entry_date: '2026-02-01' },
+        { id: 'je-feb', status: 'posted', source_type: 'bank_transaction', entry_date: '2026-02-10' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 9000, credit_amount: 0, journal_entry_id: 'je-ib' },
+        { debit_amount: 1000, credit_amount: 0, journal_entry_id: 'je-jan' },
+        { debit_amount: 400, credit_amount: 0, journal_entry_id: 'je-ib-wrong' },
+        { debit_amount: 0, credit_amount: 400, journal_entry_id: 'je-ib-storno' },
+        { debit_amount: 2000, credit_amount: 0, journal_entry_id: 'je-feb' },
+      ],
+    })
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.gl_1930_opening_balance).toBe(9000)
+    expect(status.gl_1930_period_movement).toBe(3000)
+    expect(status.bank_transaction_total).toBe(3000)
+    expect(status.difference).toBe(0)
+  })
+
+  // ----------------------------------------------------------------
   // Avstämt requires BOTH a zero net difference AND nothing unidentified
   // ----------------------------------------------------------------
 

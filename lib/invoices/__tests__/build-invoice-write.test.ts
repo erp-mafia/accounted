@@ -301,6 +301,7 @@ describe('buildInvoiceWriteData stored ROT/RUT personnummer (edit path)', () => 
     unit_price: 500,
     vat_rate: 25,
     deduction_type: 'rut' as const,
+    work_type: 'STAD',
     labor_hours: 10,
   }
 
@@ -371,6 +372,7 @@ describe('buildInvoiceWriteData kundkort personnummer fallback', () => {
     unit_price: 500,
     vat_rate: 25,
     deduction_type: 'rut' as const,
+    work_type: 'STAD',
     labor_hours: 10,
   }
 
@@ -514,6 +516,7 @@ describe('buildInvoiceWriteData kundkort fallback customer-type gate', () => {
           unit_price: 500,
           vat_rate: 25,
           deduction_type: 'rut' as const,
+          work_type: 'STAD',
           labor_hours: 10,
         }],
       },

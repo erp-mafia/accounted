@@ -336,6 +336,7 @@ export async function buildInvoiceWriteData(params: {
       // below are stored with.
       vat_rate: item.vat_rate !== undefined ? item.vat_rate : vatRules.rate,
       labor_hours: item.labor_hours ?? null,
+      work_type: item.work_type ?? null,
       housing_designation: item.housing_designation ?? null,
     }))
 

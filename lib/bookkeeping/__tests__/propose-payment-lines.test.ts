@@ -491,3 +491,68 @@ describe('proposePaymentLines: foreign currency without an exchange rate', () =>
     expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('14375')
   })
 })
+
+describe('proposePaymentLines: ROT/RUT-avdrag (fakturamodellen)', () => {
+  // 10 000 labor + 25 % = 12 500; ROT 30 % of labor incl. moms = 3 750. The
+  // customer pays 8 750; 3 750 is a receivable on Skatteverket (1513).
+  const rotInvoice = () => ({ ...makeInvoiceInput(), deduction_total: 3750 })
+
+  it('accrual: bank and 1510 legs carry the customer share (total minus avdrag)', () => {
+    const lines = proposePaymentLines({
+      invoice: rotInvoice(),
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+    })
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '8750' })
+    expect(lines[1]).toMatchObject({ account_number: '1510', credit_amount: '8750' })
+  })
+
+  it('accrual + öresavrundning: bank leg is the rounded "Att betala", 3740 carries the öre', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 12500.4 }), deduction_total: 3750 },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+      companyOreRounding: true,
+    })
+    // Att betala on the PDF: round(12 500,40) - 3 750 = 8 750; 1510 clears
+    // 8 750,40; the 0,40 lands on 3740 (same polarity as the bank match).
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('8750')
+    expect(lines.find((l) => l.account_number === '1510')?.credit_amount).toBe('8750.4')
+    expect(lines.find((l) => l.account_number === '3740')?.debit_amount).toBe('0.4')
+  })
+
+  it('cash method: bank gets the customer share, 1513 the avdrag, revenue + moms in full', () => {
+    const lines = proposePaymentLines({
+      invoice: rotInvoice(),
+      accountingMethod: 'cash',
+      entityType: 'aktiebolag',
+    })
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('8750')
+    expect(lines.find((l) => l.account_number === '1513')?.debit_amount).toBe('3750')
+    expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('10000')
+    expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('2500')
+    const debits = lines.reduce((s, l) => s + (parseFloat(l.debit_amount) || 0), 0)
+    const credits = lines.reduce((s, l) => s + (parseFloat(l.credit_amount) || 0), 0)
+    expect(Math.round((debits - credits) * 100)).toBe(0)
+  })
+
+  it('foreign invoice with a deduction and no booking rate refuses (1513 is a kronor receivable)', () => {
+    expect(() =>
+      proposePaymentLines({
+        invoice: { ...makeInvoiceInput({ currency: 'EUR', total_sek: 137500, exchange_rate: null }), deduction_total: 375 },
+        accountingMethod: 'accrual',
+        entityType: 'aktiebolag',
+      }),
+    ).toThrow()
+  })
+
+  it('no deduction: unchanged full-total proposal', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput(), deduction_total: 0 },
+      accountingMethod: 'accrual',
+      entityType: 'aktiebolag',
+    })
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '12500' })
+  })
+})

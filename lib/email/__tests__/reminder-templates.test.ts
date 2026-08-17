@@ -6,6 +6,7 @@ import {
   calculateReminderAmounts,
   formatReminderTotalDue,
   REMINDER_FEE_CURRENCY,
+  reminderPrincipal,
 } from '../reminder-templates'
 import { formatCurrency } from '@/lib/utils'
 import { makeCustomer, makeInvoice, makeCompanySettings } from '@/tests/helpers'
@@ -251,5 +252,45 @@ describe('reminder email templates: statutory fee currency (Lag 1981:739)', () =
     })
     expect(html).not.toContain('Lag 1981:739')
     expect(html).toContain(formatCurrency(1_010, 'EUR'))
+  })
+})
+
+describe('reminder email templates: ROT/RUT-avdrag (fakturamodellen)', () => {
+  // 12 500 total with a 3 750 ROT deduction: the customer was asked for
+  // 8 750; the 3 750 is a claim on Skatteverket and must never be dunned.
+  const rotInvoice = makeInvoice({
+    invoice_number: 'F2026012',
+    invoice_date: '2026-04-15',
+    due_date: '2026-05-01',
+    currency: 'SEK',
+    total: 12_500,
+    deduction_total: 3_750,
+  } as Parameters<typeof makeInvoice>[0])
+  const rotData = { ...baseData, invoice: rotInvoice, interestAmount: 0, interestRate: 0, interestFromDate: '2026-05-02', interestDays: 0, reminderFee: 0 }
+
+  it('reminderPrincipal is the customer share', () => {
+    expect(reminderPrincipal(rotInvoice, company)).toBe(8_750)
+    expect(reminderPrincipal(invoice, company)).toBe(10_000)
+  })
+
+  it('HTML, text and subject never quote the pre-deduction total', () => {
+    const html = generateReminderEmailHtml(rotData)
+    const text = generateReminderEmailText(rotData)
+    const subject = generateReminderEmailSubject({ ...rotData, reminderFee: 60 })
+    for (const out of [html, text]) {
+      expect(out).toContain(formatCurrency(8_750, 'SEK'))
+      expect(out).not.toContain(formatCurrency(12_500, 'SEK'))
+    }
+    expect(subject).not.toContain(formatCurrency(12_500, 'SEK'))
+  })
+
+  it('folds interest and fee onto the customer share', () => {
+    const amounts = calculateReminderAmounts({
+      invoiceTotal: reminderPrincipal(rotInvoice, company),
+      interestAmount: 12.5,
+      reminderFee: 60,
+      currency: 'SEK',
+    })
+    expect(amounts.totalDue).toBe(8_822.5)
   })
 })

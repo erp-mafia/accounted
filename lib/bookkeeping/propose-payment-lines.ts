@@ -5,6 +5,7 @@
  * No DB or Supabase dependency: all inputs are plain data.
  */
 import { resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
+import { roundOre } from '@/lib/money'
 import {
   getRevenueAccount,
   getOutputVatAccount,
@@ -30,6 +31,14 @@ export interface ProposePaymentLinesInput {
     items?: InvoiceItem[]
     /** Per-invoice öresavrundning override; null = inherit the company setting. */
     ore_rounding?: boolean | null
+    /**
+     * ROT/RUT-avdrag (fakturamodellen), invoice currency. The customer pays
+     * total minus this; the rest is a receivable on Skatteverket (1513) that
+     * was debited at issue (accrual) or is debited at payment (cash method).
+     * The proposal must therefore never expect the deduction on the bank leg:
+     * doing so is what made every ROT/RUT invoice fail the overpayment guard.
+     */
+    deduction_total?: number | null
     /**
      * Dimensions PR7: the invoice's default bag. Stamped on every proposed
      * line: the payment dialog always submits its (editable) lines, so the
@@ -97,9 +106,13 @@ export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[]
     input.companyOreRounding === undefined ? undefined : { ore_rounding: input.companyOreRounding },
   ).roundingDelta
 
+  // 1513 is a kronor receivable, so the deduction converts with the invoice's
+  // booking rate or not at all: same refusal as generateRotRutLines.
+  const deductionSek = resolveDeductionSek(invoice)
+
   const lines = accountingMethod === 'accrual'
-    ? proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference, roundingDelta)
-    : proposeCashLines(invoice, paymentAccount, desc, entityType, roundingDelta)
+    ? proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference, roundingDelta, deductionSek)
+    : proposeCashLines(invoice, paymentAccount, desc, entityType, roundingDelta, deductionSek)
 
   // Dimensions PR7: re-propagate the invoice default onto every proposed leg
   // (matches createInvoicePaymentJournalEntry/createInvoiceCashEntry).
@@ -108,6 +121,14 @@ export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[]
     return lines.map((line) => ({ ...line, dimensions: { ...bag } }))
   }
   return lines
+}
+
+function resolveDeductionSek(invoice: ProposePaymentLinesInput['invoice']): number {
+  const deduction = invoice.deduction_total ?? 0
+  if (deduction <= 0) return 0
+  const sek = resolveSekAmountOrNull(deduction, null, invoice.currency, invoice.exchange_rate)
+  if (sek === null) throw new InvoiceFxRateMissingError(invoice.currency)
+  return roundOre(sek)
 }
 
 /**
@@ -129,14 +150,17 @@ function proposeAccrualLines(
   paymentAccount: string,
   desc: string,
   exchangeRateDifference?: number,
-  roundingDelta = 0
+  roundingDelta = 0,
+  deductionSek = 0
 ): FormLine[] {
-  const bookedSekAmount = resolveSekAmount(
+  // The customer's share only: 1510 was debited total minus the ROT/RUT
+  // deduction at issue (1513 took the rest), so that is what the payment clears.
+  const bookedSekAmount = Math.round((resolveSekAmount(
     invoice.total,
     invoice.total_sek,
     invoice.currency,
     invoice.exchange_rate
-  )
+  ) - deductionSek) * 100) / 100
   const lines: FormLine[] = []
 
   if (exchangeRateDifference && exchangeRateDifference !== 0) {
@@ -198,7 +222,8 @@ function proposeCashLines(
   paymentAccount: string,
   desc: string,
   entityType: EntityType,
-  roundingDelta = 0
+  roundingDelta = 0,
+  deductionSek = 0
 ): FormLine[] {
   const lines: FormLine[] = []
   const isForeign = invoice.currency !== 'SEK'
@@ -309,12 +334,25 @@ function proposeCashLines(
     ? Math.round(totalCredits * 100) / 100
     : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
 
+  // Cash method: revenue + moms on the full amount, but the bank only ever
+  // receives the customer's share; the ROT/RUT deduction is debited to 1513
+  // (Skatteverket pays it later), mirroring createInvoiceCashEntry.
   lines.push({
     account_number: paymentAccount,
-    debit_amount: toFormAmount(debitAmount + roundingDelta),
+    debit_amount: toFormAmount(debitAmount - deductionSek + roundingDelta),
     credit_amount: '',
     line_description: desc,
   })
+  if (deductionSek > 0) {
+    lines.push({
+      account_number: '1513',
+      debit_amount: toFormAmount(deductionSek),
+      credit_amount: '',
+      line_description: invoice.invoice_number
+        ? `ROT/RUT-avdrag faktura ${invoice.invoice_number}`
+        : 'ROT/RUT-avdrag faktura',
+    })
+  }
 
   lines.push(...creditLines)
 

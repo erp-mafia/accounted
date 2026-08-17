@@ -293,6 +293,7 @@ export async function POST(request: Request) {
           document_type: 'invoice',
           paid_at: toDateStr(fifteenDaysAgo),
           paid_amount: 18750,
+          remaining_amount: 0,
         },
         {
           user_id: userId,
@@ -305,6 +306,8 @@ export async function POST(request: Request) {
           subtotal: 20000,
           vat_amount: 0,
           total: 20000,
+          remaining_amount: 20000,
+          paid_amount: 0,
           vat_treatment: 'reverse_charge',
           vat_rate: 0,
           reverse_charge_text: 'Reverse charge: buyer is liable for VAT',
@@ -321,6 +324,8 @@ export async function POST(request: Request) {
           subtotal: 5000,
           vat_amount: 1250,
           total: 6250,
+          remaining_amount: 6250,
+          paid_amount: 0,
           vat_treatment: 'standard_25',
           vat_rate: 25,
           moms_ruta: '10',
@@ -337,6 +342,10 @@ export async function POST(request: Request) {
           subtotal: 8000,
           vat_amount: 2000,
           total: 10000,
+          // PostgREST normalises a bulk insert to the union of keys: every row in
+          // this batch carries both columns so none arrives as NULL.
+          remaining_amount: 10000,
+          paid_amount: 0,
           vat_treatment: 'standard_25',
           vat_rate: 25,
           moms_ruta: '10',

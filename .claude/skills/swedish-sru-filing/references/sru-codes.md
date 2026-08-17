@@ -258,8 +258,8 @@ Source: BAS-kontogruppen + Skatteverket joint mapping at bas.se/kontoplaner/sru/
 | 4600-4699 | 7512 | 3.6 | Handelsvaror |
 | **5000-6999** | **7513** | 3.7 | **Övriga externa kostnader (ALL accounts in range)** |
 | 7000-7699 | 7514 | 3.8 | Personalkostnader |
-| 7700-7799 | 7516 | 3.10 | Nedskrivningar omsättningstillgångar |
-| 7800-7899 | 7515 | 3.9 | Avskrivningar |
+| 7740-7749, 7790-7799 | 7516 | 3.10 | Nedskrivningar omsättningstillgångar |
+| 7700-7739, 7750-7789, 7800-7899 | 7515 | 3.9 | Av- och nedskrivningar av anläggningstillgångar (incl. återföringar) |
 | 7900-7999 | 7517 | 3.11 | Övriga rörelsekostnader |
 | 8000-8099 | 7414 | 3.12 | Resultat koncernföretag |
 | 8100-8199 | 7415 | 3.13 | Resultat intresseföretag |

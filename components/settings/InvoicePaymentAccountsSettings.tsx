@@ -21,6 +21,9 @@ import { formatBankgiroNumber, validateBankgiroNumber, validatePlusgiroNumber } 
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
   INVOICE_PAYMENT_ACCOUNT_CURRENCIES,
+  bankCodeLabelKey,
+  hasNonIbanForeignRouting,
+  isNonIbanCurrency,
   legacySekInvoicePaymentAccount,
   normalizeInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
@@ -46,6 +49,8 @@ const EMPTY_ACCOUNT: InvoicePaymentAccount = {
   swish: null,
   iban: null,
   bic: null,
+  bank_code: null,
+  foreign_account_number: null,
 }
 
 function initialAccounts(
@@ -233,8 +238,25 @@ export function InvoicePaymentAccountsSettings({
       if (account.bic && !/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(account.bic)) {
         return t('validation_bic', { currency })
       }
+      if (account.bank_code && !/^\d{2,3}(-?\d{2,3}){1,2}$|^\d{6,9}$/.test(account.bank_code)) {
+        return t('validation_bank_code', { currency })
+      }
+      if (
+        account.foreign_account_number
+        && !/^[A-Za-z0-9-]{4,34}$/.test(account.foreign_account_number)
+      ) {
+        return t('validation_foreign_account_number', { currency })
+      }
+      // Foreign account: IBAN, or (non-IBAN banking system) bank code +
+      // account number + BIC. Same rule as InvoicePaymentAccountsSchema.
       if (currency !== 'SEK' && !account.iban) {
-        return t('validation_foreign_iban', { currency })
+        if (isNonIbanCurrency(currency)) {
+          if (!hasNonIbanForeignRouting(account)) {
+            return t('validation_foreign_non_iban', { currency })
+          }
+        } else {
+          return t('validation_foreign_iban', { currency })
+        }
       }
     }
     return null
@@ -457,9 +479,42 @@ export function InvoicePaymentAccountsSettings({
           className="max-w-40 flex-none tabular-nums"
         />
       </SettingsRow>
+      {isNonIbanCurrency(activeCurrency) && (
+        <>
+          <SettingsRow
+            label={t(bankCodeLabelKey(activeCurrency))}
+            htmlFor={`payment-bank-code-${activeCurrency}`}
+            align="baseline"
+          >
+            <SettingsInput
+              id={`payment-bank-code-${activeCurrency}`}
+              inputMode="numeric"
+              maxLength={11}
+              value={value(activeAccount, 'bank_code')}
+              onChange={(event) => updateField('bank_code', event.target.value.replace(/[^\d-]/g, ''))}
+              placeholder={activeCurrency === 'USD' ? '021000021' : '12-34-56'}
+              className="max-w-40 flex-none tabular-nums"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label={t('foreign_account_number_label')}
+            htmlFor={`payment-foreign-account-${activeCurrency}`}
+            align="baseline"
+          >
+            <SettingsInput
+              id={`payment-foreign-account-${activeCurrency}`}
+              maxLength={34}
+              value={value(activeAccount, 'foreign_account_number')}
+              onChange={(event) => updateField('foreign_account_number', event.target.value.replace(/\s/g, ''))}
+              className="max-w-56 flex-none tabular-nums"
+            />
+          </SettingsRow>
+          <SettingsRowNote>{t('non_iban_hint', { currency: activeCurrency })}</SettingsRowNote>
+        </>
+      )}
       <SettingsRow
         label={
-          activeCurrency !== 'SEK'
+          activeCurrency !== 'SEK' && !isNonIbanCurrency(activeCurrency)
             ? `${t('iban_label')} ${t('required_suffix')}`
             : t('iban_label')
         }
