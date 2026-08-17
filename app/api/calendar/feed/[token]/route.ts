@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { generateCalendarFeed } from '@/lib/calendar/ics-generator'
 import { createLogger } from '@/lib/logger'
@@ -59,7 +59,7 @@ export async function GET(
     return new NextResponse('Server configuration error', { status: 500 })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   // Fetch feed settings by token
   const { data: feed, error: feedError } = await supabase

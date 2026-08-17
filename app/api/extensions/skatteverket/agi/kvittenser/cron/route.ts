@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
@@ -68,7 +68,7 @@ export async function GET(request: Request) {
     )
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   const { data: pending, error: pendingError } = await supabase
     .from('agi_declarations')

@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { verifyCronSecret } from '@/lib/auth/cron'
@@ -66,7 +66,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Missing Supabase configuration' }, { status: 500 })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   // User-token entries. The token row is keyed by user_id but carries
   // company_id (multi-tenant refactor). Rows flagged needs_reconsent are

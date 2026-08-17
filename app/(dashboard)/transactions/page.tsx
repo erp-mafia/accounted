@@ -32,6 +32,7 @@ import TransactionHistoryList from '@/components/transactions/TransactionHistory
 import InboxZeroState from '@/components/transactions/InboxZeroState'
 import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import { mapWithConcurrency } from '@/lib/concurrency'
 
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
@@ -370,7 +371,9 @@ export default function TransactionsPage() {
   // categorizing direct to 2440. Triggered by a 409 TX_CATEGORIZE_SUGGEST_SI_MATCH.
   const [siMatchSuggestion, setSiMatchSuggestion] = useState<{
     transactionId: string
-    retry: () => Promise<string | null>
+    // Resolved value unused: callers only await completion. runCategorize
+    // resolves its outcome object, the counterparty path a journal-entry id.
+    retry: () => Promise<unknown>
     candidates: Array<{
       supplier_invoice_id: string
       invoice_number: string
@@ -387,7 +390,9 @@ export default function TransactionsPage() {
   // Triggered by a 409 TX_CATEGORIZE_SUGGEST_CI_MATCH.
   const [ciMatchSuggestion, setCiMatchSuggestion] = useState<{
     transactionId: string
-    retry: () => Promise<string | null>
+    // Resolved value unused: callers only await completion. runCategorize
+    // resolves its outcome object, the counterparty path a journal-entry id.
+    retry: () => Promise<unknown>
     candidates: Array<{
       invoice_id: string
       invoice_number: string | null
@@ -411,7 +416,9 @@ export default function TransactionsPage() {
   // candidate kinds), which the server re-detects so a stale id can't wave it.
   const [duplicateWarning, setDuplicateWarning] = useState<{
     transactionId: string
-    retry: () => Promise<string | null>
+    // Resolved value unused: callers only await completion. runCategorize
+    // resolves its outcome object, the counterparty path a journal-entry id.
+    retry: () => Promise<unknown>
     candidate: BookedDuplicateCandidate
   } | null>(null)
   const [duplicateProcessing, setDuplicateProcessing] = useState(false)
@@ -881,12 +888,23 @@ export default function TransactionsPage() {
     }
   }, [companyId])
 
+  // Same sequence-guard pattern as fetchGenerationRef: only the newest
+  // skattekonto fetch may write rows. A company switch bumps the sequence so a
+  // response started under the previous company can never land its rows in
+  // the new company's inbox, and overlapping refreshes resolve last-write-
+  // correct instead of last-resolved-wins.
+  const skvFetchSeqRef = useRef(0)
   const loadSkvRows = useCallback(async () => {
+    const seq = ++skvFetchSeqRef.current
     // Connection health, fetched alongside the rows: any failure (extension
     // disabled, capability gate, not connected) just hides the banner.
     void (async () => {
       try {
         const res = await fetch('/api/extensions/ext/skatteverket/status')
+        // Same guard as the rows below: a status response started under the
+        // previous company must not set or clear the reconnect banner for
+        // the new one.
+        if (skvFetchSeqRef.current !== seq) return
         if (!res.ok) {
           setSkvNeedsReconnect(false)
           return
@@ -898,6 +916,7 @@ export default function TransactionsPage() {
           expired?: boolean
           canRefresh?: boolean
         }
+        if (skvFetchSeqRef.current !== seq) return
         setSkvNeedsReconnect(
           Boolean(
             s.connected &&
@@ -906,22 +925,26 @@ export default function TransactionsPage() {
           ),
         )
       } catch {
+        if (skvFetchSeqRef.current !== seq) return
         setSkvNeedsReconnect(false)
       }
     })()
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/skattekonto/transaktioner')
+      if (skvFetchSeqRef.current !== seq) return
       if (!res.ok) {
         setSkvRows([])
         return
       }
       const json = await res.json()
+      if (skvFetchSeqRef.current !== seq) return
       const booked = (json.data?.booked ?? []) as SkattekontoTransactionWithSuggestion[]
       // Keep all booked SKV rows in state: inbox view filters to obokförda
       // (journal_entry_id null), history view shows all of them (matched
       // and unmatched) interleaved with bank tx by date.
       setSkvRows(booked)
     } catch {
+      if (skvFetchSeqRef.current !== seq) return
       setSkvRows([])
     }
   }, [])
@@ -1304,6 +1327,20 @@ export default function TransactionsPage() {
     // finally-guard and drop the cue.
     scopeRefreshSeqRef.current++
     setIsScopeRefreshing(false)
+    // Data boundary: the previous company's rows must neither render for the
+    // new one (the takeover fetch is async; until it resolves the old rows
+    // would sit under the new company's header) nor land later from a fetch
+    // still in flight. Clearing rows + bumping both fetch sequences closes
+    // both holes; the counts and paging state describe the cleared rows, so
+    // they reset with them.
+    setTransactions([])
+    setSkvRows([])
+    setTotalUncategorizedCount(null)
+    setPagedThroughDate(null)
+    setHasMore(false)
+    pagedCountRef.current = 0
+    fetchGenerationRef.current++
+    skvFetchSeqRef.current++
   }
 
   // Fetch the page whenever the scope changes (mount, company switch, period
@@ -1398,7 +1435,8 @@ export default function TransactionsPage() {
   }, [transactions.length])
 
   const handleCategorize: CategorizeHandler = async (id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions) => {
-    return runCategorize({ id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch: false })
+    const outcome = await runCategorize({ id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch: false })
+    return outcome.journalEntryId
   }
 
   /**
@@ -1412,6 +1450,21 @@ export default function TransactionsPage() {
    * from exitingIds again: an undo would have restored the row's data while
    * leaving it filtered out of the inbox.
    */
+  // The one place that calls the storno endpoint (pinned by
+  // booking-feedback-parity.test.ts): the per-row Ångra action and the batch
+  // "Ångra alla" both route through it.
+  const undoCategorize = (id: string) =>
+    fetch(`/api/transactions/${id}/uncategorize`, { method: 'POST' })
+
+  // Rows whose booking was undone while finishBooking's 350ms patch was still
+  // pending. The per-row Ångra covers this with a closure-local flag, but
+  // "Ångra alla" (undoBatchCategorize) cannot reach those closures: without a
+  // shared record its undo patch could land first and the timer then re-apply
+  // the booked shape, pointing journal_entry_id at a storno-reversed entry.
+  // Ids are removed again when a new booking for the row starts, so a
+  // re-booked row still gets its delayed patch.
+  const undoneIdsRef = useRef<Set<string>>(new Set())
+
   function finishBooking(args: {
     id: string
     isBusiness: boolean
@@ -1419,26 +1472,36 @@ export default function TransactionsPage() {
     journalEntryId?: string | null
     journalEntryCreated?: boolean
     journalEntryError?: string | null
+    // Batch rows: keep the exit animation, count decrement and state patch,
+    // but leave the narration to the caller's single aggregate toast instead
+    // of stacking one toast per row.
+    silent?: boolean
   }) {
-    const { id, isBusiness, category, journalEntryId, journalEntryCreated, journalEntryError } = args
+    const { id, isBusiness, category, journalEntryId, journalEntryCreated, journalEntryError, silent } = args
     // A completed Ångra must win over the delayed patch below. The undo has
     // already storno-reversed the verifikat server-side, so re-applying the
     // booked shape afterwards would show a journal_entry_id that no longer
     // represents a live entry.
     let undone = false
+    // A fresh booking supersedes any earlier undo of the same row: without
+    // this, a row booked again after an Ångra would skip its delayed patch.
+    undoneIdsRef.current.delete(id)
 
     setExitingIds((prev) => new Set(prev).add(id))
     setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
 
-    if (journalEntryCreated) {
+    if (silent) {
+      // No per-row toast: fall through to the delayed state patch below.
+    } else if (journalEntryCreated) {
       toast({
         title: 'Bokförd',
         action: (
           <ToastAction altText="Ångra kategorisering" onClick={async () => {
             try {
-              const undoRes = await fetch(`/api/transactions/${id}/uncategorize`, { method: 'POST' })
+              const undoRes = await undoCategorize(id)
               if (undoRes.ok) {
                 undone = true
+                undoneIdsRef.current.add(id)
                 setTransactions((prev) =>
                   prev.map((t) =>
                     t.id === id
@@ -1474,7 +1537,10 @@ export default function TransactionsPage() {
     // the id from exitingIds is what makes an Ångra later put the row back in
     // the inbox instead of leaving it invisible.
     setTimeout(() => {
-      if (!undone) {
+      // Both undo records gate the patch: the closure-local flag (per-row
+      // Ångra) and the shared ref ("Ångra alla", which runs outside this
+      // closure). The exitingIds/processingId cleanup below always runs.
+      if (!undone && !undoneIdsRef.current.has(id)) {
         setTransactions((prev) =>
           prev.map((tx) =>
             tx.id === id
@@ -1515,8 +1581,19 @@ export default function TransactionsPage() {
     // ledger-only voucher candidate.
     force?: boolean
     expectedDuplicateJournalEntryId?: string
-  }): Promise<string | null> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch, force, expectedDuplicateJournalEntryId } = args
+    // Batch rows: the caller narrates the outcome once for the whole batch,
+    // so the per-row success toast (finishBooking) and the generic per-row
+    // failure toast stay quiet. Interactive escalations (match suggestions,
+    // duplicate warning, activate-account) keep their dialogs/actions: they
+    // are the only way forward for those rows.
+    silent?: boolean
+    // ok distinguishes "the server accepted the categorization" from "nothing
+    // happened". A 2xx with a null journal_entry_id is a real success (e.g. an
+    // already-categorized flag flip), so the id alone cannot carry that signal:
+    // the batch aggregate would count the row as failed after finishBooking
+    // already animated it out of the inbox.
+  }): Promise<{ ok: boolean; journalEntryId: string | null }> {
+    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -1552,7 +1629,7 @@ export default function TransactionsPage() {
             candidates: result.error.details.candidates,
           })
           setProcessingId(null)
-          return null
+          return { ok: false, journalEntryId: null }
         }
         if (
           result?.error?.code === 'TX_CATEGORIZE_SUGGEST_CI_MATCH' &&
@@ -1567,7 +1644,7 @@ export default function TransactionsPage() {
             candidates: result.error.details.candidates,
           })
           setProcessingId(null)
-          return null
+          return { ok: false, journalEntryId: null }
         }
         if (result?.error?.code === 'TX_CATEGORIZE_INVALID_ACCOUNT') {
           // The user picked a library template (or typed an account
@@ -1639,7 +1716,7 @@ export default function TransactionsPage() {
             ) : undefined,
           })
           setProcessingId(null)
-          return null
+          return { ok: false, journalEntryId: null }
         }
         if (result?.error?.code === 'ACCOUNTS_NOT_IN_CHART') {
           // The mapped template/category references one or more accounts
@@ -1699,7 +1776,7 @@ export default function TransactionsPage() {
             ) : undefined,
           })
           setProcessingId(null)
-          return null
+          return { ok: false, journalEntryId: null }
         }
         if (
           result?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' &&
@@ -1721,15 +1798,17 @@ export default function TransactionsPage() {
             candidate,
           })
           setProcessingId(null)
-          return null
+          return { ok: false, journalEntryId: null }
         }
-        toast({
-          title: 'Kategorisering misslyckades',
-          description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
-          variant: 'destructive',
-        })
+        if (!silent) {
+          toast({
+            title: 'Kategorisering misslyckades',
+            description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
+            variant: 'destructive',
+          })
+        }
         setProcessingId(null)
-        return null
+        return { ok: false, journalEntryId: null }
       }
 
       finishBooking({
@@ -1739,13 +1818,16 @@ export default function TransactionsPage() {
         journalEntryId: result.journal_entry_id,
         journalEntryCreated: result.journal_entry_created,
         journalEntryError: result.journal_entry_error,
+        silent,
       })
 
-      return result.journal_entry_id || null
+      return { ok: true, journalEntryId: result.journal_entry_id || null }
     } catch {
-      toast({ title: t('booking_failed_title'), description: t('booking_failed_description'), variant: 'destructive' })
+      if (!silent) {
+        toast({ title: t('booking_failed_title'), description: t('booking_failed_description'), variant: 'destructive' })
+      }
       setProcessingId(null)
-      return null
+      return { ok: false, journalEntryId: null }
     }
   }
 
@@ -2425,65 +2507,69 @@ export default function TransactionsPage() {
     const transaction = transactions.find((t) => t.id === id)
     if (!transaction) return
 
-    const ok = await confirm({
+    // The DELETE runs as the confirm's action: the dialog stays open with its
+    // pending spinner until the operation settles (confirm-then-fetch used to
+    // close the dialog synchronously and leave the fetch with no visible
+    // state), then the row plays the same exit path as booking.
+    await confirm({
       title: 'Ta bort transaktion',
       description: `Är du säker på att du vill ta bort "${transaction.description}"? Åtgärden kan inte ångras.`,
       confirmLabel: 'Ta bort',
       variant: 'destructive',
-    })
-    if (!ok) return
-
-    try {
-      // Row-level pending state while the DELETE runs (the card renders a
-      // spinner for processingId): confirm-to-completion used to be dead air.
-      setProcessingId(id)
-      const response = await fetch(`/api/transactions/${id}`, { method: 'DELETE' })
-      if (!response.ok) {
-        const result = await response.json()
-        setProcessingId((prev) => (prev === id ? null : prev))
-        toast({
-          title: 'Kunde inte ta bort',
-          description: getErrorMessage(result, { context: 'transaction' }),
-          variant: 'destructive',
-        })
-        return
-      }
-      // Same exit path as booking/ignore: the row animates out over the
-      // 350ms window instead of vanishing with a hard jump, then the delayed
-      // filter actually removes it.
-      setExitingIds((prev) => new Set(prev).add(id))
-      // Drop the row from the batch selection immediately: leaving it there
-      // keeps the bulk bar counting (and acting on) a row that no longer
-      // exists once the timer removes it.
-      setSelectedIds((prev) => {
-        if (!prev.has(id)) return prev
-        const next = new Set(prev)
-        next.delete(id)
-        return next
-      })
-      // The realtime echo is not guaranteed for DELETE on a filtered
-      // subscription, so the pending badge must decrement locally.
-      if (transaction.is_business === null && !transaction.is_ignored) {
-        setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
-      }
-      toast({ title: t('deleted_title'), description: t('deleted_description') })
-      setTimeout(() => {
-        setTransactions((prev) => prev.filter((t) => t.id !== id))
-        setExitingIds((prev) => {
+    }, async () => {
+      try {
+        // Row-level pending state while the DELETE runs (the card renders a
+        // spinner for processingId): covers the exit window after the dialog
+        // closes.
+        setProcessingId(id)
+        const response = await fetch(`/api/transactions/${id}`, { method: 'DELETE' })
+        if (!response.ok) {
+          const result = await response.json()
+          setProcessingId((prev) => (prev === id ? null : prev))
+          toast({
+            title: 'Kunde inte ta bort',
+            description: getErrorMessage(result, { context: 'transaction' }),
+            variant: 'destructive',
+          })
+          return
+        }
+        // Same exit path as booking/ignore: the row animates out over the
+        // 350ms window instead of vanishing with a hard jump, then the delayed
+        // filter actually removes it.
+        setExitingIds((prev) => new Set(prev).add(id))
+        // Drop the row from the batch selection immediately: leaving it there
+        // keeps the bulk bar counting (and acting on) a row that no longer
+        // exists once the timer removes it.
+        setSelectedIds((prev) => {
+          if (!prev.has(id)) return prev
           const next = new Set(prev)
           next.delete(id)
           return next
         })
+        // The realtime echo is not guaranteed for DELETE on a filtered
+        // subscription, so the pending badge must decrement locally.
+        if (transaction.is_business === null && !transaction.is_ignored) {
+          setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+        }
+        toast({ title: t('deleted_title'), description: t('deleted_description') })
+        setTimeout(() => {
+          setTransactions((prev) => prev.filter((t) => t.id !== id))
+          setExitingIds((prev) => {
+            const next = new Set(prev)
+            next.delete(id)
+            return next
+          })
+          setProcessingId((prev) => (prev === id ? null : prev))
+        }, 350)
+      } catch {
         setProcessingId((prev) => (prev === id ? null : prev))
-      }, 350)
-    } catch {
-      setProcessingId((prev) => (prev === id ? null : prev))
-      toast({
-        title: 'Kunde inte ta bort',
-        description: t('delete_failed_description'),
-        variant: 'destructive',
-      })
-    }
+        toast({
+          title: 'Kunde inte ta bort',
+          description: t('delete_failed_description'),
+          variant: 'destructive',
+        })
+      }
+    })
   }
 
   function openEditTitleDialog(transaction: TransactionWithInvoice) {
@@ -2828,6 +2914,13 @@ export default function TransactionsPage() {
   }
 
   // Batch mode handlers
+
+  // Bounded pool for the per-row batch requests: parallel enough that a
+  // 20-row batch finishes in a few round trips instead of 20 serialized ones,
+  // bounded so 100 selected rows never fan out as 100 concurrent requests.
+  // The bulkbar counter ticks per completed row.
+  const BATCH_CONCURRENCY = 5
+
   function toggleBatchSelect(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev)
@@ -2878,23 +2971,30 @@ export default function TransactionsPage() {
 
     const deletedIds = new Set<string>()
     setBatchProgress({ done: 0, total: ids.length })
+    let completed = 0
+    const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
+      let deleted = false
+      try {
+        const response = await fetch(`/api/transactions/${id}`, { method: 'DELETE' })
+        deleted = response.ok
+      } catch {
+        deleted = false
+      }
+      completed++
+      setBatchProgress({ done: completed, total: ids.length })
+      return deleted
+    })
     let successes = 0
     const failures: string[] = []
-    for (let i = 0; i < ids.length; i++) {
-      try {
-        const response = await fetch(`/api/transactions/${ids[i]}`, { method: 'DELETE' })
-        if (response.ok) {
-          successes++
-          deletedIds.add(ids[i])
-        } else {
-          const tx = transactions.find((t) => t.id === ids[i])
-          failures.push(tx?.description || ids[i])
-        }
-      } catch {
-        failures.push(ids[i])
+    ids.forEach((id, i) => {
+      if (results[i]) {
+        successes++
+        deletedIds.add(id)
+      } else {
+        const tx = transactions.find((t) => t.id === id)
+        failures.push(tx?.description || id)
       }
-      setBatchProgress({ done: i + 1, total: ids.length })
-    }
+    })
     if (deletedIds.size > 0) {
       setTransactions((prev) => prev.filter((t) => !deletedIds.has(t.id)))
     }
@@ -2927,23 +3027,30 @@ export default function TransactionsPage() {
 
     const ignoredIds = new Set<string>()
     setBatchProgress({ done: 0, total: ids.length })
+    let completed = 0
+    const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
+      let ignored = false
+      try {
+        const res = await fetch(`/api/transactions/${id}/ignore`, { method: 'POST' })
+        ignored = res.ok
+      } catch {
+        ignored = false
+      }
+      completed++
+      setBatchProgress({ done: completed, total: ids.length })
+      return ignored
+    })
     let successes = 0
     const failures: string[] = []
-    for (let i = 0; i < ids.length; i++) {
-      try {
-        const res = await fetch(`/api/transactions/${ids[i]}/ignore`, { method: 'POST' })
-        if (res.ok) {
-          successes++
-          ignoredIds.add(ids[i])
-        } else {
-          const tx = transactions.find((t) => t.id === ids[i])
-          failures.push(tx?.description || ids[i])
-        }
-      } catch {
-        failures.push(ids[i])
+    ids.forEach((id, i) => {
+      if (results[i]) {
+        successes++
+        ignoredIds.add(id)
+      } else {
+        const tx = transactions.find((t) => t.id === id)
+        failures.push(tx?.description || id)
       }
-      setBatchProgress({ done: i + 1, total: ids.length })
-    }
+    })
     if (ignoredIds.size > 0) {
       setExitingIds((prev) => {
         const next = new Set(prev)
@@ -2986,30 +3093,112 @@ export default function TransactionsPage() {
   async function handleBatchCategorize(category: TransactionCategory, vatTreatment?: VatTreatment) {
     const ids = Array.from(selectedIds)
     setBatchProgress({ done: 0, total: ids.length })
-    let successes = 0
-    const failures: string[] = []
-    for (let i = 0; i < ids.length; i++) {
-      const result = await handleCategorize(ids[i], true, category, vatTreatment)
-      if (result) {
-        successes++
-      } else {
-        const tx = transactions.find((t) => t.id === ids[i])
-        failures.push(tx?.description || ids[i])
-      }
-      setBatchProgress({ done: i + 1, total: ids.length })
-    }
+    let completed = 0
+    const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
+      // silent: rows still animate out and decrement the count through
+      // finishBooking, but the narration is the single aggregate toast below
+      // instead of one "Bokförd" toast per row stacking over the list.
+      const outcome = await runCategorize({
+        id,
+        isBusiness: true,
+        category,
+        vatTreatment,
+        confirmNoMatch: false,
+        silent: true,
+      })
+      completed++
+      setBatchProgress({ done: completed, total: ids.length })
+      return outcome
+    })
     setBatchProgress(null)
     setShowBatchSelector(false)
-    if (failures.length === 0) {
-      toast({ title: 'Klart', description: `${successes} transaktioner bokförda` })
+    // Success is the server's 2xx (outcome.ok), not a non-null journal entry
+    // id: a flag-flip booking returns 200 with a null id and must not be
+    // narrated as "misslyckades" after finishBooking already animated it out.
+    const successCount = results.filter((r) => r.ok).length
+    const failedCount = ids.length - successCount
+    // One Ångra-alla for the whole batch: it runs the same storno endpoint as
+    // the per-row toast's Ångra, which requires a posted journal entry, so
+    // only rows that actually got one are undoable. A successful flag-flip
+    // row (ok, null id) has no verifikat to reverse.
+    const undoableIds = ids.filter((_, i) => results[i].ok && results[i].journalEntryId)
+    const undoAllAction =
+      undoableIds.length > 0 ? (
+        <ToastAction
+          altText={t('batch_undo_all_alt')}
+          onClick={() => void undoBatchCategorize(undoableIds)}
+        >
+          {t('batch_undo_all')}
+        </ToastAction>
+      ) : undefined
+    if (failedCount === 0) {
+      toast({
+        title: t('batch_done_title'),
+        description: t('batch_categorize_done_description', { count: successCount }),
+        action: undoAllAction,
+      })
     } else {
       toast({
-        title: 'Delvis klart',
-        description: `${successes} lyckades, ${failures.length} misslyckades: ${failures.slice(0, 3).join(', ')}${failures.length > 3 ? '...' : ''}`,
+        title: t('batch_partial_title'),
+        description: t('batch_categorize_partial_description', {
+          success: successCount,
+          failed: failedCount,
+        }),
         variant: 'destructive',
+        action: undoAllAction,
       })
     }
     exitBatchMode()
+  }
+
+  /**
+   * Ångra alla for a batch booking: storno-reverses every booked row through
+   * the same single undo endpoint as the per-row Ångra (undoCategorize), with
+   * the same bounded pool, then restores the rows into the inbox in one state
+   * patch and reports the outcome once.
+   */
+  async function undoBatchCategorize(ids: string[]) {
+    const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
+      try {
+        const res = await undoCategorize(id)
+        return res.ok
+      } catch {
+        return false
+      }
+    })
+    const undoneIds = new Set(ids.filter((_, i) => results[i]))
+    // Record the undos BEFORE patching state: any finishBooking timer still
+    // pending for these rows must see them as undone, or it would re-apply
+    // the booked shape over the restore below.
+    for (const undoneId of undoneIds) undoneIdsRef.current.add(undoneId)
+    if (undoneIds.size > 0) {
+      setTransactions((prev) =>
+        prev.map((tx) =>
+          undoneIds.has(tx.id)
+            ? {
+                ...tx,
+                is_business: null,
+                category: null as unknown as TransactionCategory,
+                journal_entry_id: null,
+              }
+            : tx,
+        ),
+      )
+      setTotalUncategorizedCount((prev) => (prev ?? 0) + undoneIds.size)
+    }
+    const failed = ids.length - undoneIds.size
+    if (failed === 0) {
+      toast({
+        title: t('undone_title'),
+        description: t('batch_undo_done_description', { count: undoneIds.size }),
+      })
+    } else {
+      toast({
+        title: t('batch_undo_partial_title'),
+        description: t('batch_undo_partial_description', { success: undoneIds.size, failed }),
+        variant: 'destructive',
+      })
+    }
   }
 
   function openMatchDialog(transaction: TransactionWithInvoice) {
