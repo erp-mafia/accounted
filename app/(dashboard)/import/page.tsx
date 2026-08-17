@@ -78,6 +78,7 @@ import type { BASAccount } from '@/types'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import dynamic from 'next/dynamic'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { FullArchiveDialog } from '@/components/import/FullArchiveDialog'
 import CloudBackupCard from '@/extensions/general/cloud-backup/components/CloudBackupCard'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 
@@ -2111,11 +2112,12 @@ const ShopifyPanel = getSettingsPanel('shopify')
 type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'bank' | 'sie' | 'underlag' | 'csv_data' | 'migration'
 
 export default function ImportPage() {
-  const { isSandbox } = useCompany()
+  const { isSandbox, role } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
   const [initialProvider, setInitialProvider] = useState<string | null>(null)
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
   const [sieHistoryOpen, setSieHistoryOpen] = useState(false)
   const [userId, setUserId] = useState('')
@@ -2163,14 +2165,18 @@ export default function ImportPage() {
     }
   }, [isSandbox, searchParams])
 
-  // Hash-based deep links: both live on the export tab; #sie-export opens
-  // the SIE dialog, #cloud-backup expands the cloud panel and scrolls to it.
+  // Hash-based deep links: all live on the export tab; #sie-export opens
+  // the SIE dialog, #full-archive opens the archive download dialog, and
+  // #cloud-backup expands the cloud panel and scrolls to it.
   useEffect(() => {
     if (typeof window === 'undefined') return
     const hash = window.location.hash
     if (hash === '#sie-export') {
       setView('export')
       setSieDialogOpen(true)
+    } else if (hash === '#full-archive') {
+      setView('export')
+      setArchiveDialogOpen(true)
     } else if (hash === '#cloud-backup') {
       setView('export')
       setCloudOpen(true)
@@ -2336,6 +2342,17 @@ export default function ImportPage() {
                   sub={t('export_sie_description')}
                   onClick={() => setSieDialogOpen(true)}
                 />
+                {/* The full-archive route is owner/admin-only (double-checked
+                    server-side), so the row hides for members and viewers
+                    instead of offering a download that can only 403. */}
+                {(role === 'owner' || role === 'admin') && (
+                  <ImportRow
+                    id="full-archive"
+                    title={t('export_archive_title')}
+                    sub={t('export_archive_description')}
+                    onClick={() => setArchiveDialogOpen(true)}
+                  />
+                )}
                 {hasCloudBackup && (
                   <ImportRow
                     title={t('cloud_row_title')}
@@ -2352,6 +2369,10 @@ export default function ImportPage() {
               )}
             </div>
           )}
+
+          {/* Full archive (SIE + reports + all documents) as the same kind of
+              small centered dialog as the SIE export below. */}
+          <FullArchiveDialog open={archiveDialogOpen} onOpenChange={setArchiveDialogOpen} />
 
           {/* SIE export as a small centered dialog (concept overlay convention) */}
           <Dialog open={sieDialogOpen} onOpenChange={setSieDialogOpen}>

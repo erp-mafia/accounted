@@ -47,6 +47,20 @@ describe('generateOpenApiSpec request contracts', () => {
     expect(schema?.required).toContain('customer_id')
   })
 
+  it('renders a z.preprocess field by its output schema and keeps it optional', () => {
+    // CreateSupplierSchema wraps email and default_expense_account in a
+    // preprocess pipe (empty string means absent). The callable sits on the
+    // pipe's input side, so describing the input would yield a required
+    // untyped field; the spec must show the output schema and not require it.
+    const op = operation('/api/v1/companies/{companyId}/suppliers', 'post')
+    const schema = op.requestBody?.content['application/json']?.schema
+    expect(schema?.properties?.email).toEqual({ type: 'string' })
+    expect(schema?.properties?.default_expense_account).toEqual({ type: 'string' })
+    expect(schema?.required).toContain('name')
+    expect(schema?.required).not.toContain('email')
+    expect(schema?.required).not.toContain('default_expense_account')
+  })
+
   it('renders multipart z.unknown() parts as binary file parts', () => {
     const op = operation('/api/v1/companies/{companyId}/documents', 'post')
     const schema = op.requestBody?.content['multipart/form-data']?.schema
