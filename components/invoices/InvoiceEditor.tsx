@@ -1775,8 +1775,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       ? ts('register')
       : t('review_and_create')
 
+  // min-w-0 on the root: DialogContent is display:grid; without it this grid
+  // item's min-width:auto lets the row grid's min-w force the whole column
+  // wider than small viewports and the dialog clips it.
   return (
-    <div className={bare ? undefined : 'mx-auto w-full max-w-2xl'}>
+    <div className={bare ? 'min-w-0' : 'mx-auto w-full min-w-0 max-w-2xl'}>
       <div className={bare ? 'px-6 pt-6 pr-10' : undefined}>
         <div className="flex items-center gap-3">
           {!bare && (
