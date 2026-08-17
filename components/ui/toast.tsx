@@ -93,6 +93,10 @@ const ToastTitle = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Title>,
   React.ComponentPropsWithoutRef<typeof ToastPrimitives.Title>
 >(({ className, ...props }, ref) => (
+  // Deliberately NOT data-ph-unmask: toast titles and descriptions
+  // interpolate user data (deadline titles, account names) at too many call
+  // sites to audit, so toasts stay masked in session replays. The variant
+  // styling still shows success/failure in the replay.
   <ToastPrimitives.Title
     ref={ref}
     className={cn("text-sm font-semibold", className)}

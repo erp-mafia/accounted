@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { parseBankFile, generateFileHash, detectFileFormat } from '@/lib/import/bank-file/parser'
+import { detectSkattekontoFile } from '@/lib/import/skattekonto-file/parser'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -55,6 +56,14 @@ export const POST = withRouteContext(
             importedAt: existingImport.created_at,
           },
         })
+      }
+
+      // A skattekontoutdrag is not a bank statement: its rows belong on the
+      // skattekonto (1630), not on a bank account. Redirect the user to the
+      // dedicated importer. An explicit format override still forces a bank
+      // parse as the escape hatch.
+      if (!formatOverride && detectSkattekontoFile(content, file.name)) {
+        return errorResponseFromCode('BANK_FILE_SKATTEKONTO_DETECTED', opLog, { requestId })
       }
 
       const detectedFormat = formatOverride

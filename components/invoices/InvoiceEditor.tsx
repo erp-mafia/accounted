@@ -31,6 +31,7 @@ import {
 } from '@/components/invoices/line-vat-rates'
 import { AttnLine } from '@/components/ui/attn-line'
 import { sortArticles } from '@/lib/articles/sort'
+import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags, Copy } from 'lucide-react'
@@ -62,7 +63,9 @@ import {
   ROT_MAX,
   RUT_MAX,
   computeDeduction,
+  deductionTypeForWorkType,
 } from '@/lib/invoices/rot-rut-rules'
+import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
@@ -98,7 +101,7 @@ export type InvoiceEditorProps = (
 // Subset of Article fields the line picker needs to pre-fill a row.
 type ArticleOption = Pick<
   Article,
-  'id' | 'article_number' | 'name' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency'
+  'id' | 'article_number' | 'name' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
 >
 
 function RequiredMark() {
@@ -516,7 +519,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (!company?.id) return
     const { data } = await supabase
       .from('articles')
-      .select('id, article_number, name, unit, price_excl_vat, vat_rate, revenue_account, currency')
+      .select('id, article_number, name, unit, price_excl_vat, vat_rate, revenue_account, currency, housework_type')
       .eq('company_id', company.id)
       .eq('active', true)
     // Numeric-aware order by article number ('2' before '10', unnumbered last):
@@ -565,6 +568,31 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // The account override rides along regardless of rate; the engine ignores it
     // for reverse-charge/export and validates it against the chart of accounts.
     setValue(`items.${index}.revenue_account`, a.revenue_account ?? null, { shouldDirty: true })
+    // ROT/RUT: the article's housework_type (Skatteverket arbetstypskod)
+    // decides both the line's deduction kind and its work type. An article
+    // WITHOUT one re-defaults the row to no deduction, the same overwrite
+    // semantics as description/price above: a material article picked onto a
+    // previously RUT-flagged row must not keep claiming a deduction on
+    // material. Proformas/delivery notes/self-billing have no deduction model
+    // (their rows keep no ⋮ menu either), so they are left untouched.
+    if (isInvoiceDoc) {
+      const kind = deductionTypeForWorkType(a.housework_type)
+      setValue(`items.${index}.deduction_type`, kind, { shouldDirty: true })
+      setValue(`items.${index}.work_type`, kind ? a.housework_type : null, { shouldDirty: true })
+      if (kind) {
+        // Same rule as the manual ⋮ menu: ROT/RUT och periodisering
+        // kombineras aldrig på samma rad; avdraget vinner.
+        if (getValues(`items.${index}.accrual_balance_account`) != null) {
+          setValue(`items.${index}.accrual_period_start`, null)
+          setValue(`items.${index}.accrual_period_end`, null)
+          setValue(`items.${index}.accrual_balance_account`, null)
+        }
+      } else {
+        setValue(`items.${index}.labor_hours`, null)
+        setValue(`items.${index}.housing_designation`, null)
+        setValue(`items.${index}.apartment_number`, null)
+      }
+    }
     // Pre-fill the invoice's (single) currency from the article ONLY on the
     // first priced line, and only while the user hasn't chosen a currency
     // themselves. Never flip an in-progress invoice's currency on a later pick:
@@ -609,6 +637,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           // The typed unit price is in the invoice's currency: without this an
           // EUR invoice line becomes an SEK article with the EUR number.
           currency: getValues('currency'),
+          // Round-trip the ROT/RUT arbetstypskod so the saved article
+          // pre-fills the deduction the next time it is picked.
+          housework_type: item.deduction_type ? item.work_type ?? null : null,
         }),
       })
       const result = await response.json()
@@ -875,6 +906,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const deductionTotal = Math.round((deductionByKind.rot + deductionByKind.rut) * 100) / 100
   const hasAnyDeduction = deductionTotal > 0
   const hasAnyRotLine = isInvoiceDoc && watchItems.some((i) => i.deduction_type === 'rot')
+  // The kundkort's personnummer reaches this component as ciphertext (direct
+  // table read) or as the masked display form (rows from the API), so the
+  // editor can only know THAT the customer has one, never render it. Presence
+  // is enough: the server falls back to it when the field is left empty, so
+  // the field stops being required and the hint says where the number will
+  // come from. The undecryptable placeholder is not presence.
+  const customerHasPersonalNumber = Boolean(
+    selectedCustomer?.personal_number &&
+      selectedCustomer.personal_number !== UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
+  )
 
   // Öresavrundning live preview: same helper as the PDF/email, so the summary
   // shows exactly what the customer will see. Display-only; the saved invoice
@@ -1203,6 +1244,24 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }
 
+  // A failed Zod validation is otherwise invisible: handleSubmit never reaches
+  // onSubmit, the buttons stay enabled and look normal, and the only signal is
+  // inline error text the user may have scrolled past. Toast + scroll so a
+  // blocked "Granska & skapa" / "Spara som utkast" never reads as a dead button.
+  function onInvalidSubmit(_errors: unknown, event?: React.BaseSyntheticEvent) {
+    toast({
+      title: t('validation_toast_title'),
+      description: t('validation_toast_description'),
+      variant: 'destructive',
+    })
+    const root = (event?.target as HTMLElement | null)?.closest('form')
+    // The inline error paragraphs render on the next React commit; scroll after.
+    setTimeout(() => {
+      const firstError = (root ?? document).querySelector('p.text-destructive')
+      firstError?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 100)
+  }
+
   // "Spara som utkast": save an unnumbered draft (save_as_draft) without the
   // review dialog. The invoice gets no F-number and fires no invoice.created
   // until the user opens it and clicks "Granska & skapa" (finalize). Same
@@ -1499,7 +1558,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         </div>
       )}
 
-      <form onSubmit={handleSubmit(onSubmit)} className={bare ? 'space-y-6' : 'space-y-6 pb-28 md:pb-0'}>
+      <form onSubmit={handleSubmit(onSubmit, onInvalidSubmit)} className={bare ? 'space-y-6' : 'space-y-6 pb-28 md:pb-0'}>
         <div className="grid gap-6 lg:grid-cols-3 lg:items-start">
           {/* Main content */}
           <div className="lg:col-span-2 space-y-6">
@@ -1737,22 +1796,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                             name={`items.${index}.article_id`}
                             control={control}
                             render={({ field }) => (
-                              <Select
-                                value={field.value ?? 'none'}
-                                onValueChange={(v) => applyArticle(index, v)}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue placeholder={t('article_placeholder')} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="none">{t('article_free_text')}</SelectItem>
-                                  {articles.map((a) => (
-                                    <SelectItem key={a.id} value={a.id}>
-                                      {a.article_number ? `${a.article_number}: ${a.name}` : a.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
+                              <ArticleCombobox
+                                value={field.value ?? null}
+                                articles={articles}
+                                onChange={(v) => applyArticle(index, v)}
+                                freeTextLabel={t('article_free_text')}
+                                placeholder={t('article_placeholder')}
+                                emptyLabel={t('article_search_empty')}
+                                ariaLabel={t('article_label')}
+                              />
                             )}
                           />
                         </div>
@@ -1803,6 +1855,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                             className="text-right tabular-nums"
                             {...register(`items.${index}.quantity`, { valueAsNumber: true })}
                           />
+                          {errors.items?.[index]?.quantity && (
+                            <p className="text-sm text-destructive">
+                              {errors.items[index].quantity?.message}
+                            </p>
+                          )}
                         </div>
                         <div className="space-y-1 md:col-span-2 md:space-y-2">
                           <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('unit_label')}</Label>
@@ -1824,6 +1881,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               </Select>
                             )}
                           />
+                          {errors.items?.[index]?.unit && (
+                            <p className="text-sm text-destructive">
+                              {errors.items[index].unit?.message}
+                            </p>
+                          )}
                         </div>
                         <div className="space-y-1 md:col-span-2 md:space-y-2">
                           <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('unit_price_label')}</Label>
@@ -2159,7 +2221,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 <CardContent className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="deduction_personnummer">
-                      {t('deduction_personnummer_label')}<RequiredMark />
+                      {t('deduction_personnummer_label')}
+                      {!(initial?.deduction_personnummer_last4 || customerHasPersonalNumber) && <RequiredMark />}
                     </Label>
                     <Input
                       id="deduction_personnummer"
@@ -2169,10 +2232,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     />
                     <p className="text-xs text-muted-foreground">
                       {/* Stored pn exists only as ciphertext: an empty field on
-                          edit keeps it server-side instead of failing validation. */}
+                          edit keeps it server-side instead of failing validation.
+                          Otherwise, a kundkort with a personnummer covers an
+                          empty field via the server-side fallback. */}
                       {initial?.deduction_personnummer_last4
                         ? t('deduction_personnummer_kept_hint', { last4: initial.deduction_personnummer_last4 })
-                        : t('deduction_personnummer_hint')}
+                        : customerHasPersonalNumber
+                          ? t('deduction_personnummer_customer_hint')
+                          : t('deduction_personnummer_hint')}
                     </p>
                   </div>
                   {hasAnyRotLine && (
@@ -2499,7 +2566,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   size="lg"
                   disabled={isSubmitting || isSavingDraft || isFormSubmitting || !canWrite}
                   title={!canWrite ? t('viewer_disabled_tooltip') : t('save_as_draft_tooltip')}
-                  onClick={handleSubmit(saveDraftData)}
+                  onClick={handleSubmit(saveDraftData, onInvalidSubmit)}
                 >
                   {isSavingDraft ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   {t('save_as_draft')}
@@ -2527,7 +2594,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   type="button"
                   variant="outline"
                   disabled={isSubmitting || isSavingDraft || isFormSubmitting || !canWrite}
-                  onClick={handleSubmit(saveDraftData)}
+                  onClick={handleSubmit(saveDraftData, onInvalidSubmit)}
                 >
                   {isSavingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : t('save_as_draft_short')}
                 </Button>
@@ -2645,7 +2712,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t('send_now_dialog_title')}</DialogTitle>
-            <DialogDescription>
+            {/* data-ph-mask: the customer email is user data */}
+            <DialogDescription data-ph-mask="">
               {t('send_now_dialog_description', { email: selectedCustomer?.email ?? '' })}
             </DialogDescription>
           </DialogHeader>

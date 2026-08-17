@@ -116,7 +116,7 @@ export function TeamPanel() {
   }
 
   return (
-    <SettingsGroup label={teamName || t('team_fallback')}>
+    <SettingsGroup label={<span data-ph-mask="">{teamName || t('team_fallback')}</span>}>
       {/* Read-only member roster: flat hairline rows, no cards. */}
       {members.map((member) => (
         <div

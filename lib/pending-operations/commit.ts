@@ -1554,6 +1554,26 @@ async function commitCreateInvoice(
     }
   }
 
+  // Drift/tamper gate for staged article references: the FK on
+  // invoice_items.article_id only proves the article exists, not that it
+  // belongs to THIS company, so scope-check here like revenue_account above.
+  const stagedArticleIds = Array.from(
+    new Set(items.map((i) => i.article_id).filter((a): a is string => !!a)),
+  )
+  if (stagedArticleIds.length > 0) {
+    const { data: articleRows, error: articleError } = await supabase
+      .from('articles')
+      .select('id')
+      .eq('company_id', companyId)
+      .in('id', stagedArticleIds)
+    if (articleError) return { error: articleError.message, status: 500 }
+    const foundArticleIds = new Set((articleRows ?? []).map((a: { id: string }) => a.id))
+    const missingArticleId = stagedArticleIds.find((a) => !foundArticleIds.has(a))
+    if (missingArticleId) {
+      return { error: `Artikel ${missingArticleId} finns inte i företaget`, status: 400 }
+    }
+  }
+
   const total = subtotal + vatAmount
   const currency = ((params.currency as string) || 'SEK') as Currency
   const invoiceDate = (params.invoice_date as string) || new Date().toISOString().split('T')[0]

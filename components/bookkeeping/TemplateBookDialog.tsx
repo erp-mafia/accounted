@@ -170,7 +170,8 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
     <Dialog open={open} onOpenChange={(next) => !submitting && onOpenChange(next)}>
       <DialogContent className="sm:min-w-[460px] sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="font-display text-lg tracking-tight">
+          {/* data-ph-mask: the template name is user data */}
+          <DialogTitle data-ph-mask="" className="font-display text-lg tracking-tight">
             {selected ? selected.name : t('tpl_dialog_title')}
           </DialogTitle>
         </DialogHeader>

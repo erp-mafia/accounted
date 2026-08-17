@@ -303,6 +303,9 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder={autoCorrectionDescription(entry.description)}
+            // ph-no-capture: the placeholder echoes the posted entry's
+            // description, and replay masking covers values, not attributes.
+            className="ph-no-capture"
           />
           <p className="text-xs text-muted-foreground">
             Texten på den nya verifikationen. Ändra den om originalets beskrivning inte längre

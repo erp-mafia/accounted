@@ -334,6 +334,11 @@ export default function NewSupplierInvoiceForm({
   // JournalEntryForm. defaultDims is the invoice-level default bag; per-item
   // bags live on the form's items and merge over it server-side.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
+  // Icke momsregistrerad verksamhet has no right to deduct input VAT: the
+  // moms controls disappear and every line books at 0 % (the gross amount IS
+  // the cost). Defaults true so registered companies keep the 25 % prefill
+  // while /api/settings is still in flight.
+  const [vatRegistered, setVatRegistered] = useState(true)
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>({})
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [periodsLoaded, setPeriodsLoaded] = useState(false)
@@ -579,6 +584,9 @@ export default function NewSupplierInvoiceForm({
                 // time) and a silent default misbooks: leave empty so the user
                 // (or the supplier default) makes the call.
                 account_number: '',
+                // Deliberately unconditional: for icke momsregistrerade the
+                // zeroing effect below grosses the net amount up by this rate
+                // before forcing it to 0, so the rate must arrive intact.
                 vat_rate: vatRateFromAi(li.vatRate),
                 accrual_period_start: withAccrual ? (sps as string) : undefined,
                 accrual_period_end: withAccrual ? (spe as string) : undefined,
@@ -812,6 +820,9 @@ export default function NewSupplierInvoiceForm({
       }
       if (typeof data?.ore_rounding === 'boolean') setOreRounding(data.ore_rounding)
       setDimensionsEnabled(data?.dimensions_enabled === true)
+      // Only an explicit false gates: a missing column or failed fetch keeps
+      // the registered-company behavior.
+      if (data?.vat_registered === false) setVatRegistered(false)
     } catch {
       // Default to enskild_firma / accrual, dimension affordances hidden
     }
@@ -845,7 +856,7 @@ export default function NewSupplierInvoiceForm({
     // (inferVatTreatment) expect a number.
     const acct = accounts.find((a) => a.account_number === accountNumber)
     const defaultRate = acct?.default_vat_rate == null ? null : Number(acct.default_vat_rate)
-    if (!watchedReverseCharge && defaultRate != null && Number.isFinite(defaultRate)) {
+    if (vatRegistered && !watchedReverseCharge && defaultRate != null && Number.isFinite(defaultRate)) {
       setValue(`items.${index}.vat_rate`, defaultRate, { shouldDirty: true })
     }
     // Särskild löneskatt only applies to 741x pension premiums: leaving the
@@ -881,6 +892,31 @@ export default function NewSupplierInvoiceForm({
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedReverseCharge])
+
+  // Force every line to 0 % moms for icke momsregistrerade companies: the
+  // default line, AI prefills and konto defaults all assume 25 % otherwise.
+  // Re-runs after the inbox prefill lands so a late extraction can't
+  // reintroduce a rate.
+  //
+  // The amount is grossed up in the same pass: an amount paired with a
+  // non-zero rate is a NET amount (AI line totals are exkl moms, and the
+  // visible column said "Belopp (exkl.)" while the rate stood). For a company
+  // with no deduction right the moms is part of the cost, so net at 25 %
+  // becomes gross at 0 %; zeroing the rate alone would understate both the
+  // expense and 2440 by exactly the moms.
+  useEffect(() => {
+    if (vatRegistered) return
+    const items = getValues('items') ?? []
+    items.forEach((item, index) => {
+      if (item.vat_rate !== 0) {
+        if (item.amount) {
+          setValue(`items.${index}.amount`, roundOre(item.amount * (1 + item.vat_rate)))
+        }
+        setValue(`items.${index}.vat_rate`, 0)
+      }
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vatRegistered, hasPrefilled])
 
   function isAccrualOpen(index: number): boolean {
     return watchedItems?.[index]?.accrual_balance_account != null
@@ -1055,6 +1091,11 @@ export default function NewSupplierInvoiceForm({
       />
     )
   }
+
+  // Reverse charge keeps its rate controls even for icke momsregistrerade
+  // (self-assessment is a separate obligation from deduction); everything
+  // else moms-related disappears when the company isn't VAT-registered.
+  const vatColsVisible = vatRegistered || watchedReverseCharge
 
   const itemTotals = (watchedItems || []).map((item) => {
     const lineTotal = Math.round((item.amount || 0) * 100) / 100
@@ -1889,7 +1930,7 @@ export default function NewSupplierInvoiceForm({
               size="sm"
               className="w-full sm:w-auto"
               onClick={() =>
-                append({ description: '', amount: 0, account_number: '', vat_rate: 0.25, reverse_charge_rate: 0.25 })
+                append({ description: '', amount: 0, account_number: '', vat_rate: vatRegistered ? 0.25 : 0, reverse_charge_rate: 0.25 })
               }
             >
               <Plus className="mr-2 h-4 w-4" />
@@ -2017,9 +2058,13 @@ export default function NewSupplierInvoiceForm({
                   <tr className="border-b text-left">
                     <th className="pb-2 w-28">{t('col_account')}</th>
                     <th className="pb-2">{t('col_description')}</th>
-                    <th className="pb-2 w-32">{t('col_amount_excl')}</th>
-                    <th className="pb-2 w-36">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</th>
-                    <th className="pb-2 w-24 text-right">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</th>
+                    <th className="pb-2 w-32">{vatColsVisible ? t('col_amount_excl') : t('col_amount')}</th>
+                    {vatColsVisible && (
+                      <>
+                        <th className="pb-2 w-36">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</th>
+                        <th className="pb-2 w-24 text-right">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</th>
+                      </>
+                    )}
                     <th className="pb-2 w-8"></th>
                   </tr>
                 </thead>
@@ -2072,28 +2117,32 @@ export default function NewSupplierInvoiceForm({
                           )}
                         />
                       </td>
-                      <td className="py-2 pr-2">
-                        {watchedReverseCharge ? (
-                          <Controller
-                            name={`items.${index}.reverse_charge_rate`}
-                            control={control}
-                            render={({ field: f }) => (
-                              <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                      {vatColsVisible && (
+                        <>
+                          <td className="py-2 pr-2">
+                            {watchedReverseCharge ? (
+                              <Controller
+                                name={`items.${index}.reverse_charge_rate`}
+                                control={control}
+                                render={({ field: f }) => (
+                                  <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                                )}
+                              />
+                            ) : (
+                              <Controller
+                                name={`items.${index}.vat_rate`}
+                                control={control}
+                                render={({ field: f }) => (
+                                  <VatRateCell value={f.value} onChange={f.onChange} />
+                                )}
+                              />
                             )}
-                          />
-                        ) : (
-                          <Controller
-                            name={`items.${index}.vat_rate`}
-                            control={control}
-                            render={({ field: f }) => (
-                              <VatRateCell value={f.value} onChange={f.onChange} />
-                            )}
-                          />
-                        )}
-                      </td>
-                      <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
-                        {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
-                      </td>
+                          </td>
+                          <td className="py-2 pr-2 text-right tabular-nums text-muted-foreground">
+                            {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
+                          </td>
+                        </>
+                      )}
                       <td className="py-2 pt-3">
                         <div className="flex items-center">
                           {dimensionsEnabled && (
@@ -2142,21 +2191,21 @@ export default function NewSupplierInvoiceForm({
                     </tr>
                     {canUseAccrual && isAccrualOpen(index) && (
                       <tr className={cn(dimensionsEnabled && isDimOpen(index) ? 'border-0' : 'border-b last:border-0')}>
-                        <td colSpan={6} className="pb-3">
+                        <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                           {renderAccrualPanel(index, `accrual-desktop-${index}`)}
                         </td>
                       </tr>
                     )}
                     {dimensionsEnabled && isDimOpen(index) && (
                       <tr className={cn(slpRowVisible(index) ? 'border-0' : 'border-b last:border-0')}>
-                        <td colSpan={6} className="pb-3">
+                        <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                           {renderDimensionsPanel(index)}
                         </td>
                       </tr>
                     )}
                     {slpRowVisible(index) && (
                       <tr className="border-b last:border-0">
-                        <td colSpan={6} className="pb-3">
+                        <td colSpan={vatColsVisible ? 6 : 4} className="pb-3">
                           {renderSlpPanel(index)}
                         </td>
                       </tr>
@@ -2243,9 +2292,9 @@ export default function NewSupplierInvoiceForm({
                       )}
                     />
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className={vatColsVisible ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
                     <div className="space-y-2">
-                      <Label className="text-xs text-muted-foreground">{t('col_amount_excl')}</Label>
+                      <Label className="text-xs text-muted-foreground">{vatColsVisible ? t('col_amount_excl') : t('col_amount')}</Label>
                       <Controller
                         name={`items.${index}.amount`}
                         control={control}
@@ -2262,33 +2311,37 @@ export default function NewSupplierInvoiceForm({
                         )}
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</Label>
-                      {watchedReverseCharge ? (
-                        <Controller
-                          name={`items.${index}.reverse_charge_rate`}
-                          control={control}
-                          render={({ field: f }) => (
-                            <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
-                          )}
-                        />
-                      ) : (
-                        <Controller
-                          name={`items.${index}.vat_rate`}
-                          control={control}
-                          render={({ field: f }) => (
-                            <VatRateCell value={f.value} onChange={f.onChange} />
-                          )}
-                        />
-                      )}
+                    {vatColsVisible && (
+                      <div className="space-y-2">
+                        <Label className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat_rate') : t('col_vat_rate')}</Label>
+                        {watchedReverseCharge ? (
+                          <Controller
+                            name={`items.${index}.reverse_charge_rate`}
+                            control={control}
+                            render={({ field: f }) => (
+                              <RcRateSelect value={f.value ?? 0.25} onChange={f.onChange} />
+                            )}
+                          />
+                        ) : (
+                          <Controller
+                            name={`items.${index}.vat_rate`}
+                            control={control}
+                            render={({ field: f }) => (
+                              <VatRateCell value={f.value} onChange={f.onChange} />
+                            )}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {vatColsVisible && (
+                    <div className="pt-1 border-t flex items-center justify-between">
+                      <span className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</span>
+                      <span className="tabular-nums text-muted-foreground">
+                        {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
+                      </span>
                     </div>
-                  </div>
-                  <div className="pt-1 border-t flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">{watchedReverseCharge ? t('col_rc_vat') : t('col_vat')}</span>
-                    <span className="tabular-nums text-muted-foreground">
-                      {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
-                    </span>
-                  </div>
+                  )}
                   {canUseAccrual && isAccrualOpen(index) &&
                     renderAccrualPanel(index, `accrual-mobile-${index}`)}
                   {dimensionsEnabled && isDimOpen(index) && renderDimensionsPanel(index)}
@@ -2321,16 +2374,20 @@ export default function NewSupplierInvoiceForm({
 
             {/* Computed totals */}
             <div className="mt-4 pt-4 border-t space-y-2">
-              <div className="flex justify-between sm:justify-end sm:gap-8">
-                <span className="text-muted-foreground">{t('net_excl_vat')}</span>
-                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(subtotal, watchedCurrency)}</span>
-              </div>
-              <div className="flex justify-between sm:justify-end sm:gap-8">
-                <span className="text-muted-foreground">
-                  {watchedReverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}
-                </span>
-                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(totalVat, watchedCurrency)}</span>
-              </div>
+              {vatColsVisible && (
+                <>
+                  <div className="flex justify-between sm:justify-end sm:gap-8">
+                    <span className="text-muted-foreground">{t('net_excl_vat')}</span>
+                    <span className="tabular-nums sm:w-32 text-right">{formatCurrency(subtotal, watchedCurrency)}</span>
+                  </div>
+                  <div className="flex justify-between sm:justify-end sm:gap-8">
+                    <span className="text-muted-foreground">
+                      {watchedReverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}
+                    </span>
+                    <span className="tabular-nums sm:w-32 text-right">{formatCurrency(totalVat, watchedCurrency)}</span>
+                  </div>
+                </>
+              )}
               {displayRounding.applies && (
                 <div className="flex justify-between sm:justify-end sm:gap-8">
                   <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
@@ -2598,7 +2655,8 @@ export default function NewSupplierInvoiceForm({
               <AlertCircle className="h-5 w-5 text-destructive" />
               {t('duplicate_dialog_title')}
             </DialogTitle>
-            <DialogDescription>{conflict?.message}</DialogDescription>
+            {/* data-ph-mask: the conflict message carries the invoice number */}
+            <DialogDescription data-ph-mask="">{conflict?.message}</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">
             {conflict?.existing && (

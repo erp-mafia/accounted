@@ -381,7 +381,7 @@ export default function HelpPage() {
           <EmptyState
             icon={Search}
             title={t('no_results_title')}
-            description={t('no_results', { query: searchQuery })}
+            description={<span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>}
           />
         ) : (
           filteredTerms.map((term) => (

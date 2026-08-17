@@ -579,7 +579,7 @@ export function AccountPickerDialog({
     <Dialog open={open && !progressOpen} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Välj konton att synka: {bankName}</DialogTitle>
+          <DialogTitle>Välj konton att synka: <span data-ph-mask="">{bankName}</span></DialogTitle>
           <DialogDescription>
             {isInitialSelection
               ? 'Banken har gett åtkomst till följande konton. Avmarkera de konton du inte vill synka transaktioner från, och välj vilket bokföringskonto varje konto ska bokföras mot. Inga transaktioner hämtas innan du sparar.'

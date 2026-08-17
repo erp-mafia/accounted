@@ -2373,7 +2373,7 @@ function PurchaseRow({
           {/* A chip only when the row deviates: here, when we can actually
               tell the user where to go. */}
           {purchase.portal && (
-            <Badge variant="outline" className="text-[10px] font-normal">
+            <Badge data-ph-mask="" variant="outline" className="text-[10px] font-normal">
               {purchase.portal.vendor}
             </Badge>
           )}

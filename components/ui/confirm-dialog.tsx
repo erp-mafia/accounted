@@ -66,11 +66,15 @@ export function ConfirmDialog({
     <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
       <DialogContent className="sm:min-w-[460px] sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="font-display text-lg tracking-tight">
+          {/* data-ph-mask: confirm dialogs describe the object being acted
+              on (convention 10), so title and description are user data in
+              session replays, not chrome. Mask wins over the primitives'
+              own data-ph-unmask. */}
+          <DialogTitle data-ph-mask="" className="font-display text-lg tracking-tight">
             {title}
           </DialogTitle>
           {description && (
-            <DialogDescription className="text-[13px] leading-relaxed">
+            <DialogDescription data-ph-mask="" className="text-[13px] leading-relaxed">
               {description}
             </DialogDescription>
           )}

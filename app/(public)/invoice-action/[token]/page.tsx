@@ -186,7 +186,8 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
               Fakturainformation
             </CardTitle>
             <CardDescription>
-              Till: {invoice.customerName}
+              {/* data-ph-mask: the customer name is user data */}
+              Till: <span data-ph-mask="">{invoice.customerName}</span>
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

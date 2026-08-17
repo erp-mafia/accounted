@@ -1713,7 +1713,7 @@ export default function JournalEntryForm({
                   {line.dimensions &&
                     Object.keys(line.dimensions).length > 0 &&
                     (line.account_number || line.debit_amount || line.credit_amount) && (
-                      <Badge variant="outline" className="mt-1 font-mono text-[11px] font-normal">
+                      <Badge data-ph-mask="" variant="outline" className="mt-1 font-mono text-[11px] font-normal">
                         {compactDims(line.dimensions)}
                       </Badge>
                     )}

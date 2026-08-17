@@ -35,8 +35,10 @@ export interface BadgeProps
     VariantProps<typeof badgeVariants> {}
 
 function Badge({ className, variant, ...props }: BadgeProps) {
+  // data-ph-unmask: status chips are static i18n chrome in session replays;
+  // a badge carrying user data adds data-ph-mask at the call site.
   return (
-    <div className={cn(badgeVariants({ variant }), className)} {...props} />
+    <div data-ph-unmask="" className={cn(badgeVariants({ variant }), className)} {...props} />
   )
 }
 
