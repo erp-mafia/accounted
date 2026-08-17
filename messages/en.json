@@ -674,6 +674,7 @@
     "type_convert_invoice": "Convert invoice",
     "type_attach_document_to_transaction": "Attach document",
     "type_link_document_to_voucher": "Link document",
+    "type_link_documents_to_vouchers": "Link documents (bulk)",
     "type_link_invoice_voucher": "Link invoice",
     "type_link_supplier_invoice_voucher": "Link supplier invoice",
     "type_link_transaction_journal_entry": "Link transaction",

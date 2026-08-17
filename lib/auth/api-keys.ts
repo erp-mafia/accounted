@@ -241,6 +241,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_document_content:            'transactions:read',
   gnubok_attach_document_to_transaction:  'transactions:write',
   gnubok_link_document_to_voucher:        'bookkeeping:write',
+  gnubok_link_documents_to_vouchers:      'bookkeeping:write',
   // Körjournal (mileage): trip log reads/writes are payroll surface
   // (milersättning, 7331); booking the verifikat is a journal write.
   gnubok_list_mileage_trips:              'payroll:read',

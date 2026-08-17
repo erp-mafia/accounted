@@ -10742,6 +10742,273 @@ export const tools: McpTool[] = [
       )
     },
   },
+  {
+    name: 'gnubok_link_documents_to_vouchers',
+    title: 'Bulk-Link Documents to Vouchers',
+    description: 'Bulk receipt migration: stage up to 300 document-to-verifikat links as ONE approval, addressed by voucher_series/voucher_number/fiscal_year (server resolves the UUID). Returns per-row hit/miss, so a wrong fiscal_year shows before approval. Only resolved rows are staged.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        links: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 300,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              document_id: { type: 'string', description: 'UUID of the document_attachments row' },
+              voucher_series: { type: 'string', minLength: 1, maxLength: 10, description: 'Voucher series letter, e.g. "A"' },
+              voucher_number: { type: 'integer', minimum: 1, description: 'Voucher number within the series and fiscal year' },
+              fiscal_year: { type: 'integer', minimum: 2000, maximum: 2100, description: 'Calendar year of the fiscal period (matched against fiscal_periods.period_start), e.g. 2025' },
+              journal_entry_line_id: { type: 'string', description: 'Optional UUID to pin the doc to a specific debit/credit line' },
+            },
+            required: ['document_id', 'voucher_series', 'voucher_number', 'fiscal_year'],
+          },
+        },
+        idempotency_key: { type: 'string', description: 'Optional UUID to dedupe retries' },
+        dry_run: { type: 'boolean', description: 'Preview without staging' },
+      },
+      required: ['links'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    // Search-only: a one-off bulk migration tool does not belong in the default
+    // catalog, which every session pays for in context. The everyday
+    // gnubok_link_document_to_voucher stays default; this one is discovered via
+    // gnubok_search_tools when a migration job actually needs it. Keeping it
+    // default pushed the tools/list projection past the 58.5K token ceiling
+    // (payload-size.bench.test.ts), whose own guidance is to prefer opt-in
+    // search over raising the budget.
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const rawLinks = args.links as Array<{
+        document_id: string
+        voucher_series: string
+        voucher_number: number
+        fiscal_year: number
+        journal_entry_line_id?: string
+      }>
+      if (!Array.isArray(rawLinks) || rawLinks.length === 0) throw new Error('links is required (non-empty)')
+      if (rawLinks.length > 300) throw new Error('links: max 300 per call')
+      for (const [i, l] of rawLinks.entries()) {
+        if (!l.document_id) throw new Error(`links[${i}]: document_id is required`)
+        if (!l.voucher_series) throw new Error(`links[${i}]: voucher_series is required`)
+        if (!Number.isInteger(l.voucher_number) || l.voucher_number < 1) {
+          throw new Error(`links[${i}]: voucher_number must be a positive integer`)
+        }
+        if (!Number.isInteger(l.fiscal_year)) throw new Error(`links[${i}]: fiscal_year must be an integer`)
+      }
+
+      // ── Resolve fiscal_year → fiscal_period_id. A "fiscal_year" here means
+      //    the calendar year the period STARTS in; broken (non-calendar)
+      //    fiscal years or a company with >1 period starting the same year
+      //    are surfaced as a per-row miss rather than guessed at.
+      const { data: periods, error: periodsError } = await supabase
+        .from('fiscal_periods')
+        .select('id, period_start, period_end')
+        .eq('company_id', companyId)
+      if (periodsError) throw new Error(`Database error: ${periodsError.message}`)
+
+      const periodsByYear = new Map<number, Array<{ id: string; period_start: string; period_end: string }>>()
+      for (const p of periods ?? []) {
+        const year = new Date(p.period_start as string).getUTCFullYear()
+        const bucket = periodsByYear.get(year) ?? []
+        bucket.push(p as { id: string; period_start: string; period_end: string })
+        periodsByYear.set(year, bucket)
+      }
+
+      // ── Batch-fetch documents.
+      const documentIds = [...new Set(rawLinks.map((l) => l.document_id))]
+      const { data: docs, error: docsError } = await supabase
+        .from('document_attachments')
+        .select('id, file_name, mime_type, journal_entry_id')
+        .in('id', documentIds)
+        .eq('company_id', companyId)
+      if (docsError) throw new Error(`Database error: ${docsError.message}`)
+      const docsById = new Map((docs ?? []).map((d) => [d.id as string, d as {
+        id: string; file_name: string; mime_type: string; journal_entry_id: string | null
+      }]))
+
+      // ── Batch-fetch candidate journal entries: every resolved period id ×
+      //    every series named in the payload, then match tuples in JS (the
+      //    unique key is (company_id, fiscal_period_id, voucher_series,
+      //    voucher_number); see migration 20260402100000).
+      const resolvedPeriodIds = [...new Set(
+        rawLinks.flatMap((l) => (periodsByYear.get(l.fiscal_year) ?? []).map((p) => p.id))
+      )]
+      const seriesList = [...new Set(rawLinks.map((l) => l.voucher_series))]
+      const voucherNumbers = [...new Set(rawLinks.map((l) => l.voucher_number))]
+      type CandidateJe = {
+        id: string; entry_date: string; description: string
+        voucher_series: string | null; voucher_number: number | null; status: string; fiscal_period_id: string
+      }
+      let jesByKey = new Map<string, CandidateJe>()
+      if (resolvedPeriodIds.length > 0) {
+        // Bounded by voucher_number (at most 300 distinct per call) and paged
+        // through fetchAllRows. Without both, a migration into a fiscal year
+        // that already holds more than 1000 vouchers in the series would hit
+        // PostgREST's silent 1000-row cap: the missing entries resolve as
+        // voucher_not_found and vanish from the staged batch, so the caller
+        // approves fewer links than requested with nothing explaining why.
+        const jes = await fetchAllRows<CandidateJe>(
+          ({ from, to }) =>
+            supabase
+              .from('journal_entries')
+              .select('id, entry_date, description, voucher_series, voucher_number, status, fiscal_period_id')
+              .eq('company_id', companyId)
+              .in('fiscal_period_id', resolvedPeriodIds)
+              .in('voucher_series', seriesList)
+              .in('voucher_number', voucherNumbers)
+              .order('id', { ascending: true })
+              .range(from, to),
+        )
+        jesByKey = new Map(jes.map((je) => [
+          `${je.fiscal_period_id}::${je.voucher_series}::${je.voucher_number}`,
+          je,
+        ]))
+      }
+
+      // ── Resolve each row to a hit or a miss. Only hits are carried into the
+      //    staged params; misses are returned in the preview so the caller
+      //    sees them without having to approve anything first.
+      type RowResult = {
+        document_id: string
+        voucher_series: string
+        voucher_number: number
+        fiscal_year: number
+        status: 'matched' | 'ambiguous_fiscal_year' | 'unknown_fiscal_year' | 'document_not_found'
+          | 'voucher_not_found' | 'already_linked' | 'duplicate_in_batch'
+        document_file_name?: string
+        journal_entry_id?: string
+        voucher_label?: string
+        voucher_date?: string
+      }
+      // Identifying fields only: spreading the raw row would leak
+      // journal_entry_line_id into a response shape that does not declare it.
+      const rowKey = (l: typeof rawLinks[number]) => ({
+        document_id: l.document_id,
+        voucher_series: l.voucher_series,
+        voucher_number: l.voucher_number,
+        fiscal_year: l.fiscal_year,
+      })
+
+      // ── Statuses of the verifikat these documents are ALREADY attached to.
+      //    The WORM guard in the executor refuses to move a document off a
+      //    POSTED verifikat, and without this lookup such a row previews as
+      //    `matched` and is silently skipped after approval: the user approves
+      //    42 and gets 38. Those entries can sit outside the periods fetched
+      //    above, so they need their own lookup.
+      const existingJeIds = [...new Set(
+        (docs ?? [])
+          .map((d) => d.journal_entry_id as string | null)
+          .filter((id): id is string => !!id)
+      )]
+      const postedExistingJeIds = new Set<string>()
+      if (existingJeIds.length > 0) {
+        const { data: existingJes, error: existingErr } = await supabase
+          .from('journal_entries')
+          .select('id, status')
+          .eq('company_id', companyId)
+          .in('id', existingJeIds)
+        if (existingErr) throw new Error(`Database error: ${existingErr.message}`)
+        for (const je of existingJes ?? []) {
+          if ((je as { status: string }).status === 'posted') postedExistingJeIds.add(je.id as string)
+        }
+      }
+
+      const results: RowResult[] = []
+      const matchedLinks: Array<{
+        document_id: string; journal_entry_id: string; journal_entry_line_id: string | null
+      }> = []
+      // Same document twice in one payload: the executor applies rows in order,
+      // so against a DRAFT verifikat the second row would silently overwrite
+      // the first (the WORM guard only blocks posted targets). Reject the
+      // repeat here instead of staging a batch whose outcome depends on order.
+      const seenDocumentIds = new Set<string>()
+
+      for (const l of rawLinks) {
+        if (seenDocumentIds.has(l.document_id)) {
+          results.push({ ...rowKey(l), status: 'duplicate_in_batch' })
+          continue
+        }
+        seenDocumentIds.add(l.document_id)
+
+        const yearPeriods = periodsByYear.get(l.fiscal_year) ?? []
+        if (yearPeriods.length === 0) {
+          results.push({ ...rowKey(l), status: 'unknown_fiscal_year' })
+          continue
+        }
+        if (yearPeriods.length > 1) {
+          results.push({ ...rowKey(l), status: 'ambiguous_fiscal_year' })
+          continue
+        }
+        const doc = docsById.get(l.document_id)
+        if (!doc) {
+          results.push({ ...rowKey(l), status: 'document_not_found' })
+          continue
+        }
+        const period = yearPeriods[0]!
+        const je = jesByKey.get(`${period.id}::${l.voucher_series}::${l.voucher_number}`)
+        if (!je) {
+          results.push({ ...rowKey(l), status: 'voucher_not_found', document_file_name: doc.file_name })
+          continue
+        }
+        const existingJeId = doc.journal_entry_id
+        if (existingJeId && existingJeId !== je.id && postedExistingJeIds.has(existingJeId)) {
+          results.push({ ...rowKey(l), status: 'already_linked', document_file_name: doc.file_name })
+          continue
+        }
+        results.push({
+          ...rowKey(l),
+          status: 'matched',
+          document_file_name: doc.file_name,
+          journal_entry_id: je.id,
+          voucher_label: `${je.voucher_series ?? l.voucher_series}${je.voucher_number ?? l.voucher_number}`,
+          voucher_date: je.entry_date,
+        })
+        matchedLinks.push({
+          document_id: l.document_id,
+          journal_entry_id: je.id,
+          journal_entry_line_id: l.journal_entry_line_id ?? null,
+        })
+      }
+
+      const matchedCount = matchedLinks.length
+      const missedCount = results.length - matchedCount
+
+      if (matchedCount === 0) {
+        throw new Error(
+          `No links resolved: 0/${rawLinks.length} matched a real document + voucher. ` +
+          `First miss: ${JSON.stringify(results[0])}`
+        )
+      }
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'link_documents_to_vouchers',
+        `Koppla ${matchedCount} bilagor till verifikat${missedCount > 0 ? ` (${missedCount} utan träff)` : ''}`,
+        { links: matchedLinks },
+        {
+          total: rawLinks.length,
+          matched_count: matchedCount,
+          missed_count: missedCount,
+          results,
+        },
+        actor,
+        undefined,
+        {
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          dryRun: args.dry_run === true,
+        }
+      )
+    },
+  },
   // ── Payroll (Lönehantering) ──────────────────────────────────
   {
     name: 'gnubok_list_mileage_trips',

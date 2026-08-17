@@ -1285,6 +1285,148 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
   })
 })
 
+// ─── link_documents_to_vouchers (bulk) ─────────────────────────────
+
+describe('commitPendingOperation: link_documents_to_vouchers', () => {
+  const baseOp: Partial<PendingOperation> = {
+    operation_type: 'link_documents_to_vouchers',
+    params: {
+      links: [
+        { document_id: 'doc-1', journal_entry_id: 'je-1', journal_entry_line_id: null },
+        { document_id: 'doc-2', journal_entry_id: 'je-2', journal_entry_line_id: null },
+      ],
+    },
+  }
+
+  it('happy path: links every row and reports zero skipped', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    // row 1: doc-1 -> je-1
+    enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })  // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                          // linkToJournalEntry: JE ownership
+    enqueue({
+      data: { id: 'doc-1', file_name: 'kvitto1.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
+      error: null,
+    })                                                                       // linkToJournalEntry: doc update
+    // row 2: doc-2 -> je-2
+    enqueue({ data: { id: 'doc-2', journal_entry_id: null }, error: null })  // doc fetch
+    enqueue({ data: { id: 'je-2' }, error: null })                          // linkToJournalEntry: JE ownership
+    enqueue({
+      data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
+      error: null,
+    })                                                                       // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                    // dispatcher commit update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      linked_count: 2,
+      skipped_count: 0,
+    })
+  })
+
+  it('mixed batch: a missing document is skipped without blocking the other rows', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })                          // CAS claim
+    // row 1: doc-1 not found in this company
+    enqueue({ data: null, error: null })                                   // doc fetch: not found
+    // row 2: doc-2 -> je-2 succeeds
+    enqueue({ data: { id: 'doc-2', journal_entry_id: null }, error: null }) // doc fetch
+    enqueue({ data: { id: 'je-2' }, error: null })                         // linkToJournalEntry: JE ownership
+    enqueue({
+      data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
+      error: null,
+    })                                                                      // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                   // dispatcher commit update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
+    )
+    // Non-transactional bulk op: overall status is 'committed' even with
+    // partial skips (mirrors bulk_book_inbox_items's booked/skipped split),
+    // since no irreversible side-effect was posted for the skipped row.
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ linked_count: 1, skipped_count: 1 })
+    expect((result.data as { skipped: Array<{ document_id: string; reason: string }> }).skipped[0]).toMatchObject({
+      document_id: 'doc-1',
+      reason: 'Bilagan hittades inte.',
+    })
+  })
+
+  it('WORM guard skips a row whose doc is already linked to a different posted JE', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })                                  // CAS claim
+    // row 1: doc-1 already linked to je-OTHER (posted) -> skipped
+    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null })   // doc fetch
+    enqueue({ data: { status: 'posted' }, error: null })                           // WORM: existing JE status
+    // row 2: doc-2 -> je-2 succeeds
+    enqueue({ data: { id: 'doc-2', journal_entry_id: null }, error: null })         // doc fetch
+    enqueue({ data: { id: 'je-2' }, error: null })                                 // linkToJournalEntry: JE ownership
+    enqueue({
+      data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
+      error: null,
+    })                                                                              // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null })                                           // dispatcher commit update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ linked_count: 1, skipped_count: 1 })
+  })
+
+  it('auto-rejects 409 when every row is skipped instead of recording a committed no-op', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })                                  // CAS claim
+    // row 1: doc-1 already linked to a posted JE -> WORM skip
+    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null })   // doc fetch
+    enqueue({ data: { status: 'posted' }, error: null })                           // WORM: existing JE status
+    // row 2: doc-2 not found -> skip
+    enqueue({ data: null, error: null })                                           // doc fetch: not found
+    enqueue({ data: null, error: null })                                           // dispatcher reject update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
+    )
+    // Partial skips stay 'committed' (see the mixed-batch case), but a batch
+    // that linked nothing must not leave an audit record asserting a run that
+    // changed nothing: the single-document executor returns 409 for the same
+    // conditions, and the bulk path must not be the weaker one.
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+  })
+
+  it('fails 400 when the staged params carry an empty links array', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })  // CAS claim
+    enqueue({ data: null, error: null })            // dispatcher failure update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1',
+      makePendingOp({ ...baseOp, params: { links: [] } }),
+    )
+    // 400 is not auto-reject territory (only 404 and 409 are), so the operation
+    // is recorded as failed rather than rejected.
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+  })
+
+  it('fails 400 when links is missing entirely', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })  // CAS claim
+    enqueue({ data: null, error: null })            // dispatcher failure update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1',
+      makePendingOp({ ...baseOp, params: {} }),
+    )
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+  })
+})
+
 // ─── categorize_transaction: dimensions propagation (PR7) ──────────
 
 describe('commitPendingOperation: categorize_transaction: dimensions propagation (PR7)', () => {

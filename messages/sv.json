@@ -674,6 +674,7 @@
     "type_convert_invoice": "Konvertera faktura",
     "type_attach_document_to_transaction": "Bifoga underlag",
     "type_link_document_to_voucher": "Länka underlag",
+    "type_link_documents_to_vouchers": "Länka underlag (bulk)",
     "type_link_invoice_voucher": "Länka faktura",
     "type_link_supplier_invoice_voucher": "Länka leverantörsfaktura",
     "type_link_transaction_journal_entry": "Länka transaktion",

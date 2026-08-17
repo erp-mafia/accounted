@@ -2340,6 +2340,10 @@ export type PendingOperationType =
   // Link a document directly to a journal entry (verifikation): for imported/
   // manual vouchers that have no bank-transaction row.
   | 'link_document_to_voucher'
+  // Bulk counterpart: N docs linked to N posted verifikationer in one staged
+  // op, addressed by voucher_series/voucher_number/fiscal_year instead of
+  // journal_entry_id UUIDs (resolved server-side).
+  | 'link_documents_to_vouchers'
   // Manual transaction ingestion (uncategorized row, reversible by delete)
   | 'create_transaction'
   // Stream 1 Phase 1: supplier invoice lifecycle
