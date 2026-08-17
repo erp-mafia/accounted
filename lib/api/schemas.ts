@@ -933,10 +933,25 @@ export const UpdateCustomerSchema = z.object({
 // Supplier schemas
 // ============================================================
 
+/**
+ * Optional field where an empty or whitespace-only string means "not set".
+ *
+ * HTML forms submit untouched inputs as '', which a format-validated
+ * `.optional()` field would reject ('' is a present string, so it hits the
+ * format rule). Same normalization as `optString` in
+ * lib/pending-operations/schemas/create-supplier.ts.
+ */
+function emptyStringAsUndefined<T extends z.ZodTypeAny>(inner: T) {
+  return z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    inner.optional(),
+  )
+}
+
 export const CreateSupplierSchema = z.object({
   name: z.string().min(1, 'Supplier name is required'),
   supplier_type: SupplierTypeSchema,
-  email: z.string().email('Invalid email address').optional(),
+  email: emptyStringAsUndefined(z.string().email('Invalid email address')),
   phone: z.string().optional(),
   address_line1: z.string().optional(),
   address_line2: z.string().optional(),
@@ -952,13 +967,31 @@ export const CreateSupplierSchema = z.object({
   bic: z.string().optional(),
   clearing_number: z.string().optional(),
   account_number: z.string().optional(),
-  default_expense_account: accountNumber.optional(),
+  default_expense_account: emptyStringAsUndefined(accountNumber),
   default_payment_terms: z.number().int().positive().optional(),
   default_currency: CurrencySchema.nullable().optional(),
   notes: z.string().optional(),
 })
 
-export const UpdateSupplierSchema = CreateSupplierSchema.partial()
+/**
+ * Optional field where an empty or whitespace-only string means "clear it".
+ *
+ * Update routes pass validated fields straight into `.update({...})`, where
+ * undefined keys are dropped by supabase-js (column left unchanged) and null
+ * writes NULL. So on update an empty string from a cleared form field must
+ * become null, not undefined, or clearing would silently do nothing.
+ */
+function emptyStringAsNull<T extends z.ZodTypeAny>(inner: T) {
+  return z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? null : v),
+    inner.nullable().optional(),
+  )
+}
+
+export const UpdateSupplierSchema = CreateSupplierSchema.partial().extend({
+  email: emptyStringAsNull(z.string().email('Invalid email address')),
+  default_expense_account: emptyStringAsNull(accountNumber),
+})
 
 // ============================================================
 // Supplier invoice schemas

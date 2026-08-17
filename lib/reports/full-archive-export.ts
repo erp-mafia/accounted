@@ -262,10 +262,7 @@ export async function estimateArchiveSize(
   periodId?: string
 ): Promise<{ total_bytes: number; document_bytes: number; document_count: number }> {
   // Scope=all counts every document (linked or not), mirroring writeDocuments.
-  let query = supabase
-    .from('document_attachments')
-    .select('file_size_bytes, journal_entry_id', { count: 'exact' })
-    .eq('company_id', companyId)
+  let rows: { file_size_bytes: number | null }[]
 
   if (scope === 'period') {
     if (!periodId) {
@@ -286,15 +283,35 @@ export async function estimateArchiveSize(
     if (ids.length === 0) {
       return { total_bytes: ARCHIVE_OVERHEAD_BYTES, document_bytes: 0, document_count: 0 }
     }
-    query = query.in('journal_entry_id', ids)
+    // A busy year holds thousands of entries and can hold more than a page of
+    // documents: chunk the IN() list (PostgREST URL limit) and paginate every
+    // chunk (PostgREST row cap). One flat IN() + single read undercounts as
+    // soon as either limit is hit.
+    rows = []
+    for (let i = 0; i < ids.length; i += CHILD_FK_CHUNK) {
+      const chunk = ids.slice(i, i + CHILD_FK_CHUNK)
+      const chunkRows = await fetchAllRows<{ file_size_bytes: number | null }>(({ from, to }) =>
+        supabase
+          .from('document_attachments')
+          .select('id, file_size_bytes')
+          .eq('company_id', companyId)
+          .in('journal_entry_id', chunk)
+          .order('id', { ascending: true })
+          .range(from, to)
+      )
+      rows.push(...chunkRows)
+    }
+  } else {
+    rows = await fetchAllRows<{ file_size_bytes: number | null }>(({ from, to }) =>
+      supabase
+        .from('document_attachments')
+        .select('id, file_size_bytes')
+        .eq('company_id', companyId)
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
   }
 
-  const { data, error } = await query
-  if (error) {
-    throw new Error(`Failed to estimate archive size: ${error.message}`)
-  }
-
-  const rows = (data as { file_size_bytes: number | null }[]) || []
   const documentBytes = rows.reduce((sum, r) => sum + (Number(r.file_size_bytes) || 0), 0)
 
   return {

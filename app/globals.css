@@ -616,6 +616,57 @@ summary,
 .stagger-enter > *:nth-child(9) { animation-delay: 320ms; }
 .stagger-enter > *:nth-child(n+10) { animation-delay: 360ms; }
 
+/* Row exit (booking/ignore/delete in dry-table lists). The page keeps the
+   row rendered for a 350ms window (see finishBooking on /transactions) and
+   marks it .row-exit; the row fades fast, then the space closes by
+   transitioning the cell paddings/line metrics to zero. Table rows cannot
+   animate height directly, so fixed-height cell content (action pill,
+   badges) carries .row-collapsible: a numeric max-height at rest, so the
+   transition to 0 interpolates instead of snapping. The stagger-enter
+   animation on the same row has long finished; `both` fill keeps it inert.
+   All timings stay inside the 350ms removal window.
+   pointer-events only guards the pointer: the exiting row also carries the
+   `inert` attribute (set by the row components) so keyboard focus and
+   activation are blocked during the window too. */
+.row-exit {
+  pointer-events: none;
+}
+.row-exit > td {
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 0;
+  font-size: 0;
+  border-bottom-width: 0;
+  transition:
+    opacity 160ms var(--ease-out),
+    padding-top 240ms var(--ease-emphasized) 60ms,
+    padding-bottom 240ms var(--ease-emphasized) 60ms,
+    line-height 240ms var(--ease-emphasized) 60ms,
+    font-size 240ms var(--ease-emphasized) 60ms,
+    border-bottom-width 240ms var(--ease-emphasized) 60ms;
+}
+.row-collapsible {
+  /* Numeric rest value so the exit transition has something to interpolate
+     from; comfortably above the tallest row content (h-7 action pill). */
+  max-height: 2.5rem;
+}
+.row-exit .row-collapsible {
+  max-height: 0;
+  overflow: hidden;
+  transform: translateX(0.5rem);
+  transition:
+    max-height 240ms var(--ease-emphasized) 60ms,
+    transform 240ms var(--ease-out);
+}
+/* Reduced motion: the row is removed instantly; the delayed state cleanup
+   in the page is invisible. */
+@media (prefers-reduced-motion: reduce) {
+  .row-exit {
+    display: none;
+  }
+}
+
 /* Utility animations */
 .animate-fade-in {
   animation: fadeIn var(--duration-base) var(--ease-out);

@@ -577,10 +577,18 @@ export default function TransactionsPage() {
     }
   }, [companyId, supabase])
 
-  // Computed lists
+  // Computed lists. Exiting rows (just booked/ignored/deleted) stay IN this
+  // list on purpose: they render for the 350ms exit window with the .row-exit
+  // collapse animation instead of popping out the same frame, and the delayed
+  // state patch (finishBooking et al.) is what actually drops them. Logic
+  // surfaces that must not act on a leaving row (batch select) exclude
+  // exitingIds themselves.
   const uncategorizedTransactions = useMemo(
     () => transactions
-      .filter((t) => t.is_business === null && !t.is_ignored && !exitingIds.has(t.id))
+      // The exitingIds clause pins a leaving row even when a realtime-echo
+      // refetch replaces its state with the booked shape mid-window: the
+      // animation still finishes instead of being cut to a jump.
+      .filter((t) => (t.is_business === null && !t.is_ignored) || exitingIds.has(t.id))
       .sort((a, b) => {
         const aHasMatch = a.potential_invoice || a.potential_supplier_invoice ? 1 : 0
         const bHasMatch = b.potential_invoice || b.potential_supplier_invoice ? 1 : 0
@@ -656,8 +664,9 @@ export default function TransactionsPage() {
     if (sourceFilter === 'all' || sourceFilter === 'skatteverket') {
       // Inbox only shows SKV rows that need action (no verifikat yet).
       for (const r of skvRows) {
-        if (r.journal_entry_id) continue
-        if (exitingIds.has(r.id)) continue
+        // Exiting rows stay rendered for the exit animation, even if a
+        // refetch already gave them a journal_entry_id mid-window (see above).
+        if (r.journal_entry_id && !exitingIds.has(r.id)) continue
         // SKV rows live client-side only, so the period filter applies here.
         if (!isWithinBounds(r.transaktionsdatum, periodBounds)) continue
         if (
@@ -788,8 +797,13 @@ export default function TransactionsPage() {
   // Rows the bulkbar's "Markera alla" can select: the visible bank rows
   // (they feed the /api/transactions/* batch handlers) ...
   const selectableInboxIds = useMemo(
-    () => inboxItems.filter((item) => item.source === 'bank').map((item) => item.data.id),
-    [inboxItems],
+    () =>
+      inboxItems
+        // Rows mid-exit still render (for the animation) but must not be
+        // selectable: they are already booked/deleted server-side.
+        .filter((item) => item.source === 'bank' && !exitingIds.has(item.data.id))
+        .map((item) => item.data.id),
+    [exitingIds, inboxItems],
   )
 
   // ... plus the visible skattekonto rows whose booking is deterministic
@@ -798,9 +812,14 @@ export default function TransactionsPage() {
   const selectableSkvIds = useMemo(
     () =>
       inboxItems
-        .filter((item) => item.source === 'skatteverket' && isSkvBulkEligible(item.data))
+        .filter(
+          (item) =>
+            item.source === 'skatteverket' &&
+            isSkvBulkEligible(item.data) &&
+            !exitingIds.has(item.data.id),
+        )
         .map((item) => item.data.id),
-    [inboxItems],
+    [exitingIds, inboxItems],
   )
 
   const skvSelectedRows = useMemo(
@@ -907,9 +926,20 @@ export default function TransactionsPage() {
     }
   }, [])
 
-  const fetchTransactions = useCallback(async (showLoading = false, includeSkvRows = false) => {
+  const fetchTransactions = useCallback(async (
+    showLoading = false,
+    includeSkvRows = false,
+    // Background refreshes (realtime echo) re-fetch the window the user has
+    // already paged through instead of resetting to the first PAGE_SIZE rows:
+    // an action after "Visa fler" must not collapse the loaded pages and
+    // yank the scroll position.
+    preserveWindow = false,
+  ) => {
     if (!companyId) return
     const generation = ++fetchGenerationRef.current
+    const windowSize = preserveWindow
+      ? Math.max(pagedCountRef.current, PAGE_SIZE)
+      : PAGE_SIZE
     if (showLoading) setIsLoading(true)
     if (includeSkvRows) void loadSkvRows()
     try {
@@ -934,7 +964,7 @@ export default function TransactionsPage() {
         windowQuery
           .order('date', { ascending: false })
           .order('id', { ascending: true })
-          .limit(PAGE_SIZE),
+          .range(0, windowSize - 1),
         supabase
           .from('transactions')
           .select('*', { count: 'exact', head: true })
@@ -1004,8 +1034,8 @@ export default function TransactionsPage() {
       setTransactions(transactionsWithInvoices)
       setTotalUncategorizedCount(uncatCount ?? 0)
       pagedCountRef.current = rows.length
-      setPagedThroughDate(rows.length >= PAGE_SIZE ? rows[rows.length - 1].date : null)
-      setHasMore(rows.length >= PAGE_SIZE)
+      setPagedThroughDate(rows.length >= windowSize ? rows[rows.length - 1].date : null)
+      setHasMore(rows.length >= windowSize)
 
     } finally {
       // Only the newest request may touch the skeleton: a stale one must not
@@ -1027,7 +1057,7 @@ export default function TransactionsPage() {
     try {
       do {
         refreshTransactionsQueuedRef.current = false
-        await fetchTransactions(false, false)
+        await fetchTransactions(false, false, true)
       } while (refreshTransactionsQueuedRef.current)
     } finally {
       refreshTransactionsInFlightRef.current = false
@@ -1235,10 +1265,65 @@ export default function TransactionsPage() {
     }
   }
 
-  // Fetch the initial page. Entity type is already available from CompanyContext.
+  // The initial fetch waits for FyPicker to finish restoring the persisted
+  // period scope (onReady fires after its restore onChange). Fetching at
+  // mount used to race the restore: an unscoped fetch painted the list, the
+  // restore re-created fetchTransactions and re-ran this effect with a second
+  // skeleton takeover, so every visit flashed list → skeleton → list.
+  const [fyReady, setFyReady] = useState(false)
+  const handleFyReady = useCallback(() => setFyReady(true), [])
+  // Whether anything is on screen, readable from the effect without making
+  // row state a dependency (which would refetch on every row patch).
+  const hasRowsRef = useRef(false)
   useEffect(() => {
-    void fetchTransactions(true, true)
-  }, [fetchTransactions])
+    hasRowsRef.current = transactions.length > 0 || skvRows.length > 0
+  }, [transactions, skvRows])
+  const lastFetchCompanyRef = useRef<string | null>(null)
+  // Subtle "refreshing" cue next to the period chip while a scope change
+  // refetches behind the rendered list. Sequence-guarded so overlapping
+  // scope changes can't clear the cue early.
+  const [isScopeRefreshing, setIsScopeRefreshing] = useState(false)
+  const scopeRefreshSeqRef = useRef(0)
+
+  // Fiscal scope must not survive a company switch: periodBounds from the
+  // previous company would scope the first fetch for the new one, and a
+  // non-null fyPeriodId makes FyPicker skip its persisted-scope restore
+  // (it only restores when value === null). Resetting during render (React's
+  // adjust-state-on-prop-change pattern) rather than in an effect guarantees
+  // FyPicker's restore effect observes the cleared value: its effect captures
+  // `value` at commit time, and child effects run before a parent effect
+  // could reset it. fyReady = false holds the fetch effect until the new
+  // company's restore completes via onReady.
+  const [scopeCompanyId, setScopeCompanyId] = useState<string | null>(companyId)
+  if (scopeCompanyId !== companyId) {
+    setScopeCompanyId(companyId)
+    setFyReady(false)
+    setFyPeriodId(null)
+    setFyPeriod(null)
+    // A scope refresh in flight belongs to the old company: invalidate its
+    // finally-guard and drop the cue.
+    scopeRefreshSeqRef.current++
+    setIsScopeRefreshing(false)
+  }
+
+  // Fetch the page whenever the scope changes (mount, company switch, period
+  // change). The skeleton takeover is reserved for an empty or foreign list:
+  // a period change refetches BEHIND the rendered rows, whose client-side
+  // isWithinBounds filters already show the new scope correctly.
+  useEffect(() => {
+    if (!fyReady) return
+    const companySwitched = lastFetchCompanyRef.current !== companyId
+    lastFetchCompanyRef.current = companyId
+    if (companySwitched || !hasRowsRef.current) {
+      void fetchTransactions(true, true)
+      return
+    }
+    const seq = ++scopeRefreshSeqRef.current
+    setIsScopeRefreshing(true)
+    void fetchTransactions(false, true).finally(() => {
+      if (scopeRefreshSeqRef.current === seq) setIsScopeRefreshing(false)
+    })
+  }, [companyId, fetchTransactions, fyReady])
 
   useEffect(() => {
     if (!companyId) return
@@ -2349,9 +2434,13 @@ export default function TransactionsPage() {
     if (!ok) return
 
     try {
+      // Row-level pending state while the DELETE runs (the card renders a
+      // spinner for processingId): confirm-to-completion used to be dead air.
+      setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}`, { method: 'DELETE' })
       if (!response.ok) {
         const result = await response.json()
+        setProcessingId((prev) => (prev === id ? null : prev))
         toast({
           title: 'Kunde inte ta bort',
           description: getErrorMessage(result, { context: 'transaction' }),
@@ -2359,9 +2448,36 @@ export default function TransactionsPage() {
         })
         return
       }
-      setTransactions((prev) => prev.filter((t) => t.id !== id))
+      // Same exit path as booking/ignore: the row animates out over the
+      // 350ms window instead of vanishing with a hard jump, then the delayed
+      // filter actually removes it.
+      setExitingIds((prev) => new Set(prev).add(id))
+      // Drop the row from the batch selection immediately: leaving it there
+      // keeps the bulk bar counting (and acting on) a row that no longer
+      // exists once the timer removes it.
+      setSelectedIds((prev) => {
+        if (!prev.has(id)) return prev
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+      // The realtime echo is not guaranteed for DELETE on a filtered
+      // subscription, so the pending badge must decrement locally.
+      if (transaction.is_business === null && !transaction.is_ignored) {
+        setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+      }
       toast({ title: t('deleted_title'), description: t('deleted_description') })
+      setTimeout(() => {
+        setTransactions((prev) => prev.filter((t) => t.id !== id))
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+        setProcessingId((prev) => (prev === id ? null : prev))
+      }, 350)
     } catch {
+      setProcessingId((prev) => (prev === id ? null : prev))
       toast({
         title: 'Kunde inte ta bort',
         description: t('delete_failed_description'),
@@ -3213,9 +3329,18 @@ export default function TransactionsPage() {
             and on a brutet rakenskapsar they were not momsdeklaration
             quarters, so they misled more than they scoped. */}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {/* Quiet cue that a scope change is reconciling behind the rendered
+              list (the list itself never swaps to a skeleton for it). */}
+          {isScopeRefreshing && (
+            <Loader2
+              className="h-3.5 w-3.5 animate-spin text-muted-foreground"
+              aria-label={t('refreshing')}
+            />
+          )}
           <FyPicker
             value={fyPeriodId}
             onChange={handlePeriodChange}
+            onReady={handleFyReady}
             storageKeyPrefix={PERIOD_FILTER_STORAGE_PREFIX}
           />
           {sourceItems.length > 1 && (
@@ -3376,6 +3501,7 @@ export default function TransactionsPage() {
                         key={`bank-${item.data.id}`}
                         transaction={item.data}
                         skvCounterpartDate={bankToSkvHints.get(item.data.id)}
+                        isExiting={exitingIds.has(item.data.id)}
                         processingId={processingId}
                         isSelected={selectedIds.has(item.data.id)}
                         isExpanded={expandedTxId === item.data.id}
@@ -3404,6 +3530,7 @@ export default function TransactionsPage() {
                         row={item.data}
                         matchSuggestion={item.data.match_suggestion}
                         bookingSuggestion={item.data.booking_suggestion}
+                        isExiting={exitingIds.has(item.data.id)}
                         processing={skvBulkSubmitting}
                         selectable={isSkvBulkEligible(item.data)}
                         isSelected={skvSelectedIds.has(item.data.id)}
@@ -3443,6 +3570,7 @@ export default function TransactionsPage() {
         <TransactionHistoryList
           transactions={historyTransactions}
           skvRows={skvRowsInScope}
+          exitingIds={exitingIds}
           searchTerm={searchTerm}
           sourceFilter={sourceFilter}
           jeUnderlagStatus={jeUnderlagStatus}

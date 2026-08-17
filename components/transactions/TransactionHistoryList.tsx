@@ -46,6 +46,9 @@ type HistoryRow =
 interface TransactionHistoryListProps {
   transactions: TransactionWithInvoice[]
   skvRows?: SkattekontoTransactionWithSuggestion[]
+  /** Rows animating out during the page's 350ms removal window (delete):
+   *  rendered with .row-exit so the departure is visible, not a hard jump. */
+  exitingIds?: Set<string>
   searchTerm?: string
   /** Page-level source chip selection (the toolbar ContextPicker on
    *  /transactions, shared with the inbox mode). */
@@ -78,6 +81,7 @@ interface TransactionHistoryListProps {
 export default function TransactionHistoryList({
   transactions,
   skvRows = [],
+  exitingIds,
   searchTerm = '',
   sourceFilter,
   jeUnderlagStatus,
@@ -182,6 +186,7 @@ export default function TransactionHistoryList({
                   <BankHistoryRow
                     key={`bank-${item.data.id}`}
                     transaction={item.data}
+                    isExiting={exitingIds?.has(item.data.id) ?? false}
                     jeUnderlagStatus={jeUnderlagStatus}
                     onOpenMatchDialog={onOpenMatchDialog}
                     onOpenCategoryDialog={onOpenCategoryDialog}
@@ -228,6 +233,7 @@ export default function TransactionHistoryList({
 
 function BankHistoryRow({
   transaction,
+  isExiting = false,
   jeUnderlagStatus,
   onOpenMatchDialog,
   onOpenCategoryDialog,
@@ -236,6 +242,7 @@ function BankHistoryRow({
   onDelete,
 }: {
   transaction: TransactionWithInvoice
+  isExiting?: boolean
   jeUnderlagStatus?: Record<string, JeUnderlagStatus>
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
@@ -282,14 +289,21 @@ function BankHistoryRow({
   return (
     <tr
       data-tx-id={transaction.id}
-      className="group transition-colors duration-150 hover:bg-secondary/35"
+      className={cn(
+        'group transition-colors duration-150 hover:bg-secondary/35',
+        isExiting && 'row-exit',
+      )}
+      // .row-exit only blocks pointer input; `inert` also drops keyboard
+      // focus and activation (booking, delete, the ⋯ menu) during the 350ms
+      // removal window.
+      inert={isExiting || undefined}
     >
       <td className={cn(TD_CLASS, 'w-0 !p-0')} aria-hidden="true"></td>
       <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(transaction.date)}
       </td>
       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="row-collapsible flex min-w-0 items-center gap-2">
           <span className="truncate">{transaction.description}</span>
           <TransactionAttachmentIndicator
             documentId={transaction.document_id}
@@ -337,7 +351,7 @@ function BankHistoryRow({
         {formatCurrency(transaction.amount, transaction.currency)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
-        <span className="inline-flex items-center justify-end gap-2">
+        <span className="row-collapsible inline-flex items-center justify-end gap-2">
           {isBooked ? (
             <>
               <span className="text-muted-foreground">

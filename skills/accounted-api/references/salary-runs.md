@@ -96,7 +96,7 @@ Response `200`:
     booked_at: string,
     created_at: string,
     notes: string,
-    calculation_params: unknown,
+    calculation_params?: unknown,
     updated_at: string
   },
   meta: {
@@ -151,7 +151,7 @@ Response `200`:
     vacation_entry_id: string,
     agi_generated_at: string,
     agi_submitted_at: string,
-    calculation_params: unknown,
+    calculation_params?: unknown,
     approved_by: string,
     approved_at: string,
     paid_at: string,
@@ -218,7 +218,7 @@ Response `200`:
     vacation_entry_id: string,
     agi_generated_at: string,
     agi_submitted_at: string,
-    calculation_params: unknown,
+    calculation_params?: unknown,
     approved_by: string,
     approved_at: string,
     paid_at: string,
@@ -549,7 +549,7 @@ Response `200`:
     ytd_gross: number,
     ytd_tax: number,
     ytd_net: number,
-    calculation_breakdown: unknown,
+    calculation_breakdown?: unknown,
     line_items: { salary_line_item_id: string, item_type: string, description: string, quantity: number, unit_price: number, amount: number, is_taxable: boolean, is_avgift_basis: boolean, is_vacation_basis: boolean, is_gross_deduction: boolean, is_net_deduction: boolean, account_number: string, sort_order: number }[],
     created_at: string,
     updated_at: string

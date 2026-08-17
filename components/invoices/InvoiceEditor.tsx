@@ -62,7 +62,9 @@ import {
   ROT_MAX,
   RUT_MAX,
   computeDeduction,
+  deductionTypeForWorkType,
 } from '@/lib/invoices/rot-rut-rules'
+import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
@@ -98,7 +100,7 @@ export type InvoiceEditorProps = (
 // Subset of Article fields the line picker needs to pre-fill a row.
 type ArticleOption = Pick<
   Article,
-  'id' | 'article_number' | 'name' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency'
+  'id' | 'article_number' | 'name' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency' | 'housework_type'
 >
 
 function RequiredMark() {
@@ -516,7 +518,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (!company?.id) return
     const { data } = await supabase
       .from('articles')
-      .select('id, article_number, name, unit, price_excl_vat, vat_rate, revenue_account, currency')
+      .select('id, article_number, name, unit, price_excl_vat, vat_rate, revenue_account, currency, housework_type')
       .eq('company_id', company.id)
       .eq('active', true)
     // Numeric-aware order by article number ('2' before '10', unnumbered last):
@@ -565,6 +567,31 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // The account override rides along regardless of rate; the engine ignores it
     // for reverse-charge/export and validates it against the chart of accounts.
     setValue(`items.${index}.revenue_account`, a.revenue_account ?? null, { shouldDirty: true })
+    // ROT/RUT: the article's housework_type (Skatteverket arbetstypskod)
+    // decides both the line's deduction kind and its work type. An article
+    // WITHOUT one re-defaults the row to no deduction, the same overwrite
+    // semantics as description/price above: a material article picked onto a
+    // previously RUT-flagged row must not keep claiming a deduction on
+    // material. Proformas/delivery notes/self-billing have no deduction model
+    // (their rows keep no ⋮ menu either), so they are left untouched.
+    if (isInvoiceDoc) {
+      const kind = deductionTypeForWorkType(a.housework_type)
+      setValue(`items.${index}.deduction_type`, kind, { shouldDirty: true })
+      setValue(`items.${index}.work_type`, kind ? a.housework_type : null, { shouldDirty: true })
+      if (kind) {
+        // Same rule as the manual ⋮ menu: ROT/RUT och periodisering
+        // kombineras aldrig på samma rad; avdraget vinner.
+        if (getValues(`items.${index}.accrual_balance_account`) != null) {
+          setValue(`items.${index}.accrual_period_start`, null)
+          setValue(`items.${index}.accrual_period_end`, null)
+          setValue(`items.${index}.accrual_balance_account`, null)
+        }
+      } else {
+        setValue(`items.${index}.labor_hours`, null)
+        setValue(`items.${index}.housing_designation`, null)
+        setValue(`items.${index}.apartment_number`, null)
+      }
+    }
     // Pre-fill the invoice's (single) currency from the article ONLY on the
     // first priced line, and only while the user hasn't chosen a currency
     // themselves. Never flip an in-progress invoice's currency on a later pick:
@@ -609,6 +636,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           // The typed unit price is in the invoice's currency: without this an
           // EUR invoice line becomes an SEK article with the EUR number.
           currency: getValues('currency'),
+          // Round-trip the ROT/RUT arbetstypskod so the saved article
+          // pre-fills the deduction the next time it is picked.
+          housework_type: item.deduction_type ? item.work_type ?? null : null,
         }),
       })
       const result = await response.json()
@@ -875,6 +905,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const deductionTotal = Math.round((deductionByKind.rot + deductionByKind.rut) * 100) / 100
   const hasAnyDeduction = deductionTotal > 0
   const hasAnyRotLine = isInvoiceDoc && watchItems.some((i) => i.deduction_type === 'rot')
+  // The kundkort's personnummer reaches this component as ciphertext (direct
+  // table read) or as the masked display form (rows from the API), so the
+  // editor can only know THAT the customer has one, never render it. Presence
+  // is enough: the server falls back to it when the field is left empty, so
+  // the field stops being required and the hint says where the number will
+  // come from. The undecryptable placeholder is not presence.
+  const customerHasPersonalNumber = Boolean(
+    selectedCustomer?.personal_number &&
+      selectedCustomer.personal_number !== UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
+  )
 
   // Öresavrundning live preview: same helper as the PDF/email, so the summary
   // shows exactly what the customer will see. Display-only; the saved invoice
@@ -2159,7 +2199,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 <CardContent className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="deduction_personnummer">
-                      {t('deduction_personnummer_label')}<RequiredMark />
+                      {t('deduction_personnummer_label')}
+                      {!(initial?.deduction_personnummer_last4 || customerHasPersonalNumber) && <RequiredMark />}
                     </Label>
                     <Input
                       id="deduction_personnummer"
@@ -2169,10 +2210,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     />
                     <p className="text-xs text-muted-foreground">
                       {/* Stored pn exists only as ciphertext: an empty field on
-                          edit keeps it server-side instead of failing validation. */}
+                          edit keeps it server-side instead of failing validation.
+                          Otherwise, a kundkort with a personnummer covers an
+                          empty field via the server-side fallback. */}
                       {initial?.deduction_personnummer_last4
                         ? t('deduction_personnummer_kept_hint', { last4: initial.deduction_personnummer_last4 })
-                        : t('deduction_personnummer_hint')}
+                        : customerHasPersonalNumber
+                          ? t('deduction_personnummer_customer_hint')
+                          : t('deduction_personnummer_hint')}
                     </p>
                   </div>
                   {hasAnyRotLine && (
