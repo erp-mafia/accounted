@@ -459,21 +459,6 @@ export const CreateInvoiceItemSchema = z
         })
       }
     }
-    // ROT/RUT claim completeness (HUSFL: art av arbete + antal arbetstimmar).
-    // Field-level here so the editor can point at the row; the same rules run
-    // again in validateInvoice for callers that bypass this schema.
-    if (item.deduction_type) {
-      const workType = item.work_type?.trim() || null
-      if (!workType) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['work_type'], message: DEDUCTION_LINE_ERRORS.workTypeMissing })
-      } else if (deductionTypeForWorkType(workType) !== item.deduction_type) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['work_type'], message: DEDUCTION_LINE_ERRORS.workTypeMismatch })
-      }
-      const isSchablon = workType != null && SCHABLON_WORK_TYPES.includes(workType)
-      if (!isSchablon && !(typeof item.labor_hours === 'number' && item.labor_hours > 0)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['labor_hours'], message: DEDUCTION_LINE_ERRORS.hoursMissing })
-      }
-    }
     // Free-text rows skip the product-line requirements (description may be
     // empty for a spacer; quantity/unit/price are ignored).
     if (item.line_type === 'text') return
@@ -490,7 +475,35 @@ export const CreateInvoiceItemSchema = z
 
 const optionalIsoDate = isoDate.or(z.literal('')).transform(v => v || undefined).optional()
 
-export const CreateInvoiceSchema = z.object({
+/**
+ * ROT/RUT claim completeness (HUSFL: art av arbete + antal arbetstimmar) at
+ * the invoice level, where document_type is known: only real invoices book a
+ * deduction (buildInvoiceWriteData nulls the fields for proformas, delivery
+ * notes and quotes), and free-text rows carry no claim. Field-level paths so
+ * the editor can point at the row; validateInvoice re-runs the same rules for
+ * callers that bypass this schema.
+ */
+function refineRotRutLineCompleteness(
+  data: { document_type?: string; items: Array<{ line_type?: string; deduction_type?: 'rot' | 'rut' | null; work_type?: string | null; labor_hours?: number | null }> },
+  ctx: z.RefinementCtx,
+): void {
+  if (data.document_type && data.document_type !== 'invoice') return
+  data.items.forEach((item, index) => {
+    if (!item.deduction_type || item.line_type === 'text') return
+    const workType = item.work_type?.trim() || null
+    if (!workType) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'work_type'], message: DEDUCTION_LINE_ERRORS.workTypeMissing })
+    } else if (deductionTypeForWorkType(workType) !== item.deduction_type) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'work_type'], message: DEDUCTION_LINE_ERRORS.workTypeMismatch })
+    }
+    const isSchablon = workType != null && SCHABLON_WORK_TYPES.includes(workType)
+    if (!isSchablon && !(typeof item.labor_hours === 'number' && item.labor_hours > 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'labor_hours'], message: DEDUCTION_LINE_ERRORS.hoursMissing })
+    }
+  })
+}
+
+const CreateInvoiceBaseSchema = z.object({
   customer_id: uuid,
   invoice_date: isoDate,
   due_date: isoDate,
@@ -584,11 +597,15 @@ export const CreateInvoiceSchema = z.object({
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
+export const CreateInvoiceSchema = CreateInvoiceBaseSchema.superRefine(refineRotRutLineCompleteness)
+
 // Update (edit) an existing DRAFT invoice in place. Same shape as create minus
 // `save_as_draft`: editing never (re)creates a draft or allocates a number, it
 // only rewrites the draft's header + line items. The PATCH route guards that the
 // target is still a draft (status='draft', no journal entry, not self-billed).
-export const UpdateInvoiceSchema = CreateInvoiceSchema.omit({ save_as_draft: true })
+export const UpdateInvoiceSchema = CreateInvoiceBaseSchema
+  .omit({ save_as_draft: true })
+  .superRefine(refineRotRutLineCompleteness)
 
 export const CreateCreditNoteSchema = z.object({
   credited_invoice_id: uuid,

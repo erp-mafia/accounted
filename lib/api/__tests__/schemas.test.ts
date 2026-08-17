@@ -278,6 +278,33 @@ describe('Enum schemas', () => {
 // Invoice schemas
 // ============================================================
 
+describe('CreateInvoiceSchema: ROT/RUT line completeness', () => {
+  const paths = (r: { success: boolean; error?: { issues: Array<{ path: PropertyKey[] }> } }) =>
+    r.success ? [] : r.error!.issues.map((i) => i.path.join('.'))
+  const rutLine = (extra: Record<string, unknown>) => validInvoiceItem({ deduction_type: 'rut', ...extra })
+
+  it('requires a same-kind arbetstyp and hours > 0 on invoice documents', () => {
+    expect(paths(CreateInvoiceSchema.safeParse(validInvoice({ items: [rutLine({})] })))).toEqual(
+      expect.arrayContaining(['items.0.work_type', 'items.0.labor_hours']),
+    )
+    expect(paths(CreateInvoiceSchema.safeParse(validInvoice({ items: [rutLine({ work_type: 'BYGG', labor_hours: 2 })] })))).toEqual(['items.0.work_type'])
+    expect(CreateInvoiceSchema.safeParse(validInvoice({ items: [rutLine({ work_type: 'STAD', labor_hours: 2 })] })).success).toBe(true)
+    // Schablontjänst: no hours needed
+    expect(CreateInvoiceSchema.safeParse(validInvoice({ items: [rutLine({ work_type: 'TVATT' })] })).success).toBe(true)
+  })
+
+  it('does not apply to proformas / delivery notes (server nulls the fields) nor to text rows', () => {
+    expect(CreateInvoiceSchema.safeParse(validInvoice({ document_type: 'proforma', items: [rutLine({})] })).success).toBe(true)
+    expect(CreateInvoiceSchema.safeParse(validInvoice({ items: [validInvoiceItem({ line_type: 'text', description: '', deduction_type: 'rut' })] })).success).toBe(true)
+  })
+
+  it('applies to UpdateInvoiceSchema too', () => {
+    const { save_as_draft: _s, ...body } = validInvoice({ items: [rutLine({})] }) as Record<string, unknown>
+    expect(UpdateInvoiceSchema.safeParse(body).success).toBe(false)
+    expect(UpdateInvoiceSchema.safeParse({ ...body, items: [rutLine({ work_type: 'STAD', labor_hours: 1 })] }).success).toBe(true)
+  })
+})
+
 describe('CreateInvoiceSchema', () => {
   it('accepts a valid invoice', () => {
     const result = CreateInvoiceSchema.safeParse(validInvoice())
@@ -494,23 +521,6 @@ describe('CreateInvoiceItemSchema', () => {
   it('rejects non-numeric quantity', () => {
     const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ quantity: 'ten' }))
     expect(result.success).toBe(false)
-  })
-
-  it('ROT/RUT line: requires a same-kind arbetstyp and hours > 0 (schablon exempt from hours)', () => {
-    const paths = (r: ReturnType<typeof CreateInvoiceItemSchema.safeParse>) =>
-      r.success ? [] : r.error.issues.map((i) => i.path.join('.'))
-    // Missing both
-    expect(paths(CreateInvoiceItemSchema.safeParse(validInvoiceItem({ deduction_type: 'rut' })))).toEqual(
-      expect.arrayContaining(['work_type', 'labor_hours']),
-    )
-    // Wrong list
-    expect(paths(CreateInvoiceItemSchema.safeParse(validInvoiceItem({ deduction_type: 'rut', work_type: 'BYGG', labor_hours: 2 })))).toEqual(['work_type'])
-    // Complete
-    expect(CreateInvoiceItemSchema.safeParse(validInvoiceItem({ deduction_type: 'rut', work_type: 'STAD', labor_hours: 2 })).success).toBe(true)
-    // Schablontjänst: no hours needed
-    expect(CreateInvoiceItemSchema.safeParse(validInvoiceItem({ deduction_type: 'rut', work_type: 'TVATT' })).success).toBe(true)
-    // No deduction: fields irrelevant
-    expect(CreateInvoiceItemSchema.safeParse(validInvoiceItem({ deduction_type: null })).success).toBe(true)
   })
 
   it('accepts orgnr-shaped brf_org_number values', () => {

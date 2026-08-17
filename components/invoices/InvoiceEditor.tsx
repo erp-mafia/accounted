@@ -70,6 +70,7 @@ import {
 import { UNDECRYPTABLE_PERSONAL_NUMBER_MASK } from '@/lib/customers/mask-personal-number'
 import { roundOre } from '@/lib/money'
 import { isFiscalYear } from '@/lib/invariants'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
@@ -176,6 +177,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }, [paymentLinksEnabled])
 
+  // The item schema is memoised on translations only; whether ROT/RUT claim
+  // completeness applies depends on the document type (proformas, delivery
+  // notes and self-billing have no deduction model and the strip never
+  // renders), so read that through a ref at validation time.
+  const rotRutCompletenessAppliesRef = useRef(false)
+
   const schema = useMemo(() => {
     const itemSchema = z.object({
       // 'text' rows carry only a (possibly empty) description: a free-text or
@@ -233,7 +240,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       // ROT/RUT claim completeness, mirrored from CreateInvoiceItemSchema:
       // arbetstyp + arbetstimmar are what the Skatteverket claim needs, and
       // creation is the last moment the line is editable.
-      if (item.deduction_type) {
+      if (item.deduction_type && rotRutCompletenessAppliesRef.current && item.line_type !== 'text') {
         const workType = item.work_type?.trim() || null
         if (!workType) {
           ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['work_type'], message: t('deduction_work_type_required') })
@@ -921,6 +928,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const isSelfBilled = mode === 'self_billed'
   // ROT/RUT is an own-issued, B2C concept: never shown for a received self-bill.
   const isInvoiceDoc = watchDocumentType === 'invoice' && !isSelfBilled
+  rotRutCompletenessAppliesRef.current = isInvoiceDoc
 
   const watchInvoiceDate = watch('invoice_date')
 
@@ -937,26 +945,37 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       return
     }
     let cancelled = false
-    supabase
-      .from('invoices')
-      .select('id, currency, exchange_rate, invoice_items(deduction_type, deduction_amount)')
-      .eq('company_id', company.id)
-      .eq('customer_id', watchCustomerId)
-      .eq('document_type', 'invoice')
-      .is('credited_invoice_id', null)
-      .not('status', 'in', '(draft,cancelled,credited)')
-      .gt('deduction_total', 0)
-      .gte('invoice_date', `${invoiceYear}-01-01`)
-      .lte('invoice_date', `${invoiceYear}-12-31`)
-      .then(({ data }) => {
-        if (cancelled || !data) return
+    // The ceiling follows the year the buyer PAID (Skatteverket attributes the
+    // skattereduktion to the payment year), so paid invoices count by paid_at
+    // and open ones by invoice_date. Paginated: PostgREST caps plain selects.
+    const yearStart = `${invoiceYear}-01-01`
+    const yearEnd = `${invoiceYear}-12-31`
+    fetchAllRows<{
+      id: string
+      currency: string | null
+      exchange_rate: number | null
+      invoice_items: Array<{ deduction_type: 'rot' | 'rut' | null; deduction_amount: number | null }> | null
+    }>(({ from, to }) =>
+      supabase
+        .from('invoices')
+        .select('id, currency, exchange_rate, invoice_items(deduction_type, deduction_amount)')
+        .eq('company_id', company.id)
+        .eq('customer_id', watchCustomerId)
+        .eq('document_type', 'invoice')
+        .is('credited_invoice_id', null)
+        .not('status', 'in', '(draft,cancelled,credited)')
+        .gt('deduction_total', 0)
+        .or(
+          `and(paid_at.gte.${yearStart},paid_at.lte.${yearEnd}T23:59:59),` +
+            `and(paid_at.is.null,invoice_date.gte.${yearStart},invoice_date.lte.${yearEnd})`,
+        )
+        .order('id')
+        .range(from, to),
+    )
+      .then((data) => {
+        if (cancelled) return
         const totals: PriorYearDeductions = { rot: 0, rut: 0 }
-        for (const inv of data as Array<{
-          id: string
-          currency: string | null
-          exchange_rate: number | null
-          invoice_items: Array<{ deduction_type: 'rot' | 'rut' | null; deduction_amount: number | null }> | null
-        }>) {
+        for (const inv of data) {
           if (initial?.id && inv.id === initial.id) continue
           const isSek = !inv.currency || inv.currency === 'SEK'
           const rate = inv.exchange_rate
@@ -968,6 +987,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           }
         }
         setPriorYearDeductions(totals)
+      })
+      .catch(() => {
+        // A failed lookup must not leave a stale total from another customer or
+        // year on screen; no prior context = per-invoice check only.
+        if (!cancelled) setPriorYearDeductions(null)
       })
     return () => {
       cancelled = true
