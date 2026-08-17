@@ -73,6 +73,15 @@
  *      and arbitrary `rounded-[Npx]` are dead vocabulary in app/ and
  *      components/. No baseline: the count is 0, any new one is a hard
  *      failure.
+ *  10. folded-public-flag: `process.env.NEXT_PUBLIC_X === 'true'` compared in
+ *      place. The Docker image bakes sentinels that docker-entrypoint.sh
+ *      substitutes at container start; an in-place comparison is constant-
+ *      folded and dead-code-eliminated at build time, erasing both the name
+ *      and the sentinel, so the flag is permanently false however the operator
+ *      configures it. Every Docker self-host consequently ran with the
+ *      entitlement paywall live (diagnosed 2026-08-17). Read flags as values
+ *      via lib/env/public-flags. No baseline: the count is 0, any new one is
+ *      a hard failure.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -406,6 +415,81 @@ function findOffLadderRadii() {
     }
   }
   return findings.sort()
+}
+
+// 10. folded-public-flag. The Docker image is built once with sentinel values
+// (ENV NEXT_PUBLIC_SELF_HOSTED=__NEXT_PUBLIC_SELF_HOSTED__) that
+// docker-entrypoint.sh seds into .next at container start. Comparing the var in
+// place defeats that: the bundler inlines the sentinel, the minifier folds
+// `"__NEXT_PUBLIC_SELF_HOSTED__" === 'true'` to false and eliminates the
+// branch, so BOTH the name and the sentinel vanish and sed has nothing to
+// replace. The flag is then permanently false whatever the operator sets.
+//
+// That shipped and stayed invisible for weeks: every Docker self-host ran with
+// the entitlement paywall live, killing ai/bank_sync/skatteverket/email_send 30
+// days after company creation. Read public flags as VALUES instead
+// (flagEnabled(process.env.NEXT_PUBLIC_X) from lib/env/public-flags), which
+// keeps the sentinel in the output as a live string literal.
+//
+// No baseline: the count is 0, any new one is a hard failure.
+const PUBLIC_FLAG_EXEMPT = new Set(['lib/env/public-flags.ts'])
+
+const EQUALITY_OPS = new Set([
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+])
+
+/** `process.env.NEXT_PUBLIC_ANYTHING` as an expression node. */
+function isPublicEnvRead(node) {
+  return (
+    ts.isPropertyAccessExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    node.expression.expression.text === 'process' &&
+    node.expression.name.text === 'env' &&
+    ts.isIdentifier(node.name) &&
+    node.name.text.startsWith('NEXT_PUBLIC_')
+  )
+}
+
+/** Public env flags compared in place, which the Docker build folds away. */
+function findFoldedPublicFlags() {
+  const files = [
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'contexts'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  const findings = []
+  for (const file of files) {
+    const relPath = rel(file)
+    if (PUBLIC_FLAG_EXEMPT.has(relPath)) continue
+    // Tests never ship in the image, and they legitimately assert on raw env.
+    // Both layouts: the __tests__/ convention, and a colocated *.test.ts(x),
+    // which would otherwise be a false positive that invites weakening this
+    // guard rather than fixing a real call site.
+    if (relPath.includes('__tests__/') || /\.test\.tsx?$/.test(relPath)) continue
+    const text = fs.readFileSync(file, 'utf8')
+    if (!text.includes('NEXT_PUBLIC_')) continue
+
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
+    const visit = (node) => {
+      if (
+        ts.isBinaryExpression(node) &&
+        EQUALITY_OPS.has(node.operatorToken.kind) &&
+        (isPublicEnvRead(node.left) || isPublicEnvRead(node.right))
+      ) {
+        const pos = source.getLineAndCharacterOfPosition(node.getStart(source))
+        findings.push(`${relPath}:${pos.line + 1}`)
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(source)
+  }
+  return [...new Set(findings)].sort()
 }
 
 // Dependencies pinned to an EXACT version on purpose, because a bump broke prod
@@ -749,6 +833,7 @@ const current = {
   sekLabelledAmounts: findSekLabelledFxAmounts(ROOT),
   extensionRoutes: findExtensionRouteFindings(ROOT),
   offLadderRadii: findOffLadderRadii(),
+  foldedPublicFlags: findFoldedPublicFlags(),
 }
 
 const isUpdate = process.argv.includes('--update')
@@ -888,6 +973,23 @@ if (current.offLadderRadii.length) {
   )
 }
 
+// 1e1b. folded-public-flag: no baseline, the count is 0 and any new in-place
+// comparison is a hard failure. This one is invisible in dev and in the Vercel
+// build (both have real env values); it only misfires in the Docker image, and
+// then silently.
+if (current.foldedPublicFlags.length) {
+  failed = true
+  console.error(
+    `\n✗ folded-public-flag: ${current.foldedPublicFlags.length} NEXT_PUBLIC_* flag(s) compared in place:`,
+  )
+  current.foldedPublicFlags.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → read the value instead: flagEnabled(process.env.NEXT_PUBLIC_X) from @/lib/env/public-flags\n' +
+      '    (or isSelfHosted()). Comparing in place lets the minifier fold the Docker sentinel to\n' +
+      '    false and delete the branch, so the flag can never be switched on by an operator.',
+  )
+}
+
 // 1e2. hand-rolled-invariant: counted, may only go down.
 if (current.handRolledInvariants > (baseline.handRolledInvariants?.count ?? Infinity)) {
   failed = true
@@ -999,5 +1101,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
 )

@@ -8,6 +8,8 @@
  * Unlike BankID this is not hosted-only: self-hosted installations can
  * configure their own Google OAuth client.
  */
+import { flagEnabled } from '@/lib/env/public-flags'
+
 export function isGoogleAuthEnabled(): boolean {
-  return process.env.NEXT_PUBLIC_GOOGLE_AUTH_ENABLED === 'true'
+  return flagEnabled(process.env.NEXT_PUBLIC_GOOGLE_AUTH_ENABLED)
 }

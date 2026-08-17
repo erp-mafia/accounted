@@ -5,9 +5,11 @@
  * Enforcement is application-side (middleware + API routes), not RLS.
  */
 
+import { flagEnabled, isSelfHosted } from '@/lib/env/public-flags'
+
 export function isMfaRequired(): boolean {
-  if (process.env.NEXT_PUBLIC_SELF_HOSTED === 'true') return false
-  return process.env.NEXT_PUBLIC_REQUIRE_MFA === 'true'
+  if (isSelfHosted()) return false
+  return flagEnabled(process.env.NEXT_PUBLIC_REQUIRE_MFA)
 }
 
 /**

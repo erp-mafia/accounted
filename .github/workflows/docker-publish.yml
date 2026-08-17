@@ -116,6 +116,51 @@ jobs:
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true
 
+      - name: Verify NEXT_PUBLIC_* sentinels survived the build
+        # The image is generic: it is built with sentinel values
+        # (__NEXT_PUBLIC_SELF_HOSTED__) that docker-entrypoint.sh seds into
+        # .next at container start. That only works if the sentinel is still IN
+        # the build output. Writing `process.env.NEXT_PUBLIC_X === 'true'` in
+        # source lets the minifier fold the comparison and delete the branch,
+        # erasing the sentinel: the flag is then permanently false and no
+        # operator setting can change it. That shipped once and left every
+        # Docker self-host running with the entitlement paywall live, invisibly,
+        # because dev and the Vercel build both have real env values and never
+        # reproduce it.
+        #
+        # This runs in the per-platform build, not in `merge`, for two reasons.
+        # It is the only place each architecture is actually checked: `docker
+        # run` against the manifest list resolves the runner's own platform, so
+        # a merge-job check would silently exempt arm64. And it lands BEFORE any
+        # tag exists, so a folded sentinel fails the matrix (fail-fast) and
+        # `merge` never runs: `latest` cannot move onto a build whose flags can
+        # no longer be configured. The digest image pushed above stays untagged
+        # and unreferenced.
+        #
+        # check:guards catches the source pattern on every PR; this is the
+        # end-to-end proof against the built artifact, which is the only place
+        # the failure is observable.
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+          MISSING=""
+          for VAR in NEXT_PUBLIC_SELF_HOSTED NEXT_PUBLIC_REQUIRE_MFA; do
+            if docker run --rm --entrypoint sh "$IMAGE" -c \
+                 "grep -rq '__${VAR}__' /opt/gnubok-template/.next"; then
+              echo "ok: __${VAR}__ present in build output"
+            else
+              MISSING="${MISSING} ${VAR}"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::Sentinel(s) missing from the build output:${MISSING}."
+            echo "::error::Read these flags via lib/env/public-flags (flagEnabled/isSelfHosted)."
+            echo "::error::An in-place comparison is constant-folded away, leaving the flag stuck off."
+            exit 1
+          fi
+
       # Digests reach `merge` as artifact filenames: the file content is
       # irrelevant, only the name carries information.
       - name: Export digest

@@ -12,10 +12,12 @@
  * short-circuits first, then the feature's own env var decides.
  */
 
+import { isSelfHosted } from '@/lib/env/public-flags'
+
 export const POSTHOG_TOKEN_VAR = 'NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN'
 
 export function isAnalyticsEnabled(): boolean {
-  if (process.env.NEXT_PUBLIC_SELF_HOSTED === 'true') return false
+  if (isSelfHosted()) return false
   return Boolean(process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN)
 }
 
@@ -31,7 +33,7 @@ export function warnIfAnalyticsMisconfigured(): boolean {
   if (isAnalyticsEnabled()) return true
 
   // Self-hosted is a deliberate off, not a misconfiguration: stay quiet.
-  if (process.env.NEXT_PUBLIC_SELF_HOSTED === 'true') return false
+  if (isSelfHosted()) return false
 
   if (process.env.NODE_ENV === 'development') {
     // console, not createLogger(): this runs in the browser from
