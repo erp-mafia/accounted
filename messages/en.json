@@ -7083,6 +7083,7 @@
     "stripe_description": "Connect your company's Stripe account to fetch payments, fees, and payouts continuously and book them against the Stripe balance.",
     "stripe_not_enabled_title": "The Stripe extension is not enabled",
     "stripe_not_enabled_description": "Enable the Stripe extension to connect your Stripe account and sync transactions automatically.",
+    "badge_beta": "Beta",
     "woocommerce_title": "WooCommerce",
     "woocommerce_description": "Connect your WooCommerce store to fetch paid orders and refunds into the transaction inbox.",
     "woocommerce_not_enabled_title": "The WooCommerce extension is not enabled",

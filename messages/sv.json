@@ -7083,6 +7083,7 @@
     "stripe_description": "Koppla företagets Stripe-konto så hämtas betalningar, avgifter och utbetalningar löpande och bokförs mot Stripe-saldot.",
     "stripe_not_enabled_title": "Stripe-tillägget är inte aktiverat",
     "stripe_not_enabled_description": "Aktivera tillägget Stripe för att koppla ditt Stripe-konto och synka transaktioner automatiskt.",
+    "badge_beta": "Beta",
     "woocommerce_title": "WooCommerce",
     "woocommerce_description": "Koppla din WooCommerce-butik så hämtas betalda ordrar och återbetalningar till transaktionsinkorgen.",
     "woocommerce_not_enabled_title": "WooCommerce-tillägget är inte aktiverat",
