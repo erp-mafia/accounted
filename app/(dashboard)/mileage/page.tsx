@@ -27,7 +27,8 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { PageHeader } from '@/components/ui/page-header'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { locationSuggestions, matchRoute } from '@/lib/mileage/route-memory'
+import { applyRoutePrefill, locationSuggestions } from '@/lib/mileage/route-memory'
+import type { RoutePrefill } from '@/lib/mileage/route-memory'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Car, Copy, Download, Plus, Trash2, Pencil, ChevronDown, ChevronUp } from 'lucide-react'
 import type { MileageTrip, MileageVehicleType } from '@/types'
@@ -112,7 +113,7 @@ export default function MileagePage() {
   const [form, setForm] = useState<TripFormState>(emptyForm())
   const [showMore, setShowMore] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [routePrefilled, setRoutePrefilled] = useState(false)
+  const [prefill, setPrefill] = useState<RoutePrefill | null>(null)
 
   const [bookOpen, setBookOpen] = useState(false)
   const [bookFrom, setBookFrom] = useState('')
@@ -167,7 +168,7 @@ export default function MileagePage() {
     setEditingId(null)
     setForm(emptyForm())
     setShowMore(false)
-    setRoutePrefilled(false)
+    setPrefill(null)
     setFormOpen(true)
   }
 
@@ -175,7 +176,7 @@ export default function MileagePage() {
     setEditingId(trip.id)
     setForm(formFromTrip(trip, true))
     setShowMore(Boolean(trip.vehicle_registration || trip.odometer_start || trip.visited || trip.notes))
-    setRoutePrefilled(false)
+    setPrefill(null)
     setFormOpen(true)
   }
 
@@ -183,31 +184,31 @@ export default function MileagePage() {
     setEditingId(null)
     setForm(formFromTrip(trip, false))
     setShowMore(false)
-    setRoutePrefilled(false)
+    setPrefill(null)
     setFormOpen(true)
   }
 
-  // Route memory: when the from/to pair matches an earlier trip, prefill km
-  // (one-way) and purpose from the latest match. Only empty fields are filled,
-  // so nothing the user typed is ever overwritten, and edit mode is untouched.
+  // Route memory: when the from/to pair matches an earlier trip, empty km and
+  // purpose fields prefill from the latest match. Prefilled values are cleared
+  // again if the route stops matching before they were touched; user-typed
+  // input is never overwritten, and edit mode is untouched.
   const updateRouteField = (field: 'from_location' | 'to_location', value: string) => {
     const next = { ...form, [field]: value }
     if (!editingId) {
-      const match = matchRoute(trips, next.from_location, next.to_location)
-      if (match) {
-        let applied = false
-        if (next.distance_km === '') {
-          next.distance_km = String(match.distance_km)
-          applied = true
-        }
-        if (next.purpose === '') {
-          next.purpose = match.purpose
-          applied = true
-        }
-        if (applied) setRoutePrefilled(true)
-      }
+      const result = applyRoutePrefill(trips, next, prefill)
+      next.distance_km = result.distance_km
+      next.purpose = result.purpose
+      setPrefill(result.prefill)
     }
     setForm(next)
+  }
+
+  // A manual edit disowns that field's prefill so the hint disappears and the
+  // value survives later route changes.
+  const disownPrefill = (field: 'distance_km' | 'purpose') => {
+    if (!prefill || !prefill[field]) return
+    const next = { ...prefill, [field]: '' }
+    setPrefill(next.distance_km || next.purpose ? next : null)
   }
 
   const submitForm = async () => {
@@ -521,8 +522,14 @@ export default function MileagePage() {
                 id="purpose"
                 value={form.purpose}
                 placeholder={t('purpose_placeholder')}
-                onChange={(e) => setForm({ ...form, purpose: e.target.value })}
+                onChange={(e) => {
+                  disownPrefill('purpose')
+                  setForm({ ...form, purpose: e.target.value })
+                }}
               />
+              {Boolean(prefill?.purpose) && (
+                <p className="text-xs text-muted-foreground">{t('route_prefill_hint')}</p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -534,11 +541,11 @@ export default function MileagePage() {
                   inputMode="decimal"
                   value={form.distance_km}
                   onChange={(e) => {
-                    setRoutePrefilled(false)
+                    disownPrefill('distance_km')
                     setForm({ ...form, distance_km: e.target.value })
                   }}
                 />
-                {routePrefilled && (
+                {Boolean(prefill?.distance_km) && (
                   <p className="text-xs text-muted-foreground">{t('route_prefill_hint')}</p>
                 )}
               </div>

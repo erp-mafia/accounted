@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { locationSuggestions, matchRoute, normalizeLocation } from '../route-memory'
+import {
+  applyRoutePrefill,
+  locationSuggestions,
+  matchRoute,
+  normalizeLocation,
+  routeKey,
+} from '../route-memory'
 import type { MileageTrip } from '@/types'
 
 function makeTrip(overrides: Partial<MileageTrip> = {}): MileageTrip {
@@ -65,9 +71,9 @@ describe('matchRoute', () => {
     expect(matchRoute(trips, 'Kontoret', 'Kunden AB')?.distance_km).toBe(42.5)
   })
 
-  it('rounds the halved distance to 1 decimal', () => {
+  it('returns the unrounded half so re-doubling restores the exact stored km', () => {
     const trips = [makeTrip({ distance_km: 42.5, is_round_trip: true })]
-    expect(matchRoute(trips, 'Kontoret', 'Kunden AB')?.distance_km).toBe(21.3)
+    expect(matchRoute(trips, 'Kontoret', 'Kunden AB')?.distance_km).toBe(21.25)
   })
 
   it('prefers the most recent trip by date, then created_at', () => {
@@ -98,6 +104,122 @@ describe('matchRoute', () => {
     ]
     matchRoute(trips, 'Kontoret', 'Kunden AB')
     expect(trips.map((trip) => trip.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('routeKey', () => {
+  it('is null while either endpoint is blank', () => {
+    expect(routeKey('', 'Kunden AB')).toBeNull()
+    expect(routeKey('Kontoret', '  ')).toBeNull()
+  })
+
+  it('normalizes both endpoints', () => {
+    expect(routeKey(' Kontoret ', 'KUNDEN  ab')).toBe(routeKey('kontoret', 'Kunden AB'))
+  })
+})
+
+describe('applyRoutePrefill', () => {
+  const fields = (overrides: Partial<Parameters<typeof applyRoutePrefill>[1]> = {}) => ({
+    from_location: 'Kontoret',
+    to_location: 'Kunden AB',
+    distance_km: '',
+    purpose: '',
+    ...overrides,
+  })
+
+  it('fills empty km and purpose on a match and records the prefill', () => {
+    const trips = [makeTrip({ distance_km: 42.5, purpose: 'Kundbesök' })]
+    const result = applyRoutePrefill(trips, fields(), null)
+    expect(result.distance_km).toBe('42.5')
+    expect(result.purpose).toBe('Kundbesök')
+    expect(result.prefill).toEqual({
+      key: routeKey('Kontoret', 'Kunden AB'),
+      distance_km: '42.5',
+      purpose: 'Kundbesök',
+    })
+  })
+
+  it('clears prefilled values when typing past the match onto a new route', () => {
+    // Skeptic scenario: "Kunden AB" matched and prefilled; user keeps typing
+    // " Syd". The stale km and purpose must not survive onto the new route.
+    const trips = [makeTrip({ distance_km: 42.5, purpose: 'Kundbesök' })]
+    const matched = applyRoutePrefill(trips, fields(), null)
+    const result = applyRoutePrefill(
+      trips,
+      fields({
+        to_location: 'Kunden AB Syd',
+        distance_km: matched.distance_km,
+        purpose: matched.purpose,
+      }),
+      matched.prefill
+    )
+    expect(result.distance_km).toBe('')
+    expect(result.purpose).toBe('')
+    expect(result.prefill).toBeNull()
+  })
+
+  it('re-derives the prefill when switching to a different known route', () => {
+    // Skeptic scenario: Kontoret->Kunden AB prefilled 42.5; switching Fran to
+    // Lagret must swap to that route's latest km, not keep the stale 42.5.
+    const trips = [
+      makeTrip({ id: 'kontoret', distance_km: 42.5, purpose: 'Kundbesök' }),
+      makeTrip({
+        id: 'lagret',
+        from_location: 'Lagret',
+        distance_km: 80,
+        purpose: 'Leverans',
+        trip_date: '2026-08-01',
+      }),
+    ]
+    const matched = applyRoutePrefill(trips, fields(), null)
+    const result = applyRoutePrefill(
+      trips,
+      fields({
+        from_location: 'Lagret',
+        distance_km: matched.distance_km,
+        purpose: matched.purpose,
+      }),
+      matched.prefill
+    )
+    expect(result.distance_km).toBe('80')
+    expect(result.purpose).toBe('Leverans')
+    expect(result.prefill?.key).toBe(routeKey('Lagret', 'Kunden AB'))
+  })
+
+  it('keeps user-typed values when the route changes', () => {
+    const trips = [makeTrip({ distance_km: 42.5, purpose: 'Kundbesök' })]
+    const matched = applyRoutePrefill(trips, fields(), null)
+    // User overwrote the km but left the prefilled purpose in place.
+    const result = applyRoutePrefill(
+      trips,
+      fields({
+        to_location: 'Annan kund',
+        distance_km: '55',
+        purpose: matched.purpose,
+      }),
+      matched.prefill
+    )
+    expect(result.distance_km).toBe('55')
+    expect(result.purpose).toBe('')
+    expect(result.prefill).toBeNull()
+  })
+
+  it('does not refill a field the user has disowned on the same route', () => {
+    const trips = [makeTrip({ distance_km: 42.5, purpose: 'Kundbesök' })]
+    // The page clears the field's prefill entry on manual edits; a later
+    // route keystroke must not clear the user's value as stale.
+    const result = applyRoutePrefill(
+      trips,
+      fields({ distance_km: '50', purpose: 'Kundbesök' }),
+      { key: routeKey('Kontoret', 'Kunden AB')!, distance_km: '', purpose: 'Kundbesök' }
+    )
+    expect(result.distance_km).toBe('50')
+    expect(result.purpose).toBe('Kundbesök')
+  })
+
+  it('is a no-op without a match or an existing prefill', () => {
+    const result = applyRoutePrefill([], fields({ distance_km: '12', purpose: 'Möte' }), null)
+    expect(result).toEqual({ distance_km: '12', purpose: 'Möte', prefill: null })
   })
 })
 
