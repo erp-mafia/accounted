@@ -4287,7 +4287,7 @@ export const tools: McpTool[] = [
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
         vat_treatment: { type: 'string', description: 'VAT treatment override. Defaults to standard_25 for business expenses. Set reverse_charge ONLY when the underlag confirms the seller did NOT charge VAT (omvänd skattskyldighet). An invoice with foreign VAT already debited is NOT reverse charge.', enum: [...VALID_VAT_TREATMENTS] },
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp: e.g. dricks carries no VAT. Requires a rate-based vat_treatment. Swedish moms only: foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
-        account_override: { type: 'string', pattern: '^\\d{4}$', description: 'Books the business side (debit when money goes out, credit when money comes in) on this kontoplan account instead of the category default: the ONLY way to reach company-custom accounts (e.g. VMB). Must exist and be active (gnubok_list_accounts; create via gnubok_create_account). VMB purchases/sales carry no deductible moms: use vat_treatment "exempt". Without an explicit vat_treatment (or vat_amount) the override books GROSS with no auto-VAT line: a moms leg is never guessed onto a custom account. Class-2 overrides outside 2610-2649 always drop auto-VAT. Not valid with category "private". State the actual affärshändelse in notes (BFL 5 kap).' },
+        account_override: { type: 'string', pattern: '^\\d{4}$', description: 'Books the business side (debit when money goes out, credit when money comes in) on this kontoplan account instead of the category default: the ONLY way to reach company-custom accounts (e.g. VMB). category is still required: it decides direction and VAT; the override only replaces its default account. Must exist and be active (gnubok_list_accounts; create via gnubok_create_account). VMB purchases/sales carry no deductible moms: use vat_treatment "exempt". Without an explicit vat_treatment (or vat_amount) the override books GROSS with no auto-VAT line: a moms leg is never guessed onto a custom account. Class-2 overrides outside 2610-2649 always drop auto-VAT. Not valid with category "private". State the actual affärshändelse in notes (BFL 5 kap).' },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
         dimensions: {
           type: 'object',
@@ -4322,10 +4322,22 @@ export const tools: McpTool[] = [
         throw new Error('account_override must be exactly 4 digits, e.g. "4020".')
       }
 
+      // Presence guard (hosts don't always enforce inputSchema `required`).
+      // Without it a call carrying only account_override reached the enum
+      // check and surfaced as 'Invalid category "undefined"'. The enum check
+      // in categorizeTransactionCore still handles unknown category strings.
+      const category = typeof args.category === 'string' ? args.category.trim() : ''
+      if (!category) {
+        throw new Error(
+          'category is required; account_override only overrides the category\'s default account. ' +
+          `Valid categories: ${VALID_CATEGORIES.join(', ')}`,
+        )
+      }
+
       // Compute the preview (accounts, amounts, VAT lines)
       const result = await categorizeTransactionCore(
         args.transaction_id as string,
-        args.category as TransactionCategory,
+        category as TransactionCategory,
         args.vat_treatment as VatTreatment | undefined,
         vatAmount,
         accountOverride,
@@ -4408,7 +4420,7 @@ export const tools: McpTool[] = [
         `Kategorisera: ${txDesc}`,
         {
           transaction_id: args.transaction_id,
-          category: args.category,
+          category,
           vat_treatment: args.vat_treatment || null,
           vat_amount: vatAmount ?? null,
           account_override: accountOverride ?? null,
@@ -8902,6 +8914,16 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const itemIds = args.item_ids as string[]
       if (!Array.isArray(itemIds) || itemIds.length === 0) throw new Error('item_ids is required (non-empty)')
+      // Presence + enum guard at the boundary (hosts don't always enforce
+      // inputSchema `required`/`enum`): without it a missing or unknown
+      // category was staged as-is and only rejected at approval time.
+      const category = typeof args.category === 'string' ? args.category.trim() : ''
+      if (!category) {
+        throw new Error(`category is required. Valid categories: ${VALID_CATEGORIES.join(', ')}`)
+      }
+      if (!VALID_CATEGORIES.includes(category as typeof VALID_CATEGORIES[number])) {
+        throw new Error(`Invalid category "${category}". Valid categories: ${VALID_CATEGORIES.join(', ')}`)
+      }
       const vatAmount = typeof args.vat_amount === 'number' && Number.isFinite(args.vat_amount)
         ? args.vat_amount
         : undefined
@@ -8971,7 +8993,7 @@ export const tools: McpTool[] = [
           // Stage only the bookable items: the executor re-checks each and
           // skips any that changed state between staging and approval.
           item_ids: bookable.map((it) => it.id as string),
-          category: args.category,
+          category,
           vat_treatment: args.vat_treatment ?? null,
           vat_amount: vatAmount ?? null,
           notes: notes ?? null,
@@ -8988,7 +9010,7 @@ export const tools: McpTool[] = [
           already_booked: alreadyBooked,
           not_found: notFound,
           total_sek: Math.round(totalSek * 100) / 100,
-          category: args.category,
+          category,
           vat_treatment: args.vat_treatment ?? null,
           ...(resolvedDimensions && Object.keys(resolvedDimensions).length > 0
             ? { dimensions: resolvedDimensions }

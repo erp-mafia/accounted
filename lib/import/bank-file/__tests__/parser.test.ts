@@ -1325,6 +1325,56 @@ describe('parseBankFile: Lunar format', () => {
     expect(result.date_to).toBe('2026-06-30')
   })
 
+  // Issue #1671: the same 2026 header set delimited by semicolon or tab (a
+  // spreadsheet re-save, a localized copy) used to fall through to the manual
+  // mapping flow, where Time was picked as the description. The detector now
+  // sniffs the delimiter, so the dedicated parser handles these files.
+  const LUNAR_CSV_2026_SEMICOLON = [
+    'Date;Time;Title;Amount;Balance;Transaction ID',
+    '2026-06-30;12:11;Incoming payment;12 345,00;98 764,94;7f0a4c9e-1111-2222-3333-444455556666',
+    '2026-06-12;05:47;Fee;-1,49;86 419,94;7f0a4c9e-1111-2222-3333-444455557777',
+    '2026-05-12;05:47;Card purchase;"-2 500,00";"86 421,43";7f0a4c9e-1111-2222-3333-444455558888',
+  ].join('\n')
+
+  const LUNAR_CSV_2026_TAB = '\uFEFF' + [
+    'Date\tTime\tTitle\tAmount\tBalance\tTransaction ID',
+    '2026-06-30\t12:11\tIncoming payment\t12 345,00\t98 764,94\t7f0a4c9e-1111-2222-3333-444455556666',
+    '2026-06-12\t05:47\tFee\t-1,49\t86 419,94\t7f0a4c9e-1111-2222-3333-444455557777',
+  ].join('\n')
+
+  it('REGRESSION (#1671): detects and parses a semicolon-delimited 2026 Lunar export', () => {
+    expect(detectFileFormat(LUNAR_CSV_2026_SEMICOLON, 'lunar.csv')!.id).toBe('lunar')
+
+    const result = parseBankFile(LUNAR_CSV_2026_SEMICOLON, 'lunar.csv')
+    expect(result.format).toBe('lunar')
+    expect(result.transactions).toHaveLength(3)
+    expect(result.issues).toHaveLength(0)
+    expect(result.transactions.map((t) => t.description)).toEqual(['Incoming payment', 'Fee', 'Card purchase'])
+    expect(result.transactions.map((t) => t.amount)).toEqual([12345, -1.49, -2500])
+    expect(result.transactions[2].balance).toBe(86421.43)
+    expect(result.transactions[0].date).toBe('2026-06-30')
+  })
+
+  it('REGRESSION (#1671): detects and parses a tab-delimited 2026 Lunar export', () => {
+    expect(detectFileFormat(LUNAR_CSV_2026_TAB, 'lunar.csv')!.id).toBe('lunar')
+
+    const result = parseBankFile(LUNAR_CSV_2026_TAB, 'lunar.csv')
+    expect(result.format).toBe('lunar')
+    expect(result.transactions).toHaveLength(2)
+    expect(result.transactions.map((t) => t.description)).toEqual(['Incoming payment', 'Fee'])
+    expect(result.transactions.map((t) => t.amount)).toEqual([12345, -1.49])
+  })
+
+  it('does not claim a Swedish-header semicolon file or an English file without the Lunar column set', () => {
+    const lunar = getFormat('lunar')!
+    // Swedish labels: not Lunar, whatever the delimiter
+    expect(lunar.detect('Datum;Text;Belopp;Saldo\n2024-01-15;SPOTIFY;-99,00;100,00', 'x.csv')).toBe(false)
+    // "Balance" only as part of another label, no title/text cell: not Lunar
+    expect(lunar.detect('Date,Description,Amount,Running Balance\n2024-01-15,SPOTIFY,-99.00,100.00', 'x.csv')).toBe(false)
+    // Substring hits inside other words are not the Lunar header set
+    expect(lunar.detect('Update,Context,Amounts,Balances\n1,2,3,4', 'x.csv')).toBe(false)
+  })
+
   it('still parses the legacy Lunar period thousands separator ("1.234,56")', () => {
     const legacy = [
       'Date,Text,Amount,Balance',
