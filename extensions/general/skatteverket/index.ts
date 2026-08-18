@@ -172,6 +172,41 @@ async function requireSkvCapability(ctx: ExtensionContext): Promise<NextResponse
 }
 
 /**
+ * Resolve auth for a company-scoped READ triggered from the UI: the caller's
+ * own token if they connected, otherwise any active token another member of
+ * the company connected (see resolve-auth.ts, #1673). Membership is the only
+ * gate: ctx.companyId is resolved from the caller's own memberships and the
+ * token table's SELECT policy is company-scoped, so this can never reach
+ * another company's row.
+ */
+function resolveCompanyReadAuth(ctx: ExtensionContext) {
+  return resolveReadAuth(ctx.supabase, ctx.companyId, { requires: 'lasombud', userId: ctx.userId })
+}
+
+/**
+ * The 401 a read route answers when no usable company token exists.
+ * NOT_CONNECTED keeps the "inte anslutet" empty state (no row at all);
+ * SESSION_EXPIRED mirrors what the token refresh would have thrown for a row
+ * already flagged needs_reconsent, so the UI shows its reconnect prompt
+ * instead of pretending the company never connected.
+ */
+function readAuthFailureResponse(reason: 'no_token' | 'needs_reconsent'): NextResponse {
+  if (reason === 'needs_reconsent') {
+    return NextResponse.json(
+      {
+        error: 'Anslutningen mot Skatteverket behöver förnyas. Anslut igen med BankID.',
+        code: 'SESSION_EXPIRED',
+      },
+      { status: 401 },
+    )
+  }
+  return NextResponse.json(
+    { error: 'Inte ansluten till Skatteverket.', code: 'NOT_CONNECTED' },
+    { status: 401 },
+  )
+}
+
+/**
  * Defense-in-depth RBAC check for AGI write/validate endpoints. Ctx
  * presence alone (set by middleware) only confirms the user is signed in
  * and has a resolved company; it does NOT prove they are entitled to
@@ -1085,17 +1120,13 @@ export const skatteverketExtension: Extension = {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
 
           // resolveReadAuth: post-signing checks should outlive the user's
-          // 65-minute session when the company has a moms_ombud grant.
+          // 65-minute session when the company has a moms_ombud grant, and
+          // any member may read what another member's token fetches (#1673).
           const resolved = await resolveReadAuth(ctx.supabase, ctx.companyId, {
             requires: 'moms_ombud',
             userId: ctx.userId,
           })
-          if (!resolved.ok) {
-            return NextResponse.json(
-              { error: 'Inte ansluten till Skatteverket.', code: 'NOT_CONNECTED' },
-              { status: 401 }
-            )
-          }
+          if (!resolved.ok) return readAuthFailureResponse(resolved.reason)
           const response = await skvRequestWithAuth(
             resolved.auth,
             'GET',
@@ -1146,12 +1177,7 @@ export const skatteverketExtension: Extension = {
             requires: 'moms_ombud',
             userId: ctx.userId,
           })
-          if (!resolved.ok) {
-            return NextResponse.json(
-              { error: 'Inte ansluten till Skatteverket.', code: 'NOT_CONNECTED' },
-              { status: 401 }
-            )
-          }
+          if (!resolved.ok) return readAuthFailureResponse(resolved.reason)
           const response = await skvRequestWithAuth(
             resolved.auth,
             'GET',
@@ -2063,17 +2089,20 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
         // The Skattekonto page keys its "inte anslutet" empty state off a 401
-        // NOT_CONNECTED from this route. Connections are per (user, company):
-        // without this check, a company that never connected rendered the
-        // connected-but-unsynced view because the snapshot read below always
-        // answered 200 (with null data), and "Synkronisera nu" then died on a
-        // behorighet error at SKV.
-        const tokens = await getTokens(ctx.supabase, ctx.userId, ctx.companyId)
-        if (!tokens) {
-          return NextResponse.json(
-            { error: 'Inte ansluten till Skatteverket.', code: 'NOT_CONNECTED' },
-            { status: 401 },
-          )
+        // NOT_CONNECTED from this route. Without this check, a company that
+        // never connected rendered the connected-but-unsynced view because
+        // the snapshot read below always answered 200 (with null data), and
+        // "Synkronisera nu" then died on a behorighet error at SKV.
+        //
+        // "Connected" means the COMPANY has a token row (any member's) or a
+        // verified system grant, not that the caller personally pressed
+        // Anslut: the snapshot and the transactions belong to the company
+        // (#1673). A row already flagged needs_reconsent still counts as
+        // connected here so the stale snapshot stays visible; the sync route
+        // is what surfaces the reconnect prompt.
+        const resolved = await resolveCompanyReadAuth(ctx)
+        if (!resolved.ok && resolved.reason === 'no_token') {
+          return readAuthFailureResponse('no_token')
         }
         const snapshot = await ctx.settings.get<SkattekontoBalanceSnapshot>(SKATTEKONTO_BALANCE_SNAPSHOT_KEY)
         const lastSyncedAt = await ctx.settings.get<string>(SKATTEKONTO_LAST_SYNCED_AT_KEY)
@@ -2165,7 +2194,14 @@ export const skatteverketExtension: Extension = {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
         try {
-          const result = await syncSkattekonto(ctx)
+          // Any member may trigger a sync on the company's connection: the
+          // resolved auth carries the token OWNER's userId, so the refresh
+          // writes back to their row, never to the caller's (#1673). A row
+          // flagged needs_reconsent cannot heal on its own, so answer the
+          // reconnect prompt directly instead of burning a refresh call.
+          const resolved = await resolveCompanyReadAuth(ctx)
+          if (!resolved.ok) return readAuthFailureResponse(resolved.reason)
+          const result = await syncSkattekonto(ctx, resolved.auth)
           return NextResponse.json({ data: result })
         } catch (err) {
           return handleSkvError(err)

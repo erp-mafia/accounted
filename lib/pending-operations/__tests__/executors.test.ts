@@ -204,6 +204,79 @@ describe('commitPendingOperation: unlock_period', () => {
   })
 })
 
+// ─── create_customer ────────────────────────────────────────────────
+
+describe('commitPendingOperation: create_customer', () => {
+  it('inserts the staged customer_number', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeCustomer({ id: 'cust-1', customer_number: 'K-1001' }),
+      error: null,
+    }) // customers insert
+    enqueue({ data: null, error: null }) // dispatcher's pending_operations update
+
+    const op = makePendingOp({
+      operation_type: 'create_customer',
+      params: {
+        name: 'Kund AB',
+        customer_type: 'swedish_business',
+        customer_number: 'K-1001',
+        email: 'faktura@example.test',
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCall('customers', 'insert')?.[0]).toMatchObject({
+      company_id: 'company-1',
+      name: 'Kund AB',
+      customer_number: 'K-1001',
+      email: 'faktura@example.test',
+    })
+  })
+
+  it('rejects a staged customer_number longer than 32 characters without inserting', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      operation_type: 'create_customer',
+      params: {
+        name: 'Kund AB',
+        customer_type: 'swedish_business',
+        customer_number: 'X'.repeat(33),
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/32/)
+    expect(findCall('customers', 'insert')).toBeUndefined()
+  })
+
+  it('inserts customer_number as null when not staged', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: makeCustomer({ id: 'cust-1' }), error: null }) // customers insert
+    enqueue({ data: null, error: null }) // dispatcher's pending_operations update
+
+    const op = makePendingOp({
+      operation_type: 'create_customer',
+      params: { name: 'Kund AB', customer_type: 'swedish_business' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCall('customers', 'insert')?.[0]).toMatchObject({ customer_number: null })
+  })
+})
+
 describe('commitPendingOperation: credit-note issuance guard', () => {
   it('rejects mark_invoice_sent before the ordinary invoice executor can book it', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()

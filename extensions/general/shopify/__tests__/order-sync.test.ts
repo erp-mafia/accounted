@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 const listOrdersPage = vi.fn()
@@ -11,42 +11,48 @@ vi.mock('../lib/api-client', () => ({
     error instanceof Error && error.message === 'REVOKED',
 }))
 
-vi.mock('@/lib/transactions/ingest', () => ({
-  ingestTransactions: vi.fn(),
+vi.mock('@/lib/webshop-orders/ingest', () => ({
+  upsertWebshopOrders: vi.fn(),
 }))
 
-vi.mock('@/lib/cash-accounts/service', () => ({
-  ensureManualCashAccount: vi.fn().mockResolvedValue('cash-account-1'),
-}))
-
-vi.mock('@/lib/import/account-sync', () => ({
-  syncMappedAccounts: vi.fn().mockResolvedValue({ error: null }),
-}))
-
-import { ingestTransactions } from '@/lib/transactions/ingest'
-import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
+import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { encryptCredential } from '../lib/credentials'
 import {
   SHOPIFY_IMPORT_SOURCE,
-  SHOPIFY_LEDGER_ACCOUNT,
-  mapOrder,
-  mapRefund,
+  buildRefundVatBreakdown,
+  buildVatBreakdown,
+  mapLineItems,
+  mapOrderToWebshopRow,
+  mapRefundToWebshopRow,
+  orderAmountUnparseable,
   orderQualifies,
-  rowBehindLock,
   shopifyOrderExternalId,
   shopifyRefundExternalId,
   shopifyShopScope,
   syncShopifyOrders,
 } from '../lib/order-sync'
-import type { ShopifyConnection, ShopifyOrder, ShopifyRefund } from '../types'
+import type {
+  ShopifyConnection,
+  ShopifyLineItem,
+  ShopifyOrder,
+  ShopifyRefund,
+  ShopifyShippingLine,
+  ShopifyTaxLine,
+} from '../types'
 
-beforeAll(() => {
-  vi.stubEnv('SHOPIFY_CREDENTIALS_ENCRYPTION_KEY', 'test-key')
-})
+// Set before the describe bodies run: makeConnection() encrypts credentials
+// at collection time (same pattern as the WooCommerce order-sync test).
+process.env.SHOPIFY_CREDENTIALS_ENCRYPTION_KEY = 'test-key'
 
-afterAll(() => {
-  vi.unstubAllEnvs()
-})
+const emptyUpsertResult = {
+  inserted: 0,
+  updated: 0,
+  unchanged: 0,
+  frozenFlagged: 0,
+  crossMarked: 0,
+  errors: 0,
+}
 
 function makeConnection(overrides: Partial<ShopifyConnection> = {}): ShopifyConnection {
   return {
@@ -74,17 +80,60 @@ function money(amount: string, currencyCode = 'SEK') {
   return { shopMoney: { amount, currencyCode } }
 }
 
+function taxLine(ratePercentage: number | null, amount: string): ShopifyTaxLine {
+  return { ratePercentage, priceSet: money(amount) }
+}
+
+function lineItem(
+  name: string,
+  quantity: number,
+  total: string,
+  taxLines: ShopifyTaxLine[] = [],
+): ShopifyLineItem {
+  return { name, quantity, discountedTotalSet: money(total), taxLines }
+}
+
+function shippingLine(
+  title: string | null,
+  price: string,
+  taxLines: ShopifyTaxLine[] = [],
+): ShopifyShippingLine {
+  return { title, discountedPriceSet: money(price), taxLines }
+}
+
+function conn<T>(nodes: T[], hasNextPage = false) {
+  return { pageInfo: { hasNextPage }, nodes }
+}
+
+/**
+ * Default order: tax-inclusive Swedish store, 1250 kr gross at 25% VAT
+ * (1000 net + 250 moms), one product line covering the whole total.
+ */
 function makeOrder(overrides: Partial<ShopifyOrder> = {}): ShopifyOrder {
   return {
     legacyResourceId: '1042',
     name: '#1042',
     test: false,
+    createdAt: '2026-08-01T09:00:00Z',
     processedAt: '2026-08-01T09:04:30Z',
     updatedAt: '2026-08-01T09:05:00Z',
     displayFinancialStatus: 'PAID',
     paymentGatewayNames: ['Klarna'],
+    taxesIncluded: true,
     totalPriceSet: money('1250.00'),
+    taxLines: [taxLine(25, '250.00')],
+    lineItems: conn([lineItem('Produkt A', 2, '1250.00', [taxLine(25, '250.00')])]),
+    shippingLines: conn<ShopifyShippingLine>([]),
     refunds: [],
+    ...overrides,
+  }
+}
+
+function makeRefund(overrides: Partial<ShopifyRefund> = {}): ShopifyRefund {
+  return {
+    legacyResourceId: '77',
+    createdAt: '2026-08-03T10:00:00Z',
+    totalRefundedSet: money('250.00'),
     ...overrides,
   }
 }
@@ -95,20 +144,13 @@ function page(orders: ShopifyOrder[], hasNextPage = false, endCursor: string | n
 }
 
 /** Minimal chainable supabase mock covering the sync's query patterns. */
-function makeSupabaseMock(options: { lockThrough?: string | null } = {}) {
+function makeSupabaseMock() {
   const updates: Array<{ table: string; values: Record<string, unknown> }> = []
   const client = {
     from(table: string) {
       const builder = {
         select: () => builder,
         eq: () => builder,
-        maybeSingle: async () => ({
-          data:
-            table === 'company_settings'
-              ? { bookkeeping_locked_through: options.lockThrough ?? null }
-              : null,
-          error: null,
-        }),
         update: (values: Record<string, unknown>) => {
           updates.push({ table, values })
           return builder
@@ -126,6 +168,10 @@ function cursorUpdates(updates: Array<{ table: string; values: Record<string, un
   )
 }
 
+function upsertedRows(call = 0): WebshopOrderUpsert[] {
+  return vi.mocked(upsertWebshopOrders).mock.calls[call][3] as WebshopOrderUpsert[]
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   createShopifySession.mockResolvedValue({
@@ -133,11 +179,7 @@ beforeEach(() => {
     accessToken: 'token-1',
   })
   listOrdersPage.mockResolvedValue(page([]))
-  vi.mocked(ingestTransactions).mockResolvedValue({
-    imported: 0,
-    duplicates: 0,
-    errors: 0,
-  } as Awaited<ReturnType<typeof ingestTransactions>>)
+  vi.mocked(upsertWebshopOrders).mockResolvedValue({ ...emptyUpsertResult })
 })
 
 describe('frozen external_id formats', () => {
@@ -160,9 +202,8 @@ describe('frozen external_id formats', () => {
     expect(shopifyShopScope('minbutik.myshopify.com')).toBe('minbutik.myshopify.com')
   })
 
-  it('import source and ledger account are frozen', () => {
+  it('retired feed import source is frozen', () => {
     expect(SHOPIFY_IMPORT_SOURCE).toBe('shopify')
-    expect(SHOPIFY_LEDGER_ACCOUNT).toBe('1584')
   })
 })
 
@@ -179,118 +220,327 @@ describe('orderQualifies', () => {
   })
 })
 
-describe('mapOrder', () => {
-  it('maps a paid order to one gross row dated by processedAt', () => {
-    const rows = mapOrder('minbutik.myshopify.com', makeOrder())
+describe('buildVatBreakdown', () => {
+  it('derives per-rate nets from the order-level tax lines', () => {
+    expect(buildVatBreakdown(makeOrder())).toEqual([{ rate: 25, net: 1000, tax: 250 }])
+  })
+
+  it('handles mixed rates, highest first', () => {
+    const order = makeOrder({
+      totalPriceSet: money('1362.00'),
+      taxLines: [taxLine(12, '12.00'), taxLine(25, '250.00')],
+    })
+    // 25%: net 1000 + 250; 12%: net 100 + 12 = 1362 total, no remainder.
+    expect(buildVatBreakdown(order)).toEqual([
+      { rate: 25, net: 1000, tax: 250 },
+      { rate: 12, net: 100, tax: 12 },
+    ])
+  })
+
+  it('books the uncovered remainder as a 0%-bucket (zero-rated goods)', () => {
+    const order = makeOrder({
+      totalPriceSet: money('1750.00'),
+      taxLines: [taxLine(25, '250.00')],
+    })
+    expect(buildVatBreakdown(order)).toEqual([
+      { rate: 25, net: 1000, tax: 250 },
+      { rate: 0, net: 500, tax: 0 },
+    ])
+  })
+
+  it('maps an entirely untaxed order to one 0%-bucket', () => {
+    const order = makeOrder({ totalPriceSet: money('900.00'), taxLines: [] })
+    expect(buildVatBreakdown(order)).toEqual([{ rate: 0, net: 900, tax: 0 }])
+  })
+
+  it('leaves öre-level drift to the booking residual instead of a fake 0%-sale', () => {
+    const order = makeOrder({
+      totalPriceSet: money('1250.30'),
+      taxLines: [taxLine(25, '250.00')],
+    })
+    expect(buildVatBreakdown(order)).toEqual([{ rate: 25, net: 1000, tax: 250 }])
+  })
+
+  it('refuses a breakdown when a charged tax has no reported rate', () => {
+    const order = makeOrder({ taxLines: [taxLine(null, '250.00')] })
+    expect(buildVatBreakdown(order)).toEqual([])
+  })
+
+  it('refuses a breakdown whose buckets exceed the charged total', () => {
+    const order = makeOrder({
+      totalPriceSet: money('500.00'),
+      taxLines: [taxLine(25, '250.00')],
+    })
+    expect(buildVatBreakdown(order)).toEqual([])
+  })
+
+  it('returns [] for zero or unparseable totals', () => {
+    expect(buildVatBreakdown(makeOrder({ totalPriceSet: money('0.00') }))).toEqual([])
+    expect(buildVatBreakdown(makeOrder({ totalPriceSet: money('nope') }))).toEqual([])
+  })
+})
+
+describe('buildRefundVatBreakdown', () => {
+  it("prorates the parent order's mix by refund/order ratio", () => {
+    const { breakdown, totalTax } = buildRefundVatBreakdown(makeOrder(), makeRefund())
+    // 250 / 1250 = 20% of {net 1000, tax 250}.
+    expect(breakdown).toEqual([{ rate: 25, net: 200, tax: 50 }])
+    expect(totalTax).toBe(50)
+  })
+
+  it('still prorates the parent TOTAL tax when per-rate bucketing is refused', () => {
+    // Unreported rate: buildVatBreakdown refuses, but the parent was taxed.
+    // The refund row must still carry the moms reversal (total_tax), which
+    // the booking dialog's ratio-inference fallback turns into an editable
+    // bucket instead of a silent 0%-refund.
+    const order = makeOrder({ taxLines: [taxLine(null, '250.00')] })
+    expect(buildRefundVatBreakdown(order, makeRefund())).toEqual({
+      breakdown: [],
+      totalTax: 50,
+    })
+  })
+
+  it('returns zero tax when the parent genuinely carried none', () => {
+    const order = makeOrder({ totalPriceSet: money('900.00'), taxLines: [] })
+    // Parent maps to one 0%-bucket, prorating it yields a 0-tax bucket set.
+    const { totalTax } = buildRefundVatBreakdown(order, makeRefund())
+    expect(totalTax).toBe(0)
+  })
+
+  it('returns an empty breakdown for zero-amount refunds', () => {
+    expect(
+      buildRefundVatBreakdown(makeOrder(), makeRefund({ totalRefundedSet: money('0') })),
+    ).toEqual({ breakdown: [], totalTax: 0 })
+  })
+})
+
+describe('mapLineItems', () => {
+  it('decomposes tax-inclusive lines into net + tax with the line rate', () => {
+    expect(mapLineItems(makeOrder())).toEqual([
+      { name: 'Produkt A', quantity: 2, total: 1000, total_tax: 250, vat_rate: 25 },
+    ])
+  })
+
+  it('keeps tax-exclusive line totals as the net', () => {
+    const order = makeOrder({
+      taxesIncluded: false,
+      lineItems: conn([lineItem('Produkt A', 2, '1000.00', [taxLine(25, '250.00')])]),
+    })
+    expect(mapLineItems(order)).toEqual([
+      { name: 'Produkt A', quantity: 2, total: 1000, total_tax: 250, vat_rate: 25 },
+    ])
+  })
+
+  it('includes shipping as its own line and marks untaxed lines 0%', () => {
+    const order = makeOrder({
+      totalPriceSet: money('1329.00'),
+      taxLines: [taxLine(25, '265.80')],
+      lineItems: conn([lineItem('Produkt A', 2, '1250.00', [taxLine(25, '250.00')])]),
+      shippingLines: conn([shippingLine(null, '79.00', [taxLine(25, '15.80')])]),
+    })
+    expect(mapLineItems(order)).toEqual([
+      { name: 'Produkt A', quantity: 2, total: 1000, total_tax: 250, vat_rate: 25 },
+      { name: 'Frakt', quantity: 1, total: 63.2, total_tax: 15.8, vat_rate: 25 },
+    ])
+  })
+
+  it('drops the snapshot when the parts do not reconstruct the charged total', () => {
+    // Cart-level discount: 100 kr off the total that discountedTotalSet does
+    // not carry. An invoice built from these lines would overbill.
+    const order = makeOrder({ totalPriceSet: money('1150.00') })
+    expect(mapLineItems(order)).toEqual([])
+  })
+
+  it('drops the snapshot when the line-item page is truncated', () => {
+    const order = makeOrder({
+      lineItems: conn([lineItem('Produkt A', 2, '1250.00', [taxLine(25, '250.00')])], true),
+    })
+    expect(mapLineItems(order)).toEqual([])
+  })
+
+  it('drops the snapshot when the shipping-line page is truncated', () => {
+    const order = makeOrder({
+      shippingLines: conn<ShopifyShippingLine>([], true),
+    })
+    expect(mapLineItems(order)).toEqual([])
+  })
+
+  it('stores vat_rate null for a part taxed at two different rates', () => {
+    const order = makeOrder({
+      totalPriceSet: money('1370.00'),
+      taxLines: [taxLine(25, '250.00'), taxLine(12, '12.00')],
+      lineItems: conn([
+        lineItem('Paket', 1, '1370.00', [taxLine(25, '250.00'), taxLine(12, '12.00')]),
+      ]),
+    })
+    expect(mapLineItems(order)).toEqual([
+      { name: 'Paket', quantity: 1, total: 1108, total_tax: 262, vat_rate: null },
+    ])
+  })
+})
+
+describe('mapOrderToWebshopRow', () => {
+  const connection = makeConnection()
+
+  it('maps a paid order to a full webshop_orders upsert row', () => {
+    const rows = mapOrderToWebshopRow(connection, 'minbutik.myshopify.com', makeOrder())
     expect(rows).toEqual([
       {
-        date: '2026-08-01',
-        description: 'Shopify-order #1042',
-        amount: 1250,
-        currency: 'SEK',
+        platform: 'shopify',
+        store_scope: 'minbutik.myshopify.com',
+        store_label: 'Testbutiken',
+        connection_id: 'conn-1',
+        row_type: 'order',
+        parent_external_id: null,
         external_id: 'shopify_minbutik.myshopify.com_order_1042',
-        import_source: 'shopify',
-        reference: 'Klarna',
+        platform_order_id: '1042',
+        order_number: '#1042',
+        status: 'paid',
+        is_paid: true,
+        order_date: '2026-08-01',
+        paid_date: '2026-08-01',
+        currency: 'SEK',
+        total: 1250,
+        total_tax: 250,
+        vat_breakdown: [{ rate: 25, net: 1000, tax: 250 }],
+        line_items: [
+          { name: 'Produkt A', quantity: 2, total: 1000, total_tax: 250, vat_rate: 25 },
+        ],
+        customer_name: null,
+        customer_company: null,
+        customer_email: null,
+        customer_orgnr: null,
+        customer_country: null,
+        payment_method: 'Klarna',
+        payment_method_title: 'Klarna',
+        gateway_reference: null,
+        refunded_total: 0,
       },
     ])
   })
 
-  it('rounds string money to two decimals and uppercases the currency', () => {
-    const rows = mapOrder('s', makeOrder({ totalPriceSet: money('99.995', 'eur') }))
-    expect(rows[0].amount).toBe(100)
-    expect(rows[0].currency).toBe('EUR')
+  it('uppercases the currency and reports the summed refund total', () => {
+    const order = makeOrder({
+      totalPriceSet: money('1250.00', 'eur'),
+      displayFinancialStatus: 'PARTIALLY_REFUNDED',
+      refunds: [makeRefund(), makeRefund({ legacyResourceId: '78' })],
+    })
+    const [row] = mapOrderToWebshopRow(connection, 's', order)
+    expect(row.currency).toBe('EUR')
+    expect(row.status).toBe('partially_refunded')
+    expect(row.refunded_total).toBe(500)
+  })
+
+  it('joins multiple gateways into the title and keys on the first', () => {
+    const order = makeOrder({ paymentGatewayNames: ['Shopify Payments', 'gift_card'] })
+    const [row] = mapOrderToWebshopRow(connection, 's', order)
+    expect(row.payment_method).toBe('Shopify Payments')
+    expect(row.payment_method_title).toBe('Shopify Payments, gift_card')
+  })
+
+  it('leaves the payment method null when no gateways are reported', () => {
+    const [row] = mapOrderToWebshopRow(connection, 's', makeOrder({ paymentGatewayNames: [] }))
+    expect(row.payment_method).toBeNull()
+    expect(row.payment_method_title).toBeNull()
   })
 
   it('skips unpaid, test, zero-total and unparseable orders', () => {
-    expect(mapOrder('s', makeOrder({ displayFinancialStatus: 'PENDING' }))).toEqual([])
-    expect(mapOrder('s', makeOrder({ test: true }))).toEqual([])
-    expect(mapOrder('s', makeOrder({ totalPriceSet: money('0.00') }))).toEqual([])
-    expect(mapOrder('s', makeOrder({ totalPriceSet: money('not-a-number') }))).toEqual([])
-  })
-
-  it('leaves the reference null when no gateways are reported', () => {
-    expect(mapOrder('s', makeOrder({ paymentGatewayNames: [] }))[0].reference).toBeNull()
+    expect(
+      mapOrderToWebshopRow(connection, 's', makeOrder({ displayFinancialStatus: 'PENDING' })),
+    ).toEqual([])
+    expect(mapOrderToWebshopRow(connection, 's', makeOrder({ test: true }))).toEqual([])
+    expect(
+      mapOrderToWebshopRow(connection, 's', makeOrder({ totalPriceSet: money('0.00') })),
+    ).toEqual([])
+    expect(
+      mapOrderToWebshopRow(connection, 's', makeOrder({ totalPriceSet: money('nope') })),
+    ).toEqual([])
+    expect(orderAmountUnparseable(makeOrder({ totalPriceSet: money('nope') }))).toBe(true)
   })
 })
 
-describe('mapRefund', () => {
-  const refund: ShopifyRefund = {
-    legacyResourceId: '77',
-    createdAt: '2026-08-03T10:00:00Z',
-    totalRefundedSet: money('250.00'),
-  }
+describe('mapRefundToWebshopRow', () => {
+  const connection = makeConnection()
 
-  it('maps a refund to one negative row dated by the refund date', () => {
-    const rows = mapRefund('minbutik.myshopify.com', makeOrder(), refund)
+  it('maps a refund to a negative row parented to its order', () => {
+    const rows = mapRefundToWebshopRow(
+      connection,
+      'minbutik.myshopify.com',
+      makeOrder(),
+      makeRefund(),
+    )
     expect(rows).toEqual([
       {
-        date: '2026-08-03',
-        description: 'Shopify-återbetalning order #1042',
-        amount: -250,
-        currency: 'SEK',
+        platform: 'shopify',
+        store_scope: 'minbutik.myshopify.com',
+        store_label: 'Testbutiken',
+        connection_id: 'conn-1',
+        row_type: 'refund',
+        parent_external_id: 'shopify_minbutik.myshopify.com_order_1042',
         external_id: 'shopify_minbutik.myshopify.com_refund_77',
-        import_source: 'shopify',
-        reference: null,
+        platform_order_id: '77',
+        order_number: '#1042',
+        status: 'refund',
+        is_paid: true,
+        order_date: '2026-08-03',
+        paid_date: '2026-08-03',
+        currency: 'SEK',
+        total: -250,
+        total_tax: -50,
+        vat_breakdown: [{ rate: 25, net: 200, tax: 50 }],
+        line_items: [],
+        customer_name: null,
+        customer_company: null,
+        customer_email: null,
+        customer_orgnr: null,
+        customer_country: null,
+        payment_method: 'Klarna',
+        payment_method_title: 'Klarna',
+        gateway_reference: null,
+        refunded_total: 0,
       },
     ])
   })
 
   it('skips zero-amount refunds', () => {
     expect(
-      mapRefund('s', makeOrder(), { ...refund, totalRefundedSet: money('0') }),
+      mapRefundToWebshopRow(connection, 's', makeOrder(), makeRefund({ totalRefundedSet: money('0') })),
     ).toEqual([])
   })
 })
 
-describe('rowBehindLock', () => {
-  it('drops dates on/before the lock and keeps later ones', () => {
-    expect(rowBehindLock('2026-06-30', '2026-06-30')).toBe(true)
-    expect(rowBehindLock('2026-06-15', '2026-06-30')).toBe(true)
-    expect(rowBehindLock('2026-07-01', '2026-06-30')).toBe(false)
-    expect(rowBehindLock('2026-06-15', null)).toBe(false)
-  })
-})
-
 describe('syncShopifyOrders', () => {
-  it('ingests order and refund rows against the 1584 cash account and advances the cursor', async () => {
+  it('upserts order and refund rows and advances the cursor', async () => {
     const { client, updates } = makeSupabaseMock()
     const order = makeOrder({
       displayFinancialStatus: 'PARTIALLY_REFUNDED',
-      refunds: [
-        {
-          legacyResourceId: '77',
-          createdAt: '2026-08-03T10:00:00Z',
-          totalRefundedSet: money('250.00'),
-        },
-      ],
+      refunds: [makeRefund()],
     })
     listOrdersPage.mockResolvedValueOnce(page([order]))
-    vi.mocked(ingestTransactions).mockResolvedValueOnce({
-      imported: 2,
-      duplicates: 0,
-      errors: 0,
-    } as Awaited<ReturnType<typeof ingestTransactions>>)
+    vi.mocked(upsertWebshopOrders).mockResolvedValueOnce({
+      ...emptyUpsertResult,
+      inserted: 2,
+    })
 
     const summary = await syncShopifyOrders(client, makeConnection())
 
-    expect(summary).toMatchObject({ fetched: 1, refundsFetched: 1, imported: 2, duplicates: 0 })
-    expect(ensureManualCashAccount).toHaveBeenCalledWith(
-      client,
-      'company-1',
-      '1584',
-      'SEK',
-      'Shopify-saldo',
-    )
-    expect(ingestTransactions).toHaveBeenCalledTimes(1)
-    const [, companyId, userId, rows, ingestOptions] =
-      vi.mocked(ingestTransactions).mock.calls[0]
+    expect(summary).toMatchObject({
+      fetched: 1,
+      refundsFetched: 1,
+      inserted: 2,
+      updated: 0,
+      errors: 0,
+    })
+    expect(upsertWebshopOrders).toHaveBeenCalledTimes(1)
+    const [, companyId, userId] = vi.mocked(upsertWebshopOrders).mock.calls[0]
     expect(companyId).toBe('company-1')
     expect(userId).toBe('user-1')
-    expect((rows as Array<{ external_id: string }>).map((r) => r.external_id)).toEqual([
+    const rows = upsertedRows()
+    expect(rows.map((r) => r.external_id)).toEqual([
       'shopify_minbutik.myshopify.com_order_1042',
       'shopify_minbutik.myshopify.com_refund_77',
     ])
-    expect(ingestOptions).toEqual({ settlementAccount: '1584', skipAutoCategorization: true })
+    expect(rows[1].parent_external_id).toBe('shopify_minbutik.myshopify.com_order_1042')
 
     // Cursor persisted from the page's max updatedAt, and any stale
     // error_message is cleared on progress. A fully-listed window then
@@ -337,34 +587,7 @@ describe('syncShopifyOrders', () => {
     expect(listOrdersPage.mock.calls[0][1].updatedAtMin).toBe('2026-08-04T12:00:00.000Z')
   })
 
-  it('drops rows dated on/before the bookkeeping lock on every run', async () => {
-    const { client, updates } = makeSupabaseMock({ lockThrough: '2026-08-02' })
-    // Order paid 2026-08-01 (behind lock), refund created 2026-08-03 (after).
-    const order = makeOrder({
-      displayFinancialStatus: 'PARTIALLY_REFUNDED',
-      refunds: [
-        {
-          legacyResourceId: '77',
-          createdAt: '2026-08-03T10:00:00Z',
-          totalRefundedSet: money('250.00'),
-        },
-      ],
-    })
-    listOrdersPage.mockResolvedValueOnce(page([order]))
-
-    const summary = await syncShopifyOrders(client, makeConnection())
-
-    expect(summary.skippedLocked).toBe(1)
-    const [, , , rows] = vi.mocked(ingestTransactions).mock.calls[0]
-    expect((rows as Array<{ external_id: string }>).map((r) => r.external_id)).toEqual([
-      'shopify_minbutik.myshopify.com_refund_77',
-    ])
-    // The cursor still advances (page + watermark): the drop is by design,
-    // not a failure.
-    expect(cursorUpdates(updates)).toHaveLength(2)
-  })
-
-  it('holds the cursor below a page whose ingest reported errors', async () => {
+  it('holds the cursor below a page whose upsert reported errors', async () => {
     const { client, updates } = makeSupabaseMock()
     // Two orders so the assertion distinguishes "first updatedAt minus 1s"
     // (the floor rule) from "max updatedAt minus 1s".
@@ -374,11 +597,11 @@ describe('syncShopifyOrders', () => {
         makeOrder({ legacyResourceId: '1043', name: '#1043', updatedAt: '2026-08-02T08:00:00Z' }),
       ]),
     )
-    vi.mocked(ingestTransactions).mockResolvedValueOnce({
-      imported: 0,
-      duplicates: 0,
+    vi.mocked(upsertWebshopOrders).mockResolvedValueOnce({
+      ...emptyUpsertResult,
+      inserted: 1,
       errors: 1,
-    } as Awaited<ReturnType<typeof ingestTransactions>>)
+    })
 
     const summary = await syncShopifyOrders(client, makeConnection())
 
@@ -390,39 +613,6 @@ describe('syncShopifyOrders', () => {
     expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:04:59.000Z')
   })
 
-  it('falls back to the first order currency when the shop currency was unreadable', async () => {
-    const { client } = makeSupabaseMock()
-    listOrdersPage.mockResolvedValueOnce(
-      page([makeOrder({ totalPriceSet: money('10.00', 'eur') })]),
-    )
-
-    await syncShopifyOrders(client, makeConnection({ currency: null }))
-
-    expect(ensureManualCashAccount).toHaveBeenCalledWith(
-      client,
-      'company-1',
-      '1584',
-      'EUR',
-      'Shopify-saldo',
-    )
-  })
-
-  it('surfaces a cash-account failure on the connection instead of failing silently', async () => {
-    const { client, updates } = makeSupabaseMock()
-    listOrdersPage.mockResolvedValueOnce(page([makeOrder()]))
-    vi.mocked(ensureManualCashAccount).mockRejectedValueOnce(
-      new Error('cash account 1584 exists with currency EUR'),
-    )
-
-    await expect(syncShopifyOrders(client, makeConnection())).rejects.toThrow(
-      /currency EUR/,
-    )
-    const errorUpdate = updates.find(
-      (u) => u.table === 'shopify_connections' && 'error_message' in u.values,
-    )
-    expect(errorUpdate?.values.error_message).toMatch(/1584/)
-  })
-
   it('counts an unparseable order total as an error without stalling the cursor', async () => {
     const { client, updates } = makeSupabaseMock()
     listOrdersPage.mockResolvedValueOnce(
@@ -432,10 +622,24 @@ describe('syncShopifyOrders', () => {
     const summary = await syncShopifyOrders(client, makeConnection())
 
     expect(summary.errors).toBe(1)
-    expect(ingestTransactions).not.toHaveBeenCalled()
+    expect(upsertWebshopOrders).not.toHaveBeenCalled()
     // Deliberate: a permanently corrupt total must not stall the feed
     // (page cursor + end-of-run watermark both persist).
     expect(cursorUpdates(updates)).toHaveLength(2)
+  })
+
+  it('counts an unparseable refund amount without dropping the order row', async () => {
+    const { client } = makeSupabaseMock()
+    const order = makeOrder({
+      refunds: [makeRefund({ totalRefundedSet: money('nope') })],
+    })
+    listOrdersPage.mockResolvedValueOnce(page([order]))
+
+    const summary = await syncShopifyOrders(client, makeConnection())
+
+    expect(summary.errors).toBe(1)
+    expect(summary.refundsFetched).toBe(1)
+    expect(upsertedRows().map((r) => r.row_type)).toEqual(['order'])
   })
 
   it('advances a watermark on an empty first run so quiet stores rotate in the cron', async () => {
