@@ -75,17 +75,27 @@ export const POST = withRouteContext(
 
       const parseResult = parseSkattekontoFile(content, file.name)
 
-      if (parseResult.sum_valid === false) {
-        return errorResponseFromCode('SKATTEKONTO_FILE_SUM_MISMATCH', opLog, {
-          requestId,
-          details: {
-            openingSaldo: parseResult.opening_saldo,
-            closingSaldo: parseResult.closing_saldo,
-          },
-        })
-      }
       if (parseResult.rows.length === 0) {
         return errorResponseFromCode('SKATTEKONTO_FILE_NO_ROWS', opLog, { requestId })
+      }
+
+      // A statement that does not sum is no longer refused: the preview shows
+      // the gap and asks for confirmation (see parser.ts). Log the figures so
+      // a report of "utdraget summerar inte" can be diagnosed without the
+      // file: amounts and counts only, never row text.
+      if (parseResult.sum_valid === false) {
+        opLog.warn('skattekonto file does not sum', {
+          openingSaldo: parseResult.opening_saldo,
+          closingSaldo: parseResult.closing_saldo,
+          eventsSum: parseResult.events_sum,
+          sumDifference: parseResult.sum_difference,
+          parsedRows: parseResult.stats.parsed_rows,
+          skippedRows: parseResult.stats.skipped_rows,
+          unreadableAmountRows: parseResult.stats.unreadable_amount_rows,
+          dateFrom: parseResult.date_from,
+          dateTo: parseResult.date_to,
+          variant: parseResult.variant,
+        })
       }
 
       // Wrong-company guard: the modern export names its orgnr in the header
