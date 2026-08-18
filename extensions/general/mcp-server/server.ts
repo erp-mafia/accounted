@@ -210,6 +210,7 @@ import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, Agen
 // the skatteverket extension via the registry (lib/pending-operations/commit.ts).
 import { skvRequest, SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
+import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/agi-submission-status'
 import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatteverket/lib/declaration-prep'
 import { writeSkatteverketAudit } from '@/extensions/general/skatteverket/lib/audit'
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
@@ -11974,7 +11975,9 @@ export const tools: McpTool[] = [
         if (!run) throw new Error('Salary run not found')
         const arbetsgivare = await resolveRedovisare(supabase, companyId)
         const period = formatRedovisningsperiod('monthly', run.period_year, run.period_month)
-        // Local cached submission state (extension_data key agi_submission_${period}).
+        // Local cached submission state (extension_data key agi_submission_${period}),
+        // falling back to the receipt on agi_declarations once the kvittens
+        // reconciliation has deleted that cache (same read as GET /agi/status).
         const { data: localRow } = await supabase
           .from('extension_data')
           .select('value')
@@ -11982,10 +11985,9 @@ export const tools: McpTool[] = [
           .eq('extension_id', 'skatteverket')
           .eq('key', `agi_submission_${period}`)
           .maybeSingle()
-        let periodRecord: AgiSubmissionState | null = null
-        if (localRow?.value) {
-          try { periodRecord = JSON.parse(localRow.value as string) as AgiSubmissionState } catch { periodRecord = null }
-        }
+        const periodRecord: AgiSubmissionState | null = await readAgiSubmissionStatus(
+          supabase, companyId, period, localRow?.value ?? null,
+        )
         // Run-scope the period-keyed record (lib/salary/agi-submission-state.ts,
         // same resolution AGIPanel and the run page use). salary_runs is unique
         // per period only for non-corrected runs (partial index, migration

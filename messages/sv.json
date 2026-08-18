@@ -6710,6 +6710,8 @@
     "success_card_signed_by": "Signerad av {name}",
     "success_card_signed_by_at": "Signerad av {name}, {date}",
     "success_card_signed_at": "Signerad {date}",
+    "success_card_signed_by_at_estimated": "Signerad av {name}, ca {date} (kvittensen saknar exakt signeringstid)",
+    "success_card_signed_at_estimated": "Signerad ca {date} (kvittensen saknar exakt signeringstid)",
     "toast_signed_title": "AGI inlämnad",
     "toast_signed_description": "Arbetsgivardeklarationen för {period} är signerad och inlämnad till Skatteverket."
   },

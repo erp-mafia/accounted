@@ -6710,6 +6710,8 @@
     "success_card_signed_by": "Signed by {name}",
     "success_card_signed_by_at": "Signed by {name}, {date}",
     "success_card_signed_at": "Signed {date}",
+    "success_card_signed_by_at_estimated": "Signed by {name}, approx. {date} (the kvittens carries no exact signing time)",
+    "success_card_signed_at_estimated": "Signed approx. {date} (the kvittens carries no exact signing time)",
     "toast_signed_title": "AGI filed",
     "toast_signed_description": "The employer declaration for {period} has been signed and filed with Skatteverket."
   },
