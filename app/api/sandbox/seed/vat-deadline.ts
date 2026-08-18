@@ -7,6 +7,7 @@ export interface SandboxVatDeadline {
   period: string
 }
 
+/** Build the current quarter's canonical, banking-day-adjusted sandbox deadline. */
 export function buildSandboxVatDeadline(today: Date): SandboxVatDeadline {
   const year = today.getFullYear()
   const quarter = Math.floor(today.getMonth() / 3) + 1

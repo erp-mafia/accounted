@@ -23,11 +23,13 @@ export interface VatPeriodDefault {
   period: number
 }
 
+/** Return the monthly VAT period a fixed number of months before a month. */
 function previousMonth(year: number, month: number, monthsBack: number): VatPeriodDefault {
   const date = new Date(year, month - 1 - monthsBack, 1)
   return { year: date.getFullYear(), period: date.getMonth() + 1 }
 }
 
+/** Select the latest ended VAT period that is currently relevant for filing. */
 export function mostRecentEndedVatPeriod(
   periodType: 'monthly' | 'quarterly',
   today: Date = new Date(),

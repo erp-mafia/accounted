@@ -137,6 +137,20 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     expect(result.payment.deadline_label).toBe('26 februari 2026')
   })
 
+  it('surfaces an unavailable deadline instead of guessing when settings are missing', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase([]),
+    )
+
+    expect(result.payment.deadline).toBeNull()
+    expect(result.blockers).toContainEqual(expect.objectContaining({
+      kind: 'deadline_unavailable',
+      severity: 'medium',
+    }))
+  })
+
   it('includes a null-rate 3011 with matching domestic VAT evidence (#1289)', async () => {
     const result = await computeVatCloseCheck(
       PERIOD,

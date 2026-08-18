@@ -1791,6 +1791,7 @@ interface VatCloseBlocker {
     | 'missing_high_value_receipts'
     | 'reverse_charge_input_missing'
     | 'declaration_incomplete'
+    | 'deadline_unavailable'
   severity: 'high' | 'medium' | 'low'
   count: number
   message: string
@@ -2121,7 +2122,7 @@ export async function computeVatCloseCheck(
   // 2) Company settings: deadline inputs come from the same fields used by
   //    lib/tax/deadline-config.ts. The over-40M flag changes monthly filers
   //    from the 12th/17th M+2 schedule to the 26th M+1 schedule.
-  const { data: settings } = await supabase
+  const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
     .select('moms_period, vat_taxable_base_over_40m, entity_type, fiscal_year_start_month, vat_has_eu_trade, vat_filing_method')
     .eq('company_id', companyId)
@@ -2140,24 +2141,57 @@ export async function computeVatCloseCheck(
       ? company.entity_type
       : null
   }
-  const deadlineSettings: VatDeadlineCalculationSettings = {
-    vat_taxable_base_over_40m: settings?.vat_taxable_base_over_40m === true,
-    entity_type: entityType,
-    fiscal_year_start_month: typeof settings?.fiscal_year_start_month === 'number'
-      ? settings.fiscal_year_start_month
-      : null,
-    vat_has_eu_trade: settings?.vat_has_eu_trade === true,
-    vat_filing_method: settings?.vat_filing_method === 'paper' ? 'paper' : 'electronic',
-  }
-
   // 3) Deadline: based on the *requested* period type, not company setting,
   //    so the model gets the right deadline even when querying ad-hoc periods.
-  const deadline = computeMomsDeadline(
-    periodType as 'monthly' | 'quarterly' | 'yearly',
-    Number(year),
-    Number(period),
-    deadlineSettings,
-  )
+  //    Never turn missing settings into a plausible statutory date. Monthly
+  //    deadlines need the turnover threshold; annual deadlines additionally
+  //    need the filing profile and a configured fiscal year matching the
+  //    report range. Quarterly dates are independent of company settings.
+  let deadline: { date: string; label: string } | null = null
+  if (periodType === 'quarterly') {
+    deadline = computeMomsDeadline('quarterly', Number(year), Number(period), {
+      vat_taxable_base_over_40m: false,
+    })
+  } else if (
+    periodType === 'monthly'
+    && typeof settings?.vat_taxable_base_over_40m === 'boolean'
+  ) {
+    deadline = computeMomsDeadline('monthly', Number(year), Number(period), {
+      vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m,
+    })
+  } else if (periodType === 'yearly' && settings && entityType) {
+    const configuredStartMonth = typeof settings.fiscal_year_start_month === 'number'
+      && settings.fiscal_year_start_month >= 1
+      && settings.fiscal_year_start_month <= 12
+      ? settings.fiscal_year_start_month
+      : null
+    const reportEndMonth = Number(end.slice(5, 7))
+    const reportStartMonth = reportEndMonth === 12 ? 1 : reportEndMonth + 1
+    const fiscalYearMatches = entityType === 'enskild_firma'
+      ? reportEndMonth === 12
+      : configuredStartMonth === reportStartMonth
+    const filingProfileComplete = typeof settings.vat_has_eu_trade === 'boolean'
+      && (settings.vat_filing_method === 'electronic' || settings.vat_filing_method === 'paper')
+
+    if (fiscalYearMatches && filingProfileComplete) {
+      const deadlineSettings: VatDeadlineCalculationSettings = {
+        vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m === true,
+        entity_type: entityType,
+        fiscal_year_start_month: reportStartMonth,
+        vat_has_eu_trade: settings.vat_has_eu_trade,
+        vat_filing_method: settings.vat_filing_method,
+      }
+      deadline = computeMomsDeadline('yearly', Number(year), Number(period), deadlineSettings)
+    }
+  }
+  if (!deadline) {
+    log.warn('VAT deadline unavailable', {
+      companyId,
+      periodType,
+      hasSettings: Boolean(settings),
+      settingsErrorCode: settingsError?.code,
+    })
+  }
 
   // 4) Blocker scans: run in parallel
   const [uncategorizedRes, unapprovedRes, recon, missingUnderlag] = await Promise.all([
@@ -2185,6 +2219,15 @@ export async function computeVatCloseCheck(
   ])
 
   const blockers: VatCloseBlocker[] = []
+  if (!deadline) {
+    blockers.push({
+      kind: 'deadline_unavailable',
+      severity: 'medium',
+      count: 1,
+      message: 'Momsens inlämningsdatum kunde inte fastställas säkert',
+      hint: 'Kontrollera momsinställningar, deklarationssätt och räkenskapsperiod innan deklarationen lämnas in.',
+    })
+  }
   const uncategorizedCount = uncategorizedRes.count ?? 0
   if (uncategorizedCount > 0) {
     blockers.push({
@@ -5441,7 +5484,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_vat_close_check',
     title: 'VAT Close Check (Momsdeklaration)',
-    description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor, blockers (uncategorized, unapproved supplier invoices, reconciliation diff, missing receipts) plus declaration_checks: the momsdeklaration completeness gate the web filing UI uses. ready_to_close covers both.",
+    description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor, blockers (uncategorized, unapproved supplier invoices, reconciliation diff, missing receipts, unavailable deadline) plus declaration_checks: the momsdeklaration completeness gate the web filing UI uses. ready_to_close covers both.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,

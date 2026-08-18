@@ -114,4 +114,12 @@ describe('computeMomsDeadline', () => {
     const d = computeMomsDeadline('yearly', 2026, 1, standardSettings)
     expect(d?.date).toBe('2027-08-17')
   })
+
+  it('yearly: does not guess a calendar year for an AB without fiscal settings', () => {
+    const d = computeMomsDeadline('yearly', 2026, 1, {
+      ...standardSettings,
+      fiscal_year_start_month: null,
+    })
+    expect(d).toBeNull()
+  })
 })

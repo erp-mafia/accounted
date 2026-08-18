@@ -91,10 +91,12 @@ export interface VatDeadlineCalculationSettings {
   vat_filing_method?: TaxFilingMethod | null
 }
 
-type AnnualVatDeadlineSettings = Required<Pick<
-  VatDeadlineCalculationSettings,
-  'entity_type' | 'fiscal_year_start_month' | 'vat_has_eu_trade' | 'vat_filing_method'
->>
+interface AnnualVatDeadlineSettings {
+  entity_type: 'aktiebolag' | 'enskild_firma'
+  fiscal_year_start_month: number
+  vat_has_eu_trade: boolean
+  vat_filing_method: TaxFilingMethod
+}
 
 /**
  * Day-of-month of the nth Swedish banking day in a month (1-based n).
@@ -205,20 +207,30 @@ export function getVatDeadlineForPeriod(
   if (settings.entity_type !== 'aktiebolag' && settings.entity_type !== 'enskild_firma') {
     return null
   }
+  if (typeof settings.vat_has_eu_trade !== 'boolean') return null
+  if (settings.vat_filing_method !== 'electronic' && settings.vat_filing_method !== 'paper') {
+    return null
+  }
 
-  const fiscalYearStartMonth = settings.fiscal_year_start_month != null
+  const configuredFiscalYearStartMonth = settings.fiscal_year_start_month != null
     && settings.fiscal_year_start_month >= 1
     && settings.fiscal_year_start_month <= 12
     ? settings.fiscal_year_start_month
-    : 1
+    : null
+  if (settings.entity_type === 'aktiebolag' && configuredFiscalYearStartMonth === null) {
+    return null
+  }
+  const fiscalYearStartMonth = settings.entity_type === 'enskild_firma'
+    ? 1
+    : configuredFiscalYearStartMonth!
   const fiscalYearEndMonth = settings.entity_type === 'enskild_firma'
     ? 12
     : (fiscalYearStartMonth === 1 ? 12 : fiscalYearStartMonth - 1)
   const deadline = getAnnualVatDeadline(fiscalYearEndMonth, year, {
     entity_type: settings.entity_type,
     fiscal_year_start_month: fiscalYearStartMonth,
-    vat_has_eu_trade: settings.vat_has_eu_trade ?? false,
-    vat_filing_method: settings.vat_filing_method ?? 'electronic',
+    vat_has_eu_trade: settings.vat_has_eu_trade,
+    vat_filing_method: settings.vat_filing_method,
   })
   const fiscalYearLabel = getFiscalYearLabel(fiscalYearEndMonth, year)
 
