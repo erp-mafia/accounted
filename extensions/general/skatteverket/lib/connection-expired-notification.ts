@@ -66,11 +66,14 @@ export async function sendConnectionExpiredNotification(
     if (!email.isConfigured()) return { sent: false, reason: 'email_not_configured' }
 
     // Episode key: the token row's created_at. No token row means nothing to
-    // reconnect (already disconnected): skip.
+    // reconnect (already disconnected): skip. Rows are per (user, company):
+    // without the company filter a multi-company operator's second row made
+    // maybeSingle() error out and the email was never sent.
     const { data: token } = await supabase
       .from('skatteverket_tokens')
       .select('created_at')
       .eq('user_id', input.userId)
+      .eq('company_id', input.companyId)
       .maybeSingle()
     const tokenCreatedAt = (token as { created_at?: string | null } | null)?.created_at
     if (!tokenCreatedAt) return { sent: false, reason: 'no_token' }

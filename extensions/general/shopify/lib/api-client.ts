@@ -17,8 +17,17 @@ import type { ShopifyOrder, ShopifyShopInfo } from '../types'
 
 /** Pinned Admin API version; bump quarterly (supported >= 12 months). */
 export const SHOPIFY_API_VERSION = '2026-07'
-/** Orders per page; the API caps `first` at 250, 100 keeps query cost low. */
-export const SHOPIFY_PAGE_SIZE = 100
+/**
+ * Orders per page. The API caps `first` at 250, but query cost is what binds
+ * here: each order carries nested lineItems/shippingLines connections, and a
+ * single GraphQL query must stay under the 1000-point ceiling
+ * (25 * (~1 + lineItems 25 + shipping 5 + overhead) lands well below it).
+ */
+export const SHOPIFY_PAGE_SIZE = 25
+/** Line items fetched per order; more than this drops the line snapshot. */
+export const SHOPIFY_LINE_ITEMS_PAGE = 25
+/** Shipping lines fetched per order; >5 on one order is effectively unheard of. */
+export const SHOPIFY_SHIPPING_LINES_PAGE = 5
 
 const REQUEST_TIMEOUT_MS = 30_000
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504])
@@ -257,9 +266,11 @@ export async function shopifyGraphQL<T>(
 /**
  * Order fields for the feed. Deliberately NO customer/PII fields (customer,
  * email, addresses): they are gated behind Shopify's protected customer data
- * program, and a bookkeeping feed does not need them; the verifikat reference
- * is the order name/id. Refunds come inline (plain list, not a connection),
- * so no per-order follow-up requests are needed.
+ * program, and the order feed does not need them; the verifikat reference is
+ * the order name/id. Tax lines, line items and shipping lines carry the
+ * booking underlag (per-rate VAT, line snapshot) for the Orders page.
+ * Refunds come inline (plain list, not a connection), so no per-order
+ * follow-up requests are needed.
  */
 const ORDERS_QUERY = `
 query OrdersFeed($first: Int!, $after: String, $query: String) {
@@ -269,11 +280,31 @@ query OrdersFeed($first: Int!, $after: String, $query: String) {
       legacyResourceId
       name
       test
+      createdAt
       processedAt
       updatedAt
       displayFinancialStatus
       paymentGatewayNames
+      taxesIncluded
       totalPriceSet { shopMoney { amount currencyCode } }
+      taxLines { ratePercentage priceSet { shopMoney { amount currencyCode } } }
+      lineItems(first: ${SHOPIFY_LINE_ITEMS_PAGE}) {
+        pageInfo { hasNextPage }
+        nodes {
+          name
+          quantity
+          discountedTotalSet { shopMoney { amount currencyCode } }
+          taxLines { ratePercentage priceSet { shopMoney { amount currencyCode } } }
+        }
+      }
+      shippingLines(first: ${SHOPIFY_SHIPPING_LINES_PAGE}) {
+        pageInfo { hasNextPage }
+        nodes {
+          title
+          discountedPriceSet { shopMoney { amount currencyCode } }
+          taxLines { ratePercentage priceSet { shopMoney { amount currencyCode } } }
+        }
+      }
       refunds {
         legacyResourceId
         createdAt

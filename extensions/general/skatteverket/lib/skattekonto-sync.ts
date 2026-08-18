@@ -120,9 +120,10 @@ function upcomingToRow(companyId: string, tx: SkatteverketUpcomingTransaction): 
  */
 export async function syncSkattekonto(
   ctx: ExtensionContext,
-  // Defaults to the ctx user's personal token: the interactive manual-sync
-  // route keeps its exact pre-hybrid behavior. The cron passes system auth
-  // for companies with a verified lasombud grant.
+  // Defaults to the ctx user's personal token (the post-connect refresh, where
+  // the ctx user just consented). The manual-sync route and the cron pass
+  // resolved auth: system credentials for companies with a verified lasombud
+  // grant, otherwise the token of whichever member connected the company.
   auth: SkvAuth = { mode: 'user', supabase: ctx.supabase, userId: ctx.userId, companyId: ctx.companyId },
 ): Promise<SkattekontoSyncResult> {
   const omfragad = await resolveOmfragad(ctx.supabase, ctx.companyId)
@@ -141,11 +142,14 @@ export async function syncSkattekonto(
         err.code === 'SESSION_EXPIRED' ||
         err.code === 'TOKEN_CORRUPTED'
       ) {
+        // Notify the token OWNER, not whoever triggered the sync: only the
+        // owner can redo the BankID consent, and the notification handler
+        // keys its dedup on the owner's token row.
         await eventBus.emit({
           type: 'skattekonto.connection.expired',
           payload: {
             reason: err.code,
-            userId: ctx.userId,
+            userId: auth.mode === 'user' ? auth.userId : ctx.userId,
             companyId: ctx.companyId,
           },
         })

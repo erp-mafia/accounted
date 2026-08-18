@@ -1722,6 +1722,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           notes: data.notes,
           payment_link_url: data.payment_link_url,
           invoice_number: numberPreview,
+          // ROT/RUT claim card: the preview shows the same masked personnummer
+          // and fastighetsbeteckning in its deduction box as the created
+          // invoice will. Only sent when a line actually claims a deduction
+          // (same privacy rule as buildInvoiceWritePayload).
+          ...(data.items.some((i) => i.deduction_type)
+            ? {
+                deduction_personnummer: data.deduction_personnummer,
+                deduction_housing_designation: data.deduction_housing_designation,
+              }
+            : {}),
         }),
       })
 
@@ -1960,6 +1970,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     <SelectValue placeholder={t('select_customer_placeholder')} />
                   </SelectTrigger>
                   <SelectContent>
+                    {/* Radix renders an empty viewport as a bare few-pixel
+                        sliver; give the zero-customer state real content. */}
+                    {customers.length === 0 && (
+                      <div className="px-3 py-2 text-[13px] text-muted-foreground">
+                        {t('no_customers_yet')}
+                      </div>
+                    )}
                     {customers.map((customer) => (
                       <SelectItem key={customer.id} value={customer.id}>
                         {customer.name}
@@ -2608,7 +2625,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   </div>
                   <div
                     id={`${entryListId}-hint`}
-                    className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground"
+                    className={cn(
+                      'px-3 py-2 text-[11px] text-muted-foreground',
+                      // Border only when a list renders above; alone it reads
+                      // as a stray hairline at the top of the popover.
+                      entryMatches.length > 0 && 'border-t border-border',
+                    )}
                   >
                     {entryMatches.length > 0 ? t('entry_hint_matches') : t('entry_hint_free')}
                   </div>
