@@ -162,14 +162,23 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
 
       {Array.isArray(snapshot.bankAccounts) && snapshot.bankAccounts.length > 0 && (
         <SettingsRow label="Bankuppgifter" align="baseline">
-          <ul className="w-full space-y-1">
-            {snapshot.bankAccounts.map((b, i) => (
-              <li key={`${b.type}-${b.accountNumber}-${i}`} className="text-sm tabular-nums">
-                <span className="text-muted-foreground">{b.type}:</span>{' '}
-                <span className="text-foreground">{b.accountNumber}</span>
-              </li>
-            ))}
-          </ul>
+          {/* Registry read-out, not a setting: without the note this row makes
+              the bankgiro look configured while payment files and invoices
+              read the editable fields under Fakturering. */}
+          <div className="w-full space-y-1">
+            <ul className="space-y-1">
+              {snapshot.bankAccounts.map((b, i) => (
+                <li key={`${b.type}-${b.accountNumber}-${i}`} className="text-sm tabular-nums">
+                  <span className="text-muted-foreground">{b.type}:</span>{' '}
+                  <span className="text-foreground">{b.accountNumber}</span>
+                </li>
+              ))}
+            </ul>
+            <SettingsRowNote className="block">
+              Enligt Bolagsverket. Fakturor och betalfiler använder bankuppgifterna
+              under Inställningar → Fakturering.
+            </SettingsRowNote>
+          </div>
         </SettingsRow>
       )}
 

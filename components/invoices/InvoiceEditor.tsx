@@ -219,6 +219,25 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       cancelled = true
     }
   }, [paymentLinksEnabled])
+  // Edit mode: the draft's stored ROT/RUT personnummer, in display form
+  // (YYYYMMDD-XXXX). The row only carries ciphertext + last four digits, and
+  // the mask must come from the server so the browser never holds both
+  // halves of the number. Read once per draft; the hint shows it.
+  const storedPersonnummerId = initial?.deduction_personnummer_last4 ? initial.id : null
+  const [storedPersonnummerMasked, setStoredPersonnummerMasked] = useState<string | null>(null)
+  useEffect(() => {
+    if (!storedPersonnummerId) return
+    let cancelled = false
+    fetch(`/api/invoices/${encodeURIComponent(storedPersonnummerId)}/rot-rut`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload: { data?: { deduction_personnummer_masked?: string | null } } | null) => {
+        if (!cancelled) setStoredPersonnummerMasked(payload?.data?.deduction_personnummer_masked ?? null)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [storedPersonnummerId])
 
   // The item schema is memoised on translations only; whether ROT/RUT claim
   // completeness applies depends on the document type (proformas, delivery
@@ -1722,6 +1741,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           notes: data.notes,
           payment_link_url: data.payment_link_url,
           invoice_number: numberPreview,
+          // ROT/RUT claim card: the preview shows the same masked personnummer
+          // and fastighetsbeteckning in its deduction box as the created
+          // invoice will. Only sent when a line actually claims a deduction
+          // (same privacy rule as buildInvoiceWritePayload).
+          ...(data.items.some((i) => i.deduction_type)
+            ? {
+                deduction_personnummer: data.deduction_personnummer,
+                deduction_housing_designation: data.deduction_housing_designation,
+              }
+            : {}),
         }),
       })
 
@@ -1960,6 +1989,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     <SelectValue placeholder={t('select_customer_placeholder')} />
                   </SelectTrigger>
                   <SelectContent>
+                    {/* Radix renders an empty viewport as a bare few-pixel
+                        sliver; give the zero-customer state real content. */}
+                    {customers.length === 0 && (
+                      <div className="px-3 py-2 text-[13px] text-muted-foreground">
+                        {t('no_customers_yet')}
+                      </div>
+                    )}
                     {customers.map((customer) => (
                       <SelectItem key={customer.id} value={customer.id}>
                         {customer.name}
@@ -2608,7 +2644,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   </div>
                   <div
                     id={`${entryListId}-hint`}
-                    className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground"
+                    className={cn(
+                      'px-3 py-2 text-[11px] text-muted-foreground',
+                      // Border only when a list renders above; alone it reads
+                      // as a stray hairline at the top of the popover.
+                      entryMatches.length > 0 && 'border-t border-border',
+                    )}
                   >
                     {entryMatches.length > 0 ? t('entry_hint_matches') : t('entry_hint_free')}
                   </div>
@@ -2656,7 +2697,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         Otherwise, a kundkort with a personnummer covers an
                         empty field via the server-side fallback. */}
                     {initial?.deduction_personnummer_last4
-                      ? t('deduction_personnummer_kept_hint', { last4: initial.deduction_personnummer_last4 })
+                      ? storedPersonnummerMasked
+                        ? t('deduction_personnummer_kept_hint', { masked: storedPersonnummerMasked })
+                        : t('deduction_personnummer_kept_hint_pending')
                       : customerHasPersonalNumber
                         ? t('deduction_personnummer_customer_hint')
                         : t('deduction_personnummer_hint')}

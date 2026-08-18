@@ -14,12 +14,22 @@
  * most recently ended month the due one year-round.
  */
 
+import { getVatDeadlineForPeriod } from '@/lib/tax/deadline-config'
+import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
+
 export interface VatPeriodDefault {
   year: number
   /** 1-12 for monthly, 1-4 for quarterly. */
   period: number
 }
 
+/** Return the monthly VAT period a fixed number of months before a month. */
+function previousMonth(year: number, month: number, monthsBack: number): VatPeriodDefault {
+  const date = new Date(year, month - 1 - monthsBack, 1)
+  return { year: date.getFullYear(), period: date.getMonth() + 1 }
+}
+
+/** Select the latest ended VAT period that is currently relevant for filing. */
 export function mostRecentEndedVatPeriod(
   periodType: 'monthly' | 'quarterly',
   today: Date = new Date(),
@@ -29,19 +39,23 @@ export function mostRecentEndedVatPeriod(
   const month = today.getMonth() + 1
 
   if (periodType === 'monthly') {
-    let m = month - 1
-    let y = year
-    if (!opts.over40m) {
-      // Deadline day of the CURRENT month for the M-2 declaration: 17 in
-      // January and August, else 12 (deadline-config huvudregel).
-      const deadlineDay = month === 1 || month === 8 ? 17 : 12
-      if (today.getDate() <= deadlineDay) m -= 1
-    }
-    while (m < 1) {
-      m += 12
-      y -= 1
-    }
-    return { year: y, period: m }
+    const mostRecentEnded = previousMonth(year, month, 1)
+    if (opts.over40m) return mostRecentEnded
+
+    const periodDueThisMonth = previousMonth(year, month, 2)
+    const deadline = getVatDeadlineForPeriod(
+      'monthly',
+      periodDueThisMonth.year,
+      periodDueThisMonth.period,
+      { vat_taxable_base_over_40m: false },
+    )
+    const adjustedDeadline = deadline
+      ? adjustDeadlineToNextBankingDay(new Date(deadline.year, deadline.month, deadline.day))
+      : null
+    const currentDate = new Date(year, month - 1, today.getDate())
+    return adjustedDeadline && currentDate <= adjustedDeadline
+      ? periodDueThisMonth
+      : mostRecentEnded
   }
 
   const quarter = Math.ceil(month / 3)

@@ -61,9 +61,11 @@ beforeEach(() => {
   syncShopifyOrders.mockResolvedValue({
     fetched: 2,
     refundsFetched: 0,
-    imported: 2,
-    duplicates: 0,
-    skippedLocked: 0,
+    inserted: 2,
+    updated: 0,
+    unchanged: 0,
+    frozenFlagged: 0,
+    crossMarked: 0,
     errors: 0,
   })
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
@@ -109,7 +111,7 @@ describe('GET /api/extensions/shopify/orders/cron', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.processed).toBe(2)
-    expect(body.imported).toBe(4)
+    expect(body.inserted).toBe(4)
     expect(syncShopifyOrders).toHaveBeenCalledTimes(2)
     // Runs on the service client with a shared deadline.
     expect(syncShopifyOrders.mock.calls[0][0]).toBeTruthy()
@@ -134,9 +136,11 @@ describe('GET /api/extensions/shopify/orders/cron', () => {
       .mockResolvedValueOnce({
         fetched: 1,
         refundsFetched: 0,
-        imported: 1,
-        duplicates: 0,
-        skippedLocked: 0,
+        inserted: 1,
+        updated: 0,
+        unchanged: 0,
+        frozenFlagged: 0,
+        crossMarked: 0,
         errors: 0,
       })
     const res = await callRoute()
@@ -150,9 +154,11 @@ describe('GET /api/extensions/shopify/orders/cron', () => {
     syncShopifyOrders.mockResolvedValue({
       fetched: 0,
       refundsFetched: 0,
-      imported: 0,
-      duplicates: 0,
-      skippedLocked: 0,
+      inserted: 0,
+      updated: 0,
+      unchanged: 0,
+      frozenFlagged: 0,
+      crossMarked: 0,
       errors: 0,
       revoked: true,
     })
