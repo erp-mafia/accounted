@@ -470,9 +470,14 @@ export const arcimMigrationExtension: Extension = {
               details: { consentId },
             })
           }
-          // Wrong credentials (provider actively rejected them): tell the
-          // user to re-check the pasted values instead of a generic 500.
+          // Provider rejected authentication or could not resolve the Bokio
+          // company: return the actionable problem instead of a generic 500.
           if (error instanceof ProviderTokenInvalidError) {
+            if (error.kind === 'company-not-found') {
+              return errorResponseFromCode('BOKIO_COMPANY_NOT_FOUND', moduleLog, {
+                details: { provider, reason: error.message },
+              })
+            }
             return errorResponseFromCode('PROVIDER_TOKEN_INVALID', moduleLog, {
               details: { provider, reason: error.message },
             })
