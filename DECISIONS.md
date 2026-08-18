@@ -2,6 +2,8 @@
 
 One line per decision: `[YYYY-MM-DD] <decision>: <why>`. Appended by agents and humans when a non-obvious choice is made (approach picked over an alternative, dependency declined, action stopped by a CLAUDE.md rule). Read before re-litigating a past decision.
 
+[2026-08-18] Shared-host white-label auth links use an exact NEXT_PUBLIC_WHITELABEL_DOMAINS allowlist and direct per-brand callbacks, with NEXT_PUBLIC_APP_URL as fallback: bouncing recovery through the canonical host would scope the recovery session cookie to that unrelated domain, while exact registered hosts preserve the brand session without trusting arbitrary Host headers or browser origins.
+
 [2026-08-13] E-invoice product-truth correction covers the MCP workflow skills and the MCP-exposed swedish-invoice-compliance atom: the atom's "for Accounted e-invoice generation" heading made the same unsupported product claim as issue #1577, so all active guidance now directs external delivery followed by gnubok_mark_invoice_as_sent; Peppol implementation remains tracked in #546.
 [2026-08-13] KU10 organisation identities normalize to the 12-digit `16`-prefixed form and receive structural XSD validation without a new Luhn gate: Skatteverket KU schema 12.0 requires that shape, names FK201 `UppgiftslamnarId`, and explicitly leaves check-digit validation outside the schema.
 
