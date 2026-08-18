@@ -17,7 +17,11 @@ import { refreshBjornLundenToken } from '@/lib/providers/bjornlunden/oauth'
 import { BjornLundenClient, BjornLundenApiError } from '@/lib/providers/bjornlunden/client'
 import { exchangeBrioxCode } from '@/lib/providers/briox/oauth'
 import { BrioxApiError } from '@/lib/providers/briox/client'
-import { BokioClient, BokioApiError } from '@/lib/providers/bokio/client'
+import {
+  BokioClient,
+  BokioApiError,
+  normalizeBokioAccessToken,
+} from '@/lib/providers/bokio/client'
 import { WintClient, WintApiError } from '@/lib/providers/wint/client'
 import { loginWint, WintLoginRejectedError } from '@/lib/providers/wint/oauth'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
@@ -39,7 +43,10 @@ const wintClient = new WintClient()
  * the user to re-check what they pasted.
  */
 export class ProviderTokenInvalidError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public readonly kind: 'credentials' | 'company-not-found' = 'credentials',
+  ) {
     super(message)
     this.name = 'ProviderTokenInvalidError'
   }
@@ -482,31 +489,41 @@ export async function submitProviderToken(
   // company GUID is typed in by hand. Nothing upstream ties either to the
   // Accounted company being imported into, so a token/GUID for the user's other
   // company imports that company's customers, suppliers and invoices here with
-  // no error at all. Probe /companies/{guid} before storing anything: it both
-  // proves the credentials work and returns the orgNumber to compare.
+  // no error at all. Probe the documented company-information endpoint before
+  // storing anything: it proves the credentials work and returns the
+  // organizationNumber to compare.
   if (provider === 'bokio') {
-    if (!providerCompanyId) {
-      throw new ProviderTokenInvalidError('Bokio requires a company id')
+    const bokioCompanyId = providerCompanyId?.trim() ?? ''
+    accessToken = normalizeBokioAccessToken(apiToken)
+
+    if (!accessToken) {
+      throw new ProviderTokenInvalidError('Bokio requires an integration token')
     }
+    if (!bokioCompanyId) {
+      throw new ProviderTokenInvalidError(
+        'Bokio requires a company id',
+        'company-not-found',
+      )
+    }
+    storedProviderCompanyId = bokioCompanyId
 
     let bokioCompany: Record<string, unknown> | null
     try {
       bokioCompany = await bokioClient.getCompany<Record<string, unknown>>(
         accessToken,
-        providerCompanyId,
+        bokioCompanyId,
       )
     } catch (error) {
       if (error instanceof BokioApiError) {
-        // 429/5xx are transient provider failures, not a verdict on the token:
-        // rethrow so the route reports a generic submit failure rather than
-        // telling the user their credentials are wrong. 401/403/404 mean the
-        // token or the GUID genuinely does not open this company.
-        if (error.statusCode === 429 || error.statusCode >= 500) {
-          throw error
+        // Only 401/403 are authentication verdicts. A 404 from the documented
+        // company-information endpoint means the company id is unknown or is
+        // not available to this company-scoped token. Other statuses can be a
+        // provider/API failure and must not be blamed on the pasted token.
+        if (error.statusCode === 401 || error.statusCode === 403) {
+          throw new ProviderTokenInvalidError(
+            `Bokio rejected the integration token (HTTP ${error.statusCode})`,
+          )
         }
-        throw new ProviderTokenInvalidError(
-          `Bokio rejected the credentials (HTTP ${error.statusCode})`,
-        )
       }
       throw error
     }
@@ -514,13 +531,18 @@ export async function submitProviderToken(
     // getCompany() maps 404 to null: an unknown GUID is a bad company id, not
     // an outage.
     if (!bokioCompany) {
-      throw new ProviderTokenInvalidError('Bokio does not know that company id')
+      throw new ProviderTokenInvalidError(
+        'Bokio does not know that company id',
+        'company-not-found',
+      )
     }
 
     const bokioName = typeof bokioCompany['name'] === 'string'
       ? (bokioCompany['name'] as string).trim()
       : ''
-    const bokioOrgNumber = normalizeOrgNumber(bokioCompany['orgNumber'] as string | undefined)
+    const bokioOrgNumber = normalizeOrgNumber(
+      bokioCompany['organizationNumber'] as string | undefined,
+    )
 
     const { data: targetCompany } = await supabase
       .from('companies')
