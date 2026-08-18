@@ -71,6 +71,7 @@ describe('company migration reset RPCs (pg)', () => {
       legacy_snapshot_141018_authenticated: boolean
       legacy_snapshot_143004_authenticated: boolean
       legacy_snapshot_224000_authenticated: boolean
+      legacy_snapshot_231500_authenticated: boolean
     }>(`
       SELECT
         has_function_privilege(
@@ -112,7 +113,12 @@ describe('company migration reset RPCs (pg)', () => {
           'authenticated',
           'public.company_migration_reset_snapshot_before_20260818224000(uuid)',
           'EXECUTE'
-        ) AS legacy_snapshot_224000_authenticated
+        ) AS legacy_snapshot_224000_authenticated,
+        has_function_privilege(
+          'authenticated',
+          'public.company_migration_reset_snapshot_before_20260818231500(uuid)',
+          'EXECUTE'
+        ) AS legacy_snapshot_231500_authenticated
     `)
 
     expect(rows[0]).toEqual({
@@ -124,6 +130,7 @@ describe('company migration reset RPCs (pg)', () => {
       legacy_snapshot_141018_authenticated: false,
       legacy_snapshot_143004_authenticated: false,
       legacy_snapshot_224000_authenticated: false,
+      legacy_snapshot_231500_authenticated: false,
     })
   })
 
@@ -229,6 +236,52 @@ describe('company migration reset RPCs (pg)', () => {
     )
     const vatDraftPreview = await preview(vatDraft.userId, vatDraft.companyId)
     expect(vatDraftPreview.eligibility?.blockers).toContainEqual({
+      code: 'authority_submission_detected',
+      count: 1,
+    })
+
+    const agiPendingSignature = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.agi_declarations
+         (company_id, user_id, period_year, period_month, xml_content, status,
+          individuppgifter)
+       VALUES ($1, $2, 2026, 8, '<agd/>', 'pending_signature', '[]'::jsonb)`,
+      [agiPendingSignature.companyId, agiPendingSignature.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.extension_data
+         (user_id, company_id, extension_id, key, value)
+       VALUES ($1, $2, 'skatteverket', 'agi_submission_2026-08',
+               to_jsonb($3::text))`,
+      [
+        agiPendingSignature.userId,
+        agiPendingSignature.companyId,
+        JSON.stringify({ status: 'underlag_submitted', period: '2026-08' }),
+      ],
+    )
+    const agiPendingPreview = await preview(
+      agiPendingSignature.userId,
+      agiPendingSignature.companyId,
+    )
+    expect(agiPendingPreview.eligibility?.blockers).toContainEqual({
+      code: 'authority_submission_detected',
+      count: 1,
+    })
+
+    const rotRutGenerated = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.rot_rut_payout_requests
+         (company_id, user_id, deduction_type, name, status, requested_total,
+          file_name)
+       VALUES ($1, $2, 'rot', 'TESTBEGARAN', 'generated', 1000,
+               'rot-begaran.xml')`,
+      [rotRutGenerated.companyId, rotRutGenerated.userId],
+    )
+    const rotRutGeneratedPreview = await preview(
+      rotRutGenerated.userId,
+      rotRutGenerated.companyId,
+    )
+    expect(rotRutGeneratedPreview.eligibility?.blockers).toContainEqual({
       code: 'authority_submission_detected',
       count: 1,
     })
@@ -546,8 +599,24 @@ describe('company migration reset RPCs (pg)', () => {
             JSON.stringify({ status: 'draft_locked', redovisningsperiod: '202606' }),
           ],
         ),
-      ).rejects.toThrow(/source VAT state is immutable/i)
+      ).rejects.toThrow(/source authority workflow state is immutable/i)
       await client.query('ROLLBACK TO SAVEPOINT reject_source_vat_state')
+
+      await client.query('SAVEPOINT reject_source_agi_state')
+      await expect(
+        client.query(
+          `INSERT INTO public.extension_data
+             (user_id, company_id, extension_id, key, value)
+           VALUES ($1, $2, 'skatteverket', 'agi_submission_2026-08',
+                   to_jsonb($3::text))`,
+          [
+            fixture.userId,
+            fixture.companyId,
+            JSON.stringify({ status: 'underlag_submitted', period: '2026-08' }),
+          ],
+        ),
+      ).rejects.toThrow(/source authority workflow state is immutable/i)
+      await client.query('ROLLBACK TO SAVEPOINT reject_source_agi_state')
 
       const guardedTables = [
         'agi_declarations',
