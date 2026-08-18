@@ -110,9 +110,35 @@ describe('computeMomsDeadline', () => {
     expect(d?.date).toBe('2027-02-26')
   })
 
+  it('yearly: an enskild firma does not require a filing method', () => {
+    const d = computeMomsDeadline('yearly', 2026, 1, {
+      ...standardSettings,
+      entity_type: 'enskild_firma',
+      vat_filing_method: null,
+    })
+    expect(d?.date).toBe('2027-05-12')
+  })
+
+  it('yearly: an AB with EU trade does not require a filing method', () => {
+    const d = computeMomsDeadline('yearly', 2026, 1, {
+      ...standardSettings,
+      vat_has_eu_trade: true,
+      vat_filing_method: null,
+    })
+    expect(d?.date).toBe('2027-02-26')
+  })
+
   it('yearly: an aktiebolag uses its canonical electronic filing deadline', () => {
     const d = computeMomsDeadline('yearly', 2026, 1, standardSettings)
     expect(d?.date).toBe('2027-08-17')
+  })
+
+  it('yearly: an AB without EU trade still requires a filing method', () => {
+    const d = computeMomsDeadline('yearly', 2026, 1, {
+      ...standardSettings,
+      vat_filing_method: null,
+    })
+    expect(d).toBeNull()
   })
 
   it('yearly: does not guess a calendar year for an AB without fiscal settings', () => {

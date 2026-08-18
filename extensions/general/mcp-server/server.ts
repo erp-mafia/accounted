@@ -2160,8 +2160,11 @@ export async function computeVatCloseCheck(
     const fiscalYearMatches = entityType === 'enskild_firma'
       ? reportEndMonth === 12
       : configuredStartMonth === reportStartMonth
+    const filingMethodRequired = entityType === 'aktiebolag' && settings.vat_has_eu_trade === false
     const filingProfileComplete = typeof settings.vat_has_eu_trade === 'boolean'
-      && (settings.vat_filing_method === 'electronic' || settings.vat_filing_method === 'paper')
+      && (!filingMethodRequired
+        || settings.vat_filing_method === 'electronic'
+        || settings.vat_filing_method === 'paper')
 
     if (fiscalYearMatches && filingProfileComplete) {
       const deadlineSettings: VatDeadlineCalculationSettings = {

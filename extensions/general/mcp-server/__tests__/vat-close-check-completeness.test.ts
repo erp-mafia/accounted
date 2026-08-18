@@ -180,6 +180,54 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     expect(result.ready_to_close).toBe(false)
   })
 
+  it.each([
+    ['enskild_firma', false, '2027-05-12'],
+    ['aktiebolag', true, '2027-02-26'],
+  ] as const)('does not require an annual filing method for %s with EU trade %s', async (
+    entityType,
+    vatHasEuTrade,
+    expectedDeadline,
+  ) => {
+    const result = await computeVatCloseCheck(
+      { period_type: 'yearly', year: 2026, period: 1 },
+      'company-1',
+      mockSupabase([], [], {
+        moms_period: 'yearly',
+        vat_taxable_base_over_40m: false,
+        entity_type: entityType,
+        fiscal_year_start_month: 1,
+        vat_has_eu_trade: vatHasEuTrade,
+        vat_filing_method: null,
+      }),
+    )
+
+    expect(result.payment.deadline).toBe(expectedDeadline)
+    expect(result.blockers).not.toContainEqual(expect.objectContaining({
+      kind: 'deadline_unavailable',
+    }))
+  })
+
+  it('requires an annual filing method for an AB without EU trade', async () => {
+    const result = await computeVatCloseCheck(
+      { period_type: 'yearly', year: 2026, period: 1 },
+      'company-1',
+      mockSupabase([], [], {
+        moms_period: 'yearly',
+        vat_taxable_base_over_40m: false,
+        entity_type: 'aktiebolag',
+        fiscal_year_start_month: 1,
+        vat_has_eu_trade: false,
+        vat_filing_method: null,
+      }),
+    )
+
+    expect(result.payment.deadline).toBeNull()
+    expect(result.blockers).toContainEqual(expect.objectContaining({
+      kind: 'deadline_unavailable',
+      severity: 'high',
+    }))
+  })
+
   it('includes a null-rate 3011 with matching domestic VAT evidence (#1289)', async () => {
     const result = await computeVatCloseCheck(
       PERIOD,

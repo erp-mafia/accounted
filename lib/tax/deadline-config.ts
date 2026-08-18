@@ -95,7 +95,7 @@ interface AnnualVatDeadlineSettings {
   entity_type: 'aktiebolag' | 'enskild_firma'
   fiscal_year_start_month: number
   vat_has_eu_trade: boolean
-  vat_filing_method: TaxFilingMethod
+  vat_filing_method?: TaxFilingMethod | null
 }
 
 /**
@@ -208,7 +208,12 @@ export function getVatDeadlineForPeriod(
     return null
   }
   if (typeof settings.vat_has_eu_trade !== 'boolean') return null
-  if (settings.vat_filing_method !== 'electronic' && settings.vat_filing_method !== 'paper') {
+  if (
+    settings.entity_type === 'aktiebolag'
+    && settings.vat_has_eu_trade === false
+    && settings.vat_filing_method !== 'electronic'
+    && settings.vat_filing_method !== 'paper'
+  ) {
     return null
   }
 
