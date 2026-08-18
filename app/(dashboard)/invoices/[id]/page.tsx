@@ -13,7 +13,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
 import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { getDisplayTotal, getAmountToPay } from '@/lib/invoices/rounding'
+import { workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
@@ -52,6 +53,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
 import {
@@ -119,6 +121,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoice_detail')
+  // Begäran status labels are shared with the payout dialog on the list page.
+  const tInvoices = useTranslations('invoices')
   const locale = useLocale()
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
@@ -150,6 +154,29 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       voucher_number: number | null
     }>
   >([])
+  // ROT/RUT begäran rows this invoice is part of (fakturamodellen). Empty
+  // for invoices without a deduction and for claimed invoices whose begäran
+  // has not been generated yet; the Skattereduktion card reads it.
+  const [payoutRequests, setPayoutRequests] = useState<
+    Array<{
+      id: string
+      requested_amount: number
+      decided_amount: number | null
+      status: string
+      name: string
+      created_at: string
+      submitted_at: string | null
+      decided_at: string | null
+    }>
+  >([])
+  // Display form of the ROT/RUT personnummer (YYYYMMDD-XXXX). The row the
+  // browser holds carries only ciphertext + last four digits, and it must
+  // never hold both a mask and the last four (that is the full number), so
+  // the mask is fetched from the server for invoices with a claim.
+  // undefined = not fetched yet, null = nothing stored or unreadable.
+  const [deductionPersonnummerMasked, setDeductionPersonnummerMasked] = useState<
+    string | null | undefined
+  >(undefined)
   const [creditNote, setCreditNote] = useState<Invoice | null>(null)
   const [originalInvoice, setOriginalInvoice] = useState<Invoice | null>(null)
   const [convertedFromInvoice, setConvertedFromInvoice] = useState<Invoice | null>(null)
@@ -212,6 +239,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  /** Masked ROT/RUT personnummer from the server; null when absent or unreadable. */
+  async function loadDeductionPersonnummerMasked(): Promise<string | null> {
+    try {
+      const response = await fetch(`/api/invoices/${encodeURIComponent(id)}/rot-rut`)
+      if (!response.ok) return null
+      const payload = (await response.json()) as {
+        data?: { deduction_personnummer_masked?: string | null }
+      }
+      return payload.data?.deduction_personnummer_masked ?? null
+    } catch {
+      return null
+    }
+  }
+
   async function retryLoadDeliveries() {
     const result = await loadDeliveries()
     setDeliveries(result.deliveries)
@@ -226,7 +267,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     // change / finalize / payment / send reconcile BEHIND the mounted page:
     // a one-field state change must not collapse the whole detail view to a
     // spinner, reset scroll, and remount every card.
-    if (!invoice || invoice.id !== id) setIsLoading(true)
+    if (!invoice || invoice.id !== id) {
+      setIsLoading(true)
+      // A different invoice: never let the previous one's mask show on it.
+      setDeductionPersonnummerMasked(undefined)
+    }
 
     // Settings depend only on the active company, so start them with the main
     // invoice batch instead of waiting for the invoice row first.
@@ -242,7 +287,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
     // Invoice, reminders, payments, and deliveries all key on the route id: one
     // parallel batch. Only the follow-ups below need the invoice row.
-    const [{ data, error }, { data: reminderData }, { data: paymentData }, deliveryData] =
+    const [{ data, error }, { data: reminderData }, { data: paymentData }, deliveryData, { data: payoutData }] =
       await Promise.all([
         supabase
           .from('invoices')
@@ -270,6 +315,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           .eq('invoice_id', id)
           .order('payment_date', { ascending: true }),
         deliveriesPromise,
+        // ROT/RUT begäran this invoice belongs to (usually 0 or 1 rows).
+        // RLS scopes the join to the user's companies.
+        supabase
+          .from('rot_rut_payout_request_items')
+          .select(
+            'id, requested_amount, decided_amount, request:rot_rut_payout_requests(status, name, created_at, submitted_at, decided_at)',
+          )
+          .eq('invoice_id', id),
       ])
 
     // A newer fetch owns the page now (pager step or later refresh): commit
@@ -321,6 +374,34 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       )
     }
 
+    type PayoutRow = {
+      id: string
+      requested_amount: number
+      decided_amount: number | null
+      request:
+        | { status: string; name: string; created_at: string; submitted_at: string | null; decided_at: string | null }
+        | { status: string; name: string; created_at: string; submitted_at: string | null; decided_at: string | null }[]
+        | null
+    }
+    setPayoutRequests(
+      ((payoutData ?? []) as unknown as PayoutRow[]).flatMap((row) => {
+        const req = Array.isArray(row.request) ? row.request[0] : row.request
+        if (!req) return []
+        return [
+          {
+            id: row.id,
+            requested_amount: Number(row.requested_amount),
+            decided_amount: row.decided_amount === null ? null : Number(row.decided_amount),
+            status: req.status,
+            name: req.name,
+            created_at: req.created_at,
+            submitted_at: req.submitted_at,
+            decided_at: req.decided_at,
+          },
+        ]
+      }),
+    )
+
     const settingsRes = await settingsPromise
     if (seq !== fetchSeqRef.current) return
     if (settingsRes) {
@@ -345,6 +426,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     // view. Resolve them together after first paint and fill their links in.
     setIsLoading(false)
     void Promise.all([
+        (data.deduction_total ?? 0) > 0
+          ? loadDeductionPersonnummerMasked()
+          : Promise.resolve(null),
         !data.credited_invoice_id &&
         ['sent', 'paid', 'overdue', 'credited'].includes(data.status)
           ? supabase
@@ -368,11 +452,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               .eq('id', data.converted_from_id)
               .single()
           : Promise.resolve(null),
-      ]).then(([creditNoteRes, originalRes, convertedRes]) => {
+      ]).then(([personnummerMasked, creditNoteRes, originalRes, convertedRes]) => {
         // Deferred writes need the same guard: they land after first paint
         // and would otherwise attach the previous invoice's related documents
         // to the one the pager has since navigated to.
         if (seq !== fetchSeqRef.current) return
+        setDeductionPersonnummerMasked(personnummerMasked)
         setCreditNote(creditNoteRes?.data ? (creditNoteRes.data as Invoice) : null)
         if (originalRes?.data) {
           setOriginalInvoice(originalRes.data as Invoice)
@@ -957,6 +1042,35 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // immutable (BFL); they are corrected with a credit note instead.
   const isEditableDraft = isEditableInvoiceDraft(invoice)
   const isCopyable = canCopyInvoice(invoice)
+  // ROT/RUT (fakturamodellen): the customer owes total minus the deduction and
+  // the rest is claimed from Skatteverket. Same helper as the PDF and the
+  // invoice email so all three surfaces state the same "Att betala".
+  const amountToPay = getAmountToPay(invoice, { ore_rounding: oreRounding })
+  const deductionItems = invoice.items.filter(
+    (i) => i.deduction_type === 'rot' || i.deduction_type === 'rut',
+  )
+  const hasRot = deductionItems.some((i) => i.deduction_type === 'rot')
+  const hasRut = deductionItems.some((i) => i.deduction_type === 'rut')
+  const deductionKindLabel = hasRot && hasRut ? 'ROT/RUT' : hasRot ? 'ROT' : 'RUT'
+  const showDeduction = amountToPay.deductionApplies && !isDeliveryNote
+  // Fastighetsbeteckning / lägenhet live on the ROT lines (one property per
+  // invoice in practice); the first ROT line carries the value.
+  const rotItem = deductionItems.find((i) => i.deduction_type === 'rot')
+  const rotHousing = rotItem?.housing_designation ?? null
+  const rotApartment = rotItem?.apartment_number ?? null
+  const rotBrf = rotItem?.brf_org_number ?? null
+  const skvClaimable = invoice.status === 'paid' && payoutRequests.length === 0
+  // "RUT · Städning · 4 tim" under a claimed line, so the claim is visible on
+  // the item itself, not only in the PDF. The amount lives in the totals block.
+  const deductionLineInfo = (item: InvoiceItem): string => {
+    const parts = [item.deduction_type === 'rot' ? 'ROT' : 'RUT']
+    const label = workTypeLabel(item.work_type)
+    if (label) parts.push(label)
+    if (item.labor_hours && item.labor_hours > 0) {
+      parts.push(t('deduction_line_hours', { hours: item.labor_hours }))
+    }
+    return parts.join(' · ')
+  }
   const hasAccruedItems = invoice.items.some(itemHasAccrual)
   const latestCompletedDelivery = deliveries.find(
     (delivery) => delivery.status === 'sent' || delivery.status === 'marked_sent',
@@ -1252,6 +1366,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             </span>
                           </p>
                         )}
+                        {item.deduction_type && (
+                          <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                            {deductionLineInfo(item)}
+                          </p>
+                        )}
                       </div>
                       <div className="col-span-2 text-right">{item.quantity}</div>
                       <div className="col-span-1 text-center">{item.unit}</div>
@@ -1284,6 +1403,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             })}
                             {item.accrual_balance_account && ` · ${item.accrual_balance_account}`}
                           </span>
+                        </p>
+                      )}
+                      {item.deduction_type && (
+                        <p className="text-xs text-muted-foreground tabular-nums">
+                          {deductionLineInfo(item)}
                         </p>
                       )}
                       <div className="flex items-center justify-between text-muted-foreground">
@@ -1337,7 +1461,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 })()}
                 <Separator />
                 {(() => {
-                  const rounding = getDisplayTotal(invoice, { ore_rounding: oreRounding })
+                  const { rounding } = amountToPay
                   return (
                     <>
                       {rounding.applies && (
@@ -1346,10 +1470,28 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           <span>{formatCurrency(rounding.roundingDelta, 'SEK')}</span>
                         </div>
                       )}
-                      <div className="flex justify-between font-bold text-lg">
-                        <span>{t('total')}</span>
+                      {/* ROT/RUT (fakturamodellen): the invoice total stands,
+                          the deduction is shown as a reduction and the bold
+                          line becomes what the customer actually pays, exactly
+                          as on the PDF and in the invoice email. */}
+                      <div className={cn('flex justify-between', showDeduction ? 'tabular-nums' : 'font-bold text-lg')}>
+                        <span className={cn(showDeduction && 'text-muted-foreground')}>{t('total')}</span>
                         <span>{formatCurrency(rounding.displayed, invoice.currency)}</span>
                       </div>
+                      {showDeduction && (
+                        <>
+                          <div className="flex justify-between tabular-nums">
+                            <span className="text-muted-foreground">
+                              {t('deduction_row', { kind: deductionKindLabel })}
+                            </span>
+                            <span>{formatCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency)}</span>
+                          </div>
+                          <div className="flex justify-between font-bold text-lg tabular-nums">
+                            <span>{t('amount_to_pay')}</span>
+                            <span>{formatCurrency(amountToPay.toPay, invoice.currency)}</span>
+                          </div>
+                        </>
+                      )}
                     </>
                   )
                 })()}
@@ -1472,6 +1614,82 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     {invoice.our_reference.split(',').map((ref) => ref.trim()).join(', ')}
                   </span>
                 </div>
+              )}
+              {/* ROT/RUT (fakturamodellen): the underlag Skatteverket needs and
+                  where the begäran om utbetalning stands, as plain rows. The
+                  amounts live in the totals block; nothing is repeated here. */}
+              {showDeduction && (
+                <>
+                  <Separator />
+                  <div className="flex justify-between gap-4">
+                    <span className="text-muted-foreground">{t('deduction_personnummer_label')}</span>
+                    {deductionPersonnummerMasked ? (
+                      <span className="tabular-nums">{deductionPersonnummerMasked}</span>
+                    ) : !invoice.deduction_personnummer_last4 ? (
+                      <span className="text-attn">{t('deduction_personnummer_missing')}</span>
+                    ) : deductionPersonnummerMasked === undefined ? (
+                      // Stored; the mask is still on its way from the server.
+                      // Never print the last four digits meanwhile.
+                      <Skeleton className="h-4 w-24" />
+                    ) : (
+                      // Stored but the server could not read it back.
+                      <span className="text-muted-foreground">{t('deduction_personnummer_unreadable')}</span>
+                    )}
+                  </div>
+                  {hasRot && (
+                    <div className="flex justify-between gap-4">
+                      <span className="text-muted-foreground">{t('deduction_property_label')}</span>
+                      {rotHousing ? (
+                        <span className="text-right">
+                          {rotHousing}
+                          {rotApartment && (
+                            <span className="text-muted-foreground tabular-nums">
+                              {' · '}{t('deduction_apartment_value', { number: rotApartment })}
+                            </span>
+                          )}
+                        </span>
+                      ) : rotBrf ? (
+                        <span className="text-right">
+                          {t('deduction_brf_value', { org: rotBrf })}
+                          {rotApartment && (
+                            <span className="text-muted-foreground tabular-nums">
+                              {' · '}{t('deduction_apartment_value', { number: rotApartment })}
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-attn">{t('deduction_housing_missing')}</span>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground text-sm">{t('deduction_status_label')}</span>
+                    {payoutRequests.length === 0 ? (
+                      // Same shape as the Bokföring row below: the state, and
+                      // the action under it when there is one.
+                      <div className="flex flex-col items-end gap-1 text-sm">
+                        <span className="text-muted-foreground">{t('deduction_claim_none')}</span>
+                        {skvClaimable && (
+                          <Link href="/invoices?rot-rut=1" className="hover:underline whitespace-nowrap">
+                            {t('deduction_claim_cta')}
+                          </Link>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-end gap-1 text-sm tabular-nums">
+                        {payoutRequests.map((req) => (
+                          <span key={req.id} className="text-right">
+                            {tInvoices(`rot_rut_status_${req.status}`)}
+                            {' '}
+                            {formatDate(req.decided_at ?? req.submitted_at ?? req.created_at)}
+                            {req.decided_amount !== null &&
+                              ` · ${formatCurrency(req.decided_amount, invoice.currency)}`}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
               {canBookAfterwards && (
                 <>

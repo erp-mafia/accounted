@@ -180,21 +180,21 @@ export default async function DashboardLayout({
     // preference (Inställningar → Assistenten). Batched here so it costs no
     // extra round-trip on the dashboard critical path.
     supabase.from('user_preferences').select('ui_state, hide_assistant_fab').eq('user_id', user.id).maybeSingle(),
-    // Whether the company has a webshop hooked up: an ACTIVE WooCommerce
-    // connection, or already-imported webshop_orders rows (a disconnected
-    // store's orders are accounting underlag and must stay reachable).
-    // Shopify connections deliberately do NOT count until the Shopify sync
-    // is switched from the transactions feed to webshop_orders: gating on
-    // them today would surface a permanently empty Orders page. Two
-    // indexed limit-1 selects, parallel with the batch; accepted cost on
-    // the first-paint path (gates a nav destination, unlike the badge
-    // counts that moved client-side above).
+    // Whether the company has a webshop hooked up: an ACTIVE WooCommerce or
+    // Shopify connection, or already-imported webshop_orders rows (a
+    // disconnected store's orders are accounting underlag and must stay
+    // reachable). Three indexed limit-1 selects, parallel with the batch;
+    // accepted cost on the first-paint path (gates a nav destination, unlike
+    // the badge counts that moved client-side above).
     Promise.all([
       supabase.from('woocommerce_connections').select('id').eq('company_id', companyId).eq('status', 'active').limit(1),
+      supabase.from('shopify_connections').select('id').eq('company_id', companyId).eq('status', 'active').limit(1),
       supabase.from('webshop_orders').select('id').eq('company_id', companyId).limit(1),
     ]).then(
-      ([woo, orders]) =>
-        (woo.data?.length ?? 0) > 0 || (orders.data?.length ?? 0) > 0,
+      ([woo, shopify, orders]) =>
+        (woo.data?.length ?? 0) > 0 ||
+        (shopify.data?.length ?? 0) > 0 ||
+        (orders.data?.length ?? 0) > 0,
     ),
     // Whether the company already has mileage trips: OR-ed with the
     // mileage_enabled settings toggle below so trips created via API/MCP can

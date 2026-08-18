@@ -18,6 +18,7 @@ import {
 import { CUSTOM_INVOICE_FONT_RENDER_PREFIX } from '@/lib/invoices/pdf-fonts'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { isTextLikeLine } from '@/lib/invoices/display'
+import { maskedDeductionPersonnummer } from '@/lib/invoices/deduction-personnummer'
 
 type PdfLang = 'sv' | 'en'
 
@@ -655,8 +656,18 @@ function getDocumentTitle(invoice: Invoice, lang: PdfLang): string {
   return L.titleInvoice
 }
 
+/**
+ * The invoice row as the template reads it. `deduction_personnummer_masked`
+ * is the display form of the ROT/RUT personnummer (`YYYYMMDD-XXXX`, see
+ * maskedDeductionPersonnummer). Callers that hold a plaintext value (the
+ * preview route) pass it in; callers that pass the stored row can leave it
+ * out and the template derives it from the ciphertext, so no render path
+ * silently loses the personnummer.
+ */
+export type InvoicePdfInvoice = Invoice & { deduction_personnummer_masked?: string | null }
+
 interface InvoicePDFProps {
-  invoice: Invoice
+  invoice: InvoicePdfInvoice
   customer: Customer
   items: InvoiceItem[]
   company: CompanySettings
@@ -686,6 +697,14 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   // hardcoded stylesheet: the default code path is unchanged.
   const styles = createStyles(branding)
   const isCreditNote = !!invoice.credited_invoice_id
+  // ROT/RUT personnummer as printed in the deduction box: YYYYMMDD-XXXX.
+  // Derived from the stored ciphertext unless the caller already masked a
+  // plaintext value (preview). Null when nothing is stored or it cannot be
+  // decrypted, and the row is then simply omitted.
+  const deductionPersonnummerMasked =
+    (invoice.deduction_total ?? 0) > 0
+      ? (invoice.deduction_personnummer_masked ?? maskedDeductionPersonnummer(invoice))
+      : null
 
   // Free-text / blank rows carry no amounts: exclude them from every VAT
   // calculation. They still render as their own row in the line-items table.
@@ -1016,17 +1035,18 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           </View>
         )}
 
-        {/* ROT/RUT-avdrag underlying details. Surfaces personnummer last 4,
-            fastighetsbeteckning, lägenhetsnummer, the per-line breakdown
-            and the statutory notice about fakturamodellen. Suppressed on
-            delivery notes (no payment info at all). */}
+        {/* ROT/RUT-avdrag underlying details. Surfaces the masked
+            personnummer (YYYYMMDD-XXXX), fastighetsbeteckning,
+            lägenhetsnummer, the per-line breakdown and the statutory notice
+            about fakturamodellen. Suppressed on delivery notes (no payment
+            info at all). */}
         {!isDeliveryNote && !isCreditNote && (invoice.deduction_total ?? 0) > 0 && (
           <View style={styles.deductionBox} wrap={false}>
             <Text style={styles.deductionTitle}>{L.deductionInfoHeading}</Text>
-            {invoice.deduction_personnummer_last4 && (
+            {deductionPersonnummerMasked && (
               <View style={styles.deductionRow}>
                 <Text style={styles.deductionLabel}>{L.deductionPersonnummer}</Text>
-                <Text style={styles.deductionValue}>XXXXXXXX-{invoice.deduction_personnummer_last4}</Text>
+                <Text style={styles.deductionValue}>{deductionPersonnummerMasked}</Text>
               </View>
             )}
             {(() => {
