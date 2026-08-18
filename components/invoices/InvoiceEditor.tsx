@@ -219,6 +219,25 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       cancelled = true
     }
   }, [paymentLinksEnabled])
+  // Edit mode: the draft's stored ROT/RUT personnummer, in display form
+  // (YYYYMMDD-XXXX). The row only carries ciphertext + last four digits, and
+  // the mask must come from the server so the browser never holds both
+  // halves of the number. Read once per draft; the hint shows it.
+  const storedPersonnummerId = initial?.deduction_personnummer_last4 ? initial.id : null
+  const [storedPersonnummerMasked, setStoredPersonnummerMasked] = useState<string | null>(null)
+  useEffect(() => {
+    if (!storedPersonnummerId) return
+    let cancelled = false
+    fetch(`/api/invoices/${encodeURIComponent(storedPersonnummerId)}/rot-rut`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload: { data?: { deduction_personnummer_masked?: string | null } } | null) => {
+        if (!cancelled) setStoredPersonnummerMasked(payload?.data?.deduction_personnummer_masked ?? null)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [storedPersonnummerId])
 
   // The item schema is memoised on translations only; whether ROT/RUT claim
   // completeness applies depends on the document type (proformas, delivery
@@ -2678,7 +2697,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         Otherwise, a kundkort with a personnummer covers an
                         empty field via the server-side fallback. */}
                     {initial?.deduction_personnummer_last4
-                      ? t('deduction_personnummer_kept_hint', { last4: initial.deduction_personnummer_last4 })
+                      ? storedPersonnummerMasked
+                        ? t('deduction_personnummer_kept_hint', { masked: storedPersonnummerMasked })
+                        : t('deduction_personnummer_kept_hint_pending')
                       : customerHasPersonalNumber
                         ? t('deduction_personnummer_customer_hint')
                         : t('deduction_personnummer_hint')}

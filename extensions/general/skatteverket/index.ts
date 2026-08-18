@@ -46,6 +46,7 @@ import {
 } from './lib/agi-client'
 import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
+import { readAgiSubmissionStatus } from './lib/agi-submission-status'
 import {
   attachBookingSuggestions,
   bokforSkattekontoTransaction,
@@ -2053,7 +2054,11 @@ export const skatteverketExtension: Extension = {
 
     // ── AGI: Local submission tracking (UI helper) ──────────────────
     // Returns the locally-cached submission state (inlamningId, signing link,
-    // kvittensnummer if seen). Pure read; never calls Skatteverket.
+    // kvittensnummer if seen). When the kvittens reconciliation (cron or
+    // post-connect refresh) has already promoted the declaration it deletes
+    // that cache, so the receipt is served from agi_declarations instead:
+    // kvittensnummer, signeradAv and signeradTid must be visible regardless
+    // of which path fetched them (#1597). Pure read; never calls Skatteverket.
     {
       method: 'GET',
       path: '/agi/status',
@@ -2064,12 +2069,8 @@ export const skatteverketExtension: Extension = {
         if (!period) return NextResponse.json({ error: 'Saknar parameter: period' }, { status: 400 })
 
         const statusJson = await ctx.settings.get<string>(`agi_submission_${period}`)
-        if (!statusJson) return NextResponse.json({ data: null })
-        try {
-          return NextResponse.json({ data: JSON.parse(statusJson) })
-        } catch {
-          return NextResponse.json({ data: null })
-        }
+        const data = await readAgiSubmissionStatus(ctx.supabase, ctx.companyId, period, statusJson)
+        return NextResponse.json({ data })
       },
     },
 

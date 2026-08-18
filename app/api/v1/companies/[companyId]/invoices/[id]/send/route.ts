@@ -225,7 +225,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_FULL_COLUMNS}, customer:customers(id, name, customer_number, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number, invoice_email_cc_addresses, invoice_email_bcc_addresses), items:invoice_items(${INVOICE_ITEM_FULL_COLUMNS})`,
+        // deduction_personnummer_encrypted rides along for the render only:
+        // the PDF template derives the masked personnummer (YYYYMMDD-XXXX)
+        // from it. It stays out of INVOICE_FULL_COLUMNS (the API projection)
+        // and this route never echoes the row.
+        `${INVOICE_FULL_COLUMNS}, deduction_personnummer_encrypted, customer:customers(id, name, customer_number, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number, invoice_email_cc_addresses, invoice_email_bcc_addresses), items:invoice_items(${INVOICE_ITEM_FULL_COLUMNS})`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
