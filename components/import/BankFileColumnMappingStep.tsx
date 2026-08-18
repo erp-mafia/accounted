@@ -41,6 +41,8 @@ const HEADER_KEYWORDS = [
   'amount',
   'description',
   'date',
+  'title',
+  'balance',
 ]
 
 interface BankFileColumnMappingStepProps {
