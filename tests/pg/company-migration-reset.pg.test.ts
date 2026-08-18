@@ -679,6 +679,8 @@ describe('company migration reset RPCs (pg)', () => {
        VALUES ($1, $2, 'aktiebolag', 'Migration AB', '5590000001', true, 41, 17)`,
       [userId, companyId],
     )
+    // The replacement is the same legal entity. Values above 1 pin that the
+    // invoice and arrival-number series continue rather than silently restart.
     const sieImportId = randomUUID()
     await getPool().query(
       `INSERT INTO public.sie_imports

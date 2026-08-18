@@ -131,6 +131,14 @@ data without documents and support must provide the complete document package
 through an approved read-only export path. Never unarchive the source merely to
 reuse ordinary write-capable screens.
 
+The replacement represents the same legal entity, not a newly formed business.
+Its `next_invoice_number` and `next_arrival_number` therefore continue from the
+source settings even when eligibility confirms that no invoice rows exist.
+Those counters can reflect an imported or previously allocated series, and
+resetting them to 1 could reuse a number or conceal a gap. Do not manually reset
+either counter as part of migration recovery. Escalate a suspected numbering
+error for a separate, documented compliance review.
+
 After deployment, the audit chain can be inspected read-only with:
 
 ```sql
