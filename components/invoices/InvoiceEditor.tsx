@@ -1722,6 +1722,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           notes: data.notes,
           payment_link_url: data.payment_link_url,
           invoice_number: numberPreview,
+          // ROT/RUT claim card: the preview shows the same masked personnummer
+          // and fastighetsbeteckning in its deduction box as the created
+          // invoice will. Only sent when a line actually claims a deduction
+          // (same privacy rule as buildInvoiceWritePayload).
+          ...(data.items.some((i) => i.deduction_type)
+            ? {
+                deduction_personnummer: data.deduction_personnummer,
+                deduction_housing_designation: data.deduction_housing_designation,
+              }
+            : {}),
         }),
       })
 
