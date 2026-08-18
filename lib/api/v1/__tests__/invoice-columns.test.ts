@@ -29,7 +29,7 @@ describe('v1 invoice projections feed the render amount path', () => {
     expect(parse(INVOICE_PDF_COLUMNS)).toContain('deduction_personnummer_last4')
   })
 
-  it('INVOICE_PDF_COLUMNS carries delivery_date (ML 17 kap 24 § p.7: rendered when it differs from invoice_date)', () => {
+  it('INVOICE_PDF_COLUMNS carries delivery_date (ML 17 kap 24 §: rendered when it differs from invoice_date)', () => {
     expect(parse(INVOICE_PDF_COLUMNS)).toContain('delivery_date')
   })
 

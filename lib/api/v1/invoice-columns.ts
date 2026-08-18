@@ -24,7 +24,7 @@ export const INVOICE_FULL_COLUMNS =
  * calculation for this surface only: the v1 PDF then disagrees with the
  * dashboard PDF and the sent email for the same invoice, which is exactly
  * the byte-equivalence this endpoint promises. delivery_date is statutory
- * content on top of that: ML 17 kap 24 § p.7 requires leveransdatum on the
+ * content on top of that: ML 17 kap 24 § requires leveransdatum on the
  * invoice when it differs from the invoice date, and the template renders it
  * exactly then. Pinned by __tests__/invoice-columns.test.ts.
  */
