@@ -111,7 +111,7 @@ describe('submitProviderToken', () => {
     mock.enqueue({ data: null }) // token upsert
     mockBokioGetCompany.mockResolvedValueOnce({
       name: 'Testbolaget AB',
-      orgNumber: '5560125790',
+      organizationNumber: '5560125790',
     })
 
     const result = await submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A')
@@ -136,7 +136,7 @@ describe('submitProviderToken', () => {
     mock.enqueue({ data: { org_number: '5560125790' } }) // target company
     mockBokioGetCompany.mockResolvedValueOnce({
       name: 'Någon Annans Bolag AB',
-      orgNumber: '5566778899', // a different legal entity
+      organizationNumber: '5566778899', // a different legal entity
     })
 
     const err: unknown = await submitProviderToken(
@@ -168,7 +168,7 @@ describe('submitProviderToken', () => {
     // Same company, hyphenated and with the century prefix Bokio may return.
     mockBokioGetCompany.mockResolvedValueOnce({
       name: 'Testbolaget AB',
-      orgNumber: '556012-5790',
+      organizationNumber: '556012-5790',
     })
 
     await expect(
@@ -185,7 +185,7 @@ describe('submitProviderToken', () => {
     mock.enqueue({ data: null }) // token upsert
     mockBokioGetCompany.mockResolvedValueOnce({
       name: 'Testbolaget AB',
-      orgNumber: '5560125790',
+      organizationNumber: '5560125790',
     })
 
     await expect(
@@ -197,25 +197,82 @@ describe('submitProviderToken', () => {
     expect(tablesTouched()).toContain('provider_consent_tokens')
   })
 
-  it('maps a 404 from the Bokio probe to invalid credentials', async () => {
+  it('maps a 404 from the Bokio probe to a company-specific failure', async () => {
     mock.enqueue({ data: [{ id: 'consent-1' }] })
     // getCompany() maps 404 to null: an unknown GUID, not an outage.
     mockBokioGetCompany.mockResolvedValueOnce(null)
 
-    await expect(
-      submitProviderToken('consent-1', 'bokio', 'tok', 'bad-guid', 'company-A'),
-    ).rejects.toBeInstanceOf(ProviderTokenInvalidError)
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'tok',
+      'bad-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect(err).toMatchObject({ kind: 'company-not-found' })
 
     expect(tablesTouched()).not.toContain('provider_consent_tokens')
   })
 
-  it('maps a 401 from the Bokio probe to invalid credentials', async () => {
+  it.each([401, 403])('maps a %s from the Bokio probe to invalid credentials', async (status) => {
     mock.enqueue({ data: [{ id: 'consent-1' }] })
-    mockBokioGetCompany.mockRejectedValueOnce(new BokioApiError('Bokio API error: 401', 401))
+    mockBokioGetCompany.mockRejectedValueOnce(
+      new BokioApiError(`Bokio API error: ${status}`, status),
+    )
 
-    await expect(
-      submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A'),
-    ).rejects.toBeInstanceOf(ProviderTokenInvalidError)
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'tok',
+      'bokio-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect(err).toMatchObject({ kind: 'credentials' })
+  })
+
+  it('trims the token and company id and removes a pasted Bearer prefix before probing or storing', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mock.enqueue({ data: { org_number: '5560125790' } })
+    mock.enqueue({ data: null })
+    mock.enqueue({ data: null })
+    mockBokioGetCompany.mockResolvedValueOnce({
+      name: 'Testbolaget AB',
+      organizationNumber: '5560125790',
+    })
+
+    await submitProviderToken(
+      'consent-1',
+      'bokio',
+      '  Bearer copied-token==\r\n',
+      '  bokio-guid  ',
+      'company-A',
+    )
+
+    expect(mockBokioGetCompany).toHaveBeenCalledWith('copied-token==', 'bokio-guid')
+    expect(mock.findCall('provider_consent_tokens', 'upsert')?.[0]).toMatchObject({
+      access_token: 'copied-token==',
+      provider_company_id: 'bokio-guid',
+    })
+  })
+
+  it('does NOT map another Bokio 4xx to invalid credentials', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBokioGetCompany.mockRejectedValueOnce(new BokioApiError('Bokio API error: 400', 400))
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'tok',
+      'bokio-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(BokioApiError)
+    expect(err).not.toBeInstanceOf(ProviderTokenInvalidError)
   })
 
   it('does NOT map a transient 503 from the Bokio probe to invalid credentials', async () => {

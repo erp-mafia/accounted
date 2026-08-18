@@ -672,6 +672,7 @@ function ConnectStep({
   onTokenSubmit: (apiToken: string, companyId: string) => void
   onBack: () => void
 }) {
+  const t = useTranslations('extensions')
   const providerName = ARCIM_PROVIDERS.find(p => p.id === provider)?.name ?? provider
   const [apiToken, setApiToken] = useState('')
   const [companyId, setCompanyId] = useState('')
@@ -691,7 +692,9 @@ function ConnectStep({
       ? 'Företagsnyckel (User-Key)'
       : provider === 'wint'
         ? 'E-postadress'
-        : 'Företags-ID'
+        : provider === 'bokio'
+          ? t('ext_arcim_bokio_company_id_label')
+          : 'Företags-ID'
 
   const tokenDescription = isClientCredentials
     ? `Ange din företagsnyckel (User-Key) från Björn Lundén. ${branding.appName.toLowerCase()} ansluter automatiskt via sin integrationspartner-åtkomst.`
@@ -699,6 +702,10 @@ function ConnectStep({
       ? `Logga in med dina WINT-uppgifter för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata. Lösenordet används en gång för att skapa anslutningen och sparas aldrig.`
       : provider === 'briox'
         ? `Ange ditt konto-ID och din applikationstoken från Briox för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
+        : provider === 'bokio'
+          ? t('ext_arcim_bokio_token_description', {
+              appName: branding.appName.toLowerCase(),
+            })
         : `Ange din API-nyckel från ${providerName} för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
 
   const tokenHelpText = isClientCredentials
@@ -706,7 +713,7 @@ function ConnectStep({
     : isWintLogin
       ? `Använd samma e-postadress och lösenord som när du loggar in på app.wint.se. Kräver ditt WINT-konto BankID-inloggning kan anslutningen inte skapas ännu: be i så fall WINT om en SIE-fil och importera den manuellt.`
       : provider === 'bokio'
-      ? `Du hittar din API-nyckel i ${providerName} under Inställningar \u2192 Integrationer \u2192 API. Ditt företags-ID är det GUID som syns i URL:en när du är inloggad, t.ex. https://app.bokio.se/ditt-företags-id/settings-r/private-integrations.`
+      ? t('ext_arcim_bokio_token_help')
       : provider === 'briox'
         ? `Skapa din applikationstoken i Briox under Admin \u2192 Anv\u00e4ndare \u2192 kugghjulet vid din anv\u00e4ndare \u2192 Applikationstoken. Ditt konto-ID \u00e4r det l\u00e5nga numret inom parentes bredvid f\u00f6retagsnamnet under "Ditt konto" i menyn till h\u00f6ger.`
         : `Du hittar din applikationstoken i ${providerName} under Administration \u2192 Integrationer.`
@@ -788,7 +795,13 @@ function ConnectStep({
             {needsApiToken && (
               <div className={cn(isWintLogin && 'order-2')}>
                 <label htmlFor="apiToken" className="text-sm font-medium">
-                  {provider === 'briox' ? 'Applikationstoken' : isWintLogin ? 'Lösenord' : 'API-nyckel'}
+                  {provider === 'briox'
+                    ? 'Applikationstoken'
+                    : isWintLogin
+                      ? 'Lösenord'
+                      : provider === 'bokio'
+                        ? t('ext_arcim_bokio_token_label')
+                        : 'API-nyckel'}
                 </label>
                 <Input
                   id="apiToken"
@@ -800,6 +813,8 @@ function ConnectStep({
                       ? 'Klistra in din applikationstoken'
                       : isWintLogin
                         ? 'Ditt lösenord hos WINT'
+                        : provider === 'bokio'
+                          ? t('ext_arcim_bokio_token_placeholder')
                         : 'Klistra in din API-nyckel'
                   }
                   value={apiToken}
@@ -2365,13 +2380,13 @@ export default function ArcimMigrationWorkspace({
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
+        throw apiError(data, `HTTP ${res.status}`)
       }
 
       // Token stored: consent is now accepted, proceed to preview
       await loadPreview(consentId)
     } catch (err) {
-      setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte ansluta')
+      setError(displayError(err, 'Kunde inte ansluta'))
     } finally {
       setIsLoading(false)
     }

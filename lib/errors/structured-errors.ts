@@ -1916,8 +1916,8 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
   },
   PROVIDER_TOKEN_SUBMIT_FAILED: {
     httpStatus: 500,
-    message_sv: 'Tokensubmissionen misslyckades.',
-    message_en: 'Failed to submit provider token.',
+    message_sv: 'Kunde inte kontrollera integrationsuppgifterna hos leverantören. Försök igen.',
+    message_en: 'Could not verify the integration details with the provider. Try again.',
   },
   PROVIDER_TOKEN_INVALID: {
     // 422 (not 401): the UPSTREAM provider rejected the pasted credentials.
@@ -1926,9 +1926,16 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     // error code, never on the HTTP status.
     httpStatus: 422,
     message_sv:
-      'Leverantören avvisade uppgifterna. Kontrollera att konto-ID och applikationstoken stämmer och försök igen.',
+      'Leverantören avvisade autentiseringen. Kontrollera integrationsuppgifterna och försök igen.',
     message_en:
-      'The provider rejected the credentials. Check that the account ID and application token are correct and try again.',
+      'The provider rejected the authentication. Check the integration details and try again.',
+  },
+  BOKIO_COMPANY_NOT_FOUND: {
+    httpStatus: 422,
+    message_sv:
+      'Bokio hittade inte företaget. Kontrollera företags-ID:t och att integrationstoken skapades för samma företag.',
+    message_en:
+      'Bokio could not find the company. Check the company ID and that the integration token was created for the same company.',
   },
   PROVIDER_COMPANY_MISMATCH: {
     // 422, same reasoning as PROVIDER_TOKEN_INVALID: the credentials are valid,
