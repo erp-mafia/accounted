@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Check } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
@@ -14,7 +15,7 @@ import {
   SettingsSectionHeader,
   SettingsSeg,
 } from '@/components/settings/SettingsRows'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { useFormat } from '@/lib/hooks/use-format'
 import { BillingActions } from '@/components/settings/BillingActions'
 import { PLAN_PRICES } from '@/components/settings/billing-plans'
@@ -40,14 +41,14 @@ interface BillingView {
   isDemo: boolean
 }
 
-function UnlockList() {
+function UnlockList({ className }: { className?: string }) {
   const t = useTranslations('settings_billing')
   return (
-    <ul className="space-y-2 px-1 pt-3">
+    <ul className={cn('grid gap-x-6 gap-y-3 px-1 sm:grid-cols-2', className)}>
       {UNLOCK_KEYS.map((key) => (
-        <li key={key} className="flex items-start gap-2 text-sm">
-          <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
-          <span>{t(key)}</span>
+        <li key={key} className="text-sm">
+          <span className="font-medium">{t(key)}</span>
+          <span className="block text-xs text-muted-foreground">{t(`${key}_gloss`)}</span>
         </li>
       ))}
     </ul>
@@ -189,7 +190,7 @@ export function BillingSettingsContent() {
           </SettingsRow>
         </SettingsGroup>
         <SettingsGroup label={t('group_included')}>
-          <UnlockList />
+          <UnlockList className="pt-3" />
         </SettingsGroup>
       </div>
     )
@@ -213,7 +214,7 @@ export function BillingSettingsContent() {
           </SettingsRow>
         </SettingsGroup>
         <SettingsGroup label={t('group_included')}>
-          <UnlockList />
+          <UnlockList className="pt-3" />
         </SettingsGroup>
       </div>
     )
@@ -238,9 +239,18 @@ export function BillingSettingsContent() {
     )
   }
 
-  // Trialing / expired → sell view.
+  // Trialing / expired → sell view: one number, four short lines, one
+  // button, two quiet sentences. Everything else lives behind the "?".
   const { trialEndsAt, daysLeft, chargeDeferred } = view
   const price = PLAN_PRICES[plan]
+  const priceNote =
+    plan === 'yearly'
+      ? t('price_note_yearly', { inc: formatCurrency(price.incVat), perMonth: formatCurrency(price.perMonthEquivalent) })
+      : t('price_note_monthly', { inc: formatCurrency(price.incVat) })
+  const termsLine =
+    chargeDeferred && trialEndsAt
+      ? t('terms_deferred', { date: formatDateLong(trialEndsAt) })
+      : t('terms_now')
 
   return (
     <div>
@@ -255,60 +265,43 @@ export function BillingSettingsContent() {
         </AttnLine>
       )}
 
-      <SettingsGroup label={t('group_included')} help={t('unlock_help')}>
-        <UnlockList />
-        {/* Freeze-and-retain, said once and up front: nothing is taken away. */}
-        <p className="px-1 pt-4 text-xs text-muted-foreground">{t('without_note')}</p>
-      </SettingsGroup>
-
-      <SettingsGroup label={t('group_terms')}>
-        {/* The interval toggle lives in the price row: it is the price selector,
-            and the amount changing right beside it makes the trade-off legible. */}
-        <SettingsRow label={t('row_price')}>
-          <SettingsSeg
-            value={plan}
-            onChange={setPlan}
-            aria-label={t('row_interval')}
-            options={[
-              { value: 'monthly', label: t('interval_monthly') },
-              {
-                value: 'yearly',
-                label: (
-                  <>
-                    {t('interval_yearly')}
-                    <span className="ml-2 text-muted-foreground">{t('interval_yearly_save')}</span>
-                  </>
-                ),
-              },
-            ]}
-          />
-          <span className="tabular-nums">
-            {formatCurrency(price.exVat)} / {t(`period_${plan}`)}
-          </span>
-          <SettingsRowNote className="basis-full tabular-nums">
-            {plan === 'yearly'
-              ? t('price_note_yearly', { inc: formatCurrency(price.incVat), perMonth: formatCurrency(price.perMonthEquivalent) })
-              : t('price_note_monthly', { inc: formatCurrency(price.incVat) })}
-          </SettingsRowNote>
-        </SettingsRow>
-        <SettingsRow label={t('row_first_charge')} align="baseline">
-          {chargeDeferred && trialEndsAt ? (
-            <>
-              <span className="tabular-nums">{formatDateLong(trialEndsAt)}</span>
-              <SettingsRowNote>{t('first_charge_deferred_note')}</SettingsRowNote>
-            </>
-          ) : (
-            <span>{t('first_charge_today')}</span>
-          )}
-        </SettingsRow>
-        <SettingsRow label={t('row_cancel')} align="baseline" borderless>
-          <span>{t('cancel_value')}</span>
-        </SettingsRow>
-        <div className="px-1 pt-4">
-          <BillingActions isPaying={false} configured={view.configured} plan={plan} firstChargeDeferred={chargeDeferred} />
-          <p className="pt-3 text-xs text-muted-foreground">{t('stripe_note')}</p>
+      <div className="mt-8 flex flex-wrap items-start justify-between gap-x-6 gap-y-3 px-1">
+        <div>
+          <p className="font-display text-xl tabular-nums leading-8">
+            {formatCurrency(price.exVat)}
+            <span className="text-muted-foreground"> / {t(`period_${plan}`)}</span>
+          </p>
+          <p className="text-xs tabular-nums text-muted-foreground">{priceNote}</p>
         </div>
-      </SettingsGroup>
+        <SettingsSeg
+          value={plan}
+          onChange={setPlan}
+          aria-label={t('row_interval')}
+          options={[
+            { value: 'monthly', label: t('interval_monthly') },
+            {
+              value: 'yearly',
+              label: (
+                <>
+                  {t('interval_yearly')}
+                  <span className="ml-2 text-muted-foreground">{t('interval_yearly_save')}</span>
+                </>
+              ),
+            },
+          ]}
+        />
+      </div>
+
+      <UnlockList className="mt-6 border-t border-border pt-6" />
+
+      <div className="mt-8 border-t border-border px-1 pt-6">
+        <BillingActions isPaying={false} configured={view.configured} plan={plan} firstChargeDeferred={chargeDeferred} />
+        <p className="pt-3 text-xs text-muted-foreground">{termsLine}</p>
+        <p className="pt-1 text-xs text-muted-foreground">
+          {t('without_note')}{' '}
+          <HelpPopover className="ml-1 align-middle">{t('unlock_help')}</HelpPopover>
+        </p>
+      </div>
     </div>
   )
 }
