@@ -7371,6 +7371,7 @@
     "purpose_placeholder": "T.ex. kundbesök, materialinköp",
     "field_km": "Sträcka (km, enkel väg)",
     "field_km_total": "Sträcka (km totalt)",
+    "route_prefill_hint": "Ifylld från din senaste resa på samma rutt",
     "field_round_trip": "Tur och retur",
     "more_fields": "Fler fält",
     "field_regnr": "Regnr",

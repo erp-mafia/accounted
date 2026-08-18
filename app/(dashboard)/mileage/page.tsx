@@ -27,6 +27,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { PageHeader } from '@/components/ui/page-header'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { locationSuggestions, matchRoute } from '@/lib/mileage/route-memory'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Car, Copy, Download, Plus, Trash2, Pencil, ChevronDown, ChevronUp } from 'lucide-react'
 import type { MileageTrip, MileageVehicleType } from '@/types'
@@ -111,6 +112,7 @@ export default function MileagePage() {
   const [form, setForm] = useState<TripFormState>(emptyForm())
   const [showMore, setShowMore] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [routePrefilled, setRoutePrefilled] = useState(false)
 
   const [bookOpen, setBookOpen] = useState(false)
   const [bookFrom, setBookFrom] = useState('')
@@ -159,10 +161,13 @@ export default function MileagePage() {
     [draftTrips]
   )
 
+  const suggestions = useMemo(() => locationSuggestions(trips), [trips])
+
   const openCreate = () => {
     setEditingId(null)
     setForm(emptyForm())
     setShowMore(false)
+    setRoutePrefilled(false)
     setFormOpen(true)
   }
 
@@ -170,6 +175,7 @@ export default function MileagePage() {
     setEditingId(trip.id)
     setForm(formFromTrip(trip, true))
     setShowMore(Boolean(trip.vehicle_registration || trip.odometer_start || trip.visited || trip.notes))
+    setRoutePrefilled(false)
     setFormOpen(true)
   }
 
@@ -177,7 +183,31 @@ export default function MileagePage() {
     setEditingId(null)
     setForm(formFromTrip(trip, false))
     setShowMore(false)
+    setRoutePrefilled(false)
     setFormOpen(true)
+  }
+
+  // Route memory: when the from/to pair matches an earlier trip, prefill km
+  // (one-way) and purpose from the latest match. Only empty fields are filled,
+  // so nothing the user typed is ever overwritten, and edit mode is untouched.
+  const updateRouteField = (field: 'from_location' | 'to_location', value: string) => {
+    const next = { ...form, [field]: value }
+    if (!editingId) {
+      const match = matchRoute(trips, next.from_location, next.to_location)
+      if (match) {
+        let applied = false
+        if (next.distance_km === '') {
+          next.distance_km = String(match.distance_km)
+          applied = true
+        }
+        if (next.purpose === '') {
+          next.purpose = match.purpose
+          applied = true
+        }
+        if (applied) setRoutePrefilled(true)
+      }
+    }
+    setForm(next)
   }
 
   const submitForm = async () => {
@@ -465,19 +495,26 @@ export default function MileagePage() {
                 <Label htmlFor="from_location">{t('field_from')}</Label>
                 <Input
                   id="from_location"
+                  list="mileage-locations"
                   value={form.from_location}
-                  onChange={(e) => setForm({ ...form, from_location: e.target.value })}
+                  onChange={(e) => updateRouteField('from_location', e.target.value)}
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="to_location">{t('field_to')}</Label>
                 <Input
                   id="to_location"
+                  list="mileage-locations"
                   value={form.to_location}
-                  onChange={(e) => setForm({ ...form, to_location: e.target.value })}
+                  onChange={(e) => updateRouteField('to_location', e.target.value)}
                 />
               </div>
             </div>
+            <datalist id="mileage-locations">
+              {suggestions.map((location) => (
+                <option key={location} value={location} />
+              ))}
+            </datalist>
             <div className="space-y-2">
               <Label htmlFor="purpose">{t('field_purpose')}</Label>
               <Input
@@ -496,8 +533,14 @@ export default function MileagePage() {
                   id="distance_km"
                   inputMode="decimal"
                   value={form.distance_km}
-                  onChange={(e) => setForm({ ...form, distance_km: e.target.value })}
+                  onChange={(e) => {
+                    setRoutePrefilled(false)
+                    setForm({ ...form, distance_km: e.target.value })
+                  }}
                 />
+                {routePrefilled && (
+                  <p className="text-xs text-muted-foreground">{t('route_prefill_hint')}</p>
+                )}
               </div>
               {!editingId && (
                 <div className="flex items-end pb-2">
