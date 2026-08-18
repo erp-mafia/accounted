@@ -935,8 +935,17 @@ export function AGIPanel(props: AGIPanelProps) {
   const forcedAdvanced = draftIsStale || underlagRejected
   const advancedOpen = showAdvanced || forcedAdvanced
 
-  const signedAtRaw = runSubmission?.signeradTid ?? agiSubmittedAt ?? null
+  const signedAtRaw =
+    runSubmission?.signeradTid ?? runSubmission?.submittedAt ?? agiSubmittedAt ?? null
   const signedAtText = signedAtRaw ? new Date(signedAtRaw).toLocaleString('sv-SE') : null
+  // A signed record without Skatteverket's signeradTid carries our
+  // reconciliation-time stamp instead (an upper bound on the signing moment,
+  // see agi-kvittens-reconcile.ts): say so rather than presenting it as the
+  // legal signing time. Without any record we cannot tell and print the run
+  // stamp as before.
+  const signedAtEstimated =
+    runSubmission?.status === 'signed' &&
+    (runSubmission.submittedAtEstimated === true || !runSubmission.signeradTid)
 
   const chainStepState = (step: ChainStep): 'done' | 'running' | 'failed' | 'upcoming' => {
     if (!chain) return 'upcoming'
@@ -979,10 +988,12 @@ export function AGIPanel(props: AGIPanelProps) {
       <CardContent className="space-y-4">
         {/* Filed: the terminal state deserves more than a gray status row.
             Kvittensnummer + signature metadata come from the run-scoped
-            record; a run stamped only via agi_submitted_at (e.g. cron
-            reconciliation with an evicted cache, or an original whose cached
-            receipt a later correction has replaced) still gets the card, just
-            without a number: better than showing another declaration's. */}
+            record, which /agi/status serves from the in-flight cache or,
+            once the kvittens reconciliation has deleted that cache, from
+            agi_declarations (#1597). A run stamped only via agi_submitted_at
+            (an original whose receipt a later correction has replaced) still
+            gets the card, just without a number: better than showing another
+            declaration's. */}
         {isSigned && (
           <div className="rounded-lg border border-border bg-muted/30 p-4">
             <div className="flex items-start gap-3">
@@ -1000,12 +1011,19 @@ export function AGIPanel(props: AGIPanelProps) {
                   <p className="text-sm text-muted-foreground">
                     {runSubmission?.signeradAv
                       ? signedAtText
-                        ? t('success_card_signed_by_at', {
-                            name: runSubmission.signeradAv,
-                            date: signedAtText,
-                          })
+                        ? t(
+                            signedAtEstimated
+                              ? 'success_card_signed_by_at_estimated'
+                              : 'success_card_signed_by_at',
+                            { name: runSubmission.signeradAv, date: signedAtText },
+                          )
                         : t('success_card_signed_by', { name: runSubmission.signeradAv })
-                      : t('success_card_signed_at', { date: signedAtText ?? '' })}
+                      : t(
+                          signedAtEstimated
+                            ? 'success_card_signed_at_estimated'
+                            : 'success_card_signed_at',
+                          { date: signedAtText ?? '' },
+                        )}
                   </p>
                 )}
               </div>

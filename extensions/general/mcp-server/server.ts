@@ -16,6 +16,11 @@ import {
 } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
+import {
+  getVatDeadlineForPeriod,
+  type VatDeadlineCalculationSettings,
+} from '@/lib/tax/deadline-config'
+import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
@@ -47,6 +52,7 @@ import {
   rutorFromTotals,
   rcInputTotalsFromDeclaration,
   calculateVatDeclaration,
+  resolvePeriodDates,
 } from '@/lib/reports/vat-declaration'
 import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 // The momsdeklaration completeness checks live in core (lib/reports) and are
@@ -210,6 +216,7 @@ import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, Agen
 // the skatteverket extension via the registry (lib/pending-operations/commit.ts).
 import { skvRequest, SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
+import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/agi-submission-status'
 import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatteverket/lib/declaration-prep'
 import { writeSkatteverketAudit } from '@/extensions/general/skatteverket/lib/audit'
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
@@ -1529,23 +1536,13 @@ export async function computeVatReportWithRutor(
   if (periodType === 'monthly' && (period < 1 || period > 12)) throw new Error('period must be 1-12 for monthly')
   if (periodType === 'quarterly' && (period < 1 || period > 4)) throw new Error('period must be 1-4 for quarterly')
 
-  let startDate: string
-  let endDate: string
-
-  if (periodType === 'monthly') {
-    startDate = `${year}-${String(period).padStart(2, '0')}-01`
-    const lastDay = new Date(year, period, 0).getDate()
-    endDate = `${year}-${String(period).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-  } else if (periodType === 'quarterly') {
-    const startMonth = (period - 1) * 3 + 1
-    const endMonth = period * 3
-    startDate = `${year}-${String(startMonth).padStart(2, '0')}-01`
-    const lastDay = new Date(year, endMonth, 0).getDate()
-    endDate = `${year}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-  } else {
-    startDate = `${year}-01-01`
-    endDate = `${year}-12-31`
-  }
+  const { start: startDate, end: endDate } = await resolvePeriodDates(
+    supabase,
+    companyId,
+    periodType as 'monthly' | 'quarterly' | 'yearly',
+    year,
+    period,
+  )
 
   // Two-step fetch (lib/bookkeeping/entry-lines.ts) rather than a
   // `journal_entries!inner` embed: PostgREST compiles that embed into a
@@ -1795,6 +1792,7 @@ interface VatCloseBlocker {
     | 'missing_high_value_receipts'
     | 'reverse_charge_input_missing'
     | 'declaration_incomplete'
+    | 'deadline_unavailable'
   severity: 'high' | 'medium' | 'low'
   count: number
   message: string
@@ -1924,47 +1922,27 @@ interface VatCloseCheckResult {
   summary: string
 }
 
-/** Compute the Skatteverket momsdeklaration deadline for a period.
- *  - monthly: due on the 12th of (period-end-month + 1)
- *  - quarterly: 26th of the month after quarter-end (Q4 → 26 Jan next year)
- *  - yearly: 26 Feb of next year
- */
+/** Adapt the canonical VAT deadline configuration to the MCP wire shape. */
 export function computeMomsDeadline(
   periodType: 'monthly' | 'quarterly' | 'yearly',
   year: number,
-  period: number
+  period: number,
+  settings: VatDeadlineCalculationSettings,
 ): { date: string; label: string } | null {
-  if (periodType === 'monthly') {
-    // period 1-12; deadline = 12th of next month
-    const deadlineMonth = period === 12 ? 1 : period + 1
-    const deadlineYear = period === 12 ? year + 1 : year
-    return {
-      date: `${deadlineYear}-${String(deadlineMonth).padStart(2, '0')}-12`,
-      label: `12 ${monthName(deadlineMonth)} ${deadlineYear}`,
-    }
+  const instance = getVatDeadlineForPeriod(periodType, year, period, settings)
+  if (!instance) return null
+
+  const adjusted = adjustDeadlineToNextBankingDay(
+    new Date(instance.year, instance.month, instance.day),
+  )
+  const deadlineYear = adjusted.getFullYear()
+  const deadlineMonth = adjusted.getMonth() + 1
+  const deadlineDay = adjusted.getDate()
+
+  return {
+    date: `${deadlineYear}-${String(deadlineMonth).padStart(2, '0')}-${String(deadlineDay).padStart(2, '0')}`,
+    label: `${deadlineDay} ${monthName(deadlineMonth)} ${deadlineYear}`,
   }
-  if (periodType === 'quarterly') {
-    // Q1→26 apr, Q2→26 jul, Q3→26 okt, Q4→26 jan next year
-    const monthByQuarter: Record<number, { m: number; yOffset: number }> = {
-      1: { m: 4, yOffset: 0 },
-      2: { m: 7, yOffset: 0 },
-      3: { m: 10, yOffset: 0 },
-      4: { m: 1, yOffset: 1 },
-    }
-    const cfg = monthByQuarter[period]
-    if (!cfg) return null
-    return {
-      date: `${year + cfg.yOffset}-${String(cfg.m).padStart(2, '0')}-26`,
-      label: `26 ${monthName(cfg.m)} ${year + cfg.yOffset}`,
-    }
-  }
-  if (periodType === 'yearly') {
-    return {
-      date: `${year + 1}-02-26`,
-      label: `26 februari ${year + 1}`,
-    }
-  }
-  return null
 }
 
 function monthName(m: number): string {
@@ -2142,21 +2120,72 @@ export async function computeVatCloseCheck(
     await computeVatReportWithRutor(args, companyId, supabase)
   const { start, end, type: periodType, year, period } = vatReport.period
 
-  // 2) Company settings: moms_period drives deadline labelling
-  const { data: settings } = await supabase
+  // 2) Company settings: deadline inputs come from the same fields used by
+  //    lib/tax/deadline-config.ts. The over-40M flag changes monthly filers
+  //    from the 12th/17th M+2 schedule to the 26th M+1 schedule.
+  const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
-    .select('moms_period')
+    .select('moms_period, vat_taxable_base_over_40m, entity_type, fiscal_year_start_month, vat_has_eu_trade, vat_filing_method')
     .eq('company_id', companyId)
     .single()
   const momsPeriod = (settings?.moms_period as 'monthly' | 'quarterly' | 'yearly' | null) ?? null
-
+  const entityType = settings?.entity_type === 'aktiebolag' || settings?.entity_type === 'enskild_firma'
+    ? settings.entity_type
+    : null
   // 3) Deadline: based on the *requested* period type, not company setting,
   //    so the model gets the right deadline even when querying ad-hoc periods.
-  const deadline = computeMomsDeadline(
-    periodType as 'monthly' | 'quarterly' | 'yearly',
-    Number(year),
-    Number(period)
-  )
+  //    Never turn missing settings into a plausible statutory date. Monthly
+  //    deadlines need the turnover threshold; annual deadlines additionally
+  //    need the filing profile and a configured fiscal year matching the
+  //    report range. Quarterly dates are independent of company settings.
+  let deadline: { date: string; label: string } | null = null
+  if (periodType === 'quarterly') {
+    deadline = computeMomsDeadline('quarterly', Number(year), Number(period), {
+      vat_taxable_base_over_40m: false,
+    })
+  } else if (
+    periodType === 'monthly'
+    && typeof settings?.vat_taxable_base_over_40m === 'boolean'
+  ) {
+    deadline = computeMomsDeadline('monthly', Number(year), Number(period), {
+      vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m,
+    })
+  } else if (periodType === 'yearly' && settings && entityType) {
+    const configuredStartMonth = typeof settings.fiscal_year_start_month === 'number'
+      && settings.fiscal_year_start_month >= 1
+      && settings.fiscal_year_start_month <= 12
+      ? settings.fiscal_year_start_month
+      : null
+    const reportEndMonth = Number(end.slice(5, 7))
+    const reportStartMonth = reportEndMonth === 12 ? 1 : reportEndMonth + 1
+    const fiscalYearMatches = entityType === 'enskild_firma'
+      ? reportEndMonth === 12
+      : configuredStartMonth === reportStartMonth
+    const filingMethodRequired = entityType === 'aktiebolag' && settings.vat_has_eu_trade === false
+    const filingProfileComplete = typeof settings.vat_has_eu_trade === 'boolean'
+      && (!filingMethodRequired
+        || settings.vat_filing_method === 'electronic'
+        || settings.vat_filing_method === 'paper')
+
+    if (fiscalYearMatches && filingProfileComplete) {
+      const deadlineSettings: VatDeadlineCalculationSettings = {
+        vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m === true,
+        entity_type: entityType,
+        fiscal_year_start_month: reportStartMonth,
+        vat_has_eu_trade: settings.vat_has_eu_trade,
+        vat_filing_method: settings.vat_filing_method,
+      }
+      deadline = computeMomsDeadline('yearly', Number(year), Number(period), deadlineSettings)
+    }
+  }
+  if (!deadline) {
+    log.warn('VAT deadline unavailable', {
+      companyId,
+      periodType,
+      hasSettings: Boolean(settings),
+      settingsErrorCode: settingsError?.code,
+    })
+  }
 
   // 4) Blocker scans: run in parallel
   const [uncategorizedRes, unapprovedRes, recon, missingUnderlag] = await Promise.all([
@@ -2184,6 +2213,15 @@ export async function computeVatCloseCheck(
   ])
 
   const blockers: VatCloseBlocker[] = []
+  if (!deadline) {
+    blockers.push({
+      kind: 'deadline_unavailable',
+      severity: 'high',
+      count: 1,
+      message: 'Momsens inlämningsdatum kunde inte fastställas säkert',
+      hint: 'Kontrollera momsinställningar, deklarationssätt och räkenskapsperiod innan deklarationen lämnas in.',
+    })
+  }
   const uncategorizedCount = uncategorizedRes.count ?? 0
   if (uncategorizedCount > 0) {
     blockers.push({
@@ -4287,7 +4325,7 @@ export const tools: McpTool[] = [
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
         vat_treatment: { type: 'string', description: 'VAT treatment override. Defaults to standard_25 for business expenses. Set reverse_charge ONLY when the underlag confirms the seller did NOT charge VAT (omvänd skattskyldighet). An invoice with foreign VAT already debited is NOT reverse charge.', enum: [...VALID_VAT_TREATMENTS] },
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp: e.g. dricks carries no VAT. Requires a rate-based vat_treatment. Swedish moms only: foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
-        account_override: { type: 'string', pattern: '^\\d{4}$', description: 'Books the business side (debit when money goes out, credit when money comes in) on this kontoplan account instead of the category default: the ONLY way to reach company-custom accounts (e.g. VMB). Must exist and be active (gnubok_list_accounts; create via gnubok_create_account). VMB purchases/sales carry no deductible moms: use vat_treatment "exempt". Without an explicit vat_treatment (or vat_amount) the override books GROSS with no auto-VAT line: a moms leg is never guessed onto a custom account. Class-2 overrides outside 2610-2649 always drop auto-VAT. Not valid with category "private". State the actual affärshändelse in notes (BFL 5 kap).' },
+        account_override: { type: 'string', pattern: '^\\d{4}$', description: 'Books the business side (debit when money goes out, credit when money comes in) on this kontoplan account instead of the category default: the ONLY way to reach company-custom accounts (e.g. VMB). category is still required: it decides direction and VAT; the override only replaces its default account. Must exist and be active (gnubok_list_accounts; create via gnubok_create_account). VMB purchases/sales carry no deductible moms: use vat_treatment "exempt". Without an explicit vat_treatment (or vat_amount) the override books GROSS with no auto-VAT line: a moms leg is never guessed onto a custom account. Class-2 overrides outside 2610-2649 always drop auto-VAT. Not valid with category "private". State the actual affärshändelse in notes (BFL 5 kap).' },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
         dimensions: {
           type: 'object',
@@ -4322,10 +4360,22 @@ export const tools: McpTool[] = [
         throw new Error('account_override must be exactly 4 digits, e.g. "4020".')
       }
 
+      // Presence guard (hosts don't always enforce inputSchema `required`).
+      // Without it a call carrying only account_override reached the enum
+      // check and surfaced as 'Invalid category "undefined"'. The enum check
+      // in categorizeTransactionCore still handles unknown category strings.
+      const category = typeof args.category === 'string' ? args.category.trim() : ''
+      if (!category) {
+        throw new Error(
+          'category is required; account_override only overrides the category\'s default account. ' +
+          `Valid categories: ${VALID_CATEGORIES.join(', ')}`,
+        )
+      }
+
       // Compute the preview (accounts, amounts, VAT lines)
       const result = await categorizeTransactionCore(
         args.transaction_id as string,
-        args.category as TransactionCategory,
+        category as TransactionCategory,
         args.vat_treatment as VatTreatment | undefined,
         vatAmount,
         accountOverride,
@@ -4408,7 +4458,7 @@ export const tools: McpTool[] = [
         `Kategorisera: ${txDesc}`,
         {
           transaction_id: args.transaction_id,
-          category: args.category,
+          category,
           vat_treatment: args.vat_treatment || null,
           vat_amount: vatAmount ?? null,
           account_override: accountOverride ?? null,
@@ -4565,6 +4615,7 @@ export const tools: McpTool[] = [
           enum: ['individual', 'swedish_business', 'eu_business', 'non_eu_business'],
           description: 'Customer type',
         },
+        customer_number: { type: 'string', maxLength: 32 },
         email: { type: 'string', description: 'Email address' },
         org_number: { type: 'string', description: 'Swedish org number' },
         vat_number: { type: 'string', description: 'EU VAT number' },
@@ -4599,9 +4650,20 @@ export const tools: McpTool[] = [
         throw new Error('Invalid customer_type. Must be: individual, swedish_business, eu_business, non_eu_business')
       }
 
+      // Runtime guard (hosts don't always enforce inputSchema maxLength).
+      const customerNumberArg = args.customer_number
+      if (customerNumberArg != null && typeof customerNumberArg !== 'string') {
+        throw new Error('customer_number must be a string.')
+      }
+      const customerNumber = typeof customerNumberArg === 'string' ? customerNumberArg.trim() : ''
+      if (customerNumber.length > 32) {
+        throw new Error('customer_number must be at most 32 characters.')
+      }
+
       const params = {
         name: name.trim(),
         customer_type: customerType,
+        customer_number: customerNumber || null,
         email: (args.email as string) || null,
         org_number: (args.org_number as string) || null,
         vat_number: (args.vat_number as string) || null,
@@ -5440,7 +5502,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_vat_close_check',
     title: 'VAT Close Check (Momsdeklaration)',
-    description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor, blockers (uncategorized, unapproved supplier invoices, reconciliation diff, missing receipts) plus declaration_checks: the momsdeklaration completeness gate the web filing UI uses. ready_to_close covers both.",
+    description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor, bookkeeping blockers (including unavailable deadlines), and declaration_checks from the same momsdeklaration completeness gate used by the web filing UI. ready_to_close covers both.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -8890,6 +8952,16 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const itemIds = args.item_ids as string[]
       if (!Array.isArray(itemIds) || itemIds.length === 0) throw new Error('item_ids is required (non-empty)')
+      // Presence + enum guard at the boundary (hosts don't always enforce
+      // inputSchema `required`/`enum`): without it a missing or unknown
+      // category was staged as-is and only rejected at approval time.
+      const category = typeof args.category === 'string' ? args.category.trim() : ''
+      if (!category) {
+        throw new Error(`category is required. Valid categories: ${VALID_CATEGORIES.join(', ')}`)
+      }
+      if (!VALID_CATEGORIES.includes(category as typeof VALID_CATEGORIES[number])) {
+        throw new Error(`Invalid category "${category}". Valid categories: ${VALID_CATEGORIES.join(', ')}`)
+      }
       const vatAmount = typeof args.vat_amount === 'number' && Number.isFinite(args.vat_amount)
         ? args.vat_amount
         : undefined
@@ -8959,7 +9031,7 @@ export const tools: McpTool[] = [
           // Stage only the bookable items: the executor re-checks each and
           // skips any that changed state between staging and approval.
           item_ids: bookable.map((it) => it.id as string),
-          category: args.category,
+          category,
           vat_treatment: args.vat_treatment ?? null,
           vat_amount: vatAmount ?? null,
           notes: notes ?? null,
@@ -8976,7 +9048,7 @@ export const tools: McpTool[] = [
           already_booked: alreadyBooked,
           not_found: notFound,
           total_sek: Math.round(totalSek * 100) / 100,
-          category: args.category,
+          category,
           vat_treatment: args.vat_treatment ?? null,
           ...(resolvedDimensions && Object.keys(resolvedDimensions).length > 0
             ? { dimensions: resolvedDimensions }
@@ -11940,7 +12012,9 @@ export const tools: McpTool[] = [
         if (!run) throw new Error('Salary run not found')
         const arbetsgivare = await resolveRedovisare(supabase, companyId)
         const period = formatRedovisningsperiod('monthly', run.period_year, run.period_month)
-        // Local cached submission state (extension_data key agi_submission_${period}).
+        // Local cached submission state (extension_data key agi_submission_${period}),
+        // falling back to the receipt on agi_declarations once the kvittens
+        // reconciliation has deleted that cache (same read as GET /agi/status).
         const { data: localRow } = await supabase
           .from('extension_data')
           .select('value')
@@ -11948,10 +12022,9 @@ export const tools: McpTool[] = [
           .eq('extension_id', 'skatteverket')
           .eq('key', `agi_submission_${period}`)
           .maybeSingle()
-        let periodRecord: AgiSubmissionState | null = null
-        if (localRow?.value) {
-          try { periodRecord = JSON.parse(localRow.value as string) as AgiSubmissionState } catch { periodRecord = null }
-        }
+        const periodRecord: AgiSubmissionState | null = await readAgiSubmissionStatus(
+          supabase, companyId, period, localRow?.value ?? null,
+        )
         // Run-scope the period-keyed record (lib/salary/agi-submission-state.ts,
         // same resolution AGIPanel and the run page use). salary_runs is unique
         // per period only for non-corrected runs (partial index, migration

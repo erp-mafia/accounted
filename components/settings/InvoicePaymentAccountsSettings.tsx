@@ -16,6 +16,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { createClient } from '@/lib/supabase/client'
+import { formatIbanGroups, uniqueConnectionIban } from '@/lib/company/connection-iban'
 import { bankgiroFromTicSnapshot } from '@/lib/company/snapshot-bank'
 import { formatBankgiroNumber, validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -92,6 +93,12 @@ export function InvoicePaymentAccountsSettings({
   // helper only suggests when the snapshot's orgNumber matches the company's
   // org_number: stale fuzzy-matched snapshots can describe another entity.
   const [snapshotBankgiro, setSnapshotBankgiro] = useState<string | null>(null)
+  // Same offer for IBAN, sourced from the bank connection instead. Only rows
+  // that still belong to a live connection count: disconnect keeps cash_accounts
+  // rows (bank_connection_id nulled) and the connect picker mirrors deselected
+  // accounts with enabled=false, so an unfiltered read could offer a closed or
+  // third-party account. Only offered when the remaining rows agree on one IBAN.
+  const [connectionIban, setConnectionIban] = useState<string | null>(null)
   const legacySekAccount = useMemo(
     () => legacySekInvoicePaymentAccount({
       bank_name: settings.bank_name,
@@ -158,6 +165,18 @@ export function InvoicePaymentAccountsSettings({
       .then(({ data }) => {
         if (cancelled) return
         setSnapshotBankgiro(bankgiroFromTicSnapshot(data?.tic_snapshot, data?.org_number))
+      })
+    supabase
+      .from('cash_accounts')
+      .select('iban')
+      .eq('company_id', company.id)
+      .eq('enabled', true)
+      .eq('currency', 'SEK')
+      .not('bank_connection_id', 'is', null)
+      .not('iban', 'is', null)
+      .then(({ data }) => {
+        if (cancelled) return
+        setConnectionIban(uniqueConnectionIban(data))
       })
     return () => {
       cancelled = true
@@ -528,6 +547,15 @@ export function InvoicePaymentAccountsSettings({
           placeholder="SE00 0000 0000 0000 0000 0000"
           className="tabular-nums"
         />
+        {activeCurrency === 'SEK' && !value(activeAccount, 'iban') && connectionIban && (
+          <button
+            type="button"
+            onClick={() => updateField('iban', connectionIban)}
+            className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+          >
+            {t('iban_prefill', { value: formatIbanGroups(connectionIban) })}
+          </button>
+        )}
       </SettingsRow>
       <SettingsRow
         label={t('bic_label')}

@@ -47,6 +47,18 @@ describe('mostRecentEndedVatPeriod', () => {
       })
     })
 
+    it('keeps the M-2 period through an adjusted banking-day deadline', () => {
+      // 17 January 2026 is Saturday, so the deadline moves to Monday 19th.
+      expect(mostRecentEndedVatPeriod('monthly', new Date(2026, 0, 19))).toEqual({
+        year: 2025,
+        period: 11,
+      })
+      expect(mostRecentEndedVatPeriod('monthly', new Date(2026, 0, 20))).toEqual({
+        year: 2025,
+        period: 12,
+      })
+    })
+
     it('over-40M filers (month M due the 26th of M+1) always get M-1', () => {
       expect(
         mostRecentEndedVatPeriod('monthly', new Date(2026, 7, 6), { over40m: true }),
