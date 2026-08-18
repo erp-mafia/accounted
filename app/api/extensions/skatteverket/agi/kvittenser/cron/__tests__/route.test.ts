@@ -147,7 +147,7 @@ function makeSupabaseStub(tables: Record<string, { data: unknown; error?: unknow
 function stubHappyTables() {
   return makeSupabaseStub({
     agi_declarations: { data: [PENDING_DECLARATION] },
-    skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+    skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
     company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
   })
 }
@@ -363,7 +363,7 @@ describe('AGI kvittenser cron', () => {
             { ...PENDING_DECLARATION, id: 'decl-3', company_id: 'comp-3' },
           ],
         },
-        skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
         company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
       }),
     )
