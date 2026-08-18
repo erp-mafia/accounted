@@ -37,13 +37,14 @@ vi.mock('@/lib/invoices/pdf-render-helpers', () => ({
 }))
 
 import { POST } from '../route'
-import type { Invoice, InvoiceItem } from '@/types'
+import type { InvoiceItem } from '@/types'
+import type { InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 
 /** The invoice + items the route handed to the PDF template on the last render. */
-function lastRenderProps(): { invoice: Invoice; items: InvoiceItem[] } {
+function lastRenderProps(): { invoice: InvoicePdfInvoice; items: InvoiceItem[] } {
   const call = invoicePdfMock.mock.calls.at(-1)
   if (!call) throw new Error('InvoicePDF was not called')
-  return call[0] as { invoice: Invoice; items: InvoiceItem[] }
+  return call[0] as { invoice: InvoicePdfInvoice; items: InvoiceItem[] }
 }
 
 describe('POST /api/invoices/preview-pdf', () => {
@@ -150,8 +151,8 @@ describe('POST /api/invoices/preview-pdf', () => {
 
   // ROT/RUT (issue #1686): the preview must state the same avdrag row, info
   // box and "Att betala" as the invoice the write path creates. The PDF
-  // template reads invoice.deduction_total / deduction_personnummer_last4 and
-  // the per-item deduction fields, so those are what the route must carry.
+  // template reads invoice.deduction_total / deduction_personnummer_masked
+  // and the per-item deduction fields, so those are what the route must carry.
   describe('ROT/RUT deduction', () => {
     const rutBody = {
       ...validBody,
@@ -193,7 +194,12 @@ describe('POST /api/invoices/preview-pdf', () => {
       // 4 x 500 = 2 000 exkl. moms = 2 500 inkl. 25% moms; RUT = 50% = 1 250.
       expect(invoice.deduction_total).toBe(1250)
       expect(invoice.total).toBe(2750)
-      expect(invoice.deduction_personnummer_last4).toBe('2385')
+      // Masked like the stored-invoice PDF and the payroll roster: birth
+      // date visible, last four hidden. Neither the plaintext nor the last
+      // four digits reach the template.
+      expect(invoice.deduction_personnummer_masked).toBe('19900101-XXXX')
+      expect(invoice).not.toHaveProperty('deduction_personnummer_last4')
+      expect(invoice).not.toHaveProperty('deduction_personnummer_encrypted')
       expect(items[0]).toMatchObject({
         deduction_type: 'rut',
         deduction_amount: 1250,
@@ -252,7 +258,41 @@ describe('POST /api/invoices/preview-pdf', () => {
       )
 
       expect(response.status).toBe(200)
-      expect(lastRenderProps().invoice.deduction_personnummer_last4).toBe('2385')
+      // The 10-digit kundkort value is expanded to 12 digits before masking,
+      // so the mask carries the full birth date.
+      expect(lastRenderProps().invoice.deduction_personnummer_masked).toBe('19900101-XXXX')
+    })
+
+    it('masks a 10-digit typed personnummer with the full birth date', async () => {
+      enqueue({ data: company, error: null })
+      enqueue({ data: customer, error: null })
+
+      const response = await POST(
+        createMockRequest('/api/invoices/preview-pdf', {
+          method: 'POST',
+          body: { ...rutBody, deduction_personnummer: '900101-2385' },
+        }),
+        createMockRouteParams({}),
+      )
+
+      expect(response.status).toBe(200)
+      expect(lastRenderProps().invoice.deduction_personnummer_masked).toBe('19900101-XXXX')
+    })
+
+    it('shows no personnummer for a half-typed value that does not expand', async () => {
+      enqueue({ data: company, error: null })
+      enqueue({ data: customer, error: null })
+
+      const response = await POST(
+        createMockRequest('/api/invoices/preview-pdf', {
+          method: 'POST',
+          body: { ...rutBody, deduction_personnummer: '1990' },
+        }),
+        createMockRouteParams({}),
+      )
+
+      expect(response.status).toBe(200)
+      expect(lastRenderProps().invoice.deduction_personnummer_masked).toBeNull()
     })
 
     it('leaves a non-deduction invoice unchanged', async () => {
@@ -267,7 +307,7 @@ describe('POST /api/invoices/preview-pdf', () => {
       expect(response.status).toBe(200)
       const { invoice, items } = lastRenderProps()
       expect(invoice.deduction_total).toBe(0)
-      expect(invoice.deduction_personnummer_last4).toBeNull()
+      expect(invoice.deduction_personnummer_masked).toBeNull()
       expect(invoice.total).toBe(17500)
       expect(items[0]).toMatchObject({ deduction_type: null, deduction_amount: 0 })
     })
@@ -287,7 +327,7 @@ describe('POST /api/invoices/preview-pdf', () => {
       expect(response.status).toBe(200)
       const { invoice, items } = lastRenderProps()
       expect(invoice.deduction_total).toBe(0)
-      expect(invoice.deduction_personnummer_last4).toBeNull()
+      expect(invoice.deduction_personnummer_masked).toBeNull()
       expect(items[0]).toMatchObject({ deduction_type: null, deduction_amount: 0, work_type: null })
     })
 
