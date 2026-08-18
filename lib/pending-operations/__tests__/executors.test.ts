@@ -237,6 +237,28 @@ describe('commitPendingOperation: create_customer', () => {
     })
   })
 
+  it('rejects a staged customer_number longer than 32 characters without inserting', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      operation_type: 'create_customer',
+      params: {
+        name: 'Kund AB',
+        customer_type: 'swedish_business',
+        customer_number: 'X'.repeat(33),
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/32/)
+    expect(findCall('customers', 'insert')).toBeUndefined()
+  })
+
   it('inserts customer_number as null when not staged', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

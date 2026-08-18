@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { eventBus } from '@/lib/events/bus'
 import { tools } from '../server'
 
 const tool = () => tools.find((candidate) => candidate.name === 'gnubok_create_customer')!
@@ -7,6 +8,7 @@ const tool = () => tools.find((candidate) => candidate.name === 'gnubok_create_c
 describe('gnubok_create_customer: customer_number input', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
   })
 
   it('exposes customer_number in the strict input schema', () => {
@@ -42,6 +44,34 @@ describe('gnubok_create_customer: customer_number input', () => {
       params: Record<string, unknown>
     }
     expect(inserted.params).toMatchObject({ customer_number: 'K-1001' })
+  })
+
+  it('rejects a customer_number longer than 32 characters before staging', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute(
+        { name: 'Kund AB', customer_type: 'swedish_business', customer_number: 'X'.repeat(33) },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/32/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-string customer_number before staging', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute(
+        { name: 'Kund AB', customer_type: 'swedish_business', customer_number: 1001 },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/string/i)
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('stages customer_number as null when omitted', async () => {
