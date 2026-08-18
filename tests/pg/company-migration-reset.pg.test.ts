@@ -385,8 +385,8 @@ describe('company migration reset RPCs (pg)', () => {
     const customerInvoice = await seedCompany()
     await getPool().query(
       `INSERT INTO public.invoices
-         (user_id, company_id, invoice_date, due_date, status)
-       VALUES ($1, $2, '2026-08-01', '2026-08-31', 'sent')`,
+         (user_id, company_id, invoice_number, invoice_date, due_date, status)
+       VALUES ($1, $2, 1, '2026-08-01', '2026-08-31', 'sent')`,
       [customerInvoice.userId, customerInvoice.companyId],
     )
     const customerPreview = await preview(customerInvoice.userId, customerInvoice.companyId)
@@ -434,80 +434,108 @@ describe('company migration reset RPCs (pg)', () => {
       [salaryRunId, fixture.companyId, fixture.userId],
     )
 
-    const result = await execute(fixture.userId, fixture.companyId)
-    expect(result.ok).toBe(true)
-    const replacementId = result.replacement_company_id!
+    await withUserContext(fixture.userId, async (client) => {
+      const { rows: resetRows } = await client.query<{ result: RpcResult }>(
+        `SELECT public.reset_company_for_migration($1, $2, $3, true, true) AS result`,
+        [fixture.companyId, 'Test AB', 'The first migration used the wrong fiscal periods.'],
+      )
+      const result = resetRows[0]!.result
+      expect(result.ok).toBe(true)
+      const replacementId = result.replacement_company_id!
 
-    await expect(
-      getPool().query(`UPDATE public.salary_runs SET status = 'review' WHERE id = $1`, [
-        salaryRunId,
-      ]),
-    ).rejects.toThrow(/source records are immutable/i)
+      // Keep the reset and guard probes in one transaction. withUserContext
+      // rolls back on return, so probing through a separate pool connection
+      // would observe the pre-reset state instead of the retained archive.
+      await client.query('SET LOCAL ROLE postgres')
+      const resetLink = await client.query<{ n: number }>(
+        `SELECT count(*)::int AS n
+         FROM public.company_migration_resets
+         WHERE source_company_id = $1 AND replacement_company_id = $2`,
+        [fixture.companyId, replacementId],
+      )
+      expect(resetLink.rows[0]!.n).toBe(1)
 
-    await expect(
-      getPool().query(
-        `UPDATE public.company_settings SET company_name = 'Changed'
-         WHERE company_id = $1`,
-        [fixture.companyId],
-      ),
-    ).rejects.toThrow(/source records are immutable/i)
+      await client.query('SAVEPOINT immutable_salary_run')
+      await expect(
+        client.query(`UPDATE public.salary_runs SET status = 'review' WHERE id = $1`, [
+          salaryRunId,
+        ]),
+      ).rejects.toThrow(/source records are immutable/i)
+      await client.query('ROLLBACK TO SAVEPOINT immutable_salary_run')
 
-    await expect(
-      getPool().query(`UPDATE public.companies SET name = 'Changed' WHERE id = $1`, [
-        fixture.companyId,
-      ]),
-    ).rejects.toThrow(/source company is immutable/i)
+      await client.query('SAVEPOINT immutable_company_settings')
+      await expect(
+        client.query(
+          `UPDATE public.company_settings SET company_name = 'Changed'
+           WHERE company_id = $1`,
+          [fixture.companyId],
+        ),
+      ).rejects.toThrow(/source records are immutable/i)
+      await client.query('ROLLBACK TO SAVEPOINT immutable_company_settings')
 
-    const replacementSalaryRunId = randomUUID()
-    await getPool().query(
-      `INSERT INTO public.salary_runs
-         (id, company_id, user_id, period_year, period_month, payment_date)
-       VALUES ($1, $2, $3, 2026, 9, '2026-09-25')`,
-      [replacementSalaryRunId, replacementId, fixture.userId],
-    )
-    await expect(
-      getPool().query(`UPDATE public.salary_runs SET company_id = $1 WHERE id = $2`, [
-        fixture.companyId,
-        replacementSalaryRunId,
-      ]),
-    ).rejects.toThrow(/source records are immutable/i)
+      await client.query('SAVEPOINT immutable_source_company')
+      await expect(
+        client.query(`UPDATE public.companies SET name = 'Changed' WHERE id = $1`, [
+          fixture.companyId,
+        ]),
+      ).rejects.toThrow(/source company is immutable/i)
+      await client.query('ROLLBACK TO SAVEPOINT immutable_source_company')
 
-    await expect(
-      getPool().query(
-        `INSERT INTO public.skatteverket_api_audit_log
-           (company_id, user_id, endpoint, outcome, response_status)
-         VALUES ($1, $2, 'declaration/validate', 'ok', 200)`,
-        [fixture.companyId, fixture.userId],
-      ),
-    ).rejects.toThrow(/source records are immutable/i)
+      const replacementSalaryRunId = randomUUID()
+      await client.query(
+        `INSERT INTO public.salary_runs
+           (id, company_id, user_id, period_year, period_month, payment_date)
+         VALUES ($1, $2, $3, 2026, 9, '2026-09-25')`,
+        [replacementSalaryRunId, replacementId, fixture.userId],
+      )
+      await client.query('SAVEPOINT reject_move_into_source')
+      await expect(
+        client.query(`UPDATE public.salary_runs SET company_id = $1 WHERE id = $2`, [
+          fixture.companyId,
+          replacementSalaryRunId,
+        ]),
+      ).rejects.toThrow(/source records are immutable/i)
+      await client.query('ROLLBACK TO SAVEPOINT reject_move_into_source')
 
-    const guardedTables = [
-      'agi_declarations',
-      'arsredovisning_submissions',
-      'bank_connections',
-      'company_settings',
-      'rot_rut_payout_requests',
-      'salary_line_items',
-      'salary_run_employees',
-      'salary_runs',
-      'skatteverket_api_audit_log',
-    ]
-    const { rows } = await getPool().query<{ table_name: string }>(
-      `SELECT c.relname AS table_name
-       FROM pg_trigger t
-       JOIN pg_class c ON c.oid = t.tgrelid
-       JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname = 'public'
-         AND NOT t.tgisinternal
-         AND t.tgname = left(
-           c.relname || '_block_migration_reset_source_mutation',
-           63
-         )
-         AND c.relname = ANY($1::text[])
-       ORDER BY c.relname`,
-      [guardedTables],
-    )
-    expect(rows.map((row) => row.table_name)).toEqual(guardedTables)
+      await client.query('SAVEPOINT reject_source_authority_audit')
+      await expect(
+        client.query(
+          `INSERT INTO public.skatteverket_api_audit_log
+             (company_id, user_id, endpoint, outcome, response_status)
+           VALUES ($1, $2, 'declaration/validate', 'ok', 200)`,
+          [fixture.companyId, fixture.userId],
+        ),
+      ).rejects.toThrow(/source records are immutable/i)
+      await client.query('ROLLBACK TO SAVEPOINT reject_source_authority_audit')
+
+      const guardedTables = [
+        'agi_declarations',
+        'arsredovisning_submissions',
+        'bank_connections',
+        'company_settings',
+        'rot_rut_payout_requests',
+        'salary_line_items',
+        'salary_run_employees',
+        'salary_runs',
+        'skatteverket_api_audit_log',
+      ]
+      const { rows } = await client.query<{ table_name: string }>(
+        `SELECT c.relname AS table_name
+         FROM pg_trigger t
+         JOIN pg_class c ON c.oid = t.tgrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public'
+           AND NOT t.tgisinternal
+           AND t.tgname = left(
+             c.relname || '_block_migration_reset_source_mutation',
+             63
+           )
+           AND c.relname = ANY($1::text[])
+         ORDER BY c.relname`,
+        [guardedTables],
+      )
+      expect(rows.map((row) => row.table_name)).toEqual(guardedTables)
+    })
   })
 
   it('does not archive or create anything when execution is ineligible', async () => {
