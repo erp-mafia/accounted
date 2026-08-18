@@ -181,6 +181,18 @@ describe('sendConnectionExpiredNotification', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('keys the episode on the (user, company) token row, not the user alone', async () => {
+    const { supabase, ops } = makeSupabase()
+
+    await sendConnectionExpiredNotification(supabase, baseInput)
+
+    // Rows are per (user, company): a multi-company operator holds several,
+    // and a user-only maybeSingle() errored out and silently skipped the
+    // email (#1673 follow-through).
+    const tokenRead = ops.find((o) => o.table === 'skatteverket_tokens')
+    expect(tokenRead?.filters).toMatchObject({ user_id: 'user-1', company_id: 'company-1' })
+  })
+
   it('skips when no token row exists (already disconnected)', async () => {
     const { supabase } = makeSupabase({ token: null })
 

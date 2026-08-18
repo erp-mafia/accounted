@@ -156,6 +156,12 @@ function CustomerPreview({ data }: { data: Record<string, unknown> }) {
       <span>{String(data.name ?? '')}</span>
       <span className="text-muted-foreground">Typ</span>
       <span>{String(data.customer_type ?? '')}</span>
+      {data.customer_number ? (
+        <>
+          <span className="text-muted-foreground">Kundnr</span>
+          <span className="font-mono">{String(data.customer_number)}</span>
+        </>
+      ) : null}
       {data.email ? (
         <>
           <span className="text-muted-foreground">E-post</span>

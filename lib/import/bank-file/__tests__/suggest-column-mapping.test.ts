@@ -177,6 +177,85 @@ describe('suggestColumnMapping', () => {
     expect(result.balance).toBe(3)
   })
 
+  // Regression tests for issue #1671: a Lunar 2026 export routed through the
+  // manual mapping (detection missed: semicolon/tab copy) seeded `Time` as the
+  // description because no label keyword matched `Title` and the positional
+  // fallback took the first non-numeric, non-date column.
+  it('REGRESSION (#1671): Lunar-style Date,Time,Title header maps Title, not Time, as description', () => {
+    const headers = ['Date', 'Time', 'Title', 'Amount', 'Balance', 'Transaction ID']
+    const dataRows = [
+      ['2026-06-30', '12:11', 'Incoming payment', '12 345,00', '98 764,94', '7f0a4c9e-1111-2222-3333-444455556666'],
+      ['2026-06-12', '05:47', 'Fee', '-1,49', '86 419,94', '7f0a4c9e-1111-2222-3333-444455557777'],
+      ['2026-05-12', '05:47', 'Card purchase', '-2 500,00', '86 421,43', '7f0a4c9e-1111-2222-3333-444455558888'],
+    ]
+
+    const result = suggestColumnMapping(headers, dataRows)
+
+    expect(result.date).toBe(0)
+    expect(result.description).toBe(2) // Title, NOT 1 (Time)
+    expect(result.amount).toBe(3)
+    expect(result.balance).toBe(4)
+  })
+
+  it('REGRESSION (#1671): skips a Time column by its HH:MM values when there is no header row', () => {
+    const dataRows = [
+      ['2026-06-30', '12:11', 'Incoming payment', '12 345,00', '98 764,94'],
+      ['2026-06-12', '05:47', 'Fee', '-1,49', '86 419,94'],
+      ['2026-05-12', '05:47:03', 'Card purchase', '-2 500,00', '86 421,43'],
+    ]
+
+    const result = suggestColumnMapping(null, dataRows)
+
+    expect(result.date).toBe(0)
+    expect(result.description).toBe(2) // the text column, NOT 1 (clock time)
+    expect(result.amount).toBe(3)
+    expect(result.balance).toBe(4)
+  })
+
+  it('maps a Swedish Datum;Tid;Titel layout to Titel and never to Tid', () => {
+    const headers = ['Datum', 'Tid', 'Titel', 'Belopp', 'Saldo']
+    const dataRows = [
+      ['2026-06-30', '12:11', 'Inbetalning', '12 345,00', '98 764,94'],
+      ['2026-06-12', '05:47', 'Avgift', '-1,49', '86 419,94'],
+    ]
+
+    const result = suggestColumnMapping(headers, dataRows)
+
+    expect(result.date).toBe(0)
+    expect(result.description).toBe(2) // Titel
+    expect(result.amount).toBe(3)
+    expect(result.balance).toBe(4)
+  })
+
+  it('skips a time-labelled column in the positional fallback even when no description keyword matches', () => {
+    // 'Notering' is not a description keyword, so the label pass misses and
+    // the fallback must step over Transaktionstid (time by label AND values).
+    const headers = ['Datum', 'Transaktionstid', 'Notering', 'Belopp']
+    const dataRows = [
+      ['2026-06-30', '12:11', 'Hyra juni', '-9 500,00'],
+      ['2026-06-12', '05:47', 'Swish', '250,00'],
+    ]
+
+    const result = suggestColumnMapping(headers, dataRows)
+
+    expect(result.description).toBe(2) // Notering, NOT 1 (Transaktionstid)
+  })
+
+  it('still seeds a description as a last resort when only a time column remains', () => {
+    // Nothing better exists: the UI must still get a value the user can change.
+    const headers = ['Datum', 'Tid', 'Belopp']
+    const dataRows = [
+      ['2026-06-30', '12:11', '-9 500,00'],
+      ['2026-06-12', '05:47', '250,00'],
+    ]
+
+    const result = suggestColumnMapping(headers, dataRows)
+
+    expect(result.date).toBe(0)
+    expect(result.amount).toBe(2)
+    expect(result.description).toBe(1)
+  })
+
   it('returns all -1 for empty input', () => {
     expect(suggestColumnMapping(null, [])).toEqual({ date: -1, description: -1, amount: -1, balance: -1 })
   })

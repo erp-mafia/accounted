@@ -347,6 +347,13 @@ async function commitCreateCustomer(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
+  // Same 32-char invariant the web/v1 create routes and commitUpdateCustomer
+  // enforce; MCP hosts don't reliably enforce inputSchema maxLength.
+  const customerNumber = params.customer_number
+  if (customerNumber != null && (typeof customerNumber !== 'string' || customerNumber.length > 32)) {
+    return { error: 'customer_number must be a string of at most 32 characters', status: 400 }
+  }
+
   const { data, error } = await supabase
     .from('customers')
     .insert({
@@ -354,6 +361,7 @@ async function commitCreateCustomer(
       company_id: companyId,
       name: params.name as string,
       customer_type: params.customer_type as string,
+      customer_number: customerNumber || null,
       email: (params.email as string) || null,
       org_number: (params.org_number as string) || null,
       vat_number: (params.vat_number as string) || null,

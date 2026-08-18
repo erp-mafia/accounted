@@ -269,9 +269,11 @@ describe('shopify extension routes', () => {
       vi.mocked(syncShopifyOrders).mockResolvedValue({
         fetched: 3,
         refundsFetched: 1,
-        imported: 4,
-        duplicates: 0,
-        skippedLocked: 0,
+        inserted: 4,
+        updated: 0,
+        unchanged: 0,
+        frozenFlagged: 0,
+        crossMarked: 0,
         errors: 0,
       })
       const res = await findRoute('POST', '/sync').handler(
@@ -280,7 +282,7 @@ describe('shopify extension routes', () => {
       )
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.transactions.imported).toBe(4)
+      expect(body.transactions.inserted).toBe(4)
       expect(vi.mocked(syncShopifyOrders).mock.calls[0][0]).toEqual({ service: true })
     })
   })

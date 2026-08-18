@@ -83,6 +83,21 @@ export interface DeadlineInstance {
   taxAssessmentNoticeId?: string
 }
 
+export interface VatDeadlineCalculationSettings {
+  vat_taxable_base_over_40m: boolean
+  entity_type?: EntityType | null
+  fiscal_year_start_month?: number | null
+  vat_has_eu_trade?: boolean | null
+  vat_filing_method?: TaxFilingMethod | null
+}
+
+interface AnnualVatDeadlineSettings {
+  entity_type: 'aktiebolag' | 'enskild_firma'
+  fiscal_year_start_month: number
+  vat_has_eu_trade: boolean
+  vat_filing_method?: TaxFilingMethod | null
+}
+
 /**
  * Day-of-month of the nth Swedish banking day in a month (1-based n).
  * Used for Intrastat, whose SCB reporting dates follow the ~10th working
@@ -111,7 +126,7 @@ function getFiscalYearLabel(fiscalYearEndMonth: number, fiscalYearEndYear: numbe
 function getAnnualVatDeadline(
   fiscalYearEndMonth: number,
   fiscalYearEndYear: number,
-  settings: CompanySettingsForDeadlines,
+  settings: AnnualVatDeadlineSettings,
 ): { day: number; month: number; year: number } {
   // Enskild firma (calendar year only, BFL 3 kap.): without EU trade the
   // annual momsdeklaration follows the income tax return (12 May); with EU
@@ -146,25 +161,100 @@ function getAnnualVatDeadline(
   return { day: paper ? 12 : 17, month: paper ? 6 : 7, year: fiscalYearEndYear + 1 }
 }
 
+/**
+ * Resolve the raw statutory VAT filing date for one reporting period.
+ * Banking-day adjustment is deliberately left to callers, matching the other
+ * deadline configs whose generated instances are adjusted by the generator.
+ */
+export function getVatDeadlineForPeriod(
+  periodType: 'monthly' | 'quarterly' | 'yearly',
+  year: number,
+  period: number,
+  settings: VatDeadlineCalculationSettings,
+): DeadlineInstance | null {
+  if (periodType === 'monthly') {
+    if (period < 1 || period > 12) return null
+
+    const month = period - 1
+    const monthOffset = settings.vat_taxable_base_over_40m ? 1 : 2
+    const deadlineMonth = (month + monthOffset) % 12
+    const deadlineYear = year + Math.floor((month + monthOffset) / 12)
+    const day = settings.vat_taxable_base_over_40m
+      ? 26
+      : (deadlineMonth === 0 || deadlineMonth === 7 ? 17 : 12)
+
+    return {
+      day,
+      month: deadlineMonth,
+      year: deadlineYear,
+      period: `${year}-${String(period).padStart(2, '0')}`,
+      periodLabel: getMonthLabel(month, year),
+    }
+  }
+
+  if (periodType === 'quarterly') {
+    if (period < 1 || period > 4) return null
+
+    return [
+      { day: 12, month: 4, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },
+      { day: 17, month: 7, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },
+      { day: 12, month: 10, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },
+      { day: 12, month: 1, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` },
+    ][period - 1]
+  }
+
+  if (period !== 1) return null
+  if (settings.entity_type !== 'aktiebolag' && settings.entity_type !== 'enskild_firma') {
+    return null
+  }
+  if (typeof settings.vat_has_eu_trade !== 'boolean') return null
+  if (
+    settings.entity_type === 'aktiebolag'
+    && settings.vat_has_eu_trade === false
+    && settings.vat_filing_method !== 'electronic'
+    && settings.vat_filing_method !== 'paper'
+  ) {
+    return null
+  }
+
+  const configuredFiscalYearStartMonth = settings.fiscal_year_start_month != null
+    && settings.fiscal_year_start_month >= 1
+    && settings.fiscal_year_start_month <= 12
+    ? settings.fiscal_year_start_month
+    : null
+  if (settings.entity_type === 'aktiebolag' && configuredFiscalYearStartMonth === null) {
+    return null
+  }
+  const fiscalYearStartMonth = settings.entity_type === 'enskild_firma'
+    ? 1
+    : configuredFiscalYearStartMonth!
+  const fiscalYearEndMonth = settings.entity_type === 'enskild_firma'
+    ? 12
+    : (fiscalYearStartMonth === 1 ? 12 : fiscalYearStartMonth - 1)
+  const deadline = getAnnualVatDeadline(fiscalYearEndMonth, year, {
+    entity_type: settings.entity_type,
+    fiscal_year_start_month: fiscalYearStartMonth,
+    vat_has_eu_trade: settings.vat_has_eu_trade,
+    vat_filing_method: settings.vat_filing_method,
+  })
+  const fiscalYearLabel = getFiscalYearLabel(fiscalYearEndMonth, year)
+
+  return {
+    ...deadline,
+    period: fiscalYearLabel,
+    periodLabel: fiscalYearLabel,
+  }
+}
+
 function generateAnnualVatDates(
   deadlineYear: number,
   settings: CompanySettingsForDeadlines,
 ): DeadlineInstance[] {
-  const fiscalYearEndMonth = settings.entity_type === 'enskild_firma'
-    ? 12
-    : (settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1)
   const results: DeadlineInstance[] = []
 
   for (const fiscalYearEndYear of [deadlineYear - 1, deadlineYear]) {
-    const deadline = getAnnualVatDeadline(fiscalYearEndMonth, fiscalYearEndYear, settings)
-    if (deadline.year !== deadlineYear) continue
-
-    const period = getFiscalYearLabel(fiscalYearEndMonth, fiscalYearEndYear)
-    results.push({
-      ...deadline,
-      period,
-      periodLabel: period,
-    })
+    const instance = getVatDeadlineForPeriod('yearly', fiscalYearEndYear, 1, settings)
+    if (instance?.year === deadlineYear) results.push(instance)
   }
 
   return results
@@ -182,27 +272,10 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     condition: (s) => s.vat_registered && s.moms_period === 'monthly',
     priority: 'important',
     linkedReportType: 'vat',
-    generateDates: (year, settings) => {
-      const instances: DeadlineInstance[] = []
-      for (let month = 0; month < 12; month++) {
-        const monthOffset = settings.vat_taxable_base_over_40m ? 1 : 2
-        const deadlineMonth = (month + monthOffset) % 12
-        const deadlineYear = year + Math.floor((month + monthOffset) / 12)
-        // Above SEK 40M the 26th applies year-round; 26 December is annandag
-        // jul, and the banking-day adjustment yields Skatteverket's 27th.
-        const day = settings.vat_taxable_base_over_40m
-          ? 26
-          : (deadlineMonth === 0 || deadlineMonth === 7 ? 17 : 12)
-        instances.push({
-          day,
-          month: deadlineMonth,
-          year: deadlineYear,
-          period: `${year}-${String(month + 1).padStart(2, '0')}`,
-          periodLabel: getMonthLabel(month, year),
-        })
-      }
-      return instances
-    },
+    generateDates: (year, settings) => Array.from(
+      { length: 12 },
+      (_, month) => getVatDeadlineForPeriod('monthly', year, month + 1, settings)!,
+    ),
   },
 
   // Momsdeklaration (quarterly)
@@ -213,14 +286,10 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     condition: (s) => s.vat_registered && s.moms_period === 'quarterly',
     priority: 'important',
     linkedReportType: 'vat',
-    generateDates: (year) => {
-      return [
-        { day: 12, month: 4, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },
-        { day: 17, month: 7, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },
-        { day: 12, month: 10, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },
-        { day: 12, month: 1, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` },
-      ]
-    },
+    generateDates: (year, settings) => Array.from(
+      { length: 4 },
+      (_, quarter) => getVatDeadlineForPeriod('quarterly', year, quarter + 1, settings)!,
+    ),
   },
 
   // Momsdeklaration (yearly)

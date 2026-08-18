@@ -1677,6 +1677,11 @@ export default function NewSupplierInvoiceForm({
                   e.preventDefault()
                 }}
               >
+                {suppliers.length === 0 && (
+                  <div className="px-2 py-2 text-[13px] text-muted-foreground">
+                    {t('no_suppliers_yet')}
+                  </div>
+                )}
                 {suppliers.map((s) => (
                   <DropdownMenuItem
                     key={s.id}
@@ -1695,7 +1700,8 @@ export default function NewSupplierInvoiceForm({
                     </div>
                   </DropdownMenuItem>
                 ))}
-                <DropdownMenuSeparator />
+                {/* No separator over an empty list: it reads as a stray line. */}
+                {suppliers.length > 0 && <DropdownMenuSeparator />}
                 <DropdownMenuItem onSelect={openSupplierDialogBlank} className="text-muted-foreground">
                   {t('add_new_supplier')}
                 </DropdownMenuItem>
