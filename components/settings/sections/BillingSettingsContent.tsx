@@ -12,28 +12,18 @@ import {
   SettingsRowEnd,
   SettingsRowNote,
   SettingsSectionHeader,
+  SettingsSeg,
 } from '@/components/settings/SettingsRows'
-import { formatDateLong } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
+import { useFormat } from '@/lib/hooks/use-format'
 import { BillingActions } from '@/components/settings/BillingActions'
-import { ILLUSTRATIONS, illustrationSrc } from '@/components/onboarding/onboarding-illustrations'
+import { PLAN_PRICES } from '@/components/settings/billing-plans'
+import type { BillingPlan } from '@/lib/stripe/client'
 
-// What the paid tier unlocks (mirrors lib/entitlements PAID_CAPABILITIES).
-const INCLUDED = [
-  'AI-assistent: chatt, kategorisering och dokumenttolkning',
-  'Bankkoppling och automatisk synk (PSD2)',
-  'Skatteverket: moms- och AGI-inlämning',
-  'E-postutskick av fakturor, påminnelser och lönebesked',
-]
-
-// What stays free forever (freeze-and-retain, nothing is taken away). Shown
-// as the second column of the flat feature list so the paid tier reads
-// strongest right next to it. Mirrors the old ALWAYS_FREE copy.
-const ALWAYS_FREE = [
-  'Bokföring och rapporter',
-  'Fakturering',
-  'SIE-export',
-  'Org.nr-uppslag och momsnummerkontroll',
-]
+// What the paid tier unlocks, phrased as what happens for the user rather
+// than as a feature inventory. One line per PAID capability in
+// lib/entitlements/keys.ts (ai, bank_sync, skatteverket, email_send).
+const UNLOCK_KEYS = ['unlock_ai', 'unlock_bank', 'unlock_skv', 'unlock_email'] as const
 
 // Mirrors the checkout route's deferred-first-charge condition (Stripe's 48h
 // trial_end floor plus clock margin). Above this, checkout collects the card
@@ -50,49 +40,17 @@ interface BillingView {
   isDemo: boolean
 }
 
-/**
- * Decorative masthead: the marketing site's halftone Stockholm skyline as a
- * quiet wide banner, echoing the onboarding backdrop so the paid surface
- * feels like the same product. Purely decorative (aria-hidden, empty alt),
- * no text, one gesture.
- */
-function BillingHero() {
-  const art = ILLUSTRATIONS['about-stockholm']
+function UnlockList() {
+  const t = useTranslations('settings_billing')
   return (
-    <div
-      aria-hidden
-      className="relative mt-6 h-40 overflow-hidden rounded-lg border border-border bg-frame"
-    >
-      {/* Anchored so the skyline's waterline sits on the strip's bottom edge
-          (the water reflection falls below it), spires reaching up into the
-          strip: same physics as the onboarding backdrop. */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={illustrationSrc('about-stockholm')}
-        width={art.w}
-        height={art.h}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        className="absolute bottom-0 left-1/2 w-full min-w-[640px] -translate-x-1/2 translate-y-[51%] opacity-70 dark:opacity-40 dark:invert"
-      />
-    </div>
-  )
-}
-
-function FeatureList({ heading, items }: { heading: string; items: string[] }) {
-  return (
-    <div>
-      <p className="text-xs font-medium text-muted-foreground">{heading}</p>
-      <ul className="mt-2 space-y-2">
-        {items.map((item) => (
-          <li key={item} className="flex items-start gap-2 text-sm">
-            <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
-            <span>{item}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
+    <ul className="space-y-2 px-1 pt-3">
+      {UNLOCK_KEYS.map((key) => (
+        <li key={key} className="flex items-start gap-2 text-sm">
+          <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
+          <span>{t(key)}</span>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -100,12 +58,18 @@ function FeatureList({ heading, items }: { heading: string; items: string[] }) {
  * Settings → Abonnemang. Rendered both as the full page (thin wrapper) and
  * inside the settings modal (via SETTINGS_SECTIONS), so it's a client component
  * that reads its state from GET /api/billing/status.
+ *
+ * The sell view is deliberately an order summary in the Fönster row grammar:
+ * what you unlock, then price / first charge / how to cancel as flat rows,
+ * then one CTA. The money terms are stated once each, where the decision is
+ * made, instead of repeated as reassurance copy around the page.
  */
 export function BillingSettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
-  const tBilling = useTranslations('settings_billing')
+  const t = useTranslations('settings_billing')
   const errorLocale = useLocale() as ErrorLocale
+  const { formatDateLong } = useFormat()
   // null = the billing state is not known: still loading, or the read failed
   // (loadError). A failed GET must never render a fabricated non-paying,
   // unconfigured panel to a paying customer.
@@ -114,6 +78,7 @@ export function BillingSettingsContent() {
   // means the user has to act (an expired session) and a retry cannot help.
   const [loadError, setLoadError] = useState<{ detail: string | null } | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const [plan, setPlan] = useState<BillingPlan>('yearly')
 
   useEffect(() => {
     let active = true
@@ -180,12 +145,7 @@ export function BillingSettingsContent() {
     return () => { active = false }
   }, [reloadKey, errorLocale])
 
-  const header = (
-    <>
-      <SettingsSectionHeader title={tNav('billing')} intro={tIntro('billing')} />
-      <BillingHero />
-    </>
-  )
+  const header = <SettingsSectionHeader title={tNav('billing')} intro={tIntro('billing')} />
 
   if (!view) {
     return (
@@ -199,12 +159,10 @@ export function BillingSettingsContent() {
               action={
                 loadError.detail
                   ? undefined
-                  : { label: tBilling('load_retry'), onClick: () => setReloadKey((k) => k + 1) }
+                  : { label: t('load_retry'), onClick: () => setReloadKey((k) => k + 1) }
               }
             >
-              {loadError.detail
-                ? `${tBilling('load_failed')} ${loadError.detail}`
-                : tBilling('load_failed')}
+              {loadError.detail ? `${t('load_failed')} ${loadError.detail}` : t('load_failed')}
             </AttnLine>
           )}
         </div>
@@ -224,24 +182,14 @@ export function BillingSettingsContent() {
     return (
       <div>
         {header}
-        <SettingsGroup label="Ditt abonnemang">
-          <SettingsRow label="Status" borderless>
-            <span>Demo</span>
-            <SettingsRowNote>
-              Du provkör Accounted i en demo. Skapa ett riktigt konto för att aktivera
-              abonnemang, AI-assistent, bankkoppling och inlämning till Skatteverket.
-            </SettingsRowNote>
+        <SettingsGroup label={t('group_yours')}>
+          <SettingsRow label={t('row_status')} borderless>
+            <span>{t('status_demo')}</span>
+            <SettingsRowNote>{t('status_demo_note')}</SettingsRowNote>
           </SettingsRow>
         </SettingsGroup>
-        <SettingsGroup label="I abonnemanget">
-          <ul className="space-y-2 px-1 pt-3">
-            {INCLUDED.map((item) => (
-              <li key={item} className="flex items-start gap-2 text-sm">
-                <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
-                <span>{item}</span>
-              </li>
-            ))}
-          </ul>
+        <SettingsGroup label={t('group_included')}>
+          <UnlockList />
         </SettingsGroup>
       </div>
     )
@@ -252,27 +200,20 @@ export function BillingSettingsContent() {
     return (
       <div>
         {header}
-        <SettingsGroup label="Ditt abonnemang">
-          <SettingsRow label="Status">
-            <span className="font-medium">Aktivt</span>
-            <SettingsRowNote>Du kan hantera eller avsluta det när som helst.</SettingsRowNote>
+        <SettingsGroup label={t('group_yours')}>
+          <SettingsRow label={t('row_status')}>
+            <span className="font-medium">{t('status_active')}</span>
+            <SettingsRowNote>{t('status_active_note')}</SettingsRowNote>
           </SettingsRow>
-          <SettingsRow label="Hantera" borderless>
-            <SettingsRowNote>Byt kort, ändra plan eller säg upp via Stripes kundportal.</SettingsRowNote>
+          <SettingsRow label={t('row_manage')} borderless>
+            <SettingsRowNote>{t('manage_note')}</SettingsRowNote>
             <SettingsRowEnd>
               <BillingActions isPaying configured={view.configured} />
             </SettingsRowEnd>
           </SettingsRow>
         </SettingsGroup>
-        <SettingsGroup label="I abonnemanget">
-          <ul className="space-y-2 px-1 pt-3">
-            {INCLUDED.map((item) => (
-              <li key={item} className="flex items-start gap-2 text-sm">
-                <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
-                <span>{item}</span>
-              </li>
-            ))}
-          </ul>
+        <SettingsGroup label={t('group_included')}>
+          <UnlockList />
         </SettingsGroup>
       </div>
     )
@@ -284,13 +225,13 @@ export function BillingSettingsContent() {
     return (
       <div>
         {header}
-        <SettingsGroup label="Ditt abonnemang">
-          <SettingsRow label="Status" borderless>
+        <SettingsGroup label={t('group_yours')}>
+          <SettingsRow label={t('row_status')} borderless>
             <span className="flex items-start gap-2">
               <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
-              <span>Klart! Ditt abonnemang är aktiverat och alla funktioner låses upp inom någon minut.</span>
+              <span>{t('paid_just_now')}</span>
             </span>
-            <SettingsRowNote>Ladda om sidan om du inte ser ändringen.</SettingsRowNote>
+            <SettingsRowNote>{t('paid_just_now_note')}</SettingsRowNote>
           </SettingsRow>
         </SettingsGroup>
       </div>
@@ -298,8 +239,8 @@ export function BillingSettingsContent() {
   }
 
   // Trialing / expired → sell view.
-  const { trialEndsAt, daysLeft } = view
-  const deferredTo = view.chargeDeferred ? trialEndsAt : null
+  const { trialEndsAt, daysLeft, chargeDeferred } = view
+  const price = PLAN_PRICES[plan]
 
   return (
     <div>
@@ -309,51 +250,63 @@ export function BillingSettingsContent() {
       {daysLeft !== null && (
         <AttnLine className="mt-3">
           {daysLeft > 0
-            ? `Din provperiod löper ut om ${daysLeft} ${daysLeft === 1 ? 'dag' : 'dagar'}${
-                trialEndsAt ? ` (${formatDateLong(trialEndsAt)})` : ''
-              }. ${
-                deferredTo
-                  ? 'Lägg till ditt kort nu: inget dras förrän provperioden är slut.'
-                  : 'Lägg till betalning nu så fortsätter allt utan avbrott.'
-              }`
-            : 'Din provperiod har löpt ut. Aktivera abonnemanget för att få tillbaka AI, bankkoppling och inlämning.'}
+            ? t('trial_ends_in', { days: daysLeft, date: trialEndsAt ? formatDateLong(trialEndsAt) : '' })
+            : t('trial_ended')}
         </AttnLine>
       )}
 
-      <SettingsGroup
-        label="Allt du behöver för att sköta bokföringen själv"
-        help="Ingen bindningstid · Avsluta när du vill · Säker betalning via Stripe"
-      >
-        <div className="px-1 pt-3">
-          <BillingActions isPaying={false} configured={view.configured} firstChargeAt={deferredTo} />
-        </div>
+      <SettingsGroup label={t('group_included')} help={t('unlock_help')}>
+        <UnlockList />
+        {/* Freeze-and-retain, said once and up front: nothing is taken away. */}
+        <p className="px-1 pt-4 text-xs text-muted-foreground">{t('without_note')}</p>
       </SettingsGroup>
 
-      {deferredTo && (
-        <SettingsGroup label="Så funkar det">
-          <SettingsRow label="Idag">
-            <span>Du lägger till ditt kort. Inget dras nu.</span>
-          </SettingsRow>
-          <SettingsRow label={<span className="tabular-nums">{formatDateLong(deferredTo)}</span>}>
-            <span>Provperioden slutar och den första debiteringen sker.</span>
-          </SettingsRow>
-          <SettingsRow label="När som helst" borderless>
-            <span>
-              Avsluta direkt via Stripe. Före {formatDateLong(deferredTo)} kostar det ingenting.
-            </span>
-          </SettingsRow>
-        </SettingsGroup>
-      )}
-
-      <SettingsGroup
-        label="Funktioner"
-        // The 7-year retention reassurance moved behind the "?": long legal
-        // copy stays out of the page flow.
-        help="Utan abonnemang behåller du bokföringen, fakturorna, rapporterna och all din data utan kostnad. Ingenting raderas: räkenskapsinformation bevaras i sju år enligt bokföringslagen, oavsett abonnemang."
-      >
-        <div className="grid gap-6 px-1 pt-3 sm:grid-cols-2">
-          <FeatureList heading="I abonnemanget" items={INCLUDED} />
-          <FeatureList heading="Alltid gratis" items={ALWAYS_FREE} />
+      <SettingsGroup label={t('group_terms')}>
+        {/* The interval toggle lives in the price row: it is the price selector,
+            and the amount changing right beside it makes the trade-off legible. */}
+        <SettingsRow label={t('row_price')}>
+          <SettingsSeg
+            value={plan}
+            onChange={setPlan}
+            aria-label={t('row_interval')}
+            options={[
+              { value: 'monthly', label: t('interval_monthly') },
+              {
+                value: 'yearly',
+                label: (
+                  <>
+                    {t('interval_yearly')}
+                    <span className="ml-2 text-muted-foreground">{t('interval_yearly_save')}</span>
+                  </>
+                ),
+              },
+            ]}
+          />
+          <span className="tabular-nums">
+            {formatCurrency(price.exVat)} / {t(`period_${plan}`)}
+          </span>
+          <SettingsRowNote className="basis-full tabular-nums">
+            {plan === 'yearly'
+              ? t('price_note_yearly', { inc: formatCurrency(price.incVat), perMonth: formatCurrency(price.perMonthEquivalent) })
+              : t('price_note_monthly', { inc: formatCurrency(price.incVat) })}
+          </SettingsRowNote>
+        </SettingsRow>
+        <SettingsRow label={t('row_first_charge')} align="baseline">
+          {chargeDeferred && trialEndsAt ? (
+            <>
+              <span className="tabular-nums">{formatDateLong(trialEndsAt)}</span>
+              <SettingsRowNote>{t('first_charge_deferred_note')}</SettingsRowNote>
+            </>
+          ) : (
+            <span>{t('first_charge_today')}</span>
+          )}
+        </SettingsRow>
+        <SettingsRow label={t('row_cancel')} align="baseline" borderless>
+          <span>{t('cancel_value')}</span>
+        </SettingsRow>
+        <div className="px-1 pt-4">
+          <BillingActions isPaying={false} configured={view.configured} plan={plan} firstChargeDeferred={chargeDeferred} />
+          <p className="pt-3 text-xs text-muted-foreground">{t('stripe_note')}</p>
         </div>
       </SettingsGroup>
     </div>
