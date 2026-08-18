@@ -218,8 +218,11 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // Mobile: sit above the bottom nav (h-16 = 64px) AND the iOS home
       // indicator (env(safe-area-inset-bottom)). Still needed after the FAB
       // went desktop-only: the collapsed handle above renders on mobile too.
-      // Desktop: standard 20px lift, no mobile nav to worry about.
-      className={`fixed right-4 z-30 ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-lg bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] md:bottom-4`}
+      // Desktop: standard 20px lift, no mobile nav to worry about, except when
+      // the page declares a bottom action bar (body[data-page-bottom-bar],
+      // set by e.g. the standalone invoice editor): lift above it so the FAB
+      // never covers the bar's primary button.
+      className={`fixed right-4 z-30 ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-lg bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
     >
       <button
         onClick={handleClick}

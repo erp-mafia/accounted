@@ -191,6 +191,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // An already-linked invoice keeps showing the section even when the
   // setting is off, so the user can still see or clear the old link.
   const hasExistingPaymentLink = Boolean(initial?.payment_link_url)
+  // Standalone pages get a page-level sticky action bar at the viewport
+  // bottom; body[data-page-bottom-bar] tells the assistant FAB (AgentTrigger)
+  // to lift above it so it never covers the bar's primary button. Dialog mode
+  // needs nothing: the veil already sits over the FAB.
+  useEffect(() => {
+    if (bare) return
+    document.body.setAttribute('data-page-bottom-bar', '1')
+    return () => {
+      document.body.removeAttribute('data-page-bottom-bar')
+    }
+  }, [bare])
   // Active Stripe connection: drives the "auto payment link" toggle in the
   // payment link section. Absent extension or no connection → toggle hidden.
   const [stripeConnected, setStripeConnected] = useState(false)
