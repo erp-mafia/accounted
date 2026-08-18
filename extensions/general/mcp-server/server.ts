@@ -2128,19 +2128,9 @@ export async function computeVatCloseCheck(
     .eq('company_id', companyId)
     .single()
   const momsPeriod = (settings?.moms_period as 'monthly' | 'quarterly' | 'yearly' | null) ?? null
-  let entityType = settings?.entity_type === 'aktiebolag' || settings?.entity_type === 'enskild_firma'
+  const entityType = settings?.entity_type === 'aktiebolag' || settings?.entity_type === 'enskild_firma'
     ? settings.entity_type
     : null
-  if (periodType === 'yearly' && entityType === null) {
-    const { data: company } = await supabase
-      .from('companies')
-      .select('entity_type')
-      .eq('id', companyId)
-      .single()
-    entityType = company?.entity_type === 'aktiebolag' || company?.entity_type === 'enskild_firma'
-      ? company.entity_type
-      : null
-  }
   // 3) Deadline: based on the *requested* period type, not company setting,
   //    so the model gets the right deadline even when querying ad-hoc periods.
   //    Never turn missing settings into a plausible statutory date. Monthly

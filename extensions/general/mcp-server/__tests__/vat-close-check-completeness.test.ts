@@ -58,6 +58,7 @@ function mockSupabase(
     moms_period: 'monthly',
     vat_taxable_base_over_40m: false,
   },
+  companyEntityType: 'aktiebolag' | 'enskild_firma' | null = null,
 ) {
   const entries = [
     ...new Map(
@@ -110,6 +111,9 @@ function mockSupabase(
       if (table === 'company_settings') {
         return makeChain(companySettings ? [companySettings] : [])
       }
+      if (table === 'companies') {
+        return makeChain(companyEntityType ? [{ entity_type: companyEntityType }] : [])
+      }
       return makeChain([])
     },
     // The missing-underlag blocker reads the verifikat_without_documents RPC,
@@ -145,6 +149,27 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
       PERIOD,
       'company-1',
       mockSupabase([], [], null),
+    )
+
+    expect(result.payment.deadline).toBeNull()
+    expect(result.blockers).toContainEqual(expect.objectContaining({
+      kind: 'deadline_unavailable',
+      severity: 'high',
+    }))
+    expect(result.ready_to_close).toBe(false)
+  })
+
+  it('does not fall back to the company row when annual settings omit entity type', async () => {
+    const result = await computeVatCloseCheck(
+      { period_type: 'yearly', year: 2026, period: 1 },
+      'company-1',
+      mockSupabase([], [], {
+        moms_period: 'yearly',
+        vat_taxable_base_over_40m: false,
+        fiscal_year_start_month: 1,
+        vat_has_eu_trade: false,
+        vat_filing_method: 'electronic',
+      }, 'aktiebolag'),
     )
 
     expect(result.payment.deadline).toBeNull()
