@@ -229,6 +229,12 @@ export function buildVatBreakdown(
  * refundLineItems connection per refund, so proration is the whole strategy
  * here, not just the amount-only fallback it is for WooCommerce. Magnitudes
  * are returned positive; row_type 'refund' carries the direction.
+ *
+ * When per-rate bucketing is refused (parent breakdown []), the parent's
+ * TOTAL tax is still prorated into totalTax: the refund row then carries the
+ * moms reversal through the booking dialog's ratio-inference fallback as an
+ * editable bucket, instead of silently prefilling a 0%-refund whose reversal
+ * never reaches 2611 (review finding, PR #1676).
  */
 export function buildRefundVatBreakdown(
   order: Pick<ShopifyOrder, 'totalPriceSet' | 'taxLines'>,
@@ -237,8 +243,13 @@ export function buildRefundVatBreakdown(
   const orderBreakdown = buildVatBreakdown(order)
   const orderTotal = Math.abs(parseAmount(order.totalPriceSet.shopMoney.amount) ?? 0)
   const refundAmount = Math.abs(parseAmount(refund.totalRefundedSet.shopMoney.amount) ?? 0)
-  if (orderBreakdown.length === 0 || orderTotal === 0 || refundAmount === 0) {
+  if (orderTotal === 0 || refundAmount === 0) {
     return { breakdown: [], totalTax: 0 }
+  }
+  if (orderBreakdown.length === 0) {
+    const parentTax = partTax(order.taxLines ?? [])
+    const ratio = refundAmount / orderTotal
+    return { breakdown: [], totalTax: parentTax > 0 ? round(parentTax * ratio) : 0 }
   }
   // Per-bucket rounding drift lands on the booking's 3740 residual line.
   const ratio = refundAmount / orderTotal

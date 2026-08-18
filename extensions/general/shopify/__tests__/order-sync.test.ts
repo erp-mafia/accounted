@@ -288,12 +288,23 @@ describe('buildRefundVatBreakdown', () => {
     expect(totalTax).toBe(50)
   })
 
-  it('returns an empty breakdown when the order has none to prorate', () => {
+  it('still prorates the parent TOTAL tax when per-rate bucketing is refused', () => {
+    // Unreported rate: buildVatBreakdown refuses, but the parent was taxed.
+    // The refund row must still carry the moms reversal (total_tax), which
+    // the booking dialog's ratio-inference fallback turns into an editable
+    // bucket instead of a silent 0%-refund.
     const order = makeOrder({ taxLines: [taxLine(null, '250.00')] })
     expect(buildRefundVatBreakdown(order, makeRefund())).toEqual({
       breakdown: [],
-      totalTax: 0,
+      totalTax: 50,
     })
+  })
+
+  it('returns zero tax when the parent genuinely carried none', () => {
+    const order = makeOrder({ totalPriceSet: money('900.00'), taxLines: [] })
+    // Parent maps to one 0%-bucket, prorating it yields a 0-tax bucket set.
+    const { totalTax } = buildRefundVatBreakdown(order, makeRefund())
+    expect(totalTax).toBe(0)
   })
 
   it('returns an empty breakdown for zero-amount refunds', () => {
@@ -345,6 +356,26 @@ describe('mapLineItems', () => {
       lineItems: conn([lineItem('Produkt A', 2, '1250.00', [taxLine(25, '250.00')])], true),
     })
     expect(mapLineItems(order)).toEqual([])
+  })
+
+  it('drops the snapshot when the shipping-line page is truncated', () => {
+    const order = makeOrder({
+      shippingLines: conn<ShopifyShippingLine>([], true),
+    })
+    expect(mapLineItems(order)).toEqual([])
+  })
+
+  it('stores vat_rate null for a part taxed at two different rates', () => {
+    const order = makeOrder({
+      totalPriceSet: money('1370.00'),
+      taxLines: [taxLine(25, '250.00'), taxLine(12, '12.00')],
+      lineItems: conn([
+        lineItem('Paket', 1, '1370.00', [taxLine(25, '250.00'), taxLine(12, '12.00')]),
+      ]),
+    })
+    expect(mapLineItems(order)).toEqual([
+      { name: 'Paket', quantity: 1, total: 1108, total_tax: 262, vat_rate: null },
+    ])
   })
 })
 
