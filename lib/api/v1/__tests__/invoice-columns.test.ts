@@ -29,6 +29,10 @@ describe('v1 invoice projections feed the render amount path', () => {
     expect(parse(INVOICE_PDF_COLUMNS)).toContain('deduction_personnummer_last4')
   })
 
+  it('INVOICE_PDF_COLUMNS carries delivery_date (ML 17 kap 24 § p.7: rendered when it differs from invoice_date)', () => {
+    expect(parse(INVOICE_PDF_COLUMNS)).toContain('delivery_date')
+  })
+
   it('never selects the encrypted personnummer blob', () => {
     expect(INVOICE_FULL_COLUMNS).not.toContain('deduction_personnummer_encrypted')
     expect(INVOICE_PDF_COLUMNS).not.toContain('deduction_personnummer_encrypted')

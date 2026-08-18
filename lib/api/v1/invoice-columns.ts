@@ -23,11 +23,13 @@ export const INVOICE_FULL_COLUMNS =
  * (editmask 0). A column missing here silently zeroes that part of the
  * calculation for this surface only: the v1 PDF then disagrees with the
  * dashboard PDF and the sent email for the same invoice, which is exactly
- * the byte-equivalence this endpoint promises. Pinned by
- * __tests__/invoice-columns.test.ts.
+ * the byte-equivalence this endpoint promises. delivery_date is statutory
+ * content on top of that: ML 17 kap 24 § p.7 requires leveransdatum on the
+ * invoice when it differs from the invoice date, and the template renders it
+ * exactly then. Pinned by __tests__/invoice-columns.test.ts.
  */
 export const INVOICE_PDF_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, status, document_type, ' +
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, document_type, ' +
   'currency, subtotal, vat_amount, total, ore_rounding, vat_treatment, vat_rate, moms_ruta, ' +
   'reverse_charge_text, your_reference, our_reference, notes, credited_invoice_id, ' +
   'paid_amount, remaining_amount, deduction_total, deduction_personnummer_last4'

@@ -374,10 +374,12 @@ describe('buildSwishQrDataUrl', () => {
     expect(toDataURL).not.toHaveBeenCalled()
   })
 
-  it('does not apply the deduction on credit notes, matching getAmountToPay', async () => {
-    const invoice = makeInvoice({ total: 1250, deduction_total: 625, credited_invoice_id: 'inv-orig' })
-    await buildSwishQrDataUrl(company(), invoice)
-    expect(toDataURL).toHaveBeenCalledWith('C1234567890;1250.00;F-2024001;0', expect.anything())
+  it('renders no QR for non-payable documents (credit note, proforma, delivery note)', async () => {
+    const creditNote = makeInvoice({ total: 1250, deduction_total: 625, credited_invoice_id: 'inv-orig' })
+    expect(await buildSwishQrDataUrl(company(), creditNote)).toBeNull()
+    expect(await buildSwishQrDataUrl(company(), makeInvoice({ document_type: 'proforma' }))).toBeNull()
+    expect(await buildSwishQrDataUrl(company(), makeInvoice({ document_type: 'delivery_note' }))).toBeNull()
+    expect(toDataURL).not.toHaveBeenCalled()
   })
 
   it('keeps the plain total for invoices without a deduction', async () => {
