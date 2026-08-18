@@ -3,12 +3,13 @@ import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode, getStructuredError } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type { Transaction } from '@/types'
@@ -17,7 +18,7 @@ ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.book',
-  async (request, { supabase, user, companyId, log }, { params }) => {
+  async (request, { supabase, user, companyId, log, requestId }, { params }) => {
     const { id } = await params
 
     const validation = await validateBody(request, BookTransactionSchema)
@@ -171,11 +172,23 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .update({
         journal_entry_id: journalEntry.id,
         is_business: true,
+        is_ignored: false,
         category: 'uncategorized',
       })
       .eq('id', id)
+      .eq('company_id', companyId)
 
     if (updateError) {
+      await reverseOrphanedJournalEntry(
+        supabase,
+        companyId,
+        user.id,
+        journalEntry.id,
+        'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+      )
+      if (getStructuredError(updateError).code === 'TX_CATEGORIZE_IGNORED_CONFLICT') {
+        return errorResponse(updateError, log, { requestId })
+      }
       return NextResponse.json(
         { error: 'Failed to update transaction' },
         { status: 500 }

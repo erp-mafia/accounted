@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
 
 const log = createLogger('cancel-orphaned-entry')
 
@@ -68,6 +69,65 @@ export async function recordVoucherGapExplanation(
       payload,
     )
     return false
+  }
+}
+
+/**
+ * Storno a posted journal entry that could not be linked to its transaction.
+ *
+ * The bookkeeping engine posts entries before the transaction CAS runs. When
+ * that CAS definitively fails, the entry is immutable and must be reversed,
+ * never edited or cancelled in place. Compensation is best-effort so the
+ * caller can preserve the original conflict response.
+ */
+export async function reverseOrphanedJournalEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  journalEntryId: string,
+  gapExplanation: string,
+): Promise<void> {
+  try {
+    await reverseEntry(supabase, companyId, userId, journalEntryId)
+    return
+  } catch (reverseError) {
+    log.error('failed to storno orphaned journal entry', reverseError as Error, {
+      companyId,
+      journalEntryId,
+    })
+  }
+
+  try {
+    const { data: orphan, error: fetchError } = await supabase
+      .from('journal_entries')
+      .select('fiscal_period_id, voucher_series, voucher_number')
+      .eq('id', journalEntryId)
+      .eq('company_id', companyId)
+      .single()
+
+    if (fetchError) {
+      log.error('failed to load orphaned journal entry after storno failure', fetchError, {
+        companyId,
+        journalEntryId,
+      })
+      return
+    }
+
+    if (orphan?.voucher_series) {
+      await recordVoucherGapExplanation(supabase, {
+        companyId,
+        userId,
+        fiscalPeriodId: orphan.fiscal_period_id,
+        voucherSeries: orphan.voucher_series,
+        voucherNumber: orphan.voucher_number,
+        explanation: gapExplanation,
+      })
+    }
+  } catch (gapError) {
+    log.error('failed to document orphaned journal entry after storno failure', gapError as Error, {
+      companyId,
+      journalEntryId,
+    })
   }
 }
 

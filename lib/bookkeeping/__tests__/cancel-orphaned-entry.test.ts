@@ -1,7 +1,17 @@
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+
+const { reverseEntryMock } = vi.hoisted(() => ({
+  reverseEntryMock: vi.fn(),
+}))
+
+vi.mock('@/lib/bookkeeping/engine', () => ({
+  reverseEntry: reverseEntryMock,
+}))
+
 import {
   cancelOrphanedPaymentEntry,
   recordVoucherGapExplanation,
+  reverseOrphanedJournalEntry,
 } from '../cancel-orphaned-entry'
 
 // The real voucher_gap_explanations column set (supabase/migrations/
@@ -54,6 +64,11 @@ function createMockSupabase(opts: {
   }
   return { supabase, updates, inserts }
 }
+
+beforeEach(() => {
+  reverseEntryMock.mockReset()
+  reverseEntryMock.mockResolvedValue(undefined)
+})
 
 describe('recordVoucherGapExplanation', () => {
   it('writes exactly the real NOT NULL columns, with the single voucher as a closed gap range', async () => {
@@ -140,6 +155,56 @@ describe('recordVoucherGapExplanation', () => {
         explanation: 'x',
       }),
     ).resolves.toBe(false)
+  })
+})
+
+describe('reverseOrphanedJournalEntry', () => {
+  it('routes posted-orphan compensation through engine storno', async () => {
+    const { supabase, inserts, updates } = createMockSupabase({})
+
+    await reverseOrphanedJournalEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      'je-1',
+      'Manuell avstämning krävs.',
+    )
+
+    expect(reverseEntryMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      'je-1',
+    )
+    expect(updates).toEqual([])
+    expect(inserts['voucher_gap_explanations']).toBeUndefined()
+  })
+
+  it('documents the voucher when storno fails', async () => {
+    const { supabase, inserts } = createMockSupabase({
+      orphan: { fiscal_period_id: 'fp-1', voucher_series: 'B', voucher_number: 66 },
+    })
+    reverseEntryMock.mockRejectedValueOnce(new Error('period locked'))
+
+    await reverseOrphanedJournalEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      'je-1',
+      'Manuell avstämning krävs.',
+    )
+
+    expect(inserts['voucher_gap_explanations']).toEqual([
+      {
+        company_id: 'company-1',
+        user_id: 'user-1',
+        fiscal_period_id: 'fp-1',
+        voucher_series: 'B',
+        gap_start: 66,
+        gap_end: 66,
+        explanation: 'Manuell avstämning krävs.',
+      },
+    ])
   })
 })
 

@@ -9,7 +9,7 @@ import {
 import { eventBus } from '@/lib/events'
 import { JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -80,13 +80,10 @@ vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
   upsertCounterpartyTemplate: vi.fn().mockResolvedValue(undefined),
 }))
 
-// CAS-race compensation is centralized in lib/bookkeeping/cancel-orphaned-entry.
-// The route must delegate to it rather than hand-rolling the cancel + the
-// voucher_gap_explanations insert (BFNAR 2013:2). The exact insert payload is
-// asserted in that helper's own test.
-const mockCancelOrphanedPaymentEntry = vi.fn()
+// Posted-orphan compensation is centralized and routes through engine storno.
+const mockReverseOrphanedJournalEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
-  cancelOrphanedPaymentEntry: (...args: unknown[]) => mockCancelOrphanedPaymentEntry(...args),
+  reverseOrphanedJournalEntry: (...args: unknown[]) => mockReverseOrphanedJournalEntry(...args),
 }))
 
 const mockFindMissingActiveAccounts = vi.fn()
@@ -128,10 +125,10 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // Default: no booking-time duplicate. The dedicated guard test overrides this.
     mockDetectDup.mockResolvedValue(null)
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
-    mockCancelOrphanedPaymentEntry.mockResolvedValue(undefined)
+    mockReverseOrphanedJournalEntry.mockResolvedValue(undefined)
   })
 
-  it('delegates the CAS-race orphan to cancelOrphanedPaymentEntry (documented voucher gap)', async () => {
+  it('delegates the CAS-race orphan to engine-backed storno compensation', async () => {
     const tx = makeTransaction({
       id: 'tx-1',
       amount: -500,
@@ -160,13 +157,13 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect((body.error as { code: string }).code).toBe('TX_CATEGORIZE_RACE')
 
     // No hand-rolled insert: the helper owns the real column set.
-    expect(mockCancelOrphanedPaymentEntry).toHaveBeenCalledTimes(1)
-    expect(mockCancelOrphanedPaymentEntry).toHaveBeenCalledWith(
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledTimes(1)
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       'user-1',
       'je-1',
-      'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
+      'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
     )
   })
 
@@ -280,6 +277,38 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'transaction.categorized' })
     )
+  })
+
+  it('atomically unignores an ignored transaction when categorizing it', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: null,
+      journal_entry_id: null,
+      is_ignored: true,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: false },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(findCalls('transactions', 'update')).toContainEqual([
+      expect.objectContaining({
+        is_business: false,
+        category: 'private',
+        is_ignored: false,
+        journal_entry_id: 'je-1',
+      }),
+    ])
   })
 
   it('passes body.dimensions onto the mapping result the engine books', async () => {
@@ -502,6 +531,54 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     expect(status).toBe(500)
     expect((body.error as unknown as { code: string }).code).toBe('INTERNAL_ERROR')
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-1',
+      expect.any(String),
+    )
+  })
+
+  it('maps an ignored-row constraint to a typed conflict and stornos the posted orphan', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      journal_entry_id: null,
+      merchant_name: null,
+      is_ignored: true,
+    })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({
+      data: null,
+      error: {
+        code: '23514',
+        message:
+          'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"',
+      },
+    })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: false },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_IGNORED_CONFLICT')
+    expect(body.error.message).not.toContain('check constraint')
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-1',
+      expect.any(String),
+    )
   })
 
   it('returns 400 when mapping result has empty debit_account', async () => {
