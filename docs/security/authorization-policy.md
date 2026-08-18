@@ -103,6 +103,8 @@ Defined in:
 
 - `supabase/migrations/20260818084050_company_migration_reset.sql`
 - `supabase/migrations/20260818141018_harden_company_migration_reset_eligibility.sql`
+- `supabase/migrations/20260818143004_close_migration_reset_archive_gaps.sql`
+- `supabase/migrations/20260818224000_block_vat_state_migration_reset.sql`
 
 These functions support the owner-only archive-and-replace recovery flow for a
 failed migration. The execution function archives the source company and
@@ -150,13 +152,18 @@ database failures roll the transaction back.
 Self-service is restricted to active companies created within 30 days. It is
 blocked by the company lock date, a closed or locked period, any journal entry
 in any status or source, any voucher-sequence row, any customer or supplier
-invoice, an incomplete import, or a known authority submission. This prevents a replacement for the same legal
+invoice, an incomplete import, a known authority submission, or persisted VAT
+declaration workflow state. The VAT state closes the historical direct-lock
+path where the signing lock was stored in `extension_data` without a matching
+audit row. This prevents a replacement for the same legal
 entity from restarting voucher numbering after a draft, migrated voucher, or
 sequence state already exists. Live integrations, bank connections, recurring
 invoice schedules, pending accrual installments, and non-terminal background
 jobs also block because they can write after the interactive session moves.
 The owner must attest that no filing was made outside Accounted and acknowledge
-that the source remains retained.
+that the source remains retained. Accounted cannot independently observe every
+filing made directly at an authority, so uncertainty must fail closed and be
+escalated rather than inferred from an empty internal audit log.
 
 The source company's imports, transactions, periods, documents, journal
 entries, and voucher sequences are not mutated. The replacement starts with no
@@ -169,8 +176,8 @@ source, closing the race with an invitation acceptance that began before the
 reset transaction. Database mutation guards make the retained source's
 imports, transactions, periods, documents, journal rows, invoices, and voucher
 sequences write-closed after the audit row is committed. Filing-adjacent payroll,
-AGI, annual report, ROT/RUT, bank-connection, and authority-audit rows receive
-the same archive guard. Team membership sync
+AGI, annual report, ROT/RUT, bank-connection, authority-audit, and newly arriving
+VAT workflow rows receive the same archive guard. Team membership sync
 selects active companies only, so an archived source cannot block a later team
 member from reaching the replacement.
 

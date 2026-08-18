@@ -49,9 +49,12 @@ The self-service boundary is intentionally narrow:
   or pending accrual installment may still be able to write in the background.
 - No import, OCR, API operation, invoice delivery, payment sync, or messaging
   worker may still be queued or processing for the company.
-- No known AGI, VAT declaration lock or submission, ROT/RUT request, or
-  production annual report submission may exist.
+- No known AGI, VAT declaration draft, lock or submission, ROT/RUT request, or
+  production annual report submission may exist. A persisted VAT workflow
+  state blocks even when an older direct lock call has no audit row.
 - The owner must separately attest that nothing was filed outside Accounted.
+  Accounted cannot verify that external fact. If the owner is unsure, support
+  must stop the reset and escalate instead of interpreting silence as consent.
 - The owner must acknowledge that the source copy is retained, provide an
   audit reason, and type the exact displayed company name.
 
@@ -81,8 +84,8 @@ makes no change. Support must not override the result with deletion SQL.
    append-only `audit_log` records.
 10. Database guards make the retained source's accounting and import rows
     write-closed, including bank connections, payroll and AGI records, annual
-    report submissions, ROT/RUT requests, authority audit rows, and requests
-    that were already waiting on a lock.
+    report submissions, ROT/RUT requests, authority audit rows, and VAT
+    workflow rows from requests that were already waiting on a lock.
 
 The transaction does not disable a trigger. It does not delete, detach,
 renumber, recalculate, copy, or mutate any source bookkeeping record.
@@ -95,6 +98,7 @@ The following stay on the archived source company unchanged:
 - documents, hashes, version chains, and voucher links
 - customers and suppliers
 - authority and general audit logs
+- extension runtime state, including any non-blocking provider history
 
 Eligibility requires journal-entry, voucher-sequence, customer-invoice, and
 supplier-invoice counts to be zero.
@@ -200,8 +204,12 @@ an incident requiring investigation. Do not repair it by editing the source.
   Do not delete, cancel, credit, or detach it to enable reset. Continue in the
   existing company or escalate for case-specific review.
 - `authority_submission_detected`: Accounted has evidence of an authority
-  interaction. Do not reset even if the owner believes it was a test without
-  first establishing the authority environment and legal status.
+  interaction, including a persisted VAT draft workflow. Do not reset even if
+  the owner believes it was a test without first establishing the authority
+  environment and legal status. Remove an ordinary unsigned VAT draft only
+  through the product and Skatteverket flow; never clear extension data or an
+  audit row manually. A locked or possibly signed declaration requires legal
+  escalation, not cleanup.
 - `live_bank_connections`: disconnect every pending or active bank connection
   first. Do not bypass the blocker because the sync cron can import without an
   interactive company session.
@@ -221,7 +229,8 @@ The migration files are
 `supabase/migrations/20260818084050_company_migration_reset.sql` and
 `supabase/migrations/20260818141018_harden_company_migration_reset_eligibility.sql`
 and
-`supabase/migrations/20260818143004_close_migration_reset_archive_gaps.sql`.
+`supabase/migrations/20260818143004_close_migration_reset_archive_gaps.sql` and
+`supabase/migrations/20260818224000_block_vat_state_migration_reset.sql`.
 Apply them only to the permitted `erpbase` staging branch through the normal
 migration workflow, then deploy application code. Never deploy the UI/API
 before both RPC migrations exist.

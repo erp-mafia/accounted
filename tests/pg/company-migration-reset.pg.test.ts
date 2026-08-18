@@ -70,6 +70,7 @@ describe('company migration reset RPCs (pg)', () => {
       snapshot_authenticated: boolean
       legacy_snapshot_141018_authenticated: boolean
       legacy_snapshot_143004_authenticated: boolean
+      legacy_snapshot_224000_authenticated: boolean
     }>(`
       SELECT
         has_function_privilege(
@@ -106,7 +107,12 @@ describe('company migration reset RPCs (pg)', () => {
           'authenticated',
           'public.company_migration_reset_snapshot_before_20260818143004(uuid)',
           'EXECUTE'
-        ) AS legacy_snapshot_143004_authenticated
+        ) AS legacy_snapshot_143004_authenticated,
+        has_function_privilege(
+          'authenticated',
+          'public.company_migration_reset_snapshot_before_20260818224000(uuid)',
+          'EXECUTE'
+        ) AS legacy_snapshot_224000_authenticated
     `)
 
     expect(rows[0]).toEqual({
@@ -117,6 +123,7 @@ describe('company migration reset RPCs (pg)', () => {
       snapshot_authenticated: false,
       legacy_snapshot_141018_authenticated: false,
       legacy_snapshot_143004_authenticated: false,
+      legacy_snapshot_224000_authenticated: false,
     })
   })
 
@@ -204,6 +211,24 @@ describe('company migration reset RPCs (pg)', () => {
     )
     const vatFiledPreview = await preview(vatFiled.userId, vatFiled.companyId)
     expect(vatFiledPreview.eligibility?.blockers).toContainEqual({
+      code: 'authority_submission_detected',
+      count: 1,
+    })
+
+    const vatDraft = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.extension_data
+         (user_id, company_id, extension_id, key, value)
+       VALUES ($1, $2, 'skatteverket', 'submission_202606',
+               to_jsonb($3::text))`,
+      [
+        vatDraft.userId,
+        vatDraft.companyId,
+        JSON.stringify({ status: 'draft_saved', redovisningsperiod: '202606' }),
+      ],
+    )
+    const vatDraftPreview = await preview(vatDraft.userId, vatDraft.companyId)
+    expect(vatDraftPreview.eligibility?.blockers).toContainEqual({
       code: 'authority_submission_detected',
       count: 1,
     })
@@ -507,6 +532,22 @@ describe('company migration reset RPCs (pg)', () => {
         ),
       ).rejects.toThrow(/source records are immutable/i)
       await client.query('ROLLBACK TO SAVEPOINT reject_source_authority_audit')
+
+      await client.query('SAVEPOINT reject_source_vat_state')
+      await expect(
+        client.query(
+          `INSERT INTO public.extension_data
+             (user_id, company_id, extension_id, key, value)
+           VALUES ($1, $2, 'skatteverket', 'submission_202606',
+                   to_jsonb($3::text))`,
+          [
+            fixture.userId,
+            fixture.companyId,
+            JSON.stringify({ status: 'draft_locked', redovisningsperiod: '202606' }),
+          ],
+        ),
+      ).rejects.toThrow(/source VAT state is immutable/i)
+      await client.query('ROLLBACK TO SAVEPOINT reject_source_vat_state')
 
       const guardedTables = [
         'agi_declarations',
