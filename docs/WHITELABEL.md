@@ -41,6 +41,7 @@ All branding can be set via env vars. Public ones use `NEXT_PUBLIC_BRANDING_*` (
 | `BRANDING_SECURITY_EMAIL` | `securityEmail` | `security@arcim.io` |
 | `NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM` | `authEmailFrom`: From address Supabase Auth sends verification / reset emails from. Used to pre-populate the `from:` query on the "open in Gmail" button after signup. Set to whatever you configured in your Supabase Auth SMTP. | `noreply@gnubok.se` |
 | `NEXT_PUBLIC_APP_URL` | `appUrl` | `https://app.gnubok.se` |
+| `NEXT_PUBLIC_WHITELABEL_DOMAINS` | Exact comma-separated hostnames served by the same hosted deployment. No wildcards. Invite and auth redirects use a listed host and otherwise fall back to `NEXT_PUBLIC_APP_URL`. | `` |
 | `NEXT_PUBLIC_BRANDING_LOGO_PATH` | `logoPath` | `/gnubokiceon-removebg-preview.png` |
 | `NEXT_PUBLIC_BRANDING_FAVICON_PATH` | `faviconPath` | `/favicon.ico` |
 | `NEXT_PUBLIC_BRANDING_APPLE_ICON_PATH` | `appleTouchIconPath` | `/icons/icon-192.png` |
@@ -101,8 +102,20 @@ A few things that look brand-related but are configured elsewhere:
 - **DNS / domain**: point `app.your-brand.se` at your Vercel deployment.
 - **OAuth redirect allowlist for MCP**: `app/api/mcp-oauth/authorize/route.ts` lists `claude.ai/api/*`, `claude.com/api/*`, and localhost. Your domain is the OAuth issuer, not a redirect target: no change needed unless you're integrating with new MCP clients.
 - **iCal feed PRODID** (`lib/calendar/ics-generator.ts`): defaults to `erp-base.se`, callers may pass their domain.
-- **`NEXT_PUBLIC_APP_URL`**: used as the OAuth issuer. Set this to your domain (e.g. `https://app.your-brand.se`).
+- **`NEXT_PUBLIC_APP_URL`**: used as the OAuth issuer and safe auth-link fallback. For a dedicated one-brand deployment, set this to your domain (e.g. `https://app.your-brand.se`). For a shared hosted deployment, keep the canonical main app URL here and register additional hosts through `NEXT_PUBLIC_WHITELABEL_DOMAINS`.
 - **Skatteverket submission identity**: `extensions/general/skatteverket/lib/api-client.ts` does not set a custom `User-Agent`; submissions go out with the Node/Vercel runtime default. If your deployment needs to identify itself to Skatteverket under a different brand, that's a future enhancement (env var + header), not something the current branding service covers.
+
+## Shared hosted deployment with custom domains
+
+Use this checklist when several white-label domains point at one hosted Accounted deployment:
+
+1. Register the exact custom hostname on the hosting deployment and finish its DNS verification.
+2. Add that hostname to the comma-separated `NEXT_PUBLIC_WHITELABEL_DOMAINS` value. Entries are exact hostnames such as `portal.partner.se`; wildcard entries are ignored.
+3. Add `https://portal.partner.se/auth/callback` and `https://portal.partner.se/invite/*` to the Supabase Auth Redirect URLs allowlist. Keep the canonical `NEXT_PUBLIC_APP_URL` callback there too.
+4. Redeploy after changing the environment variable. It is public build-time configuration because the browser must validate password-reset callbacks before calling GoTrue.
+5. Test a new-user invitation, an existing-user invitation, and a password reset from the custom domain.
+
+The request `Host` header and `window.location.origin` are inputs, not trust anchors. Accounted uses them only when the hostname exactly matches the canonical app host or a configured white-label hostname. Unknown or spoofed hosts fall back to `NEXT_PUBLIC_APP_URL`, so they cannot become invite links or GoTrue redirect targets.
 
 ## Staying in sync with upstream
 

@@ -32,6 +32,7 @@ import {
   consumeInviteCookie,
   INVITE_PROBLEM_MESSAGE_KEYS,
 } from '@/lib/auth/consume-invite-cookie'
+import { buildPasswordResetRedirectTo } from '@/lib/domains/trusted-app-origin'
 import { AuthFormError } from '@/components/auth/AuthFormError'
 import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
 import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
@@ -326,7 +327,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
 
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(emailValue, {
-        redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
+        redirectTo: buildPasswordResetRedirectTo(window.location.origin),
       })
 
       if (error) {
