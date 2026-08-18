@@ -354,6 +354,7 @@ async function commitCreateCustomer(
       company_id: companyId,
       name: params.name as string,
       customer_type: params.customer_type as string,
+      customer_number: (params.customer_number as string) || null,
       email: (params.email as string) || null,
       org_number: (params.org_number as string) || null,
       vat_number: (params.vat_number as string) || null,

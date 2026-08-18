@@ -4565,6 +4565,7 @@ export const tools: McpTool[] = [
           enum: ['individual', 'swedish_business', 'eu_business', 'non_eu_business'],
           description: 'Customer type',
         },
+        customer_number: { type: 'string', maxLength: 32 },
         email: { type: 'string', description: 'Email address' },
         org_number: { type: 'string', description: 'Swedish org number' },
         vat_number: { type: 'string', description: 'EU VAT number' },
@@ -4602,6 +4603,7 @@ export const tools: McpTool[] = [
       const params = {
         name: name.trim(),
         customer_type: customerType,
+        customer_number: (args.customer_number as string)?.trim() || null,
         email: (args.email as string) || null,
         org_number: (args.org_number as string) || null,
         vat_number: (args.vat_number as string) || null,
