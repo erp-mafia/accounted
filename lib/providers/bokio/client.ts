@@ -19,6 +19,26 @@ export class BokioApiError extends Error {
   }
 }
 
+export class BokioResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BokioResponseError';
+  }
+}
+
+/**
+ * Accept either the integration token itself or a copied Authorization value.
+ * Only surrounding whitespace and one explicit Bearer scheme are removed:
+ * internal token characters are left untouched.
+ */
+export function normalizeBokioAccessToken(accessToken: string): string {
+  return accessToken.trim().replace(/^Bearer\s+/i, '').trim();
+}
+
+function bokioAuthorizationHeader(accessToken: string): string {
+  return `Bearer ${normalizeBokioAccessToken(accessToken)}`;
+}
+
 function isRetryableError(error: unknown): boolean {
   if (isTimeoutError(error)) return true;
   if (error instanceof BokioApiError) {
@@ -54,7 +74,7 @@ export class BokioClient {
         const url = `${this.baseUrl}${path}`;
         const response = await fetch(url, {
           headers: {
-            Authorization: `Bearer ${accessToken}`,
+            Authorization: bokioAuthorizationHeader(accessToken),
             Accept: 'application/json',
           },
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -188,7 +208,7 @@ export class BokioClient {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}/companies/${companyId}${relativePath}`;
         const response = await fetch(url, {
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: { Authorization: bokioAuthorizationHeader(accessToken) },
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
 
@@ -219,7 +239,19 @@ export class BokioClient {
     companyId: string,
   ): Promise<T | null> {
     try {
-      return await this.get<T>(accessToken, `/companies/${companyId}`);
+      const normalizedCompanyId = companyId.trim();
+      const response = await this.get<{ companyInformation?: T }>(
+        accessToken,
+        `/companies/${encodeURIComponent(normalizedCompanyId)}/company-information`,
+      );
+
+      if (response.companyInformation == null) {
+        throw new BokioResponseError(
+          'Bokio company-information response is missing companyInformation',
+        );
+      }
+
+      return response.companyInformation;
     } catch (err) {
       if (err instanceof BokioApiError && err.statusCode === 404) {
         return null;
