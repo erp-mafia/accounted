@@ -111,7 +111,7 @@ describe('/api/company/[id]/migration-reset', () => {
         eligibility: {
           eligible: true,
           display_name: 'Testbolaget AB',
-          counts: { journal_entries: 4, documents: 2, voucher_sequences: 1 },
+          counts: { journal_entries: 0, documents: 2, voucher_sequences: 0 },
           blockers: [],
         },
       },
@@ -172,7 +172,7 @@ describe('/api/company/[id]/migration-reset', () => {
         source_company_id: 'company-1',
         replacement_company_id: 'company-new',
         archived_at: '2026-08-18T09:00:00.000Z',
-        counts: { journal_entries: 4, documents: 2 },
+        counts: { journal_entries: 0, documents: 2 },
       },
       error: null,
     })
@@ -192,7 +192,7 @@ describe('/api/company/[id]/migration-reset', () => {
     expect(body.data).toMatchObject({
       resetId: 'reset-1',
       replacementCompanyId: 'company-new',
-      retainedCounts: { journal_entries: 4, documents: 2 },
+      retainedCounts: { journal_entries: 0, documents: 2 },
     })
     expect(response.headers.get('set-cookie')).toContain('gnubok-company-id=company-new')
     expect(supabase.rpc).toHaveBeenCalledWith('reset_company_for_migration', {

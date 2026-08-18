@@ -102,6 +102,7 @@ tests and this document in the same change.
 Defined in:
 
 - `supabase/migrations/20260818084050_company_migration_reset.sql`
+- `supabase/migrations/20260818141018_harden_company_migration_reset_eligibility.sql`
 
 These functions support the owner-only archive-and-replace recovery flow for a
 failed migration. The execution function archives the source company and
@@ -147,13 +148,15 @@ database failures roll the transaction back.
 ### Eligibility and retention contract
 
 Self-service is restricted to active companies created within 30 days. It is
-blocked by the company lock date, a closed or locked period, a committed
-non-import journal entry, an incomplete import, or a known authority
-submission. Live integrations, bank connections, recurring invoice schedules,
-pending accrual installments, and non-terminal background jobs also block
-because they can write after the interactive session moves. The owner must
-attest that no filing was made outside Accounted and acknowledge that the
-source remains retained.
+blocked by the company lock date, a closed or locked period, any journal entry
+in any status or source, any voucher-sequence row, an incomplete import, or a
+known authority submission. This prevents a replacement for the same legal
+entity from restarting voucher numbering after a draft, migrated voucher, or
+sequence state already exists. Live integrations, bank connections, recurring
+invoice schedules, pending accrual installments, and non-terminal background
+jobs also block because they can write after the interactive session moves.
+The owner must attest that no filing was made outside Accounted and acknowledge
+that the source remains retained.
 
 The source company's imports, transactions, periods, documents, journal
 entries, and voucher sequences are not mutated. The replacement starts with no

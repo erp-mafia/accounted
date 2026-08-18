@@ -34,8 +34,11 @@ The self-service boundary is intentionally narrow:
 - The caller must be an owner, not merely an admin or member.
 - No company lock date may exist, and no fiscal period may be locked, closed,
   or marked closed in the previous bookkeeping system.
-- No committed journal entry may exist except an import or opening-balance
-  entry. Reversals and corrections block the reset.
+- No journal entry may exist in any status or source. Drafts, imported entries,
+  opening balances, postings, reversals, and corrections all block the reset.
+- No voucher-sequence row may exist, including a zero-valued sequence. This
+  prevents the same legal entity from receiving two independently restarted
+  voucher-number namespaces.
 - No bank connection may be pending or active. This prevents the service-role
   sync job from writing new transactions into the retained source after reset.
 - No SIE, bank-file, or tax-account-file import may be pending or processing.
@@ -43,8 +46,8 @@ The self-service boundary is intentionally narrow:
   or pending accrual installment may still be able to write in the background.
 - No import, OCR, API operation, invoice delivery, payment sync, or messaging
   worker may still be queued or processing for the company.
-- No known AGI, VAT declaration lock, ROT/RUT request, or production annual
-  report submission may exist.
+- No known AGI, VAT declaration lock or submission, ROT/RUT request, or
+  production annual report submission may exist.
 - The owner must separately attest that nothing was filed outside Accounted.
 - The owner must acknowledge that the source copy is retained, provide an
   audit reason, and type the exact displayed company name.
@@ -84,20 +87,21 @@ The following stay on the archived source company unchanged:
 - SIE, bank-file, and tax-account-file import records
 - bank transactions and expired or revoked bank connections
 - fiscal periods and their lock or close state
-- journal entries and journal entry lines
-- voucher sequences and their last numbers
 - documents, hashes, version chains, and voucher links
 - customers, suppliers, invoices, and supplier invoices
 - authority and general audit logs
 
-The replacement company intentionally has no fiscal period, journal entry,
-transaction, document, import record, or voucher sequence. The new migration
-creates the applicable periods and sequence state. Provider migration consent
-is transferred so the owner can start again from the import workspace. Bank
-connections are not transferred. Pending or active connections block the reset
-and must be disconnected first. Reconnect deliberately after the replacement
-migration is verified. The active inbound email address and custom inbound
-domain move to the replacement; already received documents do not move.
+Eligibility requires both journal-entry and voucher-sequence counts to be zero.
+Those tables remain covered by the immutable-source guards and audit counts as
+defense in depth. The replacement company intentionally has no fiscal period,
+journal entry, transaction, document, import record, or voucher sequence. The
+new migration creates the applicable periods and its first sequence state.
+Provider migration consent is transferred so the owner can start again from
+the import workspace. Bank connections are not transferred. Pending or active
+connections block the reset and must be disconnected first. Reconnect
+deliberately after the replacement migration is verified. The active inbound
+email address and custom inbound domain move to the replacement; already
+received documents do not move.
 
 ## Support checks
 
@@ -165,8 +169,12 @@ an incident requiring investigation. Do not repair it by editing the source.
   disposable sandbox data into a retained migration archive.
 - `locked_or_closed_periods`: a company lock date or finalized period exists.
   Do not clear or unlock it to enable reset.
-- `non_import_committed_entries`: Accounted-origin bookkeeping activity exists.
-  Correct it using normal storno or correction flows, not reset.
+- `journal_entries_exist`: at least one draft or committed journal entry exists,
+  regardless of whether it came from an import. Do not delete, reverse, or edit
+  the entry to enable reset. Continue in the existing company or escalate for
+  case-specific review.
+- `voucher_sequence_state_exists`: at least one voucher sequence has been
+  created. Do not renumber or remove it to enable reset.
 - `authority_submission_detected`: Accounted has evidence of an authority
   interaction. Do not reset even if the owner believes it was a test without
   first establishing the authority environment and legal status.
@@ -185,11 +193,12 @@ an incident requiring investigation. Do not repair it by editing the source.
 
 ## Deployment and rollback
 
-The migration file is
-`supabase/migrations/20260818084050_company_migration_reset.sql`. Apply it only
-to the permitted `erpbase` staging branch through the normal migration
-workflow, then deploy application code. Never deploy the UI/API before the RPC
-exists.
+The migration files are
+`supabase/migrations/20260818084050_company_migration_reset.sql` and
+`supabase/migrations/20260818141018_harden_company_migration_reset_eligibility.sql`.
+Apply them only to the permitted `erpbase` staging branch through the normal
+migration workflow, then deploy application code. Never deploy the UI/API
+before both RPC migrations exist.
 
 Before production rollout:
 
@@ -211,7 +220,7 @@ applied migration file.
 
 Escalate to Emil and an accounting/legal reviewer when the owner cannot make
 the external-filing attestation, the company is outside the 30-day window, a
-period is closed or locked, Accounted-origin committed entries exist, or a
+period is closed or locked, any journal entry or voucher sequence exists, or a
 known authority submission exists. A live bank connection is operational, not
 a legal override case: disconnect it before retrying. The safe fallback is to
 retain the source company and perform no reset.

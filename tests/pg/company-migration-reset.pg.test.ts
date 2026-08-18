@@ -68,6 +68,7 @@ describe('company migration reset RPCs (pg)', () => {
       execute_anon: boolean
       execute_authenticated: boolean
       snapshot_authenticated: boolean
+      legacy_snapshot_authenticated: boolean
     }>(`
       SELECT
         has_function_privilege(
@@ -94,7 +95,12 @@ describe('company migration reset RPCs (pg)', () => {
           'authenticated',
           'public.company_migration_reset_snapshot(uuid)',
           'EXECUTE'
-        ) AS snapshot_authenticated
+        ) AS snapshot_authenticated,
+        has_function_privilege(
+          'authenticated',
+          'public.company_migration_reset_snapshot_before_20260818141018(uuid)',
+          'EXECUTE'
+        ) AS legacy_snapshot_authenticated
     `)
 
     expect(rows[0]).toEqual({
@@ -103,6 +109,7 @@ describe('company migration reset RPCs (pg)', () => {
       execute_anon: false,
       execute_authenticated: true,
       snapshot_authenticated: false,
+      legacy_snapshot_authenticated: false,
     })
   })
 
@@ -147,7 +154,7 @@ describe('company migration reset RPCs (pg)', () => {
     })
   })
 
-  it('fails closed on locks, non-import entries, filings, live bank sync, and age', async () => {
+  it('fails closed on locks, journal entries, filings, live bank sync, and age', async () => {
     const locked = await seedCompany({ isClosed: true })
     const lockedPreview = await preview(locked.userId, locked.companyId)
     expect(lockedPreview.eligibility?.blockers).toContainEqual({
@@ -164,7 +171,7 @@ describe('company migration reset RPCs (pg)', () => {
     })
     const nonImportPreview = await preview(nonImport.userId, nonImport.companyId)
     expect(nonImportPreview.eligibility?.blockers).toContainEqual({
-      code: 'non_import_committed_entries',
+      code: 'journal_entries_exist',
       count: 1,
     })
 
@@ -177,6 +184,19 @@ describe('company migration reset RPCs (pg)', () => {
     )
     const filedPreview = await preview(filed.userId, filed.companyId)
     expect(filedPreview.eligibility?.blockers).toContainEqual({
+      code: 'authority_submission_detected',
+      count: 1,
+    })
+
+    const vatFiled = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.skatteverket_api_audit_log
+         (company_id, user_id, endpoint, outcome, response_status)
+       VALUES ($1, $2, 'declaration/submit', 'ok', 200)`,
+      [vatFiled.companyId, vatFiled.userId],
+    )
+    const vatFiledPreview = await preview(vatFiled.userId, vatFiled.companyId)
+    expect(vatFiledPreview.eligibility?.blockers).toContainEqual({
       code: 'authority_submission_detected',
       count: 1,
     })
@@ -252,6 +272,104 @@ describe('company migration reset RPCs (pg)', () => {
     const sandboxPreview = await preview(sandbox.userId, sandbox.companyId)
     expect(sandboxPreview.eligibility?.blockers).toContainEqual({
       code: 'sandbox_company',
+      count: 1,
+    })
+  })
+
+  it('blocks drafts, imported postings, linked documents, and voucher sequence state', async () => {
+    const draft = await seedCompany()
+    await insertDraftJournalEntry({
+      ...draft,
+      status: 'draft',
+      sourceType: 'manual',
+    })
+    const draftPreview = await preview(draft.userId, draft.companyId)
+    expect(draftPreview.eligibility?.blockers).toContainEqual({
+      code: 'journal_entries_exist',
+      count: 1,
+    })
+
+    const imported = await seedCompany()
+    const importEntryId = await insertDraftJournalEntry({
+      ...imported,
+      status: 'posted',
+      sourceType: 'import',
+      voucherSeries: 'A',
+      voucherNumber: 40,
+    })
+    const documentId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.document_attachments
+         (id, user_id, company_id, storage_path, file_name, sha256_hash,
+          upload_source, journal_entry_id)
+       VALUES ($1, $2, $3, $4, 'posted-underlag.pdf', $5, 'file_upload', $6)`,
+      [
+        documentId,
+        imported.userId,
+        imported.companyId,
+        `${imported.companyId}/posted-underlag.pdf`,
+        'b'.repeat(64),
+        importEntryId,
+      ],
+    )
+    await getPool().query(
+      `INSERT INTO public.voucher_sequences
+         (user_id, company_id, fiscal_period_id, voucher_series, last_number)
+       VALUES ($1, $2, $3, 'A', 40)`,
+      [imported.userId, imported.companyId, imported.fiscalPeriodId],
+    )
+
+    const importedPreview = await preview(imported.userId, imported.companyId)
+    expect(importedPreview.eligibility?.blockers).toEqual(expect.arrayContaining([
+      { code: 'journal_entries_exist', count: 1 },
+      { code: 'voucher_sequence_state_exists', count: 1 },
+    ]))
+    expect(importedPreview.eligibility?.blockers).not.toContainEqual(
+      expect.objectContaining({ code: 'non_import_committed_entries' }),
+    )
+
+    await expect(execute(imported.userId, imported.companyId)).resolves.toMatchObject({
+      ok: false,
+      code: 'COMPANY_RESET_INELIGIBLE',
+    })
+    const retained = await getPool().query<{
+      archived_at: string | null
+      entry_exists: boolean
+      linked_document_exists: boolean
+      sequence_last_number: number
+      reset_count: number
+    }>(
+      `SELECT
+         (SELECT archived_at::text FROM public.companies WHERE id = $1) AS archived_at,
+         EXISTS (SELECT 1 FROM public.journal_entries WHERE id = $2) AS entry_exists,
+         EXISTS (
+           SELECT 1 FROM public.document_attachments
+           WHERE id = $3 AND journal_entry_id = $2
+         ) AS linked_document_exists,
+         (SELECT last_number::int FROM public.voucher_sequences
+          WHERE company_id = $1 AND voucher_series = 'A') AS sequence_last_number,
+         (SELECT count(*)::int FROM public.company_migration_resets
+          WHERE source_company_id = $1) AS reset_count`,
+      [imported.companyId, importEntryId, documentId],
+    )
+    expect(retained.rows[0]).toEqual({
+      archived_at: null,
+      entry_exists: true,
+      linked_document_exists: true,
+      sequence_last_number: 40,
+      reset_count: 0,
+    })
+
+    const sequenceOnly = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.voucher_sequences
+         (user_id, company_id, fiscal_period_id, voucher_series, last_number)
+       VALUES ($1, $2, $3, 'B', 0)`,
+      [sequenceOnly.userId, sequenceOnly.companyId, sequenceOnly.fiscalPeriodId],
+    )
+    const sequencePreview = await preview(sequenceOnly.userId, sequenceOnly.companyId)
+    expect(sequencePreview.eligibility?.blockers).toContainEqual({
+      code: 'voucher_sequence_state_exists',
       count: 1,
     })
   })
@@ -405,36 +523,20 @@ describe('company migration reset RPCs (pg)', () => {
       [sieImportId, userId, companyId, randomUUID()],
     )
 
-    const importEntryId = await insertDraftJournalEntry({
-      userId,
-      companyId,
-      fiscalPeriodId,
-      status: 'posted',
-      sourceType: 'import',
-      voucherSeries: 'A',
-      voucherNumber: 40,
-    })
     const transactionId = await insertTransaction({ companyId, userId })
     const documentId = randomUUID()
     await getPool().query(
       `INSERT INTO public.document_attachments
          (id, user_id, company_id, storage_path, file_name, sha256_hash,
-          upload_source, journal_entry_id)
-       VALUES ($1, $2, $3, $4, 'underlag.pdf', $5, 'file_upload', $6)`,
+          upload_source)
+       VALUES ($1, $2, $3, $4, 'underlag.pdf', $5, 'file_upload')`,
       [
         documentId,
         userId,
         companyId,
         `${companyId}/underlag.pdf`,
         'a'.repeat(64),
-        importEntryId,
       ],
-    )
-    await getPool().query(
-      `INSERT INTO public.voucher_sequences
-         (user_id, company_id, fiscal_period_id, voucher_series, last_number)
-       VALUES ($1, $2, $3, 'A', 40)`,
-      [userId, companyId, fiscalPeriodId],
     )
     const consentId = randomUUID()
     await getPool().query(
@@ -492,7 +594,6 @@ describe('company migration reset RPCs (pg)', () => {
         periods: number
         sequences: number
         sie_imports: number
-        sequence_last_number: number
       }>(
         `SELECT
            (SELECT count(*)::int FROM public.journal_entries WHERE company_id = $1) AS journal_entries,
@@ -503,37 +604,31 @@ describe('company migration reset RPCs (pg)', () => {
            (SELECT count(*)::int FROM public.document_attachments WHERE company_id = $1) AS documents,
            (SELECT count(*)::int FROM public.fiscal_periods WHERE company_id = $1) AS periods,
            (SELECT count(*)::int FROM public.voucher_sequences WHERE company_id = $1) AS sequences,
-           (SELECT count(*)::int FROM public.sie_imports WHERE company_id = $1) AS sie_imports,
-           (SELECT last_number::int FROM public.voucher_sequences
-            WHERE company_id = $1 AND voucher_series = 'A') AS sequence_last_number`,
+           (SELECT count(*)::int FROM public.sie_imports WHERE company_id = $1) AS sie_imports`,
         [companyId],
       )
       expect(retained.rows[0]).toEqual({
-        journal_entries: 1,
-        journal_entry_lines: 2,
+        journal_entries: 0,
+        journal_entry_lines: 0,
         transactions: 1,
         documents: 1,
         periods: 1,
-        sequences: 1,
+        sequences: 0,
         sie_imports: 1,
-        sequence_last_number: 40,
       })
 
       const exactRows = await client.query<{
-        entry_exists: boolean
         transaction_exists: boolean
         document_exists: boolean
         sie_import_exists: boolean
       }>(
         `SELECT
-           EXISTS (SELECT 1 FROM public.journal_entries WHERE id = $1) AS entry_exists,
-           EXISTS (SELECT 1 FROM public.transactions WHERE id = $2) AS transaction_exists,
-           EXISTS (SELECT 1 FROM public.document_attachments WHERE id = $3) AS document_exists,
-           EXISTS (SELECT 1 FROM public.sie_imports WHERE id = $4) AS sie_import_exists`,
-        [importEntryId, transactionId, documentId, sieImportId],
+           EXISTS (SELECT 1 FROM public.transactions WHERE id = $1) AS transaction_exists,
+           EXISTS (SELECT 1 FROM public.document_attachments WHERE id = $2) AS document_exists,
+           EXISTS (SELECT 1 FROM public.sie_imports WHERE id = $3) AS sie_import_exists`,
+        [transactionId, documentId, sieImportId],
       )
       expect(exactRows.rows[0]).toEqual({
-        entry_exists: true,
         transaction_exists: true,
         document_exists: true,
         sie_import_exists: true,
@@ -638,7 +733,7 @@ describe('company migration reset RPCs (pg)', () => {
       expect(resetAudit.rows[0]).toEqual({
         n: 1,
         source_documents: 1,
-        source_journal_lines: 2,
+        source_journal_lines: 0,
         source_sie_imports: 1,
       })
 
@@ -714,9 +809,10 @@ describe('company migration reset RPCs (pg)', () => {
       await client.query('SAVEPOINT immutable_source_sequence')
       await expect(
         client.query(
-          `UPDATE public.voucher_sequences SET last_number = 41
-           WHERE company_id = $1 AND voucher_series = 'A'`,
-          [companyId],
+          `INSERT INTO public.voucher_sequences
+             (user_id, company_id, fiscal_period_id, voucher_series, last_number)
+           VALUES ($1, $2, $3, 'A', 1)`,
+          [userId, companyId, fiscalPeriodId],
         ),
       ).rejects.toThrow(/source records are immutable/i)
       await client.query('ROLLBACK TO SAVEPOINT immutable_source_sequence')
