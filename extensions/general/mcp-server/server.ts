@@ -2222,7 +2222,7 @@ export async function computeVatCloseCheck(
   if (!deadline) {
     blockers.push({
       kind: 'deadline_unavailable',
-      severity: 'medium',
+      severity: 'high',
       count: 1,
       message: 'Momsens inlämningsdatum kunde inte fastställas säkert',
       hint: 'Kontrollera momsinställningar, deklarationssätt och räkenskapsperiod innan deklarationen lämnas in.',

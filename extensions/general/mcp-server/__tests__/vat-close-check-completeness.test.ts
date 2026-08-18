@@ -54,7 +54,10 @@ interface MockChartAccount {
 function mockSupabase(
   lines: MockLine[],
   chartAccounts: MockChartAccount[] = [],
-  companySettings: Record<string, unknown> | null = null,
+  companySettings: Record<string, unknown> | null = {
+    moms_period: 'monthly',
+    vat_taxable_base_over_40m: false,
+  },
 ) {
   const entries = [
     ...new Map(
@@ -141,14 +144,15 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     const result = await computeVatCloseCheck(
       PERIOD,
       'company-1',
-      mockSupabase([]),
+      mockSupabase([], [], null),
     )
 
     expect(result.payment.deadline).toBeNull()
     expect(result.blockers).toContainEqual(expect.objectContaining({
       kind: 'deadline_unavailable',
-      severity: 'medium',
+      severity: 'high',
     }))
+    expect(result.ready_to_close).toBe(false)
   })
 
   it('includes a null-rate 3011 with matching domestic VAT evidence (#1289)', async () => {

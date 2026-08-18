@@ -45,7 +45,7 @@ function mockSupabase(rpcResults: Record<string, unknown>) {
     const chain: Record<string, unknown> = {}
     const settled = { data: rows, error: null, count: rows.length }
     chain.range = () => settled
-    chain.single = async () => ({ data: null, error: null })
+    chain.single = async () => ({ data: rows[0] ?? null, error: null })
     chain.maybeSingle = async () => ({ data: null, error: null })
     chain.then = (resolve: (v: unknown) => void) => resolve(settled)
     for (const m of [
@@ -66,7 +66,12 @@ function mockSupabase(rpcResults: Record<string, unknown>) {
   })
 
   return {
-    supabase: { from: () => makeChain([]), rpc } as never,
+    supabase: {
+      from: (table: string) => makeChain(table === 'company_settings'
+        ? [{ moms_period: 'monthly', vat_taxable_base_over_40m: false }]
+        : []),
+      rpc,
+    } as never,
     rpc,
   }
 }
