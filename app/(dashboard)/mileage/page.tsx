@@ -204,11 +204,12 @@ export default function MileagePage() {
   }
 
   // A manual edit disowns that field's prefill so the hint disappears and the
-  // value survives later route changes.
+  // value survives later route changes. The record itself is kept (even fully
+  // disowned) as an offered-marker, so the same route never re-fills a field
+  // the user deliberately emptied.
   const disownPrefill = (field: 'distance_km' | 'purpose') => {
     if (!prefill || !prefill[field]) return
-    const next = { ...prefill, [field]: '' }
-    setPrefill(next.distance_km || next.purpose ? next : null)
+    setPrefill({ ...prefill, [field]: '' })
   }
 
   const submitForm = async () => {

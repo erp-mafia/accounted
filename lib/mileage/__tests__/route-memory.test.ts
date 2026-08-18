@@ -116,6 +116,10 @@ describe('routeKey', () => {
   it('normalizes both endpoints', () => {
     expect(routeKey(' Kontoret ', 'KUNDEN  ab')).toBe(routeKey('kontoret', 'Kunden AB'))
   })
+
+  it('never collides ambiguous concatenations', () => {
+    expect(routeKey('a b', 'c')).not.toBe(routeKey('a', 'b c'))
+  })
 })
 
 describe('applyRoutePrefill', () => {
@@ -215,6 +219,55 @@ describe('applyRoutePrefill', () => {
     )
     expect(result.distance_km).toBe('50')
     expect(result.purpose).toBe('Kundbesök')
+  })
+
+  it('keeps the other field tracked when one field is disowned on the same key', () => {
+    // Skeptic cycle-2 scenario: both fields prefill, user empties purpose
+    // (page disowns it), then a key-preserving keystroke (trailing space).
+    // The emptied purpose must stay empty and the km tracking must survive,
+    // so a later route switch still clears the machine-written km.
+    const trips = [
+      makeTrip({ distance_km: 42.5, purpose: 'Kundbesök' }),
+      makeTrip({
+        id: 'lagret',
+        from_location: 'Lagret',
+        distance_km: 80,
+        purpose: 'Leverans',
+        trip_date: '2026-08-01',
+      }),
+    ]
+    const matched = applyRoutePrefill(trips, fields(), null)
+    const disowned = { ...matched.prefill!, purpose: '' }
+    const sameKey = applyRoutePrefill(
+      trips,
+      fields({ to_location: 'Kunden AB ', distance_km: matched.distance_km, purpose: '' }),
+      disowned
+    )
+    expect(sameKey.purpose).toBe('')
+    expect(sameKey.distance_km).toBe(matched.distance_km)
+    expect(sameKey.prefill).toEqual(disowned)
+    const switched = applyRoutePrefill(
+      trips,
+      fields({ from_location: 'Lagret', distance_km: sameKey.distance_km, purpose: '' }),
+      sameKey.prefill
+    )
+    expect(switched.distance_km).toBe('80')
+    expect(switched.purpose).toBe('Leverans')
+  })
+
+  it('offers a route at most once: emptied fields are not re-filled on the same key', () => {
+    const trips = [makeTrip({ distance_km: 42.5, purpose: 'Kundbesök' })]
+    const matched = applyRoutePrefill(trips, fields(), null)
+    // User empties both fields; the page keeps the marker with both entries ''.
+    const marker = { key: matched.prefill!.key, distance_km: '', purpose: '' }
+    const result = applyRoutePrefill(
+      trips,
+      fields({ to_location: 'Kunden AB ', distance_km: '', purpose: '' }),
+      marker
+    )
+    expect(result.distance_km).toBe('')
+    expect(result.purpose).toBe('')
+    expect(result.prefill).toEqual(marker)
   })
 
   it('is a no-op without a match or an existing prefill', () => {
