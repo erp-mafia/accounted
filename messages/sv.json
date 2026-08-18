@@ -2177,6 +2177,7 @@
     "plusgiro_label": "Plusgiro",
     "swish_label": "Swish",
     "iban_label": "IBAN",
+    "iban_prefill": "Hämta från bankkopplingen: {value}",
     "bic_label": "BIC/SWIFT",
     "routing_number": "Routing number (ABA)",
     "sort_code": "Sort code",
