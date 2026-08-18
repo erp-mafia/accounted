@@ -94,8 +94,7 @@ function parseMarkerAmount(cells: string[]): number | null {
 /** Date written into a marker text ("Ingående saldo 2026-05-03"), if any. */
 function markerDate(text: string, dateCell: string): string | null {
   const inText = /(\d{4}-\d{2}-\d{2})/.exec(text)
-  if (inText) return normalizeDate(inText[1])
-  return normalizeDate(dateCell)
+  return (inText ? normalizeDate(inText[1]) : null) ?? normalizeDate(dateCell)
 }
 
 function splitRow(line: string): string[] {

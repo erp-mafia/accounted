@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/table'
 import { ArrowLeft, ArrowRight, AlertTriangle, Calendar, FileText, Scale } from 'lucide-react'
 import { formatCurrency, cn } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
 
 interface SkattekontoFilePreviewStepProps {
@@ -153,7 +154,7 @@ export default function SkattekontoFilePreviewStep({
                 <dt className="text-muted-foreground">{t('skattekonto_sum_gap_opening')}</dt>
                 <dd className="text-right">{formatCurrency(opening_saldo)}</dd>
                 <dt className="text-muted-foreground">{t('skattekonto_sum_gap_events')}</dt>
-                <dd className="text-right">{formatCurrency(events_sum - opening_saldo)}</dd>
+                <dd className="text-right">{formatCurrency(roundOre(events_sum - opening_saldo))}</dd>
                 <dt className="text-muted-foreground">{t('skattekonto_sum_gap_expected')}</dt>
                 <dd className="text-right">{formatCurrency(events_sum)}</dd>
                 <dt className="text-muted-foreground">{t('skattekonto_sum_gap_closing')}</dt>
