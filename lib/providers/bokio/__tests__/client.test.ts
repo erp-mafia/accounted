@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  BokioApiError,
   BokioClient,
   BokioResponseError,
   normalizeBokioAccessToken,
@@ -71,6 +72,22 @@ describe('BokioClient', () => {
       new BokioClient().getCompany('integration-token', COMPANY_ID),
     ).resolves.toBeNull();
   });
+
+  it.each([400, 401, 403])(
+    'preserves a company-information HTTP %i as a Bokio API error',
+    async (statusCode) => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        new Response('', { status: statusCode, statusText: 'Request failed' }),
+      );
+
+      const error = await new BokioClient()
+        .getCompany('integration-token', COMPANY_ID)
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(BokioApiError);
+      expect((error as BokioApiError).statusCode).toBe(statusCode);
+    },
+  );
 
   it('keeps an invalid response envelope distinct from a company 404', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(Response.json({ name: 'Unexpected shape' }));

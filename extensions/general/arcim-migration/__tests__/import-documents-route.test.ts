@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createMockRequest, createMockSupabase, parseJsonResponse } from '@/tests/helpers'
+import { eventBus } from '@/lib/events/bus'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 vi.mock('../lib/import-documents', () => {
@@ -104,6 +105,7 @@ function submitTokenRequest() {
 describe('POST /import-documents', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
   })
 
   it('passes dry-run discovery through without storing documents', async () => {
@@ -156,6 +158,7 @@ describe('POST /import-documents', () => {
 describe('POST /submit-token Bokio error mapping', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
   })
 
   it('reports a 401/403 authentication verdict as rejected integration details', async () => {
