@@ -382,7 +382,7 @@ export default function AccountMappingStep({
                           variant="outline"
                           size="sm"
                           className="min-h-11 w-full sm:min-h-8"
-                          aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount} ${mapping.sourceName}`}
+                          aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount}`}
                           onClick={() => onVatTreatmentChange(
                             mapping.sourceAccount,
                             mapping.defaultVatTreatment ?? null,
