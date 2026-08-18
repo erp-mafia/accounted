@@ -1723,13 +1723,6 @@ const SKATTEKONTO_FILE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The file was not recognized as a tax account statement. Download the account events from Skatteverket and try again.',
   },
-  SKATTEKONTO_FILE_SUM_MISMATCH: {
-    httpStatus: 400,
-    message_sv:
-      'Utdraget summerar inte: ingående saldo plus händelser stämmer inte med utgående saldo. Filen kan vara ofullständig.',
-    message_en:
-      'The statement does not sum: opening balance plus events does not equal the closing balance. The file may be incomplete.',
-  },
   SKATTEKONTO_FILE_NO_ROWS: {
     httpStatus: 400,
     message_sv: 'Kontoutdraget innehåller inga händelser att importera.',

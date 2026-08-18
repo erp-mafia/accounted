@@ -92,14 +92,35 @@ describe('POST /api/import/skattekonto-file/parse', () => {
     expect(body.error.code).toBe('SKATTEKONTO_FILE_NOT_RECOGNIZED')
   })
 
-  it('rejects a statement that does not sum', async () => {
+  it('returns a statement that does not sum with the gap for the preview gate', async () => {
     enqueue({ data: null }) // no prior import
+    enqueue({ data: { org_number: '556677-8899' } }) // company_settings
+    enqueue({ data: [] }) // existing rows page
     const broken = MODERN_CSV.replace('"23 490"', '"99 999"')
     const { status, body } = await jsonOf(
       await POST(makeFileRequest(broken, 'Kontoutdrag 556677-8899 2026-05-03--2026-08-01.csv'), emptyParams),
     )
+    expect(status).toBe(200)
+    expect(body.data.parse_result.sum_valid).toBe(false)
+    expect(body.data.parse_result.opening_saldo).toBe(-500)
+    expect(body.data.parse_result.events_sum).toBe(23490)
+    expect(body.data.parse_result.closing_saldo).toBe(99999)
+    expect(body.data.parse_result.sum_difference).toBe(76509)
+    // The rows are still returned: nothing is booked at import, so the user
+    // can import the events that ARE in the file and confirm the gap.
+    expect(body.data.parse_result.rows).toHaveLength(2)
+  })
+
+  it('still refuses a statement with no readable events', async () => {
+    enqueue({ data: null }) // no prior import
+    const empty = [
+      '"Testbolaget AB";"556677-8899";""',
+      '"";"Ingående saldo 2026-05-03";"-500"',
+      '"";"Utgående saldo 2026-08-01";"-500"',
+    ].join('\r\n')
+    const { status, body } = await jsonOf(await POST(makeFileRequest(empty), emptyParams))
     expect(status).toBe(400)
-    expect(body.error.code).toBe('SKATTEKONTO_FILE_SUM_MISMATCH')
+    expect(body.error.code).toBe('SKATTEKONTO_FILE_NO_ROWS')
   })
 
   it('parses a valid statement and partitions against existing rows', async () => {

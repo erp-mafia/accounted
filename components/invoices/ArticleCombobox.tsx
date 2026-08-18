@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, useId } from 'react'
 import { Input } from '@/components/ui/input'
 import { foldText } from '@/lib/bookkeeping/account-search'
 
@@ -57,6 +57,11 @@ export default function ArticleCombobox({
   const [search, setSearch] = useState(selectedLabel)
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
+  // aria-activedescendant is only announced once the user has explicitly
+  // arrowed into the list: before that, the visual highlight is a hint for
+  // Enter behavior, not a selection a screen reader should read out.
+  const [hasArrowNavigated, setHasArrowNavigated] = useState(false)
+  const listboxId = useId()
   // Typing narrows the list; a fresh focus shows everything so the field also
   // works as a browse dropdown, exactly like the Select it replaces.
   const [hasTyped, setHasTyped] = useState(false)
@@ -107,6 +112,7 @@ export default function ArticleCombobox({
     const currentKey = value ?? 'none'
     const idx = options.findIndex((o) => o.key === currentKey)
     setHighlightedIndex(idx >= 0 ? idx : 0)
+    setHasArrowNavigated(false)
     setIsOpen(true)
   }, [options, value])
 
@@ -159,10 +165,12 @@ export default function ArticleCombobox({
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
+        setHasArrowNavigated(true)
         setHighlightedIndex((prev) => Math.min(prev + 1, options.length - 1))
         break
       case 'ArrowUp':
         e.preventDefault()
+        setHasArrowNavigated(true)
         setHighlightedIndex((prev) => Math.max(prev - 1, 0))
         break
       case 'Enter':
@@ -193,6 +201,7 @@ export default function ArticleCombobox({
         onChange={(e) => {
           setSearch(e.target.value)
           setHasTyped(true)
+          setHasArrowNavigated(false)
           if (!isOpen) setIsOpen(true)
         }}
         onPointerDown={() => {
@@ -217,18 +226,31 @@ export default function ArticleCombobox({
         disabled={disabled}
         role="combobox"
         aria-expanded={isOpen}
+        aria-controls={isOpen ? listboxId : undefined}
+        aria-autocomplete="list"
+        aria-activedescendant={
+          isOpen && hasArrowNavigated && options[highlightedIndex]
+            ? `${listboxId}-opt-${highlightedIndex}`
+            : undefined
+        }
         aria-label={ariaLabel}
       />
 
       {isOpen && !disabled && (
         <div
           ref={listRef}
+          id={listboxId}
+          role="listbox"
           className="absolute z-50 top-full left-0 mt-1 w-full min-w-[16rem] max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md"
         >
           {options.map((option, index) => (
             <button
               key={option.key}
+              id={`${listboxId}-opt-${index}`}
               type="button"
+              role="option"
+              aria-selected={option.key === (value ?? 'none')}
+              tabIndex={-1}
               data-highlighted={index === highlightedIndex}
               className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer ${
                 index === highlightedIndex ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'

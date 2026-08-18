@@ -1164,6 +1164,16 @@ export const CreateSupplierInvoiceSchema = z.object({
   items: z.array(CreateSupplierInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
+// Pre-submit duplicate lookup for the supplier-invoice editor. Mirrors the
+// partial unique index idx_supplier_invoices_company_supplier_number on
+// (company_id, supplier_id, supplier_invoice_number), which excludes
+// credited/reversed invoices, so the advisory never warns on the re-issue
+// pattern the index was widened to allow.
+export const SupplierInvoiceExistsQuerySchema = z.object({
+  supplier_id: uuid,
+  number: z.string().min(1, 'number is required'),
+})
+
 export const MarkSupplierInvoicePaidSchema = z.object({
   amount: z.number().positive().optional(),
   payment_date: isoDate.optional(),

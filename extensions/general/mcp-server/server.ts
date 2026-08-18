@@ -4565,6 +4565,7 @@ export const tools: McpTool[] = [
           enum: ['individual', 'swedish_business', 'eu_business', 'non_eu_business'],
           description: 'Customer type',
         },
+        customer_number: { type: 'string', maxLength: 32 },
         email: { type: 'string', description: 'Email address' },
         org_number: { type: 'string', description: 'Swedish org number' },
         vat_number: { type: 'string', description: 'EU VAT number' },
@@ -4599,9 +4600,20 @@ export const tools: McpTool[] = [
         throw new Error('Invalid customer_type. Must be: individual, swedish_business, eu_business, non_eu_business')
       }
 
+      // Runtime guard (hosts don't always enforce inputSchema maxLength).
+      const customerNumberArg = args.customer_number
+      if (customerNumberArg != null && typeof customerNumberArg !== 'string') {
+        throw new Error('customer_number must be a string.')
+      }
+      const customerNumber = typeof customerNumberArg === 'string' ? customerNumberArg.trim() : ''
+      if (customerNumber.length > 32) {
+        throw new Error('customer_number must be at most 32 characters.')
+      }
+
       const params = {
         name: name.trim(),
         customer_type: customerType,
+        customer_number: customerNumber || null,
         email: (args.email as string) || null,
         org_number: (args.org_number as string) || null,
         vat_number: (args.vat_number as string) || null,
