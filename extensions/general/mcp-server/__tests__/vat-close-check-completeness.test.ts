@@ -51,7 +51,11 @@ interface MockChartAccount {
  * fixture; everything else (transactions, supplier_invoices, company_settings)
  * comes back empty so no unrelated blocker fires.
  */
-function mockSupabase(lines: MockLine[], chartAccounts: MockChartAccount[] = []) {
+function mockSupabase(
+  lines: MockLine[],
+  chartAccounts: MockChartAccount[] = [],
+  companySettings: Record<string, unknown> | null = null,
+) {
   const entries = [
     ...new Map(
       lines.map((l, i) => {
@@ -83,7 +87,7 @@ function mockSupabase(lines: MockLine[], chartAccounts: MockChartAccount[] = [])
     const chain: Record<string, unknown> = {}
     const settled = { data: rows, error: null, count: rows.length }
     chain.range = () => settled
-    chain.single = async () => ({ data: null, error: null })
+    chain.single = async () => ({ data: rows[0] ?? null, error: null })
     chain.maybeSingle = async () => ({ data: null, error: null })
     chain.then = (resolve: (v: unknown) => void) => resolve(settled)
     for (const m of [
@@ -100,6 +104,9 @@ function mockSupabase(lines: MockLine[], chartAccounts: MockChartAccount[] = [])
       if (table === 'journal_entries') return makeChain(entries)
       if (table === 'journal_entry_lines') return makeChain(bareLines)
       if (table === 'chart_of_accounts') return makeChain(chartAccounts)
+      if (table === 'company_settings') {
+        return makeChain(companySettings ? [companySettings] : [])
+      }
       return makeChain([])
     },
     // The missing-underlag blocker reads the verifikat_without_documents RPC,
@@ -116,6 +123,20 @@ function mockSupabase(lines: MockLine[], chartAccounts: MockChartAccount[] = [])
 const PERIOD = { period_type: 'monthly', year: 2026, period: 1 }
 
 describe('gnubok_vat_close_check: declaration completeness', () => {
+  it('reads the over-40M setting and returns the following-month 26th deadline', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase([], [], {
+        moms_period: 'monthly',
+        vat_taxable_base_over_40m: true,
+      }),
+    )
+
+    expect(result.payment.deadline).toBe('2026-02-26')
+    expect(result.payment.deadline_label).toBe('26 februari 2026')
+  })
+
   it('includes a null-rate 3011 with matching domestic VAT evidence (#1289)', async () => {
     const result = await computeVatCloseCheck(
       PERIOD,

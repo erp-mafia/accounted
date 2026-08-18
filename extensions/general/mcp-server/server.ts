@@ -16,6 +16,11 @@ import {
 } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
+import {
+  getVatDeadlineForPeriod,
+  type VatDeadlineCalculationSettings,
+} from '@/lib/tax/deadline-config'
+import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
@@ -47,6 +52,7 @@ import {
   rutorFromTotals,
   rcInputTotalsFromDeclaration,
   calculateVatDeclaration,
+  resolvePeriodDates,
 } from '@/lib/reports/vat-declaration'
 import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 // The momsdeklaration completeness checks live in core (lib/reports) and are
@@ -1529,23 +1535,13 @@ export async function computeVatReportWithRutor(
   if (periodType === 'monthly' && (period < 1 || period > 12)) throw new Error('period must be 1-12 for monthly')
   if (periodType === 'quarterly' && (period < 1 || period > 4)) throw new Error('period must be 1-4 for quarterly')
 
-  let startDate: string
-  let endDate: string
-
-  if (periodType === 'monthly') {
-    startDate = `${year}-${String(period).padStart(2, '0')}-01`
-    const lastDay = new Date(year, period, 0).getDate()
-    endDate = `${year}-${String(period).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-  } else if (periodType === 'quarterly') {
-    const startMonth = (period - 1) * 3 + 1
-    const endMonth = period * 3
-    startDate = `${year}-${String(startMonth).padStart(2, '0')}-01`
-    const lastDay = new Date(year, endMonth, 0).getDate()
-    endDate = `${year}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-  } else {
-    startDate = `${year}-01-01`
-    endDate = `${year}-12-31`
-  }
+  const { start: startDate, end: endDate } = await resolvePeriodDates(
+    supabase,
+    companyId,
+    periodType as 'monthly' | 'quarterly' | 'yearly',
+    year,
+    period,
+  )
 
   // Two-step fetch (lib/bookkeeping/entry-lines.ts) rather than a
   // `journal_entries!inner` embed: PostgREST compiles that embed into a
@@ -1924,47 +1920,27 @@ interface VatCloseCheckResult {
   summary: string
 }
 
-/** Compute the Skatteverket momsdeklaration deadline for a period.
- *  - monthly: due on the 12th of (period-end-month + 1)
- *  - quarterly: 26th of the month after quarter-end (Q4 → 26 Jan next year)
- *  - yearly: 26 Feb of next year
- */
+/** Adapt the canonical VAT deadline configuration to the MCP wire shape. */
 export function computeMomsDeadline(
   periodType: 'monthly' | 'quarterly' | 'yearly',
   year: number,
-  period: number
+  period: number,
+  settings: VatDeadlineCalculationSettings,
 ): { date: string; label: string } | null {
-  if (periodType === 'monthly') {
-    // period 1-12; deadline = 12th of next month
-    const deadlineMonth = period === 12 ? 1 : period + 1
-    const deadlineYear = period === 12 ? year + 1 : year
-    return {
-      date: `${deadlineYear}-${String(deadlineMonth).padStart(2, '0')}-12`,
-      label: `12 ${monthName(deadlineMonth)} ${deadlineYear}`,
-    }
+  const instance = getVatDeadlineForPeriod(periodType, year, period, settings)
+  if (!instance) return null
+
+  const adjusted = adjustDeadlineToNextBankingDay(
+    new Date(instance.year, instance.month, instance.day),
+  )
+  const deadlineYear = adjusted.getFullYear()
+  const deadlineMonth = adjusted.getMonth() + 1
+  const deadlineDay = adjusted.getDate()
+
+  return {
+    date: `${deadlineYear}-${String(deadlineMonth).padStart(2, '0')}-${String(deadlineDay).padStart(2, '0')}`,
+    label: `${deadlineDay} ${monthName(deadlineMonth)} ${deadlineYear}`,
   }
-  if (periodType === 'quarterly') {
-    // Q1→26 apr, Q2→26 jul, Q3→26 okt, Q4→26 jan next year
-    const monthByQuarter: Record<number, { m: number; yOffset: number }> = {
-      1: { m: 4, yOffset: 0 },
-      2: { m: 7, yOffset: 0 },
-      3: { m: 10, yOffset: 0 },
-      4: { m: 1, yOffset: 1 },
-    }
-    const cfg = monthByQuarter[period]
-    if (!cfg) return null
-    return {
-      date: `${year + cfg.yOffset}-${String(cfg.m).padStart(2, '0')}-26`,
-      label: `26 ${monthName(cfg.m)} ${year + cfg.yOffset}`,
-    }
-  }
-  if (periodType === 'yearly') {
-    return {
-      date: `${year + 1}-02-26`,
-      label: `26 februari ${year + 1}`,
-    }
-  }
-  return null
 }
 
 function monthName(m: number): string {
@@ -2142,20 +2118,45 @@ export async function computeVatCloseCheck(
     await computeVatReportWithRutor(args, companyId, supabase)
   const { start, end, type: periodType, year, period } = vatReport.period
 
-  // 2) Company settings: moms_period drives deadline labelling
+  // 2) Company settings: deadline inputs come from the same fields used by
+  //    lib/tax/deadline-config.ts. The over-40M flag changes monthly filers
+  //    from the 12th/17th M+2 schedule to the 26th M+1 schedule.
   const { data: settings } = await supabase
     .from('company_settings')
-    .select('moms_period')
+    .select('moms_period, vat_taxable_base_over_40m, entity_type, fiscal_year_start_month, vat_has_eu_trade, vat_filing_method')
     .eq('company_id', companyId)
     .single()
   const momsPeriod = (settings?.moms_period as 'monthly' | 'quarterly' | 'yearly' | null) ?? null
+  let entityType = settings?.entity_type === 'aktiebolag' || settings?.entity_type === 'enskild_firma'
+    ? settings.entity_type
+    : null
+  if (periodType === 'yearly' && entityType === null) {
+    const { data: company } = await supabase
+      .from('companies')
+      .select('entity_type')
+      .eq('id', companyId)
+      .single()
+    entityType = company?.entity_type === 'aktiebolag' || company?.entity_type === 'enskild_firma'
+      ? company.entity_type
+      : null
+  }
+  const deadlineSettings: VatDeadlineCalculationSettings = {
+    vat_taxable_base_over_40m: settings?.vat_taxable_base_over_40m === true,
+    entity_type: entityType,
+    fiscal_year_start_month: typeof settings?.fiscal_year_start_month === 'number'
+      ? settings.fiscal_year_start_month
+      : null,
+    vat_has_eu_trade: settings?.vat_has_eu_trade === true,
+    vat_filing_method: settings?.vat_filing_method === 'paper' ? 'paper' : 'electronic',
+  }
 
   // 3) Deadline: based on the *requested* period type, not company setting,
   //    so the model gets the right deadline even when querying ad-hoc periods.
   const deadline = computeMomsDeadline(
     periodType as 'monthly' | 'quarterly' | 'yearly',
     Number(year),
-    Number(period)
+    Number(period),
+    deadlineSettings,
   )
 
   // 4) Blocker scans: run in parallel
