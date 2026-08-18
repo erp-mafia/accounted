@@ -167,7 +167,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     // Link transaction to the journal entry
-    const { error: updateError } = await supabase
+    const { data: updateResult, error: updateError } = await supabase
       .from('transactions')
       .update({
         journal_entry_id: journalEntry.id,
@@ -177,6 +177,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
       .eq('id', id)
       .eq('company_id', companyId)
+      .is('journal_entry_id', null)
+      .select('id')
 
     if (updateError) {
       await reverseOrphanedJournalEntry(
@@ -193,6 +195,20 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         { error: 'Failed to update transaction' },
         { status: 500 }
       )
+    }
+
+    if (!updateResult || updateResult.length === 0) {
+      // CAS guard: another request linked this transaction after our read. The
+      // posted orphan is immutable, so compensate through the engine with a
+      // storno entry instead of overwriting the winning journal entry link.
+      await reverseOrphanedJournalEntry(
+        supabase,
+        companyId,
+        user.id,
+        journalEntry.id,
+        'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+      )
+      return errorResponseFromCode('TX_CATEGORIZE_RACE', log, { requestId })
     }
 
     // A hunt- or hand-matched inbox item is consumed by this booking even

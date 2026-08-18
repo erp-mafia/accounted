@@ -203,7 +203,7 @@ describe('POST /api/transactions/[id]/book', () => {
     mockCreateJournalEntry.mockResolvedValue(je)
 
     // Update transaction
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
 
     const emitSpy = vi.spyOn(eventBus, 'emit')
 
@@ -246,7 +246,7 @@ describe('POST /api/transactions/[id]/book', () => {
     })
     enqueue({ data: tx, error: null })
     mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
 
     const response = await POST(
       createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
@@ -281,6 +281,31 @@ describe('POST /api/transactions/[id]/book', () => {
 
     expect(status).toBe(500)
     expect(body.error).toBe('Failed to update transaction')
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-new',
+      expect.any(String),
+    )
+  })
+
+  it('stornos the posted orphan when another booking wins the transaction-link race', async () => {
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null })
+    const je = makeJournalEntry({ id: 'je-new' })
+
+    enqueue({ data: tx, error: null })
+    mockCreateJournalEntry.mockResolvedValue(je)
+    enqueue({ data: [], error: null })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
     expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
@@ -326,7 +351,7 @@ describe('POST /api/transactions/[id]/book', () => {
     const je = makeJournalEntry({ id: 'je-new' })
     enqueue({ data: tx, error: null }) // fetch transaction
     mockCreateJournalEntry.mockResolvedValue(je)
-    enqueue({ data: null, error: null }) // update transaction
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // update transaction
     enqueue({ data: { document_id: 'doc-1' } }) // propagate: tx pin lookup
     enqueue({ data: { journal_entry_id: null } }) // pinned doc unanchored
     enqueue({ data: { id: 'je-new' } }) // linkToJournalEntry: entry ownership check
@@ -351,7 +376,7 @@ describe('POST /api/transactions/[id]/book', () => {
     const je = makeJournalEntry({ id: 'je-new' })
     enqueue({ data: tx, error: null }) // fetch transaction
     mockCreateJournalEntry.mockResolvedValue(je)
-    enqueue({ data: null, error: null }) // update transaction
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // update transaction
     enqueue({ data: { document_id: null } }) // propagate: nothing pinned
     enqueue({ data: [{ id: 'i1', document_id: null }] }) // matched inbox item
     enqueue({ data: null }) // stamp update
@@ -374,7 +399,7 @@ describe('POST /api/transactions/[id]/book', () => {
     const je = makeJournalEntry({ id: 'je-new' })
     enqueue({ data: tx, error: null }) // fetch transaction
     mockCreateJournalEntry.mockResolvedValue(je)
-    enqueue({ data: null, error: null }) // update transaction
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // update transaction
     enqueue({ data: { document_id: 'doc-1' } }) // propagate: tx pin lookup
     enqueue({ data: { journal_entry_id: null } }) // pinned doc unanchored
     enqueue({ data: null }) // linkToJournalEntry: entry lookup fails -> throws
@@ -428,7 +453,7 @@ describe('POST /api/transactions/[id]/book', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
     const je = makeJournalEntry({ id: 'je-new' })
     enqueue({ data: tx, error: null }) // fetch
-    enqueue({ data: null, error: null }) // update
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // update
     mockDetectDup.mockResolvedValue({
       transaction_id: SIBLING_UUID,
       journal_entry_id: 'je-existing',
@@ -495,7 +520,7 @@ describe('POST /api/transactions/[id]/book', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 98565, journal_entry_id: null })
     const je = makeJournalEntry({ id: 'je-new' })
     enqueue({ data: tx, error: null }) // fetch
-    enqueue({ data: null, error: null }) // update
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // update
     mockDetectDup.mockResolvedValue({
       transaction_id: null,
       journal_entry_id: VOUCHER_JE_UUID,
