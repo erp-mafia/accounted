@@ -93,9 +93,11 @@ export function InvoicePaymentAccountsSettings({
   // helper only suggests when the snapshot's orgNumber matches the company's
   // org_number: stale fuzzy-matched snapshots can describe another entity.
   const [snapshotBankgiro, setSnapshotBankgiro] = useState<string | null>(null)
-  // Same offer for IBAN, sourced from the bank connection instead: the
-  // connected accounts (cash_accounts.iban) already prove the number. Only
-  // offered when every connected account agrees on one IBAN.
+  // Same offer for IBAN, sourced from the bank connection instead. Only rows
+  // that still belong to a live connection count: disconnect keeps cash_accounts
+  // rows (bank_connection_id nulled) and the connect picker mirrors deselected
+  // accounts with enabled=false, so an unfiltered read could offer a closed or
+  // third-party account. Only offered when the remaining rows agree on one IBAN.
   const [connectionIban, setConnectionIban] = useState<string | null>(null)
   const legacySekAccount = useMemo(
     () => legacySekInvoicePaymentAccount({
@@ -168,6 +170,9 @@ export function InvoicePaymentAccountsSettings({
       .from('cash_accounts')
       .select('iban')
       .eq('company_id', company.id)
+      .eq('enabled', true)
+      .eq('currency', 'SEK')
+      .not('bank_connection_id', 'is', null)
       .not('iban', 'is', null)
       .then(({ data }) => {
         if (cancelled) return
