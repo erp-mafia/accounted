@@ -172,7 +172,21 @@ describe('GET /api/company/[id]/migration-reset/archive', () => {
     expect(mockGenerate).not.toHaveBeenCalled()
   })
 
-  it('fails closed when the retained source ownership cannot be verified', async () => {
+  it('keeps the archive reachable when retained-source membership changes', async () => {
+    enqueueAuthorizedArchive()
+
+    const response = await GET(
+      createMockRequest('/api/company/company-1/migration-reset/archive', {
+        searchParams: { estimate: '1' },
+      }),
+      params,
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockEstimate).toHaveBeenCalledWith(archiveSupabase, 'source-1', 'all')
+  })
+
+  it('fails closed when the retained source is not archived', async () => {
     enqueue({ data: { role: 'owner' }, error: null })
     enqueue({
       data: { source_company_id: 'source-1', created_at: '2026-08-18T14:00:00.000Z' },
@@ -182,8 +196,8 @@ describe('GET /api/company/[id]/migration-reset/archive', () => {
       data: { source_company_id: 'source-1', created_at: '2026-08-18T14:00:00.000Z' },
       error: null,
     })
-    enqueueArchive({ data: { role: 'admin' }, error: null })
-    enqueueArchive({ data: { archived_at: '2026-08-18T14:00:00.000Z' }, error: null })
+    enqueueArchive({ data: { role: 'owner' }, error: null })
+    enqueueArchive({ data: { archived_at: null }, error: null })
 
     const response = await GET(
       createMockRequest('/api/company/company-1/migration-reset/archive'),

@@ -182,10 +182,14 @@ internal snapshot. The audit table grants authenticated SELECT only through an
 RLS policy based on active membership of the replacement company. It has no
 user DML policy, and UPDATE, DELETE, and TRUNCATE are blocked by triggers even
 for elevated callers. An owner-only archive endpoint follows that immutable
-replacement-to-source link, verifies ownership of both company copies with a
-service-role client, requires the source archive marker, and exports without
-activating or mutating the source. Support inspection follows reset chains with
-the service-side read-only query in the runbook.
+replacement-to-source link, rechecks current ownership of the active
+replacement, requires the source archive marker with a service-role client,
+and exports without activating or mutating the source. Authorization does not
+depend on retained-source membership because normal team removal and account
+anonymization can legitimately change those rows; the immutable reset link
+keeps the statutory archive reachable to the legal entity's current owners.
+Support inspection follows reset chains with the service-side read-only query
+in the runbook.
 
 ### Verification
 

@@ -119,11 +119,13 @@ Use read-only checks only. Do not run a reset RPC on behalf of a customer, do
 not run `scripts/clear-user-data.sql`, and do not disable retention or journal
 enforcement triggers.
 
-The retained source is hidden from normal company selection. Its owner can use
-**Settings > Company > Previous migration > Download archive** while the
-replacement is active. That owner-only route verifies the immutable reset link,
-ownership of both copies, and the source archive marker before using the
-read-only archive exporter. It never makes the source active. If documents push
+The retained source is hidden from normal company selection. A current owner
+of the active replacement can use **Settings > Company > Previous migration >
+Download archive**. That owner-only route verifies the immutable reset link,
+current replacement ownership, and the source archive marker before using the
+read-only archive exporter. It deliberately does not rely on retained-source
+membership, which can change through team removal or account anonymization. It
+never makes the source active. If documents push
 the direct ZIP over the response limit, the owner can download the structured
 data without documents and support must provide the complete document package
 through an approved read-only export path. Never unarchive the source merely to

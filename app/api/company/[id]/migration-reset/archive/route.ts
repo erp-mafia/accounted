@@ -69,8 +69,10 @@ export const GET = withRouteContext<Params>(
 
     // Service credentials are required for a complete statutory export, but
     // authorization is repeated before they are used. The immutable reset row
-    // must still link this active replacement to an archived source, and the
-    // caller must still own both company copies.
+    // must still link this active replacement to an archived source. Access is
+    // based on current ownership of the replacement, not mutable membership of
+    // the retained source, so normal team removal or account anonymization
+    // cannot accidentally strand the statutory archive.
     const archiveClient = createServiceClient()
     const { data: verifiedReset, error: verifiedResetError } = await archiveClient
       .from('company_migration_resets')
@@ -91,14 +93,14 @@ export const GET = withRouteContext<Params>(
       return privateNoStore(errorResponseFromCode('COMPANY_RESET_FORBIDDEN', log, { requestId }))
     }
 
-    const [{ data: sourceMembership, error: sourceMembershipError }, {
+    const [{ data: replacementMembership, error: replacementMembershipError }, {
       data: sourceCompany,
       error: sourceCompanyError,
     }] = await Promise.all([
       archiveClient
         .from('company_members')
         .select('role')
-        .eq('company_id', reset.source_company_id)
+        .eq('company_id', companyId)
         .eq('user_id', user.id)
         .maybeSingle(),
       archiveClient
@@ -107,14 +109,14 @@ export const GET = withRouteContext<Params>(
         .eq('id', reset.source_company_id)
         .maybeSingle(),
     ])
-    if (sourceMembershipError || sourceCompanyError) {
+    if (replacementMembershipError || sourceCompanyError) {
       log.error(
         'failed to verify retained migration source',
-        sourceMembershipError ?? sourceCompanyError,
+        replacementMembershipError ?? sourceCompanyError,
       )
       return privateNoStore(errorResponseFromCode('INTERNAL_ERROR', log, { requestId }))
     }
-    if (sourceMembership?.role !== 'owner' || !sourceCompany?.archived_at) {
+    if (replacementMembership?.role !== 'owner' || !sourceCompany?.archived_at) {
       log.warn('retained migration source access denied', {
         userId: user.id,
         companyId,
