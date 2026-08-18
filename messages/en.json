@@ -5830,7 +5830,7 @@
     "mapping_saved": "Account mapping saved",
     "mapping_save_failed": "Could not save the account mapping",
     "mapping_mode_aria": "Handling for {method}",
-    "mapping_mode_unmapped": "Default (1680)",
+    "mapping_mode_unmapped": "Default (1686)",
     "mapping_mode_book": "Book to account",
     "mapping_mode_invoice": "Invoiced",
     "mapping_account_aria": "Account for {method}",

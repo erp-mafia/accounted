@@ -5830,7 +5830,7 @@
     "mapping_saved": "Kontomappning sparad",
     "mapping_save_failed": "Kunde inte spara kontomappningen",
     "mapping_mode_aria": "Hantering för {method}",
-    "mapping_mode_unmapped": "Standard (1680)",
+    "mapping_mode_unmapped": "Standard (1686)",
     "mapping_mode_book": "Bokför mot konto",
     "mapping_mode_invoice": "Faktureras",
     "mapping_account_aria": "Konto för {method}",
