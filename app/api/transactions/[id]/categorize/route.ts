@@ -140,6 +140,7 @@ export const POST = withRouteContext(
         .from('transactions')
         .update({ is_business, category: finalCat, is_ignored: false })
         .eq('id', id)
+        .eq('company_id', companyId)
 
       if (updateErr) {
         txLog.error('failed to update already-categorized transaction', updateErr)

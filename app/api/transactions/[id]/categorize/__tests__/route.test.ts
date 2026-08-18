@@ -222,6 +222,9 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(body.already_had_journal_entry).toBe(true)
     expect(body.journal_entry_id).toBe('je-existing')
     expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    expect(
+      findCalls('transactions', 'eq').filter(([column]) => column === 'company_id'),
+    ).toHaveLength(2)
   })
 
   it('creates journal entry for business expense', async () => {
