@@ -149,8 +149,8 @@ database failures roll the transaction back.
 
 Self-service is restricted to active companies created within 30 days. It is
 blocked by the company lock date, a closed or locked period, any journal entry
-in any status or source, any voucher-sequence row, an incomplete import, or a
-known authority submission. This prevents a replacement for the same legal
+in any status or source, any voucher-sequence row, any customer or supplier
+invoice, an incomplete import, or a known authority submission. This prevents a replacement for the same legal
 entity from restarting voucher numbering after a draft, migrated voucher, or
 sequence state already exists. Live integrations, bank connections, recurring
 invoice schedules, pending accrual installments, and non-terminal background
@@ -168,7 +168,9 @@ not move. A database trigger also rejects new memberships on the archived
 source, closing the race with an invitation acceptance that began before the
 reset transaction. Database mutation guards make the retained source's
 imports, transactions, periods, documents, journal rows, invoices, and voucher
-sequences write-closed after the audit row is committed. Team membership sync
+sequences write-closed after the audit row is committed. Filing-adjacent payroll,
+AGI, annual report, ROT/RUT, bank-connection, and authority-audit rows receive
+the same archive guard. Team membership sync
 selects active companies only, so an archived source cannot block a later team
 member from reaching the replacement.
 
@@ -179,8 +181,11 @@ entry points only to authenticated, and revokes authenticated access to the
 internal snapshot. The audit table grants authenticated SELECT only through an
 RLS policy based on active membership of the replacement company. It has no
 user DML policy, and UPDATE, DELETE, and TRUNCATE are blocked by triggers even
-for elevated callers. Support inspection follows reset chains with the
-service-side read-only query in the runbook.
+for elevated callers. An owner-only archive endpoint follows that immutable
+replacement-to-source link, verifies ownership of both company copies with a
+service-role client, requires the source archive marker, and exports without
+activating or mutating the source. Support inspection follows reset chains with
+the service-side read-only query in the runbook.
 
 ### Verification
 

@@ -68,7 +68,8 @@ describe('company migration reset RPCs (pg)', () => {
       execute_anon: boolean
       execute_authenticated: boolean
       snapshot_authenticated: boolean
-      legacy_snapshot_authenticated: boolean
+      legacy_snapshot_141018_authenticated: boolean
+      legacy_snapshot_143004_authenticated: boolean
     }>(`
       SELECT
         has_function_privilege(
@@ -100,7 +101,12 @@ describe('company migration reset RPCs (pg)', () => {
           'authenticated',
           'public.company_migration_reset_snapshot_before_20260818141018(uuid)',
           'EXECUTE'
-        ) AS legacy_snapshot_authenticated
+        ) AS legacy_snapshot_141018_authenticated,
+        has_function_privilege(
+          'authenticated',
+          'public.company_migration_reset_snapshot_before_20260818143004(uuid)',
+          'EXECUTE'
+        ) AS legacy_snapshot_143004_authenticated
     `)
 
     expect(rows[0]).toEqual({
@@ -109,7 +115,8 @@ describe('company migration reset RPCs (pg)', () => {
       execute_anon: false,
       execute_authenticated: true,
       snapshot_authenticated: false,
-      legacy_snapshot_authenticated: false,
+      legacy_snapshot_141018_authenticated: false,
+      legacy_snapshot_143004_authenticated: false,
     })
   })
 
@@ -372,6 +379,135 @@ describe('company migration reset RPCs (pg)', () => {
       code: 'voucher_sequence_state_exists',
       count: 1,
     })
+  })
+
+  it('blocks customer and supplier invoice records before any voucher exists', async () => {
+    const customerInvoice = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.invoices
+         (user_id, company_id, invoice_date, due_date, status)
+       VALUES ($1, $2, '2026-08-01', '2026-08-31', 'sent')`,
+      [customerInvoice.userId, customerInvoice.companyId],
+    )
+    const customerPreview = await preview(customerInvoice.userId, customerInvoice.companyId)
+    expect(customerPreview.eligibility?.blockers).toContainEqual({
+      code: 'invoice_records_exist',
+      count: 1,
+    })
+    expect(customerPreview.eligibility?.blockers).not.toContainEqual(
+      expect.objectContaining({ code: 'journal_entries_exist' }),
+    )
+
+    const supplierInvoice = await seedCompany()
+    const supplierId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.suppliers (id, user_id, company_id, name)
+       VALUES ($1, $2, $3, 'Leverantor AB')`,
+      [supplierId, supplierInvoice.userId, supplierInvoice.companyId],
+    )
+    await getPool().query(
+      `INSERT INTO public.supplier_invoices
+         (user_id, company_id, supplier_id, arrival_number,
+          supplier_invoice_number, invoice_date, due_date)
+       VALUES ($1, $2, $3, 1, 'SUP-1', '2026-08-01', '2026-08-31')`,
+      [supplierInvoice.userId, supplierInvoice.companyId, supplierId],
+    )
+    const supplierPreview = await preview(supplierInvoice.userId, supplierInvoice.companyId)
+    expect(supplierPreview.eligibility?.blockers).toContainEqual({
+      code: 'invoice_records_exist',
+      count: 1,
+    })
+  })
+
+  it('write-closes retained filing and connection evidence after reset', async () => {
+    const fixture = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.company_settings (user_id, company_id, company_name)
+       VALUES ($1, $2, 'Test AB')`,
+      [fixture.userId, fixture.companyId],
+    )
+    const salaryRunId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.salary_runs
+         (id, company_id, user_id, period_year, period_month, payment_date)
+       VALUES ($1, $2, $3, 2026, 8, '2026-08-25')`,
+      [salaryRunId, fixture.companyId, fixture.userId],
+    )
+
+    const result = await execute(fixture.userId, fixture.companyId)
+    expect(result.ok).toBe(true)
+    const replacementId = result.replacement_company_id!
+
+    await expect(
+      getPool().query(`UPDATE public.salary_runs SET status = 'review' WHERE id = $1`, [
+        salaryRunId,
+      ]),
+    ).rejects.toThrow(/source records are immutable/i)
+
+    await expect(
+      getPool().query(
+        `UPDATE public.company_settings SET company_name = 'Changed'
+         WHERE company_id = $1`,
+        [fixture.companyId],
+      ),
+    ).rejects.toThrow(/source records are immutable/i)
+
+    await expect(
+      getPool().query(`UPDATE public.companies SET name = 'Changed' WHERE id = $1`, [
+        fixture.companyId,
+      ]),
+    ).rejects.toThrow(/source company is immutable/i)
+
+    const replacementSalaryRunId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.salary_runs
+         (id, company_id, user_id, period_year, period_month, payment_date)
+       VALUES ($1, $2, $3, 2026, 9, '2026-09-25')`,
+      [replacementSalaryRunId, replacementId, fixture.userId],
+    )
+    await expect(
+      getPool().query(`UPDATE public.salary_runs SET company_id = $1 WHERE id = $2`, [
+        fixture.companyId,
+        replacementSalaryRunId,
+      ]),
+    ).rejects.toThrow(/source records are immutable/i)
+
+    await expect(
+      getPool().query(
+        `INSERT INTO public.skatteverket_api_audit_log
+           (company_id, user_id, endpoint, outcome, response_status)
+         VALUES ($1, $2, 'declaration/validate', 'ok', 200)`,
+        [fixture.companyId, fixture.userId],
+      ),
+    ).rejects.toThrow(/source records are immutable/i)
+
+    const guardedTables = [
+      'agi_declarations',
+      'arsredovisning_submissions',
+      'bank_connections',
+      'company_settings',
+      'rot_rut_payout_requests',
+      'salary_line_items',
+      'salary_run_employees',
+      'salary_runs',
+      'skatteverket_api_audit_log',
+    ]
+    const { rows } = await getPool().query<{ table_name: string }>(
+      `SELECT c.relname AS table_name
+       FROM pg_trigger t
+       JOIN pg_class c ON c.oid = t.tgrelid
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE n.nspname = 'public'
+         AND NOT t.tgisinternal
+         AND t.tgname = left(
+           c.relname || '_block_migration_reset_source_mutation',
+           63
+         )
+         AND c.relname = ANY($1::text[])
+       ORDER BY c.relname`,
+      [guardedTables],
+    )
+    expect(rows.map((row) => row.table_name)).toEqual(guardedTables)
   })
 
   it('does not archive or create anything when execution is ineligible', async () => {

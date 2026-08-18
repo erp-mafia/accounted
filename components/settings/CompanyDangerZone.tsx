@@ -27,6 +27,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { CompanyMigrationResetDialog } from '@/components/settings/CompanyMigrationResetDialog'
+import { CompanyMigrationArchiveRow } from '@/components/settings/CompanyMigrationArchiveRow'
 
 const branding = getBranding()
 
@@ -91,6 +92,8 @@ export function CompanyDangerZone() {
 
   return (
     <>
+      <CompanyMigrationArchiveRow companyId={company.id} />
+
       <SettingsDangerZone label={t('danger_heading')}>
         <SettingsRow label={t('reset_row_label')}>
           <SettingsRowNote>{t('reset_row_note')}</SettingsRowNote>

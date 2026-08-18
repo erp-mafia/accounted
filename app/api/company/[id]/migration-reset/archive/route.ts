@@ -1,0 +1,198 @@
+import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  estimateArchiveSize,
+  generateBaseDataArchive,
+} from '@/lib/reports/full-archive-export'
+import { createServiceClient } from '@/lib/supabase/server'
+
+export const runtime = 'nodejs'
+export const maxDuration = 300
+
+const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
+const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
+
+type Params = { params: Promise<{ id: string }> }
+
+interface ResetArchiveRow {
+  source_company_id: string
+  created_at: string
+}
+
+function privateNoStore(response: NextResponse): NextResponse {
+  response.headers.set('Cache-Control', 'private, no-store')
+  return response
+}
+
+/**
+ * GET /api/company/[id]/migration-reset/archive
+ *
+ * Gives the replacement-company owner a read-only ZIP of the retained source.
+ * The archived source never becomes active and no source row is modified.
+ */
+export const GET = withRouteContext<Params>(
+  'company.migration-reset.archive',
+  async (request, { supabase, companyId, user, log, requestId }, { params }) => {
+    const { id } = await params
+    if (id !== companyId) {
+      return privateNoStore(errorResponseFromCode('COMPANY_RESET_NOT_FOUND', log, { requestId }))
+    }
+
+    const { data: membership, error: membershipError } = await supabase
+      .from('company_members')
+      .select('role')
+      .eq('company_id', companyId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (membershipError) {
+      log.error('failed to authorize migration reset archive', membershipError)
+      return privateNoStore(errorResponseFromCode('INTERNAL_ERROR', log, { requestId }))
+    }
+    if (membership?.role !== 'owner') {
+      return privateNoStore(errorResponseFromCode('COMPANY_RESET_FORBIDDEN', log, { requestId }))
+    }
+
+    const { data: visibleReset, error: visibleResetError } = await supabase
+      .from('company_migration_resets')
+      .select('source_company_id, created_at')
+      .eq('replacement_company_id', companyId)
+      .maybeSingle()
+    if (visibleResetError) {
+      log.error('failed to find migration reset archive', visibleResetError)
+      return privateNoStore(errorResponseFromCode('INTERNAL_ERROR', log, { requestId }))
+    }
+    if (!visibleReset) {
+      return privateNoStore(errorResponseFromCode('COMPANY_RESET_NOT_FOUND', log, { requestId }))
+    }
+
+    // Service credentials are required for a complete statutory export, but
+    // authorization is repeated before they are used. The immutable reset row
+    // must still link this active replacement to an archived source, and the
+    // caller must still own both company copies.
+    const archiveClient = createServiceClient()
+    const { data: verifiedReset, error: verifiedResetError } = await archiveClient
+      .from('company_migration_resets')
+      .select('source_company_id, created_at')
+      .eq('replacement_company_id', companyId)
+      .maybeSingle()
+    if (verifiedResetError) {
+      log.error('failed to verify migration reset archive link', verifiedResetError)
+      return privateNoStore(errorResponseFromCode('INTERNAL_ERROR', log, { requestId }))
+    }
+
+    const reset = verifiedReset as ResetArchiveRow | null
+    if (!reset || reset.source_company_id !== visibleReset.source_company_id) {
+      log.warn('migration reset archive link verification denied', {
+        userId: user.id,
+        companyId,
+      })
+      return privateNoStore(errorResponseFromCode('COMPANY_RESET_FORBIDDEN', log, { requestId }))
+    }
+
+    const [{ data: sourceMembership, error: sourceMembershipError }, {
+      data: sourceCompany,
+      error: sourceCompanyError,
+    }] = await Promise.all([
+      archiveClient
+        .from('company_members')
+        .select('role')
+        .eq('company_id', reset.source_company_id)
+        .eq('user_id', user.id)
+        .maybeSingle(),
+      archiveClient
+        .from('companies')
+        .select('archived_at')
+        .eq('id', reset.source_company_id)
+        .maybeSingle(),
+    ])
+    if (sourceMembershipError || sourceCompanyError) {
+      log.error(
+        'failed to verify retained migration source',
+        sourceMembershipError ?? sourceCompanyError,
+      )
+      return privateNoStore(errorResponseFromCode('INTERNAL_ERROR', log, { requestId }))
+    }
+    if (sourceMembership?.role !== 'owner' || !sourceCompany?.archived_at) {
+      log.warn('retained migration source access denied', {
+        userId: user.id,
+        companyId,
+        sourceCompanyId: reset.source_company_id,
+      })
+      return privateNoStore(errorResponseFromCode('COMPANY_RESET_FORBIDDEN', log, { requestId }))
+    }
+
+    const { searchParams } = new URL(request.url)
+    const estimateOnly = searchParams.get('estimate') === '1'
+    const includeDocuments = searchParams.get('include_documents') !== 'false'
+
+    try {
+      const estimate = await estimateArchiveSize(archiveClient, reset.source_company_id, 'all')
+      if (estimateOnly) {
+        return NextResponse.json(
+          {
+            data: {
+              ...estimate,
+              archived_at: reset.created_at,
+              size_limit_bytes: SIZE_LIMIT_BYTES,
+              within_limit: estimate.total_bytes <= SIZE_LIMIT_BYTES,
+            },
+          },
+          { headers: PRIVATE_NO_STORE_HEADERS },
+        )
+      }
+
+      if (includeDocuments && estimate.total_bytes > SIZE_LIMIT_BYTES) {
+        return NextResponse.json(
+          {
+            error: 'archive_too_large',
+            size_bytes: estimate.total_bytes,
+            size_limit_bytes: SIZE_LIMIT_BYTES,
+          },
+          { status: 413, headers: PRIVATE_NO_STORE_HEADERS },
+        )
+      }
+
+      const zipBuffer = await generateBaseDataArchive(archiveClient, reset.source_company_id, {
+        include_documents: includeDocuments,
+      })
+      const filename = `migration_reset_archive_${formatDateStamp(new Date())}.zip`
+
+      log.info('migration reset source archive generated', {
+        userId: user.id,
+        companyId,
+        sourceCompanyId: reset.source_company_id,
+        includeDocuments,
+        filename,
+        sizeBytes: zipBuffer.byteLength,
+      })
+
+      return new NextResponse(zipBuffer, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Cache-Control': 'private, no-store',
+        },
+      })
+    } catch (error) {
+      log.error('migration reset source archive generation failed', error as Error, {
+        userId: user.id,
+        companyId,
+        sourceCompanyId: reset.source_company_id,
+      })
+      return NextResponse.json(
+        { error: getErrorMessage(error) },
+        { status: 500, headers: PRIVATE_NO_STORE_HEADERS },
+      )
+    }
+  },
+)
+
+function formatDateStamp(date: Date): string {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  return `${year}${month}${day}`
+}

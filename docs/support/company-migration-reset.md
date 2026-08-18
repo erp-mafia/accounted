@@ -39,6 +39,9 @@ The self-service boundary is intentionally narrow:
 - No voucher-sequence row may exist, including a zero-valued sequence. This
   prevents the same legal entity from receiving two independently restarted
   voucher-number namespaces.
+- No customer or supplier invoice may exist, even without a journal entry.
+  Issued invoices, credit-note references, and received supplier invoices are
+  retained accounting documents and cannot be stranded in a hidden source.
 - No bank connection may be pending or active. This prevents the service-role
   sync job from writing new transactions into the retained source after reset.
 - No SIE, bank-file, or tax-account-file import may be pending or processing.
@@ -77,7 +80,9 @@ makes no change. Support must not override the result with deletion SQL.
 9. It writes an immutable `company_migration_resets` audit record and two
    append-only `audit_log` records.
 10. Database guards make the retained source's accounting and import rows
-    write-closed, including requests that were already waiting on a lock.
+    write-closed, including bank connections, payroll and AGI records, annual
+    report submissions, ROT/RUT requests, authority audit rows, and requests
+    that were already waiting on a lock.
 
 The transaction does not disable a trigger. It does not delete, detach,
 renumber, recalculate, copy, or mutate any source bookkeeping record.
@@ -88,10 +93,11 @@ The following stay on the archived source company unchanged:
 - bank transactions and expired or revoked bank connections
 - fiscal periods and their lock or close state
 - documents, hashes, version chains, and voucher links
-- customers, suppliers, invoices, and supplier invoices
+- customers and suppliers
 - authority and general audit logs
 
-Eligibility requires both journal-entry and voucher-sequence counts to be zero.
+Eligibility requires journal-entry, voucher-sequence, customer-invoice, and
+supplier-invoice counts to be zero.
 Those tables remain covered by the immutable-source guards and audit counts as
 defense in depth. The replacement company intentionally has no fiscal period,
 journal entry, transaction, document, import record, or voucher sequence. The
@@ -106,17 +112,22 @@ received documents do not move.
 ## Support checks
 
 Start with the request ID from the API response or browser network panel. The
-route logs use operations `company.migration-reset.preview` and
-`company.migration-reset.execute`.
+routes log operations `company.migration-reset.preview`,
+`company.migration-reset.execute`, and `company.migration-reset.archive`.
 
 Use read-only checks only. Do not run a reset RPC on behalf of a customer, do
 not run `scripts/clear-user-data.sql`, and do not disable retention or journal
 enforcement triggers.
 
-The retained source is hidden from normal company selection. Requests to
-present or export its accounting information are retention requests: preserve
-the source, use an approved read-only support/export path, and keep the reset
-audit link. Never unarchive it merely to reuse ordinary write-capable screens.
+The retained source is hidden from normal company selection. Its owner can use
+**Settings > Company > Previous migration > Download archive** while the
+replacement is active. That owner-only route verifies the immutable reset link,
+ownership of both copies, and the source archive marker before using the
+read-only archive exporter. It never makes the source active. If documents push
+the direct ZIP over the response limit, the owner can download the structured
+data without documents and support must provide the complete document package
+through an approved read-only export path. Never unarchive the source merely to
+reuse ordinary write-capable screens.
 
 After deployment, the audit chain can be inspected read-only with:
 
@@ -175,6 +186,9 @@ an incident requiring investigation. Do not repair it by editing the source.
   case-specific review.
 - `voucher_sequence_state_exists`: at least one voucher sequence has been
   created. Do not renumber or remove it to enable reset.
+- `invoice_records_exist`: at least one customer or supplier invoice exists.
+  Do not delete, cancel, credit, or detach it to enable reset. Continue in the
+  existing company or escalate for case-specific review.
 - `authority_submission_detected`: Accounted has evidence of an authority
   interaction. Do not reset even if the owner believes it was a test without
   first establishing the authority environment and legal status.
@@ -195,7 +209,9 @@ an incident requiring investigation. Do not repair it by editing the source.
 
 The migration files are
 `supabase/migrations/20260818084050_company_migration_reset.sql` and
-`supabase/migrations/20260818141018_harden_company_migration_reset_eligibility.sql`.
+`supabase/migrations/20260818141018_harden_company_migration_reset_eligibility.sql`
+and
+`supabase/migrations/20260818143004_close_migration_reset_archive_gaps.sql`.
 Apply them only to the permitted `erpbase` staging branch through the normal
 migration workflow, then deploy application code. Never deploy the UI/API
 before both RPC migrations exist.
@@ -205,7 +221,9 @@ Before production rollout:
 1. Run the pg-real suite against an approved disposable test database.
 2. Reconcile every remote migration version with the repository.
 3. Verify anon has no execute privilege and authenticated has execute only on
-   the preview and execution RPCs.
+   the preview and execution RPCs. The archive route uses the audit table's
+   replacement-membership RLS policy and repeats owner checks with its
+   service-role export client.
 4. Exercise the flow with synthetic data in an approved non-production
    environment, including every blocker and a forced transaction failure.
 5. Confirm monitoring captures the request ID and structured error code without
@@ -221,6 +239,7 @@ applied migration file.
 Escalate to Emil and an accounting/legal reviewer when the owner cannot make
 the external-filing attestation, the company is outside the 30-day window, a
 period is closed or locked, any journal entry or voucher sequence exists, or a
-known authority submission exists. A live bank connection is operational, not
-a legal override case: disconnect it before retrying. The safe fallback is to
+customer or supplier invoice exists, or a known authority submission exists. A
+live bank connection is operational, not a legal override case: disconnect it
+before retrying. The safe fallback is to
 retain the source company and perform no reset.
