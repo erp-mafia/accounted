@@ -1665,10 +1665,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-muted-foreground text-sm">{t('deduction_status_label')}</span>
                     {payoutRequests.length === 0 ? (
-                      <div className="flex items-center gap-3 text-sm">
+                      // Same shape as the Bokföring row below: the state, and
+                      // the action under it when there is one.
+                      <div className="flex flex-col items-end gap-1 text-sm">
                         <span className="text-muted-foreground">{t('deduction_claim_none')}</span>
                         {skvClaimable && (
-                          <Link href="/invoices?rot-rut=1" className="hover:underline">
+                          <Link href="/invoices?rot-rut=1" className="hover:underline whitespace-nowrap">
                             {t('deduction_claim_cta')}
                           </Link>
                         )}
