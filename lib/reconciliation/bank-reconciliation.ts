@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { roundOre } from '@/lib/money'
 import type { Transaction, ReconciliationMethod } from '@/types'
 import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
@@ -896,7 +897,7 @@ export async function getReconciliationStatus(
   return {
     currency,
     bank_transaction_total: Math.round(bankTotal * 100) / 100,
-    ignored_transaction_total: Math.round(ignoredTotal * 100) / 100,
+    ignored_transaction_total: roundOre(ignoredTotal),
     ignored_transaction_count: ignoredTx.length,
     gl_1930_balance: Math.round(glBalance * 100) / 100,
     gl_1930_period_movement: Math.round(glPeriodMovement * 100) / 100,
