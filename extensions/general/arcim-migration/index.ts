@@ -31,7 +31,7 @@ import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { mergeParsedSIEFiles } from '@/lib/import/sie-merge'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
-import { loadMappings, generateImportPreview, executeSIEImport } from '@/lib/import/sie-import'
+import { loadMappings, generateImportPreview, executeSIEImport, findOverlappingPeriodImports } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
 import type { ProviderName } from '@/lib/providers/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -921,16 +921,17 @@ export const arcimMigrationExtension: Extension = {
             } | null = null
 
             if (fyStart && fyEnd) {
-              const { data } = await supabase
-                .from('sie_imports')
-                .select('imported_at, fiscal_year_start, fiscal_year_end')
-                .eq('company_id', companyId)
-                .eq('status', 'completed')
-                .lte('fiscal_year_start', fyEnd)
-                .gte('fiscal_year_end', fyStart)
-                .limit(1)
-                .maybeSingle()
-              priorImport = data
+              // Newest first: several completed rows can overlap the same
+              // year (manual upload + provider sync, or residue from
+              // partially deleted data). The unordered .limit(1) this
+              // replaces picked an arbitrary row, so the wizard could show
+              // a stale "ersätter tidigare import från <date>" (issue #1667).
+              // Import-time replace resolves ALL rows regardless of which
+              // one is displayed here.
+              const overlapping = await findOverlappingPeriodImports(
+                supabase, companyId, fyStart, fyEnd
+              )
+              priorImport = overlapping[0] ?? null
             }
 
             fileStatuses.push({

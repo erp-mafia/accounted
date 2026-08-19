@@ -2711,6 +2711,13 @@ export default function ArcimMigrationWorkspace({
           setMigrationProgress(progress)
           setMigrationStep(`Importerar bokföringsdata (SIE): fil ${i + 1} av ${filesToImport.length}...`)
 
+          // Name the year in every per-file failure: a multi-year re-sync
+          // that dies on ONE year must say which, or the user cannot act on
+          // it (issue #1667: the current year re-imported, the prior year
+          // refused, and the error never said so).
+          const fiscalYear = filesToImport[i].status?.fiscalYear
+          const yearLabel = fiscalYear ? `Räkenskapsår ${fiscalYear}: ` : ''
+
           const res = await fetch('/api/extensions/ext/arcim-migration/import-sie', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2728,7 +2735,10 @@ export default function ArcimMigrationWorkspace({
 
           if (!res.ok) {
             const data = await res.json().catch(() => ({}))
-            throw apiError(data, `SIE import HTTP ${res.status}`)
+            const err = apiError(data, `SIE import HTTP ${res.status}`)
+            throw err instanceof UserFacingError
+              ? new UserFacingError(`${yearLabel}${err.message}`)
+              : err
           }
 
           const result = await res.json() as ImportResult
@@ -2740,8 +2750,8 @@ export default function ArcimMigrationWorkspace({
           // först" message masks the real error.
           if (!result.success) {
             throw new UserFacingError(result.errors.length > 0
-              ? result.errors.join('\n')
-              : 'SIE-importen misslyckades utan felmeddelande.')
+              ? `${yearLabel}${result.errors.join('\n')}`
+              : `${yearLabel}SIE-importen misslyckades utan felmeddelande.`)
           }
         }
       }
