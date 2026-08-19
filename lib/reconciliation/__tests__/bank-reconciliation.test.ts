@@ -1336,6 +1336,86 @@ describe('getReconciliationStatus', () => {
     expect(status.gl_1930_period_movement).toBe(200)
   })
 
+  it('excludes ignored transactions from the bank total and difference, surfacing them separately', async () => {
+    // The 2026-08-18 duplicate-cleanup shape: a PSD2 reconnect re-imported
+    // history, the user booked one twin and IGNORED the other. The ignored
+    // duplicate never gets a ledger counterpart, so counting it in the bank
+    // total manufactured a permanent difference no amount of booking could
+    // clear (observed live: a 78 867 kr differens over a fully booked account).
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // 1) transactions: booked original + its ignored duplicate + one real
+    //    unbooked deposit.
+    enqueue({
+      data: [
+        { amount: 8730, journal_entry_id: 'je-1', reconciliation_method: 'manual', is_ignored: false },
+        { amount: 8730, journal_entry_id: null, reconciliation_method: null, is_ignored: true },
+        { amount: 500, journal_entry_id: null, reconciliation_method: null, is_ignored: false },
+      ],
+    })
+    // 2) GL: only the booked original is on 1930.
+    enqueue({ data: [{ id: 'je-1', status: 'posted', source_type: 'bank_import' }] })
+    enqueue({ data: [{ debit_amount: 8730, credit_amount: 0, journal_entry_id: 'je-1' }] })
+    // 3) RPC: no unlinked lines
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.bank_transaction_total).toBe(9230) // 8730 + 500, NOT the ignored twin
+    expect(status.ignored_transaction_count).toBe(1)
+    expect(status.ignored_transaction_total).toBe(8730)
+    expect(status.gl_1930_period_movement).toBe(8730)
+    expect(status.difference).toBe(500) // only the real unbooked deposit remains
+    expect(status.matched_count).toBe(1)
+    expect(status.unmatched_transaction_count).toBe(1)
+    expect(status.is_reconciled).toBe(false)
+  })
+
+  it('reports is_reconciled=true once everything non-ignored is booked, despite ignored rows', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: [
+        { amount: 1000, journal_entry_id: 'je-1', reconciliation_method: 'auto_exact', is_ignored: false },
+        { amount: 1000, journal_entry_id: null, reconciliation_method: null, is_ignored: true },
+      ],
+    })
+    enqueue({ data: [{ id: 'je-1', status: 'posted', source_type: 'bank_import' }] })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, journal_entry_id: 'je-1' }] })
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.bank_transaction_total).toBe(1000)
+    expect(status.ignored_transaction_total).toBe(1000)
+    expect(status.difference).toBe(0)
+    expect(status.unmatched_transaction_count).toBe(0)
+    // Before the fix this was unreachable for any company with an ignored row:
+    // the ignored amount sat in the bank total forever.
+    expect(status.is_reconciled).toBe(true)
+  })
+
+  it('does not count an ignored row that somehow retains a journal_entry_id as matched', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: [
+        { amount: 700, journal_entry_id: 'je-x', reconciliation_method: 'manual', is_ignored: true },
+      ],
+    })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    // matched + unmatched partition the reconcilable (non-ignored) set.
+    expect(status.matched_count).toBe(0)
+    expect(status.unmatched_transaction_count).toBe(0)
+    expect(status.ignored_transaction_count).toBe(1)
+    expect(status.bank_transaction_total).toBe(0)
+  })
+
   it('reconciles a corrected bank receipt and keeps gl_1930_balance equal to the balance sheet', async () => {
     // A +25000 deposit was booked to the wrong counter-account, then corrected
     // via the storno flow: the original flips to 'reversed', a storno (credit

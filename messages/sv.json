@@ -6461,6 +6461,7 @@
     "help_bank_reconciliation_ib": "Är en manuellt bokförd eller importerad verifikation egentligen en ingående balans? Märk den som IB så räknas den inte med i avstämningen utan visas separat.",
     "help_bank_reconciliation_ignored": "Ignorerade transaktioner döljs från avstämningen utan att bokföras. De påverkar inte saldot och kan återställas när som helst.",
     "recon_unmatched_attn": "{count, plural, one {1 omatchad transaktion: Förhandsgranska hittar automatiska träffar.} other {# omatchade transaktioner: Förhandsgranska hittar automatiska träffar.}}",
+    "recon_ignored_note": "{count, plural, one {1 ignorerad transaktion ({amount}) räknas inte med i avstämningen. Du kan återställa den under Ignorerade transaktioner nedan.} other {# ignorerade transaktioner ({amount}) räknas inte med i avstämningen. Du kan återställa dem under Ignorerade transaktioner nedan.}}",
     "recon_apply_strong": "{count, plural, one {Matcha 1 stark träff} other {Matcha # starka träffar}}",
     "switch_report": "Byt rapport",
     "calendar_badge": "Kalender",

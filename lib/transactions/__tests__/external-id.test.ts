@@ -134,6 +134,39 @@ describe('descriptionsBridge', () => {
     expect(descriptionsBridge('  Mataffär Solna  ', 'mataffär solna')).toBe(true)
   })
 
+  it('bridges whitespace-only rendering drift, including a DROPPED space (2026-08-18 reconnect incident)', () => {
+    // The same bank re-rendered the same transactions with different spacing
+    // after a PSD2 reconnect; every pair below is a real observed twin shape.
+    // CRLF vs space:
+    expect(
+      descriptionsBridge(
+        '2025DEC58 BRANDHEROES\r\nURSPRUNGLIGT BELOPP M M: EUR',
+        '2025DEC58 BRANDHEROES URSPRUNGLIGT BELOPP M M: EUR'
+      )
+    ).toBe(true)
+    // Dropped space (collapse-only normalization would still miss this):
+    expect(
+      descriptionsBridge(
+        '005 BaBylissURSPRUNGLIGT BELOPP M M: SEK',
+        '005 BaByliss URSPRUNGLIGT BELOPP M M: SEK'
+      )
+    ).toBe(true)
+    // Trailing padding + reference tail growth still bridges via prefix rule:
+    expect(
+      descriptionsBridge(
+        'BRANDHEROES APSFAK 008URSPRUNGLIGT BELOPP M M: EUR',
+        'BRANDHEROES APSFAK 008 URSPRUNGLIGT BELOPP M M: EUR                 2162943703022614'
+      )
+    ).toBe(true)
+  })
+
+  it('whitespace stripping does not bridge genuinely distinct references', () => {
+    expect(descriptionsBridge('REF-AAAA 1111', 'REF-BBBB 2222')).toBe(false)
+    // A whitespace-only description is still treated as blank (no wildcard).
+    expect(descriptionsBridge(' \r\n ', 'anything')).toBe(false)
+    expect(descriptionsBridge(' \r\n ', '  ')).toBe(true)
+  })
+
   it('does NOT bridge genuinely distinct descriptions sharing a date+amount', () => {
     // Distinct reference codes on same-day same-amount rows (e.g. verification
     // micro-deposits) must NOT collapse: each is a real transaction.

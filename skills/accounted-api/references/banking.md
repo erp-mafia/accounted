@@ -144,6 +144,7 @@ Returns matched / unmatched counts and the balance delta between the bank ledger
 - A non-zero difference is normal between sync runs (uncleared cheques, in-flight transfers). Investigate only if it persists across reconciliations.
 - difference compares against gl_1930_period_movement (movement excl. opening balance), NOT gl_1930_balance. Do not display gl_1930_balance next to difference.
 - is_reconciled means |difference| < 0.01 for the window, an aggregate check, not a per-transaction guarantee.
+- Ignored transactions are excluded from bank_transaction_total and difference (they never get a ledger counterpart); their count and sum are reported separately.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -154,6 +155,8 @@ Response `200`:
 {
   data: {
     bank_transaction_total: number,
+    ignored_transaction_total: number,
+    ignored_transaction_count: number,
     gl_1930_balance: number,
     gl_1930_period_movement: number,
     gl_1930_opening_balance: number,

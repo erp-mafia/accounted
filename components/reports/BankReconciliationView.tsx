@@ -113,7 +113,11 @@ const QUICK_BOOK_TEMPLATES: {
 // ============================================================
 
 interface ReconciliationStatus {
+  /** Bank-feed total EXCLUDING ignored rows: the reconciling bank side. */
   bank_transaction_total: number
+  /** Sum of ignored rows in the window; informational, not in the difference. */
+  ignored_transaction_total: number
+  ignored_transaction_count: number
   /**
    * @deprecated Kept on the server response for back-compat. The UI no longer
    * reads it: `gl_1930_period_movement` is required.
@@ -1061,6 +1065,14 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
                   {formatCurrency(status.difference)}
                 </span>
               </div>
+              {status.ignored_transaction_count > 0 && (
+                <p className="pt-2 text-xs text-muted-foreground">
+                  {t('recon_ignored_note', {
+                    count: status.ignored_transaction_count,
+                    amount: formatCurrency(status.ignored_transaction_total, accountCurrency),
+                  })}
+                </p>
+              )}
               {status.gl_1930_opening_balance !== 0 && (
                 <p className="pt-2 text-xs text-muted-foreground">
                   Ingående balans (IB) på <AccountNumber number={accountNumber} />:{' '}

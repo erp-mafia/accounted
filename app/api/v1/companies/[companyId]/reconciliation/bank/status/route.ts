@@ -18,8 +18,11 @@ import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliatio
 // total_unmatched_amount, …) that the endpoint never returned; any client coded
 // against it read undefined for every field except difference.
 const StatusResponse = z.object({
-  /** Sum of bank-feed transactions in the window (the bank side). */
+  /** Sum of bank-feed transactions in the window (the bank side), excluding ignored rows. */
   bank_transaction_total: z.number(),
+  /** Sum of ignored bank transactions in the window. Informational: not part of bank_transaction_total or difference. */
+  ignored_transaction_total: z.number(),
+  ignored_transaction_count: z.number().int(),
   /** Full ledger balance on the account incl. opening balance: matches the balance sheet. */
   gl_1930_balance: z.number(),
   /** Ledger movement excluding opening balance: what `difference` compares against. */
@@ -50,11 +53,14 @@ registerEndpoint({
     'A non-zero difference is normal between sync runs (uncleared cheques, in-flight transfers). Investigate only if it persists across reconciliations.',
     'difference compares against gl_1930_period_movement (movement excl. opening balance), NOT gl_1930_balance. Do not display gl_1930_balance next to difference.',
     'is_reconciled means |difference| < 0.01 for the window, an aggregate check, not a per-transaction guarantee.',
+    'Ignored transactions are excluded from bank_transaction_total and difference (they never get a ledger counterpart); their count and sum are reported separately.',
   ],
   example: {
     response: {
       data: {
         bank_transaction_total: 48150,
+        ignored_transaction_total: 0,
+        ignored_transaction_count: 0,
         gl_1930_balance: 98150,
         gl_1930_period_movement: 48150,
         gl_1930_opening_balance: 50000,

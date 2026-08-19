@@ -100,7 +100,20 @@ export interface ReconciliationStatus {
    * this is a no-op and every figure below is exactly what it always was.
    */
   currency: string
+  /**
+   * Sum of the window's bank-feed transactions EXCLUDING ignored rows: the
+   * bank side of the reconciliation. Ignored rows (feed duplicates from a
+   * PSD2 reconnect, non-business noise) never get a ledger counterpart, so
+   * counting them here manufactured a permanent unfixable difference; they are
+   * surfaced separately below instead, mirroring how the opening balance is
+   * excluded-but-shown.
+   */
   bank_transaction_total: number
+  /** Sum of ignored bank transactions in the window. NOT part of
+   *  bank_transaction_total or difference; informational, like the IB. */
+  ignored_transaction_total: number
+  /** Number of ignored bank transactions in the window. */
+  ignored_transaction_count: number
   /**
    * The real ledger balance on the bank account, incl. IB: computed from the
    * SAME `['posted','reversed']` lines the trial balance and balance sheet sum.
@@ -655,10 +668,11 @@ export async function getReconciliationStatus(
   includeUnassigned: boolean = true,
 ): Promise<ReconciliationStatus> {
   // Get all transactions in range, scoped to the selected cash account. Ignored
-  // rows are pulled too so the totals card still reflects what the bank
-  // actually moved, but they're excluded from the "unmatched" count below: the
-  // user has explicitly said they don't want them surfacing as something to
-  // reconcile. Scoping by cash account (not just currency) is what stops a
+  // rows are pulled too, but only to be COUNTED AND SUMMED separately: they are
+  // excluded from the bank total, the difference and the matched/unmatched
+  // counts below, because the user has explicitly said they are not something
+  // to reconcile (duplicates, non-business noise). Scoping by cash account
+  // (not just currency) is what stops a
   // second same-currency account from inflating bankTotal here.
   // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at 1000
   // rows, which would undercount bank_transaction_total for a busy company and
@@ -799,7 +813,7 @@ export async function getReconciliationStatus(
     onOrAfterFloor((tx as { date?: string | null }).date),
   )
 
-  // Bank side: every feed transaction in the (floored) window, full stop. We
+  // Bank side: every NON-IGNORED feed transaction in the (floored) window. We
   // deliberately do NOT special-case rows linked to a reversed entry any more.
   // Because the GL side now counts the reversed original, its storno AND the
   // correction together (just like the balance sheet), a corrected bank line nets
@@ -809,7 +823,20 @@ export async function getReconciliationStatus(
   // transactions.amount is denominated in transactions.currency, and
   // scopeTransactionsToAccount pinned that to `currency`, so this total is
   // already in the account's own currency: the unit lineAmount() resolves to.
-  const bankTotal = countedTx.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
+  //
+  // Ignored rows are EXCLUDED from the total, exactly as they are excluded from
+  // the unmatched count: ignoring is the sanctioned handling for feed
+  // duplicates (a reconnect re-importing history) and non-business noise, and
+  // by definition an ignored row will never get a ledger counterpart. Counting
+  // it in the bank total manufactured a permanent difference the user could
+  // never book away: after a correct duplicate cleanup the card showed a
+  // six-figure differens over a fully booked account, and is_reconciled was
+  // unreachable forever. They are surfaced separately (count + sum) instead,
+  // the same pattern as the opening balance, so nothing is silently hidden.
+  const reconcilableTx = countedTx.filter((tx) => tx.is_ignored !== true)
+  const ignoredTx = countedTx.filter((tx) => tx.is_ignored === true)
+  const bankTotal = reconcilableTx.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
+  const ignoredTotal = ignoredTx.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
 
   // Ledger lines the account's currency cannot express: a foreign account whose
   // lines hold only SEK figures with no per-row rate (SIE imports, pre-FX
@@ -844,10 +871,13 @@ export async function getReconciliationStatus(
   // a bank-feed counterpart, so it stays in.
   const glPeriodMovement = glBalance - glOpeningBalance
 
-  const matchedCount = countedTx.filter((tx) => tx.journal_entry_id !== null).length
+  // Matched/unmatched partition the RECONCILABLE (non-ignored) set, so
+  // matched_count + unmatched_transaction_count always equals the number of
+  // rows behind bank_transaction_total.
+  const matchedCount = reconcilableTx.filter((tx) => tx.journal_entry_id !== null).length
 
-  const unmatchedTransactionCount = countedTx.filter(
-    (tx) => tx.journal_entry_id === null && tx.is_ignored !== true
+  const unmatchedTransactionCount = reconcilableTx.filter(
+    (tx) => tx.journal_entry_id === null
   ).length
 
   // Unmatched GL lines count (RPC excludes opening_balance, storno and correction
@@ -866,6 +896,8 @@ export async function getReconciliationStatus(
   return {
     currency,
     bank_transaction_total: Math.round(bankTotal * 100) / 100,
+    ignored_transaction_total: Math.round(ignoredTotal * 100) / 100,
+    ignored_transaction_count: ignoredTx.length,
     gl_1930_balance: Math.round(glBalance * 100) / 100,
     gl_1930_period_movement: Math.round(glPeriodMovement * 100) / 100,
     gl_1930_opening_balance: Math.round(glOpeningBalance * 100) / 100,

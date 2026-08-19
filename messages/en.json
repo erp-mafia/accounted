@@ -6461,6 +6461,7 @@
     "help_bank_reconciliation_ib": "Is a manually booked or imported voucher actually an opening balance? Mark it as IB and it is excluded from the reconciliation and shown separately.",
     "help_bank_reconciliation_ignored": "Ignored transactions are hidden from the reconciliation without being booked. They do not affect the balance and can be restored at any time.",
     "recon_unmatched_attn": "{count, plural, one {1 unmatched transaction: Preview finds automatic matches.} other {# unmatched transactions: Preview finds automatic matches.}}",
+    "recon_ignored_note": "{count, plural, one {1 ignored transaction ({amount}) is excluded from the reconciliation. You can restore it under Ignored transactions below.} other {# ignored transactions ({amount}) are excluded from the reconciliation. You can restore them under Ignored transactions below.}}",
     "recon_apply_strong": "{count, plural, one {Match 1 strong match} other {Match # strong matches}}",
     "switch_report": "Switch report",
     "calendar_badge": "Calendar",
