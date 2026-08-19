@@ -1,9 +1,10 @@
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { z } from 'zod'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
+import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
 import {
   uploadAndExtract,
@@ -595,28 +596,12 @@ export const invoiceInboxExtension: Extension = {
         }
 
         // Re-run supplier match so the agent's parsed fields trigger the
-        // same auto-link the AI path uses. Skipped if neither key is present.
-        let matchedSupplierId: string | null = null
-        if (extracted.supplier.orgNumber) {
-          const { data: s } = await ctx.supabase
-            .from('suppliers')
-            .select('id')
-            .eq('company_id', ctx.companyId)
-            .eq('org_number', extracted.supplier.orgNumber)
-            .limit(1)
-            .maybeSingle()
-          if (s) matchedSupplierId = s.id
-        }
-        if (!matchedSupplierId && extracted.supplier.name) {
-          const { data: s } = await ctx.supabase
-            .from('suppliers')
-            .select('id')
-            .eq('company_id', ctx.companyId)
-            .ilike('name', extracted.supplier.name)
-            .limit(1)
-            .maybeSingle()
-          if (s) matchedSupplierId = s.id
-        }
+        // same auto-link the AI path uses. Skipped if no key is present.
+        const matchedSupplierId = await matchSupplierId(
+          ctx.supabase,
+          ctx.companyId,
+          extracted.supplier,
+        )
 
         const { data: updated, error: updateError } = await ctx.supabase
           .from('invoice_inbox_items')
@@ -1109,18 +1094,45 @@ export const invoiceInboxExtension: Extension = {
             fileName: doc.file_name,
           })
 
-          const { error: updateError } = await ctx.supabase
-            .from('invoice_inbox_items')
-            .update({
-              status: 'received',
-              error_message: null,
-              extracted_data: extracted as unknown as Record<string, unknown>,
-              // Retry is user-initiated and bypasses the page-count gate by
-              // design: the user explicitly opted into the slow path.
-              extraction_skipped: false,
-            })
-            .eq('id', id)
-            .eq('company_id', ctx.companyId)
+          // Re-running the extraction has to re-run the match too, or the one
+          // affordance the user reaches for when an item failed to auto-link
+          // ("Tolka om") can never produce a link: this path rewrote
+          // extracted_data and left matched_supplier_id untouched. Only a
+          // positive match is written, so a supplier the user picked by hand
+          // survives a retry that finds nothing.
+          const matchedSupplierId = await matchSupplierId(
+            ctx.supabase,
+            ctx.companyId,
+            extracted.supplier,
+          )
+
+          // Two literal payloads instead of one with a conditional spread:
+          // the phantom-column guard can only check columns written as inline
+          // object literals, and matched_supplier_id should be checkable.
+          const { error: updateError } = matchedSupplierId
+            ? await ctx.supabase
+                .from('invoice_inbox_items')
+                .update({
+                  status: 'received',
+                  error_message: null,
+                  extracted_data: extracted as unknown as Record<string, unknown>,
+                  // Retry is user-initiated and bypasses the page-count gate by
+                  // design: the user explicitly opted into the slow path.
+                  extraction_skipped: false,
+                  matched_supplier_id: matchedSupplierId,
+                })
+                .eq('id', id)
+                .eq('company_id', ctx.companyId)
+            : await ctx.supabase
+                .from('invoice_inbox_items')
+                .update({
+                  status: 'received',
+                  error_message: null,
+                  extracted_data: extracted as unknown as Record<string, unknown>,
+                  extraction_skipped: false,
+                })
+                .eq('id', id)
+                .eq('company_id', ctx.companyId)
 
           if (updateError) {
             return NextResponse.json({ error: updateError.message }, { status: 500 })
@@ -1375,7 +1387,7 @@ export const invoiceInboxExtension: Extension = {
         // the user pressing "Kontrollera igen" (requires the event type to be
         // subscribed on the Resend webhook; harmless when it isn't).
         if (event.type === 'domain.updated') {
-          const domainServiceSupabase = createClient(
+          const domainServiceSupabase = createServiceRoleClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.SUPABASE_SERVICE_ROLE_KEY!
           )
@@ -1393,7 +1405,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { email_id, to, from, subject, message_id, created_at } = event.data
 
-        const serviceSupabase = createClient(
+        const serviceSupabase = createServiceRoleClient(
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
           process.env.SUPABASE_SERVICE_ROLE_KEY!
         )

@@ -239,3 +239,28 @@ describe('parseArticlesFile currency (Valuta) column', () => {
     expect(result.rows[0].vat_rate).toBe(25)
   })
 })
+
+describe('parseArticlesFile ROT/RUT (housework) column', () => {
+  it('normalizes work-type codes and bare kinds, and drops boolean-style values', () => {
+    const buffer = buildXlsx([
+      ['Benämning', 'Pris', 'Husarbete'],
+      ['Städning', '450', 'stad'],
+      ['Fönsterputs', '500', 'RUT'],
+      // A boolean "Rot"/"Husarbete" column exported by other systems: '1'/'0'
+      // are not values the invoice editor can interpret, so they must not be
+      // stored (this is what produced 178 junk rows on prod).
+      ['Bygg', '600', '1'],
+      ['Skruv', '2', '0'],
+    ])
+
+    const result = parseArticlesFile(buffer, 'husarbete.xlsx')
+
+    expect(result.detected_columns.housework_type_col).toBe(2)
+    expect(result.rows[0].housework_type).toBe('STAD')
+    expect(result.rows[1].housework_type).toBe('RUT')
+    expect(result.rows[2].housework_type).toBeNull()
+    expect(result.rows[3].housework_type).toBeNull()
+    // Dropping a non-empty value is surfaced, never silent.
+    expect(result.warnings.some((w) => w.includes('2 rader hade ett ROT/RUT-värde'))).toBe(true)
+  })
+})

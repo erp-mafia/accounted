@@ -171,9 +171,14 @@ describe('tools/list payload size guard', () => {
     //   * 59.5K to 59.7K with account VAT treatments: create_account and
     //     update_account both expose the 12-value treatment vocabulary. The
     //     descriptions are minimal; the enum values are the wire contract.
+    //   * 59.7K to 59.75K with customer_number on gnubok_create_customer:
+    //     parity with gnubok_update_customer, so setting a customer number no
+    //     longer needs a second staged update after create. The property has
+    //     no description (name + maxLength are the whole contract); headroom
+    //     before the change was ~11 tokens, so even that minimal form crossed.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(59_700)
+    expect(approxTokens).toBeLessThan(59_750)
   })
 })

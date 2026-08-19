@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 
 const KEY_PREFIX = 'gnubok_sk_'
 const REFRESH_TOKEN_PREFIX = 'gnubok_rt_'
@@ -241,6 +241,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_document_content:            'transactions:read',
   gnubok_attach_document_to_transaction:  'transactions:write',
   gnubok_link_document_to_voucher:        'bookkeeping:write',
+  gnubok_link_documents_to_vouchers:      'bookkeeping:write',
   // Körjournal (mileage): trip log reads/writes are payroll surface
   // (milersättning, 7331); booking the verifikat is a journal write.
   gnubok_list_mileage_trips:              'payroll:read',
@@ -363,7 +364,7 @@ export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
  * Used for API key validation (MCP, webhooks) where there's no browser session.
  */
 export function createServiceClientNoCookies() {
-  return createClient(
+  return createServiceRoleClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   )

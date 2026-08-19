@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { HouseworkTypeSchema } from '../schemas'
 import {
   // Enums
   EntityTypeSchema,
@@ -276,6 +277,33 @@ describe('Enum schemas', () => {
 // ============================================================
 // Invoice schemas
 // ============================================================
+
+describe('CreateInvoiceSchema: ROT/RUT line completeness', () => {
+  const paths = (r: { success: boolean; error?: { issues: Array<{ path: PropertyKey[] }> } }) =>
+    r.success ? [] : r.error!.issues.map((i) => i.path.join('.'))
+  const rutLine = (extra: Record<string, unknown>) => validInvoiceItem({ deduction_type: 'rut', ...extra })
+
+  it('requires a same-kind arbetstyp and hours > 0 on invoice documents', () => {
+    expect(paths(CreateInvoiceSchema.safeParse(validInvoice({ items: [rutLine({})] })))).toEqual(
+      expect.arrayContaining(['items.0.work_type', 'items.0.labor_hours']),
+    )
+    expect(paths(CreateInvoiceSchema.safeParse(validInvoice({ items: [rutLine({ work_type: 'BYGG', labor_hours: 2 })] })))).toEqual(['items.0.work_type'])
+    expect(CreateInvoiceSchema.safeParse(validInvoice({ items: [rutLine({ work_type: 'STAD', labor_hours: 2 })] })).success).toBe(true)
+    // Schablontjänst: no hours needed
+    expect(CreateInvoiceSchema.safeParse(validInvoice({ items: [rutLine({ work_type: 'TVATT' })] })).success).toBe(true)
+  })
+
+  it('does not apply to proformas / delivery notes (server nulls the fields) nor to text rows', () => {
+    expect(CreateInvoiceSchema.safeParse(validInvoice({ document_type: 'proforma', items: [rutLine({})] })).success).toBe(true)
+    expect(CreateInvoiceSchema.safeParse(validInvoice({ items: [validInvoiceItem({ line_type: 'text', description: '', deduction_type: 'rut' })] })).success).toBe(true)
+  })
+
+  it('applies to UpdateInvoiceSchema too', () => {
+    const { save_as_draft: _s, ...body } = validInvoice({ items: [rutLine({})] }) as Record<string, unknown>
+    expect(UpdateInvoiceSchema.safeParse(body).success).toBe(false)
+    expect(UpdateInvoiceSchema.safeParse({ ...body, items: [rutLine({ work_type: 'STAD', labor_hours: 1 })] }).success).toBe(true)
+  })
+})
 
 describe('CreateInvoiceSchema', () => {
   it('accepts a valid invoice', () => {
@@ -1370,6 +1398,54 @@ describe('UpdateSettingsSchema', () => {
     })
 
     expect(result.success).toBe(true)
+  })
+
+  it('accepts a USD payment account with routing number + account number + BIC and no IBAN', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_payment_accounts: {
+        USD: {
+          bank_name: 'Wise US Inc',
+          bic: 'trwius35xxx',
+          bank_code: '084 009 519',
+          foreign_account_number: '9600 0012 3456 7890',
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+    if (result.success) {
+      const usd = result.data.invoice_payment_accounts?.USD
+      expect(usd?.bic).toBe('TRWIUS35XXX')
+      expect(usd?.bank_code).toBe('084009519')
+      expect(usd?.foreign_account_number).toBe('9600001234567890')
+    }
+  })
+
+  it('accepts a GBP payment account with a dashed sort code', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_payment_accounts: {
+        GBP: { bic: 'NWBKGB2L', bank_code: '60-16-13', foreign_account_number: '31926819' },
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects a USD payment account with neither IBAN nor the full routing triple', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_payment_accounts: {
+        USD: { bank_code: '084009519', foreign_account_number: '9600001234567890' },
+      },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('still requires an IBAN for an EUR payment account even with a routing triple', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_payment_accounts: {
+        EUR: { bic: 'DEUTDEFF', bank_code: '37040044', foreign_account_number: '0532013000' },
+      },
+    })
+    expect(result.success).toBe(false)
   })
 
   it('accepts null when clearing the legacy SEK bank account mirror', () => {
@@ -2869,5 +2945,30 @@ describe('CreateSalaryLineItemSchema: derived-only item types', () => {
     ).toBe(true)
     expect(UpdateSalaryLineItemSchema.safeParse({ item_type: 'oresavrundning' }).success).toBe(false)
     expect(UpdateSalaryLineItemSchema.safeParse({ item_type: 'bonus' }).success).toBe(true)
+  })
+})
+
+describe('HouseworkTypeSchema (articles.housework_type)', () => {
+  it('stores a Skatteverket work-type code upper-cased', () => {
+    expect(HouseworkTypeSchema.parse('stad')).toBe('STAD')
+    expect(HouseworkTypeSchema.parse('BYGG')).toBe('BYGG')
+  })
+
+  it('accepts the bare kind ROT / RUT (deduction only, no arbetstyp pre-fill)', () => {
+    expect(HouseworkTypeSchema.parse('rut')).toBe('RUT')
+    expect(HouseworkTypeSchema.parse('ROT')).toBe('ROT')
+  })
+
+  it('treats empty string as clear and passes null/undefined through', () => {
+    expect(HouseworkTypeSchema.parse('')).toBeNull()
+    expect(HouseworkTypeSchema.parse('   ')).toBeNull()
+    expect(HouseworkTypeSchema.parse(null)).toBeNull()
+    expect(HouseworkTypeSchema.parse(undefined)).toBeUndefined()
+  })
+
+  it('rejects values the invoice editor could never interpret', () => {
+    for (const bad of ['1', '0', 'Ja', 'SNICKERI', 'RUT-städning']) {
+      expect(HouseworkTypeSchema.safeParse(bad).success).toBe(false)
+    }
   })
 })

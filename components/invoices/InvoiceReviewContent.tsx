@@ -47,6 +47,9 @@ interface InvoiceReviewContentProps {
   /** Mirrors `company_settings.vat_registered`. When false and the invoice carries
    *  no VAT, the moms row is suppressed to match the PDF (pdf-template.tsx:876). */
   vatRegistered?: boolean
+  /** Payment-link förval on this invoice: Stripe auto-link on send, a manually
+   *  pasted link, or none. Renders in the Förval summary line when set. */
+  paymentLink?: 'auto' | 'manual' | null
 }
 
 export function InvoiceReviewContent({
@@ -64,6 +67,7 @@ export function InvoiceReviewContent({
   numberPreview,
   oreRounding,
   vatRegistered,
+  paymentLink,
 }: InvoiceReviewContentProps) {
   const t = useTranslations('invoice_review')
   const rounding = getDisplayTotal({ total, currency }, { ore_rounding: oreRounding ?? true })
@@ -117,6 +121,27 @@ export function InvoiceReviewContent({
           <p className="font-medium">{dueDate ? formatDate(dueDate) : ''}</p>
         </div>
       </div>
+
+      {/* Applied förval: the collapsed defaults the invoice will carry
+          (currency, öresavrundning, payment-link state). One muted line so
+          the review states what the settings panel may have been hiding. */}
+      <p className="text-xs text-muted-foreground">
+        {[
+          t('forval_currency', { currency }),
+          currency === 'SEK'
+            ? (oreRounding ?? true)
+              ? t('forval_ore_on')
+              : t('forval_ore_off')
+            : null,
+          paymentLink === 'auto'
+            ? t('forval_link_auto')
+            : paymentLink === 'manual'
+              ? t('forval_link_manual')
+              : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+      </p>
 
       {/* Line items: table on desktop, cards on mobile */}
       <div className="hidden sm:block">

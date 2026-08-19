@@ -238,6 +238,49 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect(result.preview.vat_amount).toBe(250)
   })
 
+  it('resolves a foreign supplier by VAT number when the document carries no org number', async () => {
+    // The extractor leaves orgNumber null for non-Swedish entities by design,
+    // so momsregistreringsnumret is the only exact key an EU supplier has.
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-vat',
+        status: 'received',
+        extracted_data: {
+          ...baseExtracted,
+          supplier: {
+            name: 'Adobe Systems Software Ireland Ltd',
+            orgNumber: null,
+            vatNumber: 'IE6364992H',
+          },
+        },
+        matched_supplier_id: null,
+        created_supplier_invoice_id: null,
+        document_id: 'doc-vat',
+      },
+      supplierByOrg: null,
+      supplierByName: null,
+      supplierList: [
+        { id: 'other-supplier', name: 'Some GmbH', org_number: null, vat_number: 'DE123456789' },
+        {
+          id: 'adobe-supplier',
+          name: 'ADOBE SYSTEMS SOFTWARE IRELAND LTD',
+          org_number: null,
+          vat_number: 'IE6364992H',
+        },
+      ],
+      supplierRecord: { id: 'adobe-supplier', default_expense_account: null },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-vat', dry_run: true },
+      'company-1', 'user-1', supabase,
+    )) as { preview: { supplier_id: string; supplier_resolution: string; extracted_vat_number: string | null } }
+
+    expect(result.preview.supplier_id).toBe('adobe-supplier')
+    expect(result.preview.supplier_resolution).toBe('lookup_vat_number')
+    expect(result.preview.extracted_vat_number).toBe('IE6364992H')
+  })
+
   it('falls through to org_number lookup when no matched supplier', async () => {
     const supabase = makeMock({
       inbox: {
@@ -331,6 +374,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect(result.preview.unresolved_supplier).toEqual({
       extracted_name: 'Acme AB',
       extracted_org_number: '5566778899',
+      extracted_vat_number: null,
     })
     // Next hint prefills gnubok_create_supplier from the extraction.
     expect(result.next.tool).toBe('gnubok_create_supplier')

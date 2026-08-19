@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -39,9 +39,7 @@ export const GET = withCronContext('cron.booking_templates_sync', async (_reques
     })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   const result = await syncSystemPacks(supabase)
 

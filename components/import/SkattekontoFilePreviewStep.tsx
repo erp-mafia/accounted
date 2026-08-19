@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/table'
 import { ArrowLeft, ArrowRight, AlertTriangle, Calendar, FileText, Scale } from 'lucide-react'
 import { formatCurrency, cn } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
 
 interface SkattekontoFilePreviewStepProps {
@@ -40,13 +41,33 @@ export default function SkattekontoFilePreviewStep({
 }: SkattekontoFilePreviewStepProps) {
   const t = useTranslations('import')
   const [mismatchConfirmed, setMismatchConfirmed] = useState(false)
-  const { rows, stats, issues, date_from, date_to, closing_saldo } = parseResult
+  const [sumGapConfirmed, setSumGapConfirmed] = useState(false)
+  const {
+    rows,
+    stats,
+    issues,
+    date_from,
+    date_to,
+    opening_saldo,
+    closing_saldo,
+    events_sum,
+    sum_difference,
+    sum_valid,
+  } = parseResult
 
   const duplicateSet = new Set(duplicateIndexes)
   const promotionSet = new Set(promotionIndexes)
   const newCount = rows.length - duplicateIndexes.length
   const warnings = issues.filter((i) => i.severity !== 'error')
-  const importBlocked = orgNumberMismatch && !mismatchConfirmed
+  // A statement that does not sum (truncated, filtered, unreadable rows) is
+  // a confirm gate, not a block: nothing is booked at import and every event
+  // is reviewed on the skattekonto page, so importing what IS in the file is
+  // safe. The gate exists so the user knows the picture is incomplete.
+  const sumGap = sum_valid === false
+  const sumGapHasFigures =
+    opening_saldo !== null && closing_saldo !== null && events_sum !== null && sum_difference !== null
+  const importBlocked =
+    (orgNumberMismatch && !mismatchConfirmed) || (sumGap && !sumGapConfirmed)
 
   return (
     <div className="space-y-6">
@@ -119,11 +140,60 @@ export default function SkattekontoFilePreviewStep({
         </Card>
       )}
 
+      {sumGap && (
+        <Card className="border-destructive/40">
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-4 w-4" />
+              {t('skattekonto_sum_gap_title')}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            {sumGapHasFigures ? (
+              <dl className="grid max-w-sm grid-cols-[auto_1fr] gap-x-6 gap-y-1 tabular-nums">
+                <dt className="text-muted-foreground">{t('skattekonto_sum_gap_opening')}</dt>
+                <dd className="text-right">{formatCurrency(opening_saldo)}</dd>
+                <dt className="text-muted-foreground">{t('skattekonto_sum_gap_events')}</dt>
+                <dd className="text-right">{formatCurrency(roundOre(events_sum - opening_saldo))}</dd>
+                <dt className="text-muted-foreground">{t('skattekonto_sum_gap_expected')}</dt>
+                <dd className="text-right">{formatCurrency(events_sum)}</dd>
+                <dt className="text-muted-foreground">{t('skattekonto_sum_gap_closing')}</dt>
+                <dd className="text-right">{formatCurrency(closing_saldo)}</dd>
+                <dt className="font-medium">{t('skattekonto_sum_gap_difference')}</dt>
+                <dd className="text-right font-medium">{formatCurrency(sum_difference)}</dd>
+              </dl>
+            ) : (
+              <p className="text-muted-foreground">{t('skattekonto_sum_gap_no_saldo')}</p>
+            )}
+            <p className="text-muted-foreground">
+              {stats.unreadable_amount_rows > 0
+                ? t('skattekonto_sum_gap_body_unreadable', { count: stats.unreadable_amount_rows })
+                : t('skattekonto_sum_gap_body')}
+            </p>
+            <label className="flex cursor-pointer items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 rounded-sm border-border"
+                checked={sumGapConfirmed}
+                onChange={(e) => setSumGapConfirmed(e.target.checked)}
+              />
+              <span>{t('skattekonto_sum_gap_confirm')}</span>
+            </label>
+          </CardContent>
+        </Card>
+      )}
+
       {duplicateIndexes.length > 0 && (
         <p className="text-sm text-muted-foreground">
           {t('skattekonto_duplicates_note', { count: duplicateIndexes.length })}
         </p>
       )}
+
+      {/* What happens after import: nothing is booked automatically, and an
+          event that already has a 1630 verifikat (a deposit booked from the
+          bank side) is offered as a link, not a second booking. Answers the
+          "some of these are already booked" question before the click. */}
+      <p className="text-sm text-muted-foreground">{t('skattekonto_after_import_note')}</p>
 
       {warnings.length > 0 && (
         <Card>

@@ -1,6 +1,6 @@
 import type { Invoice, InvoiceItem } from '@/types'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
-import { deductionSekConverter, type DeductionType } from './rot-rut-rules'
+import { deductionSekConverter, SCHABLON_WORK_TYPES, type DeductionType } from './rot-rut-rules'
 
 /**
  * Begäran om utbetalning: rot & rut (Skatteverkets husavdragstjänst).
@@ -44,6 +44,10 @@ const KOMPONENT_NS = 'http://xmls.skatteverket.se/se/skatteverket/ht/komponent/b
  * is also the emission order inside UtfortArbete. `schablon` services are
  * reported as <Utfort>true</Utfort>: no hours, no material.
  */
+// `schablon` is derived from SCHABLON_WORK_TYPES (rot-rut-rules.ts), the one
+// place that decides which services report utförd/ej utförd without hours:
+// the invoice validator and this generator must never disagree on it.
+const schablon = (code: string): boolean => SCHABLON_WORK_TYPES.includes(code)
 const WORK_TYPE_ELEMENTS: Record<DeductionType, ReadonlyArray<{
   code: string
   element: string
@@ -70,8 +74,8 @@ const WORK_TYPE_ELEMENTS: Record<DeductionType, ReadonlyArray<{
     { code: 'REPARATION', element: 'ReparationAvVitvaror' },
     { code: 'MOBLERING', element: 'Moblering' },
     { code: 'TILLSYN', element: 'TillsynAvBostad' },
-    { code: 'TRANSPORT', element: 'TransportTillForsaljning', schablon: true },
-    { code: 'TVATT', element: 'TvattVidTvattinrattning', schablon: true },
+    { code: 'TRANSPORT', element: 'TransportTillForsaljning', schablon: schablon('TRANSPORT') },
+    { code: 'TVATT', element: 'TvattVidTvattinrattning', schablon: schablon('TVATT') },
   ],
 }
 

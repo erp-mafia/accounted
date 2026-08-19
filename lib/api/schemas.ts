@@ -13,8 +13,16 @@ import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import {
+  DEDUCTION_LINE_ERRORS,
+  HOUSEWORK_TYPE_VALUES,
+  SCHABLON_WORK_TYPES,
+  deductionTypeForWorkType,
+  normalizeHouseworkType,
+} from '@/lib/invoices/rot-rut-rules'
+import { NON_IBAN_CURRENCIES } from '@/lib/invoices/payment-accounts'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
-import type { AuditAction } from '@/types'
+import type { AuditAction, Currency } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
 // ============================================================
@@ -468,7 +476,35 @@ export const CreateInvoiceItemSchema = z
 
 const optionalIsoDate = isoDate.or(z.literal('')).transform(v => v || undefined).optional()
 
-export const CreateInvoiceSchema = z.object({
+/**
+ * ROT/RUT claim completeness (HUSFL: art av arbete + antal arbetstimmar) at
+ * the invoice level, where document_type is known: only real invoices book a
+ * deduction (buildInvoiceWriteData nulls the fields for proformas, delivery
+ * notes and quotes), and free-text rows carry no claim. Field-level paths so
+ * the editor can point at the row; validateInvoice re-runs the same rules for
+ * callers that bypass this schema.
+ */
+function refineRotRutLineCompleteness(
+  data: { document_type?: string; items: Array<{ line_type?: string; deduction_type?: 'rot' | 'rut' | null; work_type?: string | null; labor_hours?: number | null }> },
+  ctx: z.RefinementCtx,
+): void {
+  if (data.document_type && data.document_type !== 'invoice') return
+  data.items.forEach((item, index) => {
+    if (!item.deduction_type || item.line_type === 'text') return
+    const workType = item.work_type?.trim() || null
+    if (!workType) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'work_type'], message: DEDUCTION_LINE_ERRORS.workTypeMissing })
+    } else if (deductionTypeForWorkType(workType) !== item.deduction_type) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'work_type'], message: DEDUCTION_LINE_ERRORS.workTypeMismatch })
+    }
+    const isSchablon = workType != null && SCHABLON_WORK_TYPES.includes(workType)
+    if (!isSchablon && !(typeof item.labor_hours === 'number' && item.labor_hours > 0)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'labor_hours'], message: DEDUCTION_LINE_ERRORS.hoursMissing })
+    }
+  })
+}
+
+const CreateInvoiceBaseSchema = z.object({
   customer_id: uuid,
   invoice_date: isoDate,
   due_date: isoDate,
@@ -562,11 +598,15 @@ export const CreateInvoiceSchema = z.object({
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
+export const CreateInvoiceSchema = CreateInvoiceBaseSchema.superRefine(refineRotRutLineCompleteness)
+
 // Update (edit) an existing DRAFT invoice in place. Same shape as create minus
 // `save_as_draft`: editing never (re)creates a draft or allocates a number, it
 // only rewrites the draft's header + line items. The PATCH route guards that the
 // target is still a draft (status='draft', no journal entry, not self-billed).
-export const UpdateInvoiceSchema = CreateInvoiceSchema.omit({ save_as_draft: true })
+export const UpdateInvoiceSchema = CreateInvoiceBaseSchema
+  .omit({ save_as_draft: true })
+  .superRefine(refineRotRutLineCompleteness)
 
 export const CreateCreditNoteSchema = z.object({
   credited_invoice_id: uuid,
@@ -637,6 +677,32 @@ export const RotRutBeslutFileSchema = z.object({
 
 export const ArticleTypeSchema = z.enum(['vara', 'tjanst'])
 
+/**
+ * articles.housework_type: a Skatteverket arbetstypskod (BYGG, EL, ..., STAD,
+ * TRADGARD, ...) or the bare kind ROT / RUT (deduction only, no arbetstyp
+ * pre-fill). Case-insensitive, stored upper-case; '' clears to null. The
+ * invoice editor derives a line's skattereduktion from this value, so any
+ * other string is a silently dead flag and is rejected here.
+ */
+export const HouseworkTypeSchema = z
+  .string()
+  .max(64)
+  .nullable()
+  .optional()
+  .transform((v, ctx) => {
+    if (v == null) return v
+    if (v.trim() === '') return null
+    const normalized = normalizeHouseworkType(v)
+    if (!normalized) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Ogiltig ROT/RUT-arbetstyp. Tillåtna värden: ${HOUSEWORK_TYPE_VALUES.join(', ')}`,
+      })
+      return z.NEVER
+    }
+    return normalized
+  })
+
 export const CreateArticleSchema = z.object({
   name: z.string().min(1, 'Article name is required').max(200),
   type: ArticleTypeSchema.optional(),
@@ -655,7 +721,7 @@ export const CreateArticleSchema = z.object({
   cost_price: nonNegativeAmount.nullable().optional(),
   ean: z.string().max(32).nullable().optional(),
   // ROT/RUT arbetstyp; only meaningful for type === 'tjanst'.
-  housework_type: z.string().max(64).nullable().optional(),
+  housework_type: HouseworkTypeSchema,
   name_en: z.string().max(200).nullable().optional(),
   notes: z.string().max(2000).nullable().optional(),
   // Manual article number; omit to auto-generate via generate_article_number.
@@ -1096,6 +1162,16 @@ export const CreateSupplierInvoiceSchema = z.object({
   // items[].dimensions merge over it per expense line.
   default_dimensions: DimensionsBagSchema.optional(),
   items: z.array(CreateSupplierInvoiceItemSchema).min(1, 'At least one item is required'),
+})
+
+// Pre-submit duplicate lookup for the supplier-invoice editor. Mirrors the
+// partial unique index idx_supplier_invoices_company_supplier_number on
+// (company_id, supplier_id, supplier_invoice_number), which excludes
+// credited/reversed invoices, so the advisory never warns on the re-issue
+// pattern the index was widened to allow.
+export const SupplierInvoiceExistsQuerySchema = z.object({
+  supplier_id: uuid,
+  number: z.string().min(1, 'number is required'),
 })
 
 export const MarkSupplierInvoicePaidSchema = z.object({
@@ -1862,19 +1938,42 @@ const InvoicePaymentAccountSchema = z.object({
     .nullable()
     .optional()
     .or(z.literal('')),
+  // Foreign non-IBAN routing (USD ABA routing number, GBP sort code): digits
+  // with optional dashes, 6-9 digits after stripping (ABA = 9, sort code = 6).
+  bank_code: z.string()
+    .transform((value) => value.replace(/\s/g, ''))
+    .pipe(z.string().regex(/^\d{2,3}(-?\d{2,3}){1,2}$|^\d{6,9}$/, 'Ogiltig bankkod'))
+    .nullable()
+    .optional()
+    .or(z.literal('')),
+  // Foreign account number: alphanumeric, distinct from the Swedish
+  // clearing+account pair (account_number is digits-only 6-12).
+  foreign_account_number: z.string()
+    .transform((value) => value.replace(/\s/g, ''))
+    .pipe(z.string().regex(/^[A-Za-z0-9-]{4,34}$/, 'Ogiltigt kontonummer'))
+    .nullable()
+    .optional()
+    .or(z.literal('')),
 })
 
 const InvoicePaymentAccountsSchema = z
   .partialRecord(CurrencySchema, InvoicePaymentAccountSchema)
   .superRefine((accounts, ctx) => {
     for (const [currency, account] of Object.entries(accounts)) {
-      if (currency !== 'SEK' && account && !account.iban) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [currency, 'iban'],
-          message: `IBAN krävs för betalningskonto i ${currency}`,
-        })
-      }
+      if (currency === 'SEK' || !account) continue
+      if (account.iban) continue
+      // Non-IBAN banking systems (US, UK): bank code + account number + BIC
+      // identifies the account. Requiring an IBAN there forced users to paste
+      // one from another currency, which then printed on the invoice.
+      const nonIban = NON_IBAN_CURRENCIES.includes(currency as Currency)
+      if (nonIban && account.bank_code && account.foreign_account_number && account.bic) continue
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [currency, 'iban'],
+        message: nonIban
+          ? `Ange IBAN eller bankkod, kontonummer och BIC/SWIFT för betalningskontot i ${currency}`
+          : `IBAN krävs för betalningskonto i ${currency}`,
+      })
     }
   })
 

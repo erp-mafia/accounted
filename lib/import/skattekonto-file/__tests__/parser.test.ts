@@ -98,7 +98,12 @@ describe('parseSkattekontoFile: modern export', () => {
 
   it('parses all transaction rows', () => {
     expect(result.rows).toHaveLength(9)
-    expect(result.stats).toEqual({ total_rows: 9, parsed_rows: 9, skipped_rows: 0 })
+    expect(result.stats).toEqual({
+      total_rows: 9,
+      parsed_rows: 9,
+      skipped_rows: 0,
+      unreadable_amount_rows: 0,
+    })
     expect(result.variant).toBe('csv')
   })
 
@@ -126,6 +131,8 @@ describe('parseSkattekontoFile: modern export', () => {
 
   it('validates the sum invariant', () => {
     expect(result.sum_valid).toBe(true)
+    expect(result.events_sum).toBe(35087)
+    expect(result.sum_difference).toBe(0)
     expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0)
   })
 
@@ -170,14 +177,92 @@ describe('parseSkattekontoFile: robustness', () => {
     expect(result.issues.some((i) => i.severity === 'error')).toBe(true)
   })
 
-  it('flags a sum mismatch as an error', () => {
+  it('flags a sum mismatch as an error and reports the gap', () => {
     const truncated = MODERN_CSV.replace(
       '"2026-07-28";"Inbetalning bokförd 260727";"35 000"\r\n',
       '',
     )
     const result = parseSkattekontoFile(truncated, MODERN_FILENAME)
     expect(result.sum_valid).toBe(false)
+    expect(result.events_sum).toBe(87)
+    expect(result.sum_difference).toBe(35000)
+    expect(result.rows).toHaveLength(8)
     expect(result.issues.some((i) => i.severity === 'error')).toBe(true)
+  })
+
+  it('counts dated rows with unreadable amounts as missing from the sum', () => {
+    const garbledRow = MODERN_CSV.replace(
+      '"2026-07-28";"Inbetalning bokförd 260727";"35 000"',
+      '"2026-07-28";"Inbetalning bokförd 260727";"trasigt"',
+    )
+    const result = parseSkattekontoFile(garbledRow, MODERN_FILENAME)
+    expect(result.sum_valid).toBe(false)
+    expect(result.stats.unreadable_amount_rows).toBe(1)
+    expect(result.stats.skipped_rows).toBe(1)
+    const error = result.issues.find((i) => i.severity === 'error')
+    expect(error?.message).toContain('oläsbart belopp')
+  })
+
+  it('reads a typographic minus and an explicit plus sign', () => {
+    const typographic = [
+      '"2026-06-06";"Kostnadsränta";"−10"',
+      '"2026-06-07";"Kostnadsränta";"–10"',
+      '"2026-07-11";"Inbetalning bokförd 260710";"+24 000"',
+    ].join('\n')
+    const result = parseSkattekontoFile(typographic, 'export.csv')
+    expect(result.rows.map((r) => r.belopp)).toEqual([-10, -10, 24000])
+    expect(result.stats.skipped_rows).toBe(0)
+  })
+
+  it('reads marker saldo from a trailing running-saldo column', () => {
+    const withSaldoColumn = [
+      '"Testbolaget AB";"556677-8899";"";""',
+      '"";"Ingående saldo 2026-05-03";"";"-500"',
+      '"2026-06-06";"Kostnadsränta";"-10";"-510"',
+      '"2026-07-11";"Inbetalning bokförd 260710";"24 000";"23 490"',
+      '"";"Utgående saldo 2026-08-01";"";"23 490"',
+    ].join('\r\n')
+    const result = parseSkattekontoFile(withSaldoColumn, 'export.csv')
+    expect(result.opening_saldo).toBe(-500)
+    expect(result.closing_saldo).toBe(23490)
+    expect(result.rows.map((r) => r.belopp)).toEqual([-10, 24000])
+    expect(result.sum_valid).toBe(true)
+  })
+
+  it('checks a multi-section statement from the earliest opening to the latest closing', () => {
+    const multiYear = [
+      '"Testbolaget AB";"556677-8899";""',
+      '"";"Ingående saldo 2025-01-01";"100"',
+      '"2025-03-12";"Debiterad preliminärskatt";"-8 000"',
+      '"2025-03-14";"Inbetalning bokförd 250313";"8 000"',
+      '"";"Utgående saldo 2025-12-31";"100"',
+      '"";"Ingående saldo 2026-01-01";"100"',
+      '"2026-02-12";"Debiterad preliminärskatt";"-9 000"',
+      '"2026-02-13";"Inbetalning bokförd 260212";"9 500"',
+      '"";"Utgående saldo 2026-08-01";"600"',
+    ].join('\r\n')
+    const result = parseSkattekontoFile(multiYear, 'export.csv')
+    expect(result.opening_saldo).toBe(100)
+    expect(result.closing_saldo).toBe(600)
+    expect(result.rows).toHaveLength(4)
+    expect(result.sum_valid).toBe(true)
+  })
+
+  it('orders markers by their own date when the file lists newest first', () => {
+    const newestFirst = [
+      '"";"Utgående saldo 2026-08-01";"600"',
+      '"2026-02-13";"Inbetalning bokförd 260212";"9 500"',
+      '"2026-02-12";"Debiterad preliminärskatt";"-9 000"',
+      '"";"Ingående saldo 2026-01-01";"100"',
+      '"";"Utgående saldo 2025-12-31";"100"',
+      '"2025-03-14";"Inbetalning bokförd 250313";"8 000"',
+      '"2025-03-12";"Debiterad preliminärskatt";"-8 000"',
+      '"";"Ingående saldo 2025-01-01";"100"',
+    ].join('\r\n')
+    const result = parseSkattekontoFile(newestFirst, 'export.csv')
+    expect(result.opening_saldo).toBe(100)
+    expect(result.closing_saldo).toBe(600)
+    expect(result.sum_valid).toBe(true)
   })
 
   it('skips malformed rows with warnings', () => {

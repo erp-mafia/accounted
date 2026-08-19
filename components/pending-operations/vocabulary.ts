@@ -41,6 +41,7 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   // Documents & links
   attach_document_to_transaction: 'type_attach_document_to_transaction',
   link_document_to_voucher: 'type_link_document_to_voucher',
+  link_documents_to_vouchers: 'type_link_documents_to_vouchers',
   link_invoice_voucher: 'type_link_invoice_voucher',
   link_supplier_invoice_voucher: 'type_link_supplier_invoice_voucher',
   link_transaction_journal_entry: 'type_link_transaction_journal_entry',

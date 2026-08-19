@@ -39,11 +39,14 @@ function findTool(name: string) {
 
 function makeQueryBuilder(result: { data: unknown; error: unknown }) {
   const builder: Record<string, unknown> = {}
-  for (const method of ['select', 'eq', 'limit', 'insert']) {
+  // ilike/not/order/range serve the shared supplier matcher
+  // (lib/suppliers/match-supplier.ts): name lookup and the vat_number scan.
+  for (const method of ['select', 'eq', 'limit', 'insert', 'ilike', 'not', 'order']) {
     builder[method] = vi.fn().mockReturnValue(builder)
   }
   builder.maybeSingle = vi.fn().mockResolvedValue(result)
   builder.single = vi.fn().mockResolvedValue(result)
+  builder.range = vi.fn().mockResolvedValue({ data: [], error: null })
   return builder
 }
 

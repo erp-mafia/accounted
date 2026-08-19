@@ -13,6 +13,7 @@ import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { buildSandboxCustomers } from './customers'
 import { buildSandboxPendingOperations } from './pending-operations'
 import { buildSandboxArticles } from './articles'
+import { buildSandboxVatDeadline } from './vat-deadline'
 import {
   buildSandboxLedgerHistory,
   SANDBOX_LEDGER_ACCOUNT_NUMBERS,
@@ -293,6 +294,7 @@ export async function POST(request: Request) {
           document_type: 'invoice',
           paid_at: toDateStr(fifteenDaysAgo),
           paid_amount: 18750,
+          remaining_amount: 0,
         },
         {
           user_id: userId,
@@ -305,6 +307,8 @@ export async function POST(request: Request) {
           subtotal: 20000,
           vat_amount: 0,
           total: 20000,
+          remaining_amount: 20000,
+          paid_amount: 0,
           vat_treatment: 'reverse_charge',
           vat_rate: 0,
           reverse_charge_text: 'Reverse charge: buyer is liable for VAT',
@@ -321,6 +325,8 @@ export async function POST(request: Request) {
           subtotal: 5000,
           vat_amount: 1250,
           total: 6250,
+          remaining_amount: 6250,
+          paid_amount: 0,
           vat_treatment: 'standard_25',
           vat_rate: 25,
           moms_ruta: '10',
@@ -337,6 +343,10 @@ export async function POST(request: Request) {
           subtotal: 8000,
           vat_amount: 2000,
           total: 10000,
+          // PostgREST normalises a bulk insert to the union of keys: every row in
+          // this batch carries both columns so none arrives as NULL.
+          remaining_amount: 10000,
+          paid_amount: 0,
           vat_treatment: 'standard_25',
           vat_rate: 25,
           moms_ruta: '10',
@@ -814,9 +824,7 @@ export async function POST(request: Request) {
     )
 
     // 12. Create deadlines
-    const momsDeadline = new Date(today)
-    momsDeadline.setMonth(momsDeadline.getMonth() + 2)
-    momsDeadline.setDate(12)
+    const momsDeadline = buildSandboxVatDeadline(today)
 
     const { error: dlError } = await supabase
       .from('deadlines')
@@ -824,15 +832,15 @@ export async function POST(request: Request) {
         {
           user_id: userId,
           company_id: companyId,
-          title: `Momsdeklaration Q1 ${currentYear}`,
-          due_date: toDateStr(momsDeadline),
+          title: momsDeadline.title,
+          due_date: momsDeadline.dueDate,
           deadline_type: 'tax',
           priority: 'important',
           // Current generator types: the bare 'moms'/'inkomstdeklaration'
           // types were retired and seeding them recreates legacy rows the
           // cleanup migration removed.
           tax_deadline_type: 'moms_quarterly',
-          tax_period: `${currentYear}-Q1`,
+          tax_period: momsDeadline.period,
           source: 'system',
           status: 'upcoming',
           linked_report_type: 'vat',

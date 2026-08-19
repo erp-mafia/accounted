@@ -1868,3 +1868,79 @@ describe('createInvoiceCashEntry: ROT/RUT-avdrag', () => {
     expect(totalDebit).toBe(totalCredit)
   })
 })
+
+describe('createInvoicePaymentJournalEntry: settles the outstanding amount, not the total', () => {
+  beforeEach(() => {
+    mockedCreateEntry.mockClear()
+  })
+
+  it('ROT/RUT invoice without paymentAmount clears 1510 by total minus the deduction (1513 keeps the rest)', async () => {
+    // 10 000 + 25 % = 12 500; ROT 30 % of labor incl. moms = 3 750 on 1513 at
+    // issue, so 1510 only ever carried 8 750. The no-lines mark-paid path used
+    // to book 12 500 here: 1510 went to -3 750 and 1930 was overstated.
+    const invoice = makeInvoice({
+      subtotal: 10000,
+      vat_amount: 2500,
+      total: 12500,
+      deduction_total: 3750,
+      paid_amount: 0,
+      remaining_amount: 8750,
+    } as Partial<Invoice>)
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const bank = input.lines.find((l) => l.account_number === '1930')!
+    const ar = input.lines.find((l) => l.account_number === '1510')!
+    expect(bank.debit_amount).toBe(8750)
+    expect(ar.credit_amount).toBe(8750)
+    expect(input.description).toMatch(/^Inbetalning kundfaktura/)
+  })
+
+  it('previously part-paid invoice without paymentAmount clears only the remainder', async () => {
+    const invoice = makeInvoice({
+      total: 1250,
+      paid_amount: 500,
+      remaining_amount: 750,
+    } as Partial<Invoice>)
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '1930')!.debit_amount).toBe(750)
+    expect(input.lines.find((l) => l.account_number === '1510')!.credit_amount).toBe(750)
+  })
+
+  it('remaining_amount left at the DEFAULT 0 (import / seed paths) is treated as unmaintained', async () => {
+    const invoice = makeInvoice({
+      total: 12500,
+      deduction_total: 3750,
+      paid_amount: null,
+      remaining_amount: 0,
+    } as Partial<Invoice>)
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '1510')!.credit_amount).toBe(8750)
+  })
+
+  it('legacy row without remaining_amount derives it from total minus paid_amount', async () => {
+    const invoice = makeInvoice({ total: 1250, paid_amount: 250 } as Partial<Invoice>)
+    ;(invoice as unknown as { remaining_amount?: number }).remaining_amount = undefined
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '1510')!.credit_amount).toBe(1000)
+  })
+
+  it('fully outstanding invoice still books the full total (unchanged path)', async () => {
+    const invoice = makeInvoice({ total: 1250, paid_amount: 0, remaining_amount: 1250 } as Partial<Invoice>)
+
+    await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-15')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '1510')!.credit_amount).toBe(1250)
+  })
+})

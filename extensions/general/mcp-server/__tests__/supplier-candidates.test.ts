@@ -97,6 +97,28 @@ describe('findSupplierCandidates', () => {
     expect(c.every((x, i, arr) => i === 0 || arr[i - 1].score >= x.score)).toBe(true)
   })
 
+  it('matches a foreign supplier on VAT number when no org number exists', () => {
+    const withAdobe = [
+      ...suppliers,
+      {
+        id: 'sup-adobe',
+        name: 'ADOBE SYSTEMS SOFTWARE IRELAND LTD',
+        org_number: null,
+        vat_number: 'IE6364992H',
+      },
+    ]
+    const c = findSupplierCandidates(withAdobe, 'Adobe Ireland', null, 'IE 6364992 H')
+    expect(c[0]).toMatchObject({ supplier_id: 'sup-adobe', score: 1, matched_on: 'vat_number' })
+  })
+
+  it('does not match a VAT number against a different country', () => {
+    const withDe = [
+      ...suppliers,
+      { id: 'sup-de', name: 'Some GmbH', org_number: null, vat_number: 'DE6364992H' },
+    ]
+    expect(findSupplierCandidates(withDe, null, null, 'IE6364992H')).toEqual([])
+  })
+
   it('returns empty for no extracted signal', () => {
     expect(findSupplierCandidates(suppliers, null, null)).toEqual([])
   })

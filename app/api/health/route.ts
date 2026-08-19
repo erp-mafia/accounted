@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { createLogger } from '@/lib/logger'
 
@@ -79,7 +79,7 @@ async function runHealthCheck(): Promise<CheckResult> {
   }
 
   try {
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
+    const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
     const { error } = await supabase
       .from('fiscal_periods')
       .select('id', { count: 'exact', head: true })

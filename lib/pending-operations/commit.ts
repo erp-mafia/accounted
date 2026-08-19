@@ -23,6 +23,7 @@ import {
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import {
   normalizeVatRateToDecimal,
@@ -35,6 +36,8 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { cashPartialBlockReason, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
@@ -344,6 +347,13 @@ async function commitCreateCustomer(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
+  // Same 32-char invariant the web/v1 create routes and commitUpdateCustomer
+  // enforce; MCP hosts don't reliably enforce inputSchema maxLength.
+  const customerNumber = params.customer_number
+  if (customerNumber != null && (typeof customerNumber !== 'string' || customerNumber.length > 32)) {
+    return { error: 'customer_number must be a string of at most 32 characters', status: 400 }
+  }
+
   const { data, error } = await supabase
     .from('customers')
     .insert({
@@ -351,6 +361,7 @@ async function commitCreateCustomer(
       company_id: companyId,
       name: params.name as string,
       customer_type: params.customer_type as string,
+      customer_number: customerNumber || null,
       email: (params.email as string) || null,
       org_number: (params.org_number as string) || null,
       vat_number: (params.vat_number as string) || null,
@@ -1670,6 +1681,11 @@ async function commitCreateInvoice(
       vat_amount_sek: vatAmountSek,
       total,
       total_sek: totalSek,
+      // Fresh unpaid receivable: remaining_amount is what every payment
+      // surface reads as the open balance; leaving the NOT NULL DEFAULT 0
+      // made every agent-created invoice look settled.
+      remaining_amount: total,
+      paid_amount: 0,
       vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
       vat_rate: isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate),
       moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
@@ -2609,13 +2625,76 @@ async function commitMatchTransactionInvoice(
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
 
+  // FX resolution: parity with the dashboard and v1 match routes. paidAmount
+  // MUST be denominated in the INVOICE's currency (the unit of
+  // invoices.paid_amount / remaining_amount and invoice_payments.amount).
+  // This path previously fed the raw bank amount straight in, which (a)
+  // rejected exact whole-krona settlements of öre-carrying invoices and (b)
+  // would corrupt the column units on a cross-currency match.
+  const txIsForeign = !!transaction.currency && transaction.currency !== 'SEK'
+  if (
+    txIsForeign &&
+    transaction.amount_sek == null &&
+    !(transaction.exchange_rate != null && transaction.exchange_rate > 0)
+  ) {
+    return {
+      error:
+        getErrorEntry('MATCH_INVOICE_TX_FX_RATE_MISSING')?.message_sv ??
+        'Transaktionen saknar valutakurs och SEK-belopp.',
+      status: 400,
+    }
+  }
+  const txAbsSek =
+    Math.round(
+      resolveSekAmount(
+        Math.abs(transaction.amount),
+        transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
+        transaction.currency,
+        transaction.exchange_rate,
+      ) * 100,
+    ) / 100
+
+  let fx: { required: false } | { required: true; rate: number; paidInInvoiceCurrency: number } = {
+    required: false,
+  }
+  if (transaction.currency !== invoice.currency) {
+    let rate: number | null = null
+    try {
+      const rateInfo = await fetchExchangeRate(
+        invoice.currency as Currency,
+        new Date(transaction.date),
+        supabase,
+      )
+      if (rateInfo && rateInfo.rate > 0) rate = rateInfo.rate
+    } catch {
+      rate = null
+    }
+    if (rate == null) {
+      return {
+        error:
+          getErrorEntry('MATCH_INVOICE_FX_RATE_UNAVAILABLE')?.message_sv ??
+          'Ingen valutakurs tillgänglig för betalningsdatumet.',
+        status: 400,
+      }
+    }
+    fx = {
+      required: true,
+      rate,
+      paidInInvoiceCurrency: Math.round((txAbsSek / rate) * 10000) / 10000,
+    }
+  }
+  const paidAmount = fx.required ? fx.paidInInvoiceCurrency : transaction.amount
+
   // Overshoot guard + paid/remaining math: shared with the dashboard and v1
   // routes via planInvoicePayment. This agent/MCP path previously had NO guard,
   // so a 1500 payment on a 1000 invoice was silently accepted (paid_amount >
-  // total, AR over-credited). Runs BEFORE the storno + JE below, so a rejected
-  // match leaves the transaction untouched and never burns a voucher number.
-  const paidAmount = transaction.amount
-  const payment = planInvoicePayment(invoice, paidAmount)
+  // total, AR over-credited). Pure-SEK settlements absorb sub-krona
+  // öresavrundning (booked to 3740 by buildInvoicePaymentClearingLines) so a
+  // whole-krona payment settles in full, exactly as on the other two routes.
+  // Runs BEFORE the storno + JE below, so a rejected match leaves the
+  // transaction untouched and never burns a voucher number.
+  const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
+  const payment = planInvoicePayment(invoice, paidAmount, { absorbOreRounding: pureSek })
   if (!payment.ok) {
     return {
       error:
@@ -2690,11 +2769,60 @@ async function commitMatchTransactionInvoice(
       )
       journalEntryId = je?.id ?? null
     } else {
-      const je = await createInvoicePaymentJournalEntry(
-        supabase, companyId, userId, invoice as Invoice, transaction.date, undefined, invoice.customer?.name, paidAmount,
-        paymentAccount,
-      )
-      journalEntryId = je?.id ?? null
+      // Clearing entry against 1510, built by the SAME shared helper the
+      // dashboard and v1 routes use, so all three produce byte-identical
+      // lines: bank leg = the actual SEK that hit the account, 1510 credited
+      // at the invoice's booking rate, and a 3960/7960 FX-diff line (or a
+      // 3740 öresavrundning line on pure SEK) making the verifikat balance.
+      // The old createInvoicePaymentJournalEntry(paidAmount) shape could not
+      // carry either residual, so öre-settled and cross-currency matches
+      // left 1510 unclean. Failure semantics preserved: no fiscal period
+      // still soft-fails to journalEntryId = null like the old builder did.
+      const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, transaction.date)
+      if (!fiscalPeriodId) {
+        log.warn('No open fiscal period found for payment date:', transaction.date)
+      } else {
+        const desc = invoice.customer?.name
+          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
+          : `Inbetalning kundfaktura ${invoice.invoice_number}`
+        const { lines: clearingLines } = buildInvoicePaymentClearingLines(
+          {
+            amount: transaction.amount,
+            amount_sek: transaction.amount_sek ?? null,
+            currency: transaction.currency,
+            exchange_rate: transaction.exchange_rate ?? null,
+          },
+          {
+            currency: invoice.currency,
+            exchange_rate: invoice.exchange_rate ?? null,
+            remaining_amount: invoice.remaining_amount ?? null,
+            total: invoice.total,
+            paid_amount: invoice.paid_amount ?? null,
+          },
+          desc,
+          fx.required ? fx.paidInInvoiceCurrency : undefined,
+          paymentAccount,
+        )
+        // Re-propagate the invoice's default dimension bag onto every leg,
+        // including the FX result lines, so a project's kursvinst/kursförlust
+        // stays inside the project P&L: the shared line-builder is
+        // dimension-agnostic.
+        const defaultDimensions = coerceDimensionsBag(
+          (invoice as { default_dimensions?: unknown }).default_dimensions,
+        )
+        if (defaultDimensions) {
+          for (const line of clearingLines) line.dimensions = { ...defaultDimensions }
+        }
+        const je = await createJournalEntry(supabase, companyId, userId, {
+          fiscal_period_id: fiscalPeriodId,
+          entry_date: transaction.date,
+          description: desc,
+          source_type: 'invoice_paid',
+          source_id: invoice.id,
+          lines: clearingLines,
+        })
+        journalEntryId = je?.id ?? null
+      }
     }
   } catch (err) {
     // Recoverable: the dispatcher releases the op back to 'pending' and this
@@ -2755,7 +2883,7 @@ async function commitMatchTransactionInvoice(
     payment_date: transaction.date,
     amount: paidAmount,
     currency: invoice.currency,
-    exchange_rate: invoice.exchange_rate,
+    exchange_rate: fx.required ? fx.rate : invoice.exchange_rate,
     journal_entry_id: journalEntryId,
     transaction_id: transactionId,
     notes: null,
@@ -3181,6 +3309,74 @@ async function commitAttachDocumentToTransaction(
   }
 }
 
+/**
+ * Shared precondition for linking a document to a verifikat, used by BOTH the
+ * single and the bulk executor. It must live in one place: a bulk call has to
+ * be exactly N single calls, and a second copy of a legally motivated guard is
+ * a copy that silently keeps the old behaviour when the first one is hardened.
+ *
+ * Two checks: the document exists in THIS company, and the WORM rule that a
+ * document already belonging to a POSTED verifikat cannot be moved to another
+ * one (it is räkenskapsinformation under BFL 5 kap 6 § once the verifikat is
+ * posted). Re-linking to the SAME verifikat is allowed: that is a no-op or a
+ * line-level refinement, not a move.
+ */
+type DocumentLinkPrecheck =
+  | { ok: true }
+  | { ok: false; reason: string; status: number }
+
+async function precheckDocumentLink(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentId: string,
+  journalEntryId: string
+): Promise<DocumentLinkPrecheck> {
+  const { data: doc, error: docError } = await supabase
+    .from('document_attachments')
+    .select('id, file_name, journal_entry_id')
+    .eq('id', documentId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (docError || !doc) return { ok: false, reason: 'Bilagan hittades inte.', status: 404 }
+
+  const existingJeId = (doc.journal_entry_id as string | null) ?? null
+  if (existingJeId && existingJeId !== journalEntryId) {
+    const { data: existingJe } = await supabase
+      .from('journal_entries')
+      .select('status')
+      .eq('id', existingJeId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (existingJe && (existingJe as { status: string }).status === 'posted') {
+      return {
+        ok: false,
+        reason:
+          'Bilagan är kopplad till en bokförd verifikation och kan inte länkas om. Ladda upp ett nytt dokument.',
+        status: 409,
+      }
+    }
+  }
+
+  return { ok: true }
+}
+
+/**
+ * Shared failure mapping for both link executors. A locked period is the one
+ * case worth its own sentence: it is recoverable by unlocking, unlike the rest,
+ * and the raw trigger text is English database prose. Everything else goes
+ * through getErrorMessage so nothing reaches the Granskning panel untranslated.
+ */
+function documentLinkFailureMessage(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err ?? '')
+  if (/locked\/closed fiscal period|Bokföringen är låst/i.test(msg)) {
+    return 'Verifikationens period är låst: bilagan kan inte länkas.'
+  }
+  // No ErrorContext value covers document attachments, and journal_entry would
+  // phrase the fallback as a verifikat problem when the failure is the link.
+  // Omitting it keeps the generic Swedish fallback, which is accurate here.
+  return getErrorMessage(err)
+}
+
 async function commitLinkDocumentToVoucher(
   supabase: SupabaseClient,
   _userId: string,
@@ -3194,31 +3390,8 @@ async function commitLinkDocumentToVoucher(
     return { error: 'document_id and journal_entry_id are required', status: 400 }
   }
 
-  const { data: doc, error: docError } = await supabase
-    .from('document_attachments')
-    .select('id, file_name, journal_entry_id')
-    .eq('id', documentId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (docError || !doc) return { error: 'Document not found', status: 404 }
-
-  // WORM guard: refuse to re-link a doc already linked to a DIFFERENT posted JE.
-  const existingJeId = (doc.journal_entry_id as string | null) ?? null
-  if (existingJeId && existingJeId !== journalEntryId) {
-    const { data: existingJe } = await supabase
-      .from('journal_entries')
-      .select('status')
-      .eq('id', existingJeId)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (existingJe && (existingJe as { status: string }).status === 'posted') {
-      return {
-        error:
-          'Bilagan är kopplad till en bokförd verifikation och kan inte länkas om. Ladda upp ett nytt dokument.',
-        status: 409,
-      }
-    }
-  }
+  const precheck = await precheckDocumentLink(supabase, companyId, documentId, journalEntryId)
+  if (!precheck.ok) return { error: precheck.reason, status: precheck.status }
 
   try {
     const updated = await linkToJournalEntry(
@@ -3237,14 +3410,90 @@ async function commitLinkDocumentToVoucher(
       },
     }
   } catch (err) {
-    const msg = (err as Error).message ?? ''
-    if (/locked\/closed fiscal period|Bokföringen är låst/i.test(msg)) {
-      return {
-        error: 'Verifikationens period är låst: bilagan kan inte länkas.',
-        status: 409,
-      }
+    const msg = err instanceof Error ? err.message : String(err ?? '')
+    const isLocked = /locked\/closed fiscal period|Bokföringen är låst/i.test(msg)
+    return { error: documentLinkFailureMessage(err), status: isLocked ? 409 : 500 }
+  }
+}
+
+async function commitLinkDocumentsToVouchers(
+  supabase: SupabaseClient,
+  _userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const links = params.links as Array<{
+    document_id: string; journal_entry_id: string; journal_entry_line_id: string | null
+  }> | undefined
+  if (!Array.isArray(links) || links.length === 0) {
+    return { error: 'links is required (non-empty)', status: 400 }
+  }
+
+  const linked: Array<{ document_id: string; journal_entry_id: string }> = []
+  const skipped: Array<{ document_id: string; journal_entry_id: string; reason: string }> = []
+
+  // Sequential, not Promise.all: each row re-validates against the current DB
+  // state (a prior row in the SAME batch can change a doc's journal_entry_id,
+  // and the WORM guard must see that), and goes through the SAME
+  // precheckDocumentLink + linkToJournalEntry pair as the single-document
+  // executor, so a bulk call enforces identical invariants to N individual
+  // calls rather than a parallel reimplementation of them.
+  for (const link of links) {
+    const documentId = link.document_id
+    const journalEntryId = link.journal_entry_id
+    if (!documentId || !journalEntryId) {
+      skipped.push({ document_id: documentId ?? '(saknas)', journal_entry_id: journalEntryId ?? '(saknas)', reason: 'Raden saknar dokument-id eller verifikations-id.' })
+      continue
     }
-    return { error: `Failed to link document: ${msg}`, status: 500 }
+
+    const precheck = await precheckDocumentLink(supabase, companyId, documentId, journalEntryId)
+    if (!precheck.ok) {
+      skipped.push({ document_id: documentId, journal_entry_id: journalEntryId, reason: precheck.reason })
+      continue
+    }
+
+    try {
+      const updated = await linkToJournalEntry(
+        supabase, companyId, documentId, journalEntryId, link.journal_entry_line_id ?? undefined,
+      )
+      linked.push({ document_id: updated.id, journal_entry_id: updated.journal_entry_id as string })
+    } catch (err) {
+      // Same mapping as the single executor, including its locked-period
+      // sentence: skipped reasons land in result_data and are rendered in the
+      // Granskning panel, so none of them may reach the user as raw English
+      // database prose.
+      skipped.push({ document_id: documentId, journal_entry_id: journalEntryId, reason: documentLinkFailureMessage(err) })
+    }
+  }
+
+  // Nothing linked is a failure, not a partial success. Recording it as
+  // `committed` would leave an approval-gated operation on
+  // räkenskapsinformation sitting in the audit trail asserting a run that
+  // changed nothing, and the single-document executor returns 409 for exactly
+  // these conditions (locked period, WORM guard, missing document). A batch
+  // must not be the weaker path.
+  if (linked.length === 0) {
+    return {
+      error: `Inga bilagor kunde länkas (${skipped.length} hoppades över). Första orsak: ${skipped[0]?.reason ?? 'okänd'}`,
+      status: 409,
+    }
+  }
+
+  log.info('link_documents_to_vouchers committed', {
+    companyId,
+    operationType: 'link_documents_to_vouchers',
+    requested: links.length,
+    linkedCount: linked.length,
+    skippedCount: skipped.length,
+  })
+
+  return {
+    data: {
+      linked_count: linked.length,
+      skipped_count: skipped.length,
+      linked,
+      skipped,
+    },
   }
 }
 
@@ -4316,6 +4565,8 @@ async function commitConvertInvoice(
       vat_amount: proforma.vat_amount,
       vat_amount_sek: proforma.vat_amount_sek,
       total: proforma.total,
+      remaining_amount: proforma.total,
+      paid_amount: 0,
       total_sek: proforma.total_sek,
       vat_treatment: proforma.vat_treatment,
       vat_rate: proforma.vat_rate,
@@ -5495,16 +5746,19 @@ async function commitSubmitAgi(
 
 async function commitMatchBatchAllocate(
   supabase: SupabaseClient,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   // Trust boundary (compliance-swarm V8.2.1, A.8.2):
   // Tenant isolation is enforced authoritatively inside the SQL RPC
-  // `match_batch_allocate` (supabase/migrations/20260601122000_*.sql):
+  // `match_batch_allocate` (supabase/migrations/20260817150000_*.sql):
   //   - `transactions` row fetched WHERE id = p_tx_id AND company_id = p_company_id
   //   - `invoices` and `supplier_invoices` rows fetched WHERE id = ? AND company_id = p_company_id
-  //   - `auth.uid()` resolves the caller; membership checked against
-  //     `company_members.company_id = p_company_id`
+  //   - the actor resolves from auth.uid(), with p_user_id honored only for
+  //     service_role callers (this commit path runs on the cookieless
+  //     service client, where auth.uid() is NULL); membership checked
+  //     against `company_members.company_id = p_company_id`
   // The MCP execute() handler additionally pre-checks the same IDs to
   // surface clean errors before staging. This commit handler is a thin
   // pass-through by design: re-querying here would triple the same
@@ -5519,6 +5773,7 @@ async function commitMatchBatchAllocate(
     p_tx_id: txId,
     p_allocations: allocations,
     p_company_id: companyId,
+    p_user_id: userId,
   })
   if (error) {
     // Sanitised log (A.8.11, CC7.2): only error code + message, no
@@ -5896,6 +6151,9 @@ async function commitPendingOperationInner(
       case 'link_document_to_voucher':
         result = await commitLinkDocumentToVoucher(supabase, userId, companyId, pendingOp.params)
         break
+      case 'link_documents_to_vouchers':
+        result = await commitLinkDocumentsToVouchers(supabase, userId, companyId, pendingOp.params)
+        break
       case 'run_year_end':
         result = await commitRunYearEnd(supabase, userId, companyId, pendingOp.params)
         break
@@ -5986,7 +6244,7 @@ async function commitPendingOperationInner(
         result = await commitVacationYearClose(supabase, userId, companyId, pendingOp.params)
         break
       case 'match_batch_allocate':
-        result = await commitMatchBatchAllocate(supabase, companyId, pendingOp.params)
+        result = await commitMatchBatchAllocate(supabase, userId, companyId, pendingOp.params)
         break
       case 'bulk_book_transactions':
         result = await commitBulkBookTransactions(supabase, companyId, pendingOp.params)

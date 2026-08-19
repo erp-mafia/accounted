@@ -300,6 +300,26 @@ describe('mapTrialBalancesToK2', () => {
     ).toBe(7_000)
     expect(res.rr['HandelsvarorKostnader'].current).toBe(3_000)
   })
+
+  it('routes 77xx nedskrivningar per K2 split (7710-7733 → anläggningstillgångar, 7740/7790 → omsättningstillgångar)', () => {
+    const rows = [
+      row('7710', 'Nedskrivningar av immateriella anläggningstillgångar', 10_000, 0),
+      row('7730', 'Nedskrivningar av maskiner respektive inventarier', 5_000, 0),
+      row('7770', 'Återföring av nedskrivningar av byggnader och mark', 0, 2_000),
+      row('7740', 'Nedskrivningar av vissa omsättningstillgångar', 4_000, 0),
+      row('7790', 'Återföring av nedskrivningar av vissa omsättningstillgångar', 0, 1_000),
+      row('7810', 'Avskrivningar på immateriella anläggningstillgångar', 20_000, 0),
+    ]
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
+    // 10 000 + 5 000 - 2 000 återföring + 20 000 avskrivningar
+    expect(
+      res.rr['AvskrivningarNedskrivningarMateriellaImmateriellaAnlaggningstillgangar'].current,
+    ).toBe(33_000)
+    // 4 000 - 1 000 återföring
+    expect(res.rr['NedskrivningarOmsattningstillgangarUtoverNormalaNedskrivningar'].current).toBe(
+      3_000,
+    )
+  })
 })
 
 describe('mapTrialBalancesToK2: öre-rounding residual smoothing', () => {

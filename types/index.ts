@@ -217,6 +217,14 @@ export interface InvoicePaymentAccount {
   swish: string | null
   iban: string | null
   bic: string | null
+  /**
+   * Foreign non-IBAN routing: ABA routing number (USD), sort code (GBP),
+   * BSB (AUD) or a comparable national bank code. Only meaningful together
+   * with foreign_account_number + bic on a non-SEK account.
+   */
+  bank_code?: string | null
+  /** Foreign account number for non-IBAN countries (US/UK/AU/CA style). */
+  foreign_account_number?: string | null
 }
 
 // Profile (extends auth.users)
@@ -335,6 +343,10 @@ export interface CompanySettings {
   swish: string | null
   iban: string | null
   bic: string | null
+  // Foreign non-IBAN routing, only ever populated on the render-time copy
+  // produced by companyWithInvoicePaymentAccount (never a DB column).
+  bank_code?: string | null
+  foreign_account_number?: string | null
   // Invoice payment instructions keyed by the currency they can receive.
   // Legacy bank fields above remain the SEK fallback for older companies.
   invoice_payment_accounts?: Partial<Record<Currency, InvoicePaymentAccount>>
@@ -2340,6 +2352,10 @@ export type PendingOperationType =
   // Link a document directly to a journal entry (verifikation): for imported/
   // manual vouchers that have no bank-transaction row.
   | 'link_document_to_voucher'
+  // Bulk counterpart: N docs linked to N posted verifikationer in one staged
+  // op, addressed by voucher_series/voucher_number/fiscal_year instead of
+  // journal_entry_id UUIDs (resolved server-side).
+  | 'link_documents_to_vouchers'
   // Manual transaction ingestion (uncategorized row, reversible by delete)
   | 'create_transaction'
   // Stream 1 Phase 1: supplier invoice lifecycle

@@ -27,6 +27,36 @@ vi.mock('@/lib/bookkeeping/invoice-entries', async () => {
   }
 })
 
+// The accrual branch books via findFiscalPeriod + createJournalEntry with
+// lines from the shared buildInvoicePaymentClearingLines helper (parity with
+// the dashboard/v1 routes); the settlement account shows up as the bank leg's
+// account_number.
+const mockFindFiscalPeriod = vi.fn()
+const mockCreateJournalEntry = vi.fn()
+vi.mock('@/lib/bookkeeping/engine', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/bookkeeping/engine')>(
+    '@/lib/bookkeeping/engine',
+  )
+  return {
+    ...actual,
+    findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
+    createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
+  }
+})
+
+// Riksbanken lookup for cross-currency parity tests: mocked so no network or
+// DB call happens; per-test mockResolvedValue supplies the rate.
+const mockFetchExchangeRate = vi.fn()
+vi.mock('@/lib/currency/riksbanken', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/currency/riksbanken')>(
+    '@/lib/currency/riksbanken',
+  )
+  return {
+    ...actual,
+    fetchExchangeRate: (...args: unknown[]) => mockFetchExchangeRate(...args),
+  }
+})
+
 // Issue #1259: settling the invoice retires the suggestion pointers at it.
 // Mocked so it consumes no slot in the queued Supabase mock; the helper's own
 // query shape is pinned by lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
@@ -64,6 +94,8 @@ beforeEach(() => {
   eventBus.clear()
   mockCreatePaymentEntry.mockResolvedValue({ id: 'je-1' })
   mockCreateCashEntry.mockResolvedValue({ id: 'je-1' })
+  mockFindFiscalPeriod.mockResolvedValue('fp-1')
+  mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 })
 
 describe('commitPendingOperation: match_transaction_invoice settlement account resolution', () => {
@@ -147,16 +179,19 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('committed')
-    expect(mockCreatePaymentEntry).toHaveBeenCalledWith(
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       'user-1',
-      expect.objectContaining({ id: 'inv-1' }),
-      '2026-05-12',
-      undefined,
-      'Test AB',
-      12500,
-      '1940',
+      expect.objectContaining({
+        source_type: 'invoice_paid',
+        source_id: 'inv-1',
+        entry_date: '2026-05-12',
+        lines: expect.arrayContaining([
+          expect.objectContaining({ account_number: '1940', debit_amount: 12500 }),
+          expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
+        ]),
+      }),
     )
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
     const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
@@ -272,16 +307,16 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('committed')
-    expect(mockCreatePaymentEntry).toHaveBeenCalledWith(
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       'user-1',
-      expect.objectContaining({ id: 'inv-1' }),
-      '2026-05-12',
-      undefined,
-      'Test AB',
-      12500,
-      '1930',
+      expect.objectContaining({
+        lines: expect.arrayContaining([
+          expect.objectContaining({ account_number: '1930', debit_amount: 12500 }),
+          expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
+        ]),
+      }),
     )
   })
 
@@ -330,5 +365,171 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     expect(result.status).toBe('failed')
     expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
+  })
+
+  it('settles a whole-krona payment of an öre-carrying invoice in full (3740 absorbs the residual)', async () => {
+    // gnubok_feedback 2026-07-24: a bank tx exactly matching the invoice's
+    // rounded "Att betala" was rejected as MATCH_AMOUNT_EXCEEDS_REMAINING
+    // because this path called planInvoicePayment without absorbOreRounding.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: 12500,
+        currency: 'SEK',
+        date: '2026-05-12',
+        invoice_id: null,
+        journal_entry_id: null,
+        cash_account_id: null,
+      },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026001',
+        status: 'sent',
+        total: 12499.63,
+        remaining_amount: 12499.63,
+        paid_amount: 0,
+        currency: 'SEK',
+        exchange_rate: null,
+        journal_entry_id: null,
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: null, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // transactions update (link)
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        lines: expect.arrayContaining([
+          expect.objectContaining({ account_number: '1930', debit_amount: 12500 }),
+          expect.objectContaining({ account_number: '1510', credit_amount: 12499.63 }),
+          expect.objectContaining({ account_number: '3740' }),
+        ]),
+      }),
+    )
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({
+      status: 'paid',
+      paid_amount: 12499.63,
+      remaining_amount: 0,
+    })
+  })
+
+  it('converts a cross-currency payment into the invoice currency before recording it', async () => {
+    // Parity with the dashboard/v1 routes: feeding the raw SEK amount into a
+    // USD invoice corrupts the units of paid_amount / remaining_amount and
+    // the invoice_payments row.
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'USD', rate: 10, date: '2026-05-12' })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: 12500,
+        amount_sek: 12500,
+        currency: 'SEK',
+        date: '2026-05-12',
+        invoice_id: null,
+        journal_entry_id: null,
+        cash_account_id: null,
+      },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026001',
+        status: 'sent',
+        total: 1250,
+        remaining_amount: 1250,
+        paid_amount: 0,
+        currency: 'USD',
+        exchange_rate: 10,
+        journal_entry_id: null,
+        customer: { name: 'US Inc' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: null, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // transactions update (link)
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    // paid/remaining accumulate in INVOICE currency (1250 USD), not 12500 SEK.
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({
+      status: 'paid',
+      paid_amount: 1250,
+      remaining_amount: 0,
+    })
+    const paymentInsert = findCalls('invoice_payments', 'insert').at(-1)?.[0]
+    expect(paymentInsert).toMatchObject({ amount: 1250, currency: 'USD', exchange_rate: 10 })
+  })
+
+  it('rejects a cross-currency match when no exchange rate is available', async () => {
+    mockFetchExchangeRate.mockResolvedValue(null)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: 12500,
+        amount_sek: 12500,
+        currency: 'SEK',
+        date: '2026-05-12',
+        invoice_id: null,
+        journal_entry_id: null,
+        cash_account_id: null,
+      },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026001',
+        status: 'sent',
+        total: 1250,
+        remaining_amount: 1250,
+        paid_amount: 0,
+        currency: 'USD',
+        exchange_rate: 10,
+        journal_entry_id: null,
+        customer: { name: 'US Inc' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    // 400 (unlike 404/409 auto-rejects) surfaces as a plain failure; the op
+    // row itself is released as 'rejected' with the error payload.
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 })

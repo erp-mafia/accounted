@@ -32,8 +32,7 @@ import {
   buildMappingResultFromCounterpartyTemplate,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
-import { recordVoucherGapExplanation } from '@/lib/bookkeeping/cancel-orphaned-entry'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -155,7 +154,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         : 'private'
       const { error: updateErr } = await ctx.supabase
         .from('transactions')
-        .update({ is_business, category: finalCat })
+        .update({ is_business, category: finalCat, is_ignored: false })
         .eq('id', txId)
         .eq('company_id', ctx.companyId!)
       if (updateErr) return v1ErrorResponse(updateErr, txLog, { requestId: ctx.requestId })
@@ -443,71 +442,43 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .update({
         is_business,
         category: finalCategory,
+        is_ignored: false,
         journal_entry_id: journalEntryId,
       })
       .eq('id', txId)
       .eq('company_id', ctx.companyId!)
       .is('journal_entry_id', null)
-      .select('id')
+      .select('*')
 
-    if (updateErr) return v1ErrorResponse(updateErr, txLog, { requestId: ctx.requestId })
+    if (updateErr) {
+      if (journalEntryId) {
+        await reverseOrphanedJournalEntry(
+          ctx.supabase,
+          ctx.companyId!,
+          ctx.userId,
+          journalEntryId,
+          'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+        )
+      }
+      return v1ErrorResponse(updateErr, txLog, { requestId: ctx.requestId })
+    }
 
-    if ((!updateResult || updateResult.length === 0) && journalEntryId) {
-      // Lost the race. The orphan JE was created with status='posted' by the
-      // engine, so the immutability trigger blocks a direct status flip to
-      // 'cancelled'. BFL 5 kap 5 § requires corrections via a reversing
-      // entry (storno): issue one. The pair (orphan + storno) keeps the
-      // verifikationsnummer series unbroken; no voucher_gap_explanations row
-      // is needed because there's no gap.
-      try {
-        await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId)
-      } catch (revErr) {
-        // Storno failure on the orphan is rare but creates an unreconcilable
-        // ledger state (posted JE with no reversal). BFL 5 kap 5 § requires
-        // every correction be traceable. Document the gap explicitly so a
-        // human can reconcile manually rather than losing the trail to logs.
-        txLog.error('TX_CATEGORIZE_RACE: failed to storno orphaned JE', revErr as Error, {
-          orphanJournalEntryId: journalEntryId,
-        })
-        try {
-          const { data: orphan } = await ctx.supabase
-            .from('journal_entries')
-            .select('fiscal_period_id, voucher_series, voucher_number')
-            .eq('id', journalEntryId)
-            .eq('company_id', ctx.companyId!)
-            .single()
-          if (orphan && orphan.voucher_series) {
-            // Skip the gap row when the engine didn't tag a series on the
-            // orphan. Filing under a fallback series (previously 'A') would
-            // index the gap explanation under the wrong key, hiding it from
-            // series-specific audit queries (BFL 5 kap 6 §). A missing series
-            // is logged above already; a human will reconcile via that trail.
-            //
-            // The insert itself lives in the shared helper: it owns the real
-            // voucher_gap_explanations column set (gap_start/gap_end/user_id)
-            // and logs a failed insert loudly instead of swallowing it.
-            await recordVoucherGapExplanation(ctx.supabase, {
-              companyId: ctx.companyId!,
-              userId: ctx.userId,
-              fiscalPeriodId: orphan.fiscal_period_id,
-              voucherSeries: orphan.voucher_series,
-              voucherNumber: orphan.voucher_number,
-              explanation:
-                'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',
-            })
-          }
-        } catch (gapErr) {
-          txLog.error(
-            'TX_CATEGORIZE_RACE: failed to look up the orphan for its gap explanation',
-            gapErr as Error,
-            { orphanJournalEntryId: journalEntryId },
-          )
-        }
+    if (!updateResult || updateResult.length === 0) {
+      if (journalEntryId) {
+        await reverseOrphanedJournalEntry(
+          ctx.supabase,
+          ctx.companyId!,
+          ctx.userId,
+          journalEntryId,
+          'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+        )
       }
       return v1ErrorResponseFromCode('TX_CATEGORIZE_RACE', txLog, {
         requestId: ctx.requestId,
       })
     }
+
+    const updatedTransaction = updateResult[0] as Transaction
 
     // Propagate the underlag onto the new verifikat: anchor the transaction's
     // pinned document and stamp matched inbox items so they leave the active
@@ -528,7 +499,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       await eventBus.emit({
         type: 'transaction.categorized',
         payload: {
-          transaction: transaction as Transaction,
+          transaction: updatedTransaction,
           account: mappingResult.debit_account,
           taxCode: mappingResult.vat_lines[0]?.account_number || '',
           userId: ctx.userId,

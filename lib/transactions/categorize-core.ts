@@ -28,6 +28,7 @@ import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
@@ -40,6 +41,7 @@ import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createLogger } from '@/lib/logger'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
 import type { InboxChannelContext, Transaction, TransactionCategory, EntityType, VatTreatment } from '@/types'
 
 const log = createLogger('transactions/categorize-core')
@@ -232,9 +234,9 @@ export async function categorizeMatchedTransaction(
   // must not block re-categorization: the row reads as "utan koppling" in the
   // UI, so a fresh booking has to be allowed (issue #988). Only a live posted
   // link means it was genuinely categorized in the meantime. The UPDATE below
-  // is unconditional (no null-lock), so it overwrites the stale pointer; the
-  // duplicate guard still catches an existing live correction and steers the
-  // user to link instead.
+  // uses the observed stale pointer as its CAS value, so it only replaces the
+  // pointer if no concurrent request changed it. The duplicate guard still
+  // catches an existing live correction and steers the user to link instead.
   if (
     transaction.journal_entry_id &&
     (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id))
@@ -392,15 +394,54 @@ export async function categorizeMatchedTransaction(
     return { error: err instanceof Error ? err.message : 'Failed to create journal entry', status: 500 }
   }
 
-  const { error: updateError } = await supabase
+  const updateQuery = supabase
     .from('transactions')
-    .update({ is_business: isBusiness, category, journal_entry_id: journalEntryId })
+    .update({
+      is_business: isBusiness,
+      category,
+      is_ignored: false,
+      journal_entry_id: journalEntryId,
+    })
     .eq('id', txId)
+    .eq('company_id', companyId)
+
+  const guardedUpdate = transaction.journal_entry_id
+    ? updateQuery.eq('journal_entry_id', transaction.journal_entry_id)
+    : updateQuery.is('journal_entry_id', null)
+
+  const { data: updateResult, error: updateError } = await guardedUpdate.select('*')
 
   if (updateError) {
     log.error('Failed to update transaction:', updateError)
-    return { error: 'Failed to update transaction', status: 500 }
+    if (journalEntryId) {
+      await reverseOrphanedJournalEntry(
+        supabase,
+        companyId,
+        userId,
+        journalEntryId,
+        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+      )
+    }
+    const structured = getStructuredError(updateError)
+    return structured.code === 'TX_CATEGORIZE_IGNORED_CONFLICT'
+      ? { error: structured.message_sv, status: 409 }
+      : { error: 'Failed to update transaction', status: 500 }
   }
+
+  if (!updateResult || updateResult.length === 0) {
+    if (journalEntryId) {
+      await reverseOrphanedJournalEntry(
+        supabase,
+        companyId,
+        userId,
+        journalEntryId,
+        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+      )
+    }
+    return { error: 'Transaction was categorized by another request.', status: 409 }
+  }
+
+  const updatedTransaction = updateResult[0] as Transaction
 
   // Propagate the underlag from matched invoice-inbox items onto the new
   // verifikation and stamp them consumed (BFL 7 kap): shared with the other
@@ -419,7 +460,7 @@ export async function categorizeMatchedTransaction(
   await eventBus.emit({
     type: 'transaction.categorized',
     payload: {
-      transaction: transaction as Transaction,
+      transaction: updatedTransaction,
       account: mappingResult.debit_account,
       taxCode: mappingResult.vat_lines[0]?.account_number || '',
       userId,

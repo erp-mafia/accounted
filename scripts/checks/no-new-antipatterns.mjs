@@ -58,7 +58,14 @@
  *      the four Skatteverket-bound org-number paths disagreed outright about
  *      what "valid" meant, which is the kind of drift a customer only discovers
  *      when a filing fails at the deadline. Tracked as a count.
- *   9. off-ladder-radius: a border-radius class outside the locked ladder
+ *   9. leaky-supabase-client: server code importing supabase-js's `createClient`
+ *      as a value instead of `createServiceRoleClient()`. The default
+ *      `autoRefreshToken: true` starts a 30 s setInterval that is never
+ *      cleared; `unref()` keeps the process exitable but not the timer
+ *      collectable, so each constructed client retains its whole request scope.
+ *      Killed a self-hosted instance after 42 idle hours (2026-08-13). No
+ *      baseline: the count is 0 today.
+ *   10. off-ladder-radius: a border-radius class outside the locked ladder
  *      (pill / rounded-xl overlays / rounded-lg surfaces / rounded-sm leaves;
  *      see .claude/rules/design.md). Before the 2026-08 migration the UI had
  *      seven radii in circulation (4/5/6/8/12/16px + pill) and one toolbar row
@@ -176,6 +183,64 @@ function findDirectJelInserts() {
       if (JEL_INSERT_SANCTIONED.has(r)) return false
       if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
       return JEL_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
+    })
+    .map(rel)
+    .sort()
+}
+
+// The one module allowed to import supabase-js's createClient as a value: it
+// is the wrapper that applies SERVER_AUTH_OPTIONS.
+const LEAKY_CLIENT_SANCTIONED = new Set(['lib/supabase/service-client.ts'])
+const SUPABASE_JS_IMPORT_RE = /import\s+(type\s+)?\{([^}]*)\}\s*from\s*['"]@supabase\/supabase-js['"]/g
+// A namespace import hands over the whole module, so `sb.createClient(...)` is
+// reachable without ever naming it in the import. Treat any value-namespace
+// import as leaky rather than trying to track member access.
+const SUPABASE_JS_NAMESPACE_RE =
+  /import\s+(type\s+)?\*\s+as\s+\w+\s+from\s*['"]@supabase\/supabase-js['"]/g
+
+/**
+ * Files that import supabase-js's `createClient` as a VALUE instead of going
+ * through createServiceRoleClient().
+ *
+ * `autoRefreshToken` defaults to true, and auth-js starts the 30 s refresh
+ * ticker unconditionally off-browser. The ticker calls unref(), so the process
+ * still exits and nothing fails in tests or on Vercel, but unref does not make
+ * a timer collectable: it stays a GC root for its callback and retains the
+ * client plus the whole request scope around it. A self-hosted instance died of
+ * heap exhaustion after 42 idle hours this way (2026-08-13), holding 445
+ * request graphs and ~1050 Timeouts in the 30 000 ms bucket.
+ *
+ * Both named (`{ createClient }`) and namespace (`* as sb`) value imports count:
+ * the latter reaches createClient through member access without naming it.
+ *
+ * Type-only imports are fine; so is the browser client, which needs the ticker
+ * and is built on @supabase/ssr's createBrowserClient anyway.
+ */
+function findLeakySupabaseClients() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  return files
+    .filter((f) => {
+      const r = rel(f)
+      if (LEAKY_CLIENT_SANCTIONED.has(r)) return false
+      if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
+      const src = fs.readFileSync(f, 'utf8')
+      for (const m of src.matchAll(SUPABASE_JS_IMPORT_RE)) {
+        const [, typeOnly, bindings] = m
+        if (typeOnly) continue
+        const bindsCreateClient = bindings
+          .split(',')
+          .map((b) => b.trim())
+          .some((b) => b === 'createClient' || b.startsWith('createClient as'))
+        if (bindsCreateClient) return true
+      }
+      for (const m of src.matchAll(SUPABASE_JS_NAMESPACE_RE)) {
+        if (!m[1]) return true
+      }
+      return false
     })
     .map(rel)
     .sort()
@@ -678,6 +743,7 @@ const current = {
   handRolledInvariants: countHandRolledInvariants(),
   ledgerScanningReports: findLedgerScanningReports(),
   directJelInsert: findDirectJelInserts(),
+  leakySupabaseClients: findLeakySupabaseClients(),
   pinnedDepViolations: findPinnedDepViolations(),
   rawUserErrors: findRawUserErrors(),
   sekLabelledAmounts: findSekLabelledFxAmounts(ROOT),
@@ -741,6 +807,23 @@ if (current.directJelInsert.length) {
     '  → route line writes through lib/bookkeeping/engine.ts, or derive cost_center/project via\n' +
       '    lineDimensionColumns() (lib/bookkeeping/dimension-resolver.ts) and add the file to\n' +
       '    JEL_INSERT_SANCTIONED in this script with a justification.',
+  )
+}
+
+// 1b2. leaky-supabase-client: server code must construct clients through
+// createServiceRoleClient(). No baseline: the count is 0 today.
+if (current.leakySupabaseClients.length) {
+  failed = true
+  console.error(
+    `\n✗ leaky-supabase-client: ${current.leakySupabaseClients.length} file(s) import supabase-js's ` +
+      `createClient as a value instead of createServiceRoleClient():`,
+  )
+  current.leakySupabaseClients.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → import { createServiceRoleClient } from "@/lib/supabase/service-client". Constructing a\n' +
+      '    client directly leaves autoRefreshToken on, which starts a 30 s setInterval that is never\n' +
+      '    cleared and retains the client plus the whole request scope (heap death after ~42 h).\n' +
+      '    Type-only imports are fine: use `import type { SupabaseClient } from "@supabase/supabase-js"`.',
   )
 }
 
@@ -916,5 +999,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
 )

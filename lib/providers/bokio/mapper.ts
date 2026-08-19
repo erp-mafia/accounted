@@ -309,7 +309,7 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
  * Map Bokio Company to CompanyInformationDto.
  *
  * Bokio Company fields:
- * - id, name, orgNumber, vatNumber, currency, country
+ * - id, name, organizationNumber, companyType
  * - address: { line1, line2, city, postalCode, country }
  */
 export function mapBokioToCompanyInformation(raw: Record<string, unknown>): CompanyInformationDto {
@@ -317,10 +317,10 @@ export function mapBokioToCompanyInformation(raw: Record<string, unknown>): Comp
 
   return {
     companyName: (raw['name'] as string) ?? '',
-    organizationNumber: raw['orgNumber'] as string | undefined,
+    organizationNumber: raw['organizationNumber'] as string | undefined,
     legalEntity: {
       registrationName: (raw['name'] as string) ?? '',
-      companyId: raw['orgNumber'] as string | undefined,
+      companyId: raw['organizationNumber'] as string | undefined,
       companyIdSchemeId: 'SE:ORGNR',
     },
     address: address ? {

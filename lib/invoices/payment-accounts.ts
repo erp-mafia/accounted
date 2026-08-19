@@ -23,7 +23,36 @@ const PAYMENT_FIELDS: readonly (keyof InvoicePaymentAccount)[] = [
   'swish',
   'iban',
   'bic',
+  'bank_code',
+  'foreign_account_number',
 ]
+
+/**
+ * Currencies whose domestic banking systems do not use IBAN. A payment
+ * account in one of these may be identified by bank_code + account number +
+ * BIC instead of an IBAN (USD: ABA routing number, GBP: sort code). Any
+ * other non-SEK currency still requires IBAN. Extend here (and the
+ * bank_code label map) when a non-IBAN currency is added to Currency.
+ */
+export const NON_IBAN_CURRENCIES: readonly Currency[] = ['USD', 'GBP']
+
+export function isNonIbanCurrency(currency: Currency): boolean {
+  return NON_IBAN_CURRENCIES.includes(currency)
+}
+
+/** The routing identifier's name per currency, for labels and messages. */
+export function bankCodeLabelKey(currency: Currency): 'routing_number' | 'sort_code' | 'bank_code' {
+  switch (currency) {
+    case 'USD': return 'routing_number'
+    case 'GBP': return 'sort_code'
+    default: return 'bank_code'
+  }
+}
+
+/** True when a foreign account is fully identified WITHOUT an IBAN. */
+export function hasNonIbanForeignRouting(account: Partial<InvoicePaymentAccount> | null): boolean {
+  return !!(account?.bank_code && account?.foreign_account_number && account?.bic)
+}
 
 function clean(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
@@ -42,6 +71,8 @@ export function legacySekInvoicePaymentAccount(
     swish: clean(company.swish),
     iban: clean(company.iban),
     bic: clean(company.bic),
+    bank_code: null,
+    foreign_account_number: null,
   }
 }
 
@@ -57,6 +88,8 @@ export function normalizeInvoicePaymentAccount(
     swish: clean(account.swish),
     iban: clean(account.iban)?.replace(/\s/g, '').toUpperCase() ?? null,
     bic: clean(account.bic)?.replace(/\s/g, '').toUpperCase() ?? null,
+    bank_code: clean(account.bank_code)?.replace(/\s/g, '') ?? null,
+    foreign_account_number: clean(account.foreign_account_number)?.replace(/\s/g, '') ?? null,
   }
 }
 
@@ -74,7 +107,12 @@ export function hasUsableInvoicePaymentAccount(
   currency: Currency,
 ): boolean {
   if (!account) return false
-  if (currency !== 'SEK') return !!account.iban
+  if (currency !== 'SEK') {
+    // A foreign account is usable with an IBAN, or (for non-IBAN banking
+    // systems) with a bank code + account number + BIC. Anything else would
+    // print an invoice the customer cannot pay from.
+    return !!account.iban || (isNonIbanCurrency(currency) && hasNonIbanForeignRouting(account))
+  }
   return !!(
     account.iban
     || account.bankgiro

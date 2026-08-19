@@ -61,10 +61,17 @@ describe('transactions page booking feedback', () => {
 
   it('lets a completed undo win over the delayed booked-state patch', () => {
     // The 350ms animation timer must not re-apply journal_entry_id after an
-    // Ångra has already storno-reversed the verifikat server-side.
+    // Ångra has already storno-reversed the verifikat server-side. The
+    // closure-local flag covers the per-row Ångra; the shared undoneIdsRef
+    // covers "Ångra alla", which runs outside finishBooking's closure.
     expect(PAGE_SRC).toMatch(/let undone = false/)
     expect(PAGE_SRC).toMatch(/undone = true/)
-    expect(PAGE_SRC).toMatch(/if \(!undone\) \{/)
+    expect(PAGE_SRC).toMatch(/if \(!undone && !undoneIdsRef\.current\.has\(id\)\) \{/)
+    // Both undo paths record into the shared ref, and a fresh booking clears
+    // its row's entry again so a re-booked row still gets its delayed patch.
+    expect(PAGE_SRC).toMatch(/undoneIdsRef\.current\.add\(id\)/)
+    expect(PAGE_SRC).toMatch(/undoneIdsRef\.current\.add\(undoneId\)/)
+    expect(PAGE_SRC).toMatch(/undoneIdsRef\.current\.delete\(id\)/)
   })
 
   it('clears only the finished row\'s spinner', () => {

@@ -163,6 +163,7 @@ describe('POST /items/:id/retry-extraction', () => {
       data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
       error: null,
     })
+    enqueue({ data: null, error: null }) // supplier name lookup: no match
     enqueue({ data: null, error: null }) // inbox update on success
 
     serviceDownloadMock.mockResolvedValue({
@@ -176,6 +177,80 @@ describe('POST /items/:id/retry-extraction', () => {
     const { status, body } = await parseJsonResponse<{ data: { extracted_data: { totals: { total: number } } } }>(res)
     expect(status).toBe(200)
     expect(body.data.extracted_data.totals.total).toBe(125)
+  })
+
+  it('re-links the supplier on retry, matching a foreign supplier by VAT number', async () => {
+    // Re-running the extraction used to rewrite extracted_data and leave
+    // matched_supplier_id untouched, so "Tolka om" could never repair a link
+    // that failed the first time (e.g. because the supplier was created after
+    // the document arrived).
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'item-1', document_id: 'doc-1', correlation_id: null, created_supplier_invoice_id: null },
+      error: null,
+    })
+    enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
+    enqueue({
+      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      error: null,
+    })
+    enqueue({
+      data: [{ id: 'adobe-supplier', vat_number: 'IE6364992H' }],
+      error: null,
+    }) // vat_number scan
+    enqueue({ data: null, error: null }) // inbox update on success
+
+    serviceDownloadMock.mockResolvedValue({
+      data: new Blob([new Uint8Array([1, 2, 3])], { type: 'application/pdf' }),
+      error: null,
+    })
+
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({
+      ...EXTRACTION_SUCCESS,
+      data: {
+        ...EXTRACTION_SUCCESS.data,
+        supplier: {
+          ...EXTRACTION_SUCCESS.data.supplier,
+          name: 'Adobe Systems Software Ireland Ltd',
+          vatNumber: 'IE6364992H',
+        },
+      },
+    } as never)
+
+    const res = await retryRoute.handler(makeReq(), buildCtx(supabase))
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(200)
+
+    const update = findCall('invoice_inbox_items', 'update')?.[0] as Record<string, unknown>
+    expect(update.matched_supplier_id).toBe('adobe-supplier')
+  })
+
+  it('leaves a hand-picked supplier alone when the retry finds no match', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'item-1', document_id: 'doc-1', correlation_id: null, created_supplier_invoice_id: null },
+      error: null,
+    })
+    enqueue({ data: { is_sandbox: false }, error: null }) // sandbox check
+    enqueue({
+      data: { storage_path: 'path/to.pdf', mime_type: 'application/pdf', file_name: 'invoice.pdf' },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // supplier name lookup: no match
+    enqueue({ data: null, error: null }) // inbox update on success
+
+    serviceDownloadMock.mockResolvedValue({
+      data: new Blob([new Uint8Array([1, 2, 3])], { type: 'application/pdf' }),
+      error: null,
+    })
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce(EXTRACTION_SUCCESS as never)
+
+    const res = await retryRoute.handler(makeReq(), buildCtx(supabase))
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(200)
+
+    const update = findCall('invoice_inbox_items', 'update')?.[0] as Record<string, unknown>
+    expect(update).not.toHaveProperty('matched_supplier_id')
   })
 
   it('marks the item as error and returns 500 when extraction throws', async () => {

@@ -854,6 +854,14 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
       data: [{ id: 'tx-1', amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }],
       error: null,
     })
+    // chart_of_accounts name lookup for the preview kontering
+    enqueue({
+      data: [
+        { account_number: '4010', account_name: 'Inköp material och varor' },
+        { account_number: '1930', account_name: 'Företagskonto' },
+      ],
+      error: null,
+    })
     // resolvePeriodStatusForDate: 2 layers
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
@@ -877,10 +885,35 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
       supabase as never,
     )) as {
       staged: boolean
-      preview: { dimension_resolutions?: Array<Record<string, unknown>> }
+      preview: {
+        dimension_resolutions?: Array<Record<string, unknown>>
+        lines?: Array<Record<string, unknown>>
+        currency?: string
+        entry_description?: string
+      }
     }
 
     expect(result.staged).toBe(true)
+
+    // The approval card renders the staged kontering: the exact lines the
+    // RPC will post, named, plus the bank rows' currency. Aggregates alone
+    // ("-400, 1 tx, expense") cannot tell a right booking from a wrong one.
+    expect(result.preview.currency).toBe('SEK')
+    expect(result.preview.entry_description).toBe('Samlingsverifikation material')
+    expect(result.preview.lines).toEqual([
+      expect.objectContaining({
+        account_number: '4010',
+        account_name: 'Inköp material och varor',
+        debit_amount: 400,
+        credit_amount: 0,
+      }),
+      expect.objectContaining({
+        account_number: '1930',
+        account_name: 'Företagskonto',
+        debit_amount: 0,
+        credit_amount: 400,
+      }),
+    ])
 
     // Contract: per-line `new_entry.lines[].dimensions` carries the MERGED
     // (line-over-default) resolved bags; the top-level default is dropped:

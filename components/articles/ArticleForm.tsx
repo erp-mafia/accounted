@@ -23,6 +23,11 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import type { BASAccount, CreateArticleInput } from '@/types'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import {
+  ROT_WORK_TYPES,
+  RUT_WORK_TYPES,
+  normalizeHouseworkType,
+} from '@/lib/invoices/rot-rut-rules'
 
 // A row from the currencies reference table (lib migration
 // 20260630110000_currencies_reference_table.sql).
@@ -202,10 +207,21 @@ export default function ArticleForm({
       revenue_account: initialData?.revenue_account || '',
       cost_price: initialData?.cost_price ?? undefined,
       ean: initialData?.ean || '',
-      housework_type: initialData?.housework_type || '',
+      // Canonical form (work-type code, bare ROT/RUT, or ''): a stray value
+      // from an import must not sit invisibly in the select as "Ingen".
+      housework_type: normalizeHouseworkType(initialData?.housework_type) ?? '',
       notes: initialData?.notes || '',
     },
   })
+
+  // Legacy articles carry only the kind ('ROT'/'RUT'), stored before this
+  // form offered Skatteverket work types. Keep that choice selectable so an
+  // edit never silently drops the flag; the user upgrades it to a real
+  // arbetstyp when they want the invoice row's work type pre-filled too.
+  const legacyHouseworkKind = (() => {
+    const v = normalizeHouseworkType(initialData?.housework_type)
+    return v === 'ROT' || v === 'RUT' ? v : null
+  })()
 
   const type = watch('type')
   const watchedName = watch('name')
@@ -454,8 +470,27 @@ export default function ArticleForm({
                     onChange={(e) => field.onChange(e.target.value)}
                   >
                     <option value="">{t('housework_none')}</option>
-                    <option value="ROT">{t('housework_rot')}</option>
-                    <option value="RUT">{t('housework_rut')}</option>
+                    {legacyHouseworkKind && (
+                      <option value={legacyHouseworkKind}>
+                        {legacyHouseworkKind === 'ROT'
+                          ? t('housework_legacy_rot')
+                          : t('housework_legacy_rut')}
+                      </option>
+                    )}
+                    <optgroup label={t('housework_rot')}>
+                      {ROT_WORK_TYPES.map((w) => (
+                        <option key={w.code} value={w.code}>
+                          {w.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label={t('housework_rut')}>
+                      {RUT_WORK_TYPES.map((w) => (
+                        <option key={w.code} value={w.code}>
+                          {w.label}
+                        </option>
+                      ))}
+                    </optgroup>
                   </SettingsSelect>
                 )}
               />

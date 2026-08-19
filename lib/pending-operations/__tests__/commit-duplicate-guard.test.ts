@@ -120,7 +120,19 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
       { data: { id: 'op-1' } },
       { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
-      { data: [] },
+      { data: [] }, // no fiscal period yet
+      { data: null }, // fiscal-period upsert
+      { data: null }, // journal-entry period lookup: partial categorization path
+      {
+        data: [{
+          id: 'tx-1',
+          date: '2026-03-26',
+          amount: 98565,
+          cash_account_id: null,
+          journal_entry_id: null,
+          is_ignored: false,
+        }],
+      }, // guarded transaction update matched
     ])
 
     const op = makePendingOp({
@@ -156,7 +168,19 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
       { data: { id: 'op-1' } },
       { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
-      { data: [] },
+      { data: [] }, // no fiscal period yet
+      { data: null }, // fiscal-period upsert
+      { data: null }, // journal-entry period lookup: partial categorization path
+      {
+        data: [{
+          id: 'tx-1',
+          date: '2026-03-26',
+          amount: 98565,
+          cash_account_id: null,
+          journal_entry_id: null,
+          is_ignored: false,
+        }],
+      }, // guarded transaction update matched
     ])
 
     const op = makePendingOp({
