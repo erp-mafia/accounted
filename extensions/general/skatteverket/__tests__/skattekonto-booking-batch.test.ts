@@ -196,6 +196,48 @@ describe('attachBookingSuggestions', () => {
     expect(abRows[0].booking_suggestion?.account).toBe('2710')
   })
 
+  it('falls back to pays_salaries when employer_registered was never attested', async () => {
+    const AVDRAGEN_RULE = [
+      {
+        id: 'sys-5', priority: 20, pattern: 'avdragen skatt,personalskatt,a-skatt',
+        amount_min: null, amount_max: null, company_type: 'all',
+        counter_account: '2710', counter_account_ef: null,
+        label: 'Avdragen skatt anställda', active: true, requires_employer: true,
+      },
+    ]
+
+    // Same signal as lib/tax/deadline-config.ts: an EF that answered
+    // pays_salaries in onboarding but never attested employer_registered
+    // (null) still runs payroll, so the gate opens and 2710 stays.
+    const ef = makeSupabase()
+    ef.enqueue({ data: AVDRAGEN_RULE })
+    ef.enqueue({
+      data: { entity_type: 'enskild_firma', employer_registered: null, pays_salaries: true },
+    })
+    const kept = await attachBookingSuggestions(
+      ef.supabase as unknown as SupabaseClient,
+      'company-1',
+      [makeSkvRow({ transaktionstext: 'Avdragen skatt' })],
+    )
+    expect(kept[0].booking_suggestion?.account).toBe('2710')
+    expect(kept[0].booking_gate).toBeUndefined()
+
+    // An explicit employer_registered = false wins over pays_salaries: the
+    // attestation is the stronger, later signal, so the gate stays closed.
+    const attested = makeSupabase()
+    attested.enqueue({ data: AVDRAGEN_RULE })
+    attested.enqueue({
+      data: { entity_type: 'enskild_firma', employer_registered: false, pays_salaries: true },
+    })
+    const gated = await attachBookingSuggestions(
+      attested.supabase as unknown as SupabaseClient,
+      'company-1',
+      [makeSkvRow({ transaktionstext: 'Avdragen skatt' })],
+    )
+    expect(gated[0].booking_suggestion).toBeNull()
+    expect(gated[0].booking_gate).toBe('requires_employer')
+  })
+
   it('hoists the rules fetch: one skattekonto_rules query for many rows', async () => {
     const { supabase, enqueue } = makeSupabase()
     enqueue({ data: SEED_RULES })
@@ -516,5 +558,32 @@ describe('bokforSkattekontoTransactionsBatch', () => {
     expect(result.results[0].error_message).toContain('före företagets första räkenskapsår')
     expect(result.results[0].error_message).toContain('kan ignoreras')
     expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+  })
+
+  it('rejects an ignored row with ROW_IGNORED before any draft exists', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    // Rule WOULD match: only the user's explicit ignore stops the booking.
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta', is_ignored: true })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row })
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row.id],
+    )
+
+    expect(result.results[0]).toMatchObject({
+      id: row.id,
+      ok: false,
+      error_code: 'ROW_IGNORED',
+      error_message: 'Transaktionen är ignorerad. Återställ den innan du bokför.',
+    })
+    expect(result.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+    // The gate fires before the engine is touched: no orphan draft.
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(commitEntry)).not.toHaveBeenCalled()
   })
 })

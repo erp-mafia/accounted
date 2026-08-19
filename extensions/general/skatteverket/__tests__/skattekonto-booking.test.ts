@@ -6,7 +6,7 @@ import { guessCounterAccount } from '../lib/skattekonto-booking'
 /**
  * System seeds mirror supabase/migrations/20260519100000_skattekonto_rules.sql
  * plus the follow-up corrections 20260817120100 (EF preliminärskatt 2012 ->
- * 2013) and 20260819080100 (requires_employer on the 'avdragen skatt' rule).
+ * 2013) and 20260819200100 (requires_employer on the 'avdragen skatt' rule).
  * Kept in lockstep so the resolver behaves identically against mock and real DB.
  */
 const SEED_RULES = [

@@ -34,6 +34,7 @@ export class SkattekontoMatchError extends Error {
     public readonly code:
       | 'TRANSACTION_NOT_FOUND'
       | 'ALREADY_BOOKED'
+      | 'ROW_IGNORED'
       | 'ENTRY_NOT_FOUND'
       | 'ENTRY_ALREADY_LINKED'
       | 'INVALID_CANDIDATE',
@@ -605,6 +606,16 @@ export async function matchSkattekontoToEntry(
     throw new SkattekontoMatchError(
       'Transaktionen är redan kopplad till ett verifikat.',
       'ALREADY_BOOKED',
+    )
+  }
+
+  // Same gate as bokforSkattekontoTransaction: an ignored row was explicitly
+  // triaged off the work list, so linking it to a verifikat must first be
+  // preceded by an explicit unignore.
+  if (tx.is_ignored) {
+    throw new SkattekontoMatchError(
+      'Transaktionen är ignorerad. Återställ den innan du bokför.',
+      'ROW_IGNORED',
     )
   }
 

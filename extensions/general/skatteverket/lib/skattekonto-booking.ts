@@ -57,7 +57,7 @@ interface SkattekontoRuleRow {
   label: string | null
   active: boolean
   /** Rule only applies to an enskild firma when the company is
-   *  employer_registered (migration 20260819080100). An AB is unaffected. */
+   *  employer_registered (migration 20260819200100). An AB is unaffected. */
   requires_employer: boolean
 }
 
@@ -70,6 +70,7 @@ export class SkattekontoBookingError extends Error {
       | 'PERIOD_LOCKED'
       | 'ALREADY_BOOKED'
       | 'NOT_SETTLED'
+      | 'ROW_IGNORED'
       | 'TRANSACTION_NOT_FOUND',
   ) {
     super(message)
@@ -218,8 +219,8 @@ export async function guessCounterAccount(
   transaktionstext: string,
   entityType: EntityType,
   belopp?: number,
-  // Whether company_settings.employer_registered is true. Defaults false:
-  // the safe side of the requires_employer gate for an enskild firma.
+  // Whether (company_settings.employer_registered ?? pays_salaries) is true.
+  // Defaults false: the safe side of the requires_employer gate for an EF.
   employerRegistered = false,
 ): Promise<CounterAccountMatch | null> {
   if (!SAFE_ID_PATTERN.test(companyId)) {
@@ -262,8 +263,8 @@ export async function guessCounterAccount(
 export interface SkattekontoRuleContext {
   rules: SkattekontoRuleRow[]
   entityType: EntityType
-  /** company_settings.employer_registered === true. Drives the
-   *  requires_employer rule gate for enskild firma. */
+  /** (company_settings.employer_registered ?? pays_salaries) === true.
+   *  Drives the requires_employer rule gate for enskild firma. */
   employerRegistered: boolean
   resolvePrimarySek: () => Promise<string>
 }
@@ -287,7 +288,7 @@ export async function loadRuleContext(
     fetchSkattekontoRules(supabase, companyId),
     supabase
       .from('company_settings')
-      .select('entity_type, employer_registered')
+      .select('entity_type, employer_registered, pays_salaries')
       .eq('company_id', companyId)
       .single(),
   ])
@@ -296,9 +297,13 @@ export async function loadRuleContext(
   return {
     rules,
     entityType: (settingsResult.data?.entity_type as EntityType) ?? 'aktiebolag',
-    // Nullable in the DB (20260717151000 added it without NOT NULL): only an
-    // explicit true counts as "registered employer".
-    employerRegistered: settingsResult.data?.employer_registered === true,
+    // Same signal as lib/tax/deadline-config.ts: employer_registered is the
+    // explicit attestation (nullable, 20260717151000; null = never attested)
+    // and falls back to the onboarding pays_salaries answer. An explicit
+    // false wins over pays_salaries; only a resolved true opens the gate.
+    employerRegistered:
+      (settingsResult.data?.employer_registered ??
+        settingsResult.data?.pays_salaries) === true,
     resolvePrimarySek: async () => {
       if (primary === null) {
         primary = await resolvePrimarySekAccount(supabase, companyId)
@@ -436,6 +441,17 @@ export async function bokforSkattekontoTransaction(
     throw new SkattekontoBookingError(
       'Transaktionen är redan bokförd.',
       'ALREADY_BOOKED',
+    )
+  }
+
+  // An ignored row is triaged-and-excluded by an explicit user decision:
+  // booking it silently would contradict that decision. The gate sits before
+  // any draft is created so no orphan draft is left behind. Unignore (fully
+  // reversible) is the way back onto the work list.
+  if (tx.is_ignored) {
+    throw new SkattekontoBookingError(
+      'Transaktionen är ignorerad. Återställ den innan du bokför.',
+      'ROW_IGNORED',
     )
   }
 

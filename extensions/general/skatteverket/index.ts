@@ -2305,6 +2305,7 @@ export const skatteverketExtension: Extension = {
             const status =
               err.code === 'TRANSACTION_NOT_FOUND' ? 404
               : err.code === 'ALREADY_BOOKED' ? 409
+              : err.code === 'ROW_IGNORED' ? 409
               : err.code === 'PERIOD_LOCKED' ? 423
               : err.code === 'NO_COUNTER_ACCOUNT' ? 422
               : 400
@@ -2393,6 +2394,7 @@ export const skatteverketExtension: Extension = {
               err.code === 'TRANSACTION_NOT_FOUND' ? 404
               : err.code === 'ENTRY_NOT_FOUND' ? 404
               : err.code === 'ALREADY_BOOKED' ? 409
+              : err.code === 'ROW_IGNORED' ? 409
               : err.code === 'ENTRY_ALREADY_LINKED' ? 409
               : 422
             return NextResponse.json({ error: err.message, code: err.code }, { status })

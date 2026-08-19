@@ -218,6 +218,22 @@ describe('matchSkattekontoToEntry', () => {
     ).rejects.toMatchObject({ code: 'ALREADY_BOOKED' })
   })
 
+  it('throws ROW_IGNORED for an ignored row before touching the candidate entry', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: txRow({ is_ignored: true }) })
+
+    await expect(
+      matchSkattekontoToEntry(supabase as never, COMPANY, TX_ID, 'je-1'),
+    ).rejects.toMatchObject({
+      code: 'ROW_IGNORED',
+      message: 'Transaktionen är ignorerad. Återställ den innan du bokför.',
+    })
+    // Only the tx fetch ran: the guard fires before the journal_entries read
+    // and before any update.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(supabase.from).toHaveBeenCalledWith('skattekonto_transactions')
+  })
+
   it('throws ENTRY_NOT_FOUND when the candidate verifikat does not exist', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })

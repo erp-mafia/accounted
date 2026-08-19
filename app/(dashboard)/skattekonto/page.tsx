@@ -442,11 +442,18 @@ export default function SkattekontoPage() {
   }
 
   // Next charge (concept attn line): the earliest upcoming due date and the
-  // sum of everything Skatteverket draws that day.
+  // sum of everything Skatteverket draws that day. Ignored rows stay out of
+  // the work-list buckets, but SKV draws an upcoming charge regardless of our
+  // ignore flag, so the saldo-coverage math re-includes them here (same
+  // future-due predicate the server bucket applies to unignored rows).
   const nextCharge = useMemo(() => {
-    const upcoming = tx?.upcoming ?? []
     const dueOf = (r: StoredSkattekontoTransaction) =>
       r.forfallodatum ?? r.transaktionsdatum
+    const today = new Date().toISOString().slice(0, 10)
+    const ignoredUpcoming = (tx?.ignored ?? []).filter(
+      (r) => r.status !== 'booked' && dueOf(r) >= today,
+    )
+    const upcoming = [...(tx?.upcoming ?? []), ...ignoredUpcoming]
     const due = upcoming.map(dueOf).sort()[0]
     if (!due) return null
     const rows = upcoming.filter((r) => dueOf(r) === due)

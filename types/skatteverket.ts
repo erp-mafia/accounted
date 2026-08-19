@@ -26,7 +26,7 @@ export interface StoredSkattekontoTransaction {
   journal_entry_id: string | null
   /** User's explicit "hide from the work list, never going to book it".
    *  Mirrors transactions.is_ignored; an ignored row never has a
-   *  journal_entry_id (DB CHECK, migration 20260819080000). */
+   *  journal_entry_id (DB CHECK, migration 20260819200000). */
   is_ignored: boolean
   source: 'api' | 'file_import'
   file_import_id: string | null
@@ -121,6 +121,7 @@ export interface SkattekontoBatchRowResult {
     | 'PERIOD_LOCKED'
     | 'ALREADY_BOOKED'
     | 'NOT_SETTLED'
+    | 'ROW_IGNORED'
     | 'TRANSACTION_NOT_FOUND'
     | 'COMMIT_FAILED'
     | 'UNKNOWN'

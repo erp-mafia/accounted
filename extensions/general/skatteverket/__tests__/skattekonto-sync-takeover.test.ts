@@ -197,6 +197,13 @@ describe('syncSkattekonto: takeover of file-imported rows', () => {
   })
 })
 
+/** ISO date `days` days before today (UTC), matching the sync's clamp math. */
+function isoDaysAgo(days: number): string {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
 describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -204,14 +211,15 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
     getSaldoMock.mockResolvedValue(makeSaldo())
   })
 
-  it('passes the earliest fiscal period start as datumFrom', async () => {
+  it('passes the earliest fiscal period start as datumFrom when inside the SKV window', async () => {
     getTransaktionerMock.mockResolvedValue({
       tidigareTransaktioner: [],
       kommandeTransaktioner: [],
     })
 
+    const periodStart = isoDaysAgo(100)
     enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
-    enqueue({ data: [{ period_start: '2025-11-01' }] }) // fiscal_periods earliest
+    enqueue({ data: [{ period_start: periodStart }] }) // fiscal_periods earliest
 
     await syncSkattekonto(makeCtx())
 
@@ -221,7 +229,49 @@ describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
     expect(getTransaktionerMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),
-      '2025-11-01',
+      periodStart,
+    )
+  })
+
+  it('omits datumFrom when bookkeeping started before the 555-day default window', async () => {
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: [],
+      kommandeTransaktioner: [],
+    })
+
+    // 800 days ago: still ACCEPTED by SKV (limit ~915 days) but OLDER than
+    // the 555-day default. Sending it would silently widen the window past
+    // what an unbounded fetch returns; omitting it is identical to what we
+    // want, so nothing is sent.
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [{ period_start: isoDaysAgo(800) }] }) // fiscal_periods earliest
+
+    await syncSkattekonto(makeCtx())
+
+    expect(getTransaktionerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      undefined,
+    )
+  })
+
+  it('omits datumFrom when bookkeeping started past the ~915-day SKV limit (felkod 2)', async () => {
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: [],
+      kommandeTransaktioner: [],
+    })
+
+    // 1690 days ago: a datumFrom this old is rejected by SKV with felkod 2
+    // and would break the whole sync. The clamp must omit it.
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [{ period_start: isoDaysAgo(1690) }] }) // fiscal_periods earliest
+
+    await syncSkattekonto(makeCtx())
+
+    expect(getTransaktionerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      undefined,
     )
   })
 

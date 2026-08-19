@@ -7,7 +7,7 @@ import { getPool, withUserContext } from '@/tests/pg/setup'
  * RLS smoke for skattekonto_transactions. Locks in tenant isolation +
  * the (company_id, dedup_key) unique constraint that the sync UPSERT
  * relies on for idempotency, and the is_ignored CHECK (migration
- * 20260819080000): an ignored row must never carry a journal_entry_id.
+ * 20260819200000): an ignored row must never carry a journal_entry_id.
  */
 
 async function insertSkattekontoTransaction(params: {
