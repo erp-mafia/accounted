@@ -47,6 +47,12 @@ import type {
   PotentialVoucher,
 } from '@/components/transactions/transaction-types'
 import { SuggestionReviewList } from '@/components/transactions/SuggestionReviewList'
+import {
+  isSourceFilter,
+  readStoredSourceFilter,
+  resolveEffectiveSourceFilter,
+  writeStoredSourceFilter,
+} from '@/components/transactions/source-filter-storage'
 import type {
   SkattekontoBatchResult,
   SkattekontoBatchRowResult,
@@ -124,8 +130,6 @@ const TemplatePicker = dynamic(() => import('@/components/transactions/TemplateP
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
 
-const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
-
 // Page-local fiscal-year scope (FyPicker appends the company id). Deliberately
 // NOT the shared report scope (Accounted:fiscal-year:): a year picked on a
 // report page must never silently hide pending inbox rows here, and vice versa.
@@ -136,18 +140,6 @@ const PERIOD_FILTER_STORAGE_PREFIX = 'Accounted:transactions-fy-scope:v1:'
 // (DB-sourced), but this guard keeps the interpolated list UUID-only, matching
 // /api/documents/counts.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-// Validates a persisted value. Stale acct:<id> entries (account removed or
-// disabled) are caught later by the sourceItems stale-filter guard.
-function isSourceFilter(value: string | null): value is SourceFilter {
-  return (
-    value === 'all' ||
-    value === 'bank' ||
-    value === 'bank:other' ||
-    value === 'skatteverket' ||
-    (value?.startsWith('acct:') ?? false)
-  )
-}
 
 // A skattekonto row qualifies for bulk booking when the outcome is fully
 // deterministic: a rule matched (booking_suggestion), it is not a likely
@@ -305,6 +297,7 @@ interface QuickReviewState {
 export default function TransactionsPage() {
   const { company } = useCompany()
   const companyId = company?.id ?? null
+  const searchParams = useSearchParams()
   const t = useTranslations('transactions')
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -477,28 +470,27 @@ export default function TransactionsPage() {
   // ever visit the settings panel where the reconnect prompt lives.
   const [skvNeedsReconnect, setSkvNeedsReconnect] = useState(false)
 
-  // One browser-wide source filter, persisted (#1105) so the choice
-  // survives reloads. Defaults to 'all'.
+  // The user's WANTED source filter, persisted per company (#1105, per-company
+  // since v2). What the page actually filters by is the derived
+  // effectiveSourceFilter below, which falls back to 'all' while the wanted
+  // source's items are still loading or when the source went stale.
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(SOURCE_FILTER_STORAGE_KEY)
-      if (isSourceFilter(stored)) setSourceFilter(stored)
-    } catch {
-      // localStorage may be unavailable. Keep the default in-memory state.
-    }
-  }, [])
+    if (!companyId) return
+    // A valid ?source= deep link overrides the remembered choice for this
+    // visit only: it is applied to state, never written to storage.
+    const urlSource = searchParams.get('source')
+    setSourceFilter(isSourceFilter(urlSource) ? urlSource : readStoredSourceFilter(companyId))
+  }, [companyId, searchParams])
 
-  const handleSourceFilterChange = useCallback((next: SourceFilter) => {
-    setSourceFilter(next)
-
-    try {
-      window.localStorage.setItem(SOURCE_FILTER_STORAGE_KEY, next)
-    } catch {
-      // localStorage may be unavailable. The in-memory filter still works.
-    }
-  }, [])
+  const handleSourceFilterChange = useCallback(
+    (next: SourceFilter) => {
+      setSourceFilter(next)
+      if (companyId) writeStoredSourceFilter(companyId, next)
+    },
+    [companyId],
+  )
 
   // Period filter (rakenskapsar). FyPicker owns the persistence under the
   // page-local key. Quarter chips existed briefly (#1545) but were dropped:
@@ -543,7 +535,6 @@ export default function TransactionsPage() {
   // Bank transaction being moved to another cash account (null = dialog closed).
   const [moveAccountTarget, setMoveAccountTarget] = useState<TransactionWithInvoice | null>(null)
   const supabase = useRealtimeSupabase()
-  const searchParams = useSearchParams()
   const highlightId = searchParams.get('highlight')
   // Tracks the last highlight target we acted on so re-renders don't re-trigger
   // the auto-open every time the user closes the categorize panel.
@@ -641,59 +632,6 @@ export default function TransactionsPage() {
     }),
     [skvUnmatched, uncategorizedTransactions],
   )
-
-  const inboxItems = useMemo<InboxItem[]>(() => {
-    const items: InboxItem[] = []
-    const query = searchTerm.trim().toLowerCase()
-    if (sourceFilter !== 'skatteverket') {
-      for (const tx of uncategorizedTransactions) {
-        // The refetch already narrows state server-side; this check makes the
-        // filter correct immediately on change, before the refetch lands.
-        if (!isWithinBounds(tx.date, periodBounds)) continue
-        if (
-          sourceFilter.startsWith('acct:') &&
-          tx.cash_account_id !== sourceFilter.slice('acct:'.length)
-        ) {
-          continue
-        }
-        if (sourceFilter === 'bank:other' && tx.cash_account_id != null) continue
-        if (
-          query &&
-          !tx.description?.toLowerCase().includes(query) &&
-          !tx.date.includes(query) &&
-          !String(tx.amount).includes(query)
-        ) {
-          continue
-        }
-        items.push({ source: 'bank', date: tx.date, data: tx })
-      }
-    }
-    if (sourceFilter === 'all' || sourceFilter === 'skatteverket') {
-      // Inbox only shows SKV rows that need action (no verifikat yet).
-      for (const r of skvRows) {
-        // Exiting rows stay rendered for the exit animation, even if a
-        // refetch already gave them a journal_entry_id mid-window (see above).
-        if (r.journal_entry_id && !exitingIds.has(r.id)) continue
-        // SKV rows live client-side only, so the period filter applies here.
-        if (!isWithinBounds(r.transaktionsdatum, periodBounds)) continue
-        if (
-          query &&
-          !r.transaktionstext?.toLowerCase().includes(query) &&
-          !r.transaktionsdatum.includes(query) &&
-          !String(r.belopp_skatteverket).includes(query)
-        ) {
-          continue
-        }
-        items.push({ source: 'skatteverket', date: r.transaktionsdatum, data: r })
-      }
-    }
-    return items.sort((a, b) => {
-      if (a.date !== b.date) return b.date.localeCompare(a.date)
-      // Same date → bank first so invoice-match cards lead.
-      if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
-      return 0
-    })
-  }, [exitingIds, periodBounds, searchTerm, skvRows, sourceFilter, uncategorizedTransactions])
 
   // History shows only the contiguous newest-first window: the older pending
   // rows merged in for the inbox would otherwise render as sparse, gap-ridden
@@ -793,13 +731,76 @@ export default function TransactionsPage() {
     return items
   }, [cashAccounts, hasUnassignedBankRows, skvNeedsReconnect, skvRows.length, t, totalSourceBalance])
 
-  // A narrowed filter can go stale (account disabled, skv rows drained,
-  // "övriga" bucket emptied): fall back to everything rather than filtering
-  // the inbox down to an invisible source.
-  useEffect(() => {
-    if (sourceFilter === 'all') return
-    if (!sourceItems.some((item) => item.id === sourceFilter)) setSourceFilter('all')
-  }, [sourceFilter, sourceItems])
+  // What the page actually filters by. A narrowed filter whose source is not
+  // (yet) among the items, because cash accounts / skv rows / transactions
+  // are still loading, or because the source went stale (account disabled,
+  // skv rows drained, "övriga" bucket emptied), resolves to 'all' instead of
+  // filtering the inbox down to an invisible source. Deriving this (rather
+  // than resetting state, as the old guard effect did) removes the mount-time
+  // race that wiped the persisted choice before the async sources arrived.
+  const effectiveSourceFilter = useMemo(
+    () =>
+      resolveEffectiveSourceFilter(
+        sourceFilter,
+        sourceItems.map((item) => item.id),
+      ),
+    [sourceFilter, sourceItems],
+  )
+
+  // Declared after sourceItems/effectiveSourceFilter because the inbox must
+  // filter by the EFFECTIVE source, never the raw wanted one.
+  const inboxItems = useMemo<InboxItem[]>(() => {
+    const items: InboxItem[] = []
+    const query = searchTerm.trim().toLowerCase()
+    if (effectiveSourceFilter !== 'skatteverket') {
+      for (const tx of uncategorizedTransactions) {
+        // The refetch already narrows state server-side; this check makes the
+        // filter correct immediately on change, before the refetch lands.
+        if (!isWithinBounds(tx.date, periodBounds)) continue
+        if (
+          effectiveSourceFilter.startsWith('acct:') &&
+          tx.cash_account_id !== effectiveSourceFilter.slice('acct:'.length)
+        ) {
+          continue
+        }
+        if (effectiveSourceFilter === 'bank:other' && tx.cash_account_id != null) continue
+        if (
+          query &&
+          !tx.description?.toLowerCase().includes(query) &&
+          !tx.date.includes(query) &&
+          !String(tx.amount).includes(query)
+        ) {
+          continue
+        }
+        items.push({ source: 'bank', date: tx.date, data: tx })
+      }
+    }
+    if (effectiveSourceFilter === 'all' || effectiveSourceFilter === 'skatteverket') {
+      // Inbox only shows SKV rows that need action (no verifikat yet).
+      for (const r of skvRows) {
+        // Exiting rows stay rendered for the exit animation, even if a
+        // refetch already gave them a journal_entry_id mid-window (see above).
+        if (r.journal_entry_id && !exitingIds.has(r.id)) continue
+        // SKV rows live client-side only, so the period filter applies here.
+        if (!isWithinBounds(r.transaktionsdatum, periodBounds)) continue
+        if (
+          query &&
+          !r.transaktionstext?.toLowerCase().includes(query) &&
+          !r.transaktionsdatum.includes(query) &&
+          !String(r.belopp_skatteverket).includes(query)
+        ) {
+          continue
+        }
+        items.push({ source: 'skatteverket', date: r.transaktionsdatum, data: r })
+      }
+    }
+    return items.sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date)
+      // Same date → bank first so invoice-match cards lead.
+      if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
+      return 0
+    })
+  }, [effectiveSourceFilter, exitingIds, periodBounds, searchTerm, skvRows, uncategorizedTransactions])
 
   // Rows the bulkbar's "Markera alla" can select: the visible bank rows
   // (they feed the /api/transactions/* batch handlers) ...
@@ -1409,6 +1410,21 @@ export default function TransactionsPage() {
     if (!tx) return
     handledHighlightRef.current = highlightId
 
+    // A deep link must land on a visible row: when the remembered source
+    // filter would hide the highlighted transaction, widen to 'all' in
+    // memory only (storage keeps the user's choice for the next visit).
+    // Checked against the WANTED filter, not the effective one: transactions
+    // can load before cash accounts, when the effective filter is still 'all'
+    // but the wanted one would hide the row the moment the accounts arrive.
+    // 'all' rather than acct:<id> because it also covers rows with a null
+    // cash_account_id.
+    const hiddenByFilter =
+      sourceFilter === 'skatteverket' ||
+      (sourceFilter.startsWith('acct:') &&
+        tx.cash_account_id !== sourceFilter.slice('acct:'.length)) ||
+      (sourceFilter === 'bank:other' && tx.cash_account_id != null)
+    if (hiddenByFilter) setSourceFilter('all')
+
     // Defer the scroll until React has committed the list to the DOM.
     // Without rAF the data-tx-id node may not exist yet when this fires
     // immediately after fetchTransactions resolves.
@@ -1420,7 +1436,7 @@ export default function TransactionsPage() {
         }
       })
     })
-  }, [highlightId, transactions])
+  }, [highlightId, sourceFilter, transactions])
 
   // Auto-fetch suggestions when transactions load
   useEffect(() => {
@@ -3470,7 +3486,7 @@ export default function TransactionsPage() {
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
 
-      {skvNeedsReconnect && sourceFilter === 'skatteverket' ? (
+      {skvNeedsReconnect && effectiveSourceFilter === 'skatteverket' ? (
         // Only when the user is actually looking at skattekonto rows: as a
         // permanent page-wide line it read as noise (feedback 2026-08-14).
         // The skattekonto page keeps its own reconnect line.
@@ -3534,11 +3550,11 @@ export default function TransactionsPage() {
           />
           {sourceItems.length > 1 && (
             <ContextPicker
-              value={sourceFilter}
+              value={effectiveSourceFilter}
               onChange={(id) => handleSourceFilterChange(id as SourceFilter)}
               triggerLabel={(() => {
                 const active =
-                  sourceItems.find((item) => item.id === sourceFilter) ?? sourceItems[0]
+                  sourceItems.find((item) => item.id === effectiveSourceFilter) ?? sourceItems[0]
                 return active.annotation ? `${active.label} · ${active.annotation}` : active.label
               })()}
               items={sourceItems}
@@ -3572,13 +3588,13 @@ export default function TransactionsPage() {
         />
       ) : mode === 'inbox' ? (
         inboxItems.length === 0 ? (
-          searchTerm || sourceFilter !== 'all' || periodBounds ? (
+          searchTerm || effectiveSourceFilter !== 'all' || periodBounds ? (
             <DataListEmpty
               title="Inga träffar"
               description={
                 searchTerm
                   ? t('no_search_results')
-                  : sourceFilter !== 'all'
+                  : effectiveSourceFilter !== 'all'
                     ? t('source_empty')
                     : t('period_empty')
               }
@@ -3761,7 +3777,7 @@ export default function TransactionsPage() {
           skvRows={skvRowsInScope}
           exitingIds={exitingIds}
           searchTerm={searchTerm}
-          sourceFilter={sourceFilter}
+          sourceFilter={effectiveSourceFilter}
           jeUnderlagStatus={jeUnderlagStatus}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
