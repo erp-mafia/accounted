@@ -360,7 +360,7 @@ describe('POST /connect existing-connection guard', () => {
     })
   })
 
-  it('returns 409 EXISTING_CONNECTION when a non-revoked row for the same bank exists', async () => {
+  it('returns 409 EXISTING_CONNECTION when a dead (expired) row for the same bank exists', async () => {
     const chains: RecordedChain[] = []
     let call = 0
     const ctx = makeContext(() => {
@@ -390,15 +390,57 @@ describe('POST /connect existing-connection guard', () => {
     }
     expect(body.code).toBe('EXISTING_CONNECTION')
     expect(body.existing_connection_id).toBe('existing-1')
+    // The message names the bank and points at Förnya samtycke.
+    expect(body.error).toContain('Nordea')
+    expect(body.error).toContain('behöver förnyas')
+    expect(body.error).toContain('Förnya samtycke')
     // The bank flow is never started and no duplicate row is inserted.
     expect(mockStartAuthorization).not.toHaveBeenCalled()
     for (const chain of chains) {
       expect(chain._calls.some((c) => c.method === 'insert')).toBe(false)
     }
-    // The guard excludes revoked rows: those are free to reconnect over.
+    // The guard only matches DEAD-BUT-ESTABLISHED rows: an active row (a
+    // legitimate second login at the same bank) and revoked rows never 409.
     const guard = chains[2]
-    const neqCall = guard._calls.find((c) => c.method === 'neq')
-    expect(neqCall?.args).toEqual(['status', 'revoked'])
+    const inCall = guard._calls.find((c) => c.method === 'in')
+    expect(inCall?.args).toEqual(['status', ['expired', 'error', 'pending_selection']])
+  })
+
+  it('never 409s over an ACTIVE same-bank connection: the guard status filter excludes it', async () => {
+    const chains: RecordedChain[] = []
+    let call = 0
+    const ctx = makeContext(() => {
+      call++
+      let chain: RecordedChain
+      if (call === 1) {
+        chain = makeChain({ data: null })
+      } else if (call === 2) {
+        chain = makeChain({ data: [] })
+      } else if (call === 3) {
+        // Guard: only an ACTIVE row exists for this bank; the dead-status
+        // filter matches nothing, so the query returns null.
+        chain = makeChain({ data: null })
+      } else {
+        chain = makeChain({ data: { id: 'second-login' } })
+      }
+      chains.push(chain)
+      return chain
+    })
+
+    const response = await connectRoute().handler(makeConnectRequest(), ctx)
+
+    // The second legitimate login at the same bank goes through.
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { connection_id: string }
+    expect(body.connection_id).toBe('second-login')
+    expect(mockStartAuthorization).toHaveBeenCalledTimes(1)
+
+    // The guard queried with the dead-status filter (so an active row can
+    // never be returned) rather than neq('status', 'revoked').
+    const guard = chains[2]
+    const inCall = guard._calls.find((c) => c.method === 'in')
+    expect(inCall?.args).toEqual(['status', ['expired', 'error', 'pending_selection']])
+    expect(guard._calls.some((c) => c.method === 'neq')).toBe(false)
   })
 
   it('force_new: true bypasses the guard and inserts a fresh row', async () => {
@@ -437,9 +479,15 @@ describe('POST /connect existing-connection guard', () => {
     const body = (await response.json()) as { connection_id: string }
     expect(body.connection_id).toBe('new-conn')
     expect(mockStartAuthorization).toHaveBeenCalledTimes(1)
-    // No guard query ran: nothing used neq('status', 'revoked').
+    // No guard query ran: nothing filtered on the guard's dead-status set
+    // (the sweep's in() uses ['pending', 'error'] and is expected).
     for (const chain of chains) {
-      expect(chain._calls.some((c) => c.method === 'neq')).toBe(false)
+      const guardIn = chain._calls.find(
+        (c) =>
+          c.method === 'in' &&
+          JSON.stringify(c.args) === JSON.stringify(['status', ['expired', 'error', 'pending_selection']]),
+      )
+      expect(guardIn).toBeUndefined()
     }
   })
 })

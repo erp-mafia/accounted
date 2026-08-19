@@ -143,6 +143,9 @@ export function useBankSync() {
         title: t('bank_sync_button_now'),
         // Surface skipped duplicates too: a renewal that dedupes correctly
         // imports 0 rows, which without this line reads as a broken sync.
+        // Joined with '. ' so the two sentences do not run together (the
+        // imported-count strings are shared with the BankSyncSinceLastVisit
+        // chip and deliberately carry no trailing period).
         description: [
           data.imported === 1
             ? t('bank_sync_new_since_last_visit_one')
@@ -154,7 +157,7 @@ export function useBankSync() {
             : null,
         ]
           .filter(Boolean)
-          .join(' '),
+          .join('. '),
       })
       // Tell the neighbouring status chip to refetch so it doesn't keep showing
       // the pre-sync "synced Nd ago" until a hard reload.

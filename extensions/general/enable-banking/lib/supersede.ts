@@ -152,6 +152,31 @@ export async function supersedeSiblingConnections(
       })
     }
 
+    // Park the row FIRST, revoke at Enable Banking only after the park
+    // succeeded: revoking first and then failing to park would leave a
+    // live-looking row whose session is already dead at the bank, with no
+    // way back but another full reconnect.
+    const { error: updateError } = await supabase
+      .from('bank_connections')
+      .update({
+        status: 'revoked',
+        session_id: null,
+        oauth_state: null,
+        error_message: null,
+        superseded_by: input.newConnectionId,
+        superseded_at: new Date().toISOString(),
+      })
+      .eq('id', sibling.id)
+      .eq('company_id', input.companyId)
+
+    if (updateError) {
+      log.error('failed to park superseded sibling: skipping its EB session revoke', {
+        siblingId: sibling.id,
+        error: updateError.message,
+      })
+      continue
+    }
+
     // Best-effort revoke the replaced consent at Enable Banking. Never revoke
     // a session another connection still holds (shared cross-company
     // consents, see lib/session-sharing.ts), and never revoke the session the
@@ -173,27 +198,6 @@ export async function supersedeSiblingConnections(
           })
         }
       }
-    }
-
-    const { error: updateError } = await supabase
-      .from('bank_connections')
-      .update({
-        status: 'revoked',
-        session_id: null,
-        oauth_state: null,
-        error_message: null,
-        superseded_by: input.newConnectionId,
-        superseded_at: new Date().toISOString(),
-      })
-      .eq('id', sibling.id)
-      .eq('company_id', input.companyId)
-
-    if (updateError) {
-      log.error('failed to park superseded sibling', {
-        siblingId: sibling.id,
-        error: updateError.message,
-      })
-      continue
     }
     superseded.push(sibling)
     result.supersededIds.push(sibling.id)

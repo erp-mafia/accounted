@@ -461,37 +461,38 @@ export const enableBankingExtension: Extension = {
               })
             }
 
-            // A fresh connect while an ESTABLISHED (non-revoked) connection to
-            // the same bank exists is almost always a renewal that should go
-            // through the reconnect path: a second row duplicates the
-            // connection and used to strand the old one in "Åtgärd krävs"
-            // forever. 409 with the existing id lets the client offer "förnya
-            // i stället"; force_new is the deliberate escape hatch for a
-            // genuinely separate login at the same bank (the callback's
-            // supersede then leaves non-overlapping account sets alone).
-            // Runs AFTER the sweep so a never-activated zombie cannot block
-            // a legitimate fresh connect.
+            // A fresh connect while a DEAD-BUT-ESTABLISHED connection to the
+            // same bank exists (expired/error/pending_selection) is almost
+            // always a renewal that should go through the reconnect path: a
+            // second row duplicates the connection and used to strand the old
+            // one in "Åtgärd krävs" forever. 409 with the existing id lets
+            // the client offer "förnya i stället". An ACTIVE row never
+            // triggers the guard: two legitimate logins at the same bank
+            // (disjoint account sets, e.g. privat + företag) must remain
+            // creatable through the UI, and the callback's supersede leaves
+            // non-overlapping account sets alone. force_new stays as the
+            // deliberate escape hatch. Runs AFTER the sweep so a
+            // never-activated zombie cannot block a legitimate fresh connect.
             if (forceNew !== true) {
               const { data: establishedRow } = await supabase
                 .from('bank_connections')
                 .select('id, status')
                 .eq('company_id', companyId)
                 .eq('bank_name', resolvedAspspName)
-                .neq('status', 'revoked')
+                .in('status', ['expired', 'error', 'pending_selection'])
                 .order('created_at', { ascending: false })
                 .limit(1)
                 .maybeSingle()
 
               if (establishedRow) {
-                log.info('[enable-banking] Rejecting fresh connect: bank already connected', {
+                log.info('[enable-banking] Rejecting fresh connect: dead connection needs renewal', {
                   existing_id: establishedRow.id,
                   existing_status: establishedRow.status,
                   bank: resolvedAspspName,
                 })
                 return NextResponse.json(
                   {
-                    error:
-                      'Det finns redan en anslutning till den här banken. Förnya den befintliga anslutningen i stället.',
+                    error: `Du har redan en koppling till ${resolvedAspspName} som behöver förnyas. Använd Förnya samtycke på kopplingen i stället.`,
                     code: 'EXISTING_CONNECTION',
                     existing_connection_id: establishedRow.id,
                   },

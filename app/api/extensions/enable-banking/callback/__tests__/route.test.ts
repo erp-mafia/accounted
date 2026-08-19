@@ -516,6 +516,74 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(accountsData[0].dedup_scope).toBe('uid-first')
   })
 
+  it('prefers the survivor account explicit dedup scope over a carried sibling scope', async () => {
+    // A superseded sibling shares the IBAN but was ingested under a different
+    // scope. The survivor's own row already pinned an explicit scope for this
+    // account: that is what its external_ids were minted under, so the
+    // sibling's scope must NOT clobber it.
+    mockSupersede.mockResolvedValue({
+      supersededIds: ['old-1'],
+      dedupScopeByIban: new Map([['SE1234', 'sibling-scope']]),
+    })
+
+    const capturedUpdates: Record<string, unknown>[] = []
+    let callIndex = 0
+    mockFrom.mockImplementation(() => {
+      callIndex++
+      if (callIndex === 1) {
+        return mockChain({
+          data: {
+            id: 'conn-1',
+            user_id: 'user-1',
+            company_id: 'company-1',
+            bank_name: 'TestBank',
+            status: 'expired',
+            session_id: null,
+            accounts_data: [
+              { uid: 'uid-old', iban: 'SE1234', currency: 'SEK', dedup_scope: 'survivor-scope' },
+            ],
+          },
+          error: null,
+        })
+      }
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn((payload: Record<string, unknown>) => {
+        capturedUpdates.push(payload)
+        return chain
+      })
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: { id: 'conn-1', bank_name: 'TestBank', company_id: 'company-1', user_id: 'user-1' },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [
+        { uid: 'uid-new', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2024-12-31T00:00:00Z' },
+      aspsp: { name: 'TestBank', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    expect(response.status).toBe(200)
+    await response.text()
+
+    // Every accounts_data write keeps the survivor's explicit scope: neither
+    // the connection write nor any carried-scope follow-up flips it.
+    const accountsWrites = capturedUpdates.filter((u) => Array.isArray(u.accounts_data))
+    expect(accountsWrites.length).toBeGreaterThan(0)
+    for (const write of accountsWrites) {
+      const accountsData = write.accounts_data as Array<{ uid: string; dedup_scope?: string }>
+      expect(accountsData.find((a) => a.uid === 'uid-new')?.dedup_scope).toBe('survivor-scope')
+    }
+  })
+
   it('deletes the fresh row and streams an error redirect when the session exchange fails', async () => {
     const deleteCalls: unknown[] = []
     const updateCalls: unknown[] = []

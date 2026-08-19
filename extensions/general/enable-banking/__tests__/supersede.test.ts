@@ -179,6 +179,66 @@ describe('supersedeSiblingConnections', () => {
     })
   })
 
+  it('parks the sibling row BEFORE revoking its session at Enable Banking', async () => {
+    // Revoking first and then failing to park would leave a live-looking row
+    // whose session is already dead at the bank: the park update must come
+    // first, in call order.
+    const sequence: string[] = []
+    mockDeleteSession.mockImplementation(async () => {
+      sequence.push('deleteSession')
+    })
+
+    const siblingSelect = makeChain({ data: [makeSibling()] })
+    const revokeUpdate = makeChain({})
+    const originalUpdate = revokeUpdate.update as ReturnType<typeof vi.fn>
+    revokeUpdate.update = vi.fn((...args: unknown[]) => {
+      sequence.push('parkUpdate')
+      return originalUpdate(...args)
+    })
+    const txSelect = makeChain({ data: [] })
+    const cashDemote = makeChain({})
+    const newRowSelect = makeChain({ data: { last_synced_at: null, initial_sync_completed_at: null } })
+    const carryUpdate = makeChain({})
+
+    const { client } = makeSupabase([
+      { table: 'bank_connections', chain: siblingSelect },
+      { table: 'bank_connections', chain: revokeUpdate },
+      { table: 'transactions', chain: txSelect },
+      { table: 'cash_accounts', chain: cashDemote },
+      { table: 'bank_connections', chain: newRowSelect },
+      { table: 'bank_connections', chain: carryUpdate },
+    ])
+
+    const result = await supersedeSiblingConnections(client, {
+      ...BASE_INPUT,
+      newAccounts: NEW_ACCOUNTS,
+    })
+
+    expect(result.supersededIds).toEqual(['old-1'])
+    expect(sequence).toEqual(['parkUpdate', 'deleteSession'])
+  })
+
+  it('skips the EB session revoke entirely when the park update fails', async () => {
+    const siblingSelect = makeChain({ data: [makeSibling()] })
+    const failedPark = makeChain({ error: { message: 'update refused' } })
+
+    // Only the lookup and the failed park run: no revoke, no re-point, no
+    // demote, no sync-state carry.
+    const { client, from } = makeSupabase([
+      { table: 'bank_connections', chain: siblingSelect },
+      { table: 'bank_connections', chain: failedPark },
+    ])
+
+    const result = await supersedeSiblingConnections(client, {
+      ...BASE_INPUT,
+      newAccounts: NEW_ACCOUNTS,
+    })
+
+    expect(result.supersededIds).toEqual([])
+    expect(mockDeleteSession).not.toHaveBeenCalled()
+    expect(from).toHaveBeenCalledTimes(2)
+  })
+
   it('never supersedes an ACTIVE sibling without IBAN overlap (separate login at the same bank)', async () => {
     const siblingSelect = makeChain({
       data: [

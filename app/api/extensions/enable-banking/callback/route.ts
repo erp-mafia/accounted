@@ -324,13 +324,17 @@ async function finalizeConnection(
   // stable. A no-IBAN account whose uid changed cannot be matched here: it
   // gets a fresh scope, same as before this field existed.
   const priorAccounts = pendingConnection.accounts_data ?? []
-  const priorScopeByIban = new Map<string, string>()
-  const priorScopeByUid = new Map<string, string>()
+  // explicit: the prior account carried a stored dedup_scope (as opposed to
+  // one derived here from its IBAN/uid). The supersede pass below only lets a
+  // carried sibling scope onto an account whose own scope is NOT explicit.
+  const priorScopeByIban = new Map<string, { scope: string; explicit: boolean }>()
+  const priorScopeByUid = new Map<string, { scope: string; explicit: boolean }>()
   for (const prior of priorAccounts) {
     const priorIban = normalizeIban(prior.iban)
     const priorScope = prior.dedup_scope || priorIban || prior.uid
-    if (priorIban && !priorScopeByIban.has(priorIban)) priorScopeByIban.set(priorIban, priorScope)
-    if (!priorScopeByUid.has(prior.uid)) priorScopeByUid.set(prior.uid, priorScope)
+    const priorEntry = { scope: priorScope, explicit: Boolean(prior.dedup_scope) }
+    if (priorIban && !priorScopeByIban.has(priorIban)) priorScopeByIban.set(priorIban, priorEntry)
+    if (!priorScopeByUid.has(prior.uid)) priorScopeByUid.set(prior.uid, priorEntry)
   }
 
   const accountsMetadata: StoredAccount[] = accounts.map((account: AccountInfo) => {
@@ -348,8 +352,8 @@ async function finalizeConnection(
       // re-authorizations. Byte-identical to the derivation lib/sync.ts
       // applied before this field existed (normalized IBAN, else uid).
       dedup_scope:
-        (normalizedIban ? priorScopeByIban.get(normalizedIban) : undefined) ??
-        priorScopeByUid.get(account.uid) ??
+        (normalizedIban ? priorScopeByIban.get(normalizedIban)?.scope : undefined) ??
+        priorScopeByUid.get(account.uid)?.scope ??
         normalizedIban ??
         account.uid,
     }
@@ -429,14 +433,23 @@ async function finalizeConnection(
     })
     // Carry the superseded rows' dedup scopes onto this row's accounts so a
     // renewal keeps minting the same transaction external_ids (see
-    // StoredAccount.dedup_scope). Persisted by the accounts_data write below.
+    // StoredAccount.dedup_scope). An account whose OWN prior row already
+    // carried an explicit dedup_scope keeps it: that scope is the one its
+    // external_ids were actually minted under, and a sibling's scope for the
+    // same IBAN must not clobber it. Only accounts whose scope was derived
+    // here (IBAN/uid fallback) take the carried one. Persisted by the
+    // accounts_data write below.
     if (supersedeResult.dedupScopeByIban.size > 0) {
       for (const account of accountsMetadata) {
         const normalizedIban = normalizeIban(account.iban)
         const carried = normalizedIban
           ? supersedeResult.dedupScopeByIban.get(normalizedIban)
           : undefined
-        if (carried && account.dedup_scope !== carried) {
+        const survivorExplicit =
+          (normalizedIban ? priorScopeByIban.get(normalizedIban)?.explicit : undefined) ??
+          priorScopeByUid.get(account.uid)?.explicit ??
+          false
+        if (carried && !survivorExplicit && account.dedup_scope !== carried) {
           account.dedup_scope = carried
           carriedScopeDirty = true
         }
