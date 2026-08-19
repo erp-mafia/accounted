@@ -1675,6 +1675,14 @@ export interface ApiResponse<T> {
   error?: string
 }
 
+export interface ArchiveEstimate {
+  total_bytes: number
+  document_bytes: number
+  document_count: number
+  size_limit_bytes: number
+  within_limit: boolean
+}
+
 export interface PaginatedResponse<T> {
   data: T[]
   count: number

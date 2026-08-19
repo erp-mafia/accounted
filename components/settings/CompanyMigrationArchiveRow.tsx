@@ -9,10 +9,10 @@ import {
   SettingsRowEnd,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
+import type { ApiResponse, ArchiveEstimate } from '@/types'
 
-interface ArchiveEstimate {
-  document_count: number
-}
+const ESTIMATE_RETRY_DELAY_MS = 1_000
+const ESTIMATE_MAX_ATTEMPTS = 3
 
 export function CompanyMigrationArchiveRow({ companyId }: { companyId: string }) {
   const t = useTranslations('settings_company')
@@ -28,24 +28,39 @@ export function CompanyMigrationArchiveRow({ companyId }: { companyId: string })
   useEffect(() => {
     const controller = new AbortController()
     let cancelled = false
-    ;(async () => {
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+
+    const scheduleRetry = (attempt: number) => {
+      if (cancelled || attempt >= ESTIMATE_MAX_ATTEMPTS) return
+      retryTimer = setTimeout(() => {
+        void loadEstimate(attempt + 1)
+      }, ESTIMATE_RETRY_DELAY_MS)
+    }
+
+    const loadEstimate = async (attempt: number) => {
       try {
         const response = await fetch(
           `/api/company/${companyId}/migration-reset/archive?estimate=1`,
           { signal: controller.signal },
         )
-        if (!response.ok) return
-        const body = await response.json() as { data?: ArchiveEstimate }
+        if (!response.ok) {
+          if (response.status >= 500 || response.status === 429) scheduleRetry(attempt)
+          return
+        }
+        const body = await response.json() as ApiResponse<ArchiveEstimate>
         if (!cancelled && body.data) {
           setLoadedEstimate({ companyId, value: body.data })
         }
-      } catch {
-        // A transient lookup failure must not expose or guess an archive link.
-        // The row appears after a later settings load once authorization works.
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        scheduleRetry(attempt)
       }
-    })()
+    }
+
+    void loadEstimate(1)
     return () => {
       cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
       controller.abort()
     }
   }, [companyId])

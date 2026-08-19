@@ -20,18 +20,11 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useFormat } from '@/lib/hooks/use-format'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import type { ApiResponse, ArchiveEstimate } from '@/types'
 import { Download, Loader2 } from 'lucide-react'
 
 type Scope = 'all' | 'period'
 type ArchiveMode = 'active-company' | 'migration-reset-source'
-
-interface EstimateResponse {
-  total_bytes: number
-  document_bytes: number
-  document_count: number
-  size_limit_bytes: number
-  within_limit: boolean
-}
 
 const LAST_DOWNLOAD_STORAGE_KEY = 'Accounted:last-backup-download'
 
@@ -62,7 +55,7 @@ export function FullArchiveDialog({
   const [scope, setScope] = useState<Scope>('all')
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [includeDocuments, setIncludeDocuments] = useState(true)
-  const [estimate, setEstimate] = useState<EstimateResponse | null>(null)
+  const [estimate, setEstimate] = useState<ArchiveEstimate | null>(null)
   const [isLoadingEstimate, setIsLoadingEstimate] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
   const [lastDownloadedAt, setLastDownloadedAt] = useState<string | null>(null)
@@ -113,8 +106,8 @@ export function FullArchiveDialog({
         const separator = archiveUrl.includes('?') ? '&' : '?'
         const res = await fetch(`${archiveUrl}${separator}estimate=1`)
         if (!res.ok) return
-        const { data } = (await res.json()) as { data: EstimateResponse }
-        if (!cancelled) setEstimate(data)
+        const { data } = (await res.json()) as ApiResponse<ArchiveEstimate>
+        if (!cancelled && data) setEstimate(data)
       } catch {
         // leave estimate null; the user can still attempt the download
       } finally {
