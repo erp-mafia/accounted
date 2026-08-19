@@ -3,6 +3,9 @@ import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailText,
   generateInvoiceEmailSubject,
+  generatePaymentConfirmationEmailHtml,
+  generatePaymentConfirmationEmailSubject,
+  generatePaymentConfirmationEmailText,
 } from '../invoice-templates'
 import { makeCustomer, makeInvoice, makeCompanySettings } from '@/tests/helpers'
 
@@ -484,6 +487,91 @@ describe('invoice email templates', () => {
       const oreInvoice = makeInvoice({ invoice_number: '1042', total: 1234.56 })
       const text = generateInvoiceEmailText({ invoice: oreInvoice, customer: svCustomer, company: withBelopp })
       expect(text).toMatch(/Summa: 1[\s ]235,00 SEK/)
+    })
+  })
+})
+
+// #1693: the betalningsbekräftelse mail. Customer-language driven like the
+// invoice mail, but it never lists payment details (nothing is due) and never
+// applies the company's custom invoice texts.
+describe('payment confirmation email templates', () => {
+  const paidInvoice = makeInvoice({
+    invoice_number: '1042',
+    invoice_date: '2026-05-22',
+    currency: 'SEK',
+    total: 12500,
+    status: 'paid',
+    paid_amount: 12500,
+    remaining_amount: 0,
+    paid_at: '2026-06-10T12:00:00+00:00',
+  })
+  const customText = makeCompanySettings({
+    company_name: 'Acme AB',
+    invoice_email_texts: { sv: { subject: 'Egen rubrik {fakturanummer}', body: 'Egen text' } },
+  })
+
+  describe('Swedish customer', () => {
+    const customer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se', language: 'sv' })
+    const data = { invoice: paidInvoice, customer, company }
+
+    it('subject names the invoice and the sender', () => {
+      expect(generatePaymentConfirmationEmailSubject(data)).toBe(
+        'Betalningsbekräftelse för faktura 1042 från Acme AB',
+      )
+    })
+
+    it('html confirms the payment with date and amount, without payment details', () => {
+      const html = generatePaymentConfirmationEmailHtml(data)
+      expect(html).toContain('<html lang="sv">')
+      expect(html).toContain('Betalningsbekräftelse från Acme AB')
+      expect(html).toContain('Hej Erik,')
+      expect(html).toContain('faktura 1042 är betald i sin helhet')
+      expect(html).toContain('2026-06-10')
+      expect(html).toContain('12\u00a0500,00 SEK')
+      expect(html).not.toContain('Betalningsinformation')
+      expect(html).not.toContain('Att betala:')
+    })
+
+    it('text mirrors the html', () => {
+      const text = generatePaymentConfirmationEmailText(data)
+      expect(text).toContain('Betalningsbekräftelse från Acme AB')
+      expect(text).toContain('Betald: 2026-06-10')
+      expect(text).toContain('Betalt belopp: 12\u00a0500,00 SEK')
+      expect(text).not.toContain('IBAN')
+    })
+
+    it('ignores the company custom invoice texts', () => {
+      const subject = generatePaymentConfirmationEmailSubject({ ...data, company: customText })
+      expect(subject).toBe('Betalningsbekräftelse för faktura 1042 från Acme AB')
+      expect(generatePaymentConfirmationEmailHtml({ ...data, company: customText })).not.toContain('Egen text')
+    })
+
+    it('omits the paid date when paid_at was never recorded', () => {
+      const text = generatePaymentConfirmationEmailText({
+        ...data,
+        invoice: { ...paidInvoice, paid_at: null },
+      })
+      expect(text).not.toContain('Betald:')
+      expect(text).toContain('Betalt belopp:')
+    })
+  })
+
+  describe('English customer', () => {
+    const customer = makeCustomer({ name: 'John Smith', email: 'john@example.com', language: 'en' })
+    const data = { invoice: paidInvoice, customer, company }
+
+    it('uses English chrome', () => {
+      expect(generatePaymentConfirmationEmailSubject(data)).toBe(
+        'Payment confirmation for invoice 1042 from Acme AB',
+      )
+      const html = generatePaymentConfirmationEmailHtml(data)
+      expect(html).toContain('<html lang="en">')
+      expect(html).toContain('Hi John,')
+      expect(html).toContain('invoice 1042 has been paid in full')
+      expect(html).toContain('12,500.00 SEK')
+      const text = generatePaymentConfirmationEmailText(data)
+      expect(text).toContain('Paid on: 2026-06-10')
+      expect(text).toContain('Amount paid: 12,500.00 SEK')
     })
   })
 })

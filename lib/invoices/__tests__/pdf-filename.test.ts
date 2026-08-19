@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { invoicePdfFilename } from '../pdf-filename'
+import { invoicePdfFilename, paymentConfirmationPdfFilename } from '../pdf-filename'
 
 describe('invoicePdfFilename', () => {
   it('includes company, customer, document type, number, and invoice date', () => {
@@ -64,5 +64,21 @@ describe('invoicePdfFilename', () => {
 
     expect(Buffer.byteLength(filename, 'utf8')).toBeLessThanOrEqual(255)
     expect(filename).toMatch(/Faktura nr 2621 20260721\.pdf$/)
+  })
+})
+
+// #1693: the paid copy is named as a betalningsbekräftelse, never as the
+// invoice, so the file cannot be mistaken for the one that was sent.
+describe('paymentConfirmationPdfFilename', () => {
+  it('names the file after the invoice number', () => {
+    expect(paymentConfirmationPdfFilename('2621')).toBe('Betalningsbekraftelse-2621.pdf')
+  })
+
+  it('sanitizes unsafe characters and spaces in the number', () => {
+    expect(paymentConfirmationPdfFilename('F 2026/0042')).toBe('Betalningsbekraftelse-F-2026-0042.pdf')
+  })
+
+  it('falls back when the number is missing', () => {
+    expect(paymentConfirmationPdfFilename(null)).toBe('Betalningsbekraftelse-okand.pdf')
   })
 })

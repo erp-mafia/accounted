@@ -1083,6 +1083,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan kan inte markeras som betald i nuvarande status.',
     message_en: 'Invoice is not in a payable status.',
   },
+  INVOICE_PAYMENT_CONFIRMATION_NOT_PAID: {
+    httpStatus: 409,
+    message_sv:
+      'En betalningsbekräftelse kan bara skapas för en faktura som är fullt betald.',
+    message_en: 'A payment confirmation can only be produced for a fully paid invoice.',
+    remediation: {
+      description:
+        'Register the payment first (POST /api/invoices/{id}/mark-paid) so the invoice reaches status paid; credit notes and proformas never qualify.',
+    },
+  },
   INVOICE_PAID_LINES_UNBALANCED: {
     httpStatus: 400,
     message_sv: 'Verifikationsraderna är inte balanserade (debet ≠ kredit).',

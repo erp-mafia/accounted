@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   invoiceDocumentCaveat,
+  invoicePaymentConfirmationUrl,
   invoiceRerenderUrl,
+  paymentConfirmationPdfSource,
   resolveInvoicePdfSource,
   type InvoicePdfDelivery,
 } from '@/lib/invoices/invoice-pdf-source'
@@ -229,5 +231,39 @@ describe('invoiceRerenderUrl', () => {
     expect(invoiceRerenderUrl('a/b', { inline: true })).toBe(
       '/api/invoices/a%2Fb/pdf?disposition=inline',
     )
+  })
+})
+
+// #1693: the betalningsbekräftelse is always a re-render and always says so,
+// however the delivery history looks. An archived delivery is the invoice as
+// sent (unpaid); the paid copy is a different document and never replaces it.
+describe('paymentConfirmationPdfSource', () => {
+  it('is a re-render of the paid variant with its own caveat', () => {
+    const source = paymentConfirmationPdfSource(INVOICE_ID)
+
+    expect(source).toEqual({
+      kind: 'rerender',
+      url: `/api/invoices/${INVOICE_ID}/pdf?variant=paid`,
+      reason: 'payment_confirmation',
+    })
+    expect(invoiceDocumentCaveat(source)).toBe('payment_confirmation')
+  })
+
+  it('never resolves to the archived delivery, even when one exists', () => {
+    const archived = resolveInvoicePdfSource({
+      invoiceId: INVOICE_ID,
+      invoiceStatus: 'paid',
+      deliveriesLoaded: true,
+      deliveries: [emailDelivery()],
+    })
+    expect(archived.kind).toBe('archived')
+
+    const confirmation = paymentConfirmationPdfSource(INVOICE_ID)
+    expect(confirmation.kind).toBe('rerender')
+    expect(confirmation.url).not.toContain('/api/documents/')
+  })
+
+  it('encodes the invoice id in the confirmation url', () => {
+    expect(invoicePaymentConfirmationUrl('a/b')).toBe('/api/invoices/a%2Fb/pdf?variant=paid')
   })
 })

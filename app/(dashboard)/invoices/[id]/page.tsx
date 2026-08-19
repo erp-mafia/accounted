@@ -22,10 +22,12 @@ import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
 import {
   invoiceDocumentCaveat,
   invoiceRerenderUrl,
+  paymentConfirmationPdfSource,
   resolveInvoicePdfSource,
   type InvoicePdfRerenderReason,
   type InvoicePdfSource,
 } from '@/lib/invoices/invoice-pdf-source'
+import { isPaymentConfirmationEligible } from '@/lib/invoices/payment-confirmation'
 import { contentDispositionFilename } from '@/lib/api/content-disposition'
 import {
   Loader2,
@@ -94,6 +96,7 @@ const RERENDER_CAVEAT_KEYS: Record<
   sent_outside_accounted: 'pdf_rerender_reason_sent_outside',
   no_archived_copy: 'pdf_rerender_reason_no_archive',
   archive_unreachable: 'pdf_rerender_reason_archive_unreachable',
+  payment_confirmation: 'pdf_rerender_reason_payment_confirmation',
 }
 
 // A line is periodiserad when both period dates are set: the revenue was
@@ -188,6 +191,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isUpdating, setIsUpdating] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
   const [isDownloadingPeppol, setIsDownloadingPeppol] = useState(false)
+  // Betalningsbekräftelse (#1693): the paid re-render handed to the customer.
+  const [isDownloadingConfirmation, setIsDownloadingConfirmation] = useState(false)
+  const [showConfirmationSendDialog, setShowConfirmationSendDialog] = useState(false)
   const [isPreparingPeppol, setIsPreparingPeppol] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -696,6 +702,86 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     )
   }
 
+  /**
+   * Download the betalningsbekräftelse (#1693). Always a fresh render with the
+   * BETALD stamp, never the archived original: the file is named and toasted
+   * as a payment confirmation so it is not mistaken for the invoice sent.
+   */
+  async function downloadPaymentConfirmation() {
+    if (!invoice) return
+    const source = paymentConfirmationPdfSource(invoice.id)
+    setIsDownloadingConfirmation(true)
+
+    try {
+      const response = await fetch(source.url)
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as {
+          error?: { code?: string; message?: string; message_en?: string }
+        } | null
+        throw body?.error ?? new Error(t('pdf_generate_failed'))
+      }
+
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
+        ?? `Betalningsbekraftelse-${invoice.invoice_number ?? invoice.id.slice(0, 8)}.pdf`
+      document.body.appendChild(anchor)
+      anchor.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(anchor)
+
+      toast({
+        title: t('payment_confirmation_downloaded_title'),
+        description: t(RERENDER_CAVEAT_KEYS.payment_confirmation),
+      })
+    } catch (error) {
+      toast({
+        title: t('pdf_download_failed_title'),
+        description: getUserErrorMessage(error, {
+          context: 'invoice',
+          locale: locale.startsWith('sv') ? 'sv' : 'en',
+        }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsDownloadingConfirmation(false)
+    }
+  }
+
+  /** Email the betalningsbekräftelse to the customer; confirmed up front. */
+  async function sendPaymentConfirmation() {
+    if (!invoice) return
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/send-payment-confirmation`, {
+        method: 'POST',
+      })
+      const body = await response.json().catch(() => null) as {
+        error?: { code?: string; message?: string; message_en?: string }
+      } | null
+      if (!response.ok) {
+        throw body?.error ?? new Error(t('payment_confirmation_send_failed_description'))
+      }
+
+      toast({
+        title: t('payment_confirmation_sent_title'),
+        description: t('payment_confirmation_sent_description', {
+          email: invoice.customer?.email ?? '',
+        }),
+      })
+    } catch (error) {
+      toast({
+        title: t('payment_confirmation_send_failed_title'),
+        description: getUserErrorMessage(error, {
+          context: 'invoice',
+          locale: locale.startsWith('sv') ? 'sv' : 'en',
+        }),
+        variant: 'destructive',
+      })
+    }
+  }
+
   async function downloadPeppolXml() {
     if (!invoice) return
     setIsDownloadingPeppol(true)
@@ -997,6 +1083,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const isProforma = docType === 'proforma'
   const isDeliveryNote = docType === 'delivery_note'
   const isRealInvoice = docType === 'invoice'
+  // #1693: only a fully paid faktura has a betalningsbekräftelse to offer.
+  const canSendPaymentConfirmation = isPaymentConfirmationEligible(invoice)
   const isCreditNote = !!invoice.credited_invoice_id
   const booksOnIssue = isCreditNote
     ? !!originalInvoice && creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
@@ -1857,6 +1945,49 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     </ul>
                   )}
                 </div>
+
+                {/* Betalningsbekräftelse (#1693): a fresh BETALD render the
+                    customer can be handed. Lives here rather than in the
+                    header row: it belongs to the payment, not the invoice,
+                    and is a different document from the archived original. */}
+                {canSendPaymentConfirmation && (
+                  <div className="space-y-2 border-t border-border pt-4">
+                    <p className="text-xs text-muted-foreground">
+                      {t('payment_confirmation_hint')}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={downloadPaymentConfirmation}
+                        disabled={isDownloadingConfirmation}
+                      >
+                        {isDownloadingConfirmation ? (
+                          <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                        ) : (
+                          <Download className="mr-2 h-3 w-3" />
+                        )}
+                        {t('payment_confirmation_download')}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowConfirmationSendDialog(true)}
+                        disabled={!canWrite || !customerHasEmail || !canEmail}
+                        title={
+                          !canWrite
+                            ? t('viewer_disabled_tooltip')
+                            : !customerHasEmail
+                              ? t('payment_confirmation_no_email')
+                              : undefined
+                        }
+                      >
+                        {canWrite ? <Mail className="mr-2 h-3 w-3" /> : <Lock className="mr-2 h-3 w-3" />}
+                        {t('payment_confirmation_send')}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -2232,6 +2363,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {/* Confirm-before-posting (convention 10): booking writes an immutable
           verifikat, so the outcome is described before the POST, not narrated
           in a toast afterwards. */}
+      <ConfirmDialog
+        open={showConfirmationSendDialog}
+        onOpenChange={setShowConfirmationSendDialog}
+        title={t('payment_confirmation_confirm_title')}
+        description={t('payment_confirmation_confirm_description', {
+          number: invoiceDisplayNumber(invoice as Invoice),
+          email: invoice.customer?.email ?? '',
+        })}
+        confirmLabel={t('payment_confirmation_confirm_action')}
+        onConfirm={sendPaymentConfirmation}
+      />
+
       <ConfirmDialog
         open={showBookConfirm}
         onOpenChange={setShowBookConfirm}

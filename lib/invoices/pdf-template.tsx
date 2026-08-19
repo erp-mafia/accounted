@@ -39,6 +39,9 @@ const LABELS = {
     draftTitle: 'UTKAST: inte en giltig faktura',
     draftWithNumber: 'Detta är ett utkast. Markera fakturan som skickad eller skicka via systemet för att göra den giltig som fakturaunderlag.',
     draftNoNumber: 'Denna faktura saknar löpnummer och kan inte användas som fakturaunderlag enligt ML 17 kap 24§. Skicka fakturan via systemet för att tilldela ett nummer.',
+    paidTitle: 'BETALD',
+    paidBannerText: (date: string, amount: string) => `Betald ${date} · ${amount}`,
+    paidBannerNoDate: (amount: string) => `Betald · ${amount}`,
     // Credit note reference
     creditNoteRef: (n: string) => `Denna kreditfaktura avser och krediterar faktura nr ${n}`,
     // Sections
@@ -77,6 +80,7 @@ const LABELS = {
     deductionNotice: 'Köparen ansöker om utbetalning hos Skatteverket via fakturamodellen. Säljaren begär utbetalning för den del köparen inte betalat.',
     toCredit: 'Att kreditera:',
     toPay: 'Att betala:',
+    paidRow: 'Betalt:',
     vatInSek: (rate: number | string) => `Moms i SEK (kurs ${rate}):`,
     totalInSek: 'Totalt i SEK:',
     // Proforma / exempt
@@ -119,6 +123,9 @@ const LABELS = {
     draftTitle: 'DRAFT: not a valid invoice',
     draftWithNumber: 'This is a draft. Mark the invoice as sent, or send it via the system, to make it a valid invoice.',
     draftNoNumber: 'This invoice has no serial number and cannot be used as a valid invoice under ML 17 kap 24§ (Swedish VAT Act). Send the invoice via the system to assign a number.',
+    paidTitle: 'PAID',
+    paidBannerText: (date: string, amount: string) => `Paid ${date} · ${amount}`,
+    paidBannerNoDate: (amount: string) => `Paid · ${amount}`,
     creditNoteRef: (n: string) => `This credit note credits invoice no. ${n}`,
     invoiceInfoHeading: 'Invoice information',
     billedToHeading: 'Billed to',
@@ -151,6 +158,7 @@ const LABELS = {
     deductionNotice: 'The customer claims the deduction via fakturamodellen at Skatteverket. The seller requests payment from the agency for the portion not paid by the customer.',
     toCredit: 'To credit:',
     toPay: 'Total due:',
+    paidRow: 'Paid:',
     vatInSek: (rate: number | string) => `VAT in SEK (rate ${rate}):`,
     totalInSek: 'Total in SEK:',
     proformaNotice: 'This is a proforma invoice and is not a request for payment.',
@@ -515,6 +523,26 @@ function createStyles(branding?: InvoiceBranding) {
       color: '#721c24',
       textAlign: 'center',
     },
+    paidBanner: {
+      marginBottom: 16,
+      padding: 10,
+      backgroundColor: '#d4edda',
+      borderWidth: 2,
+      borderColor: '#155724',
+      borderRadius: 4,
+    },
+    paidBannerTitle: {
+      fontSize: 14,
+      fontWeight: 'bold',
+      color: '#155724',
+      textAlign: 'center',
+      marginBottom: 2,
+    },
+    paidBannerText: {
+      fontSize: 9,
+      color: '#155724',
+      textAlign: 'center',
+    },
     footer: {
       position: 'absolute',
       bottom: 30,
@@ -647,6 +675,44 @@ function formatOrgNumber(orgNumber: string): string {
   return orgNumber
 }
 
+/**
+ * Payment state the PDF prints for a real faktura (#1693): the BETALD stamp
+ * and the "Betalt / Att betala" rows. Null for every other document or status,
+ * so unpaid invoices, credit notes and proformas render exactly as before.
+ *
+ * `paid_amount` is what the customer actually paid; the deduction-aware amount
+ * to pay is only the fallback for legacy rows marked paid before paid_amount
+ * existed. `remaining_amount` is the row's own figure: 0 once fully paid.
+ */
+export interface PdfPaidState {
+  kind: 'paid' | 'partially_paid'
+  paidAmount: number
+  remainingAmount: number
+  /** ISO yyyy-MM-dd, or null when paid_at was never recorded. */
+  paidDate: string | null
+}
+
+export function resolvePdfPaidState(
+  invoice: Invoice,
+  docType: InvoiceDocumentType,
+  isCreditNote: boolean,
+  amountToPay: number,
+): PdfPaidState | null {
+  if (isCreditNote || docType !== 'invoice') return null
+  if (invoice.status !== 'paid' && invoice.status !== 'partially_paid') return null
+  const paidAmount = invoice.paid_amount ?? (invoice.status === 'paid' ? amountToPay : 0)
+  const remainingAmount =
+    invoice.status === 'paid'
+      ? 0
+      : invoice.remaining_amount ?? Math.max(0, Math.round((amountToPay - paidAmount) * 100) / 100)
+  return {
+    kind: invoice.status,
+    paidAmount,
+    remainingAmount,
+    paidDate: invoice.paid_at ? formatDate(invoice.paid_at) : null,
+  }
+}
+
 function getDocumentTitle(invoice: Invoice, lang: PdfLang): string {
   const L = LABELS[lang]
   if (invoice.credited_invoice_id) return L.titleCreditNote
@@ -727,6 +793,18 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   const isDeliveryNote = docType === 'delivery_note'
   const isProforma = docType === 'proforma'
 
+  // Shared with the invoice email (lib/email/invoice-templates.ts) so the
+  // mail and the PDF always state the same "Att betala". Computed once here
+  // because the paid state below needs it too.
+  const amountToPay = getAmountToPay(invoice, company)
+
+  // Payment state (#1693). Only a real faktura carries it: credit notes are
+  // settled against their original, proformas are not a payment request. The
+  // paid amount is what the customer actually paid (paid_amount), not a
+  // recomputation of the deduction-aware total; the fallback to the amount to
+  // pay covers legacy rows marked paid before paid_amount was recorded.
+  const paidState = resolvePdfPaidState(invoice, docType, isCreditNote, amountToPay.toPay)
+
   // Optional branding banner text. Rendered only when the company has set
   // invoice_header_text: invisible chrome by default, so the byte-equivalence
   // promise for un-branded callers holds.
@@ -758,13 +836,25 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 : L.cancelledNoNumber}
             </Text>
           </View>
-        ) : isPreview ? null : (invoice.status === 'draft' || !invoice.invoice_number) && (
+        ) : isPreview ? null : (invoice.status === 'draft' || !invoice.invoice_number) ? (
           <View style={styles.draftBanner}>
             <Text style={styles.draftBannerTitle}>{L.draftTitle}</Text>
             <Text style={styles.draftBannerText}>
               {invoice.invoice_number
                 ? L.draftWithNumber
                 : L.draftNoNumber}
+            </Text>
+          </View>
+        ) : paidState?.kind === 'paid' && (
+          // BETALD stamp (#1693): the re-rendered copy of a settled faktura
+          // doubles as the betalningsbekräftelse the customer can be handed.
+          // partially_paid gets no banner, only the Betalt / Att betala rows.
+          <View style={styles.paidBanner}>
+            <Text style={styles.paidBannerTitle}>{L.paidTitle}</Text>
+            <Text style={styles.paidBannerText}>
+              {paidState.paidDate
+                ? L.paidBannerText(paidState.paidDate, formatPdfCurrency(paidState.paidAmount, invoice.currency, lang))
+                : L.paidBannerNoDate(formatPdfCurrency(paidState.paidAmount, invoice.currency, lang))}
             </Text>
           </View>
         )}
@@ -988,10 +1078,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               )
             )}
             {(() => {
-              // Shared with the invoice email (lib/email/invoice-templates.ts)
-              // so the mail and the PDF always state the same "Att betala".
-              const { rounding, deductionApplies: showDeduction, toPay: grandTotal } =
-                getAmountToPay(invoice, company)
+              const { rounding, deductionApplies: showDeduction, toPay: grandTotal } = amountToPay
               return (
                 <>
                   {rounding.applies && (
@@ -1011,10 +1098,28 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                       </Text>
                     </View>
                   )}
-                  <View style={styles.grandTotal}>
-                    <Text style={styles.grandTotalLabel}>{isCreditNote ? L.toCredit : L.toPay}</Text>
-                    <Text style={styles.grandTotalValue}>{formatPdfCurrency(grandTotal, invoice.currency, lang)}</Text>
-                  </View>
+                  {paidState ? (
+                    // Settled or partly settled faktura: state what was paid,
+                    // then what is still due (0 when fully paid). The bold
+                    // total row is the figure that matters to the reader:
+                    // the paid amount on a betald faktura, the remainder on
+                    // a partly paid one.
+                    <>
+                      <View style={paidState.kind === 'paid' ? styles.grandTotal : styles.totalRow}>
+                        <Text style={paidState.kind === 'paid' ? styles.grandTotalLabel : styles.totalLabel}>{L.paidRow}</Text>
+                        <Text style={paidState.kind === 'paid' ? styles.grandTotalValue : styles.totalValue}>{formatPdfCurrency(paidState.paidAmount, invoice.currency, lang)}</Text>
+                      </View>
+                      <View style={paidState.kind === 'paid' ? styles.totalRow : styles.grandTotal}>
+                        <Text style={paidState.kind === 'paid' ? styles.totalLabel : styles.grandTotalLabel}>{L.toPay}</Text>
+                        <Text style={paidState.kind === 'paid' ? styles.totalValue : styles.grandTotalValue}>{formatPdfCurrency(paidState.remainingAmount, invoice.currency, lang)}</Text>
+                      </View>
+                    </>
+                  ) : (
+                    <View style={styles.grandTotal}>
+                      <Text style={styles.grandTotalLabel}>{isCreditNote ? L.toCredit : L.toPay}</Text>
+                      <Text style={styles.grandTotalValue}>{formatPdfCurrency(grandTotal, invoice.currency, lang)}</Text>
+                    </View>
+                  )}
                 </>
               )
             })()}
