@@ -20,7 +20,9 @@
  * Secondary tolerance: legacy `.skv` text exports from the retired
  * e-service. Same date;text;amount row shape but possibly unquoted, without
  * the name/orgnr header, and sometimes with a trailing running-saldo column,
- * which is ignored.
+ * which is ignored for event rows (a marker row whose belopp cell is empty
+ * takes its saldo from that column instead). Several marker pairs (one per
+ * year or page) are reduced to the earliest opening and latest closing.
  */
 
 import { roundOre } from '@/lib/money'
@@ -57,17 +59,42 @@ const SKV_VOCABULARY = [
 
 /**
  * Parse a skattekonto amount: whole kronor or comma decimals, space/nbsp
- * thousands separators, optional trailing "kr". Returns null on non-amounts.
+ * thousands separators, optional trailing "kr", optional explicit "+".
+ * Typographic minus variants (U+2212 MINUS SIGN, the CLDR sv-SE default,
+ * plus hyphen/dash lookalikes) count as a minus. Returns null on non-amounts.
  */
 function parseAmount(value: string): number | null {
   const cleaned = value
     // \s covers regular space, nbsp (U+00A0) and narrow nbsp (U+202F).
     .replace(/\s/g, '')
     .replace(/kr$/i, '')
+    // U+2212 minus sign, U+2010..U+2013 hyphen/dash lookalikes.
+    .replace(/^[\u2212\u2010-\u2013]/, '-')
+    .replace(/^\+/, '')
     .replace(',', '.')
   if (cleaned === '' || cleaned === '-') return null
   if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return null
   return roundOre(parseFloat(cleaned))
+}
+
+/**
+ * Amount of a saldo marker row. The Kontoutdrag export puts it in the
+ * belopp column; a layout with a trailing running-saldo column leaves belopp
+ * empty and carries the saldo in the last column. Take the last readable
+ * amount at or after the belopp column.
+ */
+function parseMarkerAmount(cells: string[]): number | null {
+  for (let i = cells.length - 1; i >= 2; i--) {
+    const amount = parseAmount(cells[i])
+    if (amount !== null) return amount
+  }
+  return null
+}
+
+/** Date written into a marker text ("Ingående saldo 2026-05-03"), if any. */
+function markerDate(text: string, dateCell: string): string | null {
+  const inText = /(\d{4}-\d{2}-\d{2})/.exec(text)
+  return (inText ? normalizeDate(inText[1]) : null) ?? normalizeDate(dateCell)
 }
 
 function splitRow(line: string): string[] {
@@ -136,11 +163,17 @@ export function parseSkattekontoFile(
   const issues: SkattekontoFileParseIssue[] = []
   let companyName: string | null = null
   let orgNumber: string | null = null
-  let openingSaldo: number | null = null
-  let closingSaldo: number | null = null
+  // A statement can carry several marker pairs (one per year or per page).
+  // The statement-level check runs from the earliest opening to the latest
+  // closing; intermediate pairs cancel out. Order by the marker's own date,
+  // falling back to file order for undated markers.
+  let opening: { saldo: number; date: string | null; seq: number } | null = null
+  let closing: { saldo: number; date: string | null; seq: number } | null = null
   let sawSaldoMarker = false
+  let markerSeq = 0
   let totalRows = 0
   let skippedRows = 0
+  let unreadableAmountRows = 0
 
   const seenContent = new Map<string, number>()
 
@@ -163,17 +196,20 @@ export function parseSkattekontoFile(
     const markerText = cells[1] ?? ''
     if (OPENING_MARKER_RE.test(markerText) || CLOSING_MARKER_RE.test(markerText)) {
       sawSaldoMarker = true
-      const amount = parseAmount(cells[2] ?? '')
+      const amount = parseMarkerAmount(cells)
       if (amount === null) {
         issues.push({
           row: i + 1,
           message: `Kunde inte läsa saldobeloppet: ${cells[2] ?? ''}`,
           severity: 'warning',
         })
-      } else if (OPENING_MARKER_RE.test(markerText)) {
-        openingSaldo = amount
-      } else {
-        closingSaldo = amount
+        continue
+      }
+      const marker = { saldo: amount, date: markerDate(markerText, cells[0] ?? ''), seq: markerSeq++ }
+      if (OPENING_MARKER_RE.test(markerText)) {
+        if (!opening || isEarlierMarker(marker, opening)) opening = marker
+      } else if (!closing || isEarlierMarker(closing, marker)) {
+        closing = marker
       }
       continue
     }
@@ -206,6 +242,8 @@ export function parseSkattekontoFile(
         severity: 'warning',
       })
       skippedRows++
+      // A dated event we could not read is money missing from the sum check.
+      unreadableAmountRows++
       continue
     }
 
@@ -223,20 +261,32 @@ export function parseSkattekontoFile(
     rows.push({ transaktionsdatum: date, transaktionstext: text, belopp, raw_line: line })
   }
 
-  // Integrity: the statement must sum. A mismatch means a truncated or
-  // hand-edited file: surfaced as an error so the route refuses the import.
-  // A file that HAS saldo markers but not both valid balances is equally
-  // suspect (cut off before "Utgående saldo", or a garbled amount): fail it
-  // rather than silently skipping the check. Only marker-less legacy files
-  // legitimately have no balances to check (sum_valid stays null).
+  // Integrity: a complete statement sums (opening + events = closing). A
+  // mismatch means a truncated, filtered or hand-edited file, or dated rows
+  // whose amount we could not read. It is reported as an error-severity
+  // issue with the figures; the import route no longer refuses the file on
+  // it (the preview shows the gap and asks the user to confirm), because
+  // every parsed row is still a real event that is reviewed before booking
+  // and re-importing a complete file later dedups. A file that HAS saldo
+  // markers but not both readable balances is flagged the same way. Only
+  // marker-less legacy files legitimately have nothing to check
+  // (sum_valid stays null).
+  const openingSaldo = opening?.saldo ?? null
+  const closingSaldo = closing?.saldo ?? null
   let sumValid: boolean | null = null
+  let eventsSum: number | null = null
+  let sumDifference: number | null = null
   if (openingSaldo !== null && closingSaldo !== null) {
-    const sum = rows.reduce((acc, row) => roundOre(acc + row.belopp), openingSaldo)
-    sumValid = Math.abs(sum - closingSaldo) < 0.005
+    eventsSum = rows.reduce((acc, row) => roundOre(acc + row.belopp), openingSaldo)
+    sumDifference = roundOre(closingSaldo - eventsSum)
+    sumValid = Math.abs(sumDifference) < 0.005
     if (!sumValid) {
       issues.push({
         row: 0,
-        message: `Ingående saldo plus transaktioner (${sum}) stämmer inte med utgående saldo (${closingSaldo})`,
+        message:
+          unreadableAmountRows > 0
+            ? `Ingående saldo plus händelser (${eventsSum}) stämmer inte med utgående saldo (${closingSaldo}); ${unreadableAmountRows} rader med oläsbart belopp saknas i summan`
+            : `Ingående saldo plus händelser (${eventsSum}) stämmer inte med utgående saldo (${closingSaldo}); differens ${sumDifference}`,
         severity: 'error',
       })
     }
@@ -262,11 +312,23 @@ export function parseSkattekontoFile(
     opening_saldo: openingSaldo,
     closing_saldo: closingSaldo,
     sum_valid: sumValid,
+    events_sum: eventsSum,
+    sum_difference: sumDifference,
     issues,
     stats: {
       total_rows: totalRows,
       parsed_rows: rows.length,
       skipped_rows: skippedRows,
+      unreadable_amount_rows: unreadableAmountRows,
     },
   }
+}
+
+/** Earlier by marker date when both are dated; otherwise by file order. */
+function isEarlierMarker(
+  a: { date: string | null; seq: number },
+  b: { date: string | null; seq: number },
+): boolean {
+  if (a.date && b.date && a.date !== b.date) return a.date < b.date
+  return a.seq < b.seq
 }

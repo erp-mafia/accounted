@@ -12,8 +12,12 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
 const mockCreateJE = vi.fn()
+const mockReverseOrphanedJE = vi.fn()
 vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
   createTransactionJournalEntry: (...args: unknown[]) => mockCreateJE(...args),
+}))
+vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
+  reverseOrphanedJournalEntry: (...args: unknown[]) => mockReverseOrphanedJE(...args),
 }))
 vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookingDuplicate: vi.fn().mockResolvedValue(null),
@@ -57,16 +61,77 @@ beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
   mockCreateJE.mockResolvedValue({ id: 'je-override-1' })
+  mockReverseOrphanedJE.mockResolvedValue(undefined)
 })
 
 describe('categorizeMatchedTransaction: accountOverride', () => {
+  it('atomically unignores the transaction when categorizing it', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const categorizedHandler = vi.fn()
+    eventBus.on('transaction.categorized', categorizedHandler)
+    enqueue({ data: txRow({ is_ignored: true }) })
+    enqueue({ data: settingsRow })
+    enqueue({ data: [{ id: 'fp-1' }] })
+    enqueue({
+      data: [txRow({
+        is_business: false,
+        category: 'private',
+        is_ignored: false,
+        journal_entry_id: 'je-override-1',
+      })],
+    })
+
+    const result = await categorizeMatchedTransaction(
+      supabase as never,
+      'user-1',
+      'company-1',
+      TX_ID,
+      { category: 'private' },
+    )
+
+    expect(result.error).toBeUndefined()
+    expect(findCalls('transactions', 'update')).toContainEqual([
+      expect.objectContaining({
+        is_business: false,
+        category: 'private',
+        is_ignored: false,
+        journal_entry_id: 'je-override-1',
+      }),
+    ])
+    expect(categorizedHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transaction: expect.objectContaining({ is_ignored: false }),
+      }),
+    )
+  })
+
+  it('returns a race conflict when the guarded update matches no row without creating an entry', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: txRow() })
+    enqueue({ data: settingsRow })
+    enqueue({ data: [{ id: 'fp-1' }] })
+    enqueue({ data: [] })
+    mockCreateJE.mockResolvedValueOnce(null)
+
+    const result = await categorizeMatchedTransaction(
+      supabase as never,
+      'user-1',
+      'company-1',
+      TX_ID,
+      { category: 'private' },
+    )
+
+    expect(result.status).toBe(409)
+    expect(mockReverseOrphanedJE).not.toHaveBeenCalled()
+  })
+
   it('posts the entry with the override on the business side', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() }) // transactions select
     enqueue({ data: settingsRow }) // company_settings
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } }) // override chart hit
     enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod: open period exists
-    enqueue({ data: null }) // transactions update
+    enqueue({ data: [{ id: TX_ID }] }) // transactions update
 
     const result = await categorizeMatchedTransaction(
       supabase as never, 'user-1', 'company-1', TX_ID,
@@ -90,7 +155,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     enqueue({ data: settingsRow })
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } })
     enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod
-    enqueue({ data: null }) // transactions update
+    enqueue({ data: [{ id: TX_ID }] }) // transactions update
 
     const result = await categorizeMatchedTransaction(
       supabase as never, 'user-1', 'company-1', TX_ID,
@@ -137,5 +202,63 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     expect(result.status).toBe(400)
     expect(result.error).toMatch(/private/)
     expect(mockCreateJE).not.toHaveBeenCalled()
+  })
+
+  it('stornos a posted entry when the ignored-row constraint rejects the link', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: txRow({ is_ignored: true }) })
+    enqueue({ data: settingsRow })
+    enqueue({ data: [{ id: 'fp-1' }] })
+    enqueue({
+      data: null,
+      error: {
+        code: '23514',
+        message:
+          'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"',
+      },
+    })
+
+    const result = await categorizeMatchedTransaction(
+      supabase as never,
+      'user-1',
+      'company-1',
+      TX_ID,
+      { category: 'private' },
+    )
+
+    expect(result.status).toBe(409)
+    expect(mockReverseOrphanedJE).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      'je-override-1',
+      expect.any(String),
+    )
+  })
+
+  it('uses a company-scoped CAS and stornos a concurrent loser', async () => {
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: txRow() })
+    enqueue({ data: settingsRow })
+    enqueue({ data: [{ id: 'fp-1' }] })
+    enqueue({ data: [] })
+
+    const result = await categorizeMatchedTransaction(
+      supabase as never,
+      'user-1',
+      'company-1',
+      TX_ID,
+      { category: 'private' },
+    )
+
+    expect(result.status).toBe(409)
+    expect(mockReverseOrphanedJE).toHaveBeenCalledTimes(1)
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        { table: 'transactions', method: 'eq', args: ['id', TX_ID] },
+        { table: 'transactions', method: 'eq', args: ['company_id', 'company-1'] },
+        { table: 'transactions', method: 'is', args: ['journal_entry_id', null] },
+      ]),
+    )
   })
 })

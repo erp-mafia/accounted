@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { serverErrorMessage, syncSummary, type ShopifySyncPayload } from '../lib/settings-actions'
 
 describe('syncSummary', () => {
-  const base = { fetched: 5, refundsFetched: 1, imported: 4, duplicates: 1, errors: 0 }
+  const base = { fetched: 5, refundsFetched: 1, inserted: 4, updated: 1, unchanged: 0, errors: 0 }
 
   it('classifies a revoked run before anything else', () => {
     expect(syncSummary({ transactions: { ...base, revoked: true } })).toEqual({
@@ -18,7 +18,7 @@ describe('syncSummary', () => {
 
   it('classifies an empty window as its own outcome', () => {
     expect(
-      syncSummary({ transactions: { ...base, fetched: 0, imported: 0 } }),
+      syncSummary({ transactions: { ...base, fetched: 0, inserted: 0 } }),
     ).toEqual({ reason: 'empty' })
   })
 

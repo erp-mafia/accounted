@@ -61,6 +61,34 @@ export interface ShopifyRefund {
   totalRefundedSet: ShopifyMoneyBag
 }
 
+/** One tax charged on the order or on one of its parts. */
+export interface ShopifyTaxLine {
+  /** Rate as a percent (25.0); null on legacy rows where Shopify omits it. */
+  ratePercentage: number | null
+  /** Tax amount charged at this rate. */
+  priceSet: ShopifyMoneyBag
+}
+
+/** One product line of an order. */
+export interface ShopifyLineItem {
+  name: string
+  quantity: number
+  /**
+   * Line total after line-level discounts (cart-level discount allocations
+   * are NOT subtracted). Includes tax iff the order's taxesIncluded is true.
+   */
+  discountedTotalSet: ShopifyMoneyBag
+  taxLines: ShopifyTaxLine[]
+}
+
+/** One shipping line of an order. */
+export interface ShopifyShippingLine {
+  title: string | null
+  /** Shipping price after discounts; includes tax iff taxesIncluded. */
+  discountedPriceSet: ShopifyMoneyBag
+  taxLines: ShopifyTaxLine[]
+}
+
 /**
  * Minimal GraphQL Admin API order shape consumed by the feed. All timestamps
  * are ISO 8601 UTC with a Z suffix.
@@ -72,14 +100,26 @@ export interface ShopifyOrder {
   name: string
   /** Test-gateway order (dev stores, Bogus Gateway); never real revenue. */
   test: boolean
-  /** When payment was captured; the feed's row date. */
+  /** When the order was created in Shopify; the row's order_date. */
+  createdAt: string
+  /** When payment was captured; the row's paid_date. */
   processedAt: string
   updatedAt: string
   displayFinancialStatus: string | null
-  /** Gateway display names; join key for gateway-side reconciliation. */
+  /** Gateway display names; the booking dialog's payment-method map key. */
   paymentGatewayNames: string[]
+  /**
+   * Whether the store's prices include tax (typical Swedish B2C store).
+   * Governs how line/shipping totals decompose into net + tax.
+   */
+  taxesIncluded: boolean
   /** Grand total actually charged (gross, incl. tax and shipping). */
   totalPriceSet: ShopifyMoneyBag
+  /** Per-rate tax charged on the whole order; the vat_breakdown source. */
+  taxLines: ShopifyTaxLine[]
+  /** First page of line items; hasNextPage means the snapshot is incomplete. */
+  lineItems: { pageInfo: { hasNextPage: boolean }; nodes: ShopifyLineItem[] }
+  shippingLines: { pageInfo: { hasNextPage: boolean }; nodes: ShopifyShippingLine[] }
   refunds: ShopifyRefund[]
 }
 

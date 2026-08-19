@@ -214,7 +214,7 @@ const navItems: NavItem[] = [
   // hooked up (active WooCommerce/Shopify connection or existing order rows).
   // Deliberately NOT capability-gated: a company whose entitlement lapsed
   // must still reach its already-imported orders (accounting underlag).
-  { href: '/orders', labelKey: 'sales_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true },
+  { href: '/orders', labelKey: 'sales_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true, betaBadge: true },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
   // Körjournal: hidden by default (most companies have no car); shows when

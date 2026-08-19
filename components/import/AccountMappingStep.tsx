@@ -37,6 +37,12 @@ import {
   vatTreatmentsForAccountClass,
   type AccountVatTreatment,
 } from '@/lib/vat/account-vat-treatment'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/info-tooltip'
+import { cn } from '@/lib/utils'
 
 interface AccountMappingStepProps {
   mappings: AccountMapping[]
@@ -231,26 +237,31 @@ export default function AccountMappingStep({
           </div>
 
           {/* Mapping table */}
-          <div className="border rounded-lg overflow-x-auto">
-            <Table>
+          <div className="overflow-hidden rounded-lg border">
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-36">Källkonto</TableHead>
-                  <TableHead>Källnamn</TableHead>
+                  <TableHead className="w-64 max-w-64">Källnamn</TableHead>
                   <TableHead className="w-12"></TableHead>
                   <TableHead className="w-64">Målkonto</TableHead>
                   <TableHead className="min-w-72">{t('vat_treatment_column')}</TableHead>
                   <TableHead className="w-24">Konfidens</TableHead>
+                  <TableHead className="sticky right-0 z-20 w-32 min-w-32 border-l border-border bg-background text-right">
+                    {t('vat_treatment_confirm')}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {paginatedMappings.map((mapping) => (
                   <TableRow
                     key={mapping.sourceAccount}
-                    className={!mapping.targetAccount ? 'bg-destructive/5' : ''}
+                    className={cn('group', !mapping.targetAccount && 'bg-destructive/5')}
                   >
                     <TableCell className="font-mono">{mapping.sourceAccount}</TableCell>
-                    <TableCell className="text-muted-foreground">{mapping.sourceName}</TableCell>
+                    <TableCell className="max-w-64 text-muted-foreground">
+                      <TruncatedSourceName sourceName={mapping.sourceName} />
+                    </TableCell>
                     <TableCell>
                       <ArrowRight className="h-4 w-4 text-muted-foreground" />
                     </TableCell>
@@ -344,20 +355,6 @@ export default function AccountMappingStep({
                               <SelectItem value="0.06">6 %</SelectItem>
                             </SelectContent>
                           </Select>
-                          {mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed && (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => onVatTreatmentChange(
-                                mapping.sourceAccount,
-                                mapping.defaultVatTreatment ?? null,
-                                mapping.defaultVatRate ?? null,
-                              )}
-                            >
-                              {t('vat_treatment_confirm')}
-                            </Button>
-                          )}
                         </div>
                       ) : (
                         <span className="text-muted-foreground">-</span>
@@ -372,11 +369,35 @@ export default function AccountMappingStep({
                         />
                       )}
                     </TableCell>
+                    <TableCell
+                      className={cn(
+                        'sticky right-0 z-10 w-32 min-w-32 border-l border-border transition-colors',
+                        mapping.targetAccount ? 'bg-background' : 'bg-destructive/5',
+                        'group-hover:bg-muted/50 group-focus-within:bg-muted/50',
+                      )}
+                    >
+                      {mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="min-h-11 w-full sm:min-h-8"
+                          aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount}`}
+                          onClick={() => onVatTreatmentChange(
+                            mapping.sourceAccount,
+                            mapping.defaultVatTreatment ?? null,
+                            mapping.defaultVatRate ?? null,
+                          )}
+                        >
+                          {t('vat_treatment_confirm')}
+                        </Button>
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
                 {paginatedMappings.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                       Inga konton matchar filtret
                     </TableCell>
                   </TableRow>
@@ -432,6 +453,32 @@ export default function AccountMappingStep({
         </Button>
       </div>
     </div>
+  )
+}
+
+function TruncatedSourceName({ sourceName }: { sourceName: string }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Tooltip open={open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-expanded={open}
+          className="flex min-h-10 w-full min-w-0 items-center rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          onClick={() => setOpen(true)}
+        >
+          <span className="block min-w-0 truncate">{sourceName}</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side="top"
+        className="max-w-xs break-words"
+        data-ph-mask=""
+      >
+        {sourceName}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

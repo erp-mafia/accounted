@@ -6,11 +6,11 @@ import { shopifyApiRoutes } from './api-routes'
  *
  * Connects a company's Shopify store via a merchant-created Dev Dashboard
  * custom app (client credentials grant; the revealable shpat_ token flow was
- * discontinued 2026-01-01) and imports the store's paid orders and refunds
- * into the transactions inbox as a bank-style feed on the 1584 cash account.
- * Feed-only (same doctrine as the Stripe and WooCommerce feeds): nothing is
- * auto-booked, and Shopify Payments payout/fee reconciliation is out of
- * scope for now (phase 2).
+ * discontinued 2026-01-01) and upserts the store's paid orders and refunds
+ * into webshop_orders (the Orders page), with per-rate VAT and a line-item
+ * snapshot as booking underlag. Feed-only (same doctrine as the WooCommerce
+ * sync): nothing is auto-booked, and Shopify Payments payout/fee
+ * reconciliation is out of scope for now (phase 2).
  *
  * Required environment variables:
  * - SHOPIFY_CREDENTIALS_ENCRYPTION_KEY (at-rest key for client id/secret)

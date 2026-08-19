@@ -5,7 +5,7 @@ import { ensureInitialized } from '@/lib/init'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { getTemplateById, buildMappingResultFromTemplate, validateTemplateForEntity } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
-import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
@@ -138,8 +138,9 @@ export const POST = withRouteContext(
 
       const { error: updateErr } = await supabase
         .from('transactions')
-        .update({ is_business, category: finalCat })
+        .update({ is_business, category: finalCat, is_ignored: false })
         .eq('id', id)
+        .eq('company_id', companyId)
 
       if (updateErr) {
         txLog.error('failed to update already-categorized transaction', updateErr)
@@ -921,32 +922,46 @@ export const POST = withRouteContext(
       .update({
         is_business,
         category: finalCategory,
+        is_ignored: false,
         journal_entry_id: journalEntryId,
       })
       .eq('id', id)
+      .eq('company_id', companyId)
       .is('journal_entry_id', null)
-      .select('id')
+      .select('*')
 
     if (updateError) {
       txLog.error('failed to update transaction', updateError)
+      if (journalEntryId) {
+        await reverseOrphanedJournalEntry(
+          supabase,
+          companyId,
+          user.id,
+          journalEntryId,
+          'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+        )
+      }
       return errorResponse(updateError, txLog, { requestId })
     }
 
-    if ((!updateResult || updateResult.length === 0) && journalEntryId) {
+    if (!updateResult || updateResult.length === 0) {
       // CAS guard: another request set journal_entry_id between our read and
-      // write. Cancel the orphaned entry and document the voucher gap through
-      // the shared helper (BFNAR 2013:2), which owns the correct
-      // voucher_gap_explanations column set and logs failures loudly.
-      await cancelOrphanedPaymentEntry(
-        supabase,
-        companyId,
-        user.id,
-        journalEntryId,
-        'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-      )
+      // write. If this request posted an orphan, compensate through the
+      // bookkeeping engine with a storno entry.
+      if (journalEntryId) {
+        await reverseOrphanedJournalEntry(
+          supabase,
+          companyId,
+          user.id,
+          journalEntryId,
+          'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+        )
+      }
 
       return errorResponseFromCode('TX_CATEGORIZE_RACE', txLog, { requestId })
     }
+
+    const updatedTransaction = updateResult[0] as Transaction
 
     // Flag any inbox underlag already matched to this transaction as booked.
     // The block above only fires when the caller passes an explicit
@@ -991,7 +1006,7 @@ export const POST = withRouteContext(
     await eventBus.emit({
       type: 'transaction.categorized',
       payload: {
-        transaction: transaction as Transaction,
+        transaction: updatedTransaction,
         account: mappingResult.debit_account,
         taxCode: mappingResult.vat_lines[0]?.account_number || '',
         userId: user.id,

@@ -2464,6 +2464,7 @@ export default function ImportPage() {
                   <ImportRow
                     title={t('woocommerce_title')}
                     sub={t('woocommerce_description')}
+                    chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/woocommerce.svg" name="WooCommerce" />}
                     disabled={woocommerceDisabled}
                     onClick={() => setMode('woocommerce')}
@@ -2473,6 +2474,7 @@ export default function ImportPage() {
                   <ImportRow
                     title={t('shopify_title')}
                     sub={t('shopify_description')}
+                    chip={<BetaChip label={t('badge_beta')} />}
                     chips={<LogoChip src="/logos/shopify.svg" name="Shopify" />}
                     disabled={shopifyDisabled}
                     onClick={() => setMode('shopify')}
@@ -2773,6 +2775,16 @@ function ImportRow({
         aria-hidden="true"
       />
     </button>
+  )
+}
+
+// Same quiet beta-badge recipe as the sidebar nav (DashboardNav renderBadge),
+// so "Beta" reads identically wherever it appears.
+function BetaChip({ label }: { label: string }) {
+  return (
+    <span className="rounded-full bg-muted/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground/70">
+      {label}
+    </span>
   )
 }
 

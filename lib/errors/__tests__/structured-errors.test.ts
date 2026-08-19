@@ -44,6 +44,7 @@ describe('structured-errors registry', () => {
     expect(codes.length).toBeGreaterThan(20)
     expect(codes).toContain('JOURNAL_ENTRY_NOT_BALANCED')
     expect(codes).toContain('PROVIDER_AUTH_EXPIRED')
+    expect(codes).toContain('BOKIO_COMPANY_NOT_FOUND')
     expect(codes).toContain('CANNOT_EDIT_NON_DRAFT')
     expect(codes).toContain('MANDATORY_DIMENSION_MISSING')
     // Node network system codes registered as retryable transients (#337).
@@ -99,6 +100,31 @@ describe('errorResponse', () => {
     const body = await readEnvelope(res)
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(body.error.details).toMatchObject({ pgCode: '23505' })
+  })
+
+  it('maps the ignored-transaction journal constraint to a typed conflict', async () => {
+    const pgErr = Object.assign(
+      new Error(
+        'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"',
+      ),
+      { code: '23514' },
+    )
+    const res = errorResponse(pgErr, noopLogger, { requestId: 'req_ignored_tx' })
+
+    expect(res.status).toBe(409)
+    const body = await readEnvelope(res)
+    expect(body.error.code).toBe('TX_CATEGORIZE_IGNORED_CONFLICT')
+    expect(body.error.message).not.toContain('check constraint')
+    expect(body.error.details).toMatchObject({ pgCode: '23514' })
+  })
+
+  it('does not apply unrelated message heuristics to Postgres errors', async () => {
+    const pgErr = Object.assign(new Error('Invoice not found'), { code: 'P0001' })
+    const res = errorResponse(pgErr, noopLogger, { requestId: 'req_pg_unrelated' })
+
+    expect(res.status).toBe(500)
+    const body = await readEnvelope(res)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
   })
 
   it('maps Postgres no-data-found to NOT_FOUND with pgCode', async () => {

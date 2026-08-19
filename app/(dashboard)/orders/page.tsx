@@ -189,7 +189,10 @@ export default function OrdersPage() {
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={t('empty_action')}
-          actionHref="/import?mode=woocommerce"
+          // The import hub's e-handel section lists every connectable
+          // platform; deep-linking one platform's connect panel here would
+          // send Shopify users into the WooCommerce flow.
+          actionHref="/import"
         />
       ) : (
         <div className="stagger-enter overflow-x-auto">

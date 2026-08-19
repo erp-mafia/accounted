@@ -121,7 +121,7 @@ function stubHappyTables(state: Record<string, unknown> = LOCKED_STATE) {
     extension_data: {
       data: [{ company_id: 'comp-1', key: 'submission_202606', value: JSON.stringify(state) }],
     },
-    skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+    skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
   })
 }
 
@@ -312,7 +312,7 @@ describe('VAT kvittenser cron', () => {
           data: [{ company_id: 'comp-1', key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) }],
           updateError: { message: 'connection reset', code: '08006' },
         },
-        skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
       }),
     )
     mockSkvRequest.mockResolvedValueOnce({
@@ -345,7 +345,7 @@ describe('VAT kvittenser cron', () => {
           { company_id: 'comp-2', key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) },
         ],
       },
-      skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+      skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
     })
   }
 
