@@ -1,15 +1,15 @@
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { InvoicePDF, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getVatRules } from '@/lib/invoices/vat-rules'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { contentDisposition } from '@/lib/api/content-disposition'
-import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
+import type { InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { computeDeduction, computeInvoiceDeductionTotal, type DeductionType } from '@/lib/invoices/rot-rut-rules'
-import { expandPersonnummerTo12, extractLast4, validatePersonnummer } from '@/lib/salary/personnummer'
+import { expandPersonnummerTo12, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import {
   hasRequiredInvoicePaymentAccount,
@@ -43,22 +43,25 @@ function optionalTrimmed(value: unknown): string | null {
 }
 
 /**
- * The masked personnummer the deduction info box shows, resolved the same way
- * the write path does (lib/invoices/build-invoice-write.ts): the value typed
- * on the claim card wins; otherwise an individual customer's kundkort
- * personnummer, if it expands to a valid 12-digit number. Only the last four
- * digits leave this function; the plaintext is never stored or logged.
+ * The masked personnummer the deduction info box shows (`YYYYMMDD-XXXX`, the
+ * same convention as the stored-invoice PDF and the payroll roster), resolved
+ * the same way the write path does (lib/invoices/build-invoice-write.ts): the
+ * value typed on the claim card wins; otherwise an individual customer's
+ * kundkort personnummer, if it expands to a valid 12-digit number. Only the
+ * masked form leaves this function; the plaintext is never stored or logged.
  */
-function resolvePreviewPersonnummerLast4(typed: string | null, customer: Customer): string | null {
+function resolvePreviewPersonnummerMasked(typed: string | null, customer: Customer): string | null {
   if (typed) {
-    const last4 = extractLast4(typed)
-    return last4.length === 4 ? last4 : null
+    // A 10-digit form (YYMMDD-NNNN) is expanded first so the mask shows the
+    // full birth date; a half-typed value that does not expand shows nothing.
+    const expanded = expandPersonnummerTo12(typed)
+    return expanded ? maskPersonnummer(expanded) : null
   }
   if (customer.customer_type !== 'individual') return null
   try {
     const revealed = revealStoredCustomerPersonalNumber(customer.personal_number)
     const expanded = revealed ? expandPersonnummerTo12(revealed) : null
-    if (expanded && validatePersonnummer(expanded).valid) return extractLast4(expanded)
+    if (expanded && validatePersonnummer(expanded).valid) return maskPersonnummer(expanded)
   } catch {
     // Undecryptable customer value: same as absent.
   }
@@ -277,8 +280,8 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
         })),
       )
     : 0
-  const deductionPersonnummerLast4 = deductionTotal > 0
-    ? resolvePreviewPersonnummerLast4(optionalTrimmed(deduction_personnummer), customer)
+  const deductionPersonnummerMasked = deductionTotal > 0
+    ? resolvePreviewPersonnummerMasked(optionalTrimmed(deduction_personnummer), customer)
     : null
 
   // Derive vat_rate from items: single rate → that rate, mixed → null
@@ -320,10 +323,12 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     paid_at: null,
     paid_amount: null,
     deduction_total: deductionTotal,
-    deduction_personnummer_last4: deductionPersonnummerLast4,
+    // Preview invoices have no stored ciphertext: the template renders the
+    // masked value passed here instead of deriving one.
+    deduction_personnummer_masked: deductionPersonnummerMasked,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  } as Invoice
+  } as InvoicePdfInvoice
 
   try {
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(

@@ -234,7 +234,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       // 4. ensureFiscalPeriod → existing period
       { data: [{ id: 'fp-1' }] },
       // 5. transactions update (mark booked)
-      { error: null },
+      { data: [{ id: 'tx-1' }], error: null },
       // 6. propagation select (no matched inbox rows to stamp in this mock)
       { data: [] },
     ])
@@ -275,7 +275,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: { ledger_account: '1931' } },
       { data: [{ id: 'fp-1' }] },
-      { error: null },
+      { data: [{ id: 'tx-1' }], error: null },
       { data: [] },
     ])
 
@@ -315,7 +315,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [{ id: 'fp-1' }] },
-      { error: null },
+      { data: [{ id: 'tx-1' }], error: null },
       { data: [] },
     ])
 
@@ -346,7 +346,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       { data: { id: 'tx-2', date: '2026-06-02', amount: -25, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
       { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
       { data: [{ id: 'fp-1' }] },
-      { error: null },
+      { data: [{ id: 'tx-2' }], error: null },
       { data: [] },
     ])
 
@@ -382,7 +382,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
     { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
     { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
     { data: [{ id: 'fp-1' }] },
-    { error: null },
+    { data: [{ id: 'tx-1' }], error: null },
     { data: [] },
   ]
 
@@ -537,7 +537,7 @@ describe('bulkBookMatchedInboxItems: intra-batch duplicate handling', () => {
     { data: { id: txId, date: '2026-06-01', amount, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
     { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
     { data: [{ id: 'fp-1' }] },
-    { error: null },
+    { data: [{ id: txId }], error: null },
     { data: { document_id: null } }, // propagation: tx pin lookup
     { data: [] }, // propagation: matched inbox items
   ]

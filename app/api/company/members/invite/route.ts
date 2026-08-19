@@ -12,6 +12,7 @@ import {
   generateInviteEmailHtml,
   generateInviteEmailText,
 } from '@/lib/email/invite-templates'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 
 // Loads the email extension so getEmailService() returns the Resend
 // implementation instead of the noop default. Without this, the invite email
@@ -111,7 +112,11 @@ export const POST = withRouteContext(
     const { token, hash } = generateInviteToken()
     const expiresAt = getInviteExpiry()
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+    // The request host is used only when it is the canonical app host or an
+    // exact registered white-label domain. A spoofed Host header falls back to
+    // NEXT_PUBLIC_APP_URL, so neither the email nor GoTrue gets an open
+    // redirect target.
+    const appOrigin = resolveRequestAppOrigin(request)
 
     // Self-hosted installations that turn public signup off in GoTrue
     // (disable_signup) set AUTH_SIGNUPS_DISABLED=true to mirror that config:
@@ -145,7 +150,7 @@ export const POST = withRouteContext(
         // set-password surface first.
         const { error: provisionError } = await serviceClient.auth.admin.inviteUserByEmail(
           email,
-          { redirectTo: `${appUrl}/invite/${token}` },
+          { redirectTo: `${appOrigin}/invite/${token}` },
         )
 
         if (provisionError) {
@@ -211,7 +216,7 @@ export const POST = withRouteContext(
     const emailService = getEmailService()
     let emailSent = false
     if (emailService.isConfigured()) {
-      const inviteUrl = `${appUrl}/invite/${token}`
+      const inviteUrl = `${appOrigin}/invite/${token}`
 
       const emailData = {
         companyName: company?.name || 'Företag',
@@ -238,7 +243,7 @@ export const POST = withRouteContext(
 
     // In development, return the invite URL directly (no email service)
     const isDev = process.env.NODE_ENV === 'development'
-    const devInviteUrl = isDev ? `${appUrl}/invite/${token}` : undefined
+    const devInviteUrl = isDev ? `${appOrigin}/invite/${token}` : undefined
 
     return NextResponse.json({
       data: {

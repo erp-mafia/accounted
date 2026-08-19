@@ -189,7 +189,9 @@ export function getStructuredError(
   const message_sv = getErrorMessage(error)
 
   const transient = isTransientFailure(error, message_en)
-  let code = extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
+  let code = isIgnoredTransactionJournalConstraint(error)
+    ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
+    : extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
   // Nothing more specific matched but the failure is transient: surface the
   // stable TRANSIENT_ERROR code so agents can dispatch on it.
   if (code === 'UNKNOWN_ERROR' && transient) code = 'TRANSIENT_ERROR'
@@ -313,6 +315,13 @@ function isPostgresError(err: unknown): err is { code: string; message: string }
   )
 }
 
+export function isIgnoredTransactionJournalConstraint(error: unknown): boolean {
+  return (
+    isPostgresError(error) &&
+    /transactions_is_ignored_no_journal_entry/i.test(error.message)
+  )
+}
+
 /**
  * Build the canonical REST error envelope for any thrown value.
  *
@@ -358,7 +367,9 @@ export function errorResponse(
 
   // 3. Postgres errors
   if (isPostgresError(err)) {
-    const mapped = postgresCodeToStructured(err.code)
+    const mapped = isIgnoredTransactionJournalConstraint(err)
+      ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
+      : postgresCodeToStructured(err.code)
     if (mapped) {
       const entry = entryFor(mapped)
       logAtLevel(log, entry.httpStatus, 'database error', err as unknown as Error, {

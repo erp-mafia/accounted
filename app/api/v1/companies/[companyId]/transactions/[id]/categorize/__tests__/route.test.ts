@@ -69,6 +69,7 @@ vi.mock('@/lib/transactions/inbox-underlag', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { withUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
 import { POST } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -83,6 +84,7 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
   // Insert payloads are recorded verbatim: the proxy would happily accept a
   // phantom column, so the assertion has to inspect the object itself.
   const inserts: Record<string, unknown[]> = {}
+  const updates: Record<string, unknown[]> = {}
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -95,13 +97,14 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
         }
         return (...args: unknown[]) => {
           if (prop === 'insert') (inserts[table] ??= []).push(args[0])
+          if (prop === 'update') (updates[table] ??= []).push(args[0])
           return buildChain(table)
         }
       },
     }
     return new Proxy({}, handler)
   }
-  return { supabase: { from: vi.fn((table: string) => buildChain(table)) }, inserts }
+  return { supabase: { from: vi.fn((table: string) => buildChain(table)) }, inserts, updates }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -170,7 +173,7 @@ beforeEach(() => {
   })
 })
 
-function happyPathSupabase() {
+function happyPathSupabase(transactionOverrides: Record<string, unknown> = {}) {
   return makeFlexibleSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
     transactions: [
@@ -184,6 +187,7 @@ function happyPathSupabase() {
           merchant_name: 'ICA',
           cash_account_id: null,
           journal_entry_id: null,
+          ...transactionOverrides,
         },
         error: null,
       },
@@ -244,13 +248,98 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
     expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
     expect(propagateUnderlagMock).not.toHaveBeenCalled()
   })
+
+  it('returns a race conflict when the guarded update matches no row without creating an entry', async () => {
+    const { supabase } = casRaceSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+    createTxJE.mockResolvedValueOnce(null)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'expense_office' }),
+      routeParams(),
+    )
+
+    const body = await res.json()
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('atomically unignores an ignored transaction when categorizing it', async () => {
+    const { supabase, updates } = happyPathSupabase({ is_ignored: true })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(makeRequest({ is_business: false }), routeParams())
+
+    expect(res.status).toBe(200)
+    expect(updates.transactions).toContainEqual(
+      expect.objectContaining({
+        is_business: false,
+        category: 'private',
+        is_ignored: false,
+        journal_entry_id: 'je-fresh',
+      }),
+    )
+  })
+
+  it('maps an ignored-row constraint to a typed conflict and stornos the posted orphan', async () => {
+    const { supabase } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_ID,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            cash_account_id: null,
+            journal_entry_id: null,
+            is_ignored: true,
+          },
+          error: null,
+        },
+        {
+          data: null,
+          error: {
+            code: '23514',
+            message:
+              'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"',
+          },
+        },
+      ],
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(makeRequest({ is_business: false }), routeParams())
+    const body = await res.json()
+
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_IGNORED_CONFLICT')
+    expect(body.error.message).not.toContain('check constraint')
+    expect(reverseEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'user-1',
+      'je-fresh',
+    )
+  })
 })
 
 describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
   it('documents the stranded voucher with the real voucher_gap_explanations columns when the storno fails', async () => {
     const { supabase, inserts } = casRaceSupabase()
     mockServiceClient.mockReturnValue(supabase)
-    reverseEntryMock.mockRejectedValueOnce(new Error('period locked'))
+    reverseEntryMock.mockRejectedValueOnce(
+      withUnusedVoucherAllocation(new Error('account lookup failed'), {
+        fiscalPeriodId: 'period-1',
+        voucherSeries: 'B',
+        voucherNumber: 43,
+      }),
+    )
 
     const res = await POST(
       makeRequest({ is_business: true, category: 'expense_office' }),
@@ -268,9 +357,10 @@ describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
       user_id: 'user-1',
       fiscal_period_id: 'period-1',
       voucher_series: 'B',
-      gap_start: 42,
-      gap_end: 42,
-      explanation: 'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',
+      gap_start: 43,
+      gap_end: 43,
+      explanation:
+        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
     })
   })
 
