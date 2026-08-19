@@ -44,6 +44,7 @@ import {
 } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { rowsNeedingInterestDate } from '@/lib/skatteverket/interest-period'
+import { skvAuthErrorNeedsReconnect } from '@/lib/notices/predicates'
 import {
   AlertCircle,
   Copy,
@@ -212,16 +213,17 @@ export default function SkattekontoPage() {
         // …) fire while Inställningar truthfully shows the stored token as
         // "Ansluten". Showing the full "inte anslutet"-tomvy for those
         // contradicts the settings panel; show the server's actual reason
-        // with a reconnect CTA instead.
+        // with a reconnect CTA instead. The split lives in the shared
+        // skvAuthErrorNeedsReconnect predicate (lib/notices), never inline.
         if (res.status === 401) {
-          if (json.code === 'NOT_CONNECTED') {
-            setNotConnected(true)
-          } else {
+          if (skvAuthErrorNeedsReconnect(res.status, json.code)) {
             setReconnectMessage(
               typeof json.error === 'string' && json.error
                 ? json.error
                 : 'Anslutningen mot Skatteverket behöver förnyas. Anslut igen med BankID.',
             )
+          } else {
+            setNotConnected(true)
           }
           return
         }

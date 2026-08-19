@@ -61,6 +61,7 @@ import type {
 } from '@/types/skatteverket'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
+import { skvStatusNeedsReconnect, type SkvStatusLike } from '@/lib/notices/predicates'
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
@@ -914,21 +915,11 @@ export default function TransactionsPage() {
           setSkvNeedsReconnect(false)
           return
         }
-        const s = (await res.json()) as {
-          connected?: boolean
-          disabled?: boolean
-          needsReconsent?: boolean
-          expired?: boolean
-          canRefresh?: boolean
-        }
+        const s = (await res.json()) as SkvStatusLike
         if (skvFetchSeqRef.current !== seq) return
-        setSkvNeedsReconnect(
-          Boolean(
-            s.connected &&
-              !s.disabled &&
-              (s.needsReconsent || (s.expired && !s.canRefresh)),
-          ),
-        )
+        // Shared reconnect predicate (lib/notices): the same decision the
+        // skattekonto page and the Hem notice make, never a local variant.
+        setSkvNeedsReconnect(skvStatusNeedsReconnect(s))
       } catch {
         if (skvFetchSeqRef.current !== seq) return
         setSkvNeedsReconnect(false)

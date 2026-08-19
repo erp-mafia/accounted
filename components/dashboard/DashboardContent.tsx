@@ -4,15 +4,15 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
-import { AttnLine } from '@/components/ui/attn-line'
 import { useCompany } from '@/contexts/CompanyContext'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import ResumePane from '@/components/dashboard/ResumePane'
-import BackupHealthBanner from '@/components/dashboard/BackupHealthBanner'
+import NoticeLines from '@/components/dashboard/NoticeLines'
 import { SkatteverketPromoCard } from '@/components/dashboard/SkatteverketPromoCard'
 import { AgentPromo } from '@/components/dashboard/AgentPromo'
 import type { InitialSetupState, OnboardingProgress } from '@/types'
+import type { Notice } from '@/lib/notices/types'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 import type { ResumeItem } from '@/lib/worklist/resume'
 import type { VatDeadlineLine } from '@/lib/onboarding/checklist'
@@ -31,11 +31,12 @@ interface DashboardContentProps {
   /** In-progress work for the Fortsätt pane (lib/worklist/resume). */
   resumeItems: ResumeItem[]
   /**
-   * True when this account looks bookkeeping-empty while a same-orgnr
-   * company with real bookkeeping exists in another account (#1231): the
-   * user probably signed in with the wrong login (stale BankID account).
+   * Active degraded-state notices in priority order (lib/notices): broken or
+   * expiring bank connections, Skatteverket reconnect, failing backups, the
+   * wrong-account hint. Rendered as ONE attn line at the top with a quiet
+   * "+N till" expander: never a stack of banners.
    */
-  otherAccountHint?: boolean
+  notices?: Notice[]
   onboardingProgress?: OnboardingProgress
   initialSetup: InitialSetupState
   /**
@@ -72,7 +73,7 @@ export default function DashboardContent({
   worklist,
   suggestedMatches,
   resumeItems,
-  otherAccountHint = false,
+  notices = [],
   onboardingProgress,
   initialSetup,
   agentBuilt = true,
@@ -107,7 +108,15 @@ export default function DashboardContent({
 
   return (
     <div className="stagger-enter space-y-8">
-      <BackupHealthBanner />
+      {/* Degraded-state notices (lib/notices): one attn line, highest
+          priority first, quiet "+N till" expander. The wrong-account hint
+          participates in the same priority list instead of rendering its own
+          unconditional line, and the old boxed BackupHealthBanner card lives
+          on as the backup_failing category. */}
+      <NoticeLines
+        notices={notices}
+        actionOverrides={{ other_account_hint: handleSwitchAccount }}
+      />
 
       {/* Greeting hero (concept scene 14) */}
       <section>
@@ -118,14 +127,6 @@ export default function DashboardContent({
           {dateLine}
           {company?.name ? ` · ${company.name}` : ''}
         </p>
-        {otherAccountHint && (
-          <AttnLine
-            className="mt-3"
-            action={{ label: t('other_account_hint_action'), onClick: handleSwitchAccount }}
-          >
-            {t('other_account_hint')}
-          </AttnLine>
-        )}
       </section>
 
       <NewUserChecklist

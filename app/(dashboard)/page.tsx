@@ -2,7 +2,8 @@ import { redirect } from 'next/navigation'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { getWorklistCounts, listSuggestedMatches } from '@/lib/worklist'
 import { listResumeItems } from '@/lib/worklist/resume'
-import { shouldShowOtherAccountHint } from '@/lib/company/other-account-hint'
+import { getCompanyNotices } from '@/lib/notices'
+import { expiringBankConnectionsFrom } from '@/lib/notices/categories'
 import { vatDeadlineLine } from '@/lib/onboarding/checklist'
 import type { OnboardingProgress } from '@/types'
 import {
@@ -53,7 +54,7 @@ export default async function DashboardPage() {
     worklist,
     suggestedMatches,
     resumeItems,
-    otherAccountHint,
+    notices,
   ] = await Promise.all([
     getDashboardSettings(),
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -95,10 +96,10 @@ export default async function DashboardPage() {
     listSuggestedMatches(supabase, companyId, 5),
     // In-progress work for the Fortsätt pane: pure draft-state derivation.
     listResumeItems(supabase, companyId, now),
-    // Wrong-account hint (#1231): true only when this account has zero
-    // journal entries while a same-orgnr company with real bookkeeping
-    // exists in another account. Common case costs one existence probe.
-    shouldShowOtherAccountHint(supabase),
+    // Degraded-state notices (lib/notices): broken/expiring bank
+    // connections, Skatteverket reconnect, failing backups, and the
+    // wrong-account hint (#1231), priority-ordered and dismissal-filtered.
+    getCompanyNotices(supabase, companyId, { userId: user.id, now }),
   ])
 
   // A FAILED settings read must not masquerade as "onboarding not done":
@@ -139,22 +140,10 @@ export default async function DashboardPage() {
   const setupOpen = !settings.initial_setup_completed_at && !settings.initial_setup_dismissed_at
   const emptyLedger = setupOpen && !postedEntryError && (postedEntryCount || 0) === 0
 
-  const nowMs = now.getTime()
-  const expiringBankConnections = (bankConnections || [])
-    .filter(conn => {
-      if (!conn.consent_expires) return false
-      const daysLeft = Math.ceil(
-        (new Date(conn.consent_expires).getTime() - nowMs) / (1000 * 60 * 60 * 24)
-      )
-      return daysLeft > 0 && daysLeft <= 14
-    })
-    .map(conn => ({
-      id: conn.id as string,
-      bank_name: conn.bank_name as string,
-      days_left: Math.ceil(
-        (new Date(conn.consent_expires!).getTime() - nowMs) / (1000 * 60 * 60 * 24)
-      ),
-    }))
+  // Same day-math as the bank_connection_expiring notice predicate
+  // (lib/notices/categories.ts): the Bevaka row and the notice can never
+  // disagree on the threshold.
+  const expiringBankConnections = expiringBankConnectionsFrom(bankConnections || [], now)
 
   const userFirstName = profile?.full_name?.trim().split(/\s+/)[0] ?? null
 
@@ -198,7 +187,7 @@ export default async function DashboardPage() {
       worklist={worklist}
       suggestedMatches={suggestedMatches}
       resumeItems={resumeItems}
-      otherAccountHint={otherAccountHint}
+      notices={notices}
       onboardingProgress={onboardingProgress}
       initialSetup={{
         path: settings.initial_setup_path ?? null,

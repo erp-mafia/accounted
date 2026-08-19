@@ -44,7 +44,7 @@ Decided during the 2026-07 concept work (dev_docs/ui_migration_plan.md); they ap
 3. **Buttons are pills.** Radius 99px, default padding 7px 16px, 13px text. Set once in `components/ui/button.tsx`, app-wide, never per page.
 4. **Table rows are one line.** Secondary info (descriptions, OCR, roles) belongs in the detail view or a click-popup, never as sub-rows in lists.
 5. **Chips mark exceptions.** Normal states render as muted text; Badge only when the row deviates. Same chip on every row means the chip is wrong.
-6. **Attention is one ochre sentence**, not a banner: the `.attn` pattern (12.5px, `--warning` tone, single line, optionally with an embedded action link). Max one per page.
+6. **Attention is one ochre sentence**, not a banner: the `.attn` pattern (12.5px, `--warning` tone, single line, optionally with an embedded action link). Max one per page. Addendum 2026-08-19: a page may show at most one global notice line sourced from `lib/notices` (highest priority wins, additional active notices collapse behind a quiet "+N till" inline expander) plus at most one page-domain attn line.
 7. **Help text lives behind a "?"** right after the H1: a small (17px) circular button opening a popover anchored at the button. No instructional copy in the page flow.
 8. **One context picker per page, far right in the toolbar**: fiscal year or account/source as a chip-dropdown with a check on the active choice. A chip that looks like a picker must be a picker.
 9. **The primary action lives in the page header**, right side. Multiple create paths collapse into a split button whose caret menu remembers the last-used mode (persisted in `user_preferences`, not localStorage).
