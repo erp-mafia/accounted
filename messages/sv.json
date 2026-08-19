@@ -6401,6 +6401,7 @@
   },
   "notices": {
     "bank_broken_one": "Bankkopplingen till {bank} har slutat fungera och hämtar inte längre transaktioner.",
+    "bank_broken_one_unnamed": "En bankkoppling har slutat fungera och hämtar inte längre transaktioner.",
     "bank_broken_many": "{count} bankkopplingar har slutat fungera och hämtar inte längre transaktioner.",
     "bank_broken_action": "Förnya kopplingen",
     "skv_disconnected": "Anslutningen till Skatteverket behöver förnyas. Anslut igen med BankID.",

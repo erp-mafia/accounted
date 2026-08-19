@@ -8,6 +8,7 @@
  * check must never take down the dashboard or the home page.
  */
 
+import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -33,6 +34,23 @@ function logAndNull(
   return null
 }
 
+/**
+ * Bound a multi-part id discriminator. A single part stays human-readable
+ * (a connection id plus its status/expiry); several parts, each embedding a
+ * uuid, collapse to `<count>@<first 8 hex of sha256 over the sorted parts>`,
+ * so the id stays far below the dismiss schema cap (lib/api/schemas.ts) no
+ * matter how many connections fold into one notice, and is stable across
+ * row orderings. Server-only (node:crypto), which this module already is.
+ */
+function boundedDiscriminator(parts: string[]): string {
+  if (parts.length === 1) return parts[0]
+  const digest = createHash('sha256')
+    .update([...parts].sort().join(','))
+    .digest('hex')
+    .slice(0, 8)
+  return `${parts.length}@${digest}`
+}
+
 // ── Predicates (one query each; soft-fail to null) ──
 
 /**
@@ -53,18 +71,25 @@ export async function detectBrokenBankConnections(
     if (error) return logAndNull('bank_connection_broken', companyId, error)
     const rows = data ?? []
     if (rows.length === 0) return null
-    const discriminator = rows
-      .map((r) => `${r.id}=${r.status}`)
-      .sort()
-      .join(',')
+    const discriminator = boundedDiscriminator(rows.map((r) => `${r.id}=${r.status}`))
+    // A NULL bank_name switches to the unnamed message variant instead of
+    // interpolating a fallback word, which would leak Swedish into English.
+    const bankName = rows.length === 1 ? ((rows[0].bank_name as string | null) || null) : null
     return {
       id: `bank_connection_broken:${discriminator}`,
       category: 'bank_connection_broken',
       severity: 'error',
-      messageKey: rows.length === 1 ? 'bank_broken_one' : 'bank_broken_many',
+      messageKey:
+        rows.length === 1
+          ? bankName
+            ? 'bank_broken_one'
+            : 'bank_broken_one_unnamed'
+          : 'bank_broken_many',
       messageParams:
         rows.length === 1
-          ? { bank: (rows[0].bank_name as string | null) ?? 'banken' }
+          ? bankName
+            ? { bank: bankName }
+            : undefined
           : { count: rows.length },
       actionKey: 'bank_broken_action',
       actionHref: '/settings/banking',
@@ -104,10 +129,9 @@ export async function detectExpiringBankConnections(
     const consentByid = new Map(
       (data ?? []).map((r) => [r.id as string, r.consent_expires as string | null]),
     )
-    const discriminator = expiring
-      .map((c) => `${c.id}=${consentByid.get(c.id) ?? ''}`)
-      .sort()
-      .join(',')
+    const discriminator = boundedDiscriminator(
+      expiring.map((c) => `${c.id}=${consentByid.get(c.id) ?? ''}`),
+    )
     return {
       id: `bank_connection_expiring:${discriminator}`,
       category: 'bank_connection_expiring',
@@ -231,15 +255,15 @@ export async function detectBackupFailing(
     if (error) return logAndNull('backup_failing', companyId, error)
     const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]))
 
-    const failing: { provider: string; reason: 'reauth' | 'sync_error'; since: string }[] = []
+    const failing: { provider: string; reason: 'reauth' | 'sync_error' }[] = []
     for (const provider of ['google_drive', 'dropbox']) {
       const connection = byKey.get(`${provider}_connection`) as BackupConnectionValue | undefined
       if (!connection) continue
       const schedule = byKey.get(`${provider}_schedule`) as BackupScheduleValue | undefined
       if (connection.status === 'needs_reauth') {
-        failing.push({ provider, reason: 'reauth', since: connection.needs_reauth_at ?? '' })
+        failing.push({ provider, reason: 'reauth' })
       } else if (schedule?.last_auto_sync_status === 'error') {
-        failing.push({ provider, reason: 'sync_error', since: schedule.last_auto_sync_at ?? '' })
+        failing.push({ provider, reason: 'sync_error' })
       }
     }
     if (failing.length === 0) return null
@@ -248,8 +272,15 @@ export async function detectBackupFailing(
       .map((f) => BACKUP_PROVIDER_LABELS[f.provider] ?? f.provider)
       .join(' + ')
     const allNeedReauth = failing.every((f) => f.reason === 'reauth')
+    // Deliberately NO timestamp in the discriminator: the cron re-stamps
+    // last_auto_sync_at on every failed run (and can re-stamp needs_reauth_at
+    // on retries), which would resurrect a dismissed notice daily while the
+    // SAME incident persists. The id is stable per (provider, reason) and the
+    // opposite direction (a NEW failure after a healthy spell must resurface)
+    // is guaranteed by the stale-dismissal reaping in aggregate.ts; contract
+    // in lib/notices/types.ts.
     const discriminator = failing
-      .map((f) => `${f.provider}=${f.reason}@${f.since}`)
+      .map((f) => `${f.provider}=${f.reason}`)
       .sort()
       .join(',')
     return {

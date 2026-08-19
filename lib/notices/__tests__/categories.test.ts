@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -124,7 +125,18 @@ describe('detectBrokenBankConnections', () => {
     })
   })
 
-  it('folds several broken connections into one counted notice with a stable id', async () => {
+  it('uses the unnamed message variant when the single broken connection has no bank name', async () => {
+    enqueue({ data: [{ id: 'c1', status: 'expired', bank_name: null }] })
+    const notice = await detectBrokenBankConnections(supabase, COMPANY)
+    expect(notice).toMatchObject({
+      id: 'bank_connection_broken:c1=expired',
+      messageKey: 'bank_broken_one_unnamed',
+    })
+    expect(notice?.messageParams).toBeUndefined()
+  })
+
+  it('folds several broken connections into one counted notice with a bounded, stable id', async () => {
+    const digest = createHash('sha256').update('c1=expired,c2=error').digest('hex').slice(0, 8)
     enqueue({
       data: [
         { id: 'c2', status: 'error', bank_name: 'Nordea' },
@@ -133,10 +145,26 @@ describe('detectBrokenBankConnections', () => {
     })
     const notice = await detectBrokenBankConnections(supabase, COMPANY)
     expect(notice).toMatchObject({
-      id: 'bank_connection_broken:c1=expired,c2=error',
+      id: `bank_connection_broken:2@${digest}`,
       messageKey: 'bank_broken_many',
       messageParams: { count: 2 },
     })
+  })
+
+  it('keeps the id under 200 chars for 30 broken connections, stable across orderings', async () => {
+    const rows = Array.from({ length: 30 }, (_, i) => ({
+      id: `3f8b2c1a-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      status: i % 2 === 0 ? 'expired' : 'error',
+      bank_name: null,
+    }))
+    enqueue({ data: rows })
+    enqueue({ data: [...rows].reverse() })
+    const first = await detectBrokenBankConnections(supabase, COMPANY)
+    const second = await detectBrokenBankConnections(supabase, COMPANY)
+    expect(first?.id).toBeDefined()
+    expect(first?.id.length).toBeLessThan(200)
+    expect(first?.id).toMatch(/^bank_connection_broken:30@[0-9a-f]{8}$/)
+    expect(second?.id).toBe(first?.id)
   })
 
   it('soft-fails to null on query error', async () => {
@@ -167,6 +195,18 @@ describe('detectExpiringBankConnections', () => {
       messageKey: 'bank_expiring_one',
       messageParams: { bank: 'SEB', days: 10 },
     })
+  })
+
+  it('collapses several expiring consents into a bounded digest id', async () => {
+    enqueue({
+      data: [
+        { id: 'c1', bank_name: 'SEB', consent_expires: expires },
+        { id: 'c2', bank_name: 'Nordea', consent_expires: expires },
+      ],
+    })
+    const notice = await detectExpiringBankConnections(supabase, COMPANY, NOW)
+    expect(notice?.id).toMatch(/^bank_connection_expiring:2@[0-9a-f]{8}$/)
+    expect(notice).toMatchObject({ messageKey: 'bank_expiring_many', messageParams: { count: 2 } })
   })
 
   it('returns null when every consent is further out than 14 days', async () => {
@@ -295,7 +335,7 @@ describe('detectBackupFailing', () => {
     })
     const notice = await detectBackupFailing(supabase, COMPANY)
     expect(notice).toMatchObject({
-      id: 'backup_failing:google_drive=reauth@2026-08-17T00:00:00Z',
+      id: 'backup_failing:google_drive=reauth',
       category: 'backup_failing',
       severity: 'error',
       messageKey: 'backup_reauth',
@@ -304,7 +344,23 @@ describe('detectBackupFailing', () => {
     })
   })
 
-  it('folds two failing providers into ONE notice with both names', async () => {
+  it('keeps the id stable while the cron re-stamps last_auto_sync_at on the SAME incident', async () => {
+    const failingRun = (stampedAt: string) => [
+      { key: 'google_drive_connection', value: { status: 'active' } },
+      {
+        key: 'google_drive_schedule',
+        value: { last_auto_sync_status: 'error', last_auto_sync_at: stampedAt },
+      },
+    ]
+    enqueue({ data: failingRun('2026-08-18T02:00:00Z') })
+    enqueue({ data: failingRun('2026-08-19T02:00:00Z') })
+    const first = await detectBackupFailing(supabase, COMPANY)
+    const second = await detectBackupFailing(supabase, COMPANY)
+    expect(first?.id).toBe('backup_failing:google_drive=sync_error')
+    expect(second?.id).toBe(first?.id)
+  })
+
+  it('folds two failing providers into ONE notice with both names and a sorted id', async () => {
     enqueue({
       data: [
         { key: 'google_drive_connection', value: { status: 'needs_reauth' } },
@@ -317,6 +373,7 @@ describe('detectBackupFailing', () => {
     })
     const notice = await detectBackupFailing(supabase, COMPANY)
     expect(notice).toMatchObject({
+      id: 'backup_failing:dropbox=sync_error,google_drive=reauth',
       messageKey: 'backup_failing',
       messageParams: { provider: 'Google Drive + Dropbox' },
     })

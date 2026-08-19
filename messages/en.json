@@ -6401,6 +6401,7 @@
   },
   "notices": {
     "bank_broken_one": "The {bank} bank connection has stopped working and no longer fetches transactions.",
+    "bank_broken_one_unnamed": "A bank connection has stopped working and no longer fetches transactions.",
     "bank_broken_many": "{count} bank connections have stopped working and no longer fetch transactions.",
     "bank_broken_action": "Renew the connection",
     "skv_disconnected": "The Skatteverket connection needs to be renewed. Reconnect with BankID.",

@@ -76,9 +76,31 @@ export const NOTICE_PRIORITY: readonly NoticeCategory[] = [
 export interface Notice {
   /**
    * Stable identity of THIS occurrence: the category plus a state
-   * discriminator (connection id + status, expiry date, error timestamp).
-   * A dismissal is stored against the id, so a NEW failure after a fix mints
-   * a new id and surfaces again: dismissals silence a state, never a category.
+   * discriminator (connection id + status, expiry date). A dismissal is
+   * stored against the id, so dismissals silence a state, never a category.
+   *
+   * Two invariants keep dismissals honest, and every id must satisfy both:
+   *
+   * 1. Stable per incident: the discriminator must not embed anything the
+   *    system re-stamps while the SAME incident persists (a cron-updated
+   *    last-attempt timestamp), or a dismissed notice resurrects daily.
+   *    backup_failing therefore discriminates on (provider, reason) only.
+   * 2. Reaped on recovery: the read path (getCompanyNotices) best-effort
+   *    deletes the caller's stored dismissals for any category that is
+   *    currently healthy, matched by the `category:` id prefix. That is what
+   *    makes a NEW failure after a healthy spell resurface even when it mints
+   *    the exact same id as the dismissed one: error -> dismiss (hidden while
+   *    failing) -> healthy (dismissal reaped on the next read) -> new error
+   *    -> visible again. Categories whose id changes per incident anyway
+   *    (bank ids embed connection id + status/expiry, skv embeds the
+   *    incident's first-error/expiry timestamp) get the same reaping as
+   *    hygiene. other_account_hint has no `category:` prefix and is never
+   *    reaped: dismissing it silences the condition itself.
+   *
+   * Ids are also bounded: multi-connection discriminators collapse to a
+   * count + 8-char sha256 digest of the sorted parts (categories.ts), so an
+   * id never grows with the number of connections and stays well under the
+   * dismiss schema cap (lib/api/schemas.ts).
    */
   id: string
   category: NoticeCategory
