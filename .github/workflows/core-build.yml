@@ -107,6 +107,12 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-core
       - run: npm run build
+        env:
+          # The Next.js build worker OOMs on the runner's default Node heap
+          # since 2026-08-19 (bundle growth crossed the default old-space
+          # ceiling; the first branch containing the whole day's merges was the
+          # first to hit it). Public-repo runners have 16 GB, give the build 8.
+          NODE_OPTIONS: --max-old-space-size=8192
 
   test:
     # 897 unit test files (11,341 tests) take 3m31s in one process. Measured
