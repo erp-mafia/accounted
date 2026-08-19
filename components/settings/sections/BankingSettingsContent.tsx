@@ -10,7 +10,6 @@ import { useToast } from '@/components/ui/use-toast'
 import { AlertTriangle, CreditCard, ExternalLink } from 'lucide-react'
 import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
 
 const BankingPanel = getSettingsPanel('enable-banking')
@@ -124,14 +123,10 @@ export function BankingSettingsContent() {
       )}
 
       {hasBankingExtension && BankingPanel ? (
-        <>
-          {/* The chip renders null when there are no connections; empty:hidden
-              keeps its margin from leaving a stray gap in that case. */}
-          <div className="mt-6 empty:hidden">
-            <BankSyncStatusChip />
-          </div>
-          <BankingPanel />
-        </>
+        // No BankSyncStatusChip here: on this page the chip links to itself,
+        // and the panel now carries its own single attention sentence. The
+        // chip stays on /transactions.
+        <BankingPanel />
       ) : (
         <div className="pt-8">
           <EmptyState
