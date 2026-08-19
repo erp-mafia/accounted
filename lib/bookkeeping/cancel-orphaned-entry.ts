@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { getUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
 
 const log = createLogger('cancel-orphaned-entry')
 
@@ -69,6 +71,49 @@ export async function recordVoucherGapExplanation(
     )
     return false
   }
+}
+
+/**
+ * Storno a posted journal entry that could not be linked to its transaction.
+ *
+ * The bookkeeping engine posts entries before the transaction CAS runs. When
+ * that CAS definitively fails, the entry is immutable and must be reversed,
+ * never edited or cancelled in place. Compensation is best-effort so the
+ * caller can preserve the original conflict response.
+ */
+export async function reverseOrphanedJournalEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  journalEntryId: string,
+  gapExplanation: string,
+): Promise<void> {
+  let unusedVoucher: ReturnType<typeof getUnusedVoucherAllocation> = null
+  try {
+    await reverseEntry(supabase, companyId, userId, journalEntryId)
+    return
+  } catch (reverseError) {
+    unusedVoucher = getUnusedVoucherAllocation(reverseError)
+    log.error('failed to storno orphaned journal entry', reverseError as Error, {
+      companyId,
+      journalEntryId,
+      unusedVoucher,
+    })
+  }
+
+  // The original posted voucher is live accounting evidence, never a gap.
+  // Only the engine can identify an exact reversal number that its durable
+  // sequence allocated before a reversal row existed.
+  if (!unusedVoucher) return
+
+  await recordVoucherGapExplanation(supabase, {
+    companyId,
+    userId,
+    fiscalPeriodId: unusedVoucher.fiscalPeriodId,
+    voucherSeries: unusedVoucher.voucherSeries,
+    voucherNumber: unusedVoucher.voucherNumber,
+    explanation: gapExplanation,
+  })
 }
 
 /**

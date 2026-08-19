@@ -102,6 +102,31 @@ describe('errorResponse', () => {
     expect(body.error.details).toMatchObject({ pgCode: '23505' })
   })
 
+  it('maps the ignored-transaction journal constraint to a typed conflict', async () => {
+    const pgErr = Object.assign(
+      new Error(
+        'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"',
+      ),
+      { code: '23514' },
+    )
+    const res = errorResponse(pgErr, noopLogger, { requestId: 'req_ignored_tx' })
+
+    expect(res.status).toBe(409)
+    const body = await readEnvelope(res)
+    expect(body.error.code).toBe('TX_CATEGORIZE_IGNORED_CONFLICT')
+    expect(body.error.message).not.toContain('check constraint')
+    expect(body.error.details).toMatchObject({ pgCode: '23514' })
+  })
+
+  it('does not apply unrelated message heuristics to Postgres errors', async () => {
+    const pgErr = Object.assign(new Error('Invoice not found'), { code: 'P0001' })
+    const res = errorResponse(pgErr, noopLogger, { requestId: 'req_pg_unrelated' })
+
+    expect(res.status).toBe(500)
+    const body = await readEnvelope(res)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
+  })
+
   it('maps Postgres no-data-found to NOT_FOUND with pgCode', async () => {
     const pgErr = Object.assign(new Error('invoice not found'), { code: 'P0002' })
     const res = errorResponse(pgErr, noopLogger, { requestId: 'req_pg_not_found' })

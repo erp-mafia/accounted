@@ -447,6 +447,16 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Transaktionen kategoriserades av en annan förfrågan. Ladda om och försök igen.',
     message_en: 'Transaction was already categorized by another request.',
   },
+  TX_CATEGORIZE_IGNORED_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är fortfarande markerad som ignorerad och kan därför inte kopplas till en verifikation.',
+    message_en:
+      'The transaction is still marked as ignored and cannot be linked to a journal entry.',
+    remediation: {
+      description: 'Reload and retry categorization. Report the conflict if it persists.',
+    },
+  },
   TX_CATEGORIZE_SUGGEST_SI_MATCH: {
     httpStatus: 409,
     message_sv:
