@@ -142,6 +142,22 @@ export function RunEmployeesTable({
             const netValue = sre.net_salary + (sre.tax_withheld - taxValue)
             const editableSalary = isDraft && canWrite && sre.salary_type === 'monthly'
             const primaryNumber = isDraft ? sre.monthly_salary : sre.gross_salary
+            // In a draft the number on the row is the full-time monthly salary
+            // the engine multiplies by the employee's sysselsättningsgrad. Below
+            // 100 % that product is not obvious from the input alone (a 10 %
+            // employee typed 45 310 to get a 4 531 kr gross), so spell it out
+            // right under the number instead of only in Beräkningsdetaljer.
+            const degree = Number(sre.employment_degree)
+            const showDegreeHint =
+              isDraft && sre.salary_type === 'monthly' && Number.isFinite(degree) && degree < 100
+            const degreeHint = showDegreeHint ? (
+              <span className="text-[11px] leading-tight text-muted-foreground tabular-nums whitespace-nowrap">
+                {t('degree_hint', {
+                  degree: degree.toLocaleString('sv-SE'),
+                  amount: formatCurrency(roundOre((sre.monthly_salary || 0) * (degree / 100))),
+                })}
+              </span>
+            ) : null
 
             return (
               <div
@@ -176,21 +192,27 @@ export function RunEmployeesTable({
 
                 {/* Right side: editable monthly salary (draft) or the number */}
                 {editableSalary ? (
-                  <Input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    defaultValue={sre.monthly_salary}
-                    onClick={e => e.stopPropagation()}
-                    onBlur={e => onSalaryEdit(sre.employee_id, e.target.value, sre.monthly_salary)}
-                    disabled={actionLoading === `salary-${sre.employee_id}`}
-                    aria-label={t('salary_input_aria', { name })}
-                    className="h-8 w-28 text-right tabular-nums shrink-0"
-                  />
+                  <div className="flex flex-col items-end gap-0.5 shrink-0">
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      defaultValue={sre.monthly_salary}
+                      onClick={e => e.stopPropagation()}
+                      onBlur={e => onSalaryEdit(sre.employee_id, e.target.value, sre.monthly_salary)}
+                      disabled={actionLoading === `salary-${sre.employee_id}`}
+                      aria-label={t('salary_input_aria', { name })}
+                      className="h-8 w-28 text-right tabular-nums"
+                    />
+                    {degreeHint}
+                  </div>
                 ) : (
-                  <span className="text-right tabular-nums font-medium shrink-0">
-                    {formatCurrency(primaryNumber)}
-                  </span>
+                  <div className="flex flex-col items-end gap-0.5 shrink-0">
+                    <span className="text-right tabular-nums font-medium">
+                      {formatCurrency(primaryNumber)}
+                    </span>
+                    {degreeHint}
+                  </div>
                 )}
 
                 {/* Payslip PDF */}
