@@ -1047,6 +1047,7 @@
     "preview_invalid_period": "Periodens slut måste vara efter dess start",
     "preview_min_months": "Periodisering kräver minst 2 kalendermånader",
     "k2_hint": "Belopp under 5 000 kr behöver normalt inte periodiseras (K2).",
+    "k1_hint": "Belopp under 5 000 kr behöver normalt inte periodiseras (K1, förenklat årsbokslut).",
     "validation_period": "Ange en period på minst 2 kalendermånader",
     "incomplete_toast_title": "Ofullständig periodisering",
     "incomplete_toast_description": "Ange periodens start och slut (minst 2 månader) eller ta bort periodiseringen från raden."
@@ -1949,7 +1950,10 @@
     "fy_unlock_success": "Räkenskapsåret är upplåst",
     "fy_action_error": "Åtgärden kunde inte slutföras",
     "related_heading": "Relaterat",
-    "related_chart_of_accounts": "Kontoplan (BAS)"
+    "related_chart_of_accounts": "Kontoplan (BAS)",
+    "periodisering_label": "Periodisering",
+    "periodisering_help": "I bokslut-wizarden skannas fakturor efter datumintervall som sträcker sig in i nästa räkenskapsår och periodiseringar föreslås. Inget bokförs utan din granskning.",
+    "periodisering_open_wizard": "Öppna periodiserings-wizarden"
   },
   "settings_tax": {},
   "settings_team": {},

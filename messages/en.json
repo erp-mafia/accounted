@@ -1047,6 +1047,7 @@
     "preview_invalid_period": "The period end must be after its start",
     "preview_min_months": "Deferral requires at least 2 calendar months",
     "k2_hint": "Amounts under SEK 5,000 normally do not need to be deferred (K2).",
+    "k1_hint": "Amounts under SEK 5,000 normally do not need to be deferred (K1, simplified annual accounts).",
     "validation_period": "Enter a period of at least 2 calendar months",
     "incomplete_toast_title": "Incomplete deferral",
     "incomplete_toast_description": "Set the period start and end (at least 2 months) or remove the deferral from the line."
@@ -1949,7 +1950,10 @@
     "fy_unlock_success": "Fiscal year unlocked",
     "fy_action_error": "The action could not be completed",
     "related_heading": "Related",
-    "related_chart_of_accounts": "Chart of accounts (BAS)"
+    "related_chart_of_accounts": "Chart of accounts (BAS)",
+    "periodisering_label": "Accruals",
+    "periodisering_help": "The year-end wizard scans invoices for date ranges extending into the next fiscal year and suggests accruals. Nothing is booked without your review.",
+    "periodisering_open_wizard": "Open the accruals wizard"
   },
   "settings_tax": {},
   "settings_team": {},

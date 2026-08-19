@@ -1001,6 +1001,9 @@ export default function NewSupplierInvoiceForm({
     return (
       <AccrualPeriodControl
         direction="expense"
+        // Entity type picks the regelverk the 5 000 kr hint cites: K1 for
+        // enskild firma, K2 for aktiebolag.
+        entityType={entityType}
         amount={item.amount || 0}
         // Line amounts are in the invoice's currency; the K2 5 000 kr limit is
         // in SEK. The rate is the Riksbanken/manual one already on the form.

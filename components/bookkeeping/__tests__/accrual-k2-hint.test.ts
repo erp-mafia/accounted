@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   K2_ACCRUAL_THRESHOLD_SEK,
+  accrualHintKey,
   resolveAccrualAmountSek,
   shouldShowK2AccrualHint,
 } from '@/components/bookkeeping/accrual-k2-hint'
@@ -101,5 +102,20 @@ describe('shouldShowK2AccrualHint', () => {
     expect(
       shouldShowK2AccrualHint({ amount: -100, currency: 'EUR', exchangeRate: 11.5 }),
     ).toBe(false)
+  })
+})
+
+describe('accrualHintKey', () => {
+  it('cites K1 (BFNAR 2006:1) for enskild firma', () => {
+    expect(accrualHintKey('enskild_firma')).toBe('k1_hint')
+  })
+
+  it('cites K2 for aktiebolag', () => {
+    expect(accrualHintKey('aktiebolag')).toBe('k2_hint')
+  })
+
+  it('keeps the K2 default when the entity type is unknown', () => {
+    expect(accrualHintKey(null)).toBe('k2_hint')
+    expect(accrualHintKey(undefined)).toBe('k2_hint')
   })
 })

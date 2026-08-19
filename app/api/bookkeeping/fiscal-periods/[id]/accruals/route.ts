@@ -15,6 +15,7 @@ import {
   proposeVacationLiabilityChange,
 } from '@/lib/bokslut/accruals/accrual-detector'
 import { detectPeriodisering } from '@/lib/bokslut/accruals/auto-detect'
+import type { PeriodiseringEntityType } from '@/lib/bokslut/accruals/auto-detect'
 import type { AccrualProposal } from '@/lib/bokslut/accruals/types'
 import type { JournalEntry } from '@/types'
 
@@ -28,7 +29,18 @@ export const GET = withRouteContext(
       // paint isn't gated on the slower auto-detect query.
       const [proposal, autoDetected] = await Promise.all([
         buildAccrualsProposal(supabase, companyId, id),
-        detectPeriodisering(supabase, companyId, id).catch((err) => {
+        (async () => {
+          // Entity type picks the regelverk the materiality wording cites:
+          // K1 (BFNAR 2006:1) for enskild firma, K2 (BFNAR 2016:10) for AB.
+          const { data: companyRow } = await supabase
+            .from('companies')
+            .select('entity_type')
+            .eq('id', companyId)
+            .single()
+          return detectPeriodisering(supabase, companyId, id, {
+            entityType: (companyRow?.entity_type as PeriodiseringEntityType | undefined) ?? null,
+          })
+        })().catch((err) => {
           // Auto-detect is best-effort: a malformed invoice description
           // shouldn't break the rest of the preflight. Log + return empty.
           log.warn('auto-detect failed', { error: (err as Error)?.message })

@@ -44,11 +44,25 @@ beforeAll(async () => {
   ;({ GET } = await import('../route'))
 }, 30_000)
 
+/** Minimal supabase mock: auth + the GET handler's companies entity_type
+ *  lookup (which feeds the K1/K2 wording in detectPeriodisering). */
+function mockSupabaseWithEntityType(entityType: string | null) {
+  return {
+    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
+    from: vi.fn(() => ({
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: entityType ? { entity_type: entityType } : null,
+        error: entityType ? null : { message: 'not found' },
+      }),
+    })),
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
-  mockCreateClient.mockResolvedValue({
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
-  })
+  mockCreateClient.mockResolvedValue(mockSupabaseWithEntityType('aktiebolag'))
 })
 
 describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
@@ -90,6 +104,54 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
     const { status, body } = await parseJsonResponse<{ data: { autoDetected: unknown[] } }>(res)
     expect(status).toBe(200)
     expect(body.data.autoDetected).toHaveLength(1)
+    // The route resolves the company's entity_type and threads it through so
+    // the materiality wording cites the right regelverk (K1 vs K2).
+    expect(mockDetectPeriodisering).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'period-1',
+      { entityType: 'aktiebolag' },
+    )
+  })
+
+  it('threads entity_type enskild_firma to the detector', async () => {
+    mockCreateClient.mockResolvedValue(mockSupabaseWithEntityType('enskild_firma'))
+    mockBuildAccrualsProposal.mockResolvedValue({
+      fiscalPeriod: { id: 'period-1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
+      proposals: [],
+    })
+    mockDetectPeriodisering.mockResolvedValue([])
+    const res = await GET(
+      createMockRequest('/api/bookkeeping/fiscal-periods/period-1/accruals'),
+      createMockRouteParams({ id: 'period-1' }),
+    )
+    expect(res.status).toBe(200)
+    expect(mockDetectPeriodisering).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'period-1',
+      { entityType: 'enskild_firma' },
+    )
+  })
+
+  it('falls back to null entityType when the company row cannot be read', async () => {
+    mockCreateClient.mockResolvedValue(mockSupabaseWithEntityType(null))
+    mockBuildAccrualsProposal.mockResolvedValue({
+      fiscalPeriod: { id: 'period-1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
+      proposals: [],
+    })
+    mockDetectPeriodisering.mockResolvedValue([])
+    const res = await GET(
+      createMockRequest('/api/bookkeeping/fiscal-periods/period-1/accruals'),
+      createMockRouteParams({ id: 'period-1' }),
+    )
+    expect(res.status).toBe(200)
+    expect(mockDetectPeriodisering).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'period-1',
+      { entityType: null },
+    )
   })
 
   it('still returns the snapshot when auto-detect throws', async () => {

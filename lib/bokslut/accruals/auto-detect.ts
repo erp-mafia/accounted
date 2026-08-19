@@ -5,6 +5,23 @@ import { parseInvoiceDateRange } from './date-range-parser'
 export type PeriodiseringSource = 'invoice' | 'supplier_invoice'
 export type PeriodiseringConfidence = 'high' | 'medium' | 'low'
 
+/** The entity types the materiality wording distinguishes between. Mirrors
+ *  `EntityType` in `@/types` without importing app types into lib/. */
+export type PeriodiseringEntityType = 'enskild_firma' | 'aktiebolag'
+
+/**
+ * Materiality floor for auto-detected periodiseringar, in SEK.
+ *
+ * Both simplification tracks land on the same number: K1 (BFNAR 2006:1,
+ * förenklat årsbokslut for enskild firma) has no requirement to accrue posts
+ * below 5 000 kr, and K2 (BFNAR 2016:10) lets a company skip accruing
+ * individual recurring costs below 5 000 kr. Suggestions under the floor are
+ * TAGGED as low confidence rather than dropped: the relief is a MAY, never a
+ * MUST, so the user can still accept them. Personnel costs (BAS 7xxx) must
+ * always be accrued regardless of amount, so the floor never applies there.
+ */
+export const PERIODISERING_MATERIALITY_FLOOR_SEK = 5000
+
 export interface PeriodiseringSuggestion {
   /** Underlying source invoice id (invoices.id or supplier_invoices.id). */
   source_invoice_id: string
@@ -86,15 +103,19 @@ function buildSuggestion(args: {
   netAmount: number
   description: string | null
   itemDescriptions: string[]
-  /** Default expense account from the first supplier-invoice line. Reserved
-   *  for a future enhancement where the wizard can pre-fill the manual-entry
-   *  form with the actual account rather than the 5800 fallback. Not used
-   *  yet but kept on the buildSuggestion args to keep the call sites stable. */
-  _itemDefaultAccount: string | null
+  /** Account numbers of the source lines (supplier invoices only; customer
+   *  invoices carry no expense accounts). The first entry doubles as the
+   *  default expense account for a future manual-entry pre-fill; today the
+   *  list only drives the personnel-cost (7xxx) exemption from the
+   *  materiality floor. */
+  itemAccounts: string[]
   sourceLabel: string
   periodEnd: string
+  /** Drives the regelverk cited in the materiality wording: K1 (BFNAR
+   *  2006:1) for enskild firma, K2 (BFNAR 2016:10) otherwise. */
+  entityType?: PeriodiseringEntityType | null
 }): PeriodiseringSuggestion | null {
-  const { sourceId, sourceType, netAmount, description, itemDescriptions, sourceLabel, periodEnd } = args
+  const { sourceId, sourceType, netAmount, description, itemDescriptions, itemAccounts, sourceLabel, periodEnd, entityType } = args
   if (!Number.isFinite(netAmount) || netAmount <= 0) return null
 
   // Try the head text first, then each item: first hit wins.
@@ -129,14 +150,24 @@ function buildSuggestion(args: {
 
   // Confidence policy: parsed from the head description wins "high"; parsed
   // from a line item lands at "medium" since the head text is the canonical
-  // location. "low" is reserved for future heuristics that catch e.g. a
-  // single date + interpretation rules.
-  const confidence: PeriodiseringConfidence = parsedFromItem ? 'medium' : 'high'
+  // location.
+  let confidence: PeriodiseringConfidence = parsedFromItem ? 'medium' : 'high'
 
   const isSupplier = sourceType === 'supplier_invoice'
-  const reason = isSupplier
+  let reason = isSupplier
     ? `Leverantörsfakturan löper ${parsed.startDate}: ${parsed.endDate}. ${daysAfterPeriodEnd} av ${totalDays} dagar avser nästa räkenskapsår.`
     : `Kundfakturan löper ${parsed.startDate}: ${parsed.endDate}. ${daysAfterPeriodEnd} av ${totalDays} dagar avser nästa räkenskapsår.`
+
+  // Materiality floor: below 5 000 kr the K1/K2 simplifications say the post
+  // normally need not be accrued, so downgrade to "low" (the wizard only
+  // pre-ticks "high") and say why. Personnel costs (7xxx) are exempt from
+  // the relief and keep their confidence: they must always be accrued.
+  const touchesPersonnelCost = itemAccounts.some((a) => a?.startsWith('7'))
+  if (periodisationAmount < PERIODISERING_MATERIALITY_FLOOR_SEK && !touchesPersonnelCost) {
+    confidence = 'low'
+    const regelverk = entityType === 'enskild_firma' ? 'K1' : 'K2'
+    reason = `${reason} Under 5 000 kr: behöver normalt inte periodiseras (${regelverk}).`
+  }
 
   return {
     source_invoice_id: sourceId,
@@ -167,7 +198,14 @@ export async function detectPeriodisering(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
+  options?: {
+    /** Company entity type: chooses the regelverk the materiality wording
+     *  cites (K1 for enskild_firma, K2 otherwise). Optional so callers that
+     *  cannot resolve it still get suggestions with the K2 default. */
+    entityType?: PeriodiseringEntityType | null
+  },
 ): Promise<PeriodiseringSuggestion[]> {
+  const entityType = options?.entityType ?? null
   // Resolve the fiscal period window. We scope candidate invoices to those
   // dated within the period: anything outside is either an opening-balance
   // carryover (its own concern) or a future invoice (no period to detect).
@@ -240,9 +278,10 @@ export async function detectPeriodisering(
       netAmount: Number(row.subtotal ?? 0),
       description: row.notes,
       itemDescriptions: itemDescs,
-      _itemDefaultAccount: null,
+      itemAccounts: [],
       sourceLabel,
       periodEnd,
+      entityType,
     })
     if (s) suggestions.push(s)
   }
@@ -250,7 +289,9 @@ export async function detectPeriodisering(
   for (const row of (supplierRows ?? []) as unknown as SupplierInvoiceRow[]) {
     if (coveredSupplierInvoices.has(row.id)) continue
     const itemDescs = (row.supplier_invoice_items ?? []).map((i) => i.description).filter(Boolean)
-    const firstAccount = row.supplier_invoice_items?.[0]?.account_number ?? null
+    const itemAccounts = (row.supplier_invoice_items ?? [])
+      .map((i) => i.account_number)
+      .filter(Boolean)
     const supplierName = row.suppliers?.name ?? 'Okänd leverantör'
     const sourceLabel = `${supplierName} (lev.faktura ${row.supplier_invoice_number})`
     const s = buildSuggestion({
@@ -259,9 +300,10 @@ export async function detectPeriodisering(
       netAmount: Number(row.subtotal ?? 0),
       description: row.notes,
       itemDescriptions: itemDescs,
-      _itemDefaultAccount: firstAccount,
+      itemAccounts,
       sourceLabel,
       periodEnd,
+      entityType,
     })
     if (s) suggestions.push(s)
   }

@@ -63,7 +63,7 @@ export function resolveAccrualAmountSek({
 }
 
 /**
- * Whether to show the "below 5 000 kr need not be deferred (K2)" hint.
+ * Whether to show the "below 5 000 kr need not be deferred" hint.
  *
  * False whenever the SEK value is unknown: no hint beats a hint measured in
  * the wrong currency.
@@ -72,4 +72,21 @@ export function shouldShowK2AccrualHint(input: AccrualAmountInput): boolean {
   const amountSek = resolveAccrualAmountSek(input)
   if (amountSek === null) return false
   return amountSek > 0 && amountSek < K2_ACCRUAL_THRESHOLD_SEK
+}
+
+/**
+ * Which `accruals.*` message key carries the materiality hint for the given
+ * entity type. An enskild firma normally closes under K1 (BFNAR 2006:1,
+ * förenklat årsbokslut), which relieves posts below 5 000 kr; citing K2
+ * (BFNAR 2016:10) at a sole trader names a regelverk that does not apply to
+ * it. There is no stored förenklat-vs-full-årsbokslut flag, so entity_type
+ * is a proxy and the copy stays advisory ("behöver normalt inte").
+ *
+ * Unknown/missing entity keeps the K2 wording: it is the historical default
+ * and correct for every aktiebolag.
+ */
+export function accrualHintKey(
+  entityType?: 'enskild_firma' | 'aktiebolag' | null,
+): 'k1_hint' | 'k2_hint' {
+  return entityType === 'enskild_firma' ? 'k1_hint' : 'k2_hint'
 }

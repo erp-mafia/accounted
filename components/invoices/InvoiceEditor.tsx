@@ -2476,6 +2476,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               <div className="px-2 pb-3">
                                 <AccrualPeriodControl
                                   direction="revenue"
+                                  /* Entity type picks the regelverk the
+                                     5 000 kr hint cites: K1 for enskild
+                                     firma, K2 for aktiebolag. */
+                                  entityType={company?.entity_type}
                                   amount={lineTotal}
                                   /* The customer-invoice editor carries no FX rate
                                      (the form has no exchange_rate field), so the
