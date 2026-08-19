@@ -192,6 +192,40 @@ describe('replaceSIEImport: failure classification', () => {
     expect(result.code).toBe('not_found')
   })
 
+  it('classifies PGRST116 (zero rows) on the pre-check as not_found', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: null,
+      error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' },
+    }) // sie_imports fetch: .single() zero-rows error
+
+    const result = await replaceSIEImport(
+      supabase as unknown as SupabaseClient, 'company-1', 'imp-x', 'user-1'
+    )
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('not_found')
+  })
+
+  it('classifies a non-PGRST116 pre-check query failure as rpc_error, never not_found (fail closed)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: null,
+      error: { code: '57014', message: 'canceling statement due to statement timeout' },
+    }) // sie_imports fetch: transient query failure, row state UNKNOWN
+
+    const result = await replaceSIEImport(
+      supabase as unknown as SupabaseClient, 'company-1', 'imp-x', 'user-1'
+    )
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('rpc_error')
+    expect(result.error).toMatch(/statement timeout/i)
+
+    // Failed before the delete RPC: nothing was touched.
+    const rpcCalls = (supabase.rpc.mock.calls as [string][])
+      .filter(([fn]) => fn === 'replace_sie_import')
+    expect(rpcCalls).toHaveLength(0)
+  })
+
   it('classifies a row that already left completed as not_completed', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { status: 'replaced', fiscal_period_id: null } })
@@ -321,6 +355,36 @@ describe('executeSIEImport replace mode: re-sync after deletion (issue #1667)', 
     expect(result.warnings.join(' ')).toMatch(/fortsätter som ny import/i)
     expect(result.replacedPriorImport).toBeNull()
 
+    const rpcCalls = (supabase.rpc.mock.calls as [string][])
+      .filter(([fn]) => fn === 'replace_sie_import')
+    expect(rpcCalls).toHaveLength(0)
+  })
+
+  it('aborts the year when the replace pre-check query fails, instead of importing fresh', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makePriorImportRow({ id: 'imp-prior' })] }, // findOverlappingPeriodImports
+      {
+        data: null,
+        error: { code: '57014', message: 'canceling statement due to statement timeout' },
+      }, // replaceSIEImport fetch: transient failure, prior entries may still exist
+    ])
+
+    const result = await executeSIEImport(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      makeParsedFile(),
+      mappings,
+      importOptions,
+    )
+
+    // NOT treated as a stale watermark: the year aborts fail-closed.
+    expect(result.success).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/statement timeout/i)
+    expect(result.warnings.join(' ')).not.toMatch(/fortsätter som ny import/i)
+    // Aborted before any sie_imports row was created: nothing imported fresh.
+    expect(result.importId).toBeNull()
     const rpcCalls = (supabase.rpc.mock.calls as [string][])
       .filter(([fn]) => fn === 'replace_sie_import')
     expect(rpcCalls).toHaveLength(0)

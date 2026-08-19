@@ -253,13 +253,29 @@ export async function replaceSIEImport(
   importId: string,
   userId: string
 ): Promise<ReplaceSIEImportResult> {
-  // 1. Fetch and validate the import record
-  const { data: importRecord } = await supabase
+  // 1. Fetch and validate the import record. Only PGRST116 (zero rows from
+  // .single()) means the row is genuinely absent; any other error (statement
+  // timeout, network failure, 5xx surfaced as a PostgREST error) tells us
+  // nothing about whether the prior import's verifikationer are still in the
+  // ledger. Classifying such a failure as not_found would let the replace
+  // loop in executeSIEImport treat it as a stale watermark and import the
+  // year fresh on top of the old entries (silent duplicates, BFL 4:1), so it
+  // must fail closed as rpc_error and abort instead.
+  const { data: importRecord, error: fetchError } = await supabase
     .from('sie_imports')
     .select('status, fiscal_period_id')
     .eq('id', importId)
     .eq('company_id', companyId)
     .single()
+
+  if (fetchError && fetchError.code !== 'PGRST116') {
+    return {
+      success: false,
+      deletedEntries: 0,
+      error: `Kunde inte läsa tidigare import: ${fetchError.message}`,
+      code: 'rpc_error',
+    }
+  }
 
   if (!importRecord) {
     return { success: false, deletedEntries: 0, error: 'Import hittades inte', code: 'not_found' }
