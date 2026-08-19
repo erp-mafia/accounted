@@ -241,6 +241,7 @@ import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigratio
 import TheaterCanvas from '@/components/import/TheaterCanvas'
 import {
   applyVatTreatmentReview,
+  applyVatTreatmentReviewAll,
   enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
 } from '@/lib/import/account-vat-treatment'
@@ -984,6 +985,7 @@ function MappingStep({
   errorDetails,
   onMappingChange,
   onVatTreatmentChange,
+  onConfirmAllVatTreatments,
   onContinue,
   onBack,
 }: {
@@ -997,6 +999,7 @@ function MappingStep({
     treatment: AccountVatTreatment | null,
     rate: number | null,
   ) => void
+  onConfirmAllVatTreatments: () => void
   onContinue: () => void
   onBack: () => void
 }) {
@@ -1040,6 +1043,7 @@ function MappingStep({
       basAccounts={sieData.basAccounts}
       onMappingChange={onMappingChange}
       onVatTreatmentChange={onVatTreatmentChange}
+      onConfirmAllVatTreatments={onConfirmAllVatTreatments}
       onContinue={onContinue}
       onBack={onBack}
     />
@@ -2644,6 +2648,13 @@ export default function ArcimMigrationWorkspace({
     } : null)
   }, [])
 
+  const handleConfirmAllVatTreatments = useCallback(() => {
+    setSieData(prev => prev ? {
+      ...prev,
+      mappings: applyVatTreatmentReviewAll(prev.mappings),
+    } : null)
+  }, [])
+
   const handleMappingContinue = useCallback(() => {
     setStep('options')
   }, [])
@@ -2894,6 +2905,7 @@ export default function ArcimMigrationWorkspace({
           errorDetails={errorDetails}
           onMappingChange={handleMappingChange}
           onVatTreatmentChange={handleVatTreatmentChange}
+          onConfirmAllVatTreatments={handleConfirmAllVatTreatments}
           onContinue={handleMappingContinue}
           onBack={() => setStep('preview')}
         />

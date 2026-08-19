@@ -53,6 +53,8 @@ interface AccountMappingStepProps {
     treatment: AccountVatTreatment | null,
     rate: number | null,
   ) => void
+  /** Accept the suggested VAT treatment for every unreviewed row at once. */
+  onConfirmAllVatTreatments: () => void
   onContinue: () => void
   onBack: () => void
 }
@@ -66,6 +68,7 @@ export default function AccountMappingStep({
   basAccounts,
   onMappingChange,
   onVatTreatmentChange,
+  onConfirmAllVatTreatments,
   onContinue,
   onBack,
 }: AccountMappingStepProps) {
@@ -443,14 +446,26 @@ export default function AccountMappingStep({
         <Button variant="outline" className="min-h-11" onClick={onBack}>
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={onContinue} disabled={!canContinue}>
-          {canContinue
-            ? 'Fortsätt till granskning'
-            : stats.unmapped > 0
-              ? `${stats.unmapped} konton saknar mappning`
-              : `${stats.vatReview} momskoder återstår att bekräfta`}
-          <ArrowRight className="ml-2 h-4 w-4" />
-        </Button>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          {stats.vatReview > 0 && stats.unmapped === 0 && (
+            <Button
+              variant="outline"
+              className="min-h-11"
+              onClick={onConfirmAllVatTreatments}
+            >
+              <CheckCircle className="mr-2 h-4 w-4" />
+              {t('vat_review_confirm_all', { count: stats.vatReview })}
+            </Button>
+          )}
+          <Button className="min-h-11" onClick={onContinue} disabled={!canContinue}>
+            {canContinue
+              ? 'Fortsätt till granskning'
+              : stats.unmapped > 0
+                ? `${stats.unmapped} konton saknar mappning`
+                : `${stats.vatReview} momskoder återstår att bekräfta`}
+            <ArrowRight className="ml-2 h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </div>
   )

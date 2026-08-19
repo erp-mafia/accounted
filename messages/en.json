@@ -5226,6 +5226,7 @@
     "vat_treatment_rental_voluntary": "Voluntary VAT on rental income (box 08)",
     "vat_rate_label": "VAT rate",
     "vat_rate_none": "None",
+    "vat_review_confirm_all": "Confirm all suggested ({count})",
     "vat_review_filter": "{count} VAT treatments to review",
     "vat_treatment_column": "VAT treatment",
     "vat_treatment_confirm": "Confirm"

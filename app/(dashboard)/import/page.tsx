@@ -67,6 +67,7 @@ import type {
 } from '@/lib/import/types'
 import {
   applyVatTreatmentReview,
+  applyVatTreatmentReviewAll,
   enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
 } from '@/lib/import/account-vat-treatment'
@@ -941,6 +942,10 @@ function SIEImportWizard() {
     setMappings((prev) => applyVatTreatmentReview(prev, sourceAccount, treatment, rate))
   }, [])
 
+  const handleConfirmAllVatTreatments = useCallback(() => {
+    setMappings((prev) => applyVatTreatmentReviewAll(prev))
+  }, [])
+
   const confirmVatReview = useCallback(() => {
     if (mappings.some((mapping) =>
       mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
@@ -1140,6 +1145,7 @@ function SIEImportWizard() {
       {step === 'mapping' && (
         <AccountMappingStep mappings={mappings} basAccounts={basAccounts}
           onMappingChange={handleMappingChange} onVatTreatmentChange={handleVatTreatmentChange}
+          onConfirmAllVatTreatments={handleConfirmAllVatTreatments}
           onContinue={confirmVatReview} onBack={goBack} />
       )}
       {step === 'review' && preview && (

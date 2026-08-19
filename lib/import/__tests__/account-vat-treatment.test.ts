@@ -3,6 +3,7 @@ import {
   applyVatTreatmentReview,
   enrichChangedAccountMappingWithVat,
   enrichAccountMappingsWithVat,
+  applyVatTreatmentReviewAll,
 } from '../account-vat-treatment'
 import type { AccountMapping } from '../types'
 
@@ -143,5 +144,42 @@ describe('applyVatTreatmentReview', () => {
       defaultVatRate: 0,
       vatTreatmentReviewed: true,
     })
+  })
+})
+
+describe('applyVatTreatmentReviewAll', () => {
+  it('marks every unreviewed row reviewed and keeps its suggested default', () => {
+    const mappings = [
+      {
+        sourceAccount: '3001', sourceName: 'Försäljning', targetAccount: '3001', targetName: 'Försäljning',
+        confidence: 1, matchType: 'exact', isOverride: false,
+        defaultVatTreatment: 'sales_25', defaultVatRate: 25,
+        vatTreatmentSuggested: true, vatTreatmentReviewed: false, requiresVatTreatmentReview: true,
+      },
+      {
+        sourceAccount: '4010', sourceName: 'Inköp', targetAccount: '4010', targetName: 'Inköp',
+        confidence: 1, matchType: 'exact', isOverride: false,
+        defaultVatTreatment: null, defaultVatRate: null,
+        vatTreatmentSuggested: false, vatTreatmentReviewed: false, requiresVatTreatmentReview: true,
+      },
+      {
+        sourceAccount: '1930', sourceName: 'Bank', targetAccount: '1930', targetName: 'Bank',
+        confidence: 1, matchType: 'exact', isOverride: false,
+        defaultVatTreatment: null, defaultVatRate: null,
+        vatTreatmentSuggested: false, vatTreatmentReviewed: true, requiresVatTreatmentReview: false,
+      },
+    ] as never[]
+
+    const result = applyVatTreatmentReviewAll(mappings)
+
+    // Both review rows confirmed in one action, defaults untouched.
+    expect(result[0]).toMatchObject({ vatTreatmentReviewed: true, defaultVatTreatment: 'sales_25', defaultVatRate: 25 })
+    expect(result[1]).toMatchObject({ vatTreatmentReviewed: true, defaultVatTreatment: null })
+    // Already-reviewed rows pass through by reference.
+    expect(result[2]).toBe(mappings[2])
+    // No row is left gating the wizard's Continue button.
+    expect(result.filter((m: { requiresVatTreatmentReview?: boolean; vatTreatmentReviewed?: boolean }) =>
+      m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
+    )).toHaveLength(0)
   })
 })

@@ -86,3 +86,23 @@ export function enrichChangedAccountMappingWithVat(
       : mapping
   )
 }
+
+/**
+ * Accept the suggested VAT treatment for every mapping still awaiting review,
+ * in one action. Exactly the per-row "Bekräfta" semantics batched: each row
+ * keeps its current suggested default (or null when there is none) and is
+ * marked reviewed. Added because a Fortnox chart routinely puts 70+ class 3/4
+ * accounts behind the review gate, and clicking them one by one across
+ * paginated pages was an observed migration dead end (2026-08-18).
+ */
+export function applyVatTreatmentReviewAll(mappings: AccountMapping[]): AccountMapping[] {
+  return mappings.map((mapping) =>
+    mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
+      ? {
+          ...mapping,
+          vatTreatmentSuggested: false,
+          vatTreatmentReviewed: true,
+        }
+      : mapping
+  )
+}
