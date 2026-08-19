@@ -64,6 +64,35 @@ export interface VatSettlementExistingEntry {
   voucher_number: number | null
 }
 
+export type VatSettlementBookingStatus = 'booked' | 'draft' | 'none'
+
+/**
+ * Latest posted settlement in the proposal's existing_entries list
+ * (tagged vat_settlement and/or shape-detected momsomföring). The list is
+ * already newest-first from buildVatSettlementProposal.
+ */
+export function findPostedVatSettlement(
+  entries: VatSettlementExistingEntry[] | null | undefined,
+): VatSettlementExistingEntry | undefined {
+  return entries?.find((e) => e.status === 'posted')
+}
+
+/** Unposted draft, but only when no posted settlement already gates the period. */
+export function findDraftVatSettlement(
+  entries: VatSettlementExistingEntry[] | null | undefined,
+): VatSettlementExistingEntry | undefined {
+  if (findPostedVatSettlement(entries)) return undefined
+  return entries?.find((e) => e.status === 'draft')
+}
+
+export function vatSettlementBookingStatus(
+  entries: VatSettlementExistingEntry[] | null | undefined,
+): VatSettlementBookingStatus {
+  if (findPostedVatSettlement(entries)) return 'booked'
+  if (entries?.some((e) => e.status === 'draft')) return 'draft'
+  return 'none'
+}
+
 export interface VatSettlementProposal {
   period: {
     type: VatPeriodType

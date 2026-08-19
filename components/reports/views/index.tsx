@@ -27,6 +27,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { PageHeader } from '@/components/ui/page-header'
+import { VatAlreadyBookedBanner } from '@/components/reports/VatAlreadyBookedBanner'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
 import { rcInputTotalsFromDeclaration } from '@/lib/reports/vat-declaration'
@@ -42,7 +43,12 @@ import { SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import type { VatSettlementProposal } from '@/lib/reports/vat-settlement'
+import {
+  findDraftVatSettlement,
+  findPostedVatSettlement,
+  vatSettlementBookingStatus,
+  type VatSettlementProposal,
+} from '@/lib/reports/vat-settlement'
 
 // Recharts is ~180KB: defer the chart components so report tables (the
 // regulated content) render without waiting for the charting bundle.
@@ -1124,74 +1130,32 @@ function VatManualFilingCard({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: s
  * showing the declared figures after booking.
  */
 function VatBookingCard({
-  periodType,
-  year,
-  period,
-  fiscalPeriodId,
+  proposal,
+  failed,
+  loading,
+  onRetry,
+  onBooked,
   checksBlocked,
-  onStatus,
 }: {
-  periodType: VatPeriodType
-  year: number
-  period: number
-  fiscalPeriodId?: string
+  /** Settlement proposal from GET /settlement-proposal — fetched by the parent
+   *  so Granska can show the already-booked banner without waiting for step 3. */
+  proposal: VatSettlementProposal | null
+  failed: boolean
+  loading: boolean
+  onRetry: () => void
+  onBooked: () => void
   /**
    * True when the local pre-flight checks found ERRORs. Booking stays
    * possible (the RC-basis fixes only touch 44xx/45xx pairs, never the 26xx
    * accounts the settlement clears), but the user should know before filing.
    */
   checksBlocked?: boolean
-  /** Lets the surrounding stepper mirror the booking state on its dot. */
-  onStatus?: (status: 'booked' | 'draft' | 'none') => void
 }) {
   const { canWrite } = useCanWrite()
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [refreshKey, setRefreshKey] = useState(0)
-  // Fetch outcome tagged with the key it was requested under; proposal/failed
-  // are derived by comparing that tag with the current key, so the effect
-  // never sets state synchronously (same pattern as VatDeclarationView).
-  const [result, setResult] = useState<{
-    key: string
-    proposal?: VatSettlementProposal
-    failed?: boolean
-  } | null>(null)
-  const fetchKey = `${periodType}:${year}:${period}:${fiscalPeriodId ?? ''}:${refreshKey}`
 
-  useEffect(() => {
-    const params = new URLSearchParams({
-      periodType,
-      year: String(year),
-      period: String(period),
-    })
-    if (fiscalPeriodId) params.set('fiscal_period_id', fiscalPeriodId)
-    let cancelled = false
-    fetch(`/api/reports/vat-declaration/settlement-proposal?${params.toString()}`)
-      .then(async (res) => {
-        const json = await res.json().catch(() => null)
-        if (cancelled) return
-        if (!res.ok || !json?.data) setResult({ key: fetchKey, failed: true })
-        else setResult({ key: fetchKey, proposal: json.data })
-      })
-      .catch(() => {
-        if (!cancelled) setResult({ key: fetchKey, failed: true })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [fetchKey, periodType, year, period, fiscalPeriodId])
-
-  const upToDate = result !== null && result.key === fetchKey
-  const proposal = upToDate ? (result.proposal ?? null) : null
-  const failed = upToDate && !!result.failed
-
-  const booked = proposal?.existing_entries.find((e) => e.status === 'posted')
-  const draft = booked ? undefined : proposal?.existing_entries.find((e) => e.status === 'draft')
-
-  const bookingStatus = booked ? 'booked' : draft ? 'draft' : 'none'
-  useEffect(() => {
-    if (upToDate && proposal) onStatus?.(bookingStatus)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [upToDate, bookingStatus])
+  const booked = findPostedVatSettlement(proposal?.existing_entries)
+  const draft = findDraftVatSettlement(proposal?.existing_entries)
 
   // FormLine amounts are input strings; the proposal's numbers are already
   // öre-rounded server-side, so this is display formatting, not money math.
@@ -1251,11 +1215,11 @@ function VatBookingCard({
         {failed ? (
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-sm text-destructive">Kunde inte hämta verifikatförslaget.</p>
-            <Button variant="outline" onClick={() => setRefreshKey((k) => k + 1)}>
+            <Button variant="outline" onClick={onRetry}>
               Försök igen
             </Button>
           </div>
-        ) : !upToDate ? (
+        ) : loading ? (
           <Skeleton className="h-10 w-40" />
         ) : proposal?.is_empty ? (
           <p className="text-sm text-muted-foreground">Ingen moms att bokföra för perioden.</p>
@@ -1306,7 +1270,7 @@ function VatBookingCard({
                 initialLines={initialLines}
                 onCreated={() => {
                   setDialogOpen(false)
-                  setRefreshKey((k) => k + 1)
+                  onBooked()
                 }}
               />
             )}
@@ -1537,11 +1501,18 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
     error?: string
   } | null>(null)
   const [retryKey, setRetryKey] = useState(0)
+  const [settlementRetryKey, setSettlementRetryKey] = useState(0)
   // Stegen: which of the four pipeline steps is open. null = automatic
   // (errors land on Kontrollera, otherwise Granska). A period switch resets
   // to automatic so stale step choices never survive a context change.
   const [chosenStep, setChosenStep] = useState<number | null>(null)
-  const [bookingStatus, setBookingStatus] = useState<'booked' | 'draft' | 'none' | null>(null)
+  // Latest settlement-proposal fetch, tagged like the declaration result so
+  // Granska can show the already-booked banner on open (not only on step 3).
+  const [settlementResult, setSettlementResult] = useState<{
+    key: string
+    proposal?: VatSettlementProposal
+    failed?: boolean
+  } | null>(null)
   // Per-verifikat RC-basis scan, fetched here (not only inside VatChecksCard)
   // because the filing gate lives here and the worklist unmounts as soon as
   // the user leaves steg 1. Tagged with the PERIOD it was requested for (see
@@ -1645,7 +1616,6 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
 
   useEffect(() => {
     setChosenStep(null)
-    setBookingStatus(null)
   }, [periodType, year, period, fiscalPeriodId])
 
   useEffect(() => {
@@ -1678,6 +1648,45 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
       cancelled = true
     }
   }, [fetchKey, periodType, year, period, fiscalPeriodId])
+
+  const settlementFetchKey =
+    periodType === null || notVatRegistered || momsPeriodMissing || awaitingFiscalPeriod
+      ? null
+      : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}:${settlementRetryKey}`
+
+  useEffect(() => {
+    if (!settlementFetchKey || periodType === null) return
+    const params = new URLSearchParams({
+      periodType,
+      year: String(year),
+      period: String(period),
+    })
+    if (periodType === 'yearly') params.set('fiscal_period_id', fiscalPeriodId)
+    let cancelled = false
+    fetch(`/api/reports/vat-declaration/settlement-proposal?${params.toString()}`)
+      .then(async (res) => {
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        if (!res.ok || !json?.data) setSettlementResult({ key: settlementFetchKey, failed: true })
+        else setSettlementResult({ key: settlementFetchKey, proposal: json.data })
+      })
+      .catch(() => {
+        if (!cancelled) setSettlementResult({ key: settlementFetchKey, failed: true })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [settlementFetchKey, periodType, year, period, fiscalPeriodId])
+
+  const settlementUpToDate =
+    settlementResult !== null && settlementResult.key === settlementFetchKey
+  const settlementProposal = settlementUpToDate ? (settlementResult.proposal ?? null) : null
+  const settlementFailed = settlementUpToDate && !!settlementResult.failed
+  const postedSettlement = findPostedVatSettlement(settlementProposal?.existing_entries)
+  const bookingStatus =
+    settlementUpToDate && settlementProposal
+      ? vatSettlementBookingStatus(settlementProposal.existing_entries)
+      : null
 
   // The per-verifikat gap scan runs on the same key as the declaration, so a
   // korrigering (which bumps retryKey via onCorrected) re-verifies the gate
@@ -1995,6 +2004,8 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
             bookingStatus={bookingStatus}
           />
 
+          {postedSettlement && <VatAlreadyBookedBanner entry={postedSettlement} />}
+
           {activeStep === 1 && (
             <section className="mx-auto max-w-3xl space-y-3">
               <VatChecksCard
@@ -2213,12 +2224,12 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
           {activeStep === 3 && (
             <section className="mx-auto max-w-3xl space-y-3">
               <VatBookingCard
-              periodType={periodType}
-              year={year}
-              period={period}
-              fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+              proposal={settlementProposal}
+              failed={settlementFailed}
+              loading={!settlementUpToDate}
+              onRetry={() => setSettlementRetryKey((k) => k + 1)}
+              onBooked={() => setSettlementRetryKey((k) => k + 1)}
               checksBlocked={checksBlocked}
-              onStatus={setBookingStatus}
             />
               <div className="flex justify-end">
                 <Button variant="outline" size="sm" onClick={() => setChosenStep(4)}>

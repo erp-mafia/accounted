@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { buildVatSettlementProposal } from '../vat-settlement'
+import {
+  buildVatSettlementProposal,
+  findDraftVatSettlement,
+  findPostedVatSettlement,
+  vatSettlementBookingStatus,
+  type VatSettlementExistingEntry,
+} from '../vat-settlement'
 
 // ============================================================
 // Mock: fetchVatAccountTotals now goes through the
@@ -302,5 +308,54 @@ describe('buildVatSettlementProposal', () => {
     await expect(
       buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1),
     ).rejects.toThrow('existing vat_settlement lookup failed: boom')
+  })
+})
+
+describe('vat settlement booking status helpers', () => {
+  const posted: VatSettlementExistingEntry = {
+    id: 'je-posted',
+    status: 'posted',
+    entry_date: '2026-06-30',
+    source_type: 'vat_settlement',
+    voucher_series: 'A',
+    voucher_number: 83,
+  }
+  const draft: VatSettlementExistingEntry = {
+    id: 'je-draft',
+    status: 'draft',
+    entry_date: '2026-06-30',
+    source_type: 'vat_settlement',
+    voucher_series: 'A',
+    voucher_number: null,
+  }
+  const shaped: VatSettlementExistingEntry = {
+    id: 'je-shaped',
+    status: 'posted',
+    entry_date: '2026-03-31',
+    source_type: 'manual',
+    voucher_series: 'A',
+    voucher_number: 9,
+  }
+
+  it('picks the newest posted settlement, including shape-detected momsomföring', () => {
+    expect(findPostedVatSettlement([posted, shaped])).toEqual(posted)
+    expect(findPostedVatSettlement([shaped])).toEqual(shaped)
+    expect(findPostedVatSettlement([draft])).toBeUndefined()
+    expect(findPostedVatSettlement([])).toBeUndefined()
+    expect(findPostedVatSettlement(undefined)).toBeUndefined()
+  })
+
+  it('surfaces a draft only when nothing is posted', () => {
+    expect(findDraftVatSettlement([draft])).toEqual(draft)
+    expect(findDraftVatSettlement([posted, draft])).toBeUndefined()
+    expect(findDraftVatSettlement([])).toBeUndefined()
+  })
+
+  it('maps existing_entries to the stepper booking status', () => {
+    expect(vatSettlementBookingStatus([posted])).toBe('booked')
+    expect(vatSettlementBookingStatus([shaped])).toBe('booked')
+    expect(vatSettlementBookingStatus([draft])).toBe('draft')
+    expect(vatSettlementBookingStatus([])).toBe('none')
+    expect(vatSettlementBookingStatus(undefined)).toBe('none')
   })
 })
