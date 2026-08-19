@@ -1,21 +1,17 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { useCapability, useCompany } from '@/contexts/CompanyContext'
-import { CAPABILITY } from '@/lib/entitlements/keys'
+import { useCompany } from '@/contexts/CompanyContext'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import ResumePane from '@/components/dashboard/ResumePane'
 import BackupHealthBanner from '@/components/dashboard/BackupHealthBanner'
 import { SkatteverketPromoCard } from '@/components/dashboard/SkatteverketPromoCard'
-import { ArrowRight } from 'lucide-react'
+import { AgentPromo } from '@/components/dashboard/AgentPromo'
 import type { InitialSetupState, OnboardingProgress } from '@/types'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 import type { ResumeItem } from '@/lib/worklist/resume'
@@ -85,7 +81,6 @@ export default function DashboardContent({
   sieSweep = null,
 }: DashboardContentProps) {
   const t = useTranslations('dashboard')
-  const hasAi = useCapability(CAPABILITY.ai)
   const { company } = useCompany()
   const router = useRouter()
 
@@ -144,37 +139,13 @@ export default function DashboardContent({
         sieSweep={sieSweep}
       />
 
-      {/* Build-assistant hero: shown only until the company has a verified
+      {/* Build-assistant nudge: shown only until the company has a verified
           agent_profile, so existing/migrated users get a clear prompt instead
           of a full-screen onboarding takeover. While the stepped first-run
           checklist is visible it already carries the assistant as its last
-          step, so the hero waits until that block is dismissed or completed. */}
+          step, so the promo waits until that block is dismissed or completed. */}
       {!agentBuilt && (initialSetup.dismissedAt || initialSetup.completedAt) && (
-        <section>
-          {/* Non-payers keep seeing the hero (conversion surface) but it
-              routes to billing instead of a build flow that would 403. */}
-          <Link href={hasAi ? '/onboarding/agent' : '/settings/billing'} className="block group">
-            <Card className="transition-colors hover:border-primary/50">
-              <CardContent className="p-6 flex items-center gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="font-display text-xl leading-tight">Bygg din bokföringsassistent</p>
-                    <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {hasAi
-                      ? 'Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig.'
-                      : 'Ingår i abonnemanget: en assistent som föreslår bokföring åt dig.'}
-                  </p>
-                </div>
-                <div className="hidden sm:flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
-                  <span>{hasAi ? 'Kom igång' : 'Uppgradera'}</span>
-                  <ArrowRight className="h-4 w-4" />
-                </div>
-              </CardContent>
-            </Card>
-          </Link>
-        </section>
+        <AgentPromo companyId={companyId} />
       )}
 
       {/* The two panes (concept hem-grid). When nothing is in progress the
