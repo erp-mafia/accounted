@@ -9,8 +9,10 @@ import path from 'node:path'
  * in-repo pages were right, but nothing pinned them to the code. These tests
  * anchor every AI and session-replay disclosure to the source of truth:
  *
- * - lib/ai/provider.ts: hosted inference is Claude on Amazon Bedrock, default
- *   region eu-north-1. There is no OpenAI code path at all.
+ * - lib/ai/provider.ts: hosted inference is Claude on Amazon Bedrock by
+ *   credential precedence, default region eu-north-1 (AWS_REGION overrides).
+ *   A direct Anthropic API path exists for self-hosted deployments. There is
+ *   no OpenAI code path at all.
  * - instrumentation-client.ts + lib/analytics/replay-masking.ts: session
  *   replay masking is deny-by-default with no input-mask exceptions.
  *
@@ -85,25 +87,27 @@ describe('AI provider disclosures match the code', () => {
     expect(DPA).toContain('eu-north-1')
   })
 
-  it('names Anthropic inside the Bedrock row so the table cannot contradict the footnote', () => {
-    // The prospect read "Claude via Bedrock, delas inte med Anthropic" next to
-    // a table with a bare AWS row and a DPA listing Anthropic as a US
-    // processor. The row itself must say the models are Anthropic's, run
-    // inside Bedrock, and that Anthropic receives nothing.
+  it('describes the Bedrock row with claims provable from code, no sub-processor verdict', () => {
+    // The prospect read a bare AWS row next to a DPA listing Anthropic as a US
+    // processor. The row must say what the code shows: AI requests go to
+    // Amazon Bedrock, and the models are Anthropic's Claude running inside
+    // Bedrock. Whether Anthropic is an underbiträde of AWS is a contractual
+    // question between AWS and Anthropic that this repo cannot verify, so the
+    // page must not assert it either way; that wording is founder/legal's.
     const row = bedrockRow()
-    expect(row).toContain('Anthropic')
-    expect(row).toContain('Bedrock')
-    expect(row).toContain('delas inte med')
-    expect(row).toContain('inte underbiträde')
-    // The footnote below the table makes the same claim in the same words.
-    expect(PRIVACY).toContain('delas inte med Anthropic')
+    const normalized = row.replace(/\s+/g, ' ')
+    expect(normalized).toContain('AI-anropen skickas till Amazon Bedrock')
+    expect(normalized).toContain(
+      'modellerna som används är Anthropics Claude-modeller, körda inom Bedrock',
+    )
+    expect(row).not.toContain('underbiträde')
   })
 
   it('keeps the DPA pointing at the privacy policy as the single sub-processor list', () => {
     expect(DPA).toContain('href="/privacy"')
-    // The DPA must not grow its own (divergent) vendor list: Anthropic is a
-    // model vendor, not a sub-processor, and belongs only in the privacy
-    // page's Bedrock row.
+    // The DPA must not grow its own (divergent) vendor list: /privacy owns the
+    // sub-processor table, and its Bedrock row is where the Claude models are
+    // described.
     expect(DPA).not.toContain('Anthropic')
   })
 })

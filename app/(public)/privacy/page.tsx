@@ -133,11 +133,11 @@ export default function PrivacyPolicyPage() {
                     <td className="py-2 pr-4 font-medium">Amazon Web Services (AWS)</td>
                     <td className="py-2 pr-4">
                       AI-inferens (kategorisering samt dokument- och
-                      kvittotolkning) med Anthropics Claude-modeller, körda
-                      helt inom Amazon Bedrock. Uppgifterna delas inte med
-                      Anthropic, som är modelleverantör men inte underbiträde.
-                      Bearbetar bokföringsdata och uppladdade underlag: endast
-                      när AI-funktioner är aktiverade.
+                      kvittotolkning): AI-anropen skickas till Amazon Bedrock,
+                      och modellerna som används är Anthropics Claude-modeller,
+                      körda inom Bedrock. Bearbetar bokföringsdata och
+                      uppladdade underlag: endast när AI-funktioner är
+                      aktiverade.
                     </td>
                     <td className="py-2 pr-4">EU (eu-north-1, Stockholm)</td>
                     <td className="py-2">
