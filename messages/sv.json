@@ -3801,7 +3801,7 @@
     "payment_status_view_voucher": "Verifikat {label}",
     "payment_status_view_voucher_unlinked": "Saknar verifikat",
     "payment_status_empty": "Inga registrerade betalningar ännu.",
-    "payment_confirmation_hint": "Betalningsbekräftelsen är ett nytt dokument med BETALD-stämpel, skapat nu. Fakturan som skickades till kunden ligger orörd i utskickshistoriken.",
+    "payment_confirmation_hint": "Nytt dokument med BETALD-stämpel. Den skickade fakturan rörs inte.",
     "payment_confirmation_download": "Ladda ner betald kopia",
     "payment_confirmation_send": "Skicka betalningsbekräftelse",
     "payment_confirmation_no_email": "Kunden saknar e-postadress",

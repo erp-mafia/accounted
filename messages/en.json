@@ -3801,7 +3801,7 @@
     "payment_status_view_voucher": "Voucher {label}",
     "payment_status_view_voucher_unlinked": "No voucher linked",
     "payment_status_empty": "No payments recorded yet.",
-    "payment_confirmation_hint": "The payment confirmation is a new document with a PAID stamp, produced now. The invoice that was sent to the customer stays untouched in the delivery history.",
+    "payment_confirmation_hint": "A new document with a PAID stamp. The sent invoice is left untouched.",
     "payment_confirmation_download": "Download paid copy",
     "payment_confirmation_send": "Send payment confirmation",
     "payment_confirmation_no_email": "The customer has no email address",
