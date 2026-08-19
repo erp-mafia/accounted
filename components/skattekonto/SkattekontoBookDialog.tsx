@@ -250,7 +250,14 @@ export default function SkattekontoBookDialog({
           </div>
         ) : suggestion === null ? (
           <p className="pt-1 text-xs leading-5 text-muted-foreground">
-            {t('no_rule_matched')}
+            {/* The employer gate is not "no rule matched": the rule matched,
+                but this enskild firma has no registered employees, so the row
+                is most likely the owner's private A-skatt. Distinct hint so
+                the user knows why booking is not offered and that ignoring
+                the row is fine. */}
+            {row.booking_gate === 'requires_employer'
+              ? t('ef_private_tax_hint')
+              : t('no_rule_matched')}
           </p>
         ) : null}
       </dl>

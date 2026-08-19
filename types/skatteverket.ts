@@ -24,6 +24,10 @@ export interface StoredSkattekontoTransaction {
   belopp_kronofogden: number | null
   status: 'booked' | 'upcoming'
   journal_entry_id: string | null
+  /** User's explicit "hide from the work list, never going to book it".
+   *  Mirrors transactions.is_ignored; an ignored row never has a
+   *  journal_entry_id (DB CHECK, migration 20260819080000). */
+  is_ignored: boolean
   source: 'api' | 'file_import'
   file_import_id: string | null
   imported_at: string
@@ -90,6 +94,14 @@ export interface SkattekontoBookingSuggestion {
 export interface SkattekontoTransactionWithSuggestion extends StoredSkattekontoTransaction {
   match_suggestion?: SkattekontoMatchSuggestion | null
   booking_suggestion?: SkattekontoBookingSuggestion | null
+  /**
+   * Why booking_suggestion is null despite a rule matching the text.
+   * 'requires_employer': the matched rule is employer-gated and this is an
+   * enskild firma without employer_registered, so "Avdragen skatt" is most
+   * likely the owner's private A-skatt, not the firm's payroll liability.
+   * The UI shows a distinct hint instead of the generic "no rule matched".
+   */
+  booking_gate?: 'requires_employer' | null
 }
 
 /**

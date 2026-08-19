@@ -36,7 +36,7 @@ const SEED_RULES = [
   {
     id: 'sys-3', priority: 20, pattern: 'debiterad preliminärskatt,preliminärskatt,f-skatt,fskatt',
     amount_min: null, amount_max: null, company_type: 'all',
-    counter_account: '2510', counter_account_ef: '2012',
+    counter_account: '2510', counter_account_ef: '2013',
     label: 'Preliminär skatt', active: true,
   },
   {
@@ -124,7 +124,7 @@ describe('attachBookingSuggestions', () => {
       'company-1',
       [makeSkvRow({ transaktionstext: 'Debiterad preliminärskatt' })],
     )
-    expect(enriched[0].booking_suggestion?.account).toBe('2012')
+    expect(enriched[0].booking_suggestion?.account).toBe('2013')
 
     const ab = makeSupabase()
     ab.enqueue({ data: SEED_RULES })
@@ -148,6 +148,52 @@ describe('attachBookingSuggestions', () => {
       [makeSkvRow({ transaktionstext: 'Något helt okänt' })],
     )
     expect(enriched[0].booking_suggestion).toBeNull()
+  })
+
+  it('gates a requires_employer rule for a non-employer EF and marks booking_gate', async () => {
+    const AVDRAGEN_RULE = [
+      {
+        id: 'sys-5', priority: 20, pattern: 'avdragen skatt,personalskatt,a-skatt',
+        amount_min: null, amount_max: null, company_type: 'all',
+        counter_account: '2710', counter_account_ef: null,
+        label: 'Avdragen skatt anställda', active: true, requires_employer: true,
+      },
+    ]
+
+    // EF, not employer_registered: no suggestion, distinct gate marker.
+    const ef = makeSupabase()
+    ef.enqueue({ data: AVDRAGEN_RULE })
+    ef.enqueue({ data: { entity_type: 'enskild_firma', employer_registered: null } })
+    const gated = await attachBookingSuggestions(
+      ef.supabase as unknown as SupabaseClient,
+      'company-1',
+      [makeSkvRow({ transaktionstext: 'Avdragen skatt' })],
+    )
+    expect(gated[0].booking_suggestion).toBeNull()
+    expect(gated[0].booking_gate).toBe('requires_employer')
+
+    // EF that runs payroll keeps 2710, with no gate marker.
+    const employer = makeSupabase()
+    employer.enqueue({ data: AVDRAGEN_RULE })
+    employer.enqueue({ data: { entity_type: 'enskild_firma', employer_registered: true } })
+    const kept = await attachBookingSuggestions(
+      employer.supabase as unknown as SupabaseClient,
+      'company-1',
+      [makeSkvRow({ transaktionstext: 'Avdragen skatt' })],
+    )
+    expect(kept[0].booking_suggestion?.account).toBe('2710')
+    expect(kept[0].booking_gate).toBeUndefined()
+
+    // AB is never gated.
+    const ab = makeSupabase()
+    ab.enqueue({ data: AVDRAGEN_RULE })
+    ab.enqueue({ data: { entity_type: 'aktiebolag', employer_registered: null } })
+    const abRows = await attachBookingSuggestions(
+      ab.supabase as unknown as SupabaseClient,
+      'company-1',
+      [makeSkvRow({ transaktionstext: 'Avdragen skatt' })],
+    )
+    expect(abRows[0].booking_suggestion?.account).toBe('2710')
   })
 
   it('hoists the rules fetch: one skattekonto_rules query for many rows', async () => {
@@ -437,5 +483,38 @@ describe('bokforSkattekontoTransactionsBatch', () => {
     })
     expect(result.results[0].error_message).not.toContain('locked/closed fiscal period')
     expect(vi.mocked(commitEntry)).not.toHaveBeenCalled()
+  })
+
+  it('explains a row that predates the first fiscal year instead of "unlock the period"', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    // Typical EF case: the personal skattekonto carries history from before
+    // the company existed. No period covers the date and none ever will, so
+    // "lås upp perioden" is a dead end; the message must point at ignore.
+    const row = makeSkvRow({
+      transaktionstext: 'Intäktsränta',
+      transaktionsdatum: '2025-04-12',
+    })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'enskild_firma' } })
+    enqueue({ data: row })
+    enqueue({ data: [{ period_start: '2025-11-01' }] }) // earliest fiscal period
+
+    vi.mocked(findFiscalPeriod).mockResolvedValue(null)
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row.id],
+    )
+
+    expect(result.results[0]).toMatchObject({
+      id: row.id,
+      ok: false,
+      error_code: 'PERIOD_LOCKED',
+    })
+    expect(result.results[0].error_message).toContain('före företagets första räkenskapsår')
+    expect(result.results[0].error_message).toContain('kan ignoreras')
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
   })
 })

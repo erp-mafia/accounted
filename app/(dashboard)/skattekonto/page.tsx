@@ -30,6 +30,10 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
+import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { cn } from '@/lib/utils'
 import {
@@ -71,6 +75,8 @@ interface TransaktionerEnvelope {
     booked: SkattekontoTransactionWithSuggestion[]
     overdue: StoredSkattekontoTransaction[]
     upcoming: StoredSkattekontoTransaction[]
+    ignored_count: number
+    ignored?: StoredSkattekontoTransaction[]
   }
 }
 
@@ -111,6 +117,11 @@ export default function SkattekontoPage() {
   const [matchCandidates, setMatchCandidates] = useState<MatchCandidate[] | null>(null)
   const [matchLoading, setMatchLoading] = useState(false)
   const [matchSubmitting, setMatchSubmitting] = useState<string | null>(null)
+  // Ignored rows are always fetched (include_ignored=1) but rendered only on
+  // demand: the count line below the table toggles the "Ignorerade" band.
+  const [showIgnored, setShowIgnored] = useState(false)
+  const { dialogProps: ignoreConfirmProps, confirm: confirmIgnore } =
+    useDestructiveConfirm()
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -118,7 +129,7 @@ export default function SkattekontoPage() {
     try {
       const [saldoRes, txRes] = await Promise.all([
         fetch('/api/extensions/ext/skatteverket/skattekonto/saldo'),
-        fetch('/api/extensions/ext/skatteverket/skattekonto/transaktioner'),
+        fetch('/api/extensions/ext/skatteverket/skattekonto/transaktioner?include_ignored=1'),
       ])
 
       if (saldoRes.status === 401) {
@@ -352,6 +363,84 @@ export default function SkattekontoPage() {
       .catch(() => {})
   }
 
+  async function unignoreRow(id: string) {
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${id}/ignore`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_ignored: false }),
+        },
+      )
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}))
+        toast({
+          title: t('unignore_failed'),
+          description: getUserErrorMessage(json, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
+      }
+      await reload()
+    } catch (err) {
+      toast({
+        title: t('unignore_failed'),
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
+        variant: 'destructive',
+      })
+    }
+  }
+
+  async function ignoreRow(row: StoredSkattekontoTransaction) {
+    // Semi-destructive (the row leaves the work list), so confirm up front;
+    // the toast's Ångra plus the standing "Ignorerade" band are the second
+    // and third recovery affordances. Never a delete: the row stays in the
+    // table with is_ignored = true.
+    const ok = await confirmIgnore(
+      {
+        title: t('ignore_confirm_title'),
+        description: t('ignore_confirm_body', {
+          text: row.transaktionstext,
+          amount: formatCurrency(Number(row.belopp_skatteverket)),
+          date: formatDate(row.transaktionsdatum),
+        }),
+        confirmLabel: t('ignore_confirm_cta'),
+        cancelLabel: t('ignore_confirm_cancel'),
+        variant: 'warning',
+      },
+      async () => {
+        const res = await fetch(
+          `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/ignore`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_ignored: true }),
+          },
+        )
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}))
+          toast({
+            title: t('ignore_failed'),
+            description: getUserErrorMessage(json, { statusCode: res.status }),
+            variant: 'destructive',
+          })
+          throw new Error('ignore failed')
+        }
+      },
+    )
+    if (!ok) return
+    toast({
+      title: t('ignored_toast_title'),
+      action: (
+        <ToastAction altText={t('ignored_undo')} onClick={() => void unignoreRow(row.id)}>
+          {t('ignored_undo')}
+        </ToastAction>
+      ),
+    })
+    await reload()
+  }
+
   // Next charge (concept attn line): the earliest upcoming due date and the
   // sum of everything Skatteverket draws that day.
   const nextCharge = useMemo(() => {
@@ -378,7 +467,8 @@ export default function SkattekontoPage() {
   )
 
   const hasLocalRows =
-    tx !== null && tx.booked.length + tx.overdue.length + tx.upcoming.length > 0
+    tx !== null &&
+    tx.booked.length + tx.overdue.length + tx.upcoming.length + tx.ignored_count > 0
 
   if (notConnected && !hasLocalRows) {
     return (
@@ -586,13 +676,33 @@ export default function SkattekontoPage() {
       {/* One dry table with band rows (concept): Kommande, Förfallna, Genomförda */}
       <SkattekontoTable
         tx={tx}
+        showIgnored={showIgnored}
         onBokfor={bokfor}
         onMatch={openMatch}
+        onIgnore={ignoreRow}
+        onUnignore={(row) => void unignoreRow(row.id)}
       />
+
+      {/* Ignored rows never disappear silently: a standing count line with a
+          toggle keeps them one click away (BFL 5 kap anti-vanish ethos). */}
+      {(tx?.ignored_count ?? 0) > 0 && (
+        <p className="px-1 text-xs leading-5 text-muted-foreground">
+          {t('ignored_count_line', { count: tx?.ignored_count ?? 0 })}{' '}
+          <button
+            type="button"
+            onClick={() => setShowIgnored((v) => !v)}
+            className={QUIET_LINK_CLASS}
+          >
+            {showIgnored ? t('hide_ignored') : t('show_ignored')}
+          </button>
+        </p>
+      )}
 
       <p className="px-1 text-xs leading-5 text-muted-foreground">
         {t('pgnote', { amount: formatCurrency(data?.saldoKronofogden ?? 0) })}
       </p>
+
+      <DestructiveConfirmDialog {...ignoreConfirmProps} />
 
       {bookTarget && (
         <SkattekontoBookDialog
@@ -672,7 +782,7 @@ export default function SkattekontoPage() {
 }
 
 type TableSection = {
-  key: 'upcoming' | 'overdue' | 'booked'
+  key: 'upcoming' | 'overdue' | 'booked' | 'ignored'
   label: string
   rows: SkattekontoTransactionWithSuggestion[]
 }
@@ -692,12 +802,18 @@ function rowDisplayDate(
 
 function SkattekontoTable({
   tx,
+  showIgnored,
   onBokfor,
   onMatch,
+  onIgnore,
+  onUnignore,
 }: {
   tx: TransaktionerEnvelope['data'] | null
+  showIgnored: boolean
   onBokfor: (id: string) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
+  onIgnore: (row: StoredSkattekontoTransaction) => void
+  onUnignore: (row: StoredSkattekontoTransaction) => void
 }) {
   const t = useTranslations('skattekonto')
 
@@ -705,6 +821,9 @@ function SkattekontoTable({
     { key: 'upcoming', label: t('band_upcoming'), rows: tx?.upcoming ?? [] },
     { key: 'overdue', label: t('band_overdue'), rows: tx?.overdue ?? [] },
     { key: 'booked', label: t('band_booked'), rows: tx?.booked ?? [] },
+    ...(showIgnored
+      ? [{ key: 'ignored' as const, label: t('band_ignored'), rows: tx?.ignored ?? [] }]
+      : []),
   ]
   // Rows from a retroactive omprövningsbeslut share date, text and amount, so
   // they render identically unless we surface ränteberäkningsdatum. Resolved
@@ -761,6 +880,8 @@ function SkattekontoTable({
                   section={section.key}
                   onBokfor={onBokfor}
                   onMatch={onMatch}
+                  onIgnore={onIgnore}
+                  onUnignore={onUnignore}
                   showInterestDate={section.interestDateRowIds.has(row.id)}
                 />
               ))}
@@ -777,21 +898,31 @@ function SkattekontoRow({
   section,
   onBokfor,
   onMatch,
+  onIgnore,
+  onUnignore,
   showInterestDate,
 }: {
   row: SkattekontoTransactionWithSuggestion
   section: TableSection['key']
   onBokfor: (id: string) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
+  onIgnore: (row: StoredSkattekontoTransaction) => void
+  onUnignore: (row: StoredSkattekontoTransaction) => void
   showInterestDate: boolean
 }) {
   const t = useTranslations('skattekonto')
   const amount = Number(row.belopp_skatteverket)
   const isBooked = !!row.journal_entry_id
+  const isIgnoredSection = section === 'ignored'
   const displayDate = rowDisplayDate(row, section)
 
   return (
-    <tr className="group transition-colors duration-150 hover:bg-secondary/35">
+    <tr
+      className={cn(
+        'group transition-colors duration-150 hover:bg-secondary/35',
+        isIgnoredSection && 'opacity-60',
+      )}
+    >
       <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(displayDate)}
       </td>
@@ -840,7 +971,17 @@ function SkattekontoRow({
         {amount > 0 ? `+${formatCurrency(amount)}` : formatCurrency(amount)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
-        {isBooked ? (
+        {isIgnoredSection ? (
+          <span className={cn('inline-flex items-center gap-3', HOVER_REVEAL_CLASS)}>
+            <button
+              type="button"
+              onClick={() => onUnignore(row)}
+              className={QUIET_LINK_CLASS}
+            >
+              {t('action_unignore')}
+            </button>
+          </span>
+        ) : isBooked ? (
           <span className="inline-flex items-center justify-end gap-1">
             <Link
               href={`/bookkeeping/${row.journal_entry_id}`}
@@ -852,6 +993,13 @@ function SkattekontoRow({
           </span>
         ) : (
           <span className={cn('inline-flex items-center gap-3', HOVER_REVEAL_CLASS)}>
+            <button
+              type="button"
+              onClick={() => onIgnore(row)}
+              className={QUIET_LINK_CLASS}
+            >
+              {t('ignore_action')}
+            </button>
             <button
               type="button"
               onClick={() => onMatch(row)}

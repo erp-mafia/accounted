@@ -4,6 +4,7 @@ import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { computeDedupKey, contentSignature } from '@/lib/skatteverket/skattekonto-dedup'
+import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { getSaldo, getTransaktioner } from './skattekonto-client'
@@ -66,10 +67,12 @@ async function resolveOmfragad(
  */
 // file_import_id is excluded from the upsert payload on purpose: when the
 // sync takes over a file-imported row (see below) the provenance link back
-// to the uploaded file should survive the conflict-update.
+// to the uploaded file should survive the conflict-update. is_ignored is
+// likewise excluded: it is a user decision, and a nightly sync must never
+// silently un-ignore a row via the conflict-update.
 type SyncRow = Omit<
   StoredSkattekontoTransaction,
-  'id' | 'imported_at' | 'updated_at' | 'journal_entry_id' | 'file_import_id'
+  'id' | 'imported_at' | 'updated_at' | 'journal_entry_id' | 'file_import_id' | 'is_ignored'
 >
 
 function bookedToRow(companyId: string, tx: SkatteverketBookedTransaction): SyncRow {
@@ -128,12 +131,24 @@ export async function syncSkattekonto(
 ): Promise<SkattekontoSyncResult> {
   const omfragad = await resolveOmfragad(ctx.supabase, ctx.companyId)
 
+  // Lower-bound the transaction fetch at the company's bookkeeping start.
+  // Without datumFrom, SKV defaults to ~555 days back, which for an enskild
+  // firma (whose skattekonto is the owner's PERSONAL account) imports private
+  // pre-company rows that can never be booked (no fiscal period covers them).
+  // Applied uniformly to EF and AB: an AB's account is the company's own, so
+  // the bound is a no-op there in practice, and one code path beats two.
+  // No fiscal period yet (brand-new company) -> no bound, today's behavior.
+  const earliestPeriodStart = await getEarliestFiscalPeriodStart(
+    ctx.supabase,
+    ctx.companyId,
+  )
+
   let saldo: SkatteverketSaldoResponse
   let transaktioner: Awaited<ReturnType<typeof getTransaktioner>>
   try {
     ;[saldo, transaktioner] = await Promise.all([
       getSaldo(auth, omfragad),
-      getTransaktioner(auth, omfragad),
+      getTransaktioner(auth, omfragad, earliestPeriodStart ?? undefined),
     ])
   } catch (err) {
     if (err instanceof SkatteverketAuthError) {

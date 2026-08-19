@@ -617,7 +617,7 @@ export default function TransactionsPage() {
     | { source: 'skatteverket'; date: string; data: SkattekontoTransactionWithSuggestion }
 
   const skvUnmatched = useMemo(
-    () => skvRows.filter((row) => !row.journal_entry_id),
+    () => skvRows.filter((row) => !row.journal_entry_id && !row.is_ignored),
     [skvRows],
   )
 
@@ -674,7 +674,10 @@ export default function TransactionsPage() {
       (tx) => !isWithinBounds(tx.date, periodBounds),
     ).length
     const skvOutside = skvRows.filter(
-      (r) => !r.journal_entry_id && !isWithinBounds(r.transaktionsdatum, periodBounds),
+      (r) =>
+        !r.journal_entry_id &&
+        !r.is_ignored &&
+        !isWithinBounds(r.transaktionsdatum, periodBounds),
     ).length
     return bankOutside + skvOutside
   }, [periodBounds, skvRows, uncategorizedTransactions])
@@ -779,8 +782,9 @@ export default function TransactionsPage() {
       // Inbox only shows SKV rows that need action (no verifikat yet).
       for (const r of skvRows) {
         // Exiting rows stay rendered for the exit animation, even if a
-        // refetch already gave them a journal_entry_id mid-window (see above).
-        if (r.journal_entry_id && !exitingIds.has(r.id)) continue
+        // refetch already gave them a journal_entry_id (or an ignore) mid-
+        // window (see above).
+        if ((r.journal_entry_id || r.is_ignored) && !exitingIds.has(r.id)) continue
         // SKV rows live client-side only, so the period filter applies here.
         if (!isWithinBounds(r.transaktionsdatum, periodBounds)) continue
         if (
@@ -2733,6 +2737,99 @@ export default function TransactionsPage() {
     })
   }
 
+  async function handleSkvUnignore(id: string) {
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${id}/ignore`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_ignored: false }),
+        },
+      )
+      if (!res.ok) {
+        toast({ title: t('skv_ignore_undo_failed'), variant: 'destructive' })
+        return
+      }
+      setSkvRows((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, is_ignored: false } : r)),
+      )
+    } catch {
+      toast({ title: t('skv_ignore_undo_failed'), variant: 'destructive' })
+    }
+  }
+
+  /**
+   * Ignorera a skattekonto row: hides it from the work list without booking
+   * (mirrors handleIgnoreTransaction for bank rows; skattekonto rows are
+   * never deleted). Confirm up front + Ångra toast; the standing recovery
+   * surface is the "Ignorerade" band on the Skattekonto page.
+   */
+  async function handleSkvIgnore(row: StoredSkattekontoTransaction) {
+    const ok = await confirm(
+      {
+        title: t('skv_ignore_confirm_title'),
+        description: t('skv_ignore_confirm_body', {
+          text: row.transaktionstext,
+          amount: formatCurrency(Number(row.belopp_skatteverket)),
+          date: formatDate(row.transaktionsdatum),
+        }),
+        confirmLabel: t('skv_ignore_confirm_cta'),
+        cancelLabel: t('skv_ignore_confirm_cancel'),
+        variant: 'warning',
+      },
+      async () => {
+        const res = await fetch(
+          `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/ignore`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_ignored: true }),
+          },
+        )
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}))
+          toast({
+            title: t('skv_ignore_failed'),
+            description: getErrorMessage(json, { statusCode: res.status }),
+            variant: 'destructive',
+          })
+          throw new Error('skv ignore failed')
+        }
+      },
+    )
+    if (!ok) return
+
+    setSkvSelectedIds((prev) => {
+      if (!prev.has(row.id)) return prev
+      const next = new Set(prev)
+      next.delete(row.id)
+      return next
+    })
+    setExitingIds((prev) => new Set(prev).add(row.id))
+    setTimeout(() => {
+      setSkvRows((prev) =>
+        prev.map((r) => (r.id === row.id ? { ...r, is_ignored: true } : r)),
+      )
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(row.id)
+        return next
+      })
+    }, 350)
+    toast({
+      title: t('skv_ignored_title'),
+      action: (
+        <ToastAction
+          altText={t('skv_ignore_undo')}
+          onClick={() => void handleSkvUnignore(row.id)}
+        >
+          {t('skv_ignore_undo')}
+        </ToastAction>
+      ),
+    })
+  }
+
   /**
    * Bulk "Bokför valda": one confirmed summary → server-side draft+commit
    * per row via bokfor-batch (chunked so batchProgress moves), then ONE
@@ -3742,6 +3839,7 @@ export default function TransactionsPage() {
                         onToggleSelect={toggleSkvSelect}
                         onBokfor={handleSkvBokfor}
                         onMatch={r => setSkvMatchTarget(r)}
+                        onIgnore={handleSkvIgnore}
                       />
                     ),
                   )}

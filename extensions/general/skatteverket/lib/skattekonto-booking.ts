@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { commitEntry, createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { getPrimary as getPrimaryCashAccount } from '@/lib/cash-accounts/service'
@@ -55,6 +56,9 @@ interface SkattekontoRuleRow {
   counter_account_ef: string | null
   label: string | null
   active: boolean
+  /** Rule only applies to an enskild firma when the company is
+   *  employer_registered (migration 20260819080100). An AB is unaffected. */
+  requires_employer: boolean
 }
 
 export class SkattekontoBookingError extends Error {
@@ -111,7 +115,24 @@ const SAFE_ID_PATTERN = /^[a-zA-Z0-9_-]+$/
 // ship override metadata we don't need to the application layer (SOC 2
 // CC6.1, ISO 27001 A.8.5 least-privilege data access).
 const SKATTEKONTO_RULE_COLUMNS =
-  'id, priority, pattern, amount_min, amount_max, company_type, counter_account, counter_account_ef, label, active'
+  'id, priority, pattern, amount_min, amount_max, company_type, counter_account, counter_account_ef, label, active, requires_employer'
+
+/**
+ * Result of walking the rules for one transaktionstext.
+ *
+ * 'employer_gated' means a rule DID match the text, but it is flagged
+ * requires_employer and the company is an enskild firma without
+ * employer_registered: "Avdragen skatt" on the owner's personal skattekonto
+ * is then almost always A-skatt an outside employer withheld from the
+ * owner's private salary, not the firm's payroll liability, so auto-booking
+ * 2710 would fabricate a liability. Matching stops (no weaker rule may
+ * catch the text); the caller surfaces the NO_COUNTER_ACCOUNT path with a
+ * distinct hint.
+ */
+type RuleMatchOutcome =
+  | { kind: 'match'; match: CounterAccountMatch }
+  | { kind: 'employer_gated' }
+  | { kind: 'none' }
 
 /**
  * Pure core matcher shared by every suggestion/booking path: walk the
@@ -124,7 +145,8 @@ function matchSkattekontoRule(
   transaktionstext: string,
   entityType: EntityType,
   belopp?: number,
-): CounterAccountMatch | null {
+  employerRegistered = false,
+): RuleMatchOutcome {
   const normalized = transaktionstext.toLowerCase()
   const absBelopp = belopp === undefined ? null : Math.abs(belopp)
 
@@ -145,18 +167,32 @@ function matchSkattekontoRule(
 
     if (!patterns.some(p => normalized.includes(p))) continue
 
+    // Employer gate: the rule matched, but for a non-employer EF the safe
+    // outcome is NO counter account (manual review or ignore), never 2710.
+    // An AB, and an employer-registered EF, keep the rule's account.
+    if (
+      rule.requires_employer &&
+      entityType === 'enskild_firma' &&
+      !employerRegistered
+    ) {
+      return { kind: 'employer_gated' }
+    }
+
     const account =
       entityType === 'enskild_firma' && rule.counter_account_ef
         ? rule.counter_account_ef
         : rule.counter_account
 
     return {
-      account,
-      label: rule.label ?? transaktionstext,
+      kind: 'match',
+      match: {
+        account,
+        label: rule.label ?? transaktionstext,
+      },
     }
   }
 
-  return null
+  return { kind: 'none' }
 }
 
 /** The active rules for a company (system seeds + overrides), priority order. */
@@ -182,6 +218,9 @@ export async function guessCounterAccount(
   transaktionstext: string,
   entityType: EntityType,
   belopp?: number,
+  // Whether company_settings.employer_registered is true. Defaults false:
+  // the safe side of the requires_employer gate for an enskild firma.
+  employerRegistered = false,
 ): Promise<CounterAccountMatch | null> {
   if (!SAFE_ID_PATTERN.test(companyId)) {
     // The caller is supposed to pass a validated company id (from
@@ -194,8 +233,15 @@ export async function guessCounterAccount(
   const rules = await fetchSkattekontoRules(supabase, companyId)
   if (rules.length === 0) return null
 
-  const match = matchSkattekontoRule(rules, transaktionstext, entityType, belopp)
-  if (!match) return null
+  const outcome = matchSkattekontoRule(
+    rules,
+    transaktionstext,
+    entityType,
+    belopp,
+    employerRegistered,
+  )
+  if (outcome.kind !== 'match') return null
+  const match = outcome.match
 
   return {
     ...match,
@@ -216,6 +262,9 @@ export async function guessCounterAccount(
 export interface SkattekontoRuleContext {
   rules: SkattekontoRuleRow[]
   entityType: EntityType
+  /** company_settings.employer_registered === true. Drives the
+   *  requires_employer rule gate for enskild firma. */
+  employerRegistered: boolean
   resolvePrimarySek: () => Promise<string>
 }
 
@@ -229,6 +278,7 @@ export async function loadRuleContext(
     return {
       rules: [],
       entityType: 'aktiebolag',
+      employerRegistered: false,
       resolvePrimarySek: async () => PRIMARY_SEK_FALLBACK,
     }
   }
@@ -237,7 +287,7 @@ export async function loadRuleContext(
     fetchSkattekontoRules(supabase, companyId),
     supabase
       .from('company_settings')
-      .select('entity_type')
+      .select('entity_type, employer_registered')
       .eq('company_id', companyId)
       .single(),
   ])
@@ -246,6 +296,9 @@ export async function loadRuleContext(
   return {
     rules,
     entityType: (settingsResult.data?.entity_type as EntityType) ?? 'aktiebolag',
+    // Nullable in the DB (20260717151000 added it without NOT NULL): only an
+    // explicit true counts as "registered employer".
+    employerRegistered: settingsResult.data?.employer_registered === true,
     resolvePrimarySek: async () => {
       if (primary === null) {
         primary = await resolvePrimarySekAccount(supabase, companyId)
@@ -276,7 +329,12 @@ export async function attachBookingSuggestions<
   supabase: SupabaseClient,
   companyId: string,
   rows: T[],
-): Promise<(T & { booking_suggestion: SkattekontoBookingSuggestion | null })[]> {
+): Promise<
+  (T & {
+    booking_suggestion: SkattekontoBookingSuggestion | null
+    booking_gate?: 'requires_employer' | null
+  })[]
+> {
   const needsSuggestion = (row: T) =>
     !row.journal_entry_id && row.status !== 'upcoming'
 
@@ -285,7 +343,10 @@ export async function attachBookingSuggestions<
   }
 
   const ctx = await loadRuleContext(supabase, companyId)
-  const enriched: (T & { booking_suggestion: SkattekontoBookingSuggestion | null })[] = []
+  const enriched: (T & {
+    booking_suggestion: SkattekontoBookingSuggestion | null
+    booking_gate?: 'requires_employer' | null
+  })[] = []
 
   for (const row of rows) {
     if (!needsSuggestion(row)) {
@@ -293,16 +354,24 @@ export async function attachBookingSuggestions<
       continue
     }
 
-    const match = matchSkattekontoRule(
+    const outcome = matchSkattekontoRule(
       ctx.rules,
       row.transaktionstext,
       ctx.entityType,
       Number(row.belopp_skatteverket),
+      ctx.employerRegistered,
     )
-    if (!match) {
+    if (outcome.kind === 'employer_gated') {
+      // No suggestion, but tell the UI WHY so it can show the "likely your
+      // private A-skatt" hint instead of the generic "no rule matched".
+      enriched.push({ ...row, booking_suggestion: null, booking_gate: 'requires_employer' })
+      continue
+    }
+    if (outcome.kind === 'none') {
       enriched.push({ ...row, booking_suggestion: null })
       continue
     }
+    const match = outcome.match
 
     const account =
       match.account === PRIMARY_SEK_SENTINEL
@@ -378,42 +447,35 @@ export async function bokforSkattekontoTransaction(
   }
 
   // 2+3. Resolve counter-account via skattekonto_rules (entity_type decides
-  // AB/EF-specific accounts).
-  let guess: CounterAccountMatch | null
-  if (ruleContext) {
-    const match = matchSkattekontoRule(
-      ruleContext.rules,
-      tx.transaktionstext,
-      ruleContext.entityType,
-      Number(tx.belopp_skatteverket),
-    )
-    guess = match
-      ? {
-          ...match,
-          account:
-            match.account === PRIMARY_SEK_SENTINEL
-              ? await ruleContext.resolvePrimarySek()
-              : match.account,
-        }
-      : null
-  } else {
-    const { data: settings } = await supabase
-      .from('company_settings')
-      .select('entity_type')
-      .eq('company_id', companyId)
-      .single()
-
-    const entityType: EntityType =
-      (settings?.entity_type as EntityType) ?? 'aktiebolag'
-
-    guess = await guessCounterAccount(
-      supabase,
-      companyId,
-      tx.transaktionstext,
-      entityType,
-      Number(tx.belopp_skatteverket),
+  // AB/EF-specific accounts; requires_employer gates payroll rules for a
+  // non-employer enskild firma). The per-call path builds the same context
+  // the batch path preloads, so both share one matcher and one gate.
+  const ctx = ruleContext ?? (await loadRuleContext(supabase, companyId))
+  const outcome = matchSkattekontoRule(
+    ctx.rules,
+    tx.transaktionstext,
+    ctx.entityType,
+    Number(tx.belopp_skatteverket),
+    ctx.employerRegistered,
+  )
+  if (outcome.kind === 'employer_gated') {
+    throw new SkattekontoBookingError(
+      `"${tx.transaktionstext}" på en enskild firmas skattekonto är oftast skatt som en ` +
+        'arbetsgivare dragit från din privata lön och ingen affärshändelse i firman: ' +
+        'bokför manuellt om den ändå gäller firmans anställda, annars kan raden ignoreras.',
+      'NO_COUNTER_ACCOUNT',
     )
   }
+  const guess: CounterAccountMatch | null =
+    outcome.kind === 'match'
+      ? {
+          ...outcome.match,
+          account:
+            outcome.match.account === PRIMARY_SEK_SENTINEL
+              ? await ctx.resolvePrimarySek()
+              : outcome.match.account,
+        }
+      : null
   if (!guess) {
     throw new SkattekontoBookingError(
       `Vi kunde inte gissa motkontot för "${tx.transaktionstext}". Skapa verifikatet manuellt.`,
@@ -428,6 +490,23 @@ export async function bokforSkattekontoTransaction(
     tx.transaktionsdatum,
   )
   if (!fiscalPeriodId) {
+    // Distinguish "predates the company's bookkeeping entirely" from an
+    // ordinary locked/missing period: for an enskild firma the personal
+    // skattekonto history predates the company, and telling the user to
+    // "unlock the period" for a date no period will ever cover is a dead
+    // end. The ignore action is the way out for those rows.
+    const earliestPeriodStart = await getEarliestFiscalPeriodStart(
+      supabase,
+      companyId,
+    )
+    if (earliestPeriodStart && tx.transaktionsdatum < earliestPeriodStart) {
+      throw new SkattekontoBookingError(
+        `Datumet ${tx.transaktionsdatum} ligger före företagets första räkenskapsår ` +
+          `(som börjar ${earliestPeriodStart}). Händelsen gäller sannolikt tiden före ` +
+          'bokföringens start och kan ignoreras.',
+        'PERIOD_LOCKED',
+      )
+    }
     throw new SkattekontoBookingError(
       `Datumet ${tx.transaktionsdatum} ligger i en låst eller saknad räkenskapsperiod. ` +
         'Lås upp perioden eller hoppa över raden.',

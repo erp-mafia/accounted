@@ -83,6 +83,7 @@ describe('syncSkattekonto: takeover of file-imported rows', () => {
     })
 
     enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods (earliest period start: none)
     enqueue({ data: [] }) // existing dedup_key lookup: id:9001 not present
     enqueue({
       data: [
@@ -130,6 +131,7 @@ describe('syncSkattekonto: takeover of file-imported rows', () => {
       belopp_skatteverket: -15710,
     }
     enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods (earliest period start: none)
     enqueue({ data: [] }) // existing dedup_key lookup
     enqueue({
       data: [
@@ -158,6 +160,7 @@ describe('syncSkattekonto: takeover of file-imported rows', () => {
     })
 
     enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods (earliest period start: none)
     enqueue({ data: [{ dedup_key: 'id:9001', status: 'booked' }] }) // key already known
     enqueue({ data: null }) // upsert
 
@@ -184,11 +187,60 @@ describe('syncSkattekonto: takeover of file-imported rows', () => {
     })
 
     enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods (earliest period start: none)
     enqueue({ data: [{ dedup_key: FILE_ROW_HASH_KEY, status: 'booked' }] }) // same key, already booked
 
     await syncSkattekonto(makeCtx())
 
     // The colliding upcoming row is dropped: nothing left to upsert.
     expect(findCalls('skattekonto_transactions', 'upsert')).toHaveLength(0)
+  })
+})
+
+describe('syncSkattekonto: fiscal-year lower bound on the fetch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    getSaldoMock.mockResolvedValue(makeSaldo())
+  })
+
+  it('passes the earliest fiscal period start as datumFrom', async () => {
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: [],
+      kommandeTransaktioner: [],
+    })
+
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [{ period_start: '2025-11-01' }] }) // fiscal_periods earliest
+
+    await syncSkattekonto(makeCtx())
+
+    // Without the bound, SKV defaults to ~555 days of history, which for an
+    // enskild firma imports the owner's private pre-company transactions.
+    expect(getTransaktionerMock).toHaveBeenCalledTimes(1)
+    expect(getTransaktionerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      '2025-11-01',
+    )
+  })
+
+  it('passes no datumFrom when the company has no fiscal period yet', async () => {
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: [],
+      kommandeTransaktioner: [],
+    })
+
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods: none yet (brand-new company)
+
+    await syncSkattekonto(makeCtx())
+
+    // Fall back to today's unbounded behavior rather than blocking the sync.
+    expect(getTransaktionerMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      undefined,
+    )
   })
 })

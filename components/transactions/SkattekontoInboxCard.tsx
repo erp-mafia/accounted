@@ -31,6 +31,7 @@ export default function SkattekontoInboxCard({
   onToggleSelect,
   onBokfor,
   onMatch,
+  onIgnore,
 }: {
   row: StoredSkattekontoTransaction
   matchSuggestion?: SkattekontoMatchSuggestion | null
@@ -44,6 +45,10 @@ export default function SkattekontoInboxCard({
   onToggleSelect?: (id: string) => void
   onBokfor: (row: StoredSkattekontoTransaction) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
+  /** Optional "Ignorera" affordance: hides the row from the work list without
+   *  booking it (skattekonto rows are never deleted). The parent owns the
+   *  confirm dialog and the PATCH. */
+  onIgnore?: (row: StoredSkattekontoTransaction) => void
 }) {
   const t = useTranslations('tx_skattekonto_card')
   const amount = Number(row.belopp_skatteverket)
@@ -174,6 +179,16 @@ export default function SkattekontoInboxCard({
                 {t('match_to_voucher')}
               </button>
             </>
+          )}
+          {onIgnore && (
+            <button
+              type="button"
+              className={QUIET_LINK_CLASS}
+              onClick={() => onIgnore(row)}
+              disabled={processing}
+            >
+              {t('ignore')}
+            </button>
           )}
         </span>
       </td>

@@ -2126,6 +2126,9 @@ export const skatteverketExtension: Extension = {
     // ── Transaktioner (from local table) ───────────────────────────
     // Returns booked + upcoming transactions for the active company.
     // Optional `from` query filters tidigare on transaktionsdatum >= from.
+    // Ignored rows (is_ignored) are excluded from the work buckets and only
+    // reported as `ignored_count`; pass `include_ignored=1` to also get the
+    // rows themselves (the "Ignorerade" band). Never silently dropped.
     {
       method: 'GET',
       path: '/skattekonto/transaktioner',
@@ -2135,6 +2138,9 @@ export const skatteverketExtension: Extension = {
         }
         const url = new URL(request.url)
         const from = url.searchParams.get('from')
+        const includeIgnoredParam = url.searchParams.get('include_ignored')
+        const includeIgnored =
+          includeIgnoredParam === '1' || includeIgnoredParam === 'true'
 
         let query = ctx.supabase
           .from('skattekonto_transactions')
@@ -2151,7 +2157,7 @@ export const skatteverketExtension: Extension = {
 
         const rows = data ?? []
         const today = new Date().toISOString().slice(0, 10)
-        const { booked, overdue, upcoming } = splitTransactions(rows, today)
+        const { booked, overdue, upcoming, ignored } = splitTransactions(rows, today)
 
         // Enrich obokförda rader with a single-best-candidate suggestion.
         // Only attached when there's exactly one match: avoids the UI
@@ -2186,6 +2192,8 @@ export const skatteverketExtension: Extension = {
             booked: bookedEnriched,
             overdue,
             upcoming,
+            ignored_count: ignored.length,
+            ...(includeIgnored ? { ignored } : {}),
           },
         })
       },
@@ -2391,6 +2399,83 @@ export const skatteverketExtension: Extension = {
           }
           return handleSkvError(err)
         }
+      },
+    },
+
+    // ── Ignorera / återställ en rad ───────────────────────────────────
+    // Skattekonto rows mirror Skatteverket's ledger and are never deleted;
+    // is_ignored is the sanctioned way to take an unbookable row off the
+    // work list (e.g. an EF row predating the first räkenskapsår). Fully
+    // reversible: PATCH { is_ignored: false } restores it. A booked row
+    // cannot be ignored (409; the DB CHECK enforces the same invariant).
+    {
+      method: 'PATCH',
+      path: '/skattekonto/transaktioner/:id/ignore',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) {
+          return NextResponse.json({ error: 'Saknar transaktions-id' }, { status: 400 })
+        }
+        let body: { is_ignored?: unknown }
+        try {
+          body = (await request.json()) as { is_ignored?: unknown }
+        } catch {
+          return NextResponse.json({ error: 'Ogiltig request body' }, { status: 400 })
+        }
+        if (typeof body.is_ignored !== 'boolean') {
+          return NextResponse.json(
+            { error: 'is_ignored måste vara true eller false' },
+            { status: 400 },
+          )
+        }
+        const isIgnored = body.is_ignored
+
+        const { data: tx, error: txError } = await ctx.supabase
+          .from('skattekonto_transactions')
+          .select('id, journal_entry_id, is_ignored')
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .single()
+        if (txError || !tx) {
+          return NextResponse.json(
+            { error: 'Skattekonto-transaktionen hittades inte.' },
+            { status: 404 },
+          )
+        }
+        if (isIgnored && tx.journal_entry_id) {
+          return NextResponse.json(
+            { error: 'Transaktionen är redan bokförd och kan inte ignoreras.' },
+            { status: 409 },
+          )
+        }
+
+        // Conditional write: `.is('journal_entry_id', null)` on the ignore
+        // path makes a concurrent booking race lose cleanly (zero rows
+        // updated -> 409) instead of tripping the DB CHECK.
+        let update = ctx.supabase
+          .from('skattekonto_transactions')
+          .update({ is_ignored: isIgnored })
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+        if (isIgnored) {
+          update = update.is('journal_entry_id', null)
+        }
+        const { data: updated, error: updateError } = await update.select('id')
+        if (updateError) {
+          return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+        if (!updated || updated.length === 0) {
+          return NextResponse.json(
+            { error: 'Transaktionen är redan bokförd och kan inte ignoreras.' },
+            { status: 409 },
+          )
+        }
+
+        return NextResponse.json({ data: { ok: true, is_ignored: isIgnored } })
       },
     },
   ],

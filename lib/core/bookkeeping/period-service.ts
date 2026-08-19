@@ -137,6 +137,30 @@ export async function countUnbookedInPeriod(
 }
 
 /**
+ * The company's earliest fiscal_periods.period_start (ISO date), or null when
+ * no fiscal period exists yet (brand-new company before onboarding created
+ * one). This is the company's "bookkeeping starts here" boundary: external
+ * mirrors (e.g. the skattekonto sync) use it as a lower fetch bound, and
+ * booking flows use it to tell "row predates the first rakenskapsar" apart
+ * from an ordinary locked period.
+ */
+export async function getEarliestFiscalPeriodStart(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('period_start')
+    .eq('company_id', companyId)
+    .order('period_start', { ascending: true })
+    .limit(1)
+
+  if (error || !data || data.length === 0) return null
+  const start = (data[0] as { period_start?: unknown }).period_start
+  return typeof start === 'string' ? start : null
+}
+
+/**
  * Lock a fiscal period: prevents new journal entries from being posted.
  * Requires: period exists, belongs to company, not already locked/closed.
  */

@@ -4,6 +4,10 @@ export interface SkattekontoBuckets<T extends StoredSkattekontoTransaction> {
   booked: T[]
   overdue: T[]
   upcoming: T[]
+  /** Rows the user explicitly ignored (is_ignored = true). Excluded from the
+   *  work buckets above; surfaced as a count line so they never disappear
+   *  silently (same anti-silent-disappearance ethos as /transactions). */
+  ignored: T[]
 }
 
 /**
@@ -13,6 +17,9 @@ export interface SkattekontoBuckets<T extends StoredSkattekontoTransaction> {
  * haven't settled yet: labelling them "Kommande" misleads the user. We pull
  * those into a separate "Förfallna" bucket here. Stored `status` keeps
  * mirroring SKV.
+ *
+ * Ignored rows (is_ignored) leave the work buckets entirely and land in
+ * `ignored`, regardless of status: an ignored row is triaged-and-excluded.
  *
  * `today` is an ISO date string ('YYYY-MM-DD'). Lexicographic compare on
  * ISO dates is chronological.
@@ -24,8 +31,13 @@ export function splitTransactions<T extends StoredSkattekontoTransaction>(
   const booked: T[] = []
   const overdue: T[] = []
   const upcoming: T[] = []
+  const ignored: T[] = []
 
   for (const row of rows) {
+    if (row.is_ignored) {
+      ignored.push(row)
+      continue
+    }
     if (row.status === 'booked') {
       booked.push(row)
       continue
@@ -38,5 +50,5 @@ export function splitTransactions<T extends StoredSkattekontoTransaction>(
     }
   }
 
-  return { booked, overdue, upcoming }
+  return { booked, overdue, upcoming, ignored }
 }

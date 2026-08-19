@@ -1,12 +1,13 @@
 import { randomUUID } from 'crypto'
 import { describe, expect, it } from 'vitest'
-import { seedCompany } from '@/tests/pg/fixtures'
+import { insertDraftJournalEntry, seedCompany } from '@/tests/pg/fixtures'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 
 /**
  * RLS smoke for skattekonto_transactions. Locks in tenant isolation +
  * the (company_id, dedup_key) unique constraint that the sync UPSERT
- * relies on for idempotency.
+ * relies on for idempotency, and the is_ignored CHECK (migration
+ * 20260819080000): an ignored row must never carry a journal_entry_id.
  */
 
 async function insertSkattekontoTransaction(params: {
@@ -87,5 +88,86 @@ describe('skattekonto_transactions.pg: RLS tenant isolation', () => {
     await expect(
       insertSkattekontoTransaction({ companyId: b.companyId, dedupKey: 'id:555' }),
     ).resolves.toBeDefined()
+  })
+})
+
+describe('skattekonto_transactions.pg: is_ignored', () => {
+  it('defaults to false and can be toggled on an unbooked row by a company member', async () => {
+    const a = await seedCompany()
+    const id = await insertSkattekontoTransaction({ companyId: a.companyId, dedupKey: 'id:666' })
+
+    const before = await getPool().query<{ is_ignored: boolean }>(
+      `SELECT is_ignored FROM public.skattekonto_transactions WHERE id = $1`,
+      [id],
+    )
+    expect(before.rows[0]!.is_ignored).toBe(false)
+
+    // The pre-existing company-scoped UPDATE policy covers the new column:
+    // a member can ignore and unignore under RLS with no policy change.
+    await withUserContext(a.userId, async (client) => {
+      await client.query(
+        `UPDATE public.skattekonto_transactions SET is_ignored = true WHERE id = $1`,
+        [id],
+      )
+    })
+    const mid = await getPool().query<{ is_ignored: boolean }>(
+      `SELECT is_ignored FROM public.skattekonto_transactions WHERE id = $1`,
+      [id],
+    )
+    expect(mid.rows[0]!.is_ignored).toBe(true)
+
+    await withUserContext(a.userId, async (client) => {
+      await client.query(
+        `UPDATE public.skattekonto_transactions SET is_ignored = false WHERE id = $1`,
+        [id],
+      )
+    })
+    const after = await getPool().query<{ is_ignored: boolean }>(
+      `SELECT is_ignored FROM public.skattekonto_transactions WHERE id = $1`,
+      [id],
+    )
+    expect(after.rows[0]!.is_ignored).toBe(false)
+  })
+
+  it('CHECK blocks ignoring a row that has a journal_entry_id', async () => {
+    const a = await seedCompany()
+    const txId = await insertSkattekontoTransaction({ companyId: a.companyId, dedupKey: 'id:777' })
+    const entryId = await insertDraftJournalEntry({
+      userId: a.userId,
+      companyId: a.companyId,
+      fiscalPeriodId: a.fiscalPeriodId,
+    })
+    await getPool().query(
+      `UPDATE public.skattekonto_transactions SET journal_entry_id = $1 WHERE id = $2`,
+      [entryId, txId],
+    )
+
+    await expect(
+      getPool().query(
+        `UPDATE public.skattekonto_transactions SET is_ignored = true WHERE id = $1`,
+        [txId],
+      ),
+    ).rejects.toThrow(/skattekonto_transactions_is_ignored_no_journal_entry|check constraint/i)
+  })
+
+  it('CHECK blocks booking (linking a journal entry to) an ignored row', async () => {
+    const a = await seedCompany()
+    const txId = await insertSkattekontoTransaction({ companyId: a.companyId, dedupKey: 'id:888' })
+    await getPool().query(
+      `UPDATE public.skattekonto_transactions SET is_ignored = true WHERE id = $1`,
+      [txId],
+    )
+    const entryId = await insertDraftJournalEntry({
+      userId: a.userId,
+      companyId: a.companyId,
+      fiscalPeriodId: a.fiscalPeriodId,
+    })
+
+    await expect(
+      getPool().query(
+        `UPDATE public.skattekonto_transactions SET journal_entry_id = $1 WHERE id = $2`,
+        [entryId, txId],
+      ),
+    ).rejects.toThrow(/skattekonto_transactions_is_ignored_no_journal_entry|check constraint/i)
   })
 })
