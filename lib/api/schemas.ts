@@ -22,6 +22,7 @@ import {
 } from '@/lib/invoices/rot-rut-rules'
 import { NON_IBAN_CURRENCIES } from '@/lib/invoices/payment-accounts'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
+import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
 import type { AuditAction, Currency } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
@@ -931,6 +932,23 @@ export const CreateCustomerSchema = z.object({
       code: 'custom',
       path: ['personal_number'],
       message: 'Personal number is only allowed for individual customers',
+    })
+  }
+  // GDPR art. 5.1 c: a personnummer stored as a business org_number is shown
+  // unmasked everywhere (only customer_type='individual' rows are masked), so
+  // refuse to accept one silently.
+  if (
+    customer.org_number &&
+    customer.customer_type !== 'individual' &&
+    looksLikeSwedishPersonalNumber(customer.org_number)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['org_number'],
+      message:
+        'org_number looks like a Swedish personal identity number (personnummer). '
+        + 'Create the customer with customer_type "individual" and pass the number as personal_number '
+        + 'instead, so it is stored encrypted and masked in list responses.',
     })
   }
   if (

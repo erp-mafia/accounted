@@ -210,6 +210,7 @@ describe('commitPendingOperation: create_customer', () => {
   it('inserts the staged customer_number', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // company_settings read (payment-terms default)
     enqueue({
       data: makeCustomer({ id: 'cust-1', customer_number: 'K-1001' }),
       error: null,
@@ -262,6 +263,7 @@ describe('commitPendingOperation: create_customer', () => {
   it('inserts customer_number as null when not staged', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // company_settings read (payment-terms default)
     enqueue({ data: makeCustomer({ id: 'cust-1' }), error: null }) // customers insert
     enqueue({ data: null, error: null }) // dispatcher's pending_operations update
 

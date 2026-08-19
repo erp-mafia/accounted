@@ -1370,6 +1370,7 @@
     "personal_number_invalid": "Ogiltigt personnummer",
     "org_number_label": "Organisationsnummer",
     "org_number_placeholder": "XXXXXX-XXXX",
+    "org_number_looks_personal": "Numret ser ut som ett personnummer. Välj kundtypen Privatperson i stället, så lagras det skyddat och maskeras i listor.",
     "vat_label": "VAT-nummer (momsreg.nr)",
     "vat_placeholder_eu": "DE123456789",
     "vat_placeholder_se": "SE123456789001",

@@ -21,6 +21,12 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
+import {
+  encryptCustomerPersonalNumber,
+  maskCustomerRow,
+} from '@/lib/customers/protect-personal-number'
+import { isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
+import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
 
 // v1-only extension: allow PATCH to set archived_at back to null to
 // un-archive a customer. Restricted to literal `null` so the caller can't
@@ -47,6 +53,8 @@ const CustomerDetail = z.object({
   org_number: z.string().nullable(),
   vat_number: z.string().nullable(),
   vat_number_validated: z.boolean(),
+  // Always the masked display form ('********-1234'), never the stored value.
+  personal_number: z.string().nullable(),
   default_payment_terms: z.number(),
   notes: z.string().nullable(),
   archived_at: z.string().nullable(),
@@ -60,7 +68,7 @@ const OPEN_INVOICE_STATUSES = ['sent', 'partially_paid', 'overdue']
 // Explicit projection. Excludes user_id, company_id (internal scoping),
 // and vat_number_validated_at (internal timestamp not in the public schema).
 const CUSTOMER_DETAIL_COLUMNS =
-  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, personal_number, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 const OPEN_INVOICE_COLUMNS =
   'id, invoice_number, invoice_date, due_date, status, currency, total, remaining_amount'
@@ -79,6 +87,7 @@ registerEndpoint({
   pitfalls: [
     'archived_at is non-null when the customer has been soft-deleted; the customer is still queryable by id but excluded from default lists.',
     'vat_number_validated reflects the last successful VIES check; it can become stale if the EU registry revokes a number.',
+    'personal_number is always returned in the masked form ********-1234; the stored value is encrypted and never leaves the API.',
   ],
   example: {
     response: {
@@ -202,7 +211,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     }
 
     return ok(
-      { ...customer, ...(invoices !== undefined ? { invoices } : {}) },
+      // The selected row carries personal_number ciphertext; mask before it
+      // leaves the server.
+      { ...maskCustomerRow(customer as { personal_number?: string | null }), ...(invoices !== undefined ? { invoices } : {}) },
       {
         requestId: ctx.requestId,
         partialExpansions: partialExpansions.length > 0 ? partialExpansions : undefined,
@@ -230,6 +241,8 @@ registerEndpoint({
     'Idempotency-Key is mandatory; calls without it return 400.',
     'org_number uniqueness is enforced at DB level: 23505 → 409 CUSTOMER_DUPLICATE_ORG_NUMBER.',
     'VIES re-validation is best-effort and runs only on commit. A VIES timeout does not fail the update.',
+    'personal_number: a plaintext value is stored encrypted (individual customers only); the masked form a read returned (********-1234) means "leave unchanged" and is never stored; null clears it. Changing customer_type away from individual clears any stored personal_number.',
+    'An org_number shaped like a Swedish personnummer is rejected for business customer_types (400 CUSTOMER_ORG_NUMBER_IS_PERSONAL).',
   ],
   example: {
     request: { default_payment_terms: 14, notes: 'New payment terms agreed 2026-05-12.' },
@@ -292,6 +305,51 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     }
     const body = parsed.data
 
+    // Mirrors the internal PATCH route: every read path returns the masked
+    // form ('********-1234', or '********-????' when undecryptable), so a
+    // client PATCHing back what it read carries no new value. A mask must
+    // not be validated, stored, or treated as a clear.
+    const personalNumberSubmitted =
+      body.personal_number !== undefined && !isMaskedPersonalNumber(body.personal_number)
+
+    // The individual-only rule for personal_number and the personnummer
+    // guard on org_number both depend on the customer_type the row will
+    // have after the update; read the stored type when the body is silent.
+    let effectiveType: string | undefined = body.customer_type
+    if (
+      effectiveType === undefined &&
+      ((personalNumberSubmitted && body.personal_number) || body.org_number)
+    ) {
+      const { data: existing } = await ctx.supabase
+        .from('customers')
+        .select('customer_type')
+        .eq('company_id', ctx.companyId!)
+        .eq('id', customerId)
+        .maybeSingle()
+      effectiveType = (existing as { customer_type?: string } | null)?.customer_type
+    }
+
+    if (personalNumberSubmitted && body.personal_number && effectiveType !== 'individual') {
+      return v1ErrorResponseFromCode('CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'personal_number' },
+      })
+    }
+
+    // GDPR art. 5.1 c: only customer_type='individual' rows get their
+    // identifiers masked, so a personnummer accepted as a business
+    // org_number would be displayed unmasked everywhere.
+    if (
+      body.org_number &&
+      effectiveType !== 'individual' &&
+      looksLikeSwedishPersonalNumber(body.org_number)
+    ) {
+      return v1ErrorResponseFromCode('CUSTOMER_ORG_NUMBER_IS_PERSONAL', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'org_number' },
+      })
+    }
+
     // Build the partial update set. Fields explicitly set to undefined in
     // the body are not in the resulting object (Zod strips undefined). null
     // IS allowed and means "clear the field" (or, for archived_at, "un-archive").
@@ -323,6 +381,15 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     if (body.customer_number !== undefined) {
       updateData.customer_number = body.customer_number || null
     }
+    if (personalNumberSubmitted) {
+      // Stored as ciphertext; customers_personal_number_check accepts that
+      // shape only (20260726110000).
+      updateData.personal_number = encryptCustomerPersonalNumber(body.personal_number)
+    } else if (body.customer_type !== undefined && body.customer_type !== 'individual') {
+      // The row is becoming a business customer: a personnummer may not
+      // remain stored on it (matches the internal PATCH route).
+      updateData.personal_number = null
+    }
 
     if (Object.keys(updateData).length === 0) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -352,7 +419,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         })
       }
 
-      return dryRunPreview({ ...current, ...updateData }, { requestId: ctx.requestId, log: ctx.log })
+      return dryRunPreview(maskCustomerRow({ ...(current as Record<string, unknown> & { personal_number?: string | null }), ...updateData }), { requestId: ctx.requestId, log: ctx.log })
     }
 
     // Best-effort VIES re-validation if vat_number is changing on an
@@ -418,7 +485,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
-    return ok(data, { requestId: ctx.requestId })
+    return ok(maskCustomerRow(data as Record<string, unknown> & { personal_number?: string | null }), { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
 )
@@ -509,7 +576,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       }
 
       return dryRunPreview(
-        { ...current, archived_at: new Date().toISOString() },
+        maskCustomerRow({ ...(current as Record<string, unknown> & { personal_number?: string | null }), archived_at: new Date().toISOString() }),
         { requestId: ctx.requestId, log: ctx.log },
       )
     }

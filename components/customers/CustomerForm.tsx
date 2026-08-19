@@ -25,6 +25,7 @@ import {
   UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
   isMaskedPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
+import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
 import type { CreateCustomerInput } from '@/types'
 
 interface CustomerFormProps {
@@ -77,6 +78,19 @@ export default function CustomerForm({
     default_payment_terms: z.number().min(1).optional(),
     notes: z.string().optional(),
   }).superRefine((customer, ctx) => {
+    // A personnummer entered as a business org number would be shown
+    // unmasked in every list (only individual customers are masked).
+    if (
+      customer.org_number &&
+      customer.customer_type !== 'individual' &&
+      looksLikeSwedishPersonalNumber(customer.org_number)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['org_number'],
+        message: t('org_number_looks_personal'),
+      })
+    }
     const cc = parseInvoiceRecipientText(customer.invoice_email_cc_addresses ?? '')
     const bcc = parseInvoiceRecipientText(customer.invoice_email_bcc_addresses ?? '')
     for (const [field, addresses] of [
@@ -417,6 +431,9 @@ export default function CustomerForm({
               placeholder={t('org_number_placeholder')}
               {...register('org_number')}
             />
+            {errors.org_number && (
+              <p className="text-sm text-destructive">{errors.org_number.message}</p>
+            )}
           </div>
 
           {(customerType === 'eu_business' || customerType === 'non_eu_business') && (

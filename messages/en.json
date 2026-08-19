@@ -1370,6 +1370,7 @@
     "personal_number_invalid": "Invalid personal number",
     "org_number_label": "Org. number",
     "org_number_placeholder": "XXXXXX-XXXX",
+    "org_number_looks_personal": "This looks like a Swedish personal identity number. Choose the customer type Individual instead, so it is stored protected and masked in lists.",
     "vat_label": "VAT number",
     "vat_placeholder_eu": "DE123456789",
     "vat_placeholder_se": "SE123456789001",

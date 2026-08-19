@@ -9,6 +9,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import type { Customer } from '@/types'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -57,6 +58,13 @@ export const POST = withRouteContext(
     if (!result.success) return result.response
     const body = result.data
 
+    // Unset payment terms follow the company's own default, not a hardcoded 30.
+    const defaultPaymentTerms = await resolveDefaultPaymentTerms(
+      supabase,
+      companyId!,
+      body.default_payment_terms,
+    )
+
     const { data, error } = await supabase
       .from('customers')
       .insert({
@@ -79,7 +87,7 @@ export const POST = withRouteContext(
         vat_number: body.vat_number,
         personal_number: encryptCustomerPersonalNumber(body.personal_number),
         language: body.language || 'sv',
-        default_payment_terms: body.default_payment_terms || 30,
+        default_payment_terms: defaultPaymentTerms,
         notes: body.notes,
       })
       .select()

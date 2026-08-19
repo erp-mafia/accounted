@@ -222,6 +222,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
       enqueueMany([
         { data: pendingOp },                         // fetch pending op
         { data: { id: 'op-1' } },                    // CAS claim
+        { data: null, error: null },                  // company_settings read (payment-terms default)
         { data: { id: 'cust-1', name: 'Acme AB' } }, // insert customer
         { data: null, error: null },                  // update pending op status
       ])

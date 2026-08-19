@@ -2234,6 +2234,13 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Personnummer kan endast sparas för privatkunder.',
     message_en: 'Personal numbers can only be stored for individual customers.',
   },
+  CUSTOMER_ORG_NUMBER_IS_PERSONAL: {
+    httpStatus: 400,
+    message_sv:
+      'Organisationsnumret ser ut som ett personnummer. Spara kunden som privatperson i stället, så lagras numret skyddat och maskeras i listor.',
+    message_en:
+      'The org number looks like a Swedish personal identity number. Save the customer as an individual instead, so the number is stored protected and masked in lists.',
+  },
   ARTICLE_DELETE_FAILED: {
     httpStatus: 500,
     message_sv: 'Artikeln kunde inte tas bort.',

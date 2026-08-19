@@ -69,6 +69,10 @@ function CustomersPageInner() {
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
+  // Company default payment terms (Inställningar → Fakturering). Prefilled
+  // into the new-customer form so it opens on the company's own default
+  // instead of a hardcoded 30.
+  const [companyDefaultTerms, setCompanyDefaultTerms] = useState<number | null>(null)
   const { toast } = useToast()
   const t = useTranslations('customers')
   const tCommon = useTranslations('common')
@@ -137,6 +141,22 @@ function CustomersPageInner() {
   useEffect(() => {
     fetchCustomers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    // Best-effort: the dialog falls back to 30 until (or unless) this lands.
+    let cancelled = false
+    fetch('/api/settings')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((json) => {
+        if (cancelled) return
+        const days = json?.data?.invoice_default_days
+        if (typeof days === 'number' && days > 0) setCompanyDefaultTerms(days)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   async function handleCreateCustomer(data: CreateCustomerInput) {
@@ -285,6 +305,11 @@ function CustomersPageInner() {
               <CustomerForm
                 onSubmit={handleCreateCustomer}
                 isLoading={isCreating}
+                initialData={
+                  companyDefaultTerms !== null
+                    ? { default_payment_terms: companyDefaultTerms }
+                    : undefined
+                }
               />
             </DialogContent>
           </Dialog>

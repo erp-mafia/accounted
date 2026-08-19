@@ -5,6 +5,7 @@ import { validateVatNumber } from '@/lib/vat/vies-client'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
 import { isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -93,6 +94,17 @@ export const PATCH = withRouteContext(
     const effectiveType = body.customer_type ?? existing.customer_type
     if (personalNumberSubmitted && body.personal_number && effectiveType !== 'individual') {
       return errorResponseFromCode('CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED', opLog, { requestId })
+    }
+
+    // GDPR art. 5.1 c: only customer_type='individual' rows get their
+    // identifiers masked, so a personnummer accepted as a business
+    // org_number would be displayed unmasked everywhere.
+    if (
+      body.org_number &&
+      effectiveType !== 'individual' &&
+      looksLikeSwedishPersonalNumber(body.org_number)
+    ) {
+      return errorResponseFromCode('CUSTOMER_ORG_NUMBER_IS_PERSONAL', opLog, { requestId })
     }
 
     const updateData: Record<string, unknown> = {}

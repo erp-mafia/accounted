@@ -25,6 +25,8 @@ import {
 import { roundOre } from '@/lib/money'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { validateVatNumber } from '@/lib/vat/vies-client'
+import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import {
   normalizeVatRateToDecimal,
   normalizeVatRateToFraction,
@@ -354,6 +356,30 @@ async function commitCreateCustomer(
     return { error: 'customer_number must be a string of at most 32 characters', status: 400 }
   }
 
+  // Same GDPR guard as CreateCustomerSchema: identifiers are only masked on
+  // customer_type='individual' rows, so a personnummer stored as a business
+  // org_number would be shown unmasked everywhere.
+  const orgNumber = (params.org_number as string) || null
+  if (
+    orgNumber &&
+    params.customer_type !== 'individual' &&
+    looksLikeSwedishPersonalNumber(orgNumber)
+  ) {
+    return {
+      error:
+        'org_number ser ut som ett personnummer. Skapa kunden som privatperson '
+        + '(customer_type=individual) i stället, så maskeras numret i listor.',
+      status: 400,
+    }
+  }
+
+  // Unset payment terms follow the company's own default, not a hardcoded 30.
+  const defaultPaymentTerms = await resolveDefaultPaymentTerms(
+    supabase,
+    companyId,
+    typeof params.payment_terms === 'number' ? params.payment_terms : undefined,
+  )
+
   const { data, error } = await supabase
     .from('customers')
     .insert({
@@ -363,9 +389,9 @@ async function commitCreateCustomer(
       customer_type: params.customer_type as string,
       customer_number: customerNumber || null,
       email: (params.email as string) || null,
-      org_number: (params.org_number as string) || null,
+      org_number: orgNumber,
       vat_number: (params.vat_number as string) || null,
-      default_payment_terms: (params.payment_terms as number) || 30,
+      default_payment_terms: defaultPaymentTerms,
       address_line1: (params.address as string) || null,
       postal_code: (params.postal_code as string) || null,
       city: (params.city as string) || null,
