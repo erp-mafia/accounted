@@ -26,6 +26,8 @@ import { Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { CompanyMigrationResetDialog } from '@/components/settings/CompanyMigrationResetDialog'
+import { CompanyMigrationArchiveRow } from '@/components/settings/CompanyMigrationArchiveRow'
 
 const branding = getBranding()
 
@@ -48,6 +50,7 @@ export function CompanyDangerZone() {
   const { company, role } = useCompany()
 
   const [showDialog, setShowDialog] = useState(false)
+  const [showResetDialog, setShowResetDialog] = useState(false)
   const [confirmText, setConfirmText] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
 
@@ -89,7 +92,21 @@ export function CompanyDangerZone() {
 
   return (
     <>
+      <CompanyMigrationArchiveRow companyId={company.id} />
+
       <SettingsDangerZone label={t('danger_heading')}>
+        <SettingsRow label={t('reset_row_label')}>
+          <SettingsRowNote>{t('reset_row_note')}</SettingsRowNote>
+          <SettingsRowEnd>
+            <button
+              type="button"
+              onClick={() => setShowResetDialog(true)}
+              className="text-sm font-medium text-destructive underline underline-offset-2 transition-colors duration-150 hover:text-destructive/80"
+            >
+              {t('reset_row_action')}
+            </button>
+          </SettingsRowEnd>
+        </SettingsRow>
         <SettingsRow
           label={t('danger_button')}
           borderless
@@ -173,6 +190,13 @@ export function CompanyDangerZone() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CompanyMigrationResetDialog
+        companyId={company.id}
+        companyName={company.name}
+        open={showResetDialog}
+        onOpenChange={setShowResetDialog}
+      />
     </>
   )
 }

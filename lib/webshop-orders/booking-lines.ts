@@ -25,8 +25,20 @@ import type {
  * this while total_sek is null (booking is blocked until FX resolves).
  */
 
-/** Fallback counter-account when no mapping exists: the old feed's ledger. */
-export const DEFAULT_PAYMENT_ACCOUNT = '1680'
+/**
+ * Fallback counter-account when no mapping exists.
+ *
+ * BAS 2026 1686 "Fordringar för kontokort och kuponger": money the payment
+ * provider is holding but has not paid out yet. This is the same ledger the
+ * Stripe extension settles against, so a store that runs both surfaces keeps
+ * one clearing account. 1680 "Andra kortfristiga fordringar" was used before
+ * and is the generic parent bucket, not the card/PSP receivable BAS defines
+ * for this; bas.se moved this receivable off 1580 onto 1686 precisely because
+ * it is a claim on the payment provider, not on the customer.
+ */
+export const DEFAULT_PAYMENT_ACCOUNT = '1686'
+/** BAS 2026 name for DEFAULT_PAYMENT_ACCOUNT; used when adding it to a chart. */
+export const DEFAULT_PAYMENT_ACCOUNT_NAME = 'Fordringar för kontokort och kuponger'
 
 /** Revenue account per Swedish VAT rate (BAS 2026). */
 const REVENUE_ACCOUNT_BY_RATE: Record<number, string> = {
@@ -45,6 +57,25 @@ const VAT_ACCOUNT_BY_RATE: Record<number, string> = {
 
 /** Öresavrundning. */
 const ROUNDING_ACCOUNT = '3740'
+
+/**
+ * Every account this prefill can emit, as a closed set.
+ *
+ * seed_chart_of_accounts() seeds a minimal chart: 3001/3002/3003 and
+ * 2611/2621/2631 are in it, but 3004, 3740 and the clearing account are not.
+ * The engine throws AccountsNotInChartError for an account that is missing or
+ * inactive, so an untouched company hit that error the moment an order had a
+ * rounding residual, a 0%-rate line, or no payment-method mapping. Callers
+ * pass this set to ensureWebshopPrefillAccounts() so the accounts our own
+ * prefill needs are added to the chart on first use, and only ever these:
+ * an account the user typed themselves is never auto-created.
+ */
+export const WEBSHOP_PREFILL_ACCOUNTS: readonly string[] = [
+  DEFAULT_PAYMENT_ACCOUNT,
+  ...Object.values(REVENUE_ACCOUNT_BY_RATE),
+  ...Object.values(VAT_ACCOUNT_BY_RATE),
+  ROUNDING_ACCOUNT,
+]
 
 /**
  * Resolve the prefilled payment counter-account for an order from the

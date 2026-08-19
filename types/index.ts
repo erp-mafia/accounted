@@ -54,6 +54,69 @@ export interface CompanyMember {
   updated_at: string
 }
 
+export const COMPANY_MIGRATION_RESET_COUNT_KEYS = [
+  'journal_entries',
+  'journal_entry_lines',
+  'committed_import_entries',
+  'transactions',
+  'fiscal_periods',
+  'documents',
+  'voucher_sequences',
+  'sie_imports',
+  'bank_file_imports',
+  'skattekonto_file_imports',
+  'customers',
+  'suppliers',
+  'invoices',
+  'supplier_invoices',
+  'bank_connections',
+] as const
+
+export type CompanyMigrationResetCountKey =
+  (typeof COMPANY_MIGRATION_RESET_COUNT_KEYS)[number]
+
+export type CompanyMigrationResetBlockerCode =
+  | 'company_not_found'
+  | 'company_already_archived'
+  | 'migration_window_expired'
+  | 'sandbox_company'
+  | 'locked_or_closed_periods'
+  | 'journal_entries_exist'
+  | 'non_import_committed_entries'
+  | 'voucher_sequence_state_exists'
+  | 'invoice_records_exist'
+  | 'authority_submission_detected'
+  | 'live_bank_connections'
+  | 'imports_in_progress'
+  | 'active_integrations_or_schedules'
+  | 'background_work_in_progress'
+
+export interface CompanyMigrationResetBlocker {
+  code: CompanyMigrationResetBlockerCode
+  count: number
+}
+
+export interface CompanyMigrationResetEligibility {
+  eligible: boolean
+  display_name: string
+  created_at: string
+  window_ends_at: string
+  counts: Record<CompanyMigrationResetCountKey, number>
+  blockers: CompanyMigrationResetBlocker[]
+}
+
+export interface CompanyMigrationResetRpcResult {
+  ok: boolean
+  code?: string
+  details?: unknown
+  eligibility?: CompanyMigrationResetEligibility
+  reset_id?: string
+  source_company_id?: string
+  replacement_company_id?: string
+  archived_at?: string
+  counts?: CompanyMigrationResetEligibility['counts']
+}
+
 // User preferences (cross-company)
 export interface UserPreferences {
   id: string
@@ -1610,6 +1673,14 @@ export interface CreateTransactionInput {
 export interface ApiResponse<T> {
   data?: T
   error?: string
+}
+
+export interface ArchiveEstimate {
+  total_bytes: number
+  document_bytes: number
+  document_count: number
+  size_limit_bytes: number
+  within_limit: boolean
 }
 
 export interface PaginatedResponse<T> {

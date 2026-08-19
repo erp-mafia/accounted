@@ -1,3 +1,4 @@
+import { flagEnabled } from '@/lib/env/public-flags'
 import type { AnnualReportEligibilityResult, AnnualReportFramework } from './compliance-types'
 
 export interface AnnualReportCapabilities {
@@ -17,14 +18,15 @@ export interface AnnualReportCapabilities {
   }
 }
 
-export const CONNECTED_FILING_PUBLIC_RELEASED =
-  process.env.NEXT_PUBLIC_BOLAGSVERKET_FILING_ENABLED === 'true'
+export const CONNECTED_FILING_PUBLIC_RELEASED = flagEnabled(
+  process.env.NEXT_PUBLIC_BOLAGSVERKET_FILING_ENABLED,
+)
 
 export function getAnnualReportCapabilities(
   framework: AnnualReportFramework,
   eligibility?: AnnualReportEligibilityResult,
 ): AnnualReportCapabilities {
-  const releaseGateOpen = process.env.NEXT_PUBLIC_BOLAGSVERKET_FILING_ENABLED === 'true'
+  const releaseGateOpen = flagEnabled(process.env.NEXT_PUBLIC_BOLAGSVERKET_FILING_ENABLED)
   const ixbrlEnabled = framework === 'k2'
   const eligible = eligibility?.digital_filing_eligible ?? false
   return {

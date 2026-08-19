@@ -317,6 +317,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <div className="space-y-2">
                 <Label htmlFor="employment_degree">{t('form_employment_degree')}</Label>
                 <Input id="employment_degree" name="employment_degree" type="number" defaultValue={employee.employment_degree} min="1" max="100" disabled={!canWrite} />
+                <p className="text-xs text-muted-foreground">{t('form_employment_degree_hint')}</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="hours_per_week">{t('form_hours_per_week')}</Label>

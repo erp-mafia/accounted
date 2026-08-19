@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from '../../../tests/pg/setup'
 import { seedCompany, insertAuthUser, insertCompany } from '../../../tests/pg/fixtures'
+import { PAID_CAPABILITIES } from '../keys'
 
 // pg-real coverage for migrations 20260628140000 (capability_grants /
 // company_capability_config / metered_events + company_has_capability RPC +
@@ -186,7 +187,7 @@ describe('capability_grants scope constraint', () => {
   })
 })
 
-describe('trial grant seeding trigger (20260629120000)', () => {
+describe('trial grant seeding trigger (20260629120000, widened 20260818170000)', () => {
   it('grants a new company a 30-day trial on the PAID keys at creation', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
@@ -199,7 +200,10 @@ describe('trial grant seeding trigger (20260629120000)', () => {
        WHERE company_id = $1 ORDER BY capability_key`,
       [companyId],
     )
-    expect(rows.map((r) => r.capability_key)).toEqual(['ai', 'bank_sync', 'email_send', 'skatteverket'])
+    // Every PAID key, compared against the constant itself so the trigger's
+    // hardcoded list (20260629120000, widened 20260818170000) can never drift
+    // from PAID_CAPABILITIES again without this test failing.
+    expect(rows.map((r) => r.capability_key)).toEqual([...PAID_CAPABILITIES].sort())
     expect(rows.every((r) => r.source === 'trial')).toBe(true)
     expect(rows.every((r) => r.expires_at !== null)).toBe(true)
     expect(await rpc(companyId, 'ai')).toBe(true)

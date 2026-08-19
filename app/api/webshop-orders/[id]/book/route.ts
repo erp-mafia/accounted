@@ -8,6 +8,7 @@ import { BookWebshopOrderSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { ensureWebshopPrefillAccounts } from '@/lib/webshop-orders/ensure-accounts'
 import { roundOre } from '@/lib/money'
 import type { Currency, WebshopOrder } from '@/types'
 
@@ -140,6 +141,19 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // with a conditional update BEFORE anything gets a voucher number: the
     // loser's claim matches zero rows and its draft (no voucher yet, so no
     // series gap) is cancelled.
+    // The prefill can legitimately reach 3004, 3740 and the 1686 clearing
+    // account, none of which seed_chart_of_accounts() seeds. Without this the
+    // first Bokför on a fresh company died on AccountsNotInChartError for an
+    // account the user never chose. Only our own closed prefill set is added,
+    // and failures here are swallowed so the engine's typed error still wins.
+    await ensureWebshopPrefillAccounts(
+      supabase,
+      companyId,
+      user.id,
+      lines.map((l) => l.account_number),
+      log,
+    )
+
     let draft
     try {
       draft = await createDraftEntry(supabase, companyId, user.id, {

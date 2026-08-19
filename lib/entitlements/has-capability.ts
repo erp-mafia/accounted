@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import { PAID_CAPABILITIES, type CapabilityKey } from './keys'
 
 /**
@@ -18,10 +19,13 @@ import { PAID_CAPABILITIES, type CapabilityKey } from './keys'
  * validated API key for MCP): never taken from untrusted input here.
  */
 
-/** Self-hosted deployments are all-on: the gate never withholds anything. */
-function isSelfHosted(): boolean {
-  return process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
-}
+/**
+ * Self-hosted deployments are all-on: the gate never withholds anything.
+ *
+ * Read through lib/env/public-flags: comparing process.env.NEXT_PUBLIC_* in
+ * place gets constant-folded out of the Docker build, which is exactly how
+ * every self-hosted install ended up running behind this paywall.
+ */
 
 /**
  * Local development is all-on so every gated feature is testable without a

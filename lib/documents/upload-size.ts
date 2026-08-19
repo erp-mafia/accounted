@@ -15,6 +15,8 @@
  * governs there and none of this applies.
  */
 
+import { isSelfHosted } from '@/lib/env/public-flags'
+
 /** The platform's hard ceiling on a request body. */
 export const HOSTED_REQUEST_BODY_LIMIT_BYTES = Math.round(4.5 * 1024 * 1024)
 
@@ -26,7 +28,7 @@ export const HOSTED_REQUEST_BODY_LIMIT_BYTES = Math.round(4.5 * 1024 * 1024)
 export const HOSTED_MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 
 export function isHostedDeployment(): boolean {
-  return process.env.NEXT_PUBLIC_SELF_HOSTED !== 'true'
+  return !isSelfHosted()
 }
 
 /**

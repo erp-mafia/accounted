@@ -5,6 +5,7 @@ import {
   resolveBookingWarnings,
   resolvePaymentAccount,
   DEFAULT_PAYMENT_ACCOUNT,
+  WEBSHOP_PREFILL_ACCOUNTS,
 } from '../booking-lines'
 import type { CreateJournalEntryLineInput, WebshopStoreSettings } from '@/types'
 
@@ -65,12 +66,45 @@ describe('resolvePaymentAccount', () => {
     expect(result.invoiceMode).toBe(true)
   })
 
-  it('falls back to 1680 when unmapped or without settings', () => {
+  it('falls back to the 1686 clearing account when unmapped or without settings', () => {
     expect(resolvePaymentAccount(makeOrder({ payment_method: 'stripe' }), settings).account).toBe(
       DEFAULT_PAYMENT_ACCOUNT,
     )
     expect(resolvePaymentAccount(makeOrder(), null).account).toBe(DEFAULT_PAYMENT_ACCOUNT)
     expect(resolvePaymentAccount(makeOrder({ payment_method: null }), settings).mapped).toBe(false)
+  })
+
+  it('defaults to BAS 1686, the card/PSP receivable, not the 1680 parent', () => {
+    expect(DEFAULT_PAYMENT_ACCOUNT).toBe('1686')
+  })
+})
+
+describe('WEBSHOP_PREFILL_ACCOUNTS', () => {
+  it('covers every account the builder can emit', () => {
+    // Guards the ensure-accounts contract: an account the prefill emits but
+    // this set omits would resurface as AccountsNotInChartError in booking.
+    const emitted = new Set<string>()
+    for (const rate of [25, 12, 6, 0]) {
+      for (const lineSet of [
+        buildOrderBookingLines({
+          order: makeOrder({
+            total: 100.01,
+            total_tax: rate === 0 ? 0 : 20,
+            vat_breakdown: [{ rate, net: 80, tax: rate === 0 ? 0 : 20 }],
+          }),
+          settings: null,
+        }),
+      ]) {
+        for (const line of lineSet) emitted.add(line.account_number)
+      }
+    }
+    for (const account of emitted) {
+      expect(WEBSHOP_PREFILL_ACCOUNTS).toContain(account)
+    }
+    // The residual account is only reachable through rounding drift; assert
+    // it explicitly so the set never silently loses it.
+    expect(WEBSHOP_PREFILL_ACCOUNTS).toContain('3740')
+    expect(WEBSHOP_PREFILL_ACCOUNTS).toContain('3004')
   })
 })
 

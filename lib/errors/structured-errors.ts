@@ -447,6 +447,16 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Transaktionen kategoriserades av en annan förfrågan. Ladda om och försök igen.',
     message_en: 'Transaction was already categorized by another request.',
   },
+  TX_CATEGORIZE_IGNORED_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är fortfarande markerad som ignorerad och kan därför inte kopplas till en verifikation.',
+    message_en:
+      'The transaction is still marked as ignored and cannot be linked to a journal entry.',
+    remediation: {
+      description: 'Reload and retry categorization. Report the conflict if it persists.',
+    },
+  },
   TX_CATEGORIZE_SUGGEST_SI_MATCH: {
     httpStatus: 409,
     message_sv:
@@ -2697,6 +2707,41 @@ const COMPANY: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Företaget kunde inte skapas.',
     message_en: 'Failed to create company.',
+  },
+  COMPANY_RESET_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Företaget kunde inte hittas.',
+    message_en: 'Company not found.',
+  },
+  COMPANY_RESET_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Endast företagets ägare kan starta om en migrering.',
+    message_en: 'Only the company owner can reset a migration.',
+  },
+  COMPANY_RESET_INELIGIBLE: {
+    httpStatus: 409,
+    message_sv: 'Företaget kan inte återställas med självservice. Kontakta supporten för en individuell bedömning.',
+    message_en: 'The company is not eligible for a self-service reset. Contact support for an individual review.',
+  },
+  COMPANY_RESET_CONFIRMATION_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Företagsnamnet stämmer inte överens.',
+    message_en: 'The company name does not match.',
+  },
+  COMPANY_RESET_REASON_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Beskriv varför migreringen behöver göras om med 20 till 1 000 tecken.',
+    message_en: 'Explain why the migration must be redone using 20 to 1,000 characters.',
+  },
+  COMPANY_RESET_CONFIRMATION_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Alla säkerhetsbekräftelser krävs.',
+    message_en: 'All safety confirmations are required.',
+  },
+  COMPANY_RESET_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Migreringen kunde inte startas om. Inga ändringar har sparats.',
+    message_en: 'The migration reset failed. No changes were saved.',
   },
 }
 

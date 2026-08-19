@@ -43,6 +43,13 @@ vi.mock('@/lib/currency/riksbanken', () => ({
   fetchExchangeRate: (...args: unknown[]) => mockFetchExchangeRate(...args),
 }))
 
+// Behaviour lives in lib/webshop-orders/__tests__/ensure-accounts.test.ts; here
+// we only assert that the route hands it the accounts it is about to book.
+const mockEnsureAccounts = vi.fn().mockResolvedValue(undefined)
+vi.mock('@/lib/webshop-orders/ensure-accounts', () => ({
+  ensureWebshopPrefillAccounts: (...args: unknown[]) => mockEnsureAccounts(...args),
+}))
+
 import { POST } from '../[id]/book/route'
 
 const PERIOD_UUID = '550e8400-e29b-41d4-a716-446655440000'
@@ -198,6 +205,26 @@ describe('POST /api/webshop-orders/[id]/book', () => {
     const { status } = await parseJsonResponse(await postBook())
     expect(status).toBe(200)
     expect(mockCommitEntry).toHaveBeenCalled()
+  })
+
+  it('ensures the prefill accounts exist in the chart before drafting', async () => {
+    // Regression: seed_chart_of_accounts() does not seed 1686/3740/3004, so a
+    // fresh company used to hit AccountsNotInChartError on its first Bokför.
+    enqueue({ data: makeOrderRow() })
+    enqueue({ data: [{ id: 'order-1' }] }) // claim
+    const { status } = await parseJsonResponse(await postBook())
+    expect(status).toBe(200)
+    expect(mockEnsureAccounts).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      validBody.lines.map((l) => l.account_number),
+      expect.anything(),
+    )
+    // Order matters: the chart must be repaired before the engine reads it.
+    expect(mockEnsureAccounts.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCreateDraftEntry.mock.invocationCallOrder[0],
+    )
   })
 
   it('returns 422 when a non-SEK order has no rate and the retry fails', async () => {

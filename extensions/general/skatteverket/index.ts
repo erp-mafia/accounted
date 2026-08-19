@@ -973,6 +973,14 @@ export const skatteverketExtension: Extension = {
             `/las/${redovisare}/${redovisningsperiod}`
           )
 
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'declaration/lock',
+            agRegistreradId: redovisare,
+            redovisningsperiod,
+            outcome: response.ok ? 'ok' : 'skv_error',
+            responseStatus: response.status,
+          })
+
           if (!response.ok) {
             const text = await response.text()
             return NextResponse.json(

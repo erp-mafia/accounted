@@ -5,10 +5,11 @@ import { useTranslations } from 'next-intl'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsRow } from '@/components/settings/SettingsRows'
+import { isSelfHosted as readSelfHostedFlag } from '@/lib/env/public-flags'
 
 // Session timeouts are a hosted concern: self-hosted deployments have them
 // disabled at the config level, so the toggle would be a no-op there.
-const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
+const isSelfHosted = readSelfHostedFlag()
 
 /**
  * Per-user opt-in for automatic logout. Off by default: the session then

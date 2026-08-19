@@ -3640,3 +3640,32 @@ export const SkattekontoFileExecuteSchema = z.object({
   variant: z.enum(['csv', 'skv']),
   closing_saldo: z.number().finite().nullable().optional(),
 })
+
+// ============================================================
+// Company migration reset
+// ============================================================
+
+/**
+ * POST /api/company/[id]/migration-reset
+ *
+ * Every confirmation is required independently. The database repeats these
+ * checks inside the atomic RPC, including the exact display-name match.
+ */
+export const CompanyMigrationResetSchema = z.object({
+  confirm_name: z
+    .string()
+    .trim()
+    .min(1, 'Ange företagsnamnet exakt som det visas')
+    .max(200, 'Företagsnamnet får vara högst 200 tecken'),
+  reason: z
+    .string()
+    .trim()
+    .min(20, 'Beskriv varför migreringen behöver göras om med minst 20 tecken')
+    .max(1000, 'Beskrivningen får vara högst 1 000 tecken'),
+  confirm_no_filed_declarations: z.literal(true, {
+    error: 'Bekräfta att inga deklarationer eller årsredovisningar har lämnats in',
+  }),
+  confirm_retained_archive: z.literal(true, {
+    error: 'Bekräfta att den tidigare företagskopian sparas som arkiv',
+  }),
+})

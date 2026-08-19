@@ -12,6 +12,7 @@ import {
   SettingsInput,
 } from '@/components/settings/SettingsRows'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
+import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
 import type { WebshopPaymentMethodPolicy, WebshopPlatform, WebshopStoreSettings } from '@/types'
 
 interface PaymentMethodMappingFormProps {
@@ -117,7 +118,9 @@ export function PaymentMethodMappingForm({
         ...prev,
         [method]: {
           mode: 'book',
-          account: current?.mode === 'book' ? current.account : '1680',
+          // Same constant the booking prefill falls back to: a hardcoded
+          // number here would silently drift from it (it just did).
+          account: current?.mode === 'book' ? current.account : DEFAULT_PAYMENT_ACCOUNT,
         },
       }
     })

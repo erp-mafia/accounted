@@ -6,6 +6,7 @@
  */
 
 import crypto from 'crypto'
+import { flagEnabled, isSelfHosted } from '@/lib/env/public-flags'
 
 const ALGORITHM = 'aes-256-gcm'
 
@@ -14,8 +15,8 @@ const ALGORITHM = 'aes-256-gcm'
 // ---------------------------------------------------------------------------
 
 export function isBankIdEnabled(): boolean {
-  if (process.env.NEXT_PUBLIC_SELF_HOSTED === 'true') return false
-  return process.env.NEXT_PUBLIC_BANKID_ENABLED === 'true'
+  if (isSelfHosted()) return false
+  return flagEnabled(process.env.NEXT_PUBLIC_BANKID_ENABLED)
 }
 
 // ---------------------------------------------------------------------------
