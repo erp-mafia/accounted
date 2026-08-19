@@ -134,17 +134,22 @@ export async function checkDuplicateImport(
 }
 
 /**
- * Check if a completed SIE import already exists for the same fiscal year period.
- * Prevents importing two different SIE files that cover the same accounting period,
- * which would create duplicate verifikationer violating BFL 4:1 (löpande bokföring).
- * Only blocks on status='completed': failed/pending imports don't prevent retries.
+ * Every completed SIE import whose fiscal year overlaps the given range,
+ * newest first (imported_at desc, created_at as tiebreak).
+ *
+ * More than one row can overlap the same räkenskapsår: a manual upload plus
+ * a provider sync, or residue from partially deleted data. The old
+ * `.limit(1).maybeSingle()` shape picked an arbitrary row in that case, so
+ * the replace flow resolved one watermark and left the others standing,
+ * permanently blocking a re-sync of that year (issue #1667). Callers that
+ * resolve prior imports must handle every returned row.
  */
-export async function checkDuplicatePeriodImport(
+export async function findOverlappingPeriodImports(
   supabase: SupabaseClient,
   companyId: string,
   fiscalYearStart: string,
   fiscalYearEnd: string
-): Promise<SIEImport | null> {
+): Promise<SIEImport[]> {
   // Range overlap check: start <= other_end AND end >= other_start.
   // Two imports whose räkenskapsår overlap would produce duplicate
   // verifikationer, violating BFL 4:1 (löpande bokföring).
@@ -155,10 +160,30 @@ export async function checkDuplicatePeriodImport(
     .eq('status', 'completed')
     .lte('fiscal_year_start', fiscalYearEnd)
     .gte('fiscal_year_end', fiscalYearStart)
-    .limit(1)
-    .maybeSingle()
+    .order('imported_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
 
-  return data as SIEImport | null
+  return (data ?? []) as SIEImport[]
+}
+
+/**
+ * Check if a completed SIE import already exists for the same fiscal year period.
+ * Prevents importing two different SIE files that cover the same accounting period,
+ * which would create duplicate verifikationer violating BFL 4:1 (löpande bokföring).
+ * Only blocks on status='completed': failed/pending imports don't prevent retries.
+ * When several rows overlap, the newest is returned (deterministic, see
+ * findOverlappingPeriodImports).
+ */
+export async function checkDuplicatePeriodImport(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalYearStart: string,
+  fiscalYearEnd: string
+): Promise<SIEImport | null> {
+  const overlapping = await findOverlappingPeriodImports(
+    supabase, companyId, fiscalYearStart, fiscalYearEnd
+  )
+  return overlapping[0] ?? null
 }
 
 /**
@@ -209,13 +234,25 @@ async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<Supabas
  * actor the gate can never match and always raises. Making the parameter
  * required means a caller that has no authenticated user fails to compile
  * rather than discovering the closed gate at runtime.
+ *
+ * On failure `code` classifies why, so callers can tell a stale watermark
+ * (the row vanished or already left 'completed': nothing left to replace,
+ * safe to proceed as a fresh import) from a real refusal (locked period,
+ * authorization, RPC failure) that must abort.
  */
+export type ReplaceSIEImportResult = {
+  success: boolean
+  deletedEntries: number
+  error?: string
+  code?: 'not_found' | 'not_completed' | 'period_locked' | 'rpc_error'
+}
+
 export async function replaceSIEImport(
   supabase: SupabaseClient,
   companyId: string,
   importId: string,
   userId: string
-): Promise<{ success: boolean; deletedEntries: number; error?: string }> {
+): Promise<ReplaceSIEImportResult> {
   // 1. Fetch and validate the import record
   const { data: importRecord } = await supabase
     .from('sie_imports')
@@ -225,11 +262,11 @@ export async function replaceSIEImport(
     .single()
 
   if (!importRecord) {
-    return { success: false, deletedEntries: 0, error: 'Import hittades inte' }
+    return { success: false, deletedEntries: 0, error: 'Import hittades inte', code: 'not_found' }
   }
 
   if (importRecord.status !== 'completed') {
-    return { success: false, deletedEntries: 0, error: `Kan bara ersätta slutförda importer (status: ${importRecord.status})` }
+    return { success: false, deletedEntries: 0, error: `Kan bara ersätta slutförda importer (status: ${importRecord.status})`, code: 'not_completed' }
   }
 
   // 2. Check that the fiscal period is not closed or locked
@@ -242,7 +279,7 @@ export async function replaceSIEImport(
       .single()
 
     if (period?.is_closed || period?.locked_at) {
-      return { success: false, deletedEntries: 0, error: 'Kan inte ersätta import i ett låst eller stängt räkenskapsår. Öppna perioden först.' }
+      return { success: false, deletedEntries: 0, error: 'Kan inte ersätta import i ett låst eller stängt räkenskapsår. Öppna perioden först.', code: 'period_locked' }
     }
   }
 
@@ -259,7 +296,16 @@ export async function replaceSIEImport(
   })
 
   if (rpcError) {
-    return { success: false, deletedEntries: 0, error: `Kunde inte ersätta import: ${rpcError.message}` }
+    // The RPC re-checks status inside its transaction; a row that lost the
+    // race between our pre-check and the RPC surfaces here as "not found or
+    // not in completed status": classify it as the stale watermark it is.
+    const staleRace = /not found or not in completed status/i.test(rpcError.message)
+    return {
+      success: false,
+      deletedEntries: 0,
+      error: `Kunde inte ersätta import: ${rpcError.message}`,
+      code: staleRace ? 'not_completed' : 'rpc_error',
+    }
   }
 
   return { success: true, deletedEntries: deletedCount as number }
@@ -1890,10 +1936,13 @@ export async function loadMappings(supabase: SupabaseClient, companyId: string):
  * the new SIE's fiscal year is handled:
  *   - 'block' (default): refuse with a Swedish error. Used by the manual
  *     upload route in app/api/import/sie. Preserves prior behavior.
- *   - 'replace': automatically call replaceSIEImport on the prior row
- *     (marks it 'replaced', cancels its imported journal entries) and
- *     proceed. Used by the Fortnox re-sync flow so the user can pull
- *     updated data from Fortnox without manual cleanup.
+ *   - 'replace': automatically call replaceSIEImport on EVERY overlapping
+ *     completed row (marks them 'replaced', cancels their imported journal
+ *     entries) and proceed. A row that can no longer be resolved (deleted
+ *     or already left 'completed') is a stale watermark: it is skipped with
+ *     a warning and the year imports fresh (issue #1667). Used by the
+ *     provider re-sync flow so the user can pull updated data without
+ *     manual cleanup.
  *
  * Replace only cancels journal entries with source_type='import'; entries
  * the user created natively in Accounted (categorized transactions, invoices,
@@ -1987,34 +2036,60 @@ export async function executeSIEImport(
       return result
     }
 
-    // Replace mode: if a prior completed import overlaps the new SIE's fiscal
-    // year, mark it 'replaced' (and cancel its imported entries) before we
+    // Replace mode: if prior completed imports overlap the new SIE's fiscal
+    // year, mark them 'replaced' (and cancel their imported entries) before we
     // try to insert. Done before checkDuplicateImport / checkDuplicatePeriodImport
     // since both of those would otherwise reject the replace flow.
+    //
+    // ALL overlapping rows are resolved, not just the newest: more than one
+    // completed row can cover the same year (manual upload + provider sync,
+    // or residue from partially deleted data), and leaving one standing
+    // permanently blocks or corrupts the next re-sync of that year
+    // (issue #1667).
     if (onExistingPeriod === 'replace') {
       const fyStart = parsed.stats.fiscalYearStart
       const fyEnd = parsed.stats.fiscalYearEnd
       if (fyStart && fyEnd) {
-        const priorPeriodImport = await checkDuplicatePeriodImport(
+        const priorPeriodImports = await findOverlappingPeriodImports(
           supabase, companyId, fyStart, fyEnd
         )
-        if (priorPeriodImport) {
+        let replacedNewestId: string | null = null
+        let replacedDeletedEntries = 0
+        for (const priorPeriodImport of priorPeriodImports) {
           // Pass the authorising user: this path often runs on an API-key /
           // MCP client where auth.uid() is NULL, and the replace_sie_import
           // owner/admin gate would otherwise fail closed.
           const replaceResult = await replaceSIEImport(
             supabase, companyId, priorPeriodImport.id, userId
           )
+
           if (!replaceResult.success) {
+            // Stale watermark: the sie_imports row is gone or no longer
+            // 'completed' (its data was already deleted or another actor
+            // resolved it). There is nothing left to replace for that row,
+            // so treat this year as a fresh import instead of stranding the
+            // user between states (issue #1667: re-sync could not re-import
+            // an earlier fiscal year after deletion).
+            if (replaceResult.code === 'not_found' || replaceResult.code === 'not_completed') {
+              result.warnings.push(
+                `Tidigare import ${priorPeriodImport.id} kunde inte ersättas (${replaceResult.error ?? 'okänd orsak'}): dess data är redan borttagen, importen fortsätter som ny import.`
+              )
+              continue
+            }
+            // Real refusals (låst/stängd period, behörighet, RPC-fel) still
+            // abort the year: importing on top of entries we could not
+            // delete would duplicate verifikationer.
             result.errors.push(
               replaceResult.error ?? 'Kunde inte ersätta tidigare SIE-import'
             )
             return result
           }
-          result.replacedPriorImport = {
-            importId: priorPeriodImport.id,
-            deletedEntries: replaceResult.deletedEntries,
-          }
+
+          // Rows arrive newest first: report the newest replaced import's id
+          // (the shape consumers already render) with the total entries
+          // deleted across every replaced row.
+          replacedNewestId ??= priorPeriodImport.id
+          replacedDeletedEntries += replaceResult.deletedEntries
 
           // The replace_sie_import RPC clears fiscal_periods
           // opening_balance_entry_id and opening_balances_set inside its
@@ -2032,6 +2107,12 @@ export async function executeSIEImport(
               .eq('id', priorPeriodImport.fiscal_period_id)
               .eq('company_id', companyId)
               .eq('opening_balance_entry_id', priorPeriodImport.opening_balance_entry_id)
+          }
+        }
+        if (replacedNewestId) {
+          result.replacedPriorImport = {
+            importId: replacedNewestId,
+            deletedEntries: replacedDeletedEntries,
           }
         }
       }
