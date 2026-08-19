@@ -217,6 +217,18 @@ const LUNAR_CSV_2026 = '\uFEFF' + [
   '2026-05-12,05:47,Card purchase,"-2 500,00","86 421,43",7f0a4c9e-1111-2222-3333-444455558888',
 ].join('\n')
 
+// The same 2026 Lunar export downloaded with the app in Swedish: identical
+// layout, translated headers. "Transaktions-ID" contains the substring
+// "transaktion", which used to make Nordea's substring detector claim the file
+// and parse the Tid column as the description (2026-08-18 report, 117 rows
+// titled "21:30", "08:38").
+const LUNAR_CSV_2026_SV = '\uFEFF' + [
+  'Datum,Tid,Titel,Belopp,Balans,Transaktions-ID,Utländska belopp',
+  '2026-08-15,21:30,Bankgironummer avgift,"-39,00","13 034,28",3464e5f2-aaaa-bbbb-cccc-111122223333,',
+  '2026-08-15,08:38,Lunar Plan Essential,"-119,00","13 073,28",3464e5f2-aaaa-bbbb-cccc-444455556666,',
+  '2026-08-13,20:12,STRIPE Shopi,"-5 058,13","13 192,28",3464e5f2-aaaa-bbbb-cccc-777788889999,"-456,30 EUR"',
+].join('\n')
+
 // Northmill exports include a 5-line metadata preamble (Kontonummer, Saldo,
 // Kontohavare, Org. Nr, Period) plus blank lines before the actual transaction
 // header. Negative amounts use Unicode minus (U+2212), not ASCII hyphen.
@@ -420,6 +432,25 @@ describe('detectFileFormat', () => {
     const format = detectFileFormat(LUNAR_CSV, 'lunar.csv')
     expect(format).not.toBeNull()
     expect(format!.id).toBe('lunar')
+  })
+
+  it('detects a Swedish-header Lunar export as lunar, not nordea', () => {
+    // Regression: Nordea is checked first and matched "transaktion" as a
+    // substring of "Transaktions-ID", so it won and mangled the file.
+    const format = detectFileFormat(LUNAR_CSV_2026_SV, 'transactions.csv')
+    expect(format).not.toBeNull()
+    expect(format!.id).toBe('lunar')
+  })
+
+  it('parses the Swedish Lunar export with Titel as the description', () => {
+    const format = detectFileFormat(LUNAR_CSV_2026_SV, 'transactions.csv')
+    const result = format!.parse(LUNAR_CSV_2026_SV)
+    expect(result.transactions).toHaveLength(3)
+    // The bug put the Tid column here ("21:30").
+    expect(result.transactions[0].description).toBe('Bankgironummer avgift')
+    expect(result.transactions[0].amount).toBe(-39)
+    expect(result.transactions[2].amount).toBe(-5058.13)
+    expect(result.transactions.some((t) => /^\d{1,2}:\d{2}$/.test(t.description))).toBe(false)
   })
 
   it('detects the 2026 Lunar CSV header (Title column, BOM) as lunar', () => {

@@ -8,7 +8,10 @@
  * Encoding: UTF-8, may start with a BOM
  *
  * Notes:
- * - English headers distinguish Lunar from Nordea (Swedish headers)
+ * - Lunar exports in the app's display language, so the same file ships with
+ *   English (Date, Time, Title, Amount, Balance) or Swedish (Datum, Tid,
+ *   Titel, Belopp, Balans) headers. Both sets are accepted. Nordea is still
+ *   distinguishable: it has Transaktion and Saldo, never Titel and Balans.
  * - Amounts use comma as decimal separator but are quoted since the file
  *   delimiter is also comma
  * - The delimiter is sniffed from the header line: the documented export is
@@ -57,12 +60,26 @@ function parseLunarHeader(headerLine: string, delimiter: string): string[] {
  * balance" is never claimed. Exact cells are also what parse() resolves on,
  * so detect() can never accept a header parse() then rejects.
  */
+const DATE_HEADERS = ['date', 'datum']
+/** Ordered by preference: the 2026 export's "title", then the legacy "text". */
+const DESC_HEADERS = ['title', 'titel', 'text']
+const AMOUNT_HEADERS = ['amount', 'belopp']
+const BALANCE_HEADERS = ['balance', 'balans']
+
+function firstIndexOf(headers: string[], candidates: string[]): number {
+  for (const candidate of candidates) {
+    const index = headers.indexOf(candidate)
+    if (index !== -1) return index
+  }
+  return -1
+}
+
 function isLunarHeader(cells: string[]): boolean {
   return (
-    cells.includes('date') &&
-    (cells.includes('title') || cells.includes('text')) &&
-    cells.includes('amount') &&
-    cells.includes('balance')
+    firstIndexOf(cells, DATE_HEADERS) !== -1 &&
+    firstIndexOf(cells, DESC_HEADERS) !== -1 &&
+    firstIndexOf(cells, AMOUNT_HEADERS) !== -1 &&
+    firstIndexOf(cells, BALANCE_HEADERS) !== -1
   )
 }
 
@@ -80,16 +97,16 @@ function parseLunarAmount(value: string): number {
 export const lunarFormat: BankFileFormat = {
   id: 'lunar',
   name: 'Lunar',
-  description: 'Lunar CSV (comma-delimited, English headers)',
+  description: 'Lunar CSV (comma-delimited, English or Swedish headers)',
   fileExtensions: ['.csv', '.txt'],
 
   detect(content: string, _filename: string): boolean {
     const prepared = prepareContent(content)
     const firstLine = prepared.split('\n')[0] || ''
-    // Lunar: English headers "date", "amount", "balance" and a description
-    // column: "title" (2026 export) or "text" (legacy export). Delimiter is
-    // sniffed (comma, semicolon or tab); the Swedish-header banks are all
-    // checked before this format, so the English set is what distinguishes it.
+    // Lunar: a date, description, amount and balance column, in English or
+    // Swedish. Delimiter is sniffed (comma, semicolon or tab). Nordea keeps
+    // priority in the registry and is now matched on whole cells, so a Swedish
+    // Lunar export no longer lands there (2026-08-18 report).
     return isLunarHeader(parseLunarHeader(firstLine, sniffLunarDelimiter(firstLine)))
   },
 
@@ -106,12 +123,10 @@ export const lunarFormat: BankFileFormat = {
     const delimiter = sniffLunarDelimiter(headerLine)
     const headers = parseLunarHeader(headerLine, delimiter)
 
-    const dateIdx = headers.findIndex((h) => h === 'date')
-    // "title" is the 2026 export's description column; "text" is the legacy one
-    const titleIdx = headers.findIndex((h) => h === 'title')
-    const descIdx = titleIdx !== -1 ? titleIdx : headers.findIndex((h) => h === 'text')
-    const amountIdx = headers.findIndex((h) => h === 'amount')
-    const balanceIdx = headers.findIndex((h) => h === 'balance')
+    const dateIdx = firstIndexOf(headers, DATE_HEADERS)
+    const descIdx = firstIndexOf(headers, DESC_HEADERS)
+    const amountIdx = firstIndexOf(headers, AMOUNT_HEADERS)
+    const balanceIdx = firstIndexOf(headers, BALANCE_HEADERS)
 
     if (dateIdx === -1 || amountIdx === -1) {
       issues.push({
