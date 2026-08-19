@@ -19,7 +19,7 @@ export default function PrivacyPolicyPage() {
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-08-17
+            Senast uppdaterad: 2026-08-19
           </p>
         </div>
 
@@ -133,9 +133,11 @@ export default function PrivacyPolicyPage() {
                     <td className="py-2 pr-4 font-medium">Amazon Web Services (AWS)</td>
                     <td className="py-2 pr-4">
                       AI-inferens (kategorisering samt dokument- och
-                      kvittotolkning) via Amazon Bedrock. Bearbetar bokföringsdata
-                      och uppladdade underlag: endast när AI-funktioner är
-                      aktiverade.
+                      kvittotolkning) med Anthropics Claude-modeller, körda
+                      helt inom Amazon Bedrock. Uppgifterna delas inte med
+                      Anthropic, som är modelleverantör men inte underbiträde.
+                      Bearbetar bokföringsdata och uppladdade underlag: endast
+                      när AI-funktioner är aktiverade.
                     </td>
                     <td className="py-2 pr-4">EU (eu-north-1, Stockholm)</td>
                     <td className="py-2">
@@ -158,12 +160,17 @@ export default function PrivacyPolicyPage() {
                       användar-ID, e-postadress, namn och företagsnamn. Om du
                       själv skriver till supporten i appen skickas även ditt
                       meddelande dit som ett ärende, så att vi kan svara. I
-                      sessionsinspelningar maskeras allt du skriver och allt
-                      innehåll i din bokföring (namn, beskrivningar, belopp,
-                      person- och organisationsnummer); läsbart är endast
-                      appens eget gränssnitt, som rubriker, knappar, menyer
-                      och ledtexter, så att vi kan se var i appen du stöter
-                      på problem utan att se dina uppgifter.
+                      sessionsinspelningar är maskering standardläget och kan
+                      inte stängas av: allt du skriver maskeras utan undantag,
+                      och all annan text maskeras om den inte är appens eget
+                      statiska gränssnitt, som rubriker, knappar, menyer och
+                      ledtexter. Ditt innehåll (namn, beskrivningar, belopp,
+                      person- och organisationsnummer) är därför aldrig
+                      läsbart, och även nytt eller omärkt gränssnitt maskeras
+                      tills det uttryckligen märkts som gränssnittstext:
+                      felläget är övermaskering, aldrig att dina uppgifter
+                      syns. Inspelningarna finns så att vi kan se var i appen
+                      du stöter på problem utan att se dina uppgifter.
                       Organisationsnummer skickas aldrig som analysdata.
                       Identifiering sker endast för inloggade användare (ej
                       sandbox/demo). Inga kakor används, och själva analysdatan
