@@ -67,10 +67,19 @@ beforeEach(() => {
 describe('categorizeMatchedTransaction: accountOverride', () => {
   it('atomically unignores the transaction when categorizing it', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const categorizedHandler = vi.fn()
+    eventBus.on('transaction.categorized', categorizedHandler)
     enqueue({ data: txRow({ is_ignored: true }) })
     enqueue({ data: settingsRow })
     enqueue({ data: [{ id: 'fp-1' }] })
-    enqueue({ data: [{ id: TX_ID }] })
+    enqueue({
+      data: [txRow({
+        is_business: false,
+        category: 'private',
+        is_ignored: false,
+        journal_entry_id: 'je-override-1',
+      })],
+    })
 
     const result = await categorizeMatchedTransaction(
       supabase as never,
@@ -89,6 +98,31 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
         journal_entry_id: 'je-override-1',
       }),
     ])
+    expect(categorizedHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transaction: expect.objectContaining({ is_ignored: false }),
+      }),
+    )
+  })
+
+  it('returns a race conflict when the guarded update matches no row without creating an entry', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: txRow() })
+    enqueue({ data: settingsRow })
+    enqueue({ data: [{ id: 'fp-1' }] })
+    enqueue({ data: [] })
+    mockCreateJE.mockResolvedValueOnce(null)
+
+    const result = await categorizeMatchedTransaction(
+      supabase as never,
+      'user-1',
+      'company-1',
+      TX_ID,
+      { category: 'private' },
+    )
+
+    expect(result.status).toBe(409)
+    expect(mockReverseOrphanedJE).not.toHaveBeenCalled()
   })
 
   it('posts the entry with the override on the business side', async () => {

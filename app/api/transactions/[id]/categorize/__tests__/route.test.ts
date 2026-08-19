@@ -204,7 +204,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // Fetch transaction
     enqueue({ data: tx, error: null })
     // Update transaction
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ ...tx, is_business: true, category: 'expense_software' }], error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
       method: 'POST',
@@ -225,6 +225,34 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(
       findCalls('transactions', 'eq').filter(([column]) => column === 'company_id'),
     ).toHaveLength(2)
+  })
+
+  it('returns a race conflict when the guarded update matches no row without creating an entry', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: null,
+      journal_entry_id: null,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValueOnce(null)
+    enqueue({ data: [], error: null })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: false },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
+    expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
   })
 
   it('creates journal entry for business expense', async () => {
@@ -295,7 +323,10 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [{ id: 'period-1' }], error: null })
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
-    enqueue({ data: [{ id: 'tx-1' }], error: null })
+    enqueue({ data: [{ ...tx, is_business: false, category: 'private', is_ignored: false, journal_entry_id: 'je-1' }], error: null })
+
+    const categorizedHandler = vi.fn()
+    eventBus.on('transaction.categorized', categorizedHandler)
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
       method: 'POST',
@@ -312,6 +343,11 @@ describe('POST /api/transactions/[id]/categorize', () => {
         journal_entry_id: 'je-1',
       }),
     ])
+    expect(categorizedHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transaction: expect.objectContaining({ is_ignored: false }),
+      }),
+    )
   })
 
   it('passes body.dimensions onto the mapping result the engine books', async () => {
@@ -450,7 +486,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     mockCreateTransactionJournalEntry.mockRejectedValue(new Error('Period locked'))
 
     // Update transaction
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ ...tx, is_business: true, category: 'expense_software' }], error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
       method: 'POST',
@@ -486,7 +522,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     mockCreateTransactionJournalEntry.mockRejectedValue(new JournalEntryNotBalancedError(100, 80))
 
     // Update transaction
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ ...tx, is_business: true, category: 'expense_software' }], error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
       method: 'POST',

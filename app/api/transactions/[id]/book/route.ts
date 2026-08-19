@@ -178,7 +178,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('id', id)
       .eq('company_id', companyId)
       .is('journal_entry_id', null)
-      .select('id')
+      .select('*')
 
     if (updateError) {
       await reverseOrphanedJournalEntry(
@@ -211,6 +211,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponseFromCode('TX_CATEGORIZE_RACE', log, { requestId })
     }
 
+    const updatedTransaction = updateResult[0] as Transaction
+
     // A hunt- or hand-matched inbox item is consumed by this booking even
     // though the dialog never saw it: link its underlag to the verifikat and
     // stamp it so it leaves the active inbox (best-effort, logged inside).
@@ -221,7 +223,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       await eventBus.emit({
         type: 'transaction.categorized',
         payload: {
-          transaction: transaction as Transaction,
+          transaction: updatedTransaction,
           account: lines[0]?.account_number || '',
           taxCode: '',
           userId: user.id,

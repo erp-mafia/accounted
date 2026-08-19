@@ -13,6 +13,7 @@ import {
   recordVoucherGapExplanation,
   reverseOrphanedJournalEntry,
 } from '../cancel-orphaned-entry'
+import { withUnusedVoucherAllocation } from '../errors'
 
 // The real voucher_gap_explanations column set (supabase/migrations/
 // 20260402100100_voucher_gap_explanations.sql). company_id, user_id,
@@ -180,11 +181,15 @@ describe('reverseOrphanedJournalEntry', () => {
     expect(inserts['voucher_gap_explanations']).toBeUndefined()
   })
 
-  it('documents the voucher when storno fails', async () => {
-    const { supabase, inserts } = createMockSupabase({
-      orphan: { fiscal_period_id: 'fp-1', voucher_series: 'B', voucher_number: 66 },
-    })
-    reverseEntryMock.mockRejectedValueOnce(new Error('period locked'))
+  it('documents only the exact unused reversal voucher exposed by the engine', async () => {
+    const { supabase, inserts } = createMockSupabase({})
+    reverseEntryMock.mockRejectedValueOnce(
+      withUnusedVoucherAllocation(new Error('account lookup failed'), {
+        fiscalPeriodId: 'fp-1',
+        voucherSeries: 'B',
+        voucherNumber: 67,
+      }),
+    )
 
     await reverseOrphanedJournalEntry(
       supabase as never,
@@ -200,11 +205,28 @@ describe('reverseOrphanedJournalEntry', () => {
         user_id: 'user-1',
         fiscal_period_id: 'fp-1',
         voucher_series: 'B',
-        gap_start: 66,
-        gap_end: 66,
+        gap_start: 67,
+        gap_end: 67,
         explanation: 'Manuell avstämning krävs.',
       },
     ])
+  })
+
+  it('does not mislabel the original posted voucher when storno failure has no unused allocation', async () => {
+    const { supabase, inserts } = createMockSupabase({
+      orphan: { fiscal_period_id: 'fp-1', voucher_series: 'B', voucher_number: 66 },
+    })
+    reverseEntryMock.mockRejectedValueOnce(new Error('period locked'))
+
+    await reverseOrphanedJournalEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      'je-1',
+      'Manuell avstämning krävs.',
+    )
+
+    expect(inserts['voucher_gap_explanations']).toBeUndefined()
   })
 })
 

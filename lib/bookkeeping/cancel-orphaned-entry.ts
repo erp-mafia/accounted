@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { getUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
 
 const log = createLogger('cancel-orphaned-entry')
 
@@ -87,48 +88,32 @@ export async function reverseOrphanedJournalEntry(
   journalEntryId: string,
   gapExplanation: string,
 ): Promise<void> {
+  let unusedVoucher: ReturnType<typeof getUnusedVoucherAllocation> = null
   try {
     await reverseEntry(supabase, companyId, userId, journalEntryId)
     return
   } catch (reverseError) {
+    unusedVoucher = getUnusedVoucherAllocation(reverseError)
     log.error('failed to storno orphaned journal entry', reverseError as Error, {
       companyId,
       journalEntryId,
+      unusedVoucher,
     })
   }
 
-  try {
-    const { data: orphan, error: fetchError } = await supabase
-      .from('journal_entries')
-      .select('fiscal_period_id, voucher_series, voucher_number')
-      .eq('id', journalEntryId)
-      .eq('company_id', companyId)
-      .single()
+  // The original posted voucher is live accounting evidence, never a gap.
+  // Only the engine can identify an exact reversal number that its durable
+  // sequence allocated before a reversal row existed.
+  if (!unusedVoucher) return
 
-    if (fetchError) {
-      log.error('failed to load orphaned journal entry after storno failure', fetchError, {
-        companyId,
-        journalEntryId,
-      })
-      return
-    }
-
-    if (orphan?.voucher_series) {
-      await recordVoucherGapExplanation(supabase, {
-        companyId,
-        userId,
-        fiscalPeriodId: orphan.fiscal_period_id,
-        voucherSeries: orphan.voucher_series,
-        voucherNumber: orphan.voucher_number,
-        explanation: gapExplanation,
-      })
-    }
-  } catch (gapError) {
-    log.error('failed to document orphaned journal entry after storno failure', gapError as Error, {
-      companyId,
-      journalEntryId,
-    })
-  }
+  await recordVoucherGapExplanation(supabase, {
+    companyId,
+    userId,
+    fiscalPeriodId: unusedVoucher.fiscalPeriodId,
+    voucherSeries: unusedVoucher.voucherSeries,
+    voucherNumber: unusedVoucher.voucherNumber,
+    explanation: gapExplanation,
+  })
 }
 
 /**

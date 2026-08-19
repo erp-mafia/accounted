@@ -409,7 +409,7 @@ export async function categorizeMatchedTransaction(
     ? updateQuery.eq('journal_entry_id', transaction.journal_entry_id)
     : updateQuery.is('journal_entry_id', null)
 
-  const { data: updateResult, error: updateError } = await guardedUpdate.select('id')
+  const { data: updateResult, error: updateError } = await guardedUpdate.select('*')
 
   if (updateError) {
     log.error('Failed to update transaction:', updateError)
@@ -428,16 +428,20 @@ export async function categorizeMatchedTransaction(
       : { error: 'Failed to update transaction', status: 500 }
   }
 
-  if ((!updateResult || updateResult.length === 0) && journalEntryId) {
-    await reverseOrphanedJournalEntry(
-      supabase,
-      companyId,
-      userId,
-      journalEntryId,
-      'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
-    )
+  if (!updateResult || updateResult.length === 0) {
+    if (journalEntryId) {
+      await reverseOrphanedJournalEntry(
+        supabase,
+        companyId,
+        userId,
+        journalEntryId,
+        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+      )
+    }
     return { error: 'Transaction was categorized by another request.', status: 409 }
   }
+
+  const updatedTransaction = updateResult[0] as Transaction
 
   // Propagate the underlag from matched invoice-inbox items onto the new
   // verifikation and stamp them consumed (BFL 7 kap): shared with the other
@@ -456,7 +460,7 @@ export async function categorizeMatchedTransaction(
   await eventBus.emit({
     type: 'transaction.categorized',
     payload: {
-      transaction: transaction as Transaction,
+      transaction: updatedTransaction,
       account: mappingResult.debit_account,
       taxCode: mappingResult.vat_lines[0]?.account_number || '',
       userId,

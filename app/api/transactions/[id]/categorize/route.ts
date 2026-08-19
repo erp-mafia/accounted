@@ -928,7 +928,7 @@ export const POST = withRouteContext(
       .eq('id', id)
       .eq('company_id', companyId)
       .is('journal_entry_id', null)
-      .select('id')
+      .select('*')
 
     if (updateError) {
       txLog.error('failed to update transaction', updateError)
@@ -944,20 +944,24 @@ export const POST = withRouteContext(
       return errorResponse(updateError, txLog, { requestId })
     }
 
-    if ((!updateResult || updateResult.length === 0) && journalEntryId) {
+    if (!updateResult || updateResult.length === 0) {
       // CAS guard: another request set journal_entry_id between our read and
-      // write. The posted orphan is immutable, so compensate through the
+      // write. If this request posted an orphan, compensate through the
       // bookkeeping engine with a storno entry.
-      await reverseOrphanedJournalEntry(
-        supabase,
-        companyId,
-        user.id,
-        journalEntryId,
-        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
-      )
+      if (journalEntryId) {
+        await reverseOrphanedJournalEntry(
+          supabase,
+          companyId,
+          user.id,
+          journalEntryId,
+          'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+        )
+      }
 
       return errorResponseFromCode('TX_CATEGORIZE_RACE', txLog, { requestId })
     }
+
+    const updatedTransaction = updateResult[0] as Transaction
 
     // Flag any inbox underlag already matched to this transaction as booked.
     // The block above only fires when the caller passes an explicit
@@ -1002,7 +1006,7 @@ export const POST = withRouteContext(
     await eventBus.emit({
       type: 'transaction.categorized',
       payload: {
-        transaction: transaction as Transaction,
+        transaction: updatedTransaction,
         account: mappingResult.debit_account,
         taxCode: mappingResult.vat_lines[0]?.account_number || '',
         userId: user.id,

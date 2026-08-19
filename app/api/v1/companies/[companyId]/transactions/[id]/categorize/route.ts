@@ -448,7 +448,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .eq('id', txId)
       .eq('company_id', ctx.companyId!)
       .is('journal_entry_id', null)
-      .select('id')
+      .select('*')
 
     if (updateErr) {
       if (journalEntryId) {
@@ -463,18 +463,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponse(updateErr, txLog, { requestId: ctx.requestId })
     }
 
-    if ((!updateResult || updateResult.length === 0) && journalEntryId) {
-      await reverseOrphanedJournalEntry(
-        ctx.supabase,
-        ctx.companyId!,
-        ctx.userId,
-        journalEntryId,
-        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
-      )
+    if (!updateResult || updateResult.length === 0) {
+      if (journalEntryId) {
+        await reverseOrphanedJournalEntry(
+          ctx.supabase,
+          ctx.companyId!,
+          ctx.userId,
+          journalEntryId,
+          'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+        )
+      }
       return v1ErrorResponseFromCode('TX_CATEGORIZE_RACE', txLog, {
         requestId: ctx.requestId,
       })
     }
+
+    const updatedTransaction = updateResult[0] as Transaction
 
     // Propagate the underlag onto the new verifikat: anchor the transaction's
     // pinned document and stamp matched inbox items so they leave the active
@@ -495,7 +499,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       await eventBus.emit({
         type: 'transaction.categorized',
         payload: {
-          transaction: transaction as Transaction,
+          transaction: updatedTransaction,
           account: mappingResult.debit_account,
           taxCode: mappingResult.vat_lines[0]?.account_number || '',
           userId: ctx.userId,

@@ -60,6 +60,7 @@ vi.mock('@/lib/transactions/inbox-underlag', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { withUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
 import { POST } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -233,6 +234,46 @@ describe('POST batch-categorize', () => {
       'user-1',
       'je-fresh',
     )
+  })
+
+  it('returns a per-item race conflict when the guarded update matches no row without creating an entry', async () => {
+    const { supabase } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_A,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [], error: null },
+      ],
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    createTxJE.mockResolvedValueOnce(null)
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [{ transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } }],
+        },
+      ),
+      batchParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.results[0].error.code).toBe('TX_CATEGORIZE_RACE')
+    expect(body.data.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
   })
 
   it('keeps unrelated transaction update errors mapped to INTERNAL_ERROR', async () => {
@@ -578,9 +619,15 @@ describe('POST batch-categorize', () => {
       voucher_gap_explanations: { data: null, error: null },
     })
     mockServiceClient.mockReturnValue(supabase)
-    // Storno fails: the orphan keeps its number, so the break in the
-    // verifikationsnummerserie must be documented (BFNAR 2013:2).
-    reverseEntryMock.mockRejectedValueOnce(new Error('period locked'))
+    // The reversal sequence allocation fails before a reversal row is stored,
+    // so the engine exposes the exact unused number for documentation.
+    reverseEntryMock.mockRejectedValueOnce(
+      withUnusedVoucherAllocation(new Error('account lookup failed'), {
+        fiscalPeriodId: 'period-1',
+        voucherSeries: 'B',
+        voucherNumber: 43,
+      }),
+    )
 
     const res = await POST(
       makeRequest(
@@ -606,8 +653,8 @@ describe('POST batch-categorize', () => {
       user_id: 'user-1',
       fiscal_period_id: 'period-1',
       voucher_series: 'B',
-      gap_start: 42,
-      gap_end: 42,
+      gap_start: 43,
+      gap_end: 43,
       explanation:
         'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
     })

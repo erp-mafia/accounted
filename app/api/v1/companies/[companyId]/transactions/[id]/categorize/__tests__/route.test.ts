@@ -69,6 +69,7 @@ vi.mock('@/lib/transactions/inbox-underlag', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { withUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
 import { POST } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -248,6 +249,22 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
     expect(propagateUnderlagMock).not.toHaveBeenCalled()
   })
 
+  it('returns a race conflict when the guarded update matches no row without creating an entry', async () => {
+    const { supabase } = casRaceSupabase()
+    mockServiceClient.mockReturnValue(supabase)
+    createTxJE.mockResolvedValueOnce(null)
+
+    const res = await POST(
+      makeRequest({ is_business: true, category: 'expense_office' }),
+      routeParams(),
+    )
+
+    const body = await res.json()
+    expect(res.status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+  })
+
   it('atomically unignores an ignored transaction when categorizing it', async () => {
     const { supabase, updates } = happyPathSupabase({ is_ignored: true })
     mockServiceClient.mockReturnValue(supabase)
@@ -316,7 +333,13 @@ describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
   it('documents the stranded voucher with the real voucher_gap_explanations columns when the storno fails', async () => {
     const { supabase, inserts } = casRaceSupabase()
     mockServiceClient.mockReturnValue(supabase)
-    reverseEntryMock.mockRejectedValueOnce(new Error('period locked'))
+    reverseEntryMock.mockRejectedValueOnce(
+      withUnusedVoucherAllocation(new Error('account lookup failed'), {
+        fiscalPeriodId: 'period-1',
+        voucherSeries: 'B',
+        voucherNumber: 43,
+      }),
+    )
 
     const res = await POST(
       makeRequest({ is_business: true, category: 'expense_office' }),
@@ -334,8 +357,8 @@ describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
       user_id: 'user-1',
       fiscal_period_id: 'period-1',
       voucher_series: 'B',
-      gap_start: 42,
-      gap_end: 42,
+      gap_start: 43,
+      gap_end: 43,
       explanation:
         'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
     })

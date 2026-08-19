@@ -389,7 +389,7 @@ async function categorizeOne(
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .is('journal_entry_id', null)
-    .select('id')
+    .select('*')
   if (updateErr) {
     if (journalEntryId) {
       await reverseOrphanedJournalEntry(
@@ -407,14 +407,16 @@ async function categorizeOne(
       error: categorizeUpdateError(updateErr),
     }
   }
-  if ((!updated || updated.length === 0) && journalEntryId) {
-    await reverseOrphanedJournalEntry(
-      supabase,
-      companyId,
-      userId,
-      journalEntryId,
-      'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
-    )
+  if (!updated || updated.length === 0) {
+    if (journalEntryId) {
+      await reverseOrphanedJournalEntry(
+        supabase,
+        companyId,
+        userId,
+        journalEntryId,
+        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+      )
+    }
     return {
       ok: false,
       request_index: index,
@@ -422,6 +424,8 @@ async function categorizeOne(
       error: { code: 'TX_CATEGORIZE_RACE', message: 'Concurrent state change.' },
     }
   }
+
+  const updatedTransaction = updated[0] as Transaction
 
   // Propagate the underlag onto the new verifikat: anchor the transaction's
   // pinned document and stamp matched inbox items. Same shared step as the
@@ -436,7 +440,7 @@ async function categorizeOne(
     await eventBus.emit({
       type: 'transaction.categorized',
       payload: {
-        transaction: transaction as Transaction,
+        transaction: updatedTransaction,
         account: mappingResult.debit_account,
         taxCode: mappingResult.vat_lines[0]?.account_number || '',
         userId,

@@ -11,6 +11,7 @@ import {
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   FiscalPeriodNotFoundError,
+  withUnusedVoucherAllocation,
   JournalEntryNotBalancedError,
   JournalEntryNotFoundError,
 } from '@/lib/bookkeeping/errors'
@@ -1122,18 +1123,33 @@ export async function reverseEntry(
     original.fiscal_period_id,
     original.voucher_series || 'A'
   )
+  const unusedVoucherAllocation = {
+    fiscalPeriodId: original.fiscal_period_id,
+    voucherSeries: original.voucher_series || 'A',
+    voucherNumber,
+  }
 
   // Resolve account IDs: include inactive rows. The accounts on the
   // original committed entry were active at commit time; if the user has
   // since toggled one off, the storno must still be allowed to go through
   // (BFL 5 kap 5§). Only a truly missing chart row (rare: would require
   // the row to have been deleted) still throws AccountsNotInChartError.
-  const accountIdMap = await resolveAccountIds(supabase, companyId, reversedLines, { includeInactive: true })
+  let accountIdMap: Map<string, string>
+  try {
+    accountIdMap = await resolveAccountIds(supabase, companyId, reversedLines, { includeInactive: true })
+  } catch (resolveError) {
+    // The sequence RPC committed, but no reversal row exists yet. Carry the
+    // exact unused number so the caller can document this real gap.
+    throw withUnusedVoucherAllocation(resolveError, unusedVoucherAllocation)
+  }
 
   const reversalAccountNumbers = [...new Set(reversedLines.map(l => l.account_number))]
   const missingReversalAccounts = reversalAccountNumbers.filter(num => !accountIdMap.has(num))
   if (missingReversalAccounts.length > 0) {
-    throw new AccountsNotInChartError(missingReversalAccounts)
+    throw withUnusedVoucherAllocation(
+      new AccountsNotInChartError(missingReversalAccounts),
+      unusedVoucherAllocation,
+    )
   }
 
   // Create reversal entry with reverses_id link
@@ -1155,8 +1171,18 @@ export async function reverseEntry(
     .select()
     .single()
 
-  if (reversalError || !reversalEntry) {
-    throw new BookkeepingDatabaseError('create_reversal_entry', reversalError?.message)
+  if (reversalError) {
+    // PostgreSQL rejected the insert, so the allocated number is confirmed
+    // unused and can be explained without guessing from the original entry.
+    throw withUnusedVoucherAllocation(
+      new BookkeepingDatabaseError('create_reversal_entry', reversalError.message),
+      unusedVoucherAllocation,
+    )
+  }
+  if (!reversalEntry) {
+    // No database error means the outcome is ambiguous. Do not label the
+    // number unused unless the engine has a confirmed failure state.
+    throw new BookkeepingDatabaseError('create_reversal_entry', undefined)
   }
 
   // Insert reversal lines with dimensions
