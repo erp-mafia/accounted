@@ -16,8 +16,14 @@ interface ArchiveEstimate {
 
 export function CompanyMigrationArchiveRow({ companyId }: { companyId: string }) {
   const t = useTranslations('settings_company')
-  const [estimate, setEstimate] = useState<ArchiveEstimate | null>(null)
+  const [loadedEstimate, setLoadedEstimate] = useState<{
+    companyId: string
+    value: ArchiveEstimate
+  } | null>(null)
   const [open, setOpen] = useState(false)
+  const estimate = loadedEstimate?.companyId === companyId
+    ? loadedEstimate.value
+    : null
 
   useEffect(() => {
     const controller = new AbortController()
@@ -30,7 +36,9 @@ export function CompanyMigrationArchiveRow({ companyId }: { companyId: string })
         )
         if (!response.ok) return
         const body = await response.json() as { data?: ArchiveEstimate }
-        if (!cancelled && body.data) setEstimate(body.data)
+        if (!cancelled && body.data) {
+          setLoadedEstimate({ companyId, value: body.data })
+        }
       } catch {
         // A transient lookup failure must not expose or guess an archive link.
         // The row appears after a later settings load once authorization works.
