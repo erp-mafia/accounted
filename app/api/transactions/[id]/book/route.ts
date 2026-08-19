@@ -9,7 +9,7 @@ import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
-import { errorResponse, errorResponseFromCode, getStructuredError } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type { Transaction } from '@/types'
@@ -188,13 +188,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         journalEntry.id,
         'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
       )
-      if (getStructuredError(updateError).code === 'TX_CATEGORIZE_IGNORED_CONFLICT') {
-        return errorResponse(updateError, log, { requestId })
-      }
-      return NextResponse.json(
-        { error: 'Failed to update transaction' },
-        { status: 500 }
-      )
+      return errorResponse(updateError, log, { requestId })
     }
 
     if (!updateResult || updateResult.length === 0) {

@@ -225,7 +225,8 @@ describe('POST batch-categorize', () => {
     const body = await res.json()
     expect(body.data.results[0].error).toMatchObject({
       code: 'TX_CATEGORIZE_IGNORED_CONFLICT',
-      message: expect.not.stringContaining('check constraint'),
+      message:
+        'Transaktionen är fortfarande markerad som ignorerad och kan därför inte kopplas till en verifikation.',
     })
     expect(body.data.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
     expect(reverseEntryMock).toHaveBeenCalledWith(

@@ -277,10 +277,15 @@ describe('POST /api/transactions/[id]/book', () => {
       body: validBody,
     })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string }
+    }>(response)
 
     expect(status).toBe(500)
-    expect(body.error).toBe('Failed to update transaction')
+    expect(body.error).toMatchObject({
+      code: 'INTERNAL_ERROR',
+      message: 'Ett oväntat serverfel uppstod. Försök igen senare.',
+    })
     expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',

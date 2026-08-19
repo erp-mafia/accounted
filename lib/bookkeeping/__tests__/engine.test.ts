@@ -669,6 +669,87 @@ describe('reverseEntry: unused voucher allocation', () => {
       voucherNumber: 42,
     })
   })
+
+  it('does not label a preserved cancelled reversal header as an unused voucher', async () => {
+    const original = {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'B',
+      voucher_number: 41,
+      entry_date: '2024-11-15',
+      description: 'Hyra november',
+      source_type: 'manual',
+      source_id: null,
+      lines: [
+        { account_number: '5010', debit_amount: 10000, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 10000 },
+      ],
+    }
+    const reversal = { id: 'reversal-1', reverses_id: 'entry-1' }
+    const cancelUpdate = vi.fn()
+    const deleteLines = vi.fn()
+    let journalEntryCall = 0
+    let journalLineCall = 0
+
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 42, error: null }),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'journal_entries') {
+          journalEntryCall += 1
+          if (journalEntryCall === 1) return createMockChain({ singleData: original })
+          if (journalEntryCall === 2) return createMockChain({ singleData: reversal })
+          return {
+            update: cancelUpdate.mockReturnValue({
+              eq: vi.fn().mockResolvedValue({ data: null, error: null }),
+            }),
+          }
+        }
+        if (table === 'chart_of_accounts') {
+          const chain: Record<string, unknown> = {}
+          for (const method of ['select', 'eq', 'in']) {
+            chain[method] = vi.fn().mockReturnValue(chain)
+          }
+          chain.then = (resolve: (value: unknown) => void) =>
+            resolve({
+              data: [
+                { id: 'acc-5010', account_number: '5010' },
+                { id: 'acc-1930', account_number: '1930' },
+              ],
+              error: null,
+            })
+          return chain
+        }
+        if (table === 'journal_entry_lines') {
+          journalLineCall += 1
+          if (journalLineCall === 1) {
+            return {
+              insert: vi.fn().mockResolvedValue({ error: { message: 'line insert failed' } }),
+            }
+          }
+          return {
+            delete: deleteLines.mockReturnValue({
+              eq: vi.fn().mockResolvedValue({ data: null, error: null }),
+            }),
+          }
+        }
+        return createMockChain()
+      }),
+    }
+
+    let caught: unknown
+    try {
+      await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(BookkeepingDatabaseError)
+    expect(getUnusedVoucherAllocation(caught)).toBeNull()
+    expect(cancelUpdate).toHaveBeenCalledWith({ status: 'cancelled' })
+    expect(deleteLines).toHaveBeenCalled()
+  })
 })
 
 describe('reverseEntry: storno guard', () => {

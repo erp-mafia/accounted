@@ -1193,6 +1193,9 @@ export async function reverseEntry(
     .insert(lineInserts)
 
   if (linesError) {
+    // Keep the reversal header as cancelled bookkeeping evidence. The gap
+    // detector counts every non-draft header, including cancelled rows, so
+    // this allocation is still used and must not be labelled as a gap.
     await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
     await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
     throw new BookkeepingDatabaseError('create_reversal_lines', linesError.message)
@@ -1205,6 +1208,8 @@ export async function reverseEntry(
     .eq('id', reversalEntry.id)
 
   if (postError) {
+    // As above, cleanup preserves the allocated voucher on the cancelled
+    // header. A failed or ambiguous cleanup also cannot prove it unused.
     await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
     await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
     throw new BookkeepingDatabaseError('post_reversal_entry', postError.message)
@@ -1224,6 +1229,7 @@ export async function reverseEntry(
   if (casError || !updatedOriginal || updatedOriginal.length === 0) {
     // Another concurrent reversal already changed the status: mark the orphaned
     // reversal as cancelled so it's excluded from reports but remains traceable.
+    // Its header still occupies the voucher number, so no gap metadata applies.
     await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
     await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
     throw new EntryAlreadyReversedError()

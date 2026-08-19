@@ -124,7 +124,7 @@ function categorizeUpdateError(error: unknown): NonNullable<Item['error']> {
     const mapped = getErrorEntry(structured.code)
     return {
       code: structured.code,
-      message: mapped?.message_en ?? 'Concurrent transaction state conflict.',
+      message: mapped?.message_sv ?? 'Transaktionens tillstånd ändrades samtidigt.',
     }
   }
   return {
