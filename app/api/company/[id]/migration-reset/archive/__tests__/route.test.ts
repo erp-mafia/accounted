@@ -6,6 +6,7 @@ const {
   supabase: archiveSupabase,
   enqueue: enqueueArchive,
   reset: resetArchive,
+  calls: archiveCalls,
 } = createQueuedMockSupabase()
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -172,6 +173,53 @@ describe('GET /api/company/[id]/migration-reset/archive', () => {
     expect(mockGenerate).not.toHaveBeenCalled()
   })
 
+  it('downloads without documents when the planned payload is within the limit', async () => {
+    enqueueAuthorizedArchive()
+    mockEstimate.mockResolvedValue({
+      total_bytes: 100 * 1024 * 1024,
+      document_bytes: 92 * 1024 * 1024,
+      document_count: 10,
+    })
+    mockGenerate.mockResolvedValue(new ArrayBuffer(1024))
+
+    const response = await GET(
+      createMockRequest('/api/company/company-1/migration-reset/archive', {
+        searchParams: { include_documents: 'false' },
+      }),
+      params,
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockGenerate).toHaveBeenCalledWith(archiveSupabase, 'source-1', {
+      include_documents: false,
+    })
+  })
+
+  it('blocks a document-free download when its planned payload is still over the limit', async () => {
+    enqueueAuthorizedArchive()
+    mockEstimate.mockResolvedValue({
+      total_bytes: 100 * 1024 * 1024,
+      document_bytes: 10 * 1024 * 1024,
+      document_count: 10,
+    })
+
+    const response = await GET(
+      createMockRequest('/api/company/company-1/migration-reset/archive', {
+        searchParams: { include_documents: 'false' },
+      }),
+      params,
+    )
+    const { status, body } = await parseJsonResponse<{
+      size_bytes: number
+      size_limit_bytes: number
+    }>(response)
+
+    expect(status).toBe(413)
+    expect(body.size_bytes).toBe(90 * 1024 * 1024)
+    expect(body.size_limit_bytes).toBe(80 * 1024 * 1024)
+    expect(mockGenerate).not.toHaveBeenCalled()
+  })
+
   it('keeps the archive reachable when retained-source membership changes', async () => {
     enqueueAuthorizedArchive()
 
@@ -184,6 +232,11 @@ describe('GET /api/company/[id]/migration-reset/archive', () => {
 
     expect(response.status).toBe(200)
     expect(mockEstimate).toHaveBeenCalledWith(archiveSupabase, 'source-1', 'all')
+    expect(archiveCalls).not.toContainEqual({
+      table: 'company_members',
+      method: 'eq',
+      args: ['company_id', 'source-1'],
+    })
   })
 
   it('fails closed when the retained source is not archived', async () => {
@@ -216,8 +269,10 @@ describe('GET /api/company/[id]/migration-reset/archive', () => {
       createMockRequest('/api/company/company-1/migration-reset/archive'),
       params,
     )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(response.status).toBe(500)
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('COMPANY_RESET_FAILED')
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 })

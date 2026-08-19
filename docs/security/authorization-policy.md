@@ -105,6 +105,7 @@ Defined in:
 - `supabase/migrations/20260818141018_harden_company_migration_reset_eligibility.sql`
 - `supabase/migrations/20260818143004_close_migration_reset_archive_gaps.sql`
 - `supabase/migrations/20260818224000_block_vat_state_migration_reset.sql`
+- `supabase/migrations/20260818231500_block_external_filing_staging_state.sql`
 
 These functions support the owner-only archive-and-replace recovery flow for a
 failed migration. The execution function archives the source company and

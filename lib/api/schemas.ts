@@ -3652,7 +3652,11 @@ export const SkattekontoFileExecuteSchema = z.object({
  * checks inside the atomic RPC, including the exact display-name match.
  */
 export const CompanyMigrationResetSchema = z.object({
-  confirm_name: z.string().trim().min(1).max(200),
+  confirm_name: z
+    .string()
+    .trim()
+    .min(1, 'Ange företagsnamnet exakt som det visas')
+    .max(200, 'Företagsnamnet får vara högst 200 tecken'),
   reason: z
     .string()
     .trim()

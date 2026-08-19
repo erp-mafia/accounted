@@ -45,10 +45,12 @@ export function FullArchiveDialog({
   open,
   onOpenChange,
   mode = 'active-company',
+  companyId: explicitCompanyId,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   mode?: ArchiveMode
+  companyId?: string
 }) {
   const t = useTranslations('import')
   const tCompany = useTranslations('settings_company')
@@ -65,14 +67,17 @@ export function FullArchiveDialog({
   const [isDownloading, setIsDownloading] = useState(false)
   const [lastDownloadedAt, setLastDownloadedAt] = useState<string | null>(null)
   const isMigrationResetSource = mode === 'migration-reset-source'
+  const archiveCompanyId = isMigrationResetSource
+    ? explicitCompanyId ?? company?.id
+    : company?.id
 
   const storageKey = useMemo(
-    () => company
+    () => archiveCompanyId
       ? isMigrationResetSource
-        ? `${LAST_DOWNLOAD_STORAGE_KEY}:migration-reset:${company.id}`
-        : `${LAST_DOWNLOAD_STORAGE_KEY}:${company.id}`
+        ? `${LAST_DOWNLOAD_STORAGE_KEY}:migration-reset:${archiveCompanyId}`
+        : `${LAST_DOWNLOAD_STORAGE_KEY}:${archiveCompanyId}`
       : null,
-    [company, isMigrationResetSource]
+    [archiveCompanyId, isMigrationResetSource]
   )
 
   useEffect(() => {
@@ -82,18 +87,18 @@ export function FullArchiveDialog({
 
   const archiveUrl = useMemo(() => {
     if (isMigrationResetSource) {
-      if (!company) return ''
+      if (!archiveCompanyId) return ''
       const params = new URLSearchParams()
       if (!includeDocuments) params.set('include_documents', 'false')
       const query = params.toString()
-      return `/api/company/${company.id}/migration-reset/archive${query ? `?${query}` : ''}`
+      return `/api/company/${archiveCompanyId}/migration-reset/archive${query ? `?${query}` : ''}`
     }
 
     const params = new URLSearchParams({ scope })
     if (scope === 'period' && periodId) params.set('period_id', periodId)
     if (!includeDocuments) params.set('include_documents', 'false')
     return `/api/reports/full-archive?${params.toString()}`
-  }, [company, includeDocuments, isMigrationResetSource, periodId, scope])
+  }, [archiveCompanyId, includeDocuments, isMigrationResetSource, periodId, scope])
 
   useEffect(() => {
     if (!open || !archiveUrl || (!isMigrationResetSource && scope === 'period' && !periodId)) {
@@ -145,7 +150,7 @@ export function FullArchiveDialog({
           return
         }
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || t('archive_toast_failed'))
+        throw new Error(readArchiveError(body, t('archive_toast_failed')))
       }
 
       const blob = await res.blob()
@@ -195,7 +200,12 @@ export function FullArchiveDialog({
     toast,
   ])
 
-  const isOverLimit = !!estimate && !estimate.within_limit && includeDocuments
+  const plannedSizeBytes = estimate
+    ? includeDocuments
+      ? estimate.total_bytes
+      : Math.max(0, estimate.total_bytes - estimate.document_bytes)
+    : 0
+  const isOverLimit = !!estimate && plannedSizeBytes > estimate.size_limit_bytes
   const canDownload = !isDownloading
     && !isOverLimit
     && (isMigrationResetSource || scope === 'all' || !!periodId)
@@ -268,7 +278,7 @@ export function FullArchiveDialog({
                 <>
                   {t('archive_estimated_size')}{' '}
                   <strong className="font-medium tabular-nums text-foreground">
-                    {formatBytes(estimate.total_bytes)}
+                    {formatBytes(plannedSizeBytes)}
                   </strong>{' '}
                   ({estimate.document_count}{' '}
                   {estimate.document_count === 1
@@ -324,4 +334,15 @@ function formatBytes(bytes: number): string {
   const mb = kb / 1024
   if (mb < 1024) return `${mb.toFixed(1)} MB`
   return `${(mb / 1024).toFixed(2)} GB`
+}
+
+function readArchiveError(body: unknown, fallback: string): string {
+  if (!body || typeof body !== 'object') return fallback
+  const error = (body as { error?: unknown }).error
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string') return message
+  }
+  return fallback
 }

@@ -651,7 +651,8 @@ describe('company migration reset RPCs (pg)', () => {
   it('does not archive or create anything when execution is ineligible', async () => {
     const fixture = await seedCompany({ isClosed: true })
     const before = await getPool().query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM public.companies`,
+      `SELECT count(*)::int AS n FROM public.companies WHERE created_by = $1`,
+      [fixture.userId],
     )
 
     const result = await execute(fixture.userId, fixture.companyId)
@@ -662,7 +663,8 @@ describe('company migration reset RPCs (pg)', () => {
       [fixture.companyId],
     )
     const after = await getPool().query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM public.companies`,
+      `SELECT count(*)::int AS n FROM public.companies WHERE created_by = $1`,
+      [fixture.userId],
     )
     const resets = await getPool().query<{ n: number }>(
       `SELECT count(*)::int AS n
@@ -679,7 +681,8 @@ describe('company migration reset RPCs (pg)', () => {
   it('rolls back the archive and replacement when an audit write fails', async () => {
     const fixture = await seedCompany()
     const before = await getPool().query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM public.companies`,
+      `SELECT count(*)::int AS n FROM public.companies WHERE created_by = $1`,
+      [fixture.userId],
     )
 
     await getPool().query(`
@@ -709,7 +712,8 @@ describe('company migration reset RPCs (pg)', () => {
         [fixture.companyId],
       )
       const after = await getPool().query<{ n: number }>(
-        `SELECT count(*)::int AS n FROM public.companies`,
+        `SELECT count(*)::int AS n FROM public.companies WHERE created_by = $1`,
+        [fixture.userId],
       )
       const resets = await getPool().query<{ n: number }>(
         `SELECT count(*)::int AS n

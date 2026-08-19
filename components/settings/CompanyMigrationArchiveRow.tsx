@@ -21,6 +21,7 @@ export function CompanyMigrationArchiveRow({ companyId }: { companyId: string })
 
   useEffect(() => {
     const controller = new AbortController()
+    let cancelled = false
     ;(async () => {
       try {
         const response = await fetch(
@@ -29,13 +30,16 @@ export function CompanyMigrationArchiveRow({ companyId }: { companyId: string })
         )
         if (!response.ok) return
         const body = await response.json() as { data?: ArchiveEstimate }
-        if (body.data) setEstimate(body.data)
+        if (!cancelled && body.data) setEstimate(body.data)
       } catch {
         // A transient lookup failure must not expose or guess an archive link.
         // The row appears after a later settings load once authorization works.
       }
     })()
-    return () => controller.abort()
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
   }, [companyId])
 
   if (!estimate) return null
@@ -63,6 +67,7 @@ export function CompanyMigrationArchiveRow({ companyId }: { companyId: string })
         open={open}
         onOpenChange={setOpen}
         mode="migration-reset-source"
+        companyId={companyId}
       />
     </>
   )

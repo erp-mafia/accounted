@@ -3,20 +3,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CompanyMigrationResetSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import type { CompanyMigrationResetRpcResult } from '@/types'
 
 type Params = { params: Promise<{ id: string }> }
-
-interface ResetRpcResult {
-  ok: boolean
-  code?: string
-  details?: unknown
-  eligibility?: unknown
-  reset_id?: string
-  source_company_id?: string
-  replacement_company_id?: string
-  archived_at?: string
-  counts?: unknown
-}
 
 const EXPECTED_CODES = new Set([
   'COMPANY_RESET_NOT_FOUND',
@@ -28,7 +17,7 @@ const EXPECTED_CODES = new Set([
 ])
 
 function rpcFailure(
-  result: ResetRpcResult,
+  result: CompanyMigrationResetRpcResult,
   log: Parameters<typeof errorResponseFromCode>[1],
   requestId: string,
 ) {
@@ -39,6 +28,11 @@ function rpcFailure(
     requestId,
     details: result.details,
   })
+}
+
+function privateNoStore(response: NextResponse): NextResponse {
+  response.headers.set('Cache-Control', 'private, no-store')
+  return response
 }
 
 /**
@@ -52,7 +46,7 @@ export const GET = withRouteContext<Params>(
   async (_request, { supabase, companyId, log, requestId }, { params }) => {
     const { id } = await params
     if (id !== companyId) {
-      return errorResponseFromCode('COMPANY_RESET_NOT_FOUND', log, { requestId })
+      return privateNoStore(errorResponseFromCode('COMPANY_RESET_NOT_FOUND', log, { requestId }))
     }
 
     const { data, error } = await supabase.rpc(
@@ -62,13 +56,15 @@ export const GET = withRouteContext<Params>(
 
     if (error) {
       log.error('migration reset eligibility RPC failed', error)
-      return errorResponseFromCode('COMPANY_RESET_FAILED', log, { requestId })
+      return privateNoStore(errorResponseFromCode('COMPANY_RESET_FAILED', log, { requestId }))
     }
 
-    const result = data as ResetRpcResult | null
-    if (!result?.ok) return rpcFailure(result ?? { ok: false }, log, requestId)
+    const result = data as CompanyMigrationResetRpcResult | null
+    if (!result?.ok) {
+      return privateNoStore(rpcFailure(result ?? { ok: false }, log, requestId))
+    }
 
-    return NextResponse.json({ data: result.eligibility })
+    return privateNoStore(NextResponse.json({ data: result.eligibility }))
   },
 )
 
@@ -83,14 +79,14 @@ export const POST = withRouteContext<Params>(
   async (request, { supabase, companyId, log, requestId }, { params }) => {
     const { id } = await params
     if (id !== companyId) {
-      return errorResponseFromCode('COMPANY_RESET_NOT_FOUND', log, { requestId })
+      return privateNoStore(errorResponseFromCode('COMPANY_RESET_NOT_FOUND', log, { requestId }))
     }
 
     const validation = await validateBody(request, CompanyMigrationResetSchema, {
       log,
       operation: 'company.migration-reset.execute',
     })
-    if (!validation.success) return validation.response
+    if (!validation.success) return privateNoStore(validation.response)
 
     const body = validation.data
     const { data, error } = await supabase.rpc('reset_company_for_migration', {
@@ -103,14 +99,16 @@ export const POST = withRouteContext<Params>(
 
     if (error) {
       log.error('migration reset RPC failed', error)
-      return errorResponseFromCode('COMPANY_RESET_FAILED', log, { requestId })
+      return privateNoStore(errorResponseFromCode('COMPANY_RESET_FAILED', log, { requestId }))
     }
 
-    const result = data as ResetRpcResult | null
-    if (!result?.ok) return rpcFailure(result ?? { ok: false }, log, requestId)
+    const result = data as CompanyMigrationResetRpcResult | null
+    if (!result?.ok) {
+      return privateNoStore(rpcFailure(result ?? { ok: false }, log, requestId))
+    }
     if (!result.replacement_company_id) {
       log.error('migration reset RPC returned no replacement company id')
-      return errorResponseFromCode('COMPANY_RESET_FAILED', log, { requestId })
+      return privateNoStore(errorResponseFromCode('COMPANY_RESET_FAILED', log, { requestId }))
     }
 
     const response = NextResponse.json({
@@ -129,7 +127,7 @@ export const POST = withRouteContext<Params>(
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 365,
     })
-    return response
+    return privateNoStore(response)
   },
   { requireWrite: true },
 )

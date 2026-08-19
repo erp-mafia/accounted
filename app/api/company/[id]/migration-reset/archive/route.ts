@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   estimateArchiveSize,
   generateBaseDataArchive,
@@ -12,7 +11,6 @@ export const runtime = 'nodejs'
 export const maxDuration = 300
 
 const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
-const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -131,29 +129,31 @@ export const GET = withRouteContext<Params>(
 
     try {
       const estimate = await estimateArchiveSize(archiveClient, reset.source_company_id, 'all')
+      const plannedSizeBytes = includeDocuments
+        ? estimate.total_bytes
+        : Math.max(0, estimate.total_bytes - estimate.document_bytes)
       if (estimateOnly) {
-        return NextResponse.json(
+        return privateNoStore(NextResponse.json(
           {
             data: {
               ...estimate,
               archived_at: reset.created_at,
               size_limit_bytes: SIZE_LIMIT_BYTES,
-              within_limit: estimate.total_bytes <= SIZE_LIMIT_BYTES,
+              within_limit: plannedSizeBytes <= SIZE_LIMIT_BYTES,
             },
           },
-          { headers: PRIVATE_NO_STORE_HEADERS },
-        )
+        ))
       }
 
-      if (includeDocuments && estimate.total_bytes > SIZE_LIMIT_BYTES) {
-        return NextResponse.json(
+      if (plannedSizeBytes > SIZE_LIMIT_BYTES) {
+        return privateNoStore(NextResponse.json(
           {
             error: 'archive_too_large',
-            size_bytes: estimate.total_bytes,
+            size_bytes: plannedSizeBytes,
             size_limit_bytes: SIZE_LIMIT_BYTES,
           },
-          { status: 413, headers: PRIVATE_NO_STORE_HEADERS },
-        )
+          { status: 413 },
+        ))
       }
 
       const zipBuffer = await generateBaseDataArchive(archiveClient, reset.source_company_id, {
@@ -184,9 +184,8 @@ export const GET = withRouteContext<Params>(
         companyId,
         sourceCompanyId: reset.source_company_id,
       })
-      return NextResponse.json(
-        { error: getErrorMessage(error) },
-        { status: 500, headers: PRIVATE_NO_STORE_HEADERS },
+      return privateNoStore(
+        errorResponseFromCode('COMPANY_RESET_FAILED', log, { requestId }),
       )
     }
   },

@@ -234,10 +234,11 @@ The migration files are
 `supabase/migrations/20260818141018_harden_company_migration_reset_eligibility.sql`
 and
 `supabase/migrations/20260818143004_close_migration_reset_archive_gaps.sql` and
-`supabase/migrations/20260818224000_block_vat_state_migration_reset.sql`.
+`supabase/migrations/20260818224000_block_vat_state_migration_reset.sql` and
+`supabase/migrations/20260818231500_block_external_filing_staging_state.sql`.
 Apply them only to the permitted `erpbase` staging branch through the normal
 migration workflow, then deploy application code. Never deploy the UI/API
-before both RPC migrations exist.
+before all listed migrations exist.
 
 Before production rollout:
 

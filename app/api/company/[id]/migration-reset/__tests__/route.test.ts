@@ -88,6 +88,7 @@ describe('/api/company/[id]/migration-reset', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(404)
     expect(body.error.code).toBe('COMPANY_RESET_NOT_FOUND')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
@@ -102,6 +103,7 @@ describe('/api/company/[id]/migration-reset', () => {
 
     expect(status).toBe(403)
     expect(body.error.code).toBe('COMPANY_RESET_FORBIDDEN')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
   it('returns the owner eligibility preview', async () => {
@@ -129,6 +131,7 @@ describe('/api/company/[id]/migration-reset', () => {
     expect(status).toBe(200)
     expect(body.data.eligible).toBe(true)
     expect(body.data.counts.documents).toBe(2)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(supabase.rpc).toHaveBeenCalledWith(
       'get_company_migration_reset_eligibility',
       { p_company_id: 'company-1' },
@@ -218,5 +221,22 @@ describe('/api/company/[id]/migration-reset', () => {
 
     expect(status).toBe(500)
     expect(body.error.code).toBe('COMPANY_RESET_FAILED')
+  })
+
+  it('falls back to COMPANY_RESET_FAILED for an unexpected RPC code', async () => {
+    enqueue({ data: { ok: false, code: 'SOME_INTERNAL_CODE' }, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/company/company-1/migration-reset', {
+        method: 'POST',
+        body: validBody,
+      }),
+      params,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('COMPANY_RESET_FAILED')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 })

@@ -18,21 +18,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
+import { getBranding } from '@/lib/branding/service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-interface ResetBlocker {
-  code: string
-  count: number
-}
-
-interface ResetEligibility {
-  eligible: boolean
-  display_name: string
-  created_at: string
-  window_ends_at: string
-  counts: Record<string, number>
-  blockers: ResetBlocker[]
-}
+import { useFormat } from '@/lib/hooks/use-format'
+import {
+  COMPANY_MIGRATION_RESET_COUNT_KEYS,
+  type CompanyMigrationResetBlocker,
+  type CompanyMigrationResetEligibility,
+} from '@/types'
 
 interface CompanyMigrationResetDialogProps {
   companyId: string
@@ -41,22 +34,7 @@ interface CompanyMigrationResetDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-const COUNT_KEYS = [
-  'journal_entries',
-  'journal_entry_lines',
-  'transactions',
-  'fiscal_periods',
-  'documents',
-  'voucher_sequences',
-  'sie_imports',
-  'bank_file_imports',
-  'skattekonto_file_imports',
-  'bank_connections',
-  'customers',
-  'suppliers',
-  'invoices',
-  'supplier_invoices',
-] as const
+const branding = getBranding()
 
 function readApiError(body: unknown, fallback: string): string {
   if (!body || typeof body !== 'object') return fallback
@@ -78,8 +56,9 @@ export function CompanyMigrationResetDialog({
   const t = useTranslations('settings_company')
   const router = useRouter()
   const { toast } = useToast()
+  const { formatDateLong } = useFormat()
   const loadFailedMessage = t('reset_load_failed')
-  const [eligibility, setEligibility] = useState<ResetEligibility | null>(null)
+  const [eligibility, setEligibility] = useState<CompanyMigrationResetEligibility | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isResetting, setIsResetting] = useState(false)
@@ -104,7 +83,7 @@ export function CompanyMigrationResetDialog({
         if (!response.ok) {
           throw new Error(readApiError(body, loadFailedMessage))
         }
-        if (!cancelled) setEligibility(body.data as ResetEligibility)
+        if (!cancelled) setEligibility(body.data as CompanyMigrationResetEligibility)
       } catch (error) {
         if (!cancelled) {
           setLoadError(
@@ -137,10 +116,12 @@ export function CompanyMigrationResetDialog({
     if (!nextOpen) resetForm()
   }
 
-  function blockerMessage(blocker: ResetBlocker): string {
+  function blockerMessage(blocker: CompanyMigrationResetBlocker): string {
     switch (blocker.code) {
       case 'migration_window_expired':
-        return t('reset_blocker_window')
+        return t('reset_blocker_window', {
+          date: eligibility ? formatDateLong(eligibility.window_ends_at) : '',
+        })
       case 'sandbox_company':
         return t('reset_blocker_sandbox')
       case 'locked_or_closed_periods':
@@ -167,10 +148,11 @@ export function CompanyMigrationResetDialog({
     }
   }
 
-  function countLabel(key: (typeof COUNT_KEYS)[number]): string {
+  function countLabel(key: (typeof COMPANY_MIGRATION_RESET_COUNT_KEYS)[number]): string {
     switch (key) {
       case 'journal_entries': return t('reset_count_journal_entries')
       case 'journal_entry_lines': return t('reset_count_journal_entry_lines')
+      case 'committed_import_entries': return t('reset_count_committed_import_entries')
       case 'transactions': return t('reset_count_transactions')
       case 'fiscal_periods': return t('reset_count_fiscal_periods')
       case 'documents': return t('reset_count_documents')
@@ -217,6 +199,9 @@ export function CompanyMigrationResetDialog({
         title: t('reset_success_title'),
         description: t('reset_success_description'),
       })
+      setIsResetting(false)
+      onOpenChange(false)
+      resetForm()
       router.push('/import')
       router.refresh()
     } catch (error) {
@@ -277,7 +262,7 @@ export function CompanyMigrationResetDialog({
             <div>
               <h3 className="mb-2 text-sm font-medium">{t('reset_retained_heading')}</h3>
               <dl className="divide-y divide-border border-y border-border">
-                {COUNT_KEYS.map((key) => (
+                {COMPANY_MIGRATION_RESET_COUNT_KEYS.map((key) => (
                   <div key={key} className="flex items-center justify-between py-2 text-sm">
                     <dt className="text-muted-foreground">{countLabel(key)}</dt>
                     <dd className="tabular-nums font-medium">{eligibility.counts[key] ?? 0}</dd>
@@ -311,7 +296,7 @@ export function CompanyMigrationResetDialog({
                       onCheckedChange={(checked) => setConfirmedNoFilings(checked === true)}
                     />
                     <Label htmlFor="migration-reset-no-filings" className="font-normal leading-5">
-                      {t('reset_confirm_no_filings')}
+                      {t('reset_confirm_no_filings', { appName: branding.appName })}
                     </Label>
                   </div>
                   <div className="flex items-start gap-3">
