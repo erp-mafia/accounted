@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getCompanyEntityType } from '@/lib/company/context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
@@ -32,13 +33,12 @@ export const GET = withRouteContext(
         (async () => {
           // Entity type picks the regelverk the materiality wording cites:
           // K1 (BFNAR 2006:1) for enskild firma, K2 (BFNAR 2016:10) for AB.
-          const { data: companyRow } = await supabase
-            .from('companies')
-            .select('entity_type')
-            .eq('id', companyId)
-            .single()
+          // Resolved via getCompanyEntityType: company_settings is the
+          // read-primary source (what the user edits in Settings), with
+          // companies.entity_type as the fallback.
+          const entityType = await getCompanyEntityType(supabase, companyId)
           return detectPeriodisering(supabase, companyId, id, {
-            entityType: (companyRow?.entity_type as PeriodiseringEntityType | undefined) ?? null,
+            entityType: (entityType as PeriodiseringEntityType | null) ?? null,
           })
         })().catch((err) => {
           // Auto-detect is best-effort: a malformed invoice description

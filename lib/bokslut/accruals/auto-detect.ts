@@ -17,8 +17,13 @@ export type PeriodiseringEntityType = 'enskild_firma' | 'aktiebolag'
  * below 5 000 kr, and K2 (BFNAR 2016:10) lets a company skip accruing
  * individual recurring costs below 5 000 kr. Suggestions under the floor are
  * TAGGED as low confidence rather than dropped: the relief is a MAY, never a
- * MUST, so the user can still accept them. Personnel costs (BAS 7xxx) must
- * always be accrued regardless of amount, so the floor never applies there.
+ * MUST, so the user can still accept them. Personnel costs (BAS 70xx-76xx)
+ * must always be accrued regardless of amount, so the floor never applies
+ * there. The floor is a SEK threshold: for foreign-currency invoices it is
+ * compared against the subtotal_sek-derived amount, and when no SEK amount
+ * can be resolved the floor is skipped entirely rather than compared against
+ * a number in the wrong currency (mirrors the accrual-k2-hint decision,
+ * DECISIONS.md 2026-07-26).
  */
 export const PERIODISERING_MATERIALITY_FLOOR_SEK = 5000
 
@@ -55,6 +60,8 @@ interface InvoiceRow {
   invoice_number: string | null
   invoice_date: string
   subtotal: number
+  currency: string | null
+  subtotal_sek: number | null
   notes: string | null
   customers: { name: string } | null
   invoice_items: { description: string }[] | null
@@ -65,6 +72,8 @@ interface SupplierInvoiceRow {
   supplier_invoice_number: string
   invoice_date: string
   subtotal: number
+  currency: string | null
+  subtotal_sek: number | null
   notes: string | null
   suppliers: { name: string } | null
   supplier_invoice_items: { description: string; account_number: string }[] | null
@@ -101,12 +110,17 @@ function buildSuggestion(args: {
   sourceId: string
   sourceType: PeriodiseringSource
   netAmount: number
+  /** Invoice currency (ISO code). Null/undefined is treated as SEK. */
+  currency: string | null
+  /** SEK-converted net amount (subtotal_sek). Null when the invoice predates
+   *  the SEK columns or no exchange rate was captured. */
+  netAmountSek: number | null
   description: string | null
   itemDescriptions: string[]
   /** Account numbers of the source lines (supplier invoices only; customer
    *  invoices carry no expense accounts). The first entry doubles as the
    *  default expense account for a future manual-entry pre-fill; today the
-   *  list only drives the personnel-cost (7xxx) exemption from the
+   *  list only drives the personnel-cost (70xx-76xx) exemption from the
    *  materiality floor. */
   itemAccounts: string[]
   sourceLabel: string
@@ -115,7 +129,7 @@ function buildSuggestion(args: {
    *  2006:1) for enskild firma, K2 (BFNAR 2016:10) otherwise. */
   entityType?: PeriodiseringEntityType | null
 }): PeriodiseringSuggestion | null {
-  const { sourceId, sourceType, netAmount, description, itemDescriptions, itemAccounts, sourceLabel, periodEnd, entityType } = args
+  const { sourceId, sourceType, netAmount, currency, netAmountSek, description, itemDescriptions, itemAccounts, sourceLabel, periodEnd, entityType } = args
   if (!Number.isFinite(netAmount) || netAmount <= 0) return null
 
   // Try the head text first, then each item: first hit wins.
@@ -160,10 +174,29 @@ function buildSuggestion(args: {
 
   // Materiality floor: below 5 000 kr the K1/K2 simplifications say the post
   // normally need not be accrued, so downgrade to "low" (the wizard only
-  // pre-ticks "high") and say why. Personnel costs (7xxx) are exempt from
-  // the relief and keep their confidence: they must always be accrued.
-  const touchesPersonnelCost = itemAccounts.some((a) => a?.startsWith('7'))
-  if (periodisationAmount < PERIODISERING_MATERIALITY_FLOOR_SEK && !touchesPersonnelCost) {
+  // pre-ticks "high") and say why. Personnel costs (BAS 70xx-76xx) are exempt
+  // from the relief and keep their confidence: they must always be accrued.
+  // 78xx (avskrivningar) and 79xx (övriga rörelsekostnader) are NOT personnel
+  // costs, so they get the relief like any other cost.
+  //
+  // The floor is a SEK threshold. For a foreign-currency invoice the
+  // comparison uses the periodisation share of subtotal_sek; when no SEK
+  // amount is available the floor is SKIPPED entirely, because tagging on an
+  // amount in the wrong currency is strictly worse than not tagging
+  // (accrual-k2-hint precedent, DECISIONS.md 2026-07-26).
+  const touchesPersonnelCost = itemAccounts.some((a) => /^7[0-6]/.test(a ?? ''))
+  const isSek = !currency || currency === 'SEK'
+  let periodisationAmountSek: number | null = null
+  if (isSek) {
+    periodisationAmountSek = periodisationAmount
+  } else if (netAmountSek != null && Number.isFinite(netAmountSek) && netAmountSek > 0) {
+    periodisationAmountSek = roundOre(netAmountSek * ratio)
+  }
+  if (
+    periodisationAmountSek !== null &&
+    periodisationAmountSek < PERIODISERING_MATERIALITY_FLOOR_SEK &&
+    !touchesPersonnelCost
+  ) {
     confidence = 'low'
     const regelverk = entityType === 'enskild_firma' ? 'K1' : 'K2'
     reason = `${reason} Under 5 000 kr: behöver normalt inte periodiseras (${regelverk}).`
@@ -246,7 +279,7 @@ export async function detectPeriodisering(
   // status label that overlaps with sent here.
   const { data: invoiceRows } = await supabase
     .from('invoices')
-    .select('id, invoice_number, invoice_date, subtotal, notes, customers(name), invoice_items(description)')
+    .select('id, invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, customers(name), invoice_items(description)')
     .eq('company_id', companyId)
     .gte('invoice_date', periodStart)
     .lte('invoice_date', periodEnd)
@@ -256,7 +289,7 @@ export async function detectPeriodisering(
   const { data: supplierRows } = await supabase
     .from('supplier_invoices')
     .select(
-      'id, supplier_invoice_number, invoice_date, subtotal, notes, suppliers(name), supplier_invoice_items(description, account_number)',
+      'id, supplier_invoice_number, invoice_date, subtotal, currency, subtotal_sek, notes, suppliers(name), supplier_invoice_items(description, account_number)',
     )
     .eq('company_id', companyId)
     .gte('invoice_date', periodStart)
@@ -276,6 +309,8 @@ export async function detectPeriodisering(
       sourceId: row.id,
       sourceType: 'invoice',
       netAmount: Number(row.subtotal ?? 0),
+      currency: row.currency ?? null,
+      netAmountSek: row.subtotal_sek != null ? Number(row.subtotal_sek) : null,
       description: row.notes,
       itemDescriptions: itemDescs,
       itemAccounts: [],
@@ -298,6 +333,8 @@ export async function detectPeriodisering(
       sourceId: row.id,
       sourceType: 'supplier_invoice',
       netAmount: Number(row.subtotal ?? 0),
+      currency: row.currency ?? null,
+      netAmountSek: row.subtotal_sek != null ? Number(row.subtotal_sek) : null,
       description: row.notes,
       itemDescriptions: itemDescs,
       itemAccounts,

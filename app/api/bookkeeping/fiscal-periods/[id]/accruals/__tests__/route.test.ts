@@ -10,9 +10,11 @@ vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
 }))
 
+const mockGetCompanyEntityType = vi.fn()
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getCompanyEntityType: (...args: unknown[]) => mockGetCompanyEntityType(...args),
 }))
 
 vi.mock('@/lib/auth/require-write', () => ({
@@ -44,25 +46,25 @@ beforeAll(async () => {
   ;({ GET } = await import('../route'))
 }, 30_000)
 
-/** Minimal supabase mock: auth + the GET handler's companies entity_type
- *  lookup (which feeds the K1/K2 wording in detectPeriodisering). */
-function mockSupabaseWithEntityType(entityType: string | null) {
+/** Minimal supabase mock: auth only. The entity_type resolution is mocked at
+ *  the getCompanyEntityType boundary (company_settings-primary with a
+ *  companies fallback lives inside lib/company/context, tested there). */
+function mockSupabase() {
   return {
     auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) },
     from: vi.fn(() => ({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
-      single: vi.fn().mockResolvedValue({
-        data: entityType ? { entity_type: entityType } : null,
-        error: entityType ? null : { message: 'not found' },
-      }),
+      single: vi.fn().mockResolvedValue({ data: null, error: { message: 'not found' } }),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
     })),
   }
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockCreateClient.mockResolvedValue(mockSupabaseWithEntityType('aktiebolag'))
+  mockCreateClient.mockResolvedValue(mockSupabase())
+  mockGetCompanyEntityType.mockResolvedValue('aktiebolag')
 })
 
 describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
@@ -115,7 +117,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
   })
 
   it('threads entity_type enskild_firma to the detector', async () => {
-    mockCreateClient.mockResolvedValue(mockSupabaseWithEntityType('enskild_firma'))
+    mockGetCompanyEntityType.mockResolvedValue('enskild_firma')
     mockBuildAccrualsProposal.mockResolvedValue({
       fiscalPeriod: { id: 'period-1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
       proposals: [],
@@ -134,8 +136,8 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
     )
   })
 
-  it('falls back to null entityType when the company row cannot be read', async () => {
-    mockCreateClient.mockResolvedValue(mockSupabaseWithEntityType(null))
+  it('falls back to null entityType when the entity type cannot be resolved', async () => {
+    mockGetCompanyEntityType.mockResolvedValue(null)
     mockBuildAccrualsProposal.mockResolvedValue({
       fiscalPeriod: { id: 'period-1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
       proposals: [],

@@ -306,6 +306,8 @@ describe('detectPeriodisering', () => {
           supplier_invoice_number: 'LF-500',
           invoice_date: '2025-12-15',
           subtotal: 1200,
+          currency: 'SEK',
+          subtotal_sek: 1200,
           notes: 'Domänförnyelse period 2026-01-01 till 2026-12-31',
           suppliers: { name: 'Registrar AB' },
           supplier_invoice_items: [{ description: 'Domän', account_number: '6540' }],
@@ -392,7 +394,79 @@ describe('detectPeriodisering', () => {
     expect(result[0].reason).not.toContain('Under 5 000 kr')
   })
 
-  it('never applies the floor to personnel-cost (7xxx) lines', async () => {
+  it('compares the floor against the SEK amount for a foreign-currency invoice', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    // 460 EUR is numerically under 5 000, but its SEK equivalent (5 200 kr)
+    // is ABOVE the floor: comparing the raw EUR number would wrongly tag it.
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-eur',
+          supplier_invoice_number: 'LF-510',
+          invoice_date: '2025-12-15',
+          subtotal: 460,
+          currency: 'EUR',
+          subtotal_sek: 5200,
+          notes: 'SaaS-licens period 2026-01-01 till 2026-12-31',
+          suppliers: { name: 'Euro SaaS GmbH' },
+          supplier_invoice_items: [{ description: 'License', account_number: '5800' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe('high')
+    expect(result[0].reason).not.toContain('Under 5 000 kr')
+  })
+
+  it('skips the floor entirely for a foreign-currency invoice without subtotal_sek', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    // No SEK amount is resolvable, so the floor must not tag on the raw EUR
+    // number (wrong currency): the suggestion keeps its confidence.
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-eur-nosek',
+          supplier_invoice_number: 'LF-511',
+          invoice_date: '2025-12-15',
+          subtotal: 120,
+          currency: 'EUR',
+          subtotal_sek: null,
+          notes: 'SaaS-licens period 2026-01-01 till 2026-12-31',
+          suppliers: { name: 'Euro SaaS GmbH' },
+          supplier_invoice_items: [{ description: 'License', account_number: '5800' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe('high')
+    expect(result[0].reason).not.toContain('Under 5 000 kr')
+  })
+
+  it('never applies the floor to personnel-cost (70xx-76xx) lines', async () => {
     mock.enqueue({
       data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
       error: null,
@@ -425,6 +499,41 @@ describe('detectPeriodisering', () => {
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe('high')
     expect(result[0].reason).not.toContain('Under 5 000 kr')
+  })
+
+  it('applies the floor to a 79xx line: not a personnel cost', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    // 7990 (övriga rörelsekostnader) is in the 7xxx class but is NOT a
+    // personnel cost: the exemption is BAS 70xx-76xx only, so a small 7990
+    // post gets the normal under-floor downgrade.
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-7990',
+          supplier_invoice_number: 'LF-504',
+          invoice_date: '2025-12-15',
+          subtotal: 1500,
+          notes: 'Diverse kostnad period 2026-01-01 till 2026-03-31',
+          suppliers: { name: 'Diverse AB' },
+          supplier_invoice_items: [{ description: 'Övrigt', account_number: '7990' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe('low')
+    expect(result[0].reason).toContain('Under 5 000 kr')
   })
 
   it('applies the floor to a small customer-invoice revenue deferral', async () => {
