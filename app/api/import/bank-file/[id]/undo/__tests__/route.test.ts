@@ -4,8 +4,9 @@
  * Exercises the route through the real withRouteContext wrapper, mocking its
  * auth/company/write dependencies and the undoBankFileImport service. Covers:
  * 401, 403 viewer, 403 non-owner/admin (RPC 42501 mapped to
- * BANK_FILE_UNDO_FORBIDDEN), the success passthrough with the skip report,
- * and the BANK_FILE_UNDO_FAILED envelope with the service's Swedish reason.
+ * BANK_FILE_UNDO_FORBIDDEN), 404 unknown import (BANK_FILE_UNDO_NOT_FOUND),
+ * the success passthrough with the skip report, and the
+ * BANK_FILE_UNDO_FAILED envelope with the service's Swedish reason.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -104,6 +105,30 @@ describe('DELETE /api/import/bank-file/[id]/undo', () => {
     expect(body.error.message).toBe(
       'Endast ägare eller administratörer kan ångra en bankfilsimport.',
     )
+  })
+
+  it('maps an unknown import to BANK_FILE_UNDO_NOT_FOUND (404)', async () => {
+    undoBankFileImportMock.mockResolvedValue({
+      success: false,
+      deletedTransactions: 0,
+      skippedBooked: 0,
+      skippedMatchHistory: 0,
+      notFound: true,
+      error: 'Importen hittades inte',
+    })
+
+    const response = await DELETE(
+      createMockRequest('/api/import/bank-file/import-1/undo', { method: 'DELETE' }),
+      routeParams(),
+    )
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en: string }
+    }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('BANK_FILE_UNDO_NOT_FOUND')
+    expect(body.error.message).toBe('Bankfilsimporten kunde inte hittas.')
+    expect(body.error.message_en).toBe('Bank file import not found.')
   })
 
   it('passes through the deletion report on a successful undo', async () => {

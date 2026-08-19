@@ -28,12 +28,14 @@ describe('undoBankFileImport', () => {
     reset()
   })
 
-  it('fails without calling the RPC when the import is not found', async () => {
+  it('fails with the notFound flag, without calling the RPC, when the import is not found', async () => {
     enqueue({ data: null, error: { message: 'not found' } })
 
     const result = await undoBankFileImport(client, 'company-1', 'import-1', 'user-1')
 
     expect(result.success).toBe(false)
+    // The route maps this to 404 BANK_FILE_UNDO_NOT_FOUND (not the generic 400).
+    expect(result.notFound).toBe(true)
     expect(result.error).toBe('Importen hittades inte')
     expect(supabase.rpc).not.toHaveBeenCalled()
   })

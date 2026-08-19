@@ -33,6 +33,11 @@ export const DELETE = withRouteContext(
     const result = await undoBankFileImport(supabase, companyId!, id, user.id)
 
     if (!result.success) {
+      if (result.notFound) {
+        // 404, not 400: the id names no import in this company (same
+        // semantics as the SIE import routes' 'Import not found').
+        return errorResponseFromCode('BANK_FILE_UNDO_NOT_FOUND', opLog, { requestId })
+      }
       if (result.forbidden) {
         return errorResponseFromCode('BANK_FILE_UNDO_FORBIDDEN', opLog, { requestId })
       }

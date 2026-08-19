@@ -1713,6 +1713,11 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_en:
       'This file looks like a Skatteverket tax account statement. Use the skattekonto import instead.',
   },
+  BANK_FILE_UNDO_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bankfilsimporten kunde inte hittas.',
+    message_en: 'Bank file import not found.',
+  },
   BANK_FILE_UNDO_FAILED: {
     httpStatus: 400,
     message_sv: 'Bankfilsimporten kunde inte ångras.',

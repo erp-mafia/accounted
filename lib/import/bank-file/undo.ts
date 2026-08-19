@@ -18,6 +18,8 @@ export interface UndoBankFileImportResult {
   skippedMatchHistory: number
   /** True when the caller is not an owner/admin of the company (RPC 42501). */
   forbidden?: boolean
+  /** True when no import with this id exists in the company (404, not 400). */
+  notFound?: boolean
   error?: string
 }
 
@@ -59,7 +61,7 @@ export async function undoBankFileImport(
     .single()
 
   if (!importRecord) {
-    return { ...FAILED, error: 'Importen hittades inte' }
+    return { ...FAILED, notFound: true, error: 'Importen hittades inte' }
   }
 
   if (importRecord.status !== 'completed') {
