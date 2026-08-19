@@ -41,7 +41,7 @@ interface RecordedChain {
 function makeChain(result: { data?: unknown; error?: unknown }): RecordedChain {
   const calls: RecordedCall[] = []
   const chain: Record<string, unknown> = { _calls: calls }
-  for (const m of ['select', 'eq', 'in', 'is', 'order', 'limit', 'update', 'delete', 'insert']) {
+  for (const m of ['select', 'eq', 'neq', 'in', 'is', 'order', 'limit', 'update', 'delete', 'insert']) {
     chain[m] = vi.fn((...args: unknown[]) => {
       calls.push({ method: m, args })
       return chain
@@ -118,6 +118,9 @@ describe('POST /connect never-activated row cleanup', () => {
       } else if (call === 2) {
         // The sweep: returns the deleted never-activated rows.
         chain = makeChain({ data: [{ id: 'stale-1' }, { id: 'old-error' }] })
+      } else if (call === 3) {
+        // Existing-connection guard: nothing established remains post-sweep.
+        chain = makeChain({ data: null })
       } else {
         // Insert of the fresh connection row.
         chain = makeChain({ data: { id: 'new-conn' } })
@@ -186,6 +189,9 @@ describe('POST /connect never-activated row cleanup', () => {
         chain = makeChain({ data: null })
       } else if (call === 2) {
         chain = makeChain({ data: [{ id: 'old-error' }] })
+      } else if (call === 3) {
+        // Existing-connection guard: the swept zombie is gone, nothing remains.
+        chain = makeChain({ data: null })
       } else {
         chain = makeChain({ data: { id: 'new-conn' } })
       }
@@ -211,14 +217,16 @@ describe('POST /connect auth-method pinning wired into startAuthorization', () =
     })
   })
 
-  // Fresh-connect from() sequence: recent-pending check, zombie sweep, insert.
-  // Explicit psu_type in the body skips the companies entity_type lookup.
+  // Fresh-connect from() sequence: recent-pending check, zombie sweep,
+  // existing-connection guard, insert. Explicit psu_type in the body skips
+  // the companies entity_type lookup.
   function makeFreshConnectContext() {
     let call = 0
     return makeContext(() => {
       call++
       if (call === 1) return makeChain({ data: null })
       if (call === 2) return makeChain({ data: [] })
+      if (call === 3) return makeChain({ data: null })
       return makeChain({ data: { id: 'new-conn' } })
     })
   }
@@ -338,5 +346,100 @@ describe('POST /connect auth-method pinning wired into startAuthorization', () =
     expect(args[1]).toBe('SE')
     expect(args[4]).toBe('business')
     expect(args[5]).toBe('BANKID')
+  })
+})
+
+describe('POST /connect existing-connection guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireCapability).mockResolvedValue(null)
+    mockGetPreferredAuthMethod.mockResolvedValue(undefined)
+    mockStartAuthorization.mockResolvedValue({
+      url: 'https://bank.example/auth',
+      authorization_id: 'auth-1',
+    })
+  })
+
+  it('returns 409 EXISTING_CONNECTION when a non-revoked row for the same bank exists', async () => {
+    const chains: RecordedChain[] = []
+    let call = 0
+    const ctx = makeContext(() => {
+      call++
+      let chain: RecordedChain
+      if (call === 1) {
+        // No live pending attempt.
+        chain = makeChain({ data: null })
+      } else if (call === 2) {
+        // Sweep finds nothing to delete.
+        chain = makeChain({ data: [] })
+      } else {
+        // Guard: an established expired row for this bank survives the sweep.
+        chain = makeChain({ data: { id: 'existing-1', status: 'expired' } })
+      }
+      chains.push(chain)
+      return chain
+    })
+
+    const response = await connectRoute().handler(makeConnectRequest(), ctx)
+
+    expect(response.status).toBe(409)
+    const body = (await response.json()) as {
+      code: string
+      existing_connection_id: string
+      error: string
+    }
+    expect(body.code).toBe('EXISTING_CONNECTION')
+    expect(body.existing_connection_id).toBe('existing-1')
+    // The bank flow is never started and no duplicate row is inserted.
+    expect(mockStartAuthorization).not.toHaveBeenCalled()
+    for (const chain of chains) {
+      expect(chain._calls.some((c) => c.method === 'insert')).toBe(false)
+    }
+    // The guard excludes revoked rows: those are free to reconnect over.
+    const guard = chains[2]
+    const neqCall = guard._calls.find((c) => c.method === 'neq')
+    expect(neqCall?.args).toEqual(['status', 'revoked'])
+  })
+
+  it('force_new: true bypasses the guard and inserts a fresh row', async () => {
+    const chains: RecordedChain[] = []
+    let call = 0
+    const ctx = makeContext(() => {
+      call++
+      let chain: RecordedChain
+      if (call === 1) {
+        chain = makeChain({ data: null })
+      } else if (call === 2) {
+        chain = makeChain({ data: [] })
+      } else {
+        // With force_new the guard query is skipped entirely: call 3 is the
+        // insert of the fresh connection row.
+        chain = makeChain({ data: { id: 'new-conn' } })
+      }
+      chains.push(chain)
+      return chain
+    })
+
+    const req = new Request('https://test.local/api/extensions/ext/enable-banking/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        aspsp_name: 'Nordea',
+        aspsp_country: 'SE',
+        psu_type: 'business',
+        force_new: true,
+      }),
+    })
+
+    const response = await connectRoute().handler(req, ctx)
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { connection_id: string }
+    expect(body.connection_id).toBe('new-conn')
+    expect(mockStartAuthorization).toHaveBeenCalledTimes(1)
+    // No guard query ran: nothing used neq('status', 'revoked').
+    for (const chain of chains) {
+      expect(chain._calls.some((c) => c.method === 'neq')).toBe(false)
+    }
   })
 })

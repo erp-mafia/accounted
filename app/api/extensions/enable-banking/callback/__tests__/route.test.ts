@@ -9,12 +9,20 @@ vi.mock('@/extensions/general/enable-banking/lib/api-client', () => ({
 }))
 
 // Use hoisted to safely create mock objects referenced in vi.mock factories
-const { mockFrom, mockUpsertFromPsd2, mockAllocate } = vi.hoisted(() => {
+const { mockFrom, mockUpsertFromPsd2, mockAllocate, mockSupersede } = vi.hoisted(() => {
   const mockFrom = vi.fn()
   const mockUpsertFromPsd2 = vi.fn()
   const mockAllocate = vi.fn()
-  return { mockFrom, mockUpsertFromPsd2, mockAllocate }
+  const mockSupersede = vi.fn()
+  return { mockFrom, mockUpsertFromPsd2, mockAllocate, mockSupersede }
 })
+
+// The supersede pass has its own unit tests (extensions/general/enable-banking/
+// __tests__/supersede.test.ts); here it is mocked so these tests assert the
+// callback WIRES it correctly without scripting its internal queries.
+vi.mock('@/extensions/general/enable-banking/lib/supersede', () => ({
+  supersedeSiblingConnections: (...args: unknown[]) => mockSupersede(...args),
+}))
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn().mockResolvedValue({
@@ -45,6 +53,13 @@ vi.mock('@/lib/cash-accounts/service', () => ({
   },
   defaultLedgerForCurrency: (currency: string) =>
     CURRENCY_DEFAULTS[currency.toUpperCase()] ?? '1930',
+  // Real (trivial) implementation: the route normalizes IBANs when stamping
+  // dedup scopes onto accounts_data.
+  normalizeIban: (iban?: string | null) => {
+    if (!iban) return null
+    const normalized = iban.replace(/\s+/g, '').toUpperCase()
+    return normalized || null
+  },
 }))
 
 vi.stubEnv('NEXT_PUBLIC_APP_URL', 'http://localhost:3000')
@@ -74,6 +89,7 @@ describe('GET /api/extensions/enable-banking/callback', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockUpsertFromPsd2.mockResolvedValue(undefined)
+    mockSupersede.mockResolvedValue({ supersededIds: [], dedupScopeByIban: new Map() })
     // Allocator stand-in mirroring the real behavior: currency default first,
     // then the next free 1931–1959 slot (skipping other currency defaults).
     mockAllocate.mockImplementation(
@@ -324,6 +340,180 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     // transactions and picks up the new uid.
     expect(mirrored.reuse_cash_account_id).toBe('cash-row-1')
     expect(mirrored.external_uid).toBe('acc-new')
+  })
+
+  it('runs the same-bank supersede pass with the new session, accounts, and connection identity', async () => {
+    // Fresh connect while an EXPIRED sibling to the same bank exists: the
+    // supersede pass (unit-tested separately) must be handed everything it
+    // needs to park the sibling and re-point its transactions.
+    let callIndex = 0
+    mockFrom.mockImplementation(() => {
+      callIndex++
+      if (callIndex === 1) {
+        return mockChain({
+          data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'TestBank', status: 'pending' },
+          error: null,
+        })
+      }
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn(() => chain)
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: { id: 'conn-1', bank_name: 'TestBank', company_id: 'company-1', user_id: 'user-1' },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-1',
+      accounts: [
+        { uid: 'acc-1', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2024-12-31T00:00:00Z' },
+      aspsp: { name: 'TestBank', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    expect(response.status).toBe(200)
+    // Reading the body drives the stream, which awaits the finalize work.
+    await response.text()
+
+    expect(mockSupersede).toHaveBeenCalledTimes(1)
+    const [, input] = mockSupersede.mock.calls[0] as [unknown, {
+      companyId: string
+      userId: string
+      newConnectionId: string
+      bankName: string | null
+      newSessionId: string | null
+      newAccounts: Array<{ uid: string; dedup_scope?: string }>
+    }]
+    expect(input.companyId).toBe('company-1')
+    expect(input.userId).toBe('user-1')
+    expect(input.newConnectionId).toBe('conn-1')
+    expect(input.bankName).toBe('TestBank')
+    expect(input.newSessionId).toBe('sess-1')
+    expect(input.newAccounts).toHaveLength(1)
+    // First-connect accounts get their dedup scope pinned to the normalized
+    // IBAN (byte-identical to what lib/sync.ts derives).
+    expect(input.newAccounts[0].dedup_scope).toBe('SE1234')
+  })
+
+  it('applies dedup scopes carried from superseded siblings to accounts_data', async () => {
+    mockSupersede.mockResolvedValue({
+      supersededIds: ['old-1'],
+      // The sibling's account was first ingested under its old provider uid.
+      dedupScopeByIban: new Map([['SE1234', 'legacy-uid']]),
+    })
+
+    const capturedUpdates: Record<string, unknown>[] = []
+    let callIndex = 0
+    mockFrom.mockImplementation(() => {
+      callIndex++
+      if (callIndex === 1) {
+        return mockChain({
+          data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'TestBank', status: 'pending' },
+          error: null,
+        })
+      }
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn((payload: Record<string, unknown>) => {
+        capturedUpdates.push(payload)
+        return chain
+      })
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: { id: 'conn-1', bank_name: 'TestBank', company_id: 'company-1', user_id: 'user-1' },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-1',
+      accounts: [
+        { uid: 'acc-1', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2024-12-31T00:00:00Z' },
+      aspsp: { name: 'TestBank', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    expect(response.status).toBe(200)
+    await response.text()
+
+    // The follow-up accounts_data write persists the carried scope so the
+    // renewal keeps minting the sibling's external_ids.
+    const followUp = capturedUpdates[capturedUpdates.length - 1]
+    const persisted = followUp.accounts_data as Array<{ uid: string; dedup_scope?: string }>
+    expect(persisted.find((a) => a.uid === 'acc-1')?.dedup_scope).toBe('legacy-uid')
+  })
+
+  it('carries the prior accounts_data dedup scope across an in-place reconnect', async () => {
+    const capturedUpdates: Record<string, unknown>[] = []
+    let callIndex = 0
+    mockFrom.mockImplementation(() => {
+      callIndex++
+      if (callIndex === 1) {
+        // The established row being reconnected in place: its account was
+        // first ingested under the uid the ASPSP has since replaced.
+        return mockChain({
+          data: {
+            id: 'conn-1',
+            user_id: 'user-1',
+            company_id: 'company-1',
+            bank_name: 'TestBank',
+            status: 'expired',
+            session_id: null,
+            accounts_data: [
+              { uid: 'uid-old', iban: 'SE1234', currency: 'SEK', dedup_scope: 'uid-first' },
+            ],
+          },
+          error: null,
+        })
+      }
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn((payload: Record<string, unknown>) => {
+        capturedUpdates.push(payload)
+        return chain
+      })
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: { id: 'conn-1', bank_name: 'TestBank', company_id: 'company-1', user_id: 'user-1' },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [
+        // Same IBAN, freshly minted uid.
+        { uid: 'uid-new', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2024-12-31T00:00:00Z' },
+      aspsp: { name: 'TestBank', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    expect(response.status).toBe(200)
+    await response.text()
+
+    const connectionWrite = capturedUpdates[0]
+    const accountsData = connectionWrite.accounts_data as Array<{
+      uid: string
+      dedup_scope?: string
+    }>
+    expect(accountsData).toHaveLength(1)
+    expect(accountsData[0].uid).toBe('uid-new')
+    // The scope pinned at first ingest survives the uid change.
+    expect(accountsData[0].dedup_scope).toBe('uid-first')
   })
 
   it('deletes the fresh row and streams an error redirect when the session exchange fails', async () => {

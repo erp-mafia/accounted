@@ -62,6 +62,7 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'bank_connection.consent_granted',
   'bank_connection.account_selection_changed',
   'bank_connection.revoked',
+  'bank_connection.superseded',
   'bank_connection.cash_account_mirror_failed',
 ]
 

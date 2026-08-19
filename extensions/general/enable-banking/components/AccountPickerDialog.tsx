@@ -263,11 +263,29 @@ export function AccountPickerDialog({
     if (!open || !isInitialSelection || !company?.id || accounts.length === 0) return
     let cancelled = false
     ;(async () => {
+      // Include rows this connection superseded: a renewal that arrived via a
+      // fresh connect owns no transactions until the callback's supersede has
+      // re-pointed them, and the gap-fill default must not depend on winning
+      // that race. A failed lookup (e.g. column not deployed yet) falls back
+      // to probing this connection alone.
+      let probeConnectionIds: string[] = [connectionId]
+      const { data: supersededRows, error: supersededError } = await supabase
+        .from('bank_connections')
+        .select('id')
+        .eq('company_id', company.id)
+        .eq('superseded_by', connectionId)
+      if (cancelled) return
+      if (!supersededError && supersededRows) {
+        probeConnectionIds = [
+          connectionId,
+          ...(supersededRows as Array<{ id: string }>).map((r) => r.id),
+        ]
+      }
       const { data, error } = await supabase
         .from('transactions')
         .select('date')
         .eq('company_id', company.id)
-        .eq('bank_connection_id', connectionId)
+        .in('bank_connection_id', probeConnectionIds)
         .order('date', { ascending: false })
         .limit(1)
         .maybeSingle()

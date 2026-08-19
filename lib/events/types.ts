@@ -59,6 +59,11 @@ export type CoreEvent =
   | { type: 'bank_connection.consent_granted'; payload: { connectionId: string; bankName: string | null; accountCount: number; consentExpiresAt: string | null; userId: string; companyId: string } }
   | { type: 'bank_connection.account_selection_changed'; payload: { connectionId: string; bankName: string | null; previousStatus: string; newStatus: string; enabledCount: number; totalCount: number; userId: string; companyId: string } }
   | { type: 'bank_connection.revoked'; payload: { connectionId: string; bankName: string | null; userId: string; companyId: string } }
+  // Emitted when a new or renewed connection supersedes an older row for the
+  // same bank in the same company: the old row is parked as 'revoked' with
+  // superseded_by pointing at the replacement, and its transactions are
+  // re-pointed. connectionId is the SUPERSEDED (old) row, mirroring .revoked.
+  | { type: 'bank_connection.superseded'; payload: { connectionId: string; supersededById: string; bankName: string | null; userId: string; companyId: string } }
   // Emitted when the PSD2 callback fails to mirror a returned account into
   // cash_accounts. ASVS V16 / ISO 27001 A.8.15: security-relevant failures
   // must land in a structured audit log (event_log, 30-day TTL) rather than

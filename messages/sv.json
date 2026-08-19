@@ -5708,6 +5708,8 @@
     "bank_sync_new_since_last_visit_one": "1 ny banktransaktion sen ditt senaste besök",
     "bank_sync_new_since_last_visit_many": "{count} nya banktransaktioner sen ditt senaste besök",
     "bank_sync_new_since_last_visit_dismiss": "Stäng",
+    "bank_sync_duplicates_skipped_one": "1 redan importerad hoppades över.",
+    "bank_sync_duplicates_skipped_many": "{count} redan importerade hoppades över.",
     "bank_reconnect": "Förnya anslutning",
     "bank_sync_session_expired": "Bankanslutningen har löpt ut",
     "bank_sync_session_expired_desc": "Förnya anslutningen för att fortsätta synka transaktioner.",

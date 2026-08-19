@@ -294,7 +294,7 @@ export const enableBankingExtension: Extension = {
         const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
         if (blocked) return blocked
 
-        const { aspsp_name, aspsp_country, psu_type: explicitPsuType, connection_id: reconnectId } = await request.json()
+        const { aspsp_name, aspsp_country, psu_type: explicitPsuType, connection_id: reconnectId, force_new: forceNew } = await request.json()
 
         // Reconnect mode: re-authorize an EXISTING connection in place (no
         // disconnect required). The aspsp identity falls back to the stored row
@@ -459,6 +459,45 @@ export const enableBankingExtension: Extension = {
                 count: sweptRows.length,
                 bank: resolvedAspspName,
               })
+            }
+
+            // A fresh connect while an ESTABLISHED (non-revoked) connection to
+            // the same bank exists is almost always a renewal that should go
+            // through the reconnect path: a second row duplicates the
+            // connection and used to strand the old one in "Åtgärd krävs"
+            // forever. 409 with the existing id lets the client offer "förnya
+            // i stället"; force_new is the deliberate escape hatch for a
+            // genuinely separate login at the same bank (the callback's
+            // supersede then leaves non-overlapping account sets alone).
+            // Runs AFTER the sweep so a never-activated zombie cannot block
+            // a legitimate fresh connect.
+            if (forceNew !== true) {
+              const { data: establishedRow } = await supabase
+                .from('bank_connections')
+                .select('id, status')
+                .eq('company_id', companyId)
+                .eq('bank_name', resolvedAspspName)
+                .neq('status', 'revoked')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+
+              if (establishedRow) {
+                log.info('[enable-banking] Rejecting fresh connect: bank already connected', {
+                  existing_id: establishedRow.id,
+                  existing_status: establishedRow.status,
+                  bank: resolvedAspspName,
+                })
+                return NextResponse.json(
+                  {
+                    error:
+                      'Det finns redan en anslutning till den här banken. Förnya den befintliga anslutningen i stället.',
+                    code: 'EXISTING_CONNECTION',
+                    existing_connection_id: establishedRow.id,
+                  },
+                  { status: 409 }
+                )
+              }
             }
           }
 

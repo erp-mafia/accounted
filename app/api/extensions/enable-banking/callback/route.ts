@@ -10,8 +10,10 @@ import {
   upsertFromPsd2,
   resolvePsd2LedgerAccount,
   defaultLedgerForCurrency,
+  normalizeIban,
 } from '@/lib/cash-accounts/service'
 import { fanOutSessionRenewal } from '@/extensions/general/enable-banking/lib/session-sharing'
+import { supersedeSiblingConnections } from '@/extensions/general/enable-banking/lib/supersede'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
 
 // This route emits bank_connection.consent_granted / .cash_account_mirror_failed
@@ -41,6 +43,13 @@ interface PendingConnection {
    * lib/session-sharing.ts). Null on a first-time connect.
    */
   session_id: string | null
+  /**
+   * The accounts the row held BEFORE this callback overwrites them, so the
+   * dedup scope each account was first ingested under survives an in-place
+   * reconnect (several ASPSPs mint new uids on re-authorization).
+   * Null on a first-time connect.
+   */
+  accounts_data: StoredAccount[] | null
 }
 
 // Shown in the settings banner when the session exchange/finalize fails.
@@ -180,7 +189,7 @@ export async function GET(request: Request) {
   // state stays a plain redirect.
   const { data: pendingConnection, error: findError } = await supabase
     .from('bank_connections')
-    .select('id, user_id, company_id, bank_name, status, session_id')
+    .select('id, user_id, company_id, bank_name, status, session_id, accounts_data')
     .eq('oauth_state', state)
     .in('status', ['pending', 'expired', 'error'])
     .single()
@@ -307,16 +316,44 @@ async function finalizeConnection(
   // them here. The first sync (after the user enables specific accounts)
   // populates balance + balance_updated_at via lib/sync.ts. Accounts the
   // user deselects never have their balance pulled.
-  const accountsMetadata: StoredAccount[] = accounts.map((account: AccountInfo) => ({
-    uid: account.uid,
-    iban: account.account_id?.iban,
-    name: account.name || account.product,
-    currency: account.currency,
-    // Default to enabled. The user is presented with a picker
-    // immediately after this callback to uncheck unwanted accounts
-    // before any transactions are fetched.
-    enabled: true,
-  }))
+  // Dedup scopes the row's accounts were first ingested under. The scope of a
+  // legacy account without an explicit dedup_scope is what lib/sync.ts derived
+  // for it historically: the normalized IBAN, else its (then-current) uid.
+  // Matching by IBAN first covers the ASPSPs that mint new uids on every
+  // re-authorization; the uid match covers no-IBAN accounts whose uid is
+  // stable. A no-IBAN account whose uid changed cannot be matched here: it
+  // gets a fresh scope, same as before this field existed.
+  const priorAccounts = pendingConnection.accounts_data ?? []
+  const priorScopeByIban = new Map<string, string>()
+  const priorScopeByUid = new Map<string, string>()
+  for (const prior of priorAccounts) {
+    const priorIban = normalizeIban(prior.iban)
+    const priorScope = prior.dedup_scope || priorIban || prior.uid
+    if (priorIban && !priorScopeByIban.has(priorIban)) priorScopeByIban.set(priorIban, priorScope)
+    if (!priorScopeByUid.has(prior.uid)) priorScopeByUid.set(prior.uid, priorScope)
+  }
+
+  const accountsMetadata: StoredAccount[] = accounts.map((account: AccountInfo) => {
+    const normalizedIban = normalizeIban(account.account_id?.iban)
+    return {
+      uid: account.uid,
+      iban: account.account_id?.iban,
+      name: account.name || account.product,
+      currency: account.currency,
+      // Default to enabled. The user is presented with a picker
+      // immediately after this callback to uncheck unwanted accounts
+      // before any transactions are fetched.
+      enabled: true,
+      // Pin the external_id account scope at first ingest so it survives
+      // re-authorizations. Byte-identical to the derivation lib/sync.ts
+      // applied before this field existed (normalized IBAN, else uid).
+      dedup_scope:
+        (normalizedIban ? priorScopeByIban.get(normalizedIban) : undefined) ??
+        priorScopeByUid.get(account.uid) ??
+        normalizedIban ??
+        account.uid,
+    }
+  })
 
   // Stay in 'pending_selection' until the user confirms which accounts to sync.
   // The cron and manual sync routes both skip this status, so no transactions
@@ -371,6 +408,46 @@ async function finalizeConnection(
     }
   }
 
+  // A successful (re)connect supersedes any older row for the same bank in
+  // this company. Without this, a renewal performed via the bank list left
+  // the old row parked in 'expired' ("Åtgärd krävs" forever, red chip) with
+  // the transaction history stranded on it, so the picker treated the renewal
+  // as a first connect and re-imported bookkept periods. Runs BEFORE the
+  // cash_accounts mirror below: the supersede demotes the old row's ledger
+  // claims to manual, and the mirror then promotes them onto this row by
+  // IBAN, exactly like a disconnect-then-reconnect. Non-fatal: this
+  // connection is already renewed and correct.
+  let carriedScopeDirty = false
+  try {
+    const supersedeResult = await supersedeSiblingConnections(supabase, {
+      companyId: updatedConnection.company_id,
+      userId: updatedConnection.user_id,
+      newConnectionId: updatedConnection.id,
+      bankName: updatedConnection.bank_name ?? null,
+      newSessionId: session_id,
+      newAccounts: accountsMetadata,
+    })
+    // Carry the superseded rows' dedup scopes onto this row's accounts so a
+    // renewal keeps minting the same transaction external_ids (see
+    // StoredAccount.dedup_scope). Persisted by the accounts_data write below.
+    if (supersedeResult.dedupScopeByIban.size > 0) {
+      for (const account of accountsMetadata) {
+        const normalizedIban = normalizeIban(account.iban)
+        const carried = normalizedIban
+          ? supersedeResult.dedupScopeByIban.get(normalizedIban)
+          : undefined
+        if (carried && account.dedup_scope !== carried) {
+          account.dedup_scope = carried
+          carriedScopeDirty = true
+        }
+      }
+    }
+  } catch (supersedeError) {
+    log.error('supersede pass failed', supersedeError as Error, {
+      connectionId: updatedConnection.id,
+    })
+  }
+
   // Mirror each PSD2 account into cash_accounts so routing decisions read
   // from the canonical entity table. Accounts already mirrored under the same
   // (connection, uid) keep their ledger_account — re-deriving it here would
@@ -390,7 +467,7 @@ async function finalizeConnection(
     ),
   )
   const assignedLedgers = new Set<string>(existingLedgerByUid.values())
-  let accountsDataDirty = false
+  let accountsDataDirty = carriedScopeDirty
 
   for (const account of accountsMetadata) {
     let targetLedger = existingLedgerByUid.get(account.uid)

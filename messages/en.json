@@ -5708,6 +5708,8 @@
     "bank_sync_new_since_last_visit_one": "1 new bank transaction since your last visit",
     "bank_sync_new_since_last_visit_many": "{count} new bank transactions since your last visit",
     "bank_sync_new_since_last_visit_dismiss": "Dismiss",
+    "bank_sync_duplicates_skipped_one": "1 already imported was skipped.",
+    "bank_sync_duplicates_skipped_many": "{count} already imported were skipped.",
     "bank_reconnect": "Reconnect",
     "bank_sync_session_expired": "Bank connection expired",
     "bank_sync_session_expired_desc": "Reconnect to keep syncing transactions.",
