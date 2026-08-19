@@ -706,9 +706,13 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 : 'justify-between pl-5 pr-3',
             )}
           >
+            {/* Native title tooltip (same convention as the collapsed rail
+                items) so the logo square is labeled on hover, not a mystery
+                mark (#1664). */}
             <Link
               href="/"
               aria-label={getBranding().appName}
+              title={getBranding().appName}
               className="flex items-center rounded-lg"
             >
               <Image
@@ -732,6 +736,19 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               )}
             </button>
           </div>
+
+          {/* One-click company switch pinned at the top of the sidebar
+              (#1664): consultants hop between companies constantly, and the
+              user-menu flyout costs three clicks. That flyout stays as the
+              secondary path. Hidden on the collapsed rail (no room at 64px);
+              the UserMenu avatar still reaches the same switch there. Kept
+              outside the data-ph-unmask navs so the company name stays
+              masked in replays, like the mobile sheet's switcher. */}
+          {!collapsed && (
+            <div className="flex-shrink-0 px-4 pb-1">
+              <CompanySwitcher />
+            </div>
+          )}
 
           {/* Nav items in their own scroll container so the user block
               below stays sticky (concept PR 2). */}
