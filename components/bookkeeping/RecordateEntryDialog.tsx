@@ -171,6 +171,11 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
                 originalet i sin period, och en ny verifikation bokförs med
                 samma rader på det nya datumet.
               </p>
+              <p>
+                Spårbarheten ligger i stornokedjan: originalet,
+                stornoverifikationen och den nya verifikationen förblir synliga
+                i bokföringen och länkade till varandra.
+              </p>
             </RattelseExplainer>
           </div>
         </DialogHeader>

@@ -49,6 +49,26 @@ const MIN_USEFUL_HEIGHT = 120
 /** Height floor so a cramped viewport still shows a scrollable list. */
 const HEIGHT_FLOOR = 96
 
+/**
+ * Shallow equality over the full position shape. The scroll/resize reposition
+ * handler uses this to skip setState when the recomputed geometry is
+ * unchanged (e.g. scroll events that did not move the anchor), so React does
+ * not re-render the open dropdown on every scroll tick.
+ */
+export function isSameDropdownPosition(
+  a: DropdownPosition | null,
+  b: DropdownPosition,
+): boolean {
+  return (
+    a !== null &&
+    a.left === b.left &&
+    a.width === b.width &&
+    a.maxHeight === b.maxHeight &&
+    a.top === b.top &&
+    a.bottom === b.bottom
+  )
+}
+
 export function computeDropdownPosition(
   anchor: DropdownAnchorRect,
   viewport: DropdownViewportSize,

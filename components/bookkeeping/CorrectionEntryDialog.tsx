@@ -277,6 +277,11 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
                 hittar den under originalets räkenskapsår.
               </p>
               <p>
+                Spårbarheten ligger i stornokedjan: originalet,
+                stornoverifikationen och ändringsverifikationen förblir synliga
+                i bokföringen och länkade till varandra.
+              </p>
+              <p>
                 Tar du bort ett konto ur de rättade raderna nollställs det
                 (stornon återför det). Vill du bara återföra hela verifikatet
                 utan att ersätta det, använd Återför (storno) istället.

@@ -100,6 +100,10 @@ export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCor
                 ändringsverifikation.
               </p>
               <p>
+                Varje rättelse loggas med vem och när, och det ursprungliga
+                innehållet förblir synligt i verifikatets rättelsehistorik.
+              </p>
+              <p>
                 Om månaden redan är momsdeklarerad kan en datumflytt påverka
                 den inlämnade deklarationen.
               </p>

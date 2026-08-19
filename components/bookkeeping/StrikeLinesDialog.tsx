@@ -233,6 +233,10 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
                 perioder.
               </p>
               <p>
+                Varje rättelse loggas med vem och när, och de ursprungliga
+                raderna förblir synliga i verifikatets rättelsehistorik.
+              </p>
+              <p>
                 Om månaden redan är momsdeklarerad kan en ändring av momskonton
                 påverka den inlämnade deklarationen.
               </p>

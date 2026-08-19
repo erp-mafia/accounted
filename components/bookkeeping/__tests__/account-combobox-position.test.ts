@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeDropdownPosition,
+  isSameDropdownPosition,
   DROPDOWN_PREFERRED_WIDTH,
   DROPDOWN_VIEWPORT_MARGIN,
   DROPDOWN_ANCHOR_GAP,
@@ -86,5 +87,42 @@ describe('computeDropdownPosition', () => {
     expect(pos.top).toBe(72 + DROPDOWN_ANCHOR_GAP)
     // Cramped viewport: the height floor keeps the list usable and scrollable.
     expect(pos.maxHeight).toBeGreaterThanOrEqual(96)
+  })
+})
+
+describe('isSameDropdownPosition', () => {
+  const anchor = { top: 200, bottom: 232, left: 300, width: 160 }
+
+  it('is false against null (no previous position)', () => {
+    expect(isSameDropdownPosition(null, computeDropdownPosition(anchor, desktop))).toBe(false)
+  })
+
+  it('is true for two computations off an unmoved anchor', () => {
+    const a = computeDropdownPosition(anchor, desktop)
+    const b = computeDropdownPosition({ ...anchor }, desktop)
+    expect(isSameDropdownPosition(a, b)).toBe(true)
+  })
+
+  it.each([
+    ['left', { left: 301 }],
+    ['width', { width: 545 }],
+    ['maxHeight', { maxHeight: 299 }],
+    ['top', { top: 237 }],
+  ] as const)('is false when %s differs', (_field, patch) => {
+    const a = computeDropdownPosition(anchor, desktop)
+    expect(isSameDropdownPosition(a, { ...a, ...patch })).toBe(false)
+  })
+
+  it('distinguishes open-below from open-above at the same coordinates', () => {
+    const below = computeDropdownPosition(anchor, desktop)
+    const above = computeDropdownPosition({ top: 800, bottom: 832, left: 300, width: 160 }, desktop)
+    expect(below.top).toBeDefined()
+    expect(above.bottom).toBeDefined()
+    expect(isSameDropdownPosition(below, above)).toBe(false)
+    // Flipping sides toggles which of top/bottom is undefined: the guard must
+    // compare both, not just the defined one.
+    expect(
+      isSameDropdownPosition(below, { ...below, top: undefined, bottom: 123 }),
+    ).toBe(false)
   })
 })

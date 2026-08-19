@@ -14,6 +14,7 @@ import {
 } from '@/lib/bookkeeping/account-search'
 import {
   computeDropdownPosition,
+  isSameDropdownPosition,
   type DropdownPosition,
 } from '@/components/bookkeeping/account-combobox-position'
 import type { BASAccount } from '@/types'
@@ -151,21 +152,29 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   const updateDropdownPosition = useCallback(() => {
     if (flat || !containerRef.current) return
     const rect = containerRef.current.getBoundingClientRect()
-    setDropdownPos(
-      computeDropdownPosition(
-        { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
-        { width: window.innerWidth, height: window.innerHeight },
-      ),
+    const next = computeDropdownPosition(
+      { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
+      { width: window.innerWidth, height: window.innerHeight },
     )
+    // Bail out when nothing moved (e.g. scroll ticks that did not shift the
+    // anchor): returning the previous reference lets React skip the re-render.
+    setDropdownPos((prev) => (isSameDropdownPosition(prev, next) ? prev : next))
   }, [flat])
 
   useLayoutEffect(() => {
     if (!isOpen || flat) return
     updateDropdownPosition()
-    window.addEventListener('scroll', updateDropdownPosition, true)
+    const handleScroll = (e: Event) => {
+      // Scrolling the portaled panel's own list never moves the anchor (the
+      // panel is position: fixed): repositioning on it would just churn state
+      // while the user scrolls the account list.
+      if (e.target instanceof Node && portalPanelRef.current?.contains(e.target)) return
+      updateDropdownPosition()
+    }
+    window.addEventListener('scroll', handleScroll, true)
     window.addEventListener('resize', updateDropdownPosition)
     return () => {
-      window.removeEventListener('scroll', updateDropdownPosition, true)
+      window.removeEventListener('scroll', handleScroll, true)
       window.removeEventListener('resize', updateDropdownPosition)
     }
   }, [isOpen, flat, updateDropdownPosition])
