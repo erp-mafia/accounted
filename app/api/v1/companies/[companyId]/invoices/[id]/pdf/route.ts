@@ -33,8 +33,13 @@ import {
 import { INVOICE_PDF_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
+// The ciphertext is fetched here, for the render only: the template derives
+// the masked personnummer (YYYYMMDD-XXXX) in the deduction box from it. It is
+// deliberately not part of INVOICE_PDF_COLUMNS, which pins what the API
+// projects; nothing on this route echoes the row.
 const PDF_FETCH_SELECT = `
   ${INVOICE_PDF_COLUMNS},
+  deduction_personnummer_encrypted,
   customer:customers(*),
   items:invoice_items(*)
 `

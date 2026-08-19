@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createMockRequest, createMockSupabase, parseJsonResponse } from '@/tests/helpers'
+import { eventBus } from '@/lib/events/bus'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 vi.mock('../lib/import-documents', () => {
@@ -17,29 +18,44 @@ vi.mock('../lib/import-documents', () => {
   }
 })
 
-vi.mock('../lib/provider-client', () => ({
-  createConsent: vi.fn(),
-  getConsent: vi.fn(),
-  listConsents: vi.fn(),
-  generateOtc: vi.fn(),
-  consumeOAuthState: vi.fn(),
-  getAuthUrl: vi.fn(),
-  exchangeAuthToken: vi.fn(),
-  submitProviderToken: vi.fn(),
-  acceptConsent: vi.fn(),
-  deleteConsent: vi.fn(),
-  resolveConsent: vi.fn(),
-  fetchCompanyInfoDirect: vi.fn(),
-  ProviderTokenInvalidError: class ProviderTokenInvalidError extends Error {},
-  ProviderCompanyMismatchError: class ProviderCompanyMismatchError extends Error {},
-  ConsentNotFoundError: class ConsentNotFoundError extends Error {},
-}))
+vi.mock('../lib/provider-client', () => {
+  class ProviderTokenInvalidError extends Error {
+    constructor(
+      message: string,
+      readonly kind: 'credentials' | 'company-not-found' = 'credentials',
+    ) {
+      super(message)
+    }
+  }
+
+  return {
+    createConsent: vi.fn(),
+    getConsent: vi.fn(),
+    listConsents: vi.fn(),
+    generateOtc: vi.fn(),
+    consumeOAuthState: vi.fn(),
+    getAuthUrl: vi.fn(),
+    exchangeAuthToken: vi.fn(),
+    submitProviderToken: vi.fn(),
+    acceptConsent: vi.fn(),
+    deleteConsent: vi.fn(),
+    resolveConsent: vi.fn(),
+    fetchCompanyInfoDirect: vi.fn(),
+    ProviderTokenInvalidError,
+    ProviderCompanyMismatchError: class ProviderCompanyMismatchError extends Error {},
+    ConsentNotFoundError: class ConsentNotFoundError extends Error {},
+  }
+})
 
 import { arcimMigrationExtension } from '../index'
 import {
   FortnoxDocumentScopesRequiredError,
   importProviderDocuments,
 } from '../lib/import-documents'
+import {
+  ProviderTokenInvalidError,
+  submitProviderToken,
+} from '../lib/provider-client'
 
 const route = (arcimMigrationExtension.apiRoutes ?? []).find(
   (candidate) =>
@@ -48,6 +64,10 @@ const route = (arcimMigrationExtension.apiRoutes ?? []).find(
 
 type RouteHandler = (request: Request, ctx?: ExtensionContext) => Promise<Response>
 const handler = route.handler as RouteHandler
+const submitTokenRoute = (arcimMigrationExtension.apiRoutes ?? []).find(
+  (candidate) => candidate.method === 'POST' && candidate.path === '/submit-token',
+)!
+const submitTokenHandler = submitTokenRoute.handler as RouteHandler
 
 function buildContext(): ExtensionContext {
   const { supabase } = createMockSupabase()
@@ -67,9 +87,25 @@ function request(dryRun: boolean) {
   )
 }
 
+function submitTokenRequest() {
+  return createMockRequest(
+    'http://localhost/api/extensions/ext/arcim-migration/submit-token',
+    {
+      method: 'POST',
+      body: {
+        consentId: 'consent-1',
+        provider: 'bokio',
+        apiToken: 'not-a-real-token',
+        companyId: '9b408943-7a1e-47ac-85a7-ac52b2c210d3',
+      },
+    },
+  )
+}
+
 describe('POST /import-documents', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
   })
 
   it('passes dry-run discovery through without storing documents', async () => {
@@ -116,5 +152,63 @@ describe('POST /import-documents', () => {
     expect(body.error.code).toBe('PROVIDER_DOCUMENT_SCOPES_REQUIRED')
     expect(body.error.message).toContain('Koppla om Fortnox')
     expect(body.error.message_en).toContain('Reconnect Fortnox')
+  })
+})
+
+describe('POST /submit-token Bokio error mapping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('reports a 401/403 authentication verdict as rejected integration details', async () => {
+    ;(submitProviderToken as Mock).mockRejectedValue(
+      new ProviderTokenInvalidError('Bokio rejected the integration token (HTTP 403)'),
+    )
+
+    const response = await submitTokenHandler(submitTokenRequest(), buildContext())
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en?: string }
+    }>(response)
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('PROVIDER_TOKEN_INVALID')
+    expect(body.error.message).toContain('avvisade autentiseringen')
+    expect(body.error.message_en).toContain('rejected the authentication')
+  })
+
+  it('reports a Bokio 404 as a company-ID failure instead of rejected credentials', async () => {
+    ;(submitProviderToken as Mock).mockRejectedValue(
+      new ProviderTokenInvalidError(
+        'Bokio does not know that company id',
+        'company-not-found',
+      ),
+    )
+
+    const response = await submitTokenHandler(submitTokenRequest(), buildContext())
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en?: string }
+    }>(response)
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('BOKIO_COMPANY_NOT_FOUND')
+    expect(body.error.message).toContain('företags-ID')
+    expect(body.error.message_en).toContain('company ID')
+  })
+
+  it('keeps an unclassified provider/configuration failure generic', async () => {
+    ;(submitProviderToken as Mock).mockRejectedValue(
+      new Error('Bokio company-information response is missing companyInformation'),
+    )
+
+    const response = await submitTokenHandler(submitTokenRequest(), buildContext())
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en?: string }
+    }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('PROVIDER_TOKEN_SUBMIT_FAILED')
+    expect(body.error.message).toContain('kontrollera integrationsuppgifterna')
+    expect(body.error.message_en).toContain('verify the integration details')
   })
 })

@@ -36,6 +36,10 @@ vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
   createTransactionJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
 }))
 
+vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
+  detectBookingDuplicate: vi.fn().mockResolvedValue(null),
+}))
+
 // Mock VAT validation
 vi.mock('@/lib/vat/vies-client', () => ({
   validateVatNumber: vi.fn().mockResolvedValue({ valid: true }),
@@ -130,7 +134,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: tx },                                 // fetch transaction
         { data: settings },                           // fetch company settings
         { data: [{ id: 'fp-1' }] },                  // fiscal period check
-        { data: null, error: null },                  // update transaction
+        { data: [{ id: 'tx-1' }], error: null },      // transaction CAS matched
         { data: null, error: null },                  // upsert counterparty template
         { data: null, error: null },                  // update pending op status
       ])

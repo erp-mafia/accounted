@@ -341,6 +341,39 @@ export class BookkeepingDatabaseError extends Error {
   }
 }
 
+export interface UnusedVoucherAllocation {
+  fiscalPeriodId: string
+  voucherSeries: string
+  voucherNumber: number
+}
+
+const UNUSED_VOUCHER_ALLOCATION = Symbol('unused-voucher-allocation')
+
+/**
+ * Preserve the exact durable sequence allocation when an engine operation
+ * fails before any journal-entry row uses the number. The original error type
+ * is retained so existing API mappings remain unchanged.
+ */
+export function withUnusedVoucherAllocation<T>(
+  error: T,
+  allocation: UnusedVoucherAllocation,
+): T {
+  if (error instanceof Error) {
+    Object.defineProperty(error, UNUSED_VOUCHER_ALLOCATION, {
+      value: allocation,
+      enumerable: false,
+    })
+  }
+  return error
+}
+
+export function getUnusedVoucherAllocation(error: unknown): UnusedVoucherAllocation | null {
+  if (!(error instanceof Error)) return null
+  return (
+    error as Error & { [UNUSED_VOUCHER_ALLOCATION]?: UnusedVoucherAllocation }
+  )[UNUSED_VOUCHER_ALLOCATION] ?? null
+}
+
 // ============================================================================
 // Type guard
 // ============================================================================

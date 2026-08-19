@@ -259,6 +259,47 @@ describe('gnubok_agi_status: run-scoped filing state', () => {
     expect(result.local_state).toMatchObject({ status: 'signed', salaryRunId: 'sr-original' })
   })
 
+  it('cache deleted by the kvittens cron: the receipt is served from agi_declarations (#1597)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueStatusReads(enqueue, {
+      id: 'sr-original',
+      period_year: 2026,
+      period_month: 6,
+      agi_generated_at: '2026-06-28T08:00:00Z',
+      agi_submitted_at: '2026-07-01T09:00:00Z',
+    }, null)
+    enqueue({
+      data: {
+        salary_run_id: 'sr-original',
+        status: 'submitted',
+        kvittensnummer: 'KV-ORIG-1',
+        submitted_at: '2026-07-01T09:00:00Z',
+        response_data: {
+          signeradAv: '191212121212',
+          signeradTid: '2026-07-01T09:00:00Z',
+          submittedAtEstimated: false,
+        },
+      },
+    }) // agi_declarations
+
+    const result = (await agiStatus.execute(
+      { salary_run_id: 'sr-original' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as {
+      filing_state: string
+      kvittensnummer: string | null
+      local_state: Record<string, unknown> | null
+    }
+
+    expect(result.filing_state).toBe('signed')
+    expect(result.kvittensnummer).toBe('KV-ORIG-1')
+    expect(result.local_state).toMatchObject({
+      status: 'signed',
+      signeradAv: '191212121212',
+      submittedAtEstimated: false,
+      source: 'declaration',
+    })
+  })
+
   it('a run with neither XML nor record reports none', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueueStatusReads(enqueue, {

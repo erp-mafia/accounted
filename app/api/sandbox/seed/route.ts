@@ -13,6 +13,7 @@ import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { buildSandboxCustomers } from './customers'
 import { buildSandboxPendingOperations } from './pending-operations'
 import { buildSandboxArticles } from './articles'
+import { buildSandboxVatDeadline } from './vat-deadline'
 import {
   buildSandboxLedgerHistory,
   SANDBOX_LEDGER_ACCOUNT_NUMBERS,
@@ -823,9 +824,7 @@ export async function POST(request: Request) {
     )
 
     // 12. Create deadlines
-    const momsDeadline = new Date(today)
-    momsDeadline.setMonth(momsDeadline.getMonth() + 2)
-    momsDeadline.setDate(12)
+    const momsDeadline = buildSandboxVatDeadline(today)
 
     const { error: dlError } = await supabase
       .from('deadlines')
@@ -833,15 +832,15 @@ export async function POST(request: Request) {
         {
           user_id: userId,
           company_id: companyId,
-          title: `Momsdeklaration Q1 ${currentYear}`,
-          due_date: toDateStr(momsDeadline),
+          title: momsDeadline.title,
+          due_date: momsDeadline.dueDate,
           deadline_type: 'tax',
           priority: 'important',
           // Current generator types: the bare 'moms'/'inkomstdeklaration'
           // types were retired and seeding them recreates legacy rows the
           // cleanup migration removed.
           tax_deadline_type: 'moms_quarterly',
-          tax_period: `${currentYear}-Q1`,
+          tax_period: momsDeadline.period,
           source: 'system',
           status: 'upcoming',
           linked_report_type: 'vat',
