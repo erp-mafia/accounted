@@ -13,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { AlertTriangle, Lock, ArrowRight } from 'lucide-react'
@@ -160,21 +161,19 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Rätta datum</DialogTitle>
+          {/* Convention 7: the how-it-works copy lives behind the "?", not in
+              the dialog flow. */}
+          <div className="flex items-center gap-2">
+            <DialogTitle>Rätta datum</DialogTitle>
+            <RattelseExplainer>
+              <p>
+                Raderna behålls oförändrade: en stornoverifikation nollställer
+                originalet i sin period, och en ny verifikation bokförs med
+                samma rader på det nya datumet.
+              </p>
+            </RattelseExplainer>
+          </div>
         </DialogHeader>
-
-        {/* Explanation */}
-        <div className="rounded-lg bg-muted/50 border p-3 text-sm text-muted-foreground">
-          <p className="font-medium text-foreground mb-1">Flytta verifikationen till rätt datum</p>
-          <p>
-            En bokförd verifikation kan inte ändras direkt. Raderna behålls oförändrade: istället
-            skapas automatiskt:
-          </p>
-          <ol className="list-decimal list-inside mt-1 space-y-0.5">
-            <li>En <strong>stornoverifikation</strong> som nollställer originalet i sin period</li>
-            <li>En ny verifikation med samma rader, bokförd på det nya datumet</li>
-          </ol>
-        </div>
 
         {/* Original */}
         <div className="space-y-1">

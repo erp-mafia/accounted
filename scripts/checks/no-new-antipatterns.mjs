@@ -82,6 +82,23 @@
  *      entitlement paywall live (diagnosed 2026-08-17). Read flags as values
  *      via lib/env/public-flags. No baseline: the count is 0, any new one is
  *      a hard failure.
+ *   11. dialog-overflow-risk: patterns that make a dialog scroll sideways.
+ *      (a) a bare `1fr` grid track inside grid-cols-[...] in a file that
+ *      imports DialogContent/SheetContent: per the CSS Grid spec a bare fr
+ *      track's implicit minimum is auto (its content's min-content size), so
+ *      the track refuses to shrink below its content and overflows the dialog
+ *      (StrikeLinesDialog and CorrectionEntryDialog shipped this, fixed
+ *      2026-08-19; TransactionBookingDialog had the safe minmax(0,1fr) idiom
+ *      all along). (b) whitespace-nowrap inside a <DialogContent>/
+ *      <SheetContent> JSX region outside DIALOG_NOWRAP_ALLOWED (numeric
+ *      columns inside their own overflow-x-auto wrapper are fine and
+ *      allowlisted per file). (c) a hand-rolled absolute overlay forcing
+ *      min-w-[>=20rem] in a file that never portals anything to
+ *      document.body: DialogContent's overflow-y-auto computes overflow-x to
+ *      auto as well, so an oversized non-portaled panel grows the dialog a
+ *      horizontal scrollbar instead of repositioning (AccountCombobox's
+ *      dropdown pre-2026-08-19). Tracked as a per-file baseline set that may
+ *      only shrink.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -492,6 +509,85 @@ function findFoldedPublicFlags() {
   return [...new Set(findings)].sort()
 }
 
+// 11. dialog-overflow-risk. See the header comment for the three patterns.
+// Files whose whitespace-nowrap cells are fixed-width numeric/tabular columns
+// living inside their OWN overflow-x-auto scroll container, so they cannot
+// widen the dialog itself:
+// - MockDataImportDialog: CSV preview built on the Table primitive, which
+//   self-wraps in overflow-auto (components/ui/table.tsx).
+// - PaymentFileDialog: payment-line table wrapped in an overflow-x-auto div.
+const DIALOG_NOWRAP_ALLOWED = new Set([
+  'components/extensions/shared/MockDataImportDialog.tsx',
+  'components/supplier-invoices/PaymentFileDialog.tsx',
+])
+
+const DIALOG_CONTENT_IMPORT_RE =
+  /import\s*\{[^}]*\b(?:DialogContent|SheetContent)\b[^}]*\}\s*from\s*['"]@\/components\/ui\/(?:dialog|sheet)['"]/
+const GRID_COLS_TEMPLATE_RE = /grid-cols-\[([^\]]+)\]/g
+const BARE_FR_TOKEN_RE = /^\d+(?:\.\d+)?fr$/
+const WIDE_MIN_W_RE = /min-w-\[(\d+(?:\.\d+)?)(rem|px)\]/g
+const PORTAL_HINT_RE = /createPortal|\bPortal\b/
+const OVERLAY_ABSOLUTE_RE = /\babsolute\b/
+const OVERLAY_Z_RE = /\bz-(?:40|50|\[\d+\])/
+
+/**
+ * Overflow-risky patterns in dialog/sheet hosts. Returns
+ * { file, where, rule } findings; the ratchet compares the file set.
+ */
+function findDialogOverflowRisks() {
+  const files = [
+    ...walk(path.join(ROOT, 'app'), ['.tsx']),
+    ...walk(path.join(ROOT, 'components'), ['.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.tsx']),
+  ]
+  const findings = []
+  for (const f of files) {
+    const r = rel(f)
+    const src = fs.readFileSync(f, 'utf8')
+    const lines = src.split('\n')
+
+    if (DIALOG_CONTENT_IMPORT_RE.test(src)) {
+      // (a) bare fr grid tracks anywhere in a dialog-hosting file.
+      lines.forEach((line, i) => {
+        for (const m of line.matchAll(GRID_COLS_TEMPLATE_RE)) {
+          if (m[1].split('_').some((token) => BARE_FR_TOKEN_RE.test(token))) {
+            findings.push({ file: r, where: `${r}:${i + 1}`, rule: 'bare-fr-grid-track' })
+          }
+        }
+      })
+      // (b) whitespace-nowrap inside the <DialogContent>/<SheetContent>
+      // region. Line-based depth tracking is a heuristic, but dialog JSX in
+      // this repo keeps the tags on their own lines.
+      if (!DIALOG_NOWRAP_ALLOWED.has(r)) {
+        let depth = 0
+        lines.forEach((line, i) => {
+          if (/<(?:Dialog|Sheet)Content\b/.test(line)) depth++
+          if (depth > 0 && line.includes('whitespace-nowrap')) {
+            findings.push({ file: r, where: `${r}:${i + 1}`, rule: 'nowrap-in-dialog' })
+          }
+          const closes = (line.match(/<\/(?:Dialog|Sheet)Content>/g) || []).length
+          depth = Math.max(0, depth - closes)
+        })
+      }
+    }
+
+    // (c) a hand-rolled absolute overlay forcing a >=20rem minimum width in a
+    // file that never portals anything: inside a scrollable DialogContent
+    // that minimum becomes a horizontal scrollbar on the dialog.
+    if (!PORTAL_HINT_RE.test(src) && OVERLAY_ABSOLUTE_RE.test(src) && OVERLAY_Z_RE.test(src)) {
+      lines.forEach((line, i) => {
+        for (const m of line.matchAll(WIDE_MIN_W_RE)) {
+          const value = parseFloat(m[1])
+          if ((m[2] === 'rem' && value >= 20) || (m[2] === 'px' && value >= 320)) {
+            findings.push({ file: r, where: `${r}:${i + 1}`, rule: 'unportaled-wide-overlay' })
+          }
+        }
+      })
+    }
+  }
+  return findings.sort((a, b) => a.where.localeCompare(b.where))
+}
+
 // Dependencies pinned to an EXACT version on purpose, because a bump broke prod
 // and must not silently return via `npm update`, a dependabot bump, or a manual
 // install. Any drift (in package.json OR the lockfile) fails CI. See DECISIONS.md.
@@ -834,7 +930,10 @@ const current = {
   extensionRoutes: findExtensionRouteFindings(ROOT),
   offLadderRadii: findOffLadderRadii(),
   foldedPublicFlags: findFoldedPublicFlags(),
+  dialogOverflowRisk: findDialogOverflowRisks(),
 }
+
+const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
 
 const isUpdate = process.argv.includes('--update')
 
@@ -848,6 +947,10 @@ if (isUpdate) {
     ledgerScanningReports: {
       count: current.ledgerScanningReports.length,
       files: current.ledgerScanningReports,
+    },
+    dialogOverflowRisk: {
+      count: dialogOverflowFiles.length,
+      files: dialogOverflowFiles,
     },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
@@ -1068,6 +1171,31 @@ if (newLedgerScans.length) {
   )
 }
 
+// 1e3. dialog-overflow-risk: per-file ratchet, a finding in a file outside
+// the baseline set is a NEW violation. Grandfathered files stay until fixed.
+const dialogOverflowBaseline = new Set(baseline.dialogOverflowRisk?.files ?? [])
+const newDialogOverflow = current.dialogOverflowRisk.filter(
+  (finding) => !dialogOverflowBaseline.has(finding.file),
+)
+const fixedDialogOverflow = [...dialogOverflowBaseline].filter(
+  (file) => !dialogOverflowFiles.includes(file),
+)
+if (newDialogOverflow.length) {
+  failed = true
+  console.error(
+    `\n✗ dialog-overflow-risk: ${newDialogOverflow.length} overflow-risky pattern(s) in new dialog/sheet file(s):`,
+  )
+  newDialogOverflow.forEach((finding) => console.error(`    ${finding.where}  (${finding.rule})`))
+  console.error(
+    '  → bare-fr-grid-track: a bare 1fr track refuses to shrink below its content; use\n' +
+      '    minmax(0,1fr), plus min-w-0 on the cell when a combobox/long text lives in it.\n' +
+      '    nowrap-in-dialog: give the table/row its own overflow-x-auto wrapper, then allowlist\n' +
+      '    the file in DIALOG_NOWRAP_ALLOWED in this script with a reason.\n' +
+      '    unportaled-wide-overlay: portal the panel to document.body with viewport-clamped\n' +
+      '    geometry, like AccountCombobox\'s dropdown or info-tooltip.tsx.',
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -1079,11 +1207,18 @@ if (current.naiveOreRound > baseline.naiveOreRound.count) {
 }
 
 // Report ratchet-down progress (informational, never fails).
-if (fixedAuthFiles.length || fixedLedgerScans.length || current.naiveOreRound < baseline.naiveOreRound.count) {
+if (
+  fixedAuthFiles.length ||
+  fixedLedgerScans.length ||
+  fixedDialogOverflow.length ||
+  current.naiveOreRound < baseline.naiveOreRound.count
+) {
   console.log('\n✓ Progress since baseline:')
   if (fixedAuthFiles.length) console.log(`    raw-route-auth: -${fixedAuthFiles.length} file(s)`)
   if (fixedLedgerScans.length)
     console.log(`    ledger-scanning-report: -${fixedLedgerScans.length} file(s)`)
+  if (fixedDialogOverflow.length)
+    console.log(`    dialog-overflow-risk: -${fixedDialogOverflow.length} file(s)`)
   if (current.naiveOreRound < baseline.naiveOreRound.count)
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
   console.log('    Run with --update to ratchet the baseline down and lock in the gains.')
@@ -1101,5 +1236,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s)).`,
 )

@@ -20,5 +20,17 @@
       "lib/bokslut/tax-provision/bolagsskatt-calculator.ts",
       "lib/bokslut/tax-provision/sarskild-loneskatt-calculator.ts"
     ]
+  },
+  "dialogOverflowRisk": {
+    "count": 7,
+    "files": [
+      "app/(dashboard)/supplier-invoices/[id]/page.tsx",
+      "components/bookkeeping/JournalEntryForm.tsx",
+      "components/invoices/PaymentBookingDialog.tsx",
+      "components/invoices/SendInvoiceDialog.tsx",
+      "components/reports/views/index.tsx",
+      "components/salary/NewEmployeeDialog.tsx",
+      "components/transactions/InvoiceMatchDialog.tsx"
+    ]
   }
 }
