@@ -222,6 +222,54 @@ describe('ingestTransactions', () => {
   })
 
   // -----------------------------------------------------------------------
+  // 1c2. Stamps bank_file_import_id from the batch option
+  // -----------------------------------------------------------------------
+  it('stamps bank_file_import_id on the insert when bankFileImportId is given', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100 })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+      bankFileImportId: 'import-1',
+    })
+
+    expect(result.imported).toBe(1)
+    const txInserts = inserts['transactions'] ?? []
+    expect(txInserts).toHaveLength(1)
+    expect(
+      (txInserts[0] as { bank_file_import_id?: string | null }).bank_file_import_id,
+    ).toBe('import-1')
+  })
+
+  it('inserts bank_file_import_id null when no batch id is given (PSD2/MCP paths)', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100 })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.imported).toBe(1)
+    const txInserts = inserts['transactions'] ?? []
+    expect(
+      (txInserts[0] as { bank_file_import_id?: string | null }).bank_file_import_id,
+    ).toBeNull()
+  })
+
+  // -----------------------------------------------------------------------
   // 1d. Transaction-method classification at the insert boundary
   // -----------------------------------------------------------------------
   it('classifies transaction_method, strips the channel phrase from the title, and persists the raw codes', async () => {

@@ -126,7 +126,11 @@ export const POST = withRouteContext(
         sieOverlap = data ?? null
       }
 
-      const ingestOptions: IngestOptions = {}
+      const ingestOptions: IngestOptions = {
+        // Stamp every inserted row with this batch so the owner/admin
+        // "undo this import" action can scope its bulk delete exactly.
+        bankFileImportId: importRecord.id,
+      }
       if (settlement_account) ingestOptions.settlementAccount = settlement_account
       if (role === 'viewer') ingestOptions.rawInsertOnly = true
       if (sieOverlap) ingestOptions.skipAutoCategorization = true

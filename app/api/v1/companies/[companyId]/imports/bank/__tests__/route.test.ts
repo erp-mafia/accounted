@@ -278,6 +278,27 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     }
   })
 
+  it('passes the bank_file_imports batch id to ingest so undo can scope its delete', async () => {
+    supabase = makeSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      bank_file_imports: { data: { id: 'import-1' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    await callRoute()
+
+    expect(ingestMock).toHaveBeenCalledTimes(1)
+    expect(ingestMock.mock.calls[0][4]).toEqual({ bankFileImportId: 'import-1' })
+  })
+
+  it('still ingests (rows unlinked) when the upsert returns no batch id', async () => {
+    // Default beforeEach supabase: bank_file_imports resolves { data: null }.
+    await callRoute()
+
+    expect(ingestMock).toHaveBeenCalledTimes(1)
+    expect(ingestMock.mock.calls[0][4]).toBeUndefined()
+  })
+
   it('stamps ids and provenance with the fallback format when an explicit override parses nothing', async () => {
     // Swedbank file forced as `seb`: the parser falls back to the detected
     // format, and external ids / import_source must follow the format the

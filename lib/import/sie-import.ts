@@ -198,7 +198,8 @@ export async function checkDuplicatePeriodImport(
 }
 
 /**
- * Client for the bulk hard-delete RPCs (replace_sie_import / undo_sie_import).
+ * Client for the bulk hard-delete RPCs (replace_sie_import / undo_sie_import /
+ * undo_bank_file_import).
  *
  * The authenticated role carries statement_timeout=8s on hosted Supabase,
  * and deleting a large import (thousands of journal_entries, each firing
@@ -213,8 +214,11 @@ export async function checkDuplicatePeriodImport(
  *
  * Falls back to the caller's client when the service key is absent
  * (unit tests, misconfigured self-hosted), same behavior as before.
+ *
+ * Exported for lib/import/bank-file/undo.ts, which needs the exact same
+ * escalation shape for undo_bank_file_import.
  */
-async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<SupabaseClient> {
+export async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<SupabaseClient> {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) return fallback
   const { createServiceClient } = await import('@/lib/supabase/server')
   return createServiceClient()

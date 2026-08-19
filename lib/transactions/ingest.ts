@@ -947,6 +947,9 @@ export async function ingestTransactions(
         merchant_name: raw.merchant_name || null,
         reference: raw.reference || null,
         import_source: raw.import_source || null,
+        // Batch link for "undo this import": only the bank-file import paths
+        // pass this; PSD2 sync and MCP rows stay NULL.
+        bank_file_import_id: options?.bankFileImportId ?? null,
         counterparty_iban: raw.counterparty_iban || null,
         counterparty_account: raw.counterparty_account || null,
       })
