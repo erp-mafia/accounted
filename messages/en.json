@@ -144,7 +144,18 @@
     "expand_nav": "Expand menu",
     "members_roles": "Members and roles",
     "subscription": "Subscription",
+    "trial_expired_cta": "Trial ended · Upgrade",
+    "subscription_lapsed_cta": "Subscription ended · Reactivate",
     "discord_community": "Discord community"
+  },
+  "trial_expired_dialog": {
+    "title": "Your trial has expired",
+    "title_dated": "Your trial expired {date}",
+    "title_lapsed": "Your subscription has ended",
+    "body_paused": "External connections are paused: the AI assistant, bank sync, Skatteverket and email sending.",
+    "body_free": "Your bookkeeping, invoices and reports are still here and cost nothing.",
+    "cta_primary": "View subscription",
+    "cta_secondary": "Continue without"
   },
   "agentKnowledge": {
     "load_error_title": "Couldn't load the knowledge profile",

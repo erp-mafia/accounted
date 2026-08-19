@@ -35,6 +35,12 @@ const BodySchema = z
       })
       .strict()
       .optional(),
+    // One-time expired-trial dialog acknowledgement: companyId -> ISO
+    // timestamp of the ack. Merged per key like create_mode, so acking one
+    // company never clears another's.
+    trial_expired_ack: z
+      .record(z.string().uuid(), z.string().datetime())
+      .optional(),
   })
   .strict()
 
@@ -78,6 +84,9 @@ export async function POST(request: Request) {
       : {}),
     ...(patch.agent_panel
       ? { agent_panel: { ...current.agent_panel, ...patch.agent_panel } }
+      : {}),
+    ...(patch.trial_expired_ack
+      ? { trial_expired_ack: { ...current.trial_expired_ack, ...patch.trial_expired_ack } }
       : {}),
   }
 

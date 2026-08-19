@@ -144,7 +144,18 @@
     "expand_nav": "Expandera menyn",
     "members_roles": "Medlemmar och roller",
     "subscription": "Abonnemang",
+    "trial_expired_cta": "Provperioden är slut · Uppgradera",
+    "subscription_lapsed_cta": "Abonnemanget har avslutats · Aktivera",
     "discord_community": "Discord-community"
+  },
+  "trial_expired_dialog": {
+    "title": "Din provperiod har löpt ut",
+    "title_dated": "Din provperiod löpte ut {date}",
+    "title_lapsed": "Ditt abonnemang har avslutats",
+    "body_paused": "De externa kopplingarna är pausade: AI-assistenten, bankkopplingen, Skatteverket och e-postutskick.",
+    "body_free": "Bokföringen, fakturorna och rapporterna finns kvar och kostar ingenting.",
+    "cta_primary": "Se abonnemang",
+    "cta_secondary": "Fortsätt utan"
   },
   "agentKnowledge": {
     "load_error_title": "Kunde inte läsa in kunskapsprofilen",

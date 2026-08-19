@@ -146,6 +146,48 @@ describe('POST /api/user/ui-state', () => {
     expect(body.data.ui_state).toEqual({ nav_collapsed: true })
   })
 
+  it('returns 400 when a trial_expired_ack key is not a company UUID', async () => {
+    const res = await POST(request({ trial_expired_ack: { 'not-a-uuid': new Date().toISOString() } }))
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 when a trial_expired_ack value is not an ISO timestamp', async () => {
+    const res = await POST(
+      request({ trial_expired_ack: { '11111111-1111-4111-8111-111111111111': 'yesterday' } }),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('merges trial_expired_ack per company instead of replacing the record', async () => {
+    const ackedAt = '2026-08-01T10:00:00.000Z'
+    enqueue({
+      data: {
+        ui_state: {
+          trial_expired_ack: { '11111111-1111-4111-8111-111111111111': ackedAt },
+        },
+      },
+    })
+    enqueue({ data: null })
+
+    const newAck = '2026-08-19T09:00:00.000Z'
+    const { status, body } = await parseJsonResponse<{
+      data: { ui_state: { trial_expired_ack: Record<string, string> } }
+    }>(
+      await POST(
+        request({
+          trial_expired_ack: { '22222222-2222-4222-8222-222222222222': newAck },
+        }),
+      ),
+    )
+
+    expect(status).toBe(200)
+    // Acking company B never clears company A's ack.
+    expect(body.data.ui_state.trial_expired_ack).toEqual({
+      '11111111-1111-4111-8111-111111111111': ackedAt,
+      '22222222-2222-4222-8222-222222222222': newAck,
+    })
+  })
+
   it('returns 500 when the upsert fails', async () => {
     enqueue({ data: null })
     enqueue({ data: null, error: { message: 'boom' } })

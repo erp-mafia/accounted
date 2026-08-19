@@ -11,6 +11,7 @@ import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
+import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
@@ -107,6 +108,8 @@ export default async function DashboardLayout({
           isSandbox: false,
           capabilities: [],
           trialEndsAt: null,
+          entitlementState: 'none' as const,
+          trialExpiredAt: null,
         }}
       >
         <SessionTimeoutController />
@@ -231,6 +234,8 @@ export default async function DashboardLayout({
       isSandbox: false,
       capabilities: [],
       trialEndsAt: null,
+      entitlementState: 'none' as const,
+      trialExpiredAt: null,
     }
 
     return (
@@ -314,6 +319,8 @@ export default async function DashboardLayout({
     isSandbox,
     capabilities: entitlements.capabilities,
     trialEndsAt: entitlements.trialEndsAt,
+    entitlementState: entitlements.entitlementState,
+    trialExpiredAt: entitlements.trialExpiredAt,
   }
 
   return (
@@ -361,6 +368,19 @@ export default async function DashboardLayout({
             <MainContainer companyId={companyId}>{children}</MainContainer>
           </main>
           <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
+          {/* One-time expired-trial notice. Sandbox/anonymous demo users have
+              no billing (their companies carry trial grants too), so the gate
+              lives here where both flags are known. Acknowledgement persists
+              per user AND company in user_preferences.ui_state, read here
+              server-side so an acked dialog never flashes. */}
+          {!isSandbox && !user.is_anonymous && (
+            <TrialExpiredDialog
+              state={entitlements.entitlementState}
+              trialExpiredAt={entitlements.trialExpiredAt}
+              companyId={companyId}
+              initialAcknowledged={!!uiState.trial_expired_ack?.[companyId]}
+            />
+          )}
           <LazyCommandPalette />
           <SettingsHotkey />
           {settingsModal}

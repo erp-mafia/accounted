@@ -32,7 +32,6 @@ import {
   Tag,
   Tags,
   ChevronRight,
-  Clock,
   Sparkles,
   Percent,
   Landmark,
@@ -55,6 +54,7 @@ import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { SupportLink } from '@/components/ui/support-link'
 import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import UserMenu from '@/components/dashboard/UserMenu'
+import SubscriptionTouchpoint from '@/components/billing/SubscriptionTouchpoint'
 import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -298,7 +298,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
-  const { company, capabilities, trialEndsAt } = useCompany()
+  const { company, capabilities } = useCompany()
   // Agent identity drives the "Assistent" nav icon: when the user has
   // built their assistant we show its chosen avatar instead of the
   // generic Sparkles glyph.
@@ -317,28 +317,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     pendingOperations: pendingOpsCount,
     refresh: refreshBadges,
   } = useWorklistBadges(company?.id)
-  // Trial countdown for the sidebar touchpoint. Computed in an effect (not
-  // during render) so server and client markup agree at hydration; an hourly
-  // tick keeps a long-lived tab from showing yesterday's count. The sync
-  // setState is that hydration strategy, not derived-state-in-effect (the
-  // lint only started analyzing this component once the badge-refresh loop
-  // that made the compiler bail was removed).
-  const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null)
-  useEffect(() => {
-    if (!trialEndsAt) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setTrialDaysLeft(null)
-      return
-    }
-    const update = () => {
-      const msLeft = new Date(trialEndsAt).getTime() - Date.now()
-      setTrialDaysLeft(msLeft > 0 ? Math.ceil(msLeft / 86_400_000) : null)
-    }
-    update()
-    const id = setInterval(update, 3_600_000)
-    return () => clearInterval(id)
-  }, [trialEndsAt])
-
   const hasCompany = !!company
   const ALWAYS_ENABLED = new Set(['/settings'])
   const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
@@ -893,25 +871,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             </nav>
           </div>
 
-          {/* Trial countdown touchpoint: the paywall is a lifecycle flow, not
-              a settings page, so trial state stays quietly visible in the
-              chrome instead of only inside Inställningar → Abonnemang.
-              Hidden for sandbox/demo (no checkout) and once any non-trial
-              grant is active (trialEndsAt is null then). */}
-          {!collapsed && !isSandbox && trialDaysLeft !== null && (
-            <div className="flex-shrink-0 px-3 pb-2">
-              <Link
-                href="/settings/billing"
-                className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
-              >
-                <Clock className="h-3.5 w-3.5 shrink-0" />
-                <span className="flex-1 truncate">
-                  {tNav('trial_days_left', { days: trialDaysLeft })}
-                </span>
-                <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
-              </Link>
-            </div>
-          )}
+          {/* Subscription touchpoint: trial countdown while the trial runs,
+              a persistent muted upgrade link once it (or a subscription) has
+              lapsed. Hides itself for sandbox/demo and paying companies. */}
+          <SubscriptionTouchpoint variant="sidebar" collapsed={collapsed} />
 
           {/* Sticky user block (bottom-left): avatar, name, active company.
               Opens the upward user menu with the company-switcher flyout,
@@ -1206,6 +1169,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               </div>
 
               <div className="space-y-0.5">
+                {/* Subscription touchpoint: mobile had no trial surface at
+                    all before this row (trial countdown or lapsed upgrade
+                    link; hides itself for sandbox and paying companies). */}
+                <SubscriptionTouchpoint variant="mobile" onNavigate={closeMobileMenu} />
                 {([
                   { href: '/settings', labelKey: 'settings' as NavLabelKey, icon: Settings },
                   { href: '/help', labelKey: 'help' as NavLabelKey, icon: HelpCircle },

@@ -276,6 +276,25 @@ export async function requireCapability(
   return capabilityBlockedResponse(key)
 }
 
+/**
+ * Where the company sits in the paid lifecycle, derived from the same grant
+ * rows that produce `capabilities`:
+ *   'paid'                : an active non-trial grant (stripe/comp/manual/team).
+ *   'trial'               : the trial is the sole source of paid access.
+ *   'lapsed_subscription' : no active grants, but a company_subscriptions row
+ *                           in a non-paying status: a churned payer, so copy
+ *                           says "abonnemang", not "provperiod".
+ *   'trial_expired'       : no active grants, only expired trial rows.
+ *   'none'                : no grant rows at all (effectively unreachable on
+ *                           hosted: every company is seeded with trial rows).
+ */
+export type EntitlementState =
+  | 'trial'
+  | 'trial_expired'
+  | 'lapsed_subscription'
+  | 'paid'
+  | 'none'
+
 export interface CompanyEntitlements {
   capabilities: CapabilityKey[]
   /**
@@ -285,7 +304,16 @@ export interface CompanyEntitlements {
    * countdown touchpoint in the dashboard chrome.
    */
   trialEndsAt: string | null
+  entitlementState: EntitlementState
+  /**
+   * When the lapsed trial ran out (latest trial expires_at), set only while
+   * entitlementState is 'trial_expired'. Drives the expired-trial notice.
+   */
+  trialExpiredAt: string | null
 }
+
+/** company_subscriptions.status values that count as a live subscription. */
+const PAYING_SUBSCRIPTION_STATUSES = ['active', 'trialing', 'past_due']
 
 /**
  * Resolve which PAID capabilities a company currently holds (entitled AND
@@ -297,19 +325,38 @@ export async function getCompanyEntitlements(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<CompanyEntitlements> {
-  if (isPaywallBypassed()) return { capabilities: [...PAID_CAPABILITIES], trialEndsAt: null }
-  if (!isUuid(companyId)) return { capabilities: [], trialEndsAt: null } // fail-closed: never interpolate a non-UUID
+  if (isPaywallBypassed()) {
+    return {
+      capabilities: [...PAID_CAPABILITIES],
+      trialEndsAt: null,
+      entitlementState: 'paid',
+      trialExpiredAt: null,
+    }
+  }
+  // Fail-closed: never interpolate a non-UUID.
+  if (!isUuid(companyId)) {
+    return { capabilities: [], trialEndsAt: null, entitlementState: 'none', trialExpiredAt: null }
+  }
 
-  // The disabled-config subtraction only needs companyId, so it runs in
-  // parallel with the team lookup — this function sits on the dashboard
-  // layout's critical path, where each serialized round-trip is latency.
-  const [{ data: company }, { data: configs }] = await Promise.all([
+  // The disabled-config subtraction and the subscription-status read only
+  // need companyId, so they run in parallel with the team lookup: this
+  // function sits on the dashboard layout's critical path, where each
+  // serialized round-trip is latency. The subscription row (members-readable
+  // per RLS) distinguishes a churned payer from an expired trial: cancelled
+  // subscriptions have their stripe grants deleted, so the grants alone
+  // cannot tell the two apart.
+  const [{ data: company }, { data: configs }, { data: subscription }] = await Promise.all([
     supabase.from('companies').select('team_id').eq('id', companyId).maybeSingle(),
     supabase
       .from('company_capability_config')
       .select('capability_key, enabled')
       .eq('company_id', companyId)
       .eq('enabled', false),
+    supabase
+      .from('company_subscriptions')
+      .select('status')
+      .eq('company_id', companyId)
+      .maybeSingle(),
   ])
   const rawTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
   const teamId = rawTeamId && isUuid(rawTeamId) ? rawTeamId : null
@@ -325,33 +372,62 @@ export async function getCompanyEntitlements(
 
   const now = Date.now()
   const entitled = new Set<string>()
-  let trialEndsAt: string | null = null
+  // Latest trial expiry across ALL trial rows, expired ones included: this is
+  // what tells the UI the trial ENDED (ISO strings from the same column
+  // compare lexically).
+  let latestTrialExpiry: string | null = null
   let hasActiveNonTrialGrant = false
   for (const g of grants ?? []) {
     const row = g as { capability_key: string; expires_at: string | null; source: string | null }
+    if (
+      row.source === 'trial' &&
+      row.expires_at &&
+      (!latestTrialExpiry || row.expires_at > latestTrialExpiry)
+    ) {
+      latestTrialExpiry = row.expires_at
+    }
     const active = row.expires_at === null || new Date(row.expires_at).getTime() > now
     if (!active) continue
     entitled.add(row.capability_key)
-    if (row.source === 'trial') {
-      // Latest trial expiry (ISO strings from the same column compare lexically).
-      if (row.expires_at && (!trialEndsAt || row.expires_at > trialEndsAt)) {
-        trialEndsAt = row.expires_at
-      }
-    } else {
-      hasActiveNonTrialGrant = true
-    }
+    if (row.source !== 'trial') hasActiveNonTrialGrant = true
   }
   // Paying/comped companies are not "on trial" even if the seeded trial rows
   // haven't expired yet: the countdown would nag someone who already converted.
-  if (hasActiveNonTrialGrant) trialEndsAt = null
-  if (entitled.size === 0) return { capabilities: [], trialEndsAt: null }
+  const trialIsActive =
+    latestTrialExpiry !== null && new Date(latestTrialExpiry).getTime() > now
+  const trialEndsAt = !hasActiveNonTrialGrant && trialIsActive ? latestTrialExpiry : null
+
+  const subscriptionStatus = (subscription as { status: string | null } | null)?.status ?? null
+  let entitlementState: EntitlementState
+  let trialExpiredAt: string | null = null
+  if (hasActiveNonTrialGrant) {
+    entitlementState = 'paid'
+  } else if (trialEndsAt) {
+    entitlementState = 'trial'
+  } else if (subscriptionStatus && !PAYING_SUBSCRIPTION_STATUSES.includes(subscriptionStatus)) {
+    entitlementState = 'lapsed_subscription'
+  } else if (latestTrialExpiry) {
+    entitlementState = 'trial_expired'
+    trialExpiredAt = latestTrialExpiry
+  } else {
+    entitlementState = 'none'
+  }
+
+  if (entitled.size === 0) {
+    return { capabilities: [], trialEndsAt: null, entitlementState, trialExpiredAt }
+  }
 
   // Subtract any explicitly-disabled (enablement axis).
   for (const c of configs ?? []) {
     entitled.delete((c as { capability_key: string }).capability_key)
   }
 
-  return { capabilities: PAID_CAPABILITIES.filter((k) => entitled.has(k)), trialEndsAt }
+  return {
+    capabilities: PAID_CAPABILITIES.filter((k) => entitled.has(k)),
+    trialEndsAt,
+    entitlementState,
+    trialExpiredAt,
+  }
 }
 
 /** Capability list only; see getCompanyEntitlements for the full shape. */

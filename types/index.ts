@@ -145,6 +145,10 @@ export interface UserUiState {
   // re-clamps to the current viewport on read, so stale sizes from another
   // screen are safe.
   agent_panel?: AgentPanelState
+  // One-time expired-trial dialog acknowledgement, keyed per company
+  // (companyId -> ISO timestamp of the ack). Lives on the user so each
+  // member of a company sees the notice once.
+  trial_expired_ack?: Record<string, string>
 }
 
 export type AgentPanelMode = 'docked' | 'floating'

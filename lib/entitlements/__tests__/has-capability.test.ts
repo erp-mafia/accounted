@@ -240,6 +240,8 @@ describe('getCompanyEntitlements', () => {
     expect(result.trialEndsAt).toBe(expiry)
     expect(result.capabilities).toContain(CAPABILITY.ai)
     expect(result.capabilities).toContain(CAPABILITY.bank_sync)
+    expect(result.entitlementState).toBe('trial')
+    expect(result.trialExpiredAt).toBeNull()
   })
 
   it('hides the trial once a non-trial grant is active (converted customer)', async () => {
@@ -256,17 +258,65 @@ describe('getCompanyEntitlements', () => {
     const result = await getCompanyEntitlements(supabase, companyId)
     expect(result.trialEndsAt).toBeNull()
     expect(result.capabilities).toContain(CAPABILITY.ai)
+    expect(result.entitlementState).toBe('paid')
+    expect(result.trialExpiredAt).toBeNull()
   })
 
-  it('returns no trial and no capabilities after the trial lapsed', async () => {
+  it('reports trial_expired with the lapsed expiry after the trial lapsed', async () => {
+    const expiredEarlier = iso(-120_000)
+    const expiredLatest = iso(-60_000)
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: expiredLatest, source: 'trial' },
+          { capability_key: CAPABILITY.bank_sync, expires_at: expiredEarlier, source: 'trial' },
+        ],
+      },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toEqual([])
+    expect(result.entitlementState).toBe('trial_expired')
+    // Latest expiry across the trial rows, even though all are expired.
+    expect(result.trialExpiredAt).toBe(expiredLatest)
+  })
+
+  it('reports lapsed_subscription for a churned payer (cancelled subscription, expired trial rows)', async () => {
     const supabase = makeSupabase({
       companies: { data: { team_id: null } },
       capability_grants: {
         data: [{ capability_key: CAPABILITY.ai, expires_at: iso(-60_000), source: 'trial' }],
       },
+      company_subscriptions: { data: { status: 'canceled' } },
     })
     const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.entitlementState).toBe('lapsed_subscription')
     expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toEqual([])
+  })
+
+  it('a live subscription status never marks a company lapsed', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [{ capability_key: CAPABILITY.ai, expires_at: iso(-60_000), source: 'trial' }],
+      },
+      company_subscriptions: { data: { status: 'active' } },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.entitlementState).toBe('trial_expired')
+  })
+
+  it('reports none when no grant rows exist at all', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: { data: [] },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.entitlementState).toBe('none')
+    expect(result.trialEndsAt).toBeNull()
+    expect(result.trialExpiredAt).toBeNull()
     expect(result.capabilities).toEqual([])
   })
 
@@ -276,6 +326,7 @@ describe('getCompanyEntitlements', () => {
     const result = await getCompanyEntitlements(supabase, companyId)
     expect(result.trialEndsAt).toBeNull()
     expect(result.capabilities).toEqual([...PAID_CAPABILITIES])
+    expect(result.entitlementState).toBe('paid')
   })
 })
 
