@@ -6,6 +6,7 @@ import type {
   AiDocumentInput,
   AiService,
   AiTier,
+  AiToolDef,
   AiUsage,
   ExtractFromDocumentRequest,
   ExtractFromDocumentResult,
@@ -14,6 +15,26 @@ import type {
   GenerateTextRequest,
   GenerateTextResult,
 } from '../types'
+
+const DEFAULT_MAX_STEPS = 4
+
+const EMPTY_USAGE: AiUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheCreationInputTokens: 0,
+  cacheReadInputTokens: 0,
+}
+
+/** Sum usage across the turns of a tool loop so the reported cost is truthful. */
+function addUsage(a: AiUsage, b: AiUsage): AiUsage {
+  const s = (x: number | null, y: number | null) => (x ?? 0) + (y ?? 0)
+  return {
+    inputTokens: s(a.inputTokens, b.inputTokens),
+    outputTokens: s(a.outputTokens, b.outputTokens),
+    cacheCreationInputTokens: s(a.cacheCreationInputTokens, b.cacheCreationInputTokens),
+    cacheReadInputTokens: s(a.cacheReadInputTokens, b.cacheReadInputTokens),
+  }
+}
 
 /**
  * The Anthropic family (AWS Bedrock and the direct API) behind the job-shaped
@@ -93,14 +114,78 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
 
     async generateText(req: GenerateTextRequest): Promise<GenerateTextResult> {
       const model = modelFor(req.tier)
-      const params: MessageCreateParams = {
+
+      // Fast path (unchanged: keeps hosted byte-identical for every non-tool
+      // caller, which is all of them today): one turn, no tools.
+      if (!req.tools || req.tools.length === 0) {
+        const params: MessageCreateParams = {
+          model,
+          max_tokens: req.maxTokens,
+          ...(req.system ? { system: req.system } : {}),
+          messages: [{ role: 'user', content: req.prompt }],
+        }
+        const resp = await getClient().messages.create(params)
+        return { text: textOf(resp), model, usage: usageOf(resp) }
+      }
+
+      // Bounded read-only tool loop. The same dispatch shape run-turn.ts uses,
+      // minus streaming and staging: the model asks for a report, we run it,
+      // feed the JSON back, repeat up to maxSteps model turns, then answer.
+      const tools: Anthropic.Messages.Tool[] = req.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.jsonSchema as Anthropic.Messages.Tool['input_schema'],
+      }))
+      const byName = new Map<string, AiToolDef>(req.tools.map((t) => [t.name, t]))
+      const messages: Anthropic.Messages.MessageParam[] = [{ role: 'user', content: req.prompt }]
+      const maxSteps = req.maxSteps ?? DEFAULT_MAX_STEPS
+      let usage = EMPTY_USAGE
+
+      for (let step = 0; step < maxSteps; step++) {
+        const resp = await getClient().messages.create({
+          model,
+          max_tokens: req.maxTokens,
+          ...(req.system ? { system: req.system } : {}),
+          tools,
+          messages,
+        })
+        usage = addUsage(usage, usageOf(resp))
+        if (resp.stop_reason !== 'tool_use') {
+          return { text: textOf(resp), model, usage }
+        }
+
+        messages.push({ role: 'assistant', content: resp.content })
+        const results: Anthropic.Messages.ContentBlockParam[] = []
+        for (const block of resp.content) {
+          if (block.type !== 'tool_use') continue
+          const def = byName.get(block.name)
+          let content: string
+          let isError = false
+          try {
+            if (!def) {
+              isError = true
+              content = JSON.stringify({ error: `Verktyget ${block.name} är inte tillgängligt.` })
+            } else {
+              const out = await def.execute((block.input ?? {}) as Record<string, unknown>)
+              content = JSON.stringify(out ?? null)
+            }
+          } catch (err) {
+            isError = true
+            content = JSON.stringify({ error: err instanceof Error ? err.message : 'Tool failed' })
+          }
+          results.push({ type: 'tool_result', tool_use_id: block.id, content, is_error: isError })
+        }
+        messages.push({ role: 'user', content: results })
+      }
+
+      // Spent the step budget without a final answer: force one with tools off.
+      const final = await getClient().messages.create({
         model,
         max_tokens: req.maxTokens,
         ...(req.system ? { system: req.system } : {}),
-        messages: [{ role: 'user', content: req.prompt }],
-      }
-      const resp = await getClient().messages.create(params)
-      return { text: textOf(resp), model, usage: usageOf(resp) }
+        messages,
+      })
+      return { text: textOf(final), model, usage: addUsage(usage, usageOf(final)) }
     },
 
     async generateStructured(req: GenerateStructuredRequest): Promise<GenerateStructuredResult> {

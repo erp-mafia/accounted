@@ -19,7 +19,7 @@ export default function PrivacyPolicyPage() {
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-08-20
+            Senast uppdaterad: 2026-08-19
           </p>
         </div>
 
@@ -133,18 +133,17 @@ export default function PrivacyPolicyPage() {
                     <td className="py-2 pr-4 font-medium">Amazon Web Services (AWS)</td>
                     <td className="py-2 pr-4">
                       AI-inferens (kategorisering samt dokument- och
-                      kvittotolkning) med Anthropics Claude-modeller, som körs av
-                      AWS inom Amazon Bedrock. Bearbetar bokföringsdata
-                      och uppladdade underlag: endast när AI-funktioner är
+                      kvittotolkning): AI-anropen skickas till Amazon Bedrock,
+                      och modellerna som används är Anthropics Claude-modeller,
+                      körda inom Bedrock. Bearbetar bokföringsdata och
+                      uppladdade underlag: endast när AI-funktioner är
                       aktiverade.
                     </td>
                     <td className="py-2 pr-4">EU (eu-north-1, Stockholm)</td>
                     <td className="py-2">
-                      EU-baserad inferens: ingen tredjelandsöverföring. AWS är
-                      enda underbiträdet för AI-funktionerna; ingen data skickas
-                      till Anthropic som bolag. DPA, SCC och DPF-certifiering.
-                      Prompter lagras ej efter anropet och används ej till
-                      modellträning.
+                      EU-baserad inferens: ingen tredjelandsöverföring. DPA, SCC
+                      och DPF-certifiering. Prompter lagras ej efter anropet och
+                      används ej till modellträning.
                     </td>
                   </tr>
                   <tr className="border-b">
@@ -161,15 +160,17 @@ export default function PrivacyPolicyPage() {
                       användar-ID, e-postadress, namn och företagsnamn. Om du
                       själv skriver till supporten i appen skickas även ditt
                       meddelande dit som ett ärende, så att vi kan svara. I
-                      sessionsinspelningar är maskering standardläget: allt
-                      innehåll döljs om det inte uttryckligen har markerats
-                      som ofarligt gränssnitt i koden. Allt du skriver och
-                      allt innehåll i din bokföring (namn, beskrivningar,
-                      belopp, person- och organisationsnummer) maskeras
-                      därmed alltid; läsbart är endast appens eget
-                      gränssnitt, som rubriker, knappar, menyer och
-                      ledtexter, så att vi kan se var i appen du stöter
-                      på problem utan att se dina uppgifter.
+                      sessionsinspelningar är maskering standardläget och kan
+                      inte stängas av: allt du skriver maskeras utan undantag,
+                      och all annan text maskeras om den inte är appens eget
+                      statiska gränssnitt, som rubriker, knappar, menyer och
+                      ledtexter. Ditt innehåll (namn, beskrivningar, belopp,
+                      person- och organisationsnummer) är därför aldrig
+                      läsbart, och även nytt eller omärkt gränssnitt maskeras
+                      tills det uttryckligen märkts som gränssnittstext:
+                      felläget är övermaskering, aldrig att dina uppgifter
+                      syns. Inspelningarna finns så att vi kan se var i appen
+                      du stöter på problem utan att se dina uppgifter.
                       Organisationsnummer skickas aldrig som analysdata.
                       Identifiering sker endast för inloggade användare (ej
                       sandbox/demo). Inga kakor används, och själva analysdatan
@@ -193,11 +194,9 @@ export default function PrivacyPolicyPage() {
             <p className="mt-4 text-sm text-muted-foreground">
               AI-funktioner är frivilliga och kräver separat samtycke före
               aktivering: data skickas först när du aktivt godkänner
-              användningen. AI:t använder Anthropics Claude-modeller, men
-              modellerna tillhandahålls och körs av AWS inom Amazon Bedrock i EU
-              (eu-north-1, Stockholm). Datan lämnar alltså inte EU, och Anthropic
-              som bolag tar aldrig emot eller behandlar din data: AWS-raden i
-              tabellen ovan är AI-funktionernas enda underbiträde. Kärntjänsten
+              användningen. AI:t använder Anthropics Claude-modeller men körs
+              inom Amazon Bedrock i EU (eu-north-1, Stockholm); datan lämnar
+              alltså inte EU och delas inte med Anthropic. Kärntjänsten
               (bokföring, fakturor, moms och rapporter) fungerar fullt ut utan AI.
             </p>
           </CardContent>

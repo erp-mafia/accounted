@@ -1713,6 +1713,26 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_en:
       'This file looks like a Skatteverket tax account statement. Use the skattekonto import instead.',
   },
+  BANK_FILE_UNDO_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bankfilsimporten kunde inte hittas.',
+    message_en: 'Bank file import not found.',
+  },
+  BANK_FILE_UNDO_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Bankfilsimporten kunde inte ångras.',
+    message_en: 'Failed to undo bank file import.',
+  },
+  BANK_FILE_UNDO_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Endast ägare eller administratörer kan ångra en bankfilsimport.',
+    message_en: 'Only company owners and admins can undo a bank file import.',
+  },
+  BANK_FILE_LIST_INVALID_QUERY: {
+    httpStatus: 400,
+    message_sv: 'Ogiltiga listparametrar: limit måste vara 1-100, offset ett icke-negativt heltal och status ett giltigt importstatus.',
+    message_en: 'Invalid list parameters: limit must be 1-100, offset a nonnegative integer, and status a valid import status.',
+  },
 }
 
 const SKATTEKONTO_FILE: Record<string, StructuredErrorEntry> = {

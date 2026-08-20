@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: () => requireAuthMock() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn().mockResolvedValue('company-1') }))
@@ -18,6 +19,14 @@ const aiStatus = vi.fn()
 vi.mock('@/lib/ai', () => ({ getAiStatus: () => aiStatus() }))
 const answer = vi.fn()
 vi.mock('@/lib/agent/ask/ask-service', () => ({ answerAssistantQuestion: (...a: unknown[]) => answer(...a) }))
+const resolveConv = vi.fn()
+const persistUser = vi.fn()
+const persistAssistant = vi.fn()
+vi.mock('@/lib/agent/ask/persist', () => ({
+  resolveChatConversation: (...a: unknown[]) => resolveConv(...a),
+  persistUserTurn: (...a: unknown[]) => persistUser(...a),
+  persistAssistantTurn: (...a: unknown[]) => persistAssistant(...a),
+}))
 
 import { POST } from '../route'
 
@@ -31,6 +40,9 @@ beforeEach(() => {
   requireCapability.mockResolvedValue(null)
   aiStatus.mockReturnValue({ configured: true, assistantAvailable: false, provider: 'openai-compatible' })
   answer.mockResolvedValue({ answer: 'Svar', model: 'qwen3.8' })
+  resolveConv.mockResolvedValue({ ok: true, conversationId: 'conv-9', created: true })
+  persistUser.mockResolvedValue(undefined)
+  persistAssistant.mockResolvedValue(undefined)
 })
 
 const body = (o: Record<string, unknown> = {}) => ({ question: 'Hur gick juli?', ...o })
@@ -70,5 +82,84 @@ describe('POST /api/agent/ask', () => {
     expect(status).toBe(503)
     expect(b.code).toBe('ai_unconfigured')
     expect(answer).not.toHaveBeenCalled()
+  })
+
+  it('stateless (no persist): never touches the conversation tables', async () => {
+    await POST(createMockRequest('/x', { method: 'POST', body: body() }))
+    expect(resolveConv).not.toHaveBeenCalled()
+    expect(persistUser).not.toHaveBeenCalled()
+    expect(persistAssistant).not.toHaveBeenCalled()
+  })
+
+  describe('persist: true (chat console)', () => {
+    it('creates/resumes the thread, writes both turns, returns the conversation id', async () => {
+      const res = await POST(
+        createMockRequest('/x', {
+          method: 'POST',
+          body: body({ persist: true, context_ref: 'report:vat:2026-07' }),
+        }),
+      )
+      const { status, body: b } = await parseJsonResponse<{
+        data: { answer: string; model: string; conversation_id: string }
+      }>(res)
+      expect(status).toBe(200)
+      expect(b.data.conversation_id).toBe('conv-9')
+      expect(b.data.answer).toBe('Svar')
+      // Order matters: resolve → user turn → answer → assistant turn.
+      expect(resolveConv).toHaveBeenCalledWith(
+        supabase,
+        'user-1',
+        'company-1',
+        undefined,
+        'Hur gick juli?',
+        'report:vat:2026-07',
+      )
+      expect(persistUser).toHaveBeenCalledWith(supabase, 'conv-9', 'Hur gick juli?')
+      expect(answer).toHaveBeenCalled()
+      expect(persistAssistant).toHaveBeenCalledWith(supabase, 'conv-9', 'Svar')
+    })
+
+    it('resumes with a supplied conversation_id', async () => {
+      resolveConv.mockResolvedValue({ ok: true, conversationId: 'conv-7', created: false })
+      const res = await POST(
+        createMockRequest('/x', {
+          method: 'POST',
+          body: body({ persist: true, conversation_id: '11111111-1111-4111-8111-111111111111' }),
+        }),
+      )
+      const { status, body: b } = await parseJsonResponse<{ data: { conversation_id: string } }>(res)
+      expect(status).toBe(200)
+      expect(b.data.conversation_id).toBe('conv-7')
+      expect(resolveConv).toHaveBeenCalledWith(
+        supabase,
+        'user-1',
+        'company-1',
+        '11111111-1111-4111-8111-111111111111',
+        'Hur gick juli?',
+        undefined,
+      )
+    })
+
+    it("404s on a conversation that isn't the user's, without answering or persisting", async () => {
+      resolveConv.mockResolvedValue({ ok: false, reason: 'not_found' })
+      const res = await POST(
+        createMockRequest('/x', {
+          method: 'POST',
+          body: body({ persist: true, conversation_id: '22222222-2222-4222-8222-222222222222' }),
+        }),
+      )
+      expect(res.status).toBe(404)
+      expect(persistUser).not.toHaveBeenCalled()
+      expect(answer).not.toHaveBeenCalled()
+      expect(persistAssistant).not.toHaveBeenCalled()
+    })
+
+    it('still 503s (no write) when no backend is configured', async () => {
+      aiStatus.mockReturnValue({ configured: false })
+      const res = await POST(createMockRequest('/x', { method: 'POST', body: body({ persist: true }) }))
+      expect(res.status).toBe(503)
+      expect(resolveConv).not.toHaveBeenCalled()
+      expect(persistUser).not.toHaveBeenCalled()
+    })
   })
 })

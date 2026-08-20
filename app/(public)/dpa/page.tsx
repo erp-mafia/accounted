@@ -19,7 +19,7 @@ export default function DPAPage() {
             Personuppgiftsbiträdesavtal (DPA)
           </h1>
           <p className="text-sm text-muted-foreground">
-            Enligt GDPR Art. 28 &middot; Senast uppdaterad: 2026-08-20
+            Enligt GDPR Art. 28 &middot; Senast uppdaterad: 2026-06-03
           </p>
         </div>
 
@@ -119,8 +119,7 @@ export default function DPAPage() {
               <li><strong>Säkerhetskopior:</strong> Kontinuerliga databaskopior med point-in-time-recovery</li>
               <li><strong>EU-lagring och EU-inferens:</strong> All primär datalagring sker i EU
                 (Supabase, eu-north-1, Stockholm). AI-inferens sker, när AI-funktioner är aktiverade, inom
-                EU med Anthropics Claude-modeller körda av AWS via Amazon Bedrock (eu-north-1, Stockholm):
-                ingen överföring till tredje land, och ingen data skickas till Anthropic som bolag</li>
+                EU via Amazon Bedrock (eu-north-1, Stockholm): ingen överföring till tredje land</li>
             </ul>
           </CardContent>
         </Card>
