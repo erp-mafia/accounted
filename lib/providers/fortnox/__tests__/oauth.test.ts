@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildFortnoxAuthUrl } from '../oauth';
+import {
+  buildFortnoxAuthUrl,
+  fortnoxConsentScopes,
+  FORTNOX_DOCUMENT_SCOPES,
+  FORTNOX_DOCUMENT_SCOPES_APPROVED,
+} from '../oauth';
 
 describe('Fortnox OAuth scopes', () => {
   // Pins the 2026-08-13 incident fix: the registered Fortnox app does not
@@ -21,5 +26,40 @@ describe('Fortnox OAuth scopes', () => {
     expect(scopes).toContain('bookkeeping');
     expect(scopes).not.toContain('archive');
     expect(scopes).not.toContain('connectfile');
+  });
+
+  // The document-import error message is derived from this flag, so that a
+  // user is never told to reconnect for a permission the connect request does
+  // not ask for. Flipping it here without enabling the scopes in the Fortnox
+  // Developer Portal reintroduces the 2026-08-13 invalid_scope outage.
+  it('keeps the document scopes flagged as not approved, and names both of them', () => {
+    expect(FORTNOX_DOCUMENT_SCOPES_APPROVED).toBe(false);
+    expect(FORTNOX_DOCUMENT_SCOPES).toEqual(['archive', 'connectfile']);
+  });
+
+  // Even once the portal registration lands, opting in must never cost the
+  // consent its ledger access: the callback overwrites its tokens in place.
+  it('keeps a document consent a superset of an ordinary one', () => {
+    const withDocuments = fortnoxConsentScopes({ documents: true });
+    for (const scope of fortnoxConsentScopes()) {
+      expect(withDocuments).toContain(scope);
+    }
+  });
+
+  it('requests the document scopes only when they are explicitly passed in', () => {
+    const url = new URL(
+      buildFortnoxAuthUrl(
+        {
+          clientId: 'client-id',
+          clientSecret: 'client-secret',
+          redirectUri: 'https://accounted.example.test/callback',
+        },
+        { scopes: ['bookkeeping', ...FORTNOX_DOCUMENT_SCOPES] },
+      ),
+    );
+    const scopes = new Set(url.searchParams.get('scope')?.split(' ') ?? []);
+
+    expect(scopes).toContain('archive');
+    expect(scopes).toContain('connectfile');
   });
 });

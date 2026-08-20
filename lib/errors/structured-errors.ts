@@ -2037,6 +2037,13 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_en:
       'The Fortnox connection lacks Archive and Connect file access. Reconnect Fortnox and approve those permissions to import documents.',
   },
+  PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE: {
+    httpStatus: 403,
+    message_sv:
+      'Filimport från Fortnox är inte påslagen än: behörigheterna Arkiv och Koppla fil saknas för Accounted-integrationen hos Fortnox. Att koppla om hjälper inte, vi aktiverar det så snart behörigheten är på plats. Allt annat i migreringen är importerat.',
+    message_en:
+      'Fortnox file import is not enabled yet: the Archive and Connect file permissions are missing for the Accounted integration at Fortnox. Reconnecting will not help; we enable this as soon as the permission is in place. Everything else in the migration was imported.',
+  },
   PROVIDER_DISCONNECT_FAILED: {
     httpStatus: 500,
     message_sv: 'Frånkoppling från leverantören misslyckades.',

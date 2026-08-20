@@ -5442,6 +5442,7 @@
     "ext_arcim_documents_discovery_error": "Migreringen är klar, men vi kunde inte kontrollera underlagen i Fortnox. Försök igen utan att köra om migreringen.",
     "ext_arcim_documents_import_error": "Migreringen är fortfarande klar, men underlagen kunde inte importeras. Försök igen; redan importerade underlag hoppas över.",
     "ext_arcim_documents_scope_error": "Fortnox-anslutningen saknar behörighet till Arkiv och Koppla fil. Koppla om Fortnox och godkänn behörigheterna för att fortsätta.",
+    "ext_arcim_documents_scope_unavailable": "Filimport från Fortnox är inte påslagen än: behörigheterna Arkiv och Koppla fil saknas för Accounted-integrationen hos Fortnox. Att koppla om hjälper inte, vi aktiverar det så snart behörigheten är på plats. Allt annat i migreringen är importerat.",
     "ext_arcim_documents_reconnect_action": "Koppla om Fortnox",
     "ext_arcim_documents_retry_discovery": "Kontrollera igen",
     "ext_arcim_documents_retry_import": "Försök importera igen",

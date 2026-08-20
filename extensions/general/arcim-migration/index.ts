@@ -34,6 +34,7 @@ import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/
 import { loadMappings, generateImportPreview, executeSIEImport, findOverlappingPeriodImports } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
 import type { ProviderName } from '@/lib/providers/types'
+import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
@@ -119,7 +120,11 @@ function resolveArcimCallbackUrl(provider: ArcimProvider | ProviderName): string
  * consent_id, so re-running OAuth against the same consent overwrites a dead
  * refresh-token pair in place: no disconnect/recreate needed.
  */
-async function buildArcimOAuthUrl(consentId: string, provider: ArcimProvider): Promise<string> {
+async function buildArcimOAuthUrl(
+  consentId: string,
+  provider: ArcimProvider,
+  options?: { documentScopes?: boolean },
+): Promise<string> {
   // Server-side state row: consent id, provider (via the consent), expiry and a
   // consumed marker all live in provider_otc. The `state` handed to the provider
   // is that row's opaque random primary key, nothing more.
@@ -131,7 +136,9 @@ async function buildArcimOAuthUrl(consentId: string, provider: ArcimProvider): P
   // above. It deliberately encodes NOTHING. The previous base64url JSON payload
   // was attacker-authored input the callback trusted, so anyone who learned a
   // consent id could redirect their own provider tokens onto that consent.
-  const { url } = await getAuthUrl(provider, otc.code, callbackUrl)
+  const { url } = await getAuthUrl(provider, otc.code, callbackUrl, {
+    documentScopes: options?.documentScopes,
+  })
   return url
 }
 
@@ -259,11 +266,23 @@ export const arcimMigrationExtension: Extension = {
 
         const companyId = ctx?.companyId ?? user.id
 
-        const { provider, companyName, orgNumber, reconnect } = await request.json() as {
+        const {
+          provider,
+          companyName,
+          orgNumber,
+          reconnect,
+          documentScopes,
+        } = await request.json() as {
           provider: ArcimProvider
           companyName?: string
           orgNumber?: string
           reconnect?: boolean
+          /**
+           * Reconnect specifically to grant the voucher-attachment scopes.
+           * Only the underlag follow-up sets it, so an ordinary connect never
+           * asks the customer for Arkivplats and Koppla filer.
+           */
+          documentScopes?: boolean
         }
 
         if (!provider) {
@@ -300,7 +319,9 @@ export const arcimMigrationExtension: Extension = {
                 await ctx.settings.set('provider', provider)
               }
               if (providerInfo.authType === 'oauth') {
-                const authUrl = await buildArcimOAuthUrl(stale.id, provider)
+                const authUrl = await buildArcimOAuthUrl(stale.id, provider, {
+                  documentScopes: documentScopes === true,
+                })
                 return NextResponse.json({
                   consentId: stale.id,
                   authType: 'oauth',
@@ -1386,8 +1407,13 @@ export const arcimMigrationExtension: Extension = {
               error instanceof FortnoxApiError ? error.body?.slice(0, 500) : undefined,
           })
           if (error instanceof FortnoxDocumentScopesRequiredError) {
+            // Reconnecting only helps once the connect request actually asks
+            // for Arkiv and Koppla fil. While it does not, say so plainly
+            // instead of sending the user around a loop that cannot succeed.
             return errorResponseFromCode(
-              'PROVIDER_DOCUMENT_SCOPES_REQUIRED',
+              FORTNOX_DOCUMENT_SCOPES_APPROVED
+                ? 'PROVIDER_DOCUMENT_SCOPES_REQUIRED'
+                : 'PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE',
               moduleLog,
               { status: 403 },
             )

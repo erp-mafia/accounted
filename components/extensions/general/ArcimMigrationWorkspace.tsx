@@ -35,6 +35,7 @@ import {
   arcimDocumentImportReducer,
   documentOAuthProblemFromReason,
   parseArcimDocumentOAuthResume,
+  PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   requestArcimDocumentImport,
   resolveArcimDocumentFollowUpProvider,
   watchArcimOAuthPopup,
@@ -1586,11 +1587,17 @@ function DocumentImportFollowUp({
 
   const reconnectRequired = state.problem?.reconnectRequired === true
   const discoveryFailed = state.phase === 'discovery-error'
+  // Fortnox has not granted the file permissions to the integration itself, so
+  // neither reconnecting nor retrying can succeed: state it and offer nothing.
+  const scopesUnavailable =
+    state.problem?.code === PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE
   return (
     <section className="space-y-3" aria-live="polite">
       {title}
       <p className="text-sm text-destructive">
-        {state.problem?.message
+        {scopesUnavailable
+          ? t('ext_arcim_documents_scope_unavailable')
+          : state.problem?.message
           ? state.problem.message
           : reconnectRequired
           ? t('ext_arcim_documents_scope_error')
@@ -1612,21 +1619,23 @@ function DocumentImportFollowUp({
           })}
         </p>
       )}
-      <Button
-        className="min-h-11"
-        onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
-      >
-        {reconnectRequired ? (
-          <RefreshCw className="mr-2 h-4 w-4" />
-        ) : (
-          <RotateCcw className="mr-2 h-4 w-4" />
-        )}
-        {reconnectRequired
-          ? t('ext_arcim_documents_reconnect_action')
-          : discoveryFailed
-            ? t('ext_arcim_documents_retry_discovery')
-            : t('ext_arcim_documents_retry_import')}
-      </Button>
+      {!scopesUnavailable && (
+        <Button
+          className="min-h-11"
+          onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
+        >
+          {reconnectRequired ? (
+            <RefreshCw className="mr-2 h-4 w-4" />
+          ) : (
+            <RotateCcw className="mr-2 h-4 w-4" />
+          )}
+          {reconnectRequired
+            ? t('ext_arcim_documents_reconnect_action')
+            : discoveryFailed
+              ? t('ext_arcim_documents_retry_discovery')
+              : t('ext_arcim_documents_retry_import')}
+        </Button>
+      )}
     </section>
   )
 }
@@ -2192,7 +2201,7 @@ export default function ArcimMigrationWorkspace({
   const handleReconnect = useCallback(async (
     provider: ArcimProvider,
     existingConsentId: string,
-    options?: { onFailure?: () => void },
+    options?: { onFailure?: () => void; documentScopes?: boolean },
   ) => {
     setError(null)
     setAuthExpired(false)
@@ -2215,7 +2224,11 @@ export default function ArcimMigrationWorkspace({
       const res = await fetch('/api/extensions/ext/arcim-migration/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, reconnect: true }),
+        body: JSON.stringify({
+          provider,
+          reconnect: true,
+          documentScopes: options?.documentScopes === true,
+        }),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -2328,6 +2341,9 @@ export default function ArcimMigrationWorkspace({
     storeDocumentOAuthResume(reconnectAction)
     dispatchDocumentImport({ type: 'reconnect-started' })
     void handleReconnect('fortnox', consentId, {
+      // The whole point of this reconnect is the attachment permissions, so
+      // this is the one path that asks Fortnox for them.
+      documentScopes: true,
       onFailure: () => {
         dispatchDocumentImport(
           reconnectAction === 'discover'
