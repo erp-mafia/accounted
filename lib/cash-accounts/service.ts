@@ -1100,10 +1100,10 @@ export async function upsertFromPsd2(
     const typedOwn = ownRow as { id: string; is_primary: boolean } | null
     let transferPrimary = false
     if (typedOwn) {
-      // With linked transactions the duplicate is demoted to a plain manual
-      // row (deleting it would SET NULL those transactions' cash_account_id
-      // links). Without any, it is a leftover mirror from the broken reconnect
-      // and is deleted outright so its overflow slot frees up.
+      // With linked transactions the duplicate used to be demoted to a
+      // manual leftover so delete would not SET NULL cash_account_id.
+      // That left booking on the overflow ledger after remap. Rebind onto
+      // the promoted row, then delete the duplicate in both cases.
       const { data: linkedTx, error: linkedTxError } = await supabase
         .from('transactions')
         .select('id')
@@ -1122,25 +1122,28 @@ export async function upsertFromPsd2(
       }
 
       if ((linkedTx ?? []).length > 0) {
-        const { error: demoteError } = await supabase
-          .from('cash_accounts')
-          .update({ bank_connection_id: null, external_uid: null })
-          .eq('id', typedOwn.id)
-        if (demoteError) {
-          throw new Error(`cash_accounts upsert failed: ${demoteError.message}`)
-        }
-      } else {
-        const { error: deleteError } = await supabase
-          .from('cash_accounts')
-          .delete()
-          .eq('id', typedOwn.id)
-        if (deleteError) {
-          throw new Error(`cash_accounts upsert failed: ${deleteError.message}`)
+        // The overflow row still holds the imported bank txs. Demoting it to a
+        // manual leftover left categorize/booking on the old ledger (1931)
+        // after the user mapped the same IBAN to 1930. Rebind first so
+        // delete cannot SET NULL cash_account_id (ON DELETE SET NULL).
+        const { error: rebindError } = await supabase
+          .from('transactions')
+          .update({ cash_account_id: promotableRowId })
+          .eq('company_id', companyId)
+          .eq('cash_account_id', typedOwn.id)
+        if (rebindError) {
+          throw new Error(`cash_accounts upsert failed: ${rebindError.message}`)
         }
       }
-      // A primary duplicate must hand the flag to the promoted row either way:
-      // deleted, it would leave the __PRIMARY_SEK__ sentinel unresolvable;
-      // demoted, the sentinel would keep resolving to the stale manual row.
+      const { error: deleteError } = await supabase
+        .from('cash_accounts')
+        .delete()
+        .eq('id', typedOwn.id)
+      if (deleteError) {
+        throw new Error(`cash_accounts upsert failed: ${deleteError.message}`)
+      }
+      // A primary duplicate must hand the flag to the promoted row:
+      // deleted, it would leave the __PRIMARY_SEK__ sentinel unresolvable.
       transferPrimary = typedOwn.is_primary
     }
 

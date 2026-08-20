@@ -503,6 +503,8 @@ interface UpsertStub {
   rpcCalls: Array<{ fn: string; args: Record<string, unknown> }>
   /** .eq() filters applied to the linked-transactions probe. */
   transactionFilters: Array<{ col: string; value: unknown }>
+  /** Rebind writes from the overflow duplicate onto the promoted row. */
+  txRebinds: Array<Record<string, unknown>>
 }
 
 function makeUpsertStub(partial: Partial<UpsertStub> = {}): UpsertStub {
@@ -512,6 +514,7 @@ function makeUpsertStub(partial: Partial<UpsertStub> = {}): UpsertStub {
     upserts: [],
     rpcCalls: [],
     transactionFilters: [],
+    txRebinds: [],
     ...partial,
   }
 }
@@ -548,6 +551,18 @@ function makeUpsertSupabase(stub: UpsertStub) {
               error: null,
             }),
           ),
+          update: vi.fn((payload: Record<string, unknown>) => {
+            stub.txRebinds.push(payload)
+            const eqChain = {
+              eq: vi.fn((col: string, value: unknown) => {
+                stub.transactionFilters.push({ col, value })
+                return eqChain
+              }),
+              then: (onFulfilled: (v: { error: null }) => unknown) =>
+                Promise.resolve({ error: null }).then(onFulfilled),
+            }
+            return eqChain
+          }),
         }
         return chain
       }
@@ -758,7 +773,7 @@ describe('upsertFromPsd2', () => {
     expect(stub.rpcCalls).toHaveLength(0)
   })
 
-  it('demotes (not deletes) a duplicate that has linked transactions', async () => {
+  it('rebinds linked transactions then deletes the overflow duplicate', async () => {
     const stub = makeUpsertStub({
       holder: { id: 'row-old', bank_connection_id: 'conn-old' },
       connections: [{ id: 'conn-old', status: 'revoked' }],
@@ -767,15 +782,11 @@ describe('upsertFromPsd2', () => {
     })
     await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
 
-    expect(stub.deletes).toHaveLength(0)
-    expect(stub.updates).toHaveLength(2)
-    // First write releases the duplicate's PSD2 binding, preserving the row
-    // (and its transactions.cash_account_id links) as a manual account.
-    expect(stub.updates[0].id).toBe('row-dup')
-    expect(stub.updates[0].payload).toEqual({ bank_connection_id: null, external_uid: null })
-    // Second write promotes the holder.
-    expect(stub.updates[1].id).toBe('row-old')
-    expect(stub.updates[1].payload).toMatchObject({ bank_connection_id: 'conn-new' })
+    expect(stub.txRebinds).toEqual([{ cash_account_id: 'row-old' }])
+    expect(stub.deletes).toEqual(['row-dup'])
+    expect(stub.updates).toHaveLength(1)
+    expect(stub.updates[0].id).toBe('row-old')
+    expect(stub.updates[0].payload).toMatchObject({ bank_connection_id: 'conn-new' })
   })
 
   it('scopes the duplicate linked-transactions probe by company (service-role defense in depth)', async () => {
@@ -824,9 +835,8 @@ describe('upsertFromPsd2', () => {
     })
     await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT)
 
-    expect(stub.deletes).toHaveLength(0)
-    expect(stub.updates[0].id).toBe('row-dup')
-    expect(stub.updates[0].payload).toEqual({ bank_connection_id: null, external_uid: null })
+    expect(stub.deletes).toEqual(['row-dup'])
+    expect(stub.txRebinds).toEqual([{ cash_account_id: 'row-old' }])
     expect(stub.rpcCalls).toEqual([
       {
         fn: 'set_cash_account_primary',
