@@ -709,6 +709,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             <Link
               href="/"
               aria-label={getBranding().appName}
+              title={getBranding().appName}
               className="flex items-center rounded-lg"
             >
               <Image
@@ -732,6 +733,19 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               )}
             </button>
           </div>
+
+          {/* One-click company switcher (restored, #1664): consultants hop
+              between companies constantly, so the switcher lives at the top
+              of the expanded sidebar; the user-menu flyout below stays as a
+              secondary path. Kept outside the data-ph-unmask navs so company
+              names stay masked in replays. Hidden in the collapsed rail
+              (unmounted, same treatment as SubscriptionTouchpoint's trial
+              countdown): switching there goes through the user menu. */}
+          {!collapsed && (
+            <div className="flex-shrink-0 px-4 pb-2">
+              <CompanySwitcher />
+            </div>
+          )}
 
           {/* Nav items in their own scroll container so the user block
               below stays sticky (concept PR 2). */}

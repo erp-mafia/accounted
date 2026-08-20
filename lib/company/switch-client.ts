@@ -5,8 +5,9 @@ import { switchCompany } from '@/lib/company/actions'
 /**
  * Client-side company switch: persists the new active company via the
  * server action, notifies sibling tabs, then hard-reloads onto the new
- * company. Shared by CompanySwitcher (mobile sheet) and the sidebar
- * user-menu flyout so both use the exact same mechanism.
+ * company. Shared by CompanySwitcher (top of the desktop sidebar and the
+ * mobile sheet) and the sidebar user-menu flyout so all paths use the
+ * exact same mechanism.
  *
  * Returns an error code instead of navigating when the switch fails.
  */
