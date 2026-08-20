@@ -18,6 +18,8 @@ import AgentChat, {
   normalizeStoredMessages,
   type ChatMessage,
 } from './AgentChat'
+import AskConsole, { type AskConsoleMessage } from './AskConsole'
+import { CHAT_INTENT_ID } from '@/lib/agent/ask/persist'
 import type { AgentPanelFloatRect, StoredStagedOperation } from '@/types'
 import {
   DOCK_GUTTER,
@@ -756,14 +758,35 @@ export default function AgentSheet({
           </button>
         </div>
       ) : loaded ? (
-        <AgentChat
-          key={loaded.id}
-          intentId={loaded.intentId}
-          contextRef={loaded.contextRef ?? undefined}
-          initialConversationId={loaded.id}
-          initialMessages={loaded.messages}
-          onConversationIdChange={(id) => setConversationId(id)}
-          onStatus={onStatus}
+        loaded.intentId === CHAT_INTENT_ID ? (
+          // Resumed free-form thread: the single-call console (runs on a local
+          // model). Its turns are text-only, so drop any empty/tool rows.
+          <AskConsole
+            key={loaded.id}
+            initialConversationId={loaded.id}
+            initialMessages={loaded.messages
+              .filter((m) => m.text.trim().length > 0)
+              .map((m): AskConsoleMessage => ({ role: m.role, text: m.text }))}
+            contextRef={loaded.contextRef}
+          />
+        ) : (
+          <AgentChat
+            key={loaded.id}
+            intentId={loaded.intentId}
+            contextRef={loaded.contextRef ?? undefined}
+            initialConversationId={loaded.id}
+            initialMessages={loaded.messages}
+            onConversationIdChange={(id) => setConversationId(id)}
+            onStatus={onStatus}
+          />
+        )
+      ) : intentId === CHAT_INTENT_ID ? (
+        // Fresh free-form ask (the FAB's "Fråga min assistent" catch-all).
+        <AskConsole
+          seedUserMessage={seedUserMessage}
+          initialConversationId={null}
+          contextRef={contextRef ?? null}
+          onConversationCreated={(id) => setConversationId(id)}
         />
       ) : (
         <AgentChat
