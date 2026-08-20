@@ -746,7 +746,7 @@ export interface Transaction {
   import_source: string | null
   // The bank_file_imports batch that inserted this row (bank-file CSV/CAMT
   // import paths only). NULL for PSD2/manual/MCP rows and rows imported
-  // before migration 20260819100000. Scope key for undo_bank_file_import.
+  // before migration 20260820071500. Scope key for undo_bank_file_import.
   // Optional like the other late-added columns: older fixtures/readers
   // predate it.
   bank_file_import_id?: string | null

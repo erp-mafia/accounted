@@ -9,7 +9,7 @@ import {
   insertTransaction,
 } from '@/tests/pg/fixtures'
 
-// Migration 20260819100000_undo_bank_file_import.sql (issue #1672):
+// Migration 20260820071500_undo_bank_file_import.sql (issue #1672):
 // transactions.bank_file_import_id links every bank-file-imported row to its
 // batch, and undo_bank_file_import bulk-deletes the batch's unbooked rows
 // (ignored INCLUDED) while skipping booked rows and rows with

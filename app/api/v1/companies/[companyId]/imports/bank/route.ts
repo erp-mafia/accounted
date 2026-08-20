@@ -232,7 +232,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // batch id (transactions.bank_file_import_id): the scope key for the
       // owner/admin "undo this import" action. A missing id (upsert error) is
       // non-fatal: the import proceeds, its rows just stay unlinked, exactly
-      // like a pre-20260819100000 import.
+      // like a pre-20260820071500 import.
       const { data: importRow } = await ctx.supabase
         .from('bank_file_imports')
         .upsert(

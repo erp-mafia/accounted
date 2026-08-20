@@ -38,7 +38,7 @@ const FAILED: Omit<UndoBankFileImportResult, 'error' | 'forbidden'> = {
  *
  * Scope: strictly the rows stamped with this batch's id at ingest
  * (transactions.bank_file_import_id). Imports executed before migration
- * 20260819100000 carry no stamp and therefore delete nothing: there is no
+ * 20260820071500 carry no stamp and therefore delete nothing: there is no
  * fuzzy fallback on format or date windows by design.
  *
  * `userId` is the authorising user and is required: the RPC usually runs on
