@@ -65,6 +65,16 @@ WORKDIR /app
 RUN apk upgrade --no-cache && \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
+# poppler-utils (pdftoppm, ~4 MB plus shared libs) renders PDF pages to images
+# for AI backends that cannot read PDF bytes natively: a self-host pointing
+# AI_BASE_URL at an OpenAI-compatible endpoint (e.g. a Swedish inference
+# provider) rasterizes the first pages of a receipt/invoice before extraction
+# (lib/ai/rasterize-pdf.ts, AI_PDF_MODE). Hosted runs Claude on Bedrock, which
+# reads PDFs natively and never calls it. Deliberately the only system
+# package beyond the base image. Temp files go to /tmp, which
+# docker-compose.yml mounts as tmpfs (the root filesystem is read-only).
+RUN apk add --no-cache poppler-utils
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 

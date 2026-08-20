@@ -232,7 +232,7 @@ AI_MODEL=qwen3.8                        # a model id is required: there is no de
 Three things about such endpoints are declared rather than probed, because the app cannot tell from the outside:
 
 - `AI_VISION=false` says the configured model cannot read images. Images and PDFs are then skipped honestly (the inbox row lands with the empty skeleton and the "AI-tolkning kördes inte" hint) instead of failing with a 400 on every upload; HTML mail invoices still extract as text on any model.
-- `AI_PDF_MODE` defaults to `rasterize` here: most such endpoints have no PDF input, so the first `AI_PDF_MAX_PAGES` pages (default 4) are rendered to images with poppler's `pdftoppm`, which the self-host image installs. If the binary is missing, PDFs are skipped with `pdf_rasterizer_missing` rather than failing. A provider that accepts the OpenAI `file` content part can use `AI_PDF_MODE=native`.
+- `AI_PDF_MODE` defaults to `rasterize` here: most such endpoints have no PDF input, so the first `AI_PDF_MAX_PAGES` pages (default 4) are rendered to images with poppler's `pdftoppm`, which the self-host image installs (`apk add poppler-utils`, the only system package beyond the base image; page images are written to `/tmp`, a tmpfs in `docker-compose.yml`). If the binary is missing, PDFs are skipped with `pdf_rasterizer_missing` rather than failing; `AI_PDF_RASTERIZER_BIN` points at a non-standard install. A provider that accepts the OpenAI `file` content part can use `AI_PDF_MODE=native`.
 - `AI_STRICT_JSON=true` asks for `response_format: json_schema` on providers that enforce it. The default (JSON answered in prose, then parsed and validated) works on every model and is what hosted runs.
 
 Optional model overrides, in any setup:
@@ -254,7 +254,16 @@ Without working credentials the rest of the app runs normally: uploads are store
 
 #### Verifying the setup
 
-`scripts/smoke-ai.ts` sends real traffic to whichever backend your environment resolves to, so a wrong key, an unavailable model or a rejected parameter surfaces here rather than in front of a user:
+`scripts/smoke-ai-provider.ts` is the "is AI wired up?" command. It works the same on every backend because it only talks to the app's AI service: it prints the resolved provider, the model per tier, the PDF mode (and whether `pdftoppm` is installed when PDFs are rasterized), then sends real traffic: one small text generation per tier model, one schema-shaped answer, and, when you pass a file, the exact document-extraction path an uploaded receipt takes. It exits non-zero if any step fails, so it works as a post-deploy check. Run it from a checkout next to the env file your deployment uses (`.env.local`, then `.env` are read):
+
+```bash
+npx tsx scripts/smoke-ai-provider.ts                 # provider, models, text + structured calls
+npx tsx scripts/smoke-ai-provider.ts ./receipt.pdf   # also runs document extraction end to end
+```
+
+A skipped extraction is reported as a failure with the reason: a text-only model (`ai_no_vision`, pick a vision model for `AI_EXTRACTION_MODEL`), a missing rasterizer (`pdf_rasterizer_missing`, install poppler-utils or set `AI_PDF_MODE=native`), or no credentials/model at all.
+
+On the Anthropic family, `scripts/smoke-ai.ts` additionally probes the in-app assistant's full parameter set (a streamed turn with a tool, adaptive thinking, effort and the prompt cache), which the assistant still sends through the Anthropic SDK directly:
 
 ```bash
 npx tsx scripts/smoke-ai.ts                  # credentials, models, chat loop
@@ -265,8 +274,6 @@ npx tsx scripts/smoke-ai.ts                  # credentials, models, chat loop
 # anyway.
 npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
 ```
-
-It prints the resolved provider and model ids first, then exercises a plain request, a streamed turn carrying the assistant's full parameter set (adaptive thinking, effort, prompt caching and a tool), and finally extraction of the file you pass. It exits non-zero if any step fails, so it works as a post-deploy check.
 
 > **Note:** `OPENAI_API_KEY` from earlier versions is not read by any code path. To use OpenAI itself, point Option 3 at `https://api.openai.com/v1`; the app has no provider-specific OpenAI integration, only the OpenAI-compatible one. Background: [#1406](https://github.com/erp-mafia/accounted/issues/1406).
 
