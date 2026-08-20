@@ -35,10 +35,23 @@ interface TransactionBookingDialogProps {
   preselectedTemplate?: BookingTemplateLibrary | null
 }
 
+function counterAccountFromSuggestion(
+  suggestion: { debit_account?: string; credit_account?: string } | null,
+  bankAccount: string,
+  isExpense: boolean,
+): string {
+  if (!suggestion?.debit_account || !suggestion?.credit_account) return ''
+  if (isExpense) {
+    return suggestion.debit_account === bankAccount ? suggestion.credit_account : suggestion.debit_account
+  }
+  return suggestion.credit_account === bankAccount ? suggestion.debit_account : suggestion.credit_account
+}
+
 function buildInitialLines(
   transaction: TransactionWithInvoice,
   bankLineDescription: string,
   bankAccount: string = '1930',
+  counterAccount: string = '',
 ): FormLine[] {
   const sekAmount = Math.round(Math.abs(resolveSekAmount(
     transaction.amount,
@@ -67,7 +80,7 @@ function buildInitialLines(
   }
 
   const counterLine: FormLine = {
-    account_number: '',
+    account_number: counterAccount,
     debit_amount: isExpense ? amountStr : '',
     credit_amount: isExpense ? '' : amountStr,
     line_description: '',
@@ -121,11 +134,13 @@ export default function TransactionBookingDialog({
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
   const [bankAccount, setBankAccount] = useState<string | null>(null)
   const [bankAccountName, setBankAccountName] = useState<string | null>(null)
+  const [suggestedCounterAccount, setSuggestedCounterAccount] = useState('')
 
   useEffect(() => {
     if (!open || !transaction) return
     setBankAccount(null)
     setBankAccountName(null)
+    setSuggestedCounterAccount('')
     let cancelled = false
     fetch('/api/cash-accounts')
       .then((r) => {
@@ -150,6 +165,27 @@ export default function TransactionBookingDialog({
       .catch(() => {
         if (!cancelled) setBankAccount('1930')
       })
+    fetch('/api/transactions/suggest-categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transaction_ids: [transaction.id] }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return
+        const templates = (data.template_suggestions?.[transaction.id] ?? []) as Array<{
+          debit_account?: string
+          credit_account?: string
+        }>
+        const top = templates.find((s) => s.debit_account && s.credit_account)
+        const categories = (data.suggestions?.[transaction.id] ?? []) as Array<{ account?: string | null }>
+        const fromCategory = categories.find((s) => s.account)?.account ?? ''
+        const bank = '1930'
+        setSuggestedCounterAccount(
+          counterAccountFromSuggestion(top ?? null, bank, transaction.amount < 0) || fromCategory || '',
+        )
+      })
+      .catch(() => {})
     return () => { cancelled = true }
   }, [open, transaction?.id])
 
@@ -385,12 +421,12 @@ export default function TransactionBookingDialog({
           <div className="space-y-4">
             {bankAccount !== null && (
               <JournalEntryForm
-                key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
+                key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}-${bankAccount}-${suggestedCounterAccount}`}
                 embedded
                 initialLines={
                   preselectedTemplate
                     ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
-                    : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount)
+                    : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, suggestedCounterAccount)
                 }
                 initialDate={transaction.date}
                 initialDescription={transaction.description}
