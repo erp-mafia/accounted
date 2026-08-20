@@ -4,6 +4,8 @@ import { useMemo } from 'react'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import AgentChat, { attachStagedOperations, normalizeStoredMessages } from './AgentChat'
+import AskConsole, { type AskConsoleMessage } from './AskConsole'
+import { CHAT_INTENT_ID } from '@/lib/agent/ask/persist'
 import type { StoredStagedOperation } from '@/types'
 import AgentAvatar from './AgentAvatar'
 import ContextChip from './ContextChip'
@@ -36,6 +38,17 @@ export default function ChatConversationView({
   const initialMessages = useMemo(
     () => attachStagedOperations(normalizeStoredMessages(rawMessages), stagedOperations ?? []),
     [rawMessages, stagedOperations],
+  )
+  // general.help runs on the single-call console; it never stages operations,
+  // so the thread is text-only. Empty turns (a historical pure-tool_use row
+  // from the old runtime) are dropped rather than rendered as blank rows.
+  const isSingleCall = intentId === CHAT_INTENT_ID
+  const consoleMessages = useMemo<AskConsoleMessage[]>(
+    () =>
+      normalizeStoredMessages(rawMessages)
+        .filter((m) => m.text.trim().length > 0)
+        .map((m) => ({ role: m.role, text: m.text })),
+    [rawMessages],
   )
   const { identity } = useAgentSheet()
   const companyCtx = useCompanyOptional()
@@ -71,6 +84,13 @@ export default function ChatConversationView({
       <div className="flex-1 min-h-0 flex flex-col">
         {isSandbox ? (
           <SandboxAgentPreview agentName={agentName} />
+        ) : isSingleCall ? (
+          <AskConsole
+            initialConversationId={conversationId}
+            initialMessages={consoleMessages}
+            contextRef={contextRef}
+            scrollerClassName="px-6 py-8"
+          />
         ) : (
           <AgentChat
             intentId={intentId}

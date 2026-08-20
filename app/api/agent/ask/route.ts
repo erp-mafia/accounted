@@ -8,6 +8,11 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getAiStatus } from '@/lib/ai'
 import { answerAssistantQuestion } from '@/lib/agent/ask/ask-service'
+import {
+  resolveChatConversation,
+  persistUserTurn,
+  persistAssistantTurn,
+} from '@/lib/agent/ask/persist'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -27,6 +32,15 @@ const Schema = z.object({
   context: z.string().max(24_000).optional(),
   tier: z.enum(['assistant', 'heavy']).optional(),
   company_id: z.string().uuid().optional(),
+  // Chat-console persistence (opt-in). When `persist` is true, the turn is
+  // written to agent_conversations/agent_messages so the /chat sidebar keeps
+  // working. Page-scoped one-off actions (a report page asking a question)
+  // omit it and stay stateless. `conversation_id` resumes an existing
+  // general.help thread; omitted means "create one". `context_ref` binds a
+  // fresh thread to a page ("report:vat:2026-07") for the context chip.
+  persist: z.boolean().optional(),
+  conversation_id: z.string().uuid().nullable().optional(),
+  context_ref: z.string().max(200).nullable().optional(),
 })
 
 export async function POST(request: Request): Promise<Response> {
@@ -73,7 +87,43 @@ export async function POST(request: Request): Promise<Response> {
     )
   }
 
+  // Stateless page-scoped ask: one answer, nothing written.
+  if (parsed.data.persist !== true) {
+    try {
+      const result = await answerAssistantQuestion({
+        supabase,
+        companyId,
+        question: parsed.data.question,
+        pageContext: parsed.data.context,
+        tier: parsed.data.tier,
+      })
+      return NextResponse.json({ data: result })
+    } catch (err) {
+      return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+    }
+  }
+
+  // Persisted chat-console turn: resolve/create the thread, write the question,
+  // answer once, write the answer. Resolve BEFORE the model call so a bad
+  // conversation id 404s without spending a request; the user turn is written
+  // before the answer so a mid-call failure still leaves the question in the
+  // thread (the user can retry), matching the streaming runtime's semantics.
   try {
+    const resolved = await resolveChatConversation(
+      supabase,
+      user.id,
+      companyId,
+      parsed.data.conversation_id,
+      parsed.data.question,
+      parsed.data.context_ref,
+    )
+    if (!resolved.ok) {
+      return NextResponse.json({ error: 'Konversationen hittades inte.' }, { status: 404 })
+    }
+    const { conversationId } = resolved
+
+    await persistUserTurn(supabase, conversationId, parsed.data.question)
+
     const result = await answerAssistantQuestion({
       supabase,
       companyId,
@@ -81,7 +131,10 @@ export async function POST(request: Request): Promise<Response> {
       pageContext: parsed.data.context,
       tier: parsed.data.tier,
     })
-    return NextResponse.json({ data: result })
+
+    await persistAssistantTurn(supabase, conversationId, result.answer)
+
+    return NextResponse.json({ data: { ...result, conversation_id: conversationId } })
   } catch (err) {
     return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
   }
