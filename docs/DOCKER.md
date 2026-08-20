@@ -17,15 +17,15 @@ You do **not** need Node.js, npm, or anything else installed locally. The pre-bu
 mkdir Accounted && cd Accounted
 
 # Compose file + env template
-curl -fsSLO https://raw.githubusercontent.com/gnubok/gnubok/main/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/gnubok/gnubok/main/.env.docker.example
+curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/.env.docker.example
 
 # Cron sidecar (Dockerfile + schedule)
 mkdir -p docker
 curl -fsSL -o docker/cron.Dockerfile \
-  https://raw.githubusercontent.com/gnubok/gnubok/main/docker/cron.Dockerfile
+  https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/cron.Dockerfile
 curl -fsSL -o docker/crontab.self-hosted \
-  https://raw.githubusercontent.com/gnubok/gnubok/main/docker/crontab.self-hosted
+  https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/crontab.self-hosted
 ```
 
 ### 2. Configure your environment
@@ -146,10 +146,10 @@ NEXT_PUBLIC_APP_URL=https://gnubok.example.com
 ### 3. Download the overlay + Caddyfile
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/gnubok/gnubok/main/docker-compose.caddy.yml
+curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.caddy.yml
 mkdir -p docker
 curl -fsSL -o docker/Caddyfile \
-  https://raw.githubusercontent.com/gnubok/gnubok/main/docker/Caddyfile
+  https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/Caddyfile
 ```
 
 ### 4. Start with the overlay

@@ -33,7 +33,7 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 - **Document archive** -- SHA-256 integrity, 7-year retention enforcement, full archive ZIP export
 - **SIE import/export** -- Standard Swedish accounting interchange format
 - **Agent access (MCP)** -- 100+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals
-- **Extension system** -- Opt-in plugins for AI categorization, receipt OCR, email, calendar, and more
+- **Extension system** -- Opt-in plugins for AI document extraction, the invoice inbox, bank sync, email, calendar, Skatteverket, and more
 
 ## Self-Hosting
 
@@ -44,7 +44,7 @@ cd accounted
 docker compose up -d
 ```
 
-You need a Supabase project and must apply the database migrations before first use. See [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) for the full step-by-step guide, including Supabase setup, auth configuration, optional features (AI, email, push notifications), and troubleshooting.
+You need a Supabase project and must apply the database migrations before first use. See [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) for the full step-by-step guide, including Supabase setup, auth configuration, optional features (AI, email, push notifications), and troubleshooting. To run everything on Swedish infrastructure (your own Supabase stack, Swedish hosting, AI on Swedish GPUs), see [docs/SOVEREIGN.md](docs/SOVEREIGN.md).
 
 ## Development Setup
 
@@ -65,7 +65,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow.
 - **Framework**: Next.js 16 (App Router), React 19, TypeScript (strict)
 - **Database**: Supabase (PostgreSQL + Row Level Security + email/password auth + TOTP MFA)
 - **Styling**: Tailwind CSS 4 + shadcn/ui
-- **Integrations**: Enable Banking (PSD2), Anthropic SDK, LangChain, OpenAI, Resend, JSZip
+- **Integrations**: Enable Banking (PSD2), Skatteverket APIs, Claude (Anthropic SDK on AWS Bedrock or the direct API) or any OpenAI-compatible endpoint via the Vercel AI SDK, Resend, JSZip
 
 ## Documentation
 

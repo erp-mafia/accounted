@@ -14,6 +14,7 @@ import { PaletteProvider } from "@/components/providers/PaletteProvider";
 import { SWRProvider } from "@/components/providers/SWRProvider";
 import { ScrollbarReveal } from "@/components/ScrollbarReveal";
 import { ensureInitialized } from "@/lib/init";
+import { isSelfHosted } from "@/lib/env/public-flags";
 import { getBranding } from "@/lib/branding/service";
 import { APP_TIME_ZONE } from "@/i18n/config";
 import "./globals.css";
@@ -104,7 +105,11 @@ export default async function RootLayout({
             </PaletteProvider>
           </ThemeProvider>
         </NextIntlClientProvider>
-        <SpeedInsights />
+        {/* Vercel Speed Insights is hosted-only telemetry: a self-hosted
+            (AGPL) instance must not report its users' page timings to our
+            Vercel project. Read through lib/env/public-flags, never compared
+            in place (the Docker build folds in-place NEXT_PUBLIC_* reads). */}
+        {!isSelfHosted() && <SpeedInsights />}
         <Script src="/sw-register.js" strategy="afterInteractive" />
       </body>
     </html>

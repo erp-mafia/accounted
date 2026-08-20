@@ -54,7 +54,7 @@ The migrations automatically enable these extensions:
 | Extension | Migration | Purpose |
 |-----------|-----------|---------|
 | `uuid-ossp` | 001 | UUID generation |
-| `vector` (pgvector) | 033 | AI embedding storage (for AI extensions) |
+| `vector` (pgvector) | 033 | Created by an early migration; no current code path stores embeddings, the extension only needs to exist for the migration to apply |
 | `btree_gist` | 042 | Fiscal period overlap prevention |
 | `pg_cron` | 048 | In-database scheduled jobs |
 
@@ -182,14 +182,14 @@ There is no admin account or invite system: any email address can sign up. You c
 
 ## Scheduled Jobs
 
-The cron sidecar runs these jobs automatically:
+The cron sidecar runs the schedule in [`docker/crontab.self-hosted`](../docker/crontab.self-hosted). That file is generated from the `crons` array in `vercel.json` (the single source of truth, shared with the hosted service) by `npm run crontabs:generate`, and a test fails CI if it drifts, so this guide does not repeat the table: open the file for exact times. As of this writing it holds 23 jobs, in these groups:
 
-| Schedule (UTC) | Endpoint | Purpose |
-|----------------|----------|---------|
-| Daily 06:00 | `/api/deadlines/status/cron` | Update deadline statuses |
-| Daily 08:00 | `/api/invoices/reminders/cron` | Send overdue invoice reminders |
-| Yearly Jan 2 | `/api/tax-deadlines/cron` | Generate tax deadlines for the new year |
-| Sundays 03:00 | `/api/documents/verify/cron` | SHA-256 integrity check on document archive |
+- **Every minute / every few minutes**: webhook dispatch, WhatsApp and invoice-inbox sweeps (crash recovery for staged uploads).
+- **Hourly**: recurring invoices, cloud-backup auto-sync, idempotency-key cleanup.
+- **Nightly (UTC)**: deadline statuses, tax deadlines, document-archive SHA-256 verification, event and pending-operation cleanup, sandbox cleanup, booking-template sync, bank sync, skattekonto sync, accrual posting, receipt hunt, WhatsApp retention.
+- **Skatteverket receipts**: AGI every 15 minutes, VAT every two hours.
+
+Extension endpoints are listed unconditionally: one whose extension is not enabled answers a cheap no-op, so enabling it later needs no crontab change.
 
 All cron endpoints are authenticated with `Authorization: Bearer <CRON_SECRET>`. The cron container calls the app over the internal Docker network (`http://app:3000`), so these endpoints are not exposed publicly.
 
@@ -269,15 +269,6 @@ VAPID_SUBJECT=mailto:you@example.com
 
 Generate VAPID keys with `npx web-push generate-vapid-keys`. Push notifications require HTTPS.
 
-### Error Tracking (Sentry)
-
-```bash
-SENTRY_DSN=https://...@sentry.io/...
-NEXT_PUBLIC_SENTRY_DSN=https://...@sentry.io/...
-```
-
-Sentry is disabled if these are not set. No errors are thrown.
-
 ## Storage Buckets
 
 Migration 024 automatically creates the `documents` storage bucket (private, 50 MB limit, WORM, no update/delete). No other buckets need to be created manually.
@@ -322,7 +313,7 @@ The Next.js app is stateless: all data lives in Supabase. The Docker entrypoint 
 
 ## Fully Self-Hosted (No Supabase Cloud)
 
-The setup above relies on a Supabase project at supabase.com. If you also want to host the database, auth, and storage yourself (to keep all data on-premises, avoid the SaaS dependency, or run air-gapped) you can pair Accounted with [Supabase's official Docker self-hosting stack](https://supabase.com/docs/guides/self-hosting/docker) instead.
+The setup above relies on a Supabase project at supabase.com. If you also want to host the database, auth, and storage yourself (to keep all data on-premises, avoid the SaaS dependency, or run air-gapped) you can pair Accounted with [Supabase's official Docker self-hosting stack](https://supabase.com/docs/guides/self-hosting/docker) instead. For the fully Swedish variant of this (Swedish hosting, Swedish object storage with retention locks for the 7-year archive, AI on Swedish GPUs, backup/restore runbook) see [SOVEREIGN.md](SOVEREIGN.md); the mechanics below apply there too.
 
 This is a more involved path. You take responsibility for backups, TLS certificates, image upgrades, and Postgres operations. It is intended for operators already running Docker services who are comfortable with PostgreSQL.
 
@@ -363,7 +354,7 @@ flowchart LR
 
 ### Setup outline
 
-1. **Bring up Supabase** following [supabase.com/docs/guides/self-hosting/docker](https://supabase.com/docs/guides/self-hosting/docker). Generate your own `JWT_SECRET`, `ANON_KEY`, and `SERVICE_ROLE_KEY` (Supabase ships `sh utils/generate-keys.sh`). Pick a hostname for the API gateway (e.g. `supabase.example.com`) and point `SUPABASE_PUBLIC_URL` / `API_EXTERNAL_URL` at it.
+1. **Bring up Supabase** following [supabase.com/docs/guides/self-hosting/docker](https://supabase.com/docs/guides/self-hosting/docker). Generate your own `JWT_SECRET`, `ANON_KEY`, and `SERVICE_ROLE_KEY` (Supabase ships `sh utils/generate-keys.sh`). Pick a hostname for the API gateway (e.g. `supabase.example.com`) and point `SUPABASE_PUBLIC_URL` at it and `API_EXTERNAL_URL` at it **including the `/auth/v1` path** (upstream docker 0.7.0, July 2026, changed this). The gateway container is `kong` up to docker 0.7 and `envoy` from 0.8.0 (August 2026); the diagram above says `kong`, the role is the same.
 
 2. **Apply the Accounted migrations** directly via `psql`: the Supabase CLI (`db push`) assumes a cloud project, so run the SQL files against the self-hosted database container:
 
