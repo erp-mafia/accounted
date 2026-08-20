@@ -52,7 +52,15 @@ const cspDirectives = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
-  output: 'standalone',
+  // Standalone output feeds the Docker image (Dockerfile copies
+  // .next/standalone). Vercel never reads it: its build adapter
+  // (onBuildComplete) traces and packages functions itself, and as of Next
+  // 16.3 the adapter path no longer leaves the next-server.js.nft.json the
+  // standalone writer copies from, so the build failed with ENOENT right after
+  // "Running onBuildComplete from Vercel" (#1750 preview). VERCEL=1 is a
+  // system env var on every Vercel build; self-hosted and local builds keep
+  // the standalone directory.
+  output: process.env.VERCEL ? undefined : 'standalone',
   // Build id inlined into the client bundle so a running tab can tell when a
   // newer deploy is live (see components/system/DeployReloadPrompt). On Vercel
   // this is the commit SHA; empty elsewhere (dev / self-hosted), which disables
