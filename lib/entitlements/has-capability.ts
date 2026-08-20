@@ -363,14 +363,13 @@ export async function getCompanyEntitlements(
   if (!isUuid(companyId)) {
     return { capabilities: [], trialEndsAt: null, entitlementState: 'none', trialExpiredAt: null }
   }
-  // Self-hosted: every local capability is held; the connector capabilities
-  // among the paid keys come from `source = 'connector'` grants written by
-  // the instance's connector sync. There is no trial on a self-host, so the
-  // state is 'paid' when any connector grant is active and 'none' otherwise
-  // (never 'trial_expired': that copy talks about a hosted trial).
-  if (isSelfHosted()) {
-    return getSelfHostedEntitlements(supabase, companyId)
-  }
+  // Self-hosted: every local capability is held outright; only the connector
+  // capabilities among the paid keys are read from grants (written with
+  // `source = 'connector'` by the instance's connector sync). Same query
+  // below, narrowed to those keys.
+  const selfHosted = isSelfHosted()
+  const localPaid = selfHosted ? PAID_CAPABILITIES.filter((k) => !isConnectorCapability(k)) : []
+  const queriedKeys = selfHosted ? PAID_CAPABILITIES.filter((k) => isConnectorCapability(k)) : PAID_CAPABILITIES
 
   // The disabled-config subtraction and the subscription-status read only
   // need companyId, so they run in parallel with the team lookup: this
@@ -401,16 +400,17 @@ export async function getCompanyEntitlements(
   const { data: grants } = await supabase
     .from('capability_grants')
     .select('capability_key, expires_at, source')
-    .in('capability_key', PAID_CAPABILITIES as unknown as string[])
+    .in('capability_key', queriedKeys as unknown as string[])
     .or(scopeFilter)
 
   const now = Date.now()
-  const entitled = new Set<string>()
+  const entitled = new Set<string>(localPaid)
   // Latest trial expiry across ALL trial rows, expired ones included: this is
   // what tells the UI the trial ENDED (ISO strings from the same column
   // compare lexically).
   let latestTrialExpiry: string | null = null
   let hasActiveNonTrialGrant = false
+  let hasActiveConnectorGrant = false
   for (const g of grants ?? []) {
     const row = g as { capability_key: string; expires_at: string | null; source: string | null }
     if (
@@ -424,6 +424,22 @@ export async function getCompanyEntitlements(
     if (!active) continue
     entitled.add(row.capability_key)
     if (row.source !== 'trial') hasActiveNonTrialGrant = true
+    if (row.source === 'connector') hasActiveConnectorGrant = true
+  }
+
+  if (selfHosted) {
+    // No trial on a self-host: 'paid' while a connector grant is active,
+    // 'none' otherwise (never the hosted trial copy). Explicit disables still
+    // apply.
+    for (const c of configs ?? []) {
+      entitled.delete((c as { capability_key: string }).capability_key)
+    }
+    return {
+      capabilities: PAID_CAPABILITIES.filter((k) => entitled.has(k)),
+      trialEndsAt: null,
+      entitlementState: hasActiveConnectorGrant ? 'paid' : 'none',
+      trialExpiredAt: null,
+    }
   }
   // Paying/comped companies are not "on trial" even if the seeded trial rows
   // haven't expired yet: the countdown would nag someone who already converted.
@@ -461,52 +477,6 @@ export async function getCompanyEntitlements(
     trialEndsAt,
     entitlementState,
     trialExpiredAt,
-  }
-}
-
-async function getSelfHostedEntitlements(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<CompanyEntitlements> {
-  const localPaid = PAID_CAPABILITIES.filter((k) => !isConnectorCapability(k))
-  const connectorPaid = PAID_CAPABILITIES.filter((k) => isConnectorCapability(k))
-
-  const [{ data: company }, { data: configs }] = await Promise.all([
-    supabase.from('companies').select('team_id').eq('id', companyId).maybeSingle(),
-    supabase
-      .from('company_capability_config')
-      .select('capability_key, enabled')
-      .eq('company_id', companyId)
-      .eq('enabled', false),
-  ])
-  const rawTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
-  const teamId = rawTeamId && isUuid(rawTeamId) ? rawTeamId : null
-  const scopeFilter = teamId
-    ? `company_id.eq.${companyId},team_id.eq.${teamId}`
-    : `company_id.eq.${companyId}`
-  const { data: grants } = await supabase
-    .from('capability_grants')
-    .select('capability_key, expires_at, source')
-    .in('capability_key', connectorPaid as unknown as string[])
-    .or(scopeFilter)
-
-  const now = Date.now()
-  const entitled = new Set<string>(localPaid)
-  let hasActiveConnectorGrant = false
-  for (const g of grants ?? []) {
-    const row = g as { capability_key: string; expires_at: string | null; source: string | null }
-    if (!grantIsActive(row.expires_at, now)) continue
-    entitled.add(row.capability_key)
-    if (row.source === 'connector') hasActiveConnectorGrant = true
-  }
-  for (const c of configs ?? []) {
-    entitled.delete((c as { capability_key: string }).capability_key)
-  }
-  return {
-    capabilities: PAID_CAPABILITIES.filter((k) => entitled.has(k)),
-    trialEndsAt: null,
-    entitlementState: hasActiveConnectorGrant ? 'paid' : 'none',
-    trialExpiredAt: null,
   }
 }
 
