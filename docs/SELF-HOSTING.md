@@ -274,7 +274,7 @@ The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docke
 curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/connector/sync/cron
 ```
 
-The proxied connector services themselves (bank, Skatteverket, lookup, migration through `app.gnubok.se/api/connect/*`) ship in a following release; until then the key is validated and the grants are written, nothing more.
+The **bank connector** proxy is live (`app.gnubok.se/api/connect/bank/*`): with `bank_sync` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials while the bank session id and all transaction data stay in the instance's own database. Skatteverket, company lookup and migration through the connector ship in following releases; until each lands, a key is validated and its grants are written, and the unshipped services stay unconfigured.
 
 ### Push Notifications
 

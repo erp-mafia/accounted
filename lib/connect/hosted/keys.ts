@@ -25,6 +25,18 @@ export function isConnectorKeyFormat(key: string): boolean {
   return key.startsWith(CONNECTOR_KEY_PREFIX) && key.length > CONNECTOR_KEY_PREFIX.length + 16
 }
 
+export interface ConnectorKeyLimits {
+  bank_connections_per_company: number
+  skv_connections_per_company: number
+  sync_min_interval_s: number
+}
+
+export const DEFAULT_CONNECTOR_LIMITS: ConnectorKeyLimits = {
+  bank_connections_per_company: 1,
+  skv_connections_per_company: 1,
+  sync_min_interval_s: 0,
+}
+
 export interface ValidatedConnectorKey {
   id: string
   orgNumber: string
@@ -32,6 +44,7 @@ export interface ValidatedConnectorKey {
   scopes: string[]
   status: ConnectorKeyStatus
   currentPeriodEnd: string | null
+  limits: ConnectorKeyLimits
 }
 
 export type ConnectorKeyValidation =
@@ -64,6 +77,7 @@ export async function validateConnectorKey(
     status: string
     current_period_end: string | null
     rate_limited: boolean
+    limits: Partial<ConnectorKeyLimits> | null
   }
   if (row.status !== 'active') {
     return { ok: false, status: 403, code: 'CONNECTOR_KEY_SUSPENDED', error: 'Connector key is suspended' }
@@ -80,6 +94,7 @@ export async function validateConnectorKey(
       scopes: row.scopes ?? [],
       status: 'active',
       currentPeriodEnd: row.current_period_end,
+      limits: { ...DEFAULT_CONNECTOR_LIMITS, ...(row.limits ?? {}) },
     },
   }
 }

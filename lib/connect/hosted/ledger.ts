@@ -1,0 +1,141 @@
+import crypto from 'node:crypto'
+import type { SupabaseClient } from '@supabase/supabase-js'
+
+/**
+ * The connector connection ledger: proof, without secrets, that a connection
+ * belongs to a given connector key. Every bank/SKV connection is born through
+ * the proxy (the consent redirect is ours), so the proxy records it at
+ * creation and checks ownership on every later use. The upstream handle (EB
+ * session id, SKV access token) is hashed; the value never rests here.
+ */
+
+export type ConnectorService = 'bank' | 'skatteverket'
+
+export function hashHandle(handle: string): string {
+  return crypto.createHash('sha256').update(handle).digest('hex')
+}
+
+export interface LedgerRow {
+  id: string
+  connector_key_id: string
+  service: ConnectorService
+  company_ref: string
+  provider: string | null
+  account_uids: string[]
+  status: 'pending' | 'active' | 'revoked'
+}
+
+/** Active connections for one company under one key and service. Enforces the per-company limit. */
+export async function countActiveConnections(
+  supabase: SupabaseClient,
+  keyId: string,
+  service: ConnectorService,
+  companyRef: string,
+): Promise<number> {
+  const { count, error } = await supabase
+    .from('connector_connections')
+    .select('id', { count: 'exact', head: true })
+    .eq('connector_key_id', keyId)
+    .eq('service', service)
+    .eq('company_ref', companyRef)
+    .eq('status', 'active')
+  if (error) throw new Error(`ledger count failed: ${error.message}`)
+  return count ?? 0
+}
+
+export async function createPendingConnection(
+  supabase: SupabaseClient,
+  params: { keyId: string; service: ConnectorService; companyRef: string; provider: string | null; pendingState: string },
+): Promise<string> {
+  const { data, error } = await supabase
+    .from('connector_connections')
+    .insert({
+      connector_key_id: params.keyId,
+      service: params.service,
+      company_ref: params.companyRef,
+      provider: params.provider,
+      pending_state: params.pendingState,
+      status: 'pending',
+    })
+    .select('id')
+    .single()
+  if (error || !data) throw new Error(`ledger insert failed: ${error?.message}`)
+  return (data as { id: string }).id
+}
+
+/** Activate a pending connection (found by its signed pending_state) with the live handle + accounts. */
+export async function activateByPendingState(
+  supabase: SupabaseClient,
+  params: { keyId: string; pendingState: string; handle: string; accountUids?: string[] },
+): Promise<LedgerRow | null> {
+  const { data, error } = await supabase
+    .from('connector_connections')
+    .update({
+      status: 'active',
+      handle_hash: hashHandle(params.handle),
+      account_uids: params.accountUids ?? [],
+      pending_state: null,
+      activated_at: new Date().toISOString(),
+      last_used_at: new Date().toISOString(),
+    })
+    .eq('connector_key_id', params.keyId)
+    .eq('pending_state', params.pendingState)
+    .eq('status', 'pending')
+    .select('id, connector_key_id, service, company_ref, provider, account_uids, status')
+    .maybeSingle()
+  if (error) throw new Error(`ledger activate failed: ${error.message}`)
+  return (data as LedgerRow | null) ?? null
+}
+
+/** The active ledger row that owns a given handle under a key. Ownership check for reads/writes. */
+export async function findByHandle(
+  supabase: SupabaseClient,
+  params: { keyId: string; service: ConnectorService; handle: string },
+): Promise<LedgerRow | null> {
+  const { data, error } = await supabase
+    .from('connector_connections')
+    .select('id, connector_key_id, service, company_ref, provider, account_uids, status')
+    .eq('connector_key_id', params.keyId)
+    .eq('service', params.service)
+    .eq('handle_hash', hashHandle(params.handle))
+    .eq('status', 'active')
+    .maybeSingle()
+  if (error) throw new Error(`ledger lookup failed: ${error.message}`)
+  return (data as LedgerRow | null) ?? null
+}
+
+/** The active ledger row that owns a bank account uid under a key. */
+export async function findByAccountUid(
+  supabase: SupabaseClient,
+  params: { keyId: string; accountUid: string },
+): Promise<LedgerRow | null> {
+  const { data, error } = await supabase
+    .from('connector_connections')
+    .select('id, connector_key_id, service, company_ref, provider, account_uids, status')
+    .eq('connector_key_id', params.keyId)
+    .eq('service', 'bank')
+    .eq('status', 'active')
+    .contains('account_uids', [params.accountUid])
+    .limit(1)
+    .maybeSingle()
+  if (error) throw new Error(`ledger account lookup failed: ${error.message}`)
+  return (data as LedgerRow | null) ?? null
+}
+
+export async function touchConnection(supabase: SupabaseClient, id: string): Promise<void> {
+  await supabase.from('connector_connections').update({ last_used_at: new Date().toISOString() }).eq('id', id)
+}
+
+/** Revoke by handle (DELETE /sessions). Idempotent. */
+export async function revokeByHandle(
+  supabase: SupabaseClient,
+  params: { keyId: string; service: ConnectorService; handle: string },
+): Promise<void> {
+  await supabase
+    .from('connector_connections')
+    .update({ status: 'revoked', revoked_at: new Date().toISOString() })
+    .eq('connector_key_id', params.keyId)
+    .eq('service', params.service)
+    .eq('handle_hash', hashHandle(params.handle))
+    .eq('status', 'active')
+}

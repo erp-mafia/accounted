@@ -15,6 +15,7 @@ import {
 import { fanOutSessionRenewal } from '@/extensions/general/enable-banking/lib/session-sharing'
 import { supersedeSiblingConnections } from '@/extensions/general/enable-banking/lib/supersede'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
+import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
 
 // This route emits bank_connection.consent_granted / .cash_account_mirror_failed
 // (ASVS V16 / GDPR Art.30 audit events). ensureInitialized() must run at module
@@ -80,6 +81,28 @@ export async function GET(request: Request) {
   const errorDescription = searchParams.get('error_description')
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+
+  // Connector branch: a self-hosted instance started this authorization through
+  // the /api/connect/bank proxy, which replaced the upstream state with a
+  // signed connector state carrying the instance's own return URL. We never
+  // create a session here (the instance does, through the proxy): we just
+  // bounce the browser back to the instance with the code + its original
+  // state, so no per-instance redirect URI has to be registered with EB.
+  if (isConnectorState(state)) {
+    const verified = verifyConnectorState(state as string)
+    if (!verified.ok || verified.payload.svc !== 'bank') {
+      return NextResponse.redirect(`${baseUrl}/?connector_error=${encodeURIComponent(verified.ok ? 'wrong_service' : verified.reason)}`)
+    }
+    const ret = new URL(verified.payload.ret)
+    if (error) ret.searchParams.set('error', error)
+    if (errorDescription) ret.searchParams.set('error_description', errorDescription)
+    if (code) ret.searchParams.set('code', code)
+    if (verified.payload.st) ret.searchParams.set('state', verified.payload.st)
+    // Echo the signed connector state so the instance can present it back to
+    // the proxy's POST /sessions (which finds the pending ledger row by it).
+    ret.searchParams.set('connector_state', state as string)
+    return NextResponse.redirect(ret.toString())
+  }
 
   if (error) {
     const errorMessage = errorDescription || error
