@@ -9,6 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
+import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import type { Currency, CustomerType, ExchangeRate, SupplierType, VatTreatment } from '@/types'
 import type {
   CustomerDto,
@@ -224,18 +225,111 @@ export function inferTypeFromParty(
   )
 }
 
-function inferVatTreatment(taxPercent?: number, currencyCode?: string): VatTreatment {
-  if (taxPercent === 25) return 'standard_25'
-  if (taxPercent === 12) return 'reduced_12'
-  if (taxPercent === 6) return 'reduced_6'
-  if (taxPercent === 0 && currencyCode && currencyCode !== 'SEK') return 'export'
-  return 'standard_25'
+/**
+ * The VAT figures for one imported invoice, and whether they were observed.
+ *
+ * `rate` is null when nothing in the payload established one. That is the
+ * difference this type exists to carry: the old code answered "25" to that
+ * question and the record then read "25 % moms" beside "0 kr", which is not a
+ * rounding artefact but a claim the source never made.
+ */
+interface InvoiceVatResolution {
+  subtotal: number
+  vatAmount: number
+  /** Percent (25 / 12 / 6 / 0), or null when no evidence established it. */
+  rate: number | null
+  treatment: VatTreatment
+  /** True when neither a VAT total, line VAT, nor a net could be found. */
+  unresolved: boolean
 }
 
-function inferVatRate(taxPercent?: number): number {
-  if (taxPercent === 25 || taxPercent === 12 || taxPercent === 6) return taxPercent
-  if (taxPercent === 0) return 0
-  return 25 // Default to standard rate
+/** Swedish statutory rates, most common first. */
+const SWEDISH_VAT_RATES = [25, 12, 6, 0] as const
+
+/**
+ * Snap an observed ratio to a statutory Swedish rate.
+ *
+ * Providers hand back both units (25 and 0.25) and their own rounding, so an
+ * invoice whose VAT divided by its net comes to 0.2499 is a 25 % invoice.
+ * A ratio matching none of the statutory rates returns null rather than the
+ * nearest one: an unrecognised rate is a fact worth surfacing, and a foreign
+ * invoice may legitimately carry 19 % or 24 %.
+ */
+function snapToSwedishRate(ratio: number): number | null {
+  const percent = ratio > 1 ? ratio : ratio * 100
+  return SWEDISH_VAT_RATES.find((rate) => Math.abs(percent - rate) < 0.5) ?? null
+}
+
+/**
+ * Treatment implied by an observed rate.
+ *
+ * A 0 % rate is genuinely ambiguous in the source data: it could be momsfritt,
+ * omvänd skattskyldighet or an export. Currency is the only signal available
+ * here, so a non-SEK invoice reads as export and a SEK one as exempt. Both
+ * post to a 0 % revenue account, which is what the numbers say; calling it
+ * `standard_25` (the old fallback) would have put a momsfri sale on 3001 and
+ * into ruta 05 of the momsdeklaration.
+ */
+function treatmentForRate(rate: number, currencyCode?: string): VatTreatment {
+  if (rate === 25) return 'standard_25'
+  if (rate === 12) return 'reduced_12'
+  if (rate === 6) return 'reduced_6'
+  return currencyCode && currencyCode !== 'SEK' ? 'export' : 'exempt'
+}
+
+/**
+ * Establish subtotal / VAT / rate for an imported invoice from evidence only.
+ *
+ * Evidence is taken in descending order of authority: the provider's own VAT
+ * total, then the sum of per-line VAT, then the gap between a stated net and
+ * the gross. When none of the three exists the invoice is marked unresolved
+ * and keeps only the figure that IS known, the gross the customer owes; the
+ * rate goes to null so no downstream reader can mistake silence for 25 %.
+ */
+function resolveInvoiceVat(
+  dto: { currencyCode: string; lines: readonly { taxPercent?: number; taxAmount?: { value: number } }[]; taxTotal?: { taxAmount: { value: number } }; legalMonetaryTotal: { lineExtensionAmount?: { value: number }; payableAmount: { value: number } } },
+): InvoiceVatResolution {
+  const total = round2(dto.legalMonetaryTotal.payableAmount.value)
+  const statedNet = dto.legalMonetaryTotal.lineExtensionAmount?.value
+  const net = statedNet !== undefined ? round2(statedNet) : undefined
+
+  const vatAmount = dto.taxTotal !== undefined
+    ? round2(dto.taxTotal.taxAmount.value)
+    : sumLineVat(dto.lines) ?? (net !== undefined ? round2(total - net) : undefined)
+
+  if (vatAmount === undefined) {
+    return {
+      subtotal: total,
+      vatAmount: 0,
+      rate: null,
+      // Nothing was observed, so nothing is asserted: `vat_rate: null` is the
+      // signal the UI and the repair query read. The treatment column is NOT
+      // NULL-typed across the codebase, so it keeps the schema default rather
+      // than widening `Invoice['vat_treatment']` through 90 call sites.
+      treatment: 'standard_25',
+      unresolved: true,
+    }
+  }
+
+  const subtotal = net ?? round2(total - vatAmount)
+
+  // A rate stated on a line beats one divided out of the totals: mixed-rate
+  // invoices divide out to a blended figure that matches no statutory rate.
+  const statedPercent = dto.lines.find((line) => line.taxPercent != null)?.taxPercent
+  const rate = statedPercent != null
+    ? snapToSwedishRate(statedPercent)
+    : subtotal > 0
+      ? snapToSwedishRate(vatAmount / subtotal)
+      : null
+
+  return {
+    subtotal,
+    vatAmount,
+    rate,
+    treatment: rate !== null ? treatmentForRate(rate, dto.currencyCode) : 'standard_25',
+    // A VAT amount was established; only its rate could not be classified.
+    unresolved: false,
+  }
 }
 
 // ── Currency conversion ─────────────────────────────────────────────
@@ -417,6 +511,13 @@ export interface MappedInvoice {
   invoice: Record<string, unknown>
   items: Record<string, unknown>[]
   fxUnresolved: FxUnresolved | null
+  /**
+   * True when the provider payload established no VAT at all, so the invoice
+   * carries its gross as its subtotal, 0 kr of VAT and a null rate. Counted
+   * into the migration summary the same way `fxUnresolved` is, so a run that
+   * could not establish VAT says so instead of looking clean.
+   */
+  vatUnresolved: boolean
 }
 
 // ── Public mappers ──────────────────────────────────────────────────
@@ -489,13 +590,10 @@ export function mapSalesInvoice(
   customerId: string,
   fxRates?: FxRateIndex
 ): MappedInvoice {
-  const subtotal = round2(dto.legalMonetaryTotal.lineExtensionAmount.value)
   const total = round2(dto.legalMonetaryTotal.payableAmount.value)
-  const vatAmount = round2(dto.taxTotal?.taxAmount.value ?? (total - subtotal))
-
-  // Determine primary VAT treatment from first line with tax
-  const primaryTaxPercent = dto.lines.find(l => l.taxPercent != null)?.taxPercent
-  const vatTreatment = inferVatTreatment(primaryTaxPercent, dto.currencyCode)
+  const vat = resolveInvoiceVat(dto)
+  const subtotal = vat.subtotal
+  const vatAmount = vat.vatAmount
 
   // Map Arcim status to Accounted status
   const statusMap: Record<string, string> = {
@@ -535,8 +633,11 @@ export function mapSalesInvoice(
     vat_amount_sek: toSek(vatAmount, fx.sekFactor),
     total,
     total_sek: toSek(total, fx.sekFactor),
-    vat_treatment: vatTreatment,
-    vat_rate: inferVatRate(primaryTaxPercent),
+    vat_treatment: vat.treatment,
+    // null, not 25, when the payload established no rate. The column is
+    // nullable and defaults to 25; writing the default explicitly is what made
+    // 8 700+ migrated invoices assert "25 % moms" beside 0 kr of it.
+    vat_rate: vat.rate,
     your_reference: null,
     our_reference: null,
     notes: dto.note || null,
@@ -548,21 +649,43 @@ export function mapSalesInvoice(
     remaining_amount: dto.paymentStatus.paid ? 0 : Math.max(0, round2(dto.paymentStatus.balance.value)),
   }
 
-  const items = dto.lines.map((line, idx) => mapSalesInvoiceLine(line, idx))
+  const items = dto.lines.map((line, idx) => mapSalesInvoiceLine(line, idx, vat.rate))
 
-  return { invoice, items, fxUnresolved: fx.unresolved }
+  return { invoice, items, fxUnresolved: fx.unresolved, vatUnresolved: vat.unresolved }
 }
 
-function mapSalesInvoiceLine(line: SalesInvoiceLineDto, index: number): Record<string, unknown> {
+/**
+ * One invoice_items row.
+ *
+ * `invoiceRate` is the rate resolved for the invoice as a whole, used only
+ * when the line itself states none. The booking engine sums `vat_amount`
+ * across items to post 2611, so a line that carried a rate but no amount used
+ * to contribute nothing: 3 451 of 4 030 migrated items at 25 % hold 0 kr.
+ * Deriving the amount from whichever rate is known fixes that at the source.
+ *
+ * invoice_items.vat_rate is stored as a PERCENT (25), unlike
+ * supplier_invoice_items.vat_rate which is a fraction (0.25).
+ */
+function mapSalesInvoiceLine(
+  line: SalesInvoiceLineDto,
+  index: number,
+  invoiceRate: number | null,
+): Record<string, unknown> {
+  const lineTotal = round2(line.lineExtensionAmount.value)
+  const rate = line.taxPercent != null ? snapToSwedishRate(line.taxPercent) : invoiceRate
+  const vatAmount = line.taxAmount?.value ?? lineVatFromPercent(lineTotal, rate ?? undefined)
+
   return {
     sort_order: index + 1,
     description: line.description || line.itemName || '',
     quantity: line.quantity || 1,
     unit: line.unitCode || 'st',
     unit_price: round2(line.unitPrice?.value ?? line.lineExtensionAmount.value),
-    line_total: round2(line.lineExtensionAmount.value),
-    vat_rate: inferVatRate(line.taxPercent),
-    vat_amount: round2(line.taxAmount?.value ?? 0),
+    line_total: lineTotal,
+    // 0 rather than the old hardcoded 25 when nothing established a rate: a
+    // 0 % line beside 0 kr of VAT is at least internally consistent.
+    vat_rate: rate ?? 0,
+    vat_amount: round2(vatAmount ?? 0),
   }
 }
 
@@ -573,12 +696,11 @@ export function mapSupplierInvoice(
   supplierId: string,
   fxRates?: FxRateIndex
 ): MappedInvoice {
-  const subtotal = round2(dto.legalMonetaryTotal.lineExtensionAmount.value)
   const total = round2(dto.legalMonetaryTotal.payableAmount.value)
-  const vatAmount = round2(dto.taxTotal?.taxAmount.value ?? (total - subtotal))
-
-  const primaryTaxPercent = dto.lines.find(l => l.taxPercent != null)?.taxPercent
-  const vatTreatment = inferVatTreatment(primaryTaxPercent, dto.currencyCode)
+  const vat = resolveInvoiceVat(dto)
+  const subtotal = vat.subtotal
+  const vatAmount = vat.vatAmount
+  const vatTreatment = vat.treatment
 
   const statusMap: Record<string, string> = {
     draft: 'registered',
@@ -664,25 +786,43 @@ export function mapSupplierInvoice(
     notes: dto.note || null,
   }
 
-  const items = dto.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx))
+  const items = dto.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx, vat.rate))
 
-  return { invoice, items, fxUnresolved: fx.unresolved }
+  return { invoice, items, fxUnresolved: fx.unresolved, vatUnresolved: vat.unresolved }
 }
 
-function mapSupplierInvoiceLine(line: SupplierInvoiceLineDto, index: number): Record<string, unknown> {
+/**
+ * One supplier_invoice_items row.
+ *
+ * `invoiceRate` (percent) is the rate resolved for the invoice as a whole and
+ * is used only when the line states none: the previous `?? 25` asserted a
+ * standard rate on every line of every provider that omits per-line VAT, and
+ * paired it with a 0 kr amount.
+ */
+function mapSupplierInvoiceLine(
+  line: SupplierInvoiceLineDto,
+  index: number,
+  invoiceRate: number | null,
+): Record<string, unknown> {
+  const lineTotal = round2(line.lineExtensionAmount.value)
+  // Foreign rates (19 % DE) must survive rather than be snapped to a Swedish
+  // one, so the line's own percent is used as stated; only the fallback comes
+  // from the invoice-level resolution.
+  const percent = line.taxPercent ?? invoiceRate ?? 0
+  const vatAmount = line.taxAmount?.value ?? lineVatFromPercent(lineTotal, percent)
+
   return {
     sort_order: index + 1,
     description: line.description || line.itemName || '',
     quantity: line.quantity || 1,
     unit: line.unitCode || 'st',
     unit_price: round2(line.unitPrice?.value ?? line.lineExtensionAmount.value),
-    line_total: round2(line.lineExtensionAmount.value),
+    line_total: lineTotal,
     account_number: line.accountNumber || '4000', // Default to purchases
     // supplier_invoice_items stores decimal fractions (0.25 = 25 %), unlike
-    // customer invoice_items which store percent; foreign rates (19 % DE)
-    // must survive as 0.19 rather than be coerced to a Swedish rate.
-    vat_rate: normalizeVatRateToFraction(line.taxPercent ?? 25),
-    vat_amount: round2(line.taxAmount?.value ?? 0),
+    // customer invoice_items which store percent.
+    vat_rate: normalizeVatRateToFraction(percent),
+    vat_amount: round2(vatAmount ?? 0),
   }
 }
 

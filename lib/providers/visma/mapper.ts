@@ -8,10 +8,36 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto,
 } from '../dto';
+import {
+  readNumber,
+  resolveVatTriple,
+  lineVatFromPercent,
+  multiplyIfBothPresent,
+} from '../amounts';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
   return { value: value ?? 0, currencyCode: currency };
 }
+
+/**
+ * eAccounting states the VAT total on the invoice header (`TotalVatAmount`)
+ * and the ex-VAT amount per row (`AmountNoVat`), alongside the rate as
+ * `PercentVat`. None of the three was read: the header net was taken straight
+ * from `TotalAmount`, which is the amount INCLUDING VAT, so every migrated
+ * Visma invoice recorded its gross as its net and 0 kr of VAT. The row reader
+ * asked for `LineTotal` and `VatRatePercent`, neither of which exists in the
+ * schema, so every line landed with a 0 amount and the hardcoded 25 % default.
+ *
+ * `TotalAmount` and `TotalVatAmount` are both in the company's accounting
+ * currency, while `currencyCode` below reports the INVOICE currency; the
+ * `*InvoiceCurrency` twins carry the invoice-currency figures. What matters
+ * for VAT is reading a consistent pair, so both come from the
+ * accounting-currency family here. The currency-label mismatch on foreign
+ * invoices predates this change and is deliberately left alone:
+ * `RemainingAmount` and the paid/balance logic read that same family, and
+ * switching only the totals would desync payment status.
+ */
+const VISMA_INVOICE_VAT_KEYS = ['TotalVatAmount'] as const;
 
 // CustomerInvoiceApi.PaymentStatus: 0 = Paid, 1 = Unpaid, 2 = Overdue.
 const CUSTOMER_PS_PAID = 0;
@@ -108,20 +134,36 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     : remaining === 0 && total !== 0;
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
-  const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => ({
-    id: String(row['LineNumber'] ?? idx + 1),
-    description: row['Text'] as string | undefined,
-    quantity: row['Quantity'] as number | undefined,
-    unitCode: row['UnitAbbreviation'] as string | undefined,
-    unitPrice: row['UnitPrice'] != null ? amount(row['UnitPrice'] as number, currency) : undefined,
-    lineExtensionAmount: amount(row['LineTotal'] as number ?? 0, currency),
-    taxPercent: row['VatRatePercent'] as number | undefined,
-    accountNumber: row['AccountNumber'] != null ? String(row['AccountNumber']) : undefined,
-    articleNumber: row['ArticleNumber'] as string | undefined,
-  }));
+  const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
+    // `AmountNoVat` is the row amount excluding VAT. Fall back to
+    // UnitPrice x Quantity only when the schema field is absent, never to 0.
+    const lineNet = readNumber(row, ['AmountNoVat'])
+      ?? multiplyIfBothPresent(readNumber(row, ['UnitPrice']), readNumber(row, ['Quantity']));
+    const taxPercent = readNumber(row, ['PercentVat']);
+    const lineVat = lineNet !== undefined ? lineVatFromPercent(lineNet, taxPercent) : undefined;
+
+    return {
+      id: String(row['LineNumber'] ?? idx + 1),
+      description: row['Text'] as string | undefined,
+      quantity: row['Quantity'] as number | undefined,
+      unitCode: row['UnitAbbreviation'] as string | undefined,
+      unitPrice: row['UnitPrice'] != null ? amount(row['UnitPrice'] as number, currency) : undefined,
+      lineExtensionAmount: amount(lineNet ?? 0, currency),
+      taxPercent,
+      taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
+      accountNumber: row['AccountNumber'] != null ? String(row['AccountNumber']) : undefined,
+      articleNumber: row['ArticleNumber'] as string | undefined,
+    };
+  });
+
+  const vat = resolveVatTriple({
+    gross: total,
+    vat: readNumber(raw, VISMA_INVOICE_VAT_KEYS),
+  });
 
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(total, currency),
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
+    taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
 
@@ -147,6 +189,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
       undefined,
     ),
     lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     createdAt: raw['CreatedUtc'] as string | undefined,
@@ -186,8 +229,17 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
     };
   });
 
+  // Supplier-invoice `Rows` are accounting rows (debit/credit per account),
+  // not invoice lines, so the VAT total cannot be summed off them: one of the
+  // rows IS the VAT account. The header field is the only usable source.
+  const vat = resolveVatTriple({
+    gross: total,
+    vat: readNumber(raw, VISMA_INVOICE_VAT_KEYS),
+  });
+
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(total, currency),
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
+    taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
 
@@ -208,6 +260,7 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
     supplier: buildParty((raw['SupplierName'] ?? '') as string),
     buyer: buildParty(''),
     lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     updatedAt: raw['ModifiedUtc'] as string | undefined,

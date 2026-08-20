@@ -29,8 +29,8 @@ import {
   fetchCompanyInfoDirect,
   fetchCustomersDirect,
   fetchSuppliersDirect,
-  fetchSalesInvoicesDirect,
-  fetchSupplierInvoicesDirect,
+  fetchSalesInvoicesHydrated,
+  fetchSupplierInvoicesHydrated,
 } from '@/lib/providers/provider-data-fetcher'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
@@ -488,7 +488,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     if (options.importSalesInvoices !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Importerar kundfakturor...', progress: 60 })
       try {
-        const invoices = await fetchSalesInvoicesDirect(provider, accessToken, providerCompanyId)
+        // Hydrated, not the bare list: the list payload omits VAT, the net
+        // and the line items for most providers (see provider-data-fetcher).
+        const { invoices, hydration } = await fetchSalesInvoicesHydrated(
+          provider, accessToken, providerCompanyId,
+        )
         console.log(`[migration] Sales invoices: ${invoices.length} total`)
 
         // Bulk-load existing invoice numbers once.
@@ -642,6 +646,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           ready.map((r) => ({ currencyCode: r.dto.currencyCode, issueDate: r.dto.issueDate }))
         )
         let fxUnresolved = 0
+        let vatUnresolved = 0
 
         // Phase C: chunk-insert invoices + their line items.
         for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
@@ -677,6 +682,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               fxUnresolved++
               logFxUnresolved('Sales invoice', mappedBatch[i].dto.invoiceNumber, fx)
             }
+            if (mappedBatch[i].vatUnresolved) {
+              vatUnresolved++
+              console.warn(
+                `[migration] Sales invoice ${mappedBatch[i].dto.invoiceNumber}: no VAT in provider payload; `
+                + 'imported with gross as subtotal and a null rate.'
+              )
+            }
             imported++
           }
 
@@ -690,7 +702,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, errorSample: errorSample ?? undefined }
+        results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, hydration, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import sales invoices:', err)
         recordStepError(results, 'salesInvoices', err)
@@ -701,7 +713,9 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     if (options.importSupplierInvoices !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Importerar leverantörsfakturor...', progress: 80 })
       try {
-        const invoices = await fetchSupplierInvoicesDirect(provider, accessToken, providerCompanyId)
+        const { invoices, hydration } = await fetchSupplierInvoicesHydrated(
+          provider, accessToken, providerCompanyId,
+        )
         console.log(`[migration] Supplier invoices: ${invoices.length} total`)
 
         // Load existing (supplier_invoice_number, supplier_id) pairs once.
@@ -863,14 +877,15 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           ready.map((r) => ({ currencyCode: r.dto.currencyCode, issueDate: r.dto.issueDate }))
         )
         let fxUnresolved = 0
+        let vatUnresolved = 0
 
         for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
           const mappedBatch = batch.map((r) => {
-            const { invoice, items, fxUnresolved: fx } = mapSupplierInvoice(
+            const { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing } = mapSupplierInvoice(
               r.dto, userId, companyId, r.supplierId, fxRates
             )
             invoice.arrival_number = nextArrivalNumber++
-            return { invoice, items, fxUnresolved: fx, dto: r.dto }
+            return { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, dto: r.dto }
           })
 
           const outcome = await insertWithPerRowFallback(
@@ -904,6 +919,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               fxUnresolved++
               logFxUnresolved('Supplier invoice', mappedBatch[i].dto.invoiceNumber, fx)
             }
+            if (mappedBatch[i].vatUnresolved) {
+              vatUnresolved++
+              console.warn(
+                `[migration] Supplier invoice ${mappedBatch[i].dto.invoiceNumber}: no VAT in provider payload; `
+                + 'imported with gross as subtotal.'
+              )
+            }
             imported++
           }
 
@@ -917,7 +939,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, errorSample: errorSample ?? undefined }
+        results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, hydration, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import supplier invoices:', err)
         recordStepError(results, 'supplierInvoices', err)
