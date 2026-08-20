@@ -9611,7 +9611,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_reconciliation_status',
     title: 'Bank Reconciliation Status',
-    description: 'Bank reconciliation for one cash account: matched/unmatched counts, bank vs ledger balance, difference. Defaults to 1930, or the primary cash account if there is no 1930; pass account_number for 1940/1932 etc. Optional date range.',
+    description: 'Bank reconciliation for one cash account: matched/unmatched counts and totals. Judge health on unexplained_difference, not difference (large mid-year by design). Defaults to 1930, else the primary cash account; pass account_number for 1940/1932. Optional date range.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

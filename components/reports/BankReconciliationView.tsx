@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { Fragment, useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,8 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Progress } from '@/components/ui/progress'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { EmptyState } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
@@ -41,6 +43,27 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+/** A bridge step, always carrying its sign so the column reads as a running
+ *  adjustment. Only the plus is added: Intl already renders negatives with a
+ *  real minus sign (U+2212), and prefixing an ASCII hyphen to an absolute value
+ *  would put a different glyph in this column than every other amount on the
+ *  page. */
+function formatSigned(amount: number, currency?: string): string {
+  const rendered = formatCurrency(amount, currency)
+  return amount > 0 ? `+${rendered}` : rendered
+}
+
+/** Anchors for the bridge rows: clicking a step scrolls to the list it names.
+ *  The dashboard panel is the scroll container, so scrollIntoView (which walks
+ *  up to the nearest scrollable ancestor) is correct here and window.scrollTo
+ *  would not be. */
+const UNMATCHED_TX_SECTION_ID = 'recon-unmatched-transactions'
+const UNMATCHED_GL_SECTION_ID = 'recon-unmatched-gl-lines'
+
+function scrollToSection(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 const METHOD_LABELS: Record<string, string> = {
@@ -130,7 +153,15 @@ interface ReconciliationStatus {
   is_reconciled: boolean
   matched_count: number
   unmatched_transaction_count: number
+  /** Sum behind unmatched_transaction_count: one leg of the bridge. */
+  unmatched_transaction_total: number
   unmatched_gl_line_count: number
+  /** Sum behind unmatched_gl_line_count, signed like a bank movement. null on a
+   *  foreign account whose candidate lines carry no amount in that currency. */
+  unmatched_gl_line_total: number | null
+  /** What is left of the difference once both lists are accounted for; null
+   *  whenever unmatched_gl_line_total is. */
+  unexplained_difference: number | null
 }
 
 interface UnmatchedTransaction {
@@ -280,6 +311,10 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
   // MatchVoucherDialog gets on the Transactions page. Keyed by transaction id;
   // cleared whenever the lists refetch (the candidate set may have changed).
   const [rankedCandidates, setRankedCandidates] = useState<Record<string, UnlinkedGLLine[]>>({})
+  /** The one unmatched row whose match picker is open. Single-open by design:
+   *  the picker is a heavy control (it fetches ranked candidates per row), and
+   *  rendering one per row is exactly what made this list unusable. */
+  const [expandedTxId, setExpandedTxId] = useState<string | null>(null)
   const rankedFetchInFlight = useRef<Set<string>>(new Set())
   // Bumped whenever fetchAll clears the ranked cache: an in-flight ranked
   // response from before the clear must not repopulate the fresh cache, or
@@ -701,6 +736,18 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
     [accountNumber, includeMatched, rankedCandidates, appliedDates],
   )
 
+  /** Open one row's match picker (closing any other) and fetch its ranked
+   *  candidates. The fetch used to hang off onFocusCapture on an always-rendered
+   *  picker; it now runs on expand, which is the same moment the user asks for
+   *  candidates but only for rows they actually open. */
+  const toggleExpandedTx = useCallback(
+    (transactionId: string) => {
+      setExpandedTxId((current) => (current === transactionId ? null : transactionId))
+      void ensureRankedCandidates(transactionId)
+    },
+    [ensureRankedCandidates],
+  )
+
   const handleManualLink = async (transactionId: string) => {
     const journalEntryId = selectedMatch[transactionId]
     if (!journalEntryId) return
@@ -731,6 +778,7 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
           delete next[transactionId]
           return next
         })
+        setExpandedTxId((current) => (current === transactionId ? null : current))
         toast({ variant: 'success', title: 'Transaktionen matchades mot verifikationen' })
         await fetchAll({ silent: true })
       }
@@ -1010,6 +1058,51 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
     )
   }
 
+  // Bridge derivations. `unexplained_difference` is null exactly when the GL
+  // side cannot be expressed in the account's currency (a foreign account: the
+  // candidate RPCs project no FX columns), and the card falls back to the flat
+  // figures rather than showing a bridge whose middle row has no honest amount.
+  const bridgeDerivable = status?.unexplained_difference != null
+  const reconcilableCount = status
+    ? status.matched_count + status.unmatched_transaction_count
+    : 0
+  const matchedPercent =
+    reconcilableCount > 0 ? Math.round((status!.matched_count / reconcilableCount) * 100) : 0
+
+  // What the reconciliation leaves out, as one line instead of three stacked
+  // paragraphs. Amounts stay on screen (BFL: the user must be able to see what
+  // was excluded); the legal reasoning moved into the tooltip beside them.
+  const excludedItems: string[] = []
+  if (status) {
+    if (status.gl_1930_opening_balance !== 0) {
+      excludedItems.push(
+        t('recon_excl_ib', { amount: formatCurrency(status.gl_1930_opening_balance) })
+      )
+    }
+    if (status.ignored_transaction_count > 0) {
+      excludedItems.push(
+        t('recon_excl_ignored', {
+          count: status.ignored_transaction_count,
+          amount: formatCurrency(status.ignored_transaction_total, accountCurrency),
+        })
+      )
+    }
+  }
+  const exclusionNotes: string[] = []
+  if (excludedItems.length > 0) {
+    exclusionNotes.push(t('recon_excl_prefix', { items: excludedItems.join(', ') }))
+  }
+  // Corrections are the opposite case: INCLUDED, exactly as on the balance
+  // sheet. Stated here because a large correction figure is the single most
+  // common "why is the booked amount so big" question on this card.
+  if (status && status.gl_1930_correction_adjustment !== 0) {
+    exclusionNotes.push(
+      t('recon_excl_corrections', {
+        amount: formatCurrency(status.gl_1930_correction_adjustment),
+      })
+    )
+  }
+
   return (
     <div className="space-y-8">
       {error && (
@@ -1030,72 +1123,152 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle>Avstämning mot <AccountNumber number={accountNumber} /></CardTitle>
+              {/* Convention 5: chips mark exceptions. Being mid-year and not yet
+                  reconciled is the NORMAL state, so a permanent destructive
+                  "Ej avstämd" badge marked nothing and just manufactured alarm.
+                  Fully reconciled is the state worth marking. */}
               {status.is_reconciled ? (
-                <span className="text-sm text-muted-foreground">Avstämd</span>
+                <Badge variant="success">Avstämd</Badge>
               ) : (
-                <Badge variant="destructive">Ej avstämd</Badge>
+                <span className="text-sm text-muted-foreground">
+                  {t('recon_open_items', {
+                    count:
+                      status.unmatched_transaction_count + status.unmatched_gl_line_count,
+                  })}
+                </span>
               )}
             </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span>Banktransaktioner i perioden</span>
-                <span className="tabular-nums">
-                  {formatCurrency(status.bank_transaction_total, accountCurrency)}
-                </span>
-              </div>
-              {/* GL-side figures (bokfört, IB, rättelser, differens) stay in
-                  SEK: journal entries are booked in SEK regardless of the
-                  cash account's currency. Only the bank-feed total above is in
-                  the account's own currency. */}
-              <div className="flex justify-between">
-                <span>Bokfört på <AccountNumber number={accountNumber} /> i perioden</span>
-                <span className="tabular-nums">
-                  {formatCurrency(status.gl_1930_period_movement)}
-                </span>
-              </div>
-              <div className="flex justify-between pt-2 border-t font-semibold">
-                <span>Differens</span>
-                <span
-                  className={`tabular-nums ${
-                    status.is_reconciled ? 'text-success' : 'text-destructive'
-                  }`}
-                >
-                  {formatCurrency(status.difference)}
-                </span>
-              </div>
-              {status.ignored_transaction_count > 0 && (
-                <p className="pt-2 text-xs text-muted-foreground">
-                  {t('recon_ignored_note', {
-                    count: status.ignored_transaction_count,
-                    amount: formatCurrency(status.ignored_transaction_total, accountCurrency),
-                  })}
-                </p>
+            <div className="space-y-5 text-sm">
+              {/* Reconciliation is a count-down-to-zero task; the only progress
+                  signal used to be three comma-separated numbers in 12px grey. */}
+              {reconcilableCount > 0 && (
+                <div className="space-y-1.5">
+                  <Progress value={matchedPercent} className="h-1" />
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>
+                      {t('recon_progress', {
+                        matched: status.matched_count,
+                        total: reconcilableCount,
+                      })}
+                    </span>
+                    <span className="tabular-nums">{matchedPercent} %</span>
+                  </div>
+                </div>
               )}
-              {status.gl_1930_opening_balance !== 0 && (
-                <p className="pt-2 text-xs text-muted-foreground">
-                  Ingående balans (IB) på <AccountNumber number={accountNumber} />:{' '}
+
+              {/* THE BRIDGE. The old card printed the bank total, the ledger
+                  total and a red difference, leaving the user to work out what
+                  the difference consisted of: the page already knew, exactly.
+                  Every krona of it is (unmatched bank rows) - (unmatched
+                  vouchers), so the two middle rows both explain the number AND
+                  navigate to the list that resolves them. Only the residual
+                  after those two can mean something is actually wrong.
+                  Falls back to the flat figures when the residual is not
+                  derivable (a foreign account: see unmatched_gl_line_total). */}
+              <div className="space-y-2">
+                <div className="flex justify-between">
+                  <span>Banktransaktioner i perioden</span>
                   <span className="tabular-nums">
-                    {formatCurrency(status.gl_1930_opening_balance)}
+                    {formatCurrency(status.bank_transaction_total, accountCurrency)}
                   </span>
-                  , räknas inte i avstämningen.
-                </p>
-              )}
-              {status.gl_1930_correction_adjustment !== 0 && (
-                <p className="pt-2 text-xs text-muted-foreground">
-                  Varav rättelser och stornon på <AccountNumber number={accountNumber} /> i perioden:{' '}
+                </div>
+
+                {bridgeDerivable && (
+                  <>
+                    {status.unmatched_transaction_count > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => scrollToSection(UNMATCHED_TX_SECTION_ID)}
+                        className="-mx-2 flex w-[calc(100%+1rem)] items-baseline justify-between gap-4 rounded-sm px-2 py-1 text-left text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
+                      >
+                        <span>
+                          {t('recon_bridge_unmatched_tx', {
+                            count: status.unmatched_transaction_count,
+                          })}
+                        </span>
+                        <span className="tabular-nums">
+                          {formatSigned(-status.unmatched_transaction_total, accountCurrency)}
+                        </span>
+                      </button>
+                    )}
+                    {status.unmatched_gl_line_count > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => scrollToSection(UNMATCHED_GL_SECTION_ID)}
+                        className="-mx-2 flex w-[calc(100%+1rem)] items-baseline justify-between gap-4 rounded-sm px-2 py-1 text-left text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
+                      >
+                        <span>
+                          {t('recon_bridge_unmatched_gl', {
+                            count: status.unmatched_gl_line_count,
+                          })}
+                        </span>
+                        <span className="tabular-nums">
+                          {formatSigned(status.unmatched_gl_line_total ?? 0, accountCurrency)}
+                        </span>
+                      </button>
+                    )}
+                  </>
+                )}
+
+                {/* GL-side figures (bokfört, IB, rättelser, differens) stay in
+                    SEK: journal entries are booked in SEK regardless of the
+                    cash account's currency. Only the bank-feed total above is in
+                    the account's own currency. */}
+                <div className="flex justify-between border-t pt-2">
+                  <span>
+                    Bokfört på <AccountNumber number={accountNumber} /> i perioden
+                  </span>
                   <span className="tabular-nums">
-                    {formatCurrency(status.gl_1930_correction_adjustment)}
+                    {formatCurrency(status.gl_1930_period_movement)}
                   </span>
-                  , ingår i det bokförda beloppet och i avstämningen, precis som i balansräkningen.
+                </div>
+
+                {bridgeDerivable ? (
+                  <div className="flex items-baseline justify-between gap-4 pt-1 font-semibold">
+                    <span className="flex items-center gap-1.5">
+                      {t('recon_unexplained_label')}
+                      <InfoTooltip content={t('recon_unexplained_help')} />
+                    </span>
+                    <span
+                      className={`tabular-nums ${
+                        Math.abs(status.unexplained_difference ?? 0) < 0.01 ? 'text-success' : ''
+                      }`}
+                    >
+                      {formatCurrency(status.unexplained_difference ?? 0, accountCurrency)}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex justify-between pt-1 font-semibold">
+                    <span>Differens</span>
+                    <span
+                      className={`tabular-nums ${
+                        status.is_reconciled ? 'text-success' : 'text-destructive'
+                      }`}
+                    >
+                      {formatCurrency(status.difference)}
+                    </span>
+                  </div>
+                )}
+
+                {bridgeDerivable && Math.abs(status.unexplained_difference ?? 0) >= 0.01 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('recon_unexplained_note')}
+                  </p>
+                )}
+              </div>
+
+              {/* What the reconciliation deliberately leaves out. Three stacked
+                  paragraphs of legal prose used to sit in the card; the amounts
+                  stay visible (they are compliance-relevant) but the reasoning
+                  moved behind the tooltip. */}
+              {exclusionNotes.length > 0 && (
+                <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                  <span>{exclusionNotes.join(' ')}</span>
+                  <InfoTooltip content={t('recon_exclusions_help')} className="mt-0.5 shrink-0" />
                 </p>
               )}
-              <div className="flex gap-4 pt-2 text-xs text-muted-foreground">
-                <span>Matchade: {status.matched_count}</span>
-                <span>Omatchade transaktioner: {status.unmatched_transaction_count}</span>
-                <span>Omatchade verifikationer: {status.unmatched_gl_line_count}</span>
-              </div>
             </div>
           </CardContent>
         </Card>
@@ -1234,7 +1407,7 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
 
       {/* Unmatched Transactions */}
       {unmatchedTx.length > 0 && (
-        <section className="space-y-3">
+        <section id={UNMATCHED_TX_SECTION_ID} className="scroll-mt-4 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
               Omatchade transaktioner ({unmatchedTx.length})
@@ -1260,193 +1433,237 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
               Visar de senaste 500 transaktionerna: begränsa datumintervallet för att se fler.
             </p>
           )}
-          <div className="space-y-3">
-            {unmatchedTx.map((tx) => {
-              const isPositive = tx.amount > 0
-              // Quick-book options matching the transaction's direction. The
-              // bank leg books to the SELECTED account (the categorize endpoint
-              // rewrites it from the cash_account_id), so these are correct on
-              // any account, not just 1930.
-              const quickBooks = QUICK_BOOK_TEMPLATES.filter((t) =>
-                isPositive ? t.direction === 'income' : t.direction === 'expense',
-              )
-              // Other enabled cash accounts this row could move to. Same
-              // currency only: the server hard-rejects a cross-currency move
-              // (the row would vanish from every report's currency scope).
-              const moveTargets = cashAccounts.filter(
-                (a) =>
-                  a.enabled &&
-                  a.ledger_account !== accountNumber &&
-                  a.currency.toUpperCase() === tx.currency.toUpperCase(),
-              )
-              return (
-                <div
-                  key={tx.id}
-                  className="rounded-lg border border-border bg-card p-4 space-y-4"
-                >
-                  {/* Header row: meta + description + amount + menu */}
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground tabular-nums">
-                        <span>{formatDate(tx.date)}</span>
-                        <span aria-hidden>·</span>
-                        <span>{tx.currency}</span>
-                        {tx.reference && (
-                          <>
-                            <span aria-hidden>·</span>
-                            <span>Ref: {tx.reference}</span>
-                          </>
-                        )}
-                      </div>
-                      <div className="mt-1.5 text-sm font-medium truncate">{tx.description}</div>
-                    </div>
-                    <div className="flex items-start gap-2 shrink-0">
-                      <div
-                        className={`font-display text-xl tabular-nums ${
-                          isPositive ? 'text-success' : ''
+          {/* One line per transaction (locked convention 4). This list used to
+              render a ~230px card per row, each carrying an always-open, always
+              empty "Matcha mot verifikation" search field: for a company with a
+              real backlog that is thousands of pixels of empty search boxes, and
+              it gave the RAREST action (pairing with an existing voucher) the
+              only visible affordance while the common ones (bokför, ignorera)
+              stayed hidden behind the row menu. The picker now renders for the
+              one row the user opens, and its ranked candidates are fetched then. */}
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <th className={`${TH_CLASS} w-24`}>Datum</th>
+                  <th className={TH_CLASS}>Beskrivning</th>
+                  <th className={`${TH_CLASS} w-32 text-right`}>Belopp</th>
+                  <th className={`${TH_CLASS} w-32`}></th>
+                  <th className={`${TH_CLASS} w-10`}></th>
+                </tr>
+              </thead>
+              <tbody className="stagger-enter">
+                {unmatchedTx.map((tx) => {
+                  const isPositive = tx.amount > 0
+                  const isOpen = expandedTxId === tx.id
+                  // Quick-book options matching the transaction's direction. The
+                  // bank leg books to the SELECTED account (the categorize endpoint
+                  // rewrites it from the cash_account_id), so these are correct on
+                  // any account, not just 1930.
+                  const quickBooks = QUICK_BOOK_TEMPLATES.filter((t) =>
+                    isPositive ? t.direction === 'income' : t.direction === 'expense',
+                  )
+                  // Other enabled cash accounts this row could move to. Same
+                  // currency only: the server hard-rejects a cross-currency move
+                  // (the row would vanish from every report's currency scope).
+                  const moveTargets = cashAccounts.filter(
+                    (a) =>
+                      a.enabled &&
+                      a.ledger_account !== accountNumber &&
+                      a.currency.toUpperCase() === tx.currency.toUpperCase(),
+                  )
+                  return (
+                    <Fragment key={tx.id}>
+                      <tr
+                        className={`transition-colors duration-150 hover:bg-secondary/35 ${
+                          isOpen ? 'bg-secondary/35' : ''
                         }`}
                       >
-                        {isPositive ? '+' : ''}
-                        {formatCurrency(tx.amount, tx.currency)}
-                      </div>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
+                        <td className={`${TD_CLASS} tabular-nums text-muted-foreground`}>
+                          {formatDate(tx.date)}
+                        </td>
+                        <td className={TD_CLASS}>
+                          <button
+                            type="button"
+                            onClick={() => toggleExpandedTx(tx.id)}
+                            aria-expanded={isOpen}
+                            className="flex max-w-full items-center gap-1.5 text-left transition-colors duration-150 hover:text-foreground"
+                          >
+                            {isOpen ? (
+                              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            ) : (
+                              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            )}
+                            <span className="truncate">{tx.description}</span>
+                            {/* Inline, not a sub-row: convention 4 keeps list
+                                rows one line high. */}
+                            {tx.reference && (
+                              <span className="shrink-0 text-xs text-muted-foreground">
+                                · {tx.reference}
+                              </span>
+                            )}
+                          </button>
+                        </td>
+                        <td
+                          className={`${TD_CLASS} text-right tabular-nums ${
+                            isPositive ? 'text-success' : ''
+                          }`}
+                        >
+                          {isPositive ? '+' : ''}
+                          {formatCurrency(tx.amount, tx.currency)}
+                        </td>
+                        <td className={`${TD_CLASS} text-right`}>
+                          {/* Opens the picker; the button INSIDE it performs the
+                              match. Two controls labelled "Matcha" in one row
+                              would read as the same action twice. */}
                           <Button
-                            size="icon"
+                            size="sm"
                             variant="ghost"
-                            className="h-8 w-8"
-                            aria-label="Fler åtgärder"
-                            disabled={actionLoading === tx.id}
+                            className="h-8 text-xs"
+                            onClick={() => toggleExpandedTx(tx.id)}
                           >
-                            <MoreHorizontal className="h-4 w-4" />
+                            {isOpen ? 'Stäng' : 'Välj verifikat'}
                           </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-72">
-                          {quickBooks.length > 0 && (
-                            <>
-                              <DropdownMenuLabel className="text-[11px] font-normal uppercase tracking-wider text-muted-foreground">
-                                Bokför direkt
-                              </DropdownMenuLabel>
-                              {quickBooks.map((t) => {
-                                // Read as "debit mot credit": income debits the
-                                // bank (selected account), credits revenue;
-                                // expense debits the cost account, credits bank.
-                                const legs = isPositive
-                                  ? `${accountNumber} mot ${t.account}`
-                                  : `${t.account} mot ${accountNumber}`
-                                return (
-                                  <DropdownMenuItem
-                                    key={t.id}
-                                    onClick={() => handleQuickBook(tx.id, t.id)}
-                                    disabled={actionLoading === tx.id}
-                                  >
-                                    <PiggyBank className="h-4 w-4" />
-                                    <div className="flex flex-col">
-                                      <span>Bokför som {t.label}</span>
-                                      <span className="text-xs text-muted-foreground tabular-nums">
-                                        {legs}
-                                      </span>
-                                    </div>
-                                  </DropdownMenuItem>
-                                )
-                              })}
-                              <DropdownMenuSeparator />
-                            </>
-                          )}
-                          {moveTargets.length > 0 && (
-                            <>
-                              <DropdownMenuLabel className="text-[11px] font-normal uppercase tracking-wider text-muted-foreground">
-                                Flytta till annat konto
-                              </DropdownMenuLabel>
-                              {moveTargets.map((account) => (
-                                <DropdownMenuItem
-                                  key={account.id}
-                                  onClick={() => handleMoveToAccount(tx, account)}
-                                  disabled={actionLoading === tx.id}
-                                >
-                                  <ArrowRightLeft className="h-4 w-4" />
-                                  <div className="flex flex-col">
-                                    <span>
-                                      Flytta till {account.name || `Bankkonto ${account.currency}`}
-                                    </span>
-                                    <span className="text-xs text-muted-foreground tabular-nums">
-                                      {account.ledger_account}
-                                    </span>
-                                  </div>
-                                </DropdownMenuItem>
-                              ))}
-                              <DropdownMenuSeparator />
-                            </>
-                          )}
+                        </td>
+                        <td className={`${TD_CLASS} text-right`}>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8"
+                      aria-label="Fler åtgärder"
+                      disabled={actionLoading === tx.id}
+                    >
+                      <MoreHorizontal className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-72">
+                    {quickBooks.length > 0 && (
+                      <>
+                        <DropdownMenuLabel className="text-[11px] font-normal uppercase tracking-wider text-muted-foreground">
+                          Bokför direkt
+                        </DropdownMenuLabel>
+                        {quickBooks.map((t) => {
+                          // Read as "debit mot credit": income debits the
+                          // bank (selected account), credits revenue;
+                          // expense debits the cost account, credits bank.
+                          const legs = isPositive
+                            ? `${accountNumber} mot ${t.account}`
+                            : `${t.account} mot ${accountNumber}`
+                          return (
+                            <DropdownMenuItem
+                              key={t.id}
+                              onClick={() => handleQuickBook(tx.id, t.id)}
+                              disabled={actionLoading === tx.id}
+                            >
+                              <PiggyBank className="h-4 w-4" />
+                              <div className="flex flex-col">
+                                <span>Bokför som {t.label}</span>
+                                <span className="text-xs text-muted-foreground tabular-nums">
+                                  {legs}
+                                </span>
+                              </div>
+                            </DropdownMenuItem>
+                          )
+                        })}
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    {moveTargets.length > 0 && (
+                      <>
+                        <DropdownMenuLabel className="text-[11px] font-normal uppercase tracking-wider text-muted-foreground">
+                          Flytta till annat konto
+                        </DropdownMenuLabel>
+                        {moveTargets.map((account) => (
                           <DropdownMenuItem
-                            onClick={() => handleIgnore(tx)}
+                            key={account.id}
+                            onClick={() => handleMoveToAccount(tx, account)}
                             disabled={actionLoading === tx.id}
                           >
-                            <EyeOff className="h-4 w-4" />
+                            <ArrowRightLeft className="h-4 w-4" />
                             <div className="flex flex-col">
-                              <span>Ignorera transaktion…</span>
-                              <span className="text-xs text-muted-foreground">
-                                Dölj utan att bokföra. Går att återställa.
+                              <span>
+                                Flytta till {account.name || `Bankkonto ${account.currency}`}
+                              </span>
+                              <span className="text-xs text-muted-foreground tabular-nums">
+                                {account.ledger_account}
                               </span>
                             </div>
                           </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </div>
-
-                  {/* Match action row */}
-                  <div className="pt-3 border-t border-border space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                        Matcha mot verifikation
-                      </Label>
-                      {glLines.length === 0 && (
-                        <span className="text-[11px] text-muted-foreground">
-                          Inga omatchade verifikationer på <AccountNumber number={accountNumber} />
+                        ))}
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    <DropdownMenuItem
+                      onClick={() => handleIgnore(tx)}
+                      disabled={actionLoading === tx.id}
+                    >
+                      <EyeOff className="h-4 w-4" />
+                      <div className="flex flex-col">
+                        <span>Ignorera transaktion…</span>
+                        <span className="text-xs text-muted-foreground">
+                          Dölj utan att bokföra. Går att återställa.
                         </span>
-                      )}
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <div
-                        className="flex-1 min-w-0"
-                        // First focus fetches ranked, confidence-scored candidates
-                        // for THIS transaction (server-side ranking via
-                        // transaction_id). Until they land the picker shows the
-                        // shared unranked pool, so nothing blocks.
-                        onFocusCapture={() => ensureRankedCandidates(tx.id)}
-                      >
-                        <MatchVerifikationPicker
-                          glLines={rankedCandidates[tx.id] ?? glLines}
-                          value={selectedMatch[tx.id] || ''}
-                          onChange={(v) =>
-                            setSelectedMatch((prev) => ({ ...prev, [tx.id]: v }))
-                          }
-                          disabled={linkLoading === tx.id || glLines.length === 0}
-                        />
                       </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!selectedMatch[tx.id] || linkLoading === tx.id}
-                        onClick={() => handleManualLink(tx.id)}
-                        className="shrink-0 h-10"
-                      >
-                        <Link2 className="h-3.5 w-3.5 mr-1.5" />
-                        {linkLoading === tx.id ? 'Matchar…' : 'Matcha'}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                        </td>
+                      </tr>
+                      {isOpen && (
+                        <tr className="bg-secondary/20">
+                          <td colSpan={5} className="px-3 pb-4 pt-1 align-top">
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <Label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                                  Matcha mot verifikation
+                                </Label>
+                                {glLines.length === 0 && (
+                                  <span className="text-[11px] text-muted-foreground">
+                                    Inga omatchade verifikationer på{' '}
+                                    <AccountNumber number={accountNumber} />
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <MatchVerifikationPicker
+                                    glLines={rankedCandidates[tx.id] ?? glLines}
+                                    value={selectedMatch[tx.id] || ''}
+                                    onChange={(v) =>
+                                      setSelectedMatch((prev) => ({ ...prev, [tx.id]: v }))
+                                    }
+                                    disabled={linkLoading === tx.id || glLines.length === 0}
+                                  />
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={!selectedMatch[tx.id] || linkLoading === tx.id}
+                                  onClick={() => handleManualLink(tx.id)}
+                                  className="h-10 shrink-0"
+                                >
+                                  <Link2 className="mr-1.5 h-3.5 w-3.5" />
+                                  {linkLoading === tx.id ? 'Matchar…' : 'Matcha'}
+                                </Button>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
         </section>
       )}
 
       {/* Unmatched GL Lines */}
       {unmatchedGlLines.length > 0 && (
-        <section className="space-y-3">
+        <section id={UNMATCHED_GL_SECTION_ID} className="scroll-mt-4 space-y-3">
           <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
             Omatchade verifikationer på <AccountNumber number={accountNumber} /> ({unmatchedGlLines.length})
           </h2>
@@ -1535,7 +1752,7 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
                     <th className={TH_CLASS}>Beskrivning</th>
                     <th className={`${TH_CLASS} w-20`}>Valuta</th>
                     <th className={`${TH_CLASS} w-28 text-right`}>Belopp</th>
-                    <th className={`${TH_CLASS} w-28`}></th>
+                    <th className={`${TH_CLASS} w-32`}></th>
                   </tr>
                 </thead>
                 <tbody className="stagger-enter">
