@@ -849,6 +849,18 @@ export async function getAllTransactions(
       break
     }
     if (!continuationKey) break
+    // Swedbank historic AIS (strategy=longest) returns empty pages plus a
+    // continuation_key while it prepares. Following that key used to spin
+    // MAX_PAGINATION_PAGES (~100) in seconds and ingest nothing. An empty
+    // page means this window has no more booked txs; the next cron picks up
+    // whatever the bank later materializes.
+    if (!(response.transactions && response.transactions.length)) {
+      console.warn('[enable-banking] Empty page with continuation_key; stopping pagination', {
+        accountUid,
+        page,
+      })
+      break
+    }
   }
 
   return allTransactions
@@ -1039,6 +1051,15 @@ export async function getAllTransactionsWithRaw(
       break
     }
     if (!continuationKey) break
+    // See getAllTransactions: empty+continuation is not more data, it is
+    // an unprepared historic window (Swedbank). Stop instead of spinning.
+    if (!(data.transactions && data.transactions.length)) {
+      console.warn('[enable-banking] Empty page with continuation_key; stopping pagination', {
+        accountUid,
+        page,
+      })
+      break
+    }
   }
 
   return { transactions: allTransactions, rawPages }

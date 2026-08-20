@@ -167,6 +167,31 @@ describe('api-client', () => {
 
       warnSpy.mockRestore()
     })
+
+    it('stops when a page is empty but still sends continuation_key', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy.mockImplementation(() => {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              transactions: [],
+              continuation_key: 'keep-going',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        )
+      })
+
+      const result = await getAllTransactions('acc-1', '2024-01-01', '2024-12-31')
+
+      expect(result).toHaveLength(0)
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[enable-banking] Empty page with continuation_key; stopping pagination',
+        expect.objectContaining({ accountUid: 'acc-1', page: 1 }),
+      )
+      warnSpy.mockRestore()
+    })
   })
 
   // -------------------------------------------------------------------------
