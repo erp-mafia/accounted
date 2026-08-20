@@ -120,3 +120,46 @@ describe('fetchSalesInvoicesHydrated (fortnox)', () => {
     expect(invoices[0]?.legalMonetaryTotal.payableAmount.value).toBe(1250);
   });
 });
+
+describe('fetchSalesInvoicesHydrated: detail id comes from the configured idField', () => {
+  beforeEach(() => {
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', '');
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('uses BL invoiceNumber, not the entityId its DTO id is built from', async () => {
+    // Björn Lundén's sales config names `invoiceNumber` as idField, while its
+    // mapper sets dto.id from `entityId`. Addressing the detail endpoint by
+    // dto.id would request invoice 99001 instead of 5. The two differ here on
+    // purpose: with equal values the test would pass either way.
+    const seen: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      seen.push(url);
+      if (url.includes('/customerinvoice/batch')) {
+        return new Response(JSON.stringify({
+          data: [{ entityId: 99001, invoiceNumber: 5, invoiceDate: '2025-11-01', currency: 'SEK', amountInLocalCurrency: 1250, paid: false }],
+          totalPages: 1,
+          pageRequested: 1,
+          totalRows: 1,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        entityId: 99001, invoiceNumber: 5, invoiceDate: '2025-11-01',
+        currency: 'SEK', amountInLocalCurrency: 1250, vatAmount: 250, paid: false,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+
+    const { invoices } = await fetchSalesInvoicesHydrated('bjornlunden', 'token', 'user-key');
+
+    const detail = seen.find((u) => u.includes('/customerinvoice/') && !u.includes('/batch'));
+    expect(detail).toContain('/customerinvoice/5');
+    expect(detail).not.toContain('99001');
+    // And the hydrated payload's VAT actually landed.
+    expect(invoices[0]?.taxTotal?.taxAmount.value).toBe(250);
+  });
+});

@@ -428,21 +428,38 @@ function supplierInvoiceNeedsDetail(dto: SupplierInvoiceDto): boolean {
  * (Bokio and BL need a company id; WINT has no supplier endpoint) is
  * detectable before any work starts.
  */
+type DetailFetch = (dto: { id: string; _raw?: Record<string, unknown> })
+  => Promise<Record<string, unknown> | null>;
+
+/**
+ * The id the DETAIL endpoint expects, which is not always `dto.id`.
+ *
+ * Each config names its own `idField`, and Björn Lundén's sales config names
+ * `invoiceNumber` while its mapper sets `dto.id` from `entityId`: passing the
+ * DTO id there would request a different invoice, or none. The config is the
+ * authority, so the raw payload is read through it and `dto.id` is only the
+ * fallback for a payload that did not survive mapping.
+ */
+function detailId(dto: { id: string; _raw?: Record<string, unknown> }, idField: string): string {
+  const raw = dto._raw?.[idField];
+  return raw !== undefined && raw !== null && raw !== '' ? String(raw) : dto.id;
+}
+
 function detailFetcher(
   provider: ProviderName,
   resource: InvoiceResource,
   accessToken: string,
   providerCompanyId?: string,
-): ((id: string) => Promise<Record<string, unknown> | null>) | null {
+): DetailFetch | null {
   const path = (endpoint: string, id: string) =>
     endpoint.replace('{id}', encodeURIComponent(id));
 
   if (provider === 'fortnox') {
     const config = FORTNOX_RESOURCE_CONFIGS[resource];
     if (!config) return null;
-    return async (id) => {
+    return async (dto) => {
       const response = await fortnoxClient.get<Record<string, unknown>>(
-        accessToken, path(config.detailEndpoint, id),
+        accessToken, path(config.detailEndpoint, detailId(dto, config.idField)),
       );
       // Fortnox wraps the detail in a single-key envelope ("Invoice", …).
       const body = response[config.detailKey];
@@ -453,17 +470,17 @@ function detailFetcher(
   if (provider === 'visma') {
     const config = VISMA_RESOURCE_CONFIGS[resource];
     if (!config) return null;
-    return async (id) => vismaClient.get<Record<string, unknown>>(
-      accessToken, path(config.detailEndpoint, id),
+    return async (dto) => vismaClient.get<Record<string, unknown>>(
+      accessToken, path(config.detailEndpoint, detailId(dto, config.idField)),
     );
   }
 
   if (provider === 'briox') {
     const config = BRIOX_RESOURCE_CONFIGS[resource];
     if (!config) return null;
-    return async (id) => {
+    return async (dto) => {
       const response = await brioxClient.get<Record<string, unknown>>(
-        accessToken, path(config.detailEndpoint, id),
+        accessToken, path(config.detailEndpoint, detailId(dto, config.idField)),
       );
       // Briox wraps some detail bodies and returns others bare.
       const body = config.detailKey ? response[config.detailKey] : response;
@@ -474,24 +491,24 @@ function detailFetcher(
   if (provider === 'bokio') {
     const config = BOKIO_RESOURCE_CONFIGS[resource];
     if (!config || !providerCompanyId) return null;
-    return async (id) => bokioClient.getDetail<Record<string, unknown>>(
-      accessToken, providerCompanyId, path(config.detailEndpoint, id),
+    return async (dto) => bokioClient.getDetail<Record<string, unknown>>(
+      accessToken, providerCompanyId, path(config.detailEndpoint, detailId(dto, config.idField)),
     );
   }
 
   if (provider === 'bjornlunden') {
     const config = BL_RESOURCE_CONFIGS[resource];
     if (!config || !providerCompanyId) return null;
-    return async (id) => bjornLundenClient.getDetail<Record<string, unknown>>(
-      accessToken, providerCompanyId, path(config.detailEndpoint, id),
+    return async (dto) => bjornLundenClient.getDetail<Record<string, unknown>>(
+      accessToken, providerCompanyId, path(config.detailEndpoint, detailId(dto, config.idField)),
     );
   }
 
   if (provider === 'wint') {
     const config = WINT_RESOURCE_CONFIGS[resource];
     if (!config) return null;
-    return async (id) => wintClient.get<Record<string, unknown>>(
-      accessToken, path(config.detailEndpoint, id),
+    return async (dto) => wintClient.get<Record<string, unknown>>(
+      accessToken, path(config.detailEndpoint, detailId(dto, config.idField)),
     );
   }
 
@@ -542,7 +559,7 @@ async function mapWithConcurrency<T>(
 async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   items: T[],
   needsDetail: (dto: T) => boolean,
-  fetchDetail: ((id: string) => Promise<Record<string, unknown> | null>) | null,
+  fetchDetail: DetailFetch | null,
   mapper: ((raw: Record<string, unknown>) => unknown) | null,
   label: string,
   budgetMs: number,
@@ -570,7 +587,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
     }
 
     try {
-      const raw = await fetchDetail(dto.id);
+      const raw = await fetchDetail(dto);
       if (!raw) {
         report.failed++;
         return;
