@@ -11,15 +11,15 @@ import {
   Link2Off,
   Loader2,
   Lock,
-  PlugZap,
   Send,
-  ShieldAlert,
   Unlock,
 } from 'lucide-react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { DetailSection } from '@/components/ui/detail-section'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { AttnLine } from '@/components/ui/attn-line'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -30,6 +30,7 @@ import {
   type AgiSubmissionState,
 } from '@/lib/salary/agi-submission-state'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { cn, formatDateTime } from '@/lib/utils'
 
 interface AGIPanelProps {
   salaryRunId: string
@@ -862,55 +863,40 @@ export function AGIPanel(props: AGIPanelProps) {
 
   if (extensionDisabled) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('title')}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm text-muted-foreground">
-          <div className="flex items-start gap-2">
-            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>
-              {t('disabled_before')}
-              <code className="mx-1 rounded-sm bg-muted px-1 py-0.5 text-xs">SKATTEVERKET_ENABLED</code>
-              {t('disabled_after')}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      <DetailSection kicker={t('title')}>
+        <p className="text-sm text-muted-foreground">
+          {t('disabled_before')}
+          <code className="mx-1 rounded-sm bg-muted px-1 py-0.5 text-xs">SKATTEVERKET_ENABLED</code>
+          {t('disabled_after')}
+        </p>
+      </DetailSection>
     )
   }
 
   if (loading) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('title')}</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> {t('loading_status')}
-        </CardContent>
-      </Card>
+      <DetailSection kicker={t('title')}>
+        <div role="status" aria-label={t('loading_status')} className="space-y-2">
+          <Skeleton className="h-4 w-64" />
+          <Skeleton className="h-4 w-48" />
+        </div>
+      </DetailSection>
     )
   }
 
   if (!status?.connected) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('title')}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            {t('connect_description')}
-          </p>
-          {!readOnly && (
+      <DetailSection kicker={t('title')}>
+        <p className="text-sm text-muted-foreground">{t('connect_description')}</p>
+        {!readOnly && (
+          <div className="mt-3 flex justify-end">
             <Button onClick={handleConnect} disabled={connecting}>
               <Link2 className="mr-2 h-4 w-4" />
               {connecting ? t('connect_waiting') : t('connect_button')}
             </Button>
-          )}
-        </CardContent>
-      </Card>
+          </div>
+        )}
+      </DetailSection>
     )
   }
 
@@ -930,6 +916,19 @@ export function AGIPanel(props: AGIPanelProps) {
   const missingKvittensScope =
     grantedScopes !== null && !missingAgdScope && !grantedScopes.includes('agdredovisningperiod')
 
+  // Expired session: the token row exists (so status.connected is true) but
+  // the access token is past expiry and either has no refresh token or has
+  // burned through its 10-refresh budget. The only fix is a fresh BankID
+  // round-trip.
+  const sessionExpiredStatus = status?.expired === true || status?.canRefresh === false
+
+  // One attention sentence per section (convention 6). The expired session
+  // outranks the missing inlämning scope: nothing can be filed until the
+  // user has reconnected, and the fresh grant re-evaluates the scope. When
+  // both hold, the scope notice drops to a muted line so it is still said.
+  const attn: 'expired' | 'scope' | null =
+    readOnly ? null : sessionExpiredStatus ? 'expired' : missingAgdScope ? 'scope' : null
+
   // Recovery states expose the advanced actions on their own: the stale-draft
   // and error-report guidance below reference them by name.
   const forcedAdvanced = draftIsStale || underlagRejected
@@ -937,7 +936,7 @@ export function AGIPanel(props: AGIPanelProps) {
 
   const signedAtRaw =
     runSubmission?.signeradTid ?? runSubmission?.submittedAt ?? agiSubmittedAt ?? null
-  const signedAtText = signedAtRaw ? new Date(signedAtRaw).toLocaleString('sv-SE') : null
+  const signedAtText = signedAtRaw ? formatDateTime(signedAtRaw) : null
   // A signed record without Skatteverket's signeradTid carries our
   // reconciliation-time stamp instead (an upper bound on the signing moment,
   // see agi-kvittens-reconcile.ts): say so rather than presenting it as the
@@ -956,151 +955,125 @@ export function AGIPanel(props: AGIPanelProps) {
     return 'upcoming'
   }
 
+  const reconnectLabel = connecting ? t('connect_waiting') : t('reconnect_button')
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between text-base">
-          <span>{t('title')}</span>
-          <span className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <CheckCircle2 className="h-3.5 w-3.5 text-success" />
-              {t('connected')}
-            </span>
-            {!readOnly && (
-              <button
-                type="button"
-                onClick={handleDisconnect}
-                disabled={actionLoading === 'disconnect' || connecting}
-                className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
-                title={t('disconnect_title')}
-              >
-                {actionLoading === 'disconnect' ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <PlugZap className="h-3 w-3" />
-                )}
-                {t('disconnect_button')}
-              </button>
-            )}
-          </span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* Filed: the terminal state deserves more than a gray status row.
-            Kvittensnummer + signature metadata come from the run-scoped
-            record, which /agi/status serves from the in-flight cache or,
-            once the kvittens reconciliation has deleted that cache, from
-            agi_declarations (#1597). A run stamped only via agi_submitted_at
-            (an original whose receipt a later correction has replaced) still
-            gets the card, just without a number: better than showing another
-            declaration's. */}
+    <DetailSection
+      kicker={t('title')}
+      help={<HelpPopover>{t('granskningsunderlag_gloss')}</HelpPopover>}
+      aside={
+        // Connected is the normal state: muted text, no chip (convention 5).
+        // Disconnect is the quiet action beside it.
+        <span className="flex items-center gap-3 text-[11px] text-muted-foreground">
+          <span>{t('connected')}</span>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              disabled={actionLoading === 'disconnect' || connecting}
+              className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+              title={t('disconnect_title')}
+            >
+              {actionLoading === 'disconnect' && <Loader2 className="h-3 w-3 animate-spin" />}
+              {t('disconnect_button')}
+            </button>
+          )}
+        </span>
+      }
+    >
+      <div className="space-y-4">
+        {/* Filed: the terminal state, stated first. Kvittensnummer + signature
+            metadata come from the run-scoped record, which /agi/status serves
+            from the in-flight cache or, once the kvittens reconciliation has
+            deleted that cache, from agi_declarations (#1597). A run stamped
+            only via agi_submitted_at (an original whose receipt a later
+            correction has replaced) still gets the lines, just without a
+            number: better than showing another declaration's. */}
         {isSigned && (
-          <div className="rounded-lg border border-border bg-muted/30 p-4">
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
-              <div className="space-y-1">
-                <p className="text-sm font-medium">
-                  {t('success_card_title', { period: prettyPeriod })}
-                </p>
-                {runSubmission?.kvittensnummer && (
-                  <p className="text-sm text-muted-foreground tabular-nums">
-                    {t('success_card_kvittens', { kvittens: runSubmission.kvittensnummer })}
-                  </p>
-                )}
-                {(runSubmission?.signeradAv || signedAtText) && (
-                  <p className="text-sm text-muted-foreground">
-                    {runSubmission?.signeradAv
-                      ? signedAtText
-                        ? t(
-                            signedAtEstimated
-                              ? 'success_card_signed_by_at_estimated'
-                              : 'success_card_signed_by_at',
-                            { name: runSubmission.signeradAv, date: signedAtText },
-                          )
-                        : t('success_card_signed_by', { name: runSubmission.signeradAv })
-                      : t(
-                          signedAtEstimated
-                            ? 'success_card_signed_at_estimated'
-                            : 'success_card_signed_at',
-                          { date: signedAtText ?? '' },
-                        )}
-                  </p>
-                )}
-              </div>
-            </div>
+          <div className="space-y-1 text-sm">
+            <p className="font-medium">{t('success_card_title', { period: prettyPeriod })}</p>
+            {runSubmission?.kvittensnummer && (
+              <p className="text-muted-foreground tabular-nums">
+                {t('success_card_kvittens', { kvittens: runSubmission.kvittensnummer })}
+              </p>
+            )}
+            {(runSubmission?.signeradAv || signedAtText) && (
+              <p className="text-muted-foreground">
+                {runSubmission?.signeradAv
+                  ? signedAtText
+                    ? t(
+                        signedAtEstimated
+                          ? 'success_card_signed_by_at_estimated'
+                          : 'success_card_signed_by_at',
+                        { name: runSubmission.signeradAv, date: signedAtText },
+                      )
+                    : t('success_card_signed_by', { name: runSubmission.signeradAv })
+                  : t(
+                      signedAtEstimated
+                        ? 'success_card_signed_at_estimated'
+                        : 'success_card_signed_at',
+                      { date: signedAtText ?? '' },
+                    )}
+              </p>
+            )}
           </div>
         )}
 
-        {/* Expired-session banner: the token row exists (so status.connected
-            is true) but the access token is past expiry and either has no
-            refresh token or has burned through its 10-refresh budget. The
-            only fix is a fresh BankID round-trip. */}
-        {(status?.expired === true || status?.canRefresh === false) && !readOnly && (
-          <div className="rounded-lg border border-border bg-muted/30 p-3">
-            <p className="text-sm font-medium">{t('expired_banner_title')}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t('expired_banner_description')}
-            </p>
-            <Button size="sm" variant="outline" className="mt-2" onClick={handleConnect} disabled={connecting}>
-              <Link2 className="mr-1.5 h-3.5 w-3.5" />
-              {connecting ? t('connect_waiting') : t('reconnect_button')}
-            </Button>
-          </div>
+        {attn === 'expired' && (
+          <AttnLine
+            action={{
+              label: reconnectLabel,
+              onClick: () => {
+                if (!connecting) handleConnect()
+              },
+            }}
+          >
+            {t('expired_banner_title')}. {t('expired_banner_description')}
+          </AttnLine>
         )}
 
         {/* Missing-scope nudges: proactive, before the user hits a 403
             invalid_scope. The agd scope was added after some users had
             already connected, so their stored token grants moms/skattekonto
-            but not AGI: that one stays a hard nudge. The kvittens scope only
-            breaks the final receipt fetch and may not be grantable yet, so
-            its notice is softer and dismissible. */}
-        {missingAgdScope && !readOnly && (
-          <div className="rounded-lg border border-border bg-muted/30 p-3">
-            <p className="text-sm font-medium">
-              {t('missing_scope_title')}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t('missing_scope_description')}
-            </p>
-            <a
-              href="/settings/tax"
-              className="mt-2 inline-flex items-center gap-1 text-sm font-medium hover:underline"
-            >
-              {t('open_settings')} <ExternalLink className="h-3.5 w-3.5" />
+            but not AGI: that one is the hard nudge (the attention line, or a
+            muted line when the expired session already holds it). The
+            kvittens scope only breaks the final receipt fetch and may not be
+            grantable yet, so its notice is softer and dismissible. */}
+        {attn === 'scope' && (
+          <AttnLine action={{ label: t('open_settings'), href: '/settings/tax' }}>
+            {t('missing_scope_title')}. {t('missing_scope_description')}
+          </AttnLine>
+        )}
+        {missingAgdScope && !readOnly && attn !== 'scope' && (
+          <p className="text-xs text-muted-foreground">
+            {t('missing_scope_title')}. {t('missing_scope_description')}{' '}
+            <a href="/settings/tax" className="underline underline-offset-2 hover:text-foreground">
+              {t('open_settings')}
             </a>
-          </div>
+          </p>
         )}
         {missingKvittensScope && !kvittensNoticeDismissed && !readOnly && (
-          <div className="rounded-lg border border-border bg-muted/30 p-3">
-            <p className="text-sm font-medium">
-              {t('kvittens_scope_title')}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t('kvittens_scope_description')}
-            </p>
-            <div className="mt-2 flex items-center gap-4">
-              <a
-                href="/settings/tax"
-                className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
-              >
-                {t('open_settings')} <ExternalLink className="h-3.5 w-3.5" />
-              </a>
-              <button
-                type="button"
-                onClick={dismissKvittensNotice}
-                className="text-sm text-muted-foreground hover:underline"
-              >
-                {t('kvittens_scope_dismiss')}
-              </button>
-            </div>
-          </div>
+          <p className="text-xs text-muted-foreground">
+            <span className="text-foreground">{t('kvittens_scope_title')}.</span>{' '}
+            {t('kvittens_scope_description')}{' '}
+            <a href="/settings/tax" className="underline underline-offset-2 hover:text-foreground">
+              {t('open_settings')}
+            </a>{' '}
+            <button
+              type="button"
+              onClick={dismissKvittensNotice}
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              {t('kvittens_scope_dismiss')}
+            </button>
+          </p>
         )}
 
-        {/* Status summary */}
-        <div className="space-y-1.5 text-sm">
+        {/* Status summary: one line per step, hairlines between. */}
+        <div className="divide-y divide-border text-sm">
           <StatusRow
             ok={!!agiGeneratedAt}
-            okText={agiGeneratedAt ? t('file_generated', { date: new Date(agiGeneratedAt).toLocaleString('sv-SE') }) : ''}
+            okText={agiGeneratedAt ? t('file_generated', { date: formatDateTime(agiGeneratedAt) }) : ''}
             pendingText={t('file_not_generated')}
           />
           <StatusRow
@@ -1109,7 +1082,7 @@ export function AGIPanel(props: AGIPanelProps) {
               runSubmission?.kvittensnummer
                 ? t('submitted_with_kvittens', { kvittens: runSubmission.kvittensnummer })
                 : agiSubmittedAt
-                  ? t('submitted_at', { date: new Date(agiSubmittedAt).toLocaleString('sv-SE') })
+                  ? t('submitted_at', { date: formatDateTime(agiSubmittedAt) })
                   : t('submitted')
             }
             pendingText={
@@ -1130,20 +1103,14 @@ export function AGIPanel(props: AGIPanelProps) {
             treatment so the user understands they must fix errors before
             BankID signing is even possible. */}
         {submission?.signeringslank && awaitingSigning && !draftIsStale && (
-          <div className="rounded-lg border border-border bg-muted/30 p-3">
-            <p className="text-sm font-medium">
-              <InfoTooltip variant="help" content={t('granskningsunderlag_gloss')}>
-                {t('draft_locked_title')}
-              </InfoTooltip>
-            </p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {t('draft_locked_description')}
-            </p>
+          <div className="text-sm">
+            <p className="font-medium">{t('draft_locked_title')}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{t('draft_locked_description')}</p>
             <a
               href={submission.signeringslank}
               target="_blank"
               rel="noreferrer"
-              className="mt-2 inline-flex items-center gap-1 text-sm font-medium hover:underline"
+              className="mt-2 inline-flex items-center gap-1 font-medium underline underline-offset-2 hover:opacity-80"
             >
               {t('open_signing_link')} <ExternalLink className="h-3.5 w-3.5" />
             </a>
@@ -1156,13 +1123,13 @@ export function AGIPanel(props: AGIPanelProps) {
             it would file the old amounts. The "Lås upp" button below releases
             the SKV lock; the user then re-submits the freshly generated XML. */}
         {awaitingSigning && draftIsStale && (
-          <div className="rounded-lg border border-border bg-muted/30 p-3">
-            <p className="text-sm font-medium">{t('stale_draft_title')}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
+          <div className="text-sm">
+            <p className="font-medium">{t('stale_draft_title')}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
               {t('stale_draft_description', {
-                generatedAt: agiGeneratedAt ? new Date(agiGeneratedAt).toLocaleString('sv-SE') : '',
+                generatedAt: agiGeneratedAt ? formatDateTime(agiGeneratedAt) : '',
                 draftCreatedAt: submission?.updatedAt
-                  ? ` (${new Date(submission.updatedAt).toLocaleString('sv-SE')})`
+                  ? ` (${formatDateTime(submission.updatedAt)})`
                   : '',
               })}{' '}
               {t('stale_draft_click')}{' '}
@@ -1180,32 +1147,34 @@ export function AGIPanel(props: AGIPanelProps) {
             link would be permanently unreachable even though the extension
             persisted it. */}
         {submission?.signeringslank && underlagRejected && (
-          <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3">
-            <p className="text-sm font-medium text-destructive">
-              {t('incorrect_data_title')}
-            </p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
+          <div className="text-sm">
+            <p className="font-medium text-destructive">{t('incorrect_data_title')}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
               {submission.meddelande || t('incorrect_data_description')}
             </p>
             <a
               href={submission.signeringslank}
               target="_blank"
               rel="noreferrer"
-              className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-destructive hover:underline"
+              className="mt-2 inline-flex items-center gap-1 font-medium text-destructive underline underline-offset-2 hover:opacity-80"
             >
               {t('open_error_report')} <ExternalLink className="h-3.5 w-3.5" />
             </a>
           </div>
         )}
 
+        {/* Skatteverket's kontrollresultat findings: one line per finding,
+            severity carried by the text tone (terracotta for STOPP, ochre
+            for ärende/warning), no box. */}
         {kontroller.length > 0 && (
-          <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
+          <div className="divide-y divide-border text-xs">
             {kontroller.map((k, i) => (
               <div
                 key={i}
-                className={`flex items-start gap-2 text-xs ${
-                  k.status === 'STOPP' ? 'text-destructive' : 'text-warning'
-                }`}
+                className={cn(
+                  'flex items-start gap-2 py-2',
+                  k.status === 'STOPP' ? 'text-destructive' : 'text-attn',
+                )}
               >
                 <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span>
@@ -1225,17 +1194,18 @@ export function AGIPanel(props: AGIPanelProps) {
           // don't have to hunt for it in settings.
           const sessionExpired =
             /sessionen har gått ut|logga in med bankid igen/i.test(error) ||
-            status?.expired === true ||
-            status?.canRefresh === false
+            sessionExpiredStatus
           return (
-            <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
-              {error}
+            <div className="text-sm text-destructive">
+              <p>
+                <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
+                {error}
+              </p>
               {sessionExpired && !readOnly && (
                 <div className="mt-2">
                   <Button size="sm" variant="outline" onClick={handleConnect} disabled={connecting}>
-                    <Link2 className="mr-1.5 h-3.5 w-3.5" />
-                    {connecting ? t('connect_waiting') : t('reconnect_button')}
+                    <Link2 className="mr-2 h-3.5 w-3.5" />
+                    {reconnectLabel}
                   </Button>
                 </div>
               )}
@@ -1243,56 +1213,23 @@ export function AGIPanel(props: AGIPanelProps) {
           )
         })()}
         {success && !error && (
-          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+          <p className="text-sm">
             <CheckCircle2 className="mr-1 inline h-3.5 w-3.5 text-success" />
             {success}
-          </div>
+          </p>
         )}
 
         {!readOnly && !isSigned && (
           <div className="space-y-3">
-            {/* Primary path: one click runs the whole filing chain. Hidden
-                while a signing draft is open at SKV (the period is locked,
-                so a resubmission would be refused): the signing-link card
-                above is the CTA then, and the stale-draft recovery goes
-                through the advanced actions per the guidance text. The
-                XML download stays free for manual filing regardless. */}
-            <div className="flex flex-wrap items-center gap-2">
-              {!awaitingSigning && (
-                <Button
-                  onClick={handleSubmitChain}
-                  disabled={actionLoading !== null || !hasSkatteverket}
-                >
-                  {actionLoading === 'chain' ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="mr-2 h-4 w-4" />
-                  )}
-                  {t('chain_button')}
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleDownloadXml}
-                disabled={actionLoading === 'download'}
-                title={t('download_xml_title')}
-              >
-                {actionLoading === 'download' ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Download className="mr-1.5 h-3.5 w-3.5" />
-                )}
-                {t('download_xml_button')}
-              </Button>
-            </div>
-
+            {/* Live progress of the one-click chain: a flat step list that
+                sits with the status above, so the action row does not move
+                while it runs. */}
             {chain && (
-              <ol className="space-y-1.5 rounded-lg border border-border bg-muted/30 p-3">
+              <ol className="space-y-1 text-xs">
                 {CHAIN_STEPS.map(step => {
                   const state = chainStepState(step)
                   return (
-                    <li key={step} className="flex items-center gap-2 text-xs">
+                    <li key={step} className="flex items-center gap-2">
                       {state === 'done' ? (
                         <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
                       ) : state === 'running' ? (
@@ -1311,87 +1248,127 @@ export function AGIPanel(props: AGIPanelProps) {
               </ol>
             )}
 
+            {/* The one action row. Primary path: one click runs the whole
+                filing chain. Hidden while a signing draft is open at SKV (the
+                period is locked, so a resubmission would be refused): the
+                signing link above is the CTA then, and the stale-draft
+                recovery goes through the advanced actions per the guidance
+                text. The XML download stays free for manual filing
+                regardless. The advanced toggle sits quietly at the left of
+                the row; its actions fold out beneath. */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                {!forcedAdvanced && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvanced(v => !v)}
+                    className="text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                  >
+                    {advancedOpen ? t('advanced_hide') : t('advanced_show')}
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleDownloadXml}
+                  disabled={actionLoading === 'download'}
+                  title={t('download_xml_title')}
+                >
+                  {actionLoading === 'download' ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {t('download_xml_button')}
+                </Button>
+                {!awaitingSigning && (
+                  <Button
+                    onClick={handleSubmitChain}
+                    disabled={actionLoading !== null || !hasSkatteverket}
+                  >
+                    {actionLoading === 'chain' ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="mr-2 h-4 w-4" />
+                    )}
+                    {t('chain_button')}
+                  </Button>
+                )}
+              </div>
+            </div>
+
             {/* Recovery/expert actions: each is one step of the chain above,
                 for resuming after a partial failure. Auto-expanded when a
                 recovery state (stale draft, rejected underlag) references
                 them by name. */}
-            <div>
-              {!forcedAdvanced && (
-                <button
-                  type="button"
-                  onClick={() => setShowAdvanced(v => !v)}
-                  className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+            {advancedOpen && (
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleSubmit}
+                  disabled={actionLoading !== null || !hasSkatteverket}
                 >
-                  {advancedOpen ? t('advanced_hide') : t('advanced_show')}
-                </button>
-              )}
-              {advancedOpen && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleSubmit}
-                    disabled={actionLoading !== null || !hasSkatteverket}
-                  >
-                    {actionLoading === 'submit' ? (
-                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Send className="mr-1.5 h-3.5 w-3.5" />
-                    )}
-                    {t('submit_button')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleCreateSigningLink}
-                    disabled={actionLoading !== null || !underlagSubmitted}
-                  >
-                    {actionLoading === 'granskning' ? (
-                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Lock className="mr-1.5 h-3.5 w-3.5" />
-                    )}
-                    {t('signing_link_button')}
-                  </Button>
+                  {actionLoading === 'submit' ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Send className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {t('submit_button')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleCreateSigningLink}
+                  disabled={actionLoading !== null || !underlagSubmitted}
+                >
+                  {actionLoading === 'granskning' ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Lock className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {t('signing_link_button')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleCheckSubmitted}
+                  disabled={actionLoading !== null}
+                >
+                  {actionLoading === 'check' ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {t('check_kvittens_button')}
+                </Button>
+                {awaitingSigning && (
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={handleCheckSubmitted}
+                    onClick={handleUnlock}
                     disabled={actionLoading !== null}
                   >
-                    {actionLoading === 'check' ? (
-                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    {actionLoading === 'unlock' ? (
+                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <Download className="mr-1.5 h-3.5 w-3.5" />
+                      <Unlock className="mr-2 h-3.5 w-3.5" />
                     )}
-                    {t('check_kvittens_button')}
+                    {t('unlock_button')}
                   </Button>
-                  {awaitingSigning && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={handleUnlock}
-                      disabled={actionLoading !== null}
-                    >
-                      {actionLoading === 'unlock' ? (
-                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Unlock className="mr-1.5 h-3.5 w-3.5" />
-                      )}
-                      {t('unlock_button')}
-                    </Button>
-                  )}
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
         {!readOnly && !isSigned && !hasSkatteverket && (
           <UpgradeNote>{t('upgrade_note')}</UpgradeNote>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </DetailSection>
   )
 }
 
@@ -1405,11 +1382,11 @@ function StatusRow({
   pendingText: string
 }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-start gap-2 py-2">
       {ok ? (
-        <CheckCircle2 className="h-4 w-4 text-success" />
+        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
       ) : (
-        <Link2Off className="h-4 w-4 text-muted-foreground" />
+        <Link2Off className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
       )}
       <span className="text-muted-foreground">{ok ? okText : pendingText}</span>
     </div>

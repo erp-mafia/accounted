@@ -1416,6 +1416,132 @@ describe('getReconciliationStatus', () => {
     expect(status.bank_transaction_total).toBe(0)
   })
 
+  it('decomposes the difference into the two work lists (unexplained residual 0)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // Bank side: one matched 1000 deposit + one unbooked 500 deposit.
+    enqueue({
+      data: [
+        { amount: 1000, journal_entry_id: 'je-matched', reconciliation_method: 'auto_exact' },
+        { amount: 500, journal_entry_id: null, reconciliation_method: null },
+      ],
+    })
+    // GL side: the matched 1000 debit + a 300 credit voucher with no bank row.
+    enqueue({
+      data: [
+        { id: 'je-matched', status: 'posted', source_type: 'bank_transaction' },
+        { id: 'je-lonely', status: 'posted', source_type: 'manual' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 1000, credit_amount: 0, journal_entry_id: 'je-matched' },
+        { debit_amount: 0, credit_amount: 300, journal_entry_id: 'je-lonely' },
+      ],
+    })
+    // Candidate RPC: the lonely voucher is the one unmatched GL line.
+    enqueue({
+      data: [
+        {
+          line_id: 'l-lonely',
+          journal_entry_id: 'je-lonely',
+          debit_amount: 0,
+          credit_amount: 300,
+          entry_date: '2026-03-01',
+          voucher_number: 7,
+          voucher_series: 'A',
+          entry_description: 'Avgift',
+          source_type: 'manual',
+          linked_transaction_count: 0,
+        },
+      ],
+    })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.bank_transaction_total).toBe(1500)
+    expect(status.gl_1930_period_movement).toBe(700)
+    expect(status.difference).toBe(800)
+    // The two lists the user can actually open...
+    expect(status.unmatched_transaction_total).toBe(500)
+    expect(status.unmatched_gl_line_total).toBe(-300)
+    // ...account for every krona of it: 800 - 500 + (-300) = 0.
+    expect(status.unexplained_difference).toBe(0)
+  })
+
+  it('surfaces a residual when a matched pair disagrees in amount', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // The bank moved 1000 but the voucher it is matched to books only 900:
+    // nothing sits in either work list, yet the sides do not agree. This is the
+    // finding `difference` alone can never distinguish from ordinary backlog.
+    enqueue({
+      data: [{ amount: 1000, journal_entry_id: 'je-short', reconciliation_method: 'manual' }],
+    })
+    enqueue({ data: [{ id: 'je-short', status: 'posted', source_type: 'bank_transaction' }] })
+    enqueue({ data: [{ debit_amount: 900, credit_amount: 0, journal_entry_id: 'je-short' }] })
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.difference).toBe(100)
+    expect(status.unmatched_transaction_total).toBe(0)
+    expect(status.unmatched_gl_line_total).toBe(0)
+    expect(status.unexplained_difference).toBe(100)
+  })
+
+  it('reports no residual on a foreign account whose candidate lines carry no FX amount', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    // EUR account. The candidate RPC projects neither currency nor
+    // amount_in_currency, so its lines cannot be expressed in EUR: summing the
+    // raw SEK columns would claim a EUR figure that is off by the rate.
+    enqueue({ data: [{ amount: 100, journal_entry_id: null, reconciliation_method: null }] })
+    enqueue({ data: [{ id: 'je-eur', status: 'posted', source_type: 'manual' }] })
+    enqueue({
+      data: [
+        {
+          debit_amount: 1150,
+          credit_amount: 0,
+          currency: 'EUR',
+          amount_in_currency: 100,
+          journal_entry_id: 'je-eur',
+        },
+      ],
+    })
+    enqueue({
+      data: [
+        {
+          line_id: 'l-eur',
+          journal_entry_id: 'je-eur',
+          debit_amount: 1150,
+          credit_amount: 0,
+          entry_date: '2026-03-01',
+          voucher_number: 8,
+          voucher_series: 'A',
+          entry_description: 'EU-faktura',
+          source_type: 'manual',
+          linked_transaction_count: 0,
+        },
+      ],
+    })
+
+    const status = await getReconciliationStatus(
+      supabase as never,
+      'company-1',
+      undefined,
+      undefined,
+      '1932',
+      'EUR',
+    )
+
+    // Never 0: that would assert the vouchers net to nothing.
+    expect(status.unmatched_gl_line_total).toBeNull()
+    expect(status.unexplained_difference).toBeNull()
+    // The count still works; only the sum is withheld.
+    expect(status.unmatched_gl_line_count).toBe(1)
+  })
+
   it('reconciles a corrected bank receipt and keeps gl_1930_balance equal to the balance sheet', async () => {
     // A +25000 deposit was booked to the wrong counter-account, then corrected
     // via the storno flow: the original flips to 'reversed', a storno (credit

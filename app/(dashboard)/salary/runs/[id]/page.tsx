@@ -4,8 +4,8 @@ import { use, useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { AttnLine } from '@/components/ui/attn-line'
 import {
   Dialog,
   DialogContent,
@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { AlertTriangle, Download, Loader2 } from 'lucide-react'
+import { AlertTriangle, Loader2 } from 'lucide-react'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -768,46 +768,46 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             : null
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 stagger-enter">
+      {/* Back row + header: serif title with one status chip, the quiet meta
+          line, the next step as the one default button and everything else
+          behind the ⋯ menu. */}
       <RunHeader
         run={run}
         canWrite={canWrite}
         actionLoading={actionLoading}
         employeeCount={employees.length}
-        onDelete={handleDelete}
-        onCorrect={handleCorrect}
-      />
-
-      {/* Control zone: the wizard line and every action for the current stage,
-          grouped in one place with a large primary target. */}
-      <RunProgressBar
-        run={run}
         isCalculated={isCalculated}
-        noPayout={noPayout}
-        agiState={agiState}
-        agiKvittensnummer={agiKvittensnummer}
-        canWrite={canWrite}
-        actionLoading={actionLoading}
         primaryAction={primaryAction}
         onPreview={handlePreview}
         onRevert={() => handleAction('revert')}
         onUnapprove={handleUnapprove}
         onSendPayslips={handleSendPayslips}
         onDownloadPayslips={handleBulkPayslipDownload}
+        onDownloadAgi={handleDownloadAgi}
+        onDelete={handleDelete}
+        onCorrect={handleCorrect}
+      />
+
+      {/* The one attention sentence on the page: an empty declaration will be
+          filed for the period, which should be deliberate. */}
+      {isNollkorning && (
+        <AttnLine>
+          {t('nollkorning_title')}: {t('nollkorning_body', { period: periodLabel })}
+        </AttnLine>
+      )}
+
+      {/* The month's steps as a flat rail: where the run stands and what the
+          stage means. Actions live in the header. */}
+      <RunProgressBar
+        run={run}
+        isCalculated={isCalculated}
+        noPayout={noPayout}
+        agiState={agiState}
+        agiKvittensnummer={agiKvittensnummer}
       />
 
       <RunKpiCards run={run} employees={employees} />
-
-      {isNollkorning && (
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-sm font-medium">{t('nollkorning_title')}</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              {t('nollkorning_body', { period: periodLabel })}
-            </p>
-          </CardContent>
-        </Card>
-      )}
 
       <RunEmployeesTable
         run={run}
@@ -825,7 +825,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
       {/* Calculation detail and the journal preview read best side by side on
           the wide canvas; they stack on smaller viewports. */}
-      <div className="lg:grid lg:grid-cols-2 lg:gap-6 space-y-6 lg:space-y-0 items-start">
+      <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2 items-start">
         <RunCalculationDetails periodYear={run.period_year} employees={employees} />
         {preview && (
           <RunJournalPreview
@@ -856,12 +856,10 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       {/* Tax payment (skatt + arbetsgivaravgifter): once AGI has been generated */}
       {run.status === 'booked' && run.agi_generated_at && (
         taxPaymentLoading ? (
-          <Card>
-            <CardContent className="space-y-4 p-6">
-              <Skeleton className="h-5 w-40" />
-              <Skeleton className="h-20 w-full" />
-            </CardContent>
-          </Card>
+          <div className="space-y-4">
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-20 w-full" />
+          </div>
         ) : (
           <TaxPaymentPanel
             period={periodLabel}
@@ -878,38 +876,20 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         )
       )}
 
-      {/* AGI (Arbetsgivardeklaration): available once the run is booked */}
+      {/* AGI (Arbetsgivardeklaration): available once the run is booked. The
+          XML download for manual filing lives in the header's ⋯ menu. */}
       {run.status === 'booked' && (
-        <div className="space-y-3">
-          <AGIPanel
-            salaryRunId={id}
-            arbetsgivare={run.arbetsgivare ?? ''}
-            period={`${run.period_year}${String(run.period_month).padStart(2, '0')}`}
-            agiGeneratedAt={run.agi_generated_at}
-            agiSubmittedAt={run.agi_submitted_at}
-            submission={agiSubmission}
-            onRefreshSubmission={refreshAgiSubmission}
-            readOnly={!canWrite}
-            onChange={loadRun}
-          />
-          {canWrite && (
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleDownloadAgi}
-                disabled={!!actionLoading}
-              >
-                {actionLoading === 'agi-download' ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="mr-2 h-4 w-4" />
-                )}
-                {t('action_download_agi')}
-              </Button>
-            </div>
-          )}
-        </div>
+        <AGIPanel
+          salaryRunId={id}
+          arbetsgivare={run.arbetsgivare ?? ''}
+          period={`${run.period_year}${String(run.period_month).padStart(2, '0')}`}
+          agiGeneratedAt={run.agi_generated_at}
+          agiSubmittedAt={run.agi_submitted_at}
+          submission={agiSubmission}
+          onRefreshSubmission={refreshAgiSubmission}
+          readOnly={!canWrite}
+          onChange={loadRun}
+        />
       )}
 
       {/* Overridable approval guard: missing bank details don't dead-end -

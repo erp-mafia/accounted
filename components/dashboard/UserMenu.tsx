@@ -25,8 +25,9 @@ import {
 
 // Community invite (Accounted's Discord). Deliberately a constant, not
 // branding config: self-hosted rebrands can hide or swap it when someone
-// actually asks for that.
-const DISCORD_INVITE_URL = 'https://discord.gg/D9SxtTgvx'
+// actually asks for that. Must be a never-expiring invite: the previous one
+// expired and left logged-in users with a dead link.
+const DISCORD_INVITE_URL = 'https://discord.gg/nfE9Uyv69a'
 
 // Lucide ships no brand marks, so the Discord logo is inlined (simple-icons
 // path, CC0). Sized and colored like the surrounding lucide icons.

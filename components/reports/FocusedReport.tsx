@@ -18,6 +18,10 @@ import { DimensionFilter, type DimensionFilterValue } from '@/components/reports
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import type { FiscalPeriod } from '@/types'
 
+/** Preset memory for the bank-reconciliation range, deliberately separate from
+ *  the shared report-family key so the two cannot steer each other. */
+const RECONCILIATION_RANGE_KEY_PREFIX = 'Accounted:recon-range-preset:'
+
 function ReportViewLoading() {
   return (
     <Card>
@@ -163,6 +167,14 @@ function FocusedReportInner({
           periodEnd={selectedPeriodBounds.end}
           value={dateRange}
           onChange={setDateRange}
+          // A reconciliation is carried out over a whole räkenskapsår, so it
+          // opens on the full year and keeps its own preset memory: inheriting
+          // a "Denna månad" left over from Resultatrapport would show an
+          // alarming difference for a window the user never chose here.
+          defaultPreset={slug === 'bank-reconciliation' ? 'full_year' : undefined}
+          storageKeyPrefix={
+            slug === 'bank-reconciliation' ? RECONCILIATION_RANGE_KEY_PREFIX : undefined
+          }
         />
       )}
 
@@ -258,7 +270,14 @@ function FocusedView({
     case 'supplier-ledger':
       return <SupplierLedgerView periodId={periodId} />
     case 'bank-reconciliation':
-      return <BankReconciliationView periodId={periodId} periodBounds={periodBounds} autoRun={autoRun} />
+      return (
+        <BankReconciliationView
+          periodId={periodId}
+          periodBounds={periodBounds}
+          dateRange={dateRange}
+          autoRun={autoRun}
+        />
+      )
     default:
       return null
   }

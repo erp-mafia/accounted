@@ -298,7 +298,13 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     // which left the view to host its OWN fiscal-year selector inside a
     // loading-gated action bar: a render deadlock that hung the page on a
     // permanent skeleton (#771).
-    params: 'fiscal',
+    //
+    // 'fiscal-range' since 2026-08-20: the view used to host its own "Datum
+    // från / Datum till" inputs plus a Filtrera button, a second period control
+    // competing with the header's räkenskapsår picker (convention 8). It now
+    // uses the shared ReportDateRange like every other report, mounted with a
+    // full-year default and its own preset memory (see FocusedReport).
+    params: 'fiscal-range',
   },
 
   // --- Export & arkiv: library-only ---

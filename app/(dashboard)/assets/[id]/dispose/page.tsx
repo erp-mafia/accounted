@@ -1,6 +1,6 @@
 'use client'
 
-import { use, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -8,20 +8,18 @@ import { ArrowLeft, Loader2, Lock } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
+import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { Label } from '@/components/ui/label'
 import { PageHeader } from '@/components/ui/page-header'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  SettingsInput,
+  SettingsRow,
+  SettingsRowNote,
+  SettingsSelect,
+} from '@/components/settings/SettingsRows'
 import { assessJamkning, assessJamkningEligibility } from '@/lib/bokslut/assets/jamkning'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -38,6 +36,10 @@ interface PeriodOption {
 }
 
 const VAT_TREATMENTS = ['standard_25', 'reverse_charge', 'export', 'exempt'] as const
+
+// Flat Fönster inputs are sized by the row; amounts, dates and account
+// numbers get a fixed short width so the row does not stretch them.
+const FIELD_CLASS = 'max-w-44 flex-none tabular-nums'
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100
@@ -246,7 +248,10 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
     return (
       <div className="space-y-8">
         <PageHeader title={t('title')} />
-        <Card><CardContent className="space-y-3 p-6"><Skeleton className="h-6 w-1/3" /><Skeleton className="h-4 w-2/3" /></CardContent></Card>
+        <div className="space-y-3">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
       </div>
     )
   }
@@ -255,12 +260,10 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
     return (
       <div className="space-y-8">
         <PageHeader title={t('title')} />
-        <Card>
-          <CardContent className="space-y-4 p-6">
-            <p>{!asset ? t('not_found') : t('already_disposed', { date: formatDate(asset.disposed_at!) })}</p>
-            <Link href="/assets"><Button variant="secondary"><ArrowLeft className="mr-1 h-4 w-4" />{t('back')}</Button></Link>
-          </CardContent>
-        </Card>
+        <p className="text-sm text-muted-foreground">
+          {!asset ? t('not_found') : t('already_disposed', { date: formatDate(asset.disposed_at!) })}
+        </p>
+        <Link href="/assets"><Button variant="secondary"><ArrowLeft className="mr-1 h-4 w-4" />{t('back')}</Button></Link>
       </div>
     )
   }
@@ -269,112 +272,222 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   const missingJamkningData = possibleInvestmentGood &&
     (originalInputVat === '' || originalDeductionPercent === '')
 
+  // Which rows the adjustment section shows, so the last one can drop its
+  // hairline and the section never ends on a dangling rule.
+  const showJamkningInputs = Boolean(eligibility?.withinAdjustmentPeriod)
+  const showAssessment = jamkningAssessment !== null
+  const showTransferConfirm = disposalType === 'business_transfer'
+  const showDocumentConfirm = showTransferConfirm && transferNeedsDocument
+  const assessmentIsLast = showAssessment && !showTransferConfirm
+  const inputsAreLast = showJamkningInputs && !showAssessment && !showTransferConfirm
+
   return (
-    <div className="space-y-8">
-      <PageHeader
-        title={t('title')}
-        action={<Link href="/assets"><Button variant="secondary"><ArrowLeft className="mr-1 h-4 w-4" />{t('back')}</Button></Link>}
-      />
+    <div className="space-y-8 stagger-enter">
+      {/* Back link on its own quiet row, same as the register documents */}
+      <Link
+        href="/assets"
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        {t('back')}
+      </Link>
 
-      <Card>
-        {/* data-ph-mask: the asset name is user data */}
-        <CardHeader><CardTitle data-ph-mask="" className="text-base">{asset.name}</CardTitle></CardHeader>
-        <CardContent className="space-y-2 p-6 pt-0 text-sm">
-          <SummaryRow label={t('acquisition_cost')} value={formatCurrency(Number(asset.acquisition_cost))} />
-          <SummaryRow label={t('acquired')} value={formatDate(asset.acquisition_date)} />
-          <SummaryRow label={t('bas_accounts')} value={`${asset.bas_asset_account} / ${asset.bas_accumulated_account} / ${asset.bas_expense_account}`} />
-        </CardContent>
-      </Card>
+      {/* data-ph-mask: the asset name is user data */}
+      <PageHeader title={t('title')} description={<span data-ph-mask="">{asset.name}</span>} />
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">{t('details_title')}</CardTitle></CardHeader>
-        <CardContent className="grid gap-4 p-6 pt-0 md:grid-cols-2">
-          <Field label={t('type_label')} htmlFor="disposalType">
-            <Select value={disposalType} onValueChange={(value) => setDisposalType(value as AssetDisposalType)}>
-              <SelectTrigger id="disposalType"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="sale">{t('type_sale')}</SelectItem>
-                <SelectItem value="scrap">{t('type_scrap')}</SelectItem>
-                <SelectItem value="business_transfer">{t('type_business_transfer')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label={t('date_label')} htmlFor="disposalDate">
-            <Input id="disposalDate" type="date" value={disposalDate} onChange={(event) => setDisposalDate(event.target.value)} className="tabular-nums" />
-          </Field>
-          <Field label={t('period_label')} htmlFor="period">
-            <Select value={periodId} onValueChange={setPeriodId}>
-              <SelectTrigger id="period"><SelectValue placeholder={t('period_placeholder')} /></SelectTrigger>
-              <SelectContent>{periods.map((period) => <SelectItem key={period.id} value={period.id}>{period.name}{period.is_closed || period.locked_at ? ` (${t('locked')})` : ''}</SelectItem>)}</SelectContent>
-            </Select>
-            {periodLocked && <p className="text-xs text-destructive">{t('period_locked')}</p>}
-          </Field>
-          <Field label={disposalType === 'business_transfer' ? t('consideration_label') : t('proceeds_label')} htmlFor="proceeds">
-            <Input id="proceeds" inputMode="decimal" value={proceeds} onChange={(event) => setProceeds(event.target.value)} disabled={disposalType === 'scrap'} className="tabular-nums" />
-          </Field>
-          {disposalType !== 'scrap' && <Field label={t('proceeds_account_label')} htmlFor="proceedsAccount"><Input id="proceedsAccount" value={proceedsAccount} onChange={(event) => setProceedsAccount(event.target.value)} className="tabular-nums" /></Field>}
-        </CardContent>
-      </Card>
+      {/* The asset being disposed: read-only context as plain rows */}
+      <DetailSection kicker={t('asset_section')}>
+        <DefRow label={t('acquisition_cost')}>
+          <span className="tabular-nums">{formatCurrency(Number(asset.acquisition_cost))}</span>
+        </DefRow>
+        <DefRow label={t('acquired')}>
+          <span className="tabular-nums">{formatDate(asset.acquisition_date)}</span>
+        </DefRow>
+        <DefRow label={t('bas_accounts')}>
+          <span className="tabular-nums">
+            {`${asset.bas_asset_account} / ${asset.bas_accumulated_account} / ${asset.bas_expense_account}`}
+          </span>
+        </DefRow>
+      </DetailSection>
+
+      {/* The disposal itself: flat hairline rows, label left, control right */}
+      <DetailSection kicker={t('details_title')}>
+        <SettingsRow label={t('type_label')} htmlFor="disposalType">
+          <SettingsSelect
+            id="disposalType"
+            value={disposalType}
+            onChange={(event) => setDisposalType(event.target.value as AssetDisposalType)}
+          >
+            <option value="sale">{t('type_sale')}</option>
+            <option value="scrap">{t('type_scrap')}</option>
+            <option value="business_transfer">{t('type_business_transfer')}</option>
+          </SettingsSelect>
+        </SettingsRow>
+        <SettingsRow label={t('date_label')} htmlFor="disposalDate" align="baseline">
+          <SettingsInput
+            id="disposalDate"
+            type="date"
+            value={disposalDate}
+            onChange={(event) => setDisposalDate(event.target.value)}
+            className={FIELD_CLASS}
+          />
+        </SettingsRow>
+        <SettingsRow label={t('period_label')} htmlFor="period">
+          <SettingsSelect id="period" value={periodId} onChange={(event) => setPeriodId(event.target.value)}>
+            <option value="" disabled>{t('period_placeholder')}</option>
+            {periods.map((period) => (
+              <option key={period.id} value={period.id}>
+                {period.name}{period.is_closed || period.locked_at ? ` (${t('locked')})` : ''}
+              </option>
+            ))}
+          </SettingsSelect>
+          {periodLocked && <p className="basis-full text-xs text-destructive">{t('period_locked')}</p>}
+        </SettingsRow>
+        <SettingsRow
+          label={disposalType === 'business_transfer' ? t('consideration_label') : t('proceeds_label')}
+          htmlFor="proceeds"
+          align="baseline"
+          borderless={disposalType === 'scrap'}
+        >
+          <SettingsInput
+            id="proceeds"
+            inputMode="decimal"
+            value={proceeds}
+            onChange={(event) => setProceeds(event.target.value)}
+            disabled={disposalType === 'scrap'}
+            className={FIELD_CLASS}
+          />
+        </SettingsRow>
+        {disposalType !== 'scrap' && (
+          <SettingsRow label={t('proceeds_account_label')} htmlFor="proceedsAccount" align="baseline" borderless>
+            <SettingsInput
+              id="proceedsAccount"
+              value={proceedsAccount}
+              onChange={(event) => setProceedsAccount(event.target.value)}
+              className={FIELD_CLASS}
+            />
+          </SettingsRow>
+        )}
+      </DetailSection>
 
       {disposalType === 'sale' && (
-        <Card>
-          <CardHeader><CardTitle className="text-base">{t('vat_title')}</CardTitle></CardHeader>
-          <CardContent className="space-y-4 p-6 pt-0">
-            <Field label={t('vat_treatment_label')} htmlFor="vatTreatment">
-              <Select value={vatTreatment} onValueChange={(value) => setVatTreatment(value as VatTreatment)}>
-                <SelectTrigger id="vatTreatment"><SelectValue /></SelectTrigger>
-                <SelectContent>{VAT_TREATMENTS.map((value) => <SelectItem key={value} value={value}>{t(`vat_${value}`)}</SelectItem>)}</SelectContent>
-              </Select>
-            </Field>
-            <div className="rounded-lg bg-secondary/40 p-3 text-xs">
-              <SummaryRow label={t('gross')} value={formatCurrency(proceedsNumber)} />
-              <SummaryRow label={t('vat')} value={formatCurrency(vatAmount)} />
-              <SummaryRow label={t('net')} value={formatCurrency(netProceeds)} strong />
-            </div>
-          </CardContent>
-        </Card>
+        <DetailSection kicker={t('vat_title')}>
+          <SettingsRow label={t('vat_treatment_label')} htmlFor="vatTreatment">
+            <SettingsSelect
+              id="vatTreatment"
+              value={vatTreatment}
+              onChange={(event) => setVatTreatment(event.target.value as VatTreatment)}
+            >
+              {VAT_TREATMENTS.map((value) => (
+                <option key={value} value={value}>{t(`vat_${value}`)}</option>
+              ))}
+            </SettingsSelect>
+          </SettingsRow>
+          <SettingsRow label={t('gross')}>
+            <span className="tabular-nums">{formatCurrency(proceedsNumber)}</span>
+          </SettingsRow>
+          <SettingsRow label={t('vat')}>
+            <span className="tabular-nums">{formatCurrency(vatAmount)}</span>
+          </SettingsRow>
+          <SettingsRow label={t('net')} borderless>
+            <span className="font-medium tabular-nums">{formatCurrency(netProceeds)}</span>
+          </SettingsRow>
+        </DetailSection>
       )}
 
-      <Card>
-        <CardHeader><CardTitle className="text-base">{t('adjustment_title')}</CardTitle></CardHeader>
-        <CardContent className="space-y-4 p-6 pt-0">
-          {eligibility?.withinAdjustmentPeriod
-            ? <Badge variant="warning">{t('within_adjustment_period', { years: eligibility.remainingYears, total: eligibility.totalYears })}</Badge>
-            : <Badge variant="secondary">{t('outside_adjustment_period')}</Badge>}
-          {eligibility?.withinAdjustmentPeriod && (
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label={t('original_vat_label')} htmlFor="originalInputVat" hint={t('original_vat_hint', { threshold: eligibility.threshold })}>
-                <Input id="originalInputVat" inputMode="decimal" value={originalInputVat} onChange={(event) => setOriginalInputVat(event.target.value)} className="tabular-nums" />
-              </Field>
-              <Field label={t('original_percent_label')} htmlFor="originalDeductionPercent">
-                <Input id="originalDeductionPercent" type="number" min={0} max={100} value={originalDeductionPercent} onChange={(event) => setOriginalDeductionPercent(event.target.value)} className="tabular-nums" />
-              </Field>
-            </div>
-          )}
-          {jamkningAssessment && (
-            <div className="rounded-lg border border-border bg-secondary/40 p-3 text-sm">
-              <SummaryRow label={t('adjustment_direction')} value={t(`direction_${jamkningAssessment.direction}`)} />
-              <SummaryRow label={t('adjustment_amount')} value={formatCurrency(jamkningAssessment.amount)} strong />
-              {jamkningAssessment.capped && <p className="mt-2 text-xs text-muted-foreground">{t('adjustment_capped')}</p>}
-            </div>
-          )}
-          {disposalType === 'business_transfer' && (
-            <div className="flex items-center gap-3 rounded-lg border border-border p-3">
-              <Switch id="businessTransfer" checked={businessTransferConfirmed} onCheckedChange={setBusinessTransferConfirmed} />
-              <Label htmlFor="businessTransfer" className="cursor-pointer">{t('business_transfer_confirm')}</Label>
-            </div>
-          )}
-          {disposalType === 'business_transfer' && transferNeedsDocument && (
-            <div className="flex items-center gap-3 rounded-lg border border-border p-3">
-              <Switch id="adjustmentDocument" checked={adjustmentDocumentConfirmed} onCheckedChange={setAdjustmentDocumentConfirmed} />
-              <Label htmlFor="adjustmentDocument" className="cursor-pointer">{t('adjustment_document_confirm')}</Label>
-            </div>
-          )}
-          {missingJamkningData && <p className="text-xs text-destructive">{t('adjustment_data_required')}</p>}
-        </CardContent>
-      </Card>
+      {/* Input VAT adjustment: the period status sits on the kicker line
+          (a chip only when the asset is still inside the period), the
+          underlag as rows, the assessment as read-only rows below. */}
+      <DetailSection
+        kicker={t('adjustment_title')}
+        aside={
+          eligibility?.withinAdjustmentPeriod ? (
+            <Badge variant="warning">
+              {t('within_adjustment_period', { years: eligibility.remainingYears, total: eligibility.totalYears })}
+            </Badge>
+          ) : (
+            <span className="text-[11px] text-muted-foreground">{t('outside_adjustment_period')}</span>
+          )
+        }
+      >
+        {showJamkningInputs && eligibility && (
+          <>
+            <SettingsRow
+              label={t('original_vat_label')}
+              htmlFor="originalInputVat"
+              help={t('original_vat_hint', { threshold: eligibility.threshold })}
+              align="baseline"
+            >
+              <SettingsInput
+                id="originalInputVat"
+                inputMode="decimal"
+                value={originalInputVat}
+                onChange={(event) => setOriginalInputVat(event.target.value)}
+                className={FIELD_CLASS}
+              />
+            </SettingsRow>
+            <SettingsRow
+              label={t('original_percent_label')}
+              htmlFor="originalDeductionPercent"
+              align="baseline"
+              borderless={inputsAreLast}
+            >
+              <SettingsInput
+                id="originalDeductionPercent"
+                type="number"
+                min={0}
+                max={100}
+                value={originalDeductionPercent}
+                onChange={(event) => setOriginalDeductionPercent(event.target.value)}
+                className={FIELD_CLASS}
+              />
+            </SettingsRow>
+          </>
+        )}
+        {jamkningAssessment && (
+          <>
+            <SettingsRow label={t('adjustment_direction')}>
+              {t(`direction_${jamkningAssessment.direction}`)}
+            </SettingsRow>
+            <SettingsRow label={t('adjustment_amount')} borderless={assessmentIsLast}>
+              <span className="font-medium tabular-nums">{formatCurrency(jamkningAssessment.amount)}</span>
+              {jamkningAssessment.capped && (
+                <SettingsRowNote className="basis-full">{t('adjustment_capped')}</SettingsRowNote>
+              )}
+            </SettingsRow>
+          </>
+        )}
+        {showTransferConfirm && (
+          <SettingsRow label={t('type_business_transfer')} borderless={!showDocumentConfirm}>
+            <Switch
+              id="businessTransfer"
+              checked={businessTransferConfirmed}
+              onCheckedChange={setBusinessTransferConfirmed}
+            />
+            <Label htmlFor="businessTransfer" className="min-w-0 flex-1 cursor-pointer font-normal leading-5">
+              {t('business_transfer_confirm')}
+            </Label>
+          </SettingsRow>
+        )}
+        {showDocumentConfirm && (
+          <SettingsRow label={t('adjustment_document_label')} borderless>
+            <Switch
+              id="adjustmentDocument"
+              checked={adjustmentDocumentConfirmed}
+              onCheckedChange={setAdjustmentDocumentConfirmed}
+            />
+            <Label htmlFor="adjustmentDocument" className="min-w-0 flex-1 cursor-pointer font-normal leading-5">
+              {t('adjustment_document_confirm')}
+            </Label>
+          </SettingsRow>
+        )}
+        {missingJamkningData && (
+          <p className="mt-3 text-xs text-destructive">{t('adjustment_data_required')}</p>
+        )}
+      </DetailSection>
 
-      <div className="flex justify-end gap-2">
+      {/* Actions: one footer row, so the flow ends on the button it arms */}
+      <div className="flex flex-wrap justify-end gap-2">
         <Link href="/assets"><Button variant="secondary" disabled={submitting}>{t('cancel')}</Button></Link>
         <Button
           onClick={handleSubmit}
@@ -388,12 +501,4 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
       </div>
     </div>
   )
-}
-
-function Field({ label, htmlFor, hint, children }: { label: string; htmlFor: string; hint?: string; children: ReactNode }) {
-  return <div className="space-y-2"><Label htmlFor={htmlFor}>{label}</Label>{children}{hint && <p className="text-xs text-muted-foreground">{hint}</p>}</div>
-}
-
-function SummaryRow({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
-  return <div className={`flex justify-between gap-4 ${strong ? 'font-medium' : ''}`}><span className="text-muted-foreground">{label}</span><span className="text-right tabular-nums">{value}</span></div>
 }

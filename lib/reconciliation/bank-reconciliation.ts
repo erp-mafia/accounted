@@ -158,7 +158,52 @@ export interface ReconciliationStatus {
   is_reconciled: boolean
   matched_count: number
   unmatched_transaction_count: number
+  /**
+   * Sum of the unmatched bank transactions behind `unmatched_transaction_count`,
+   * in `currency`. Together with {@link unmatched_gl_line_total} this decomposes
+   * `difference` into the two work lists the user can actually open, instead of
+   * leaving it an unexplained scalar.
+   */
+  unmatched_transaction_total: number
   unmatched_gl_line_count: number
+  /**
+   * Sum of the unmatched ledger lines behind `unmatched_gl_line_count`, in
+   * `currency`, signed like a bank movement (+ in, - out).
+   *
+   * `null` when at least one of those lines carries no amount in `currency`:
+   * the two candidate RPCs project neither `currency` nor `amount_in_currency`,
+   * so on a foreign account every line is unconvertible and there is no honest
+   * sum to report. Reporting 0 there would claim the vouchers net to nothing.
+   * Always a number on a SEK account (see {@link ledgerLineAmountIn}).
+   */
+  unmatched_gl_line_total: number | null
+  /**
+   * What is left of `difference` once both work lists are accounted for:
+   * `difference - unmatched_transaction_total + unmatched_gl_line_total`.
+   *
+   * `difference` is merely how far apart the two sides currently stand; mid-year
+   * it is expected to be large and it is fully explained as long as every krona
+   * of it sits in one of the two lists. The residual is what does NOT.
+   *
+   * It reduces to (sum of matched transactions - sum of the ledger lines they
+   * settle), so it is non-zero when a matched pair disagrees in amount, when one
+   * voucher carries several lines on this account, or when a ledger line the
+   * candidate RPC hides has no bank counterpart. That last cause dominates:
+   * `get_account_gl_lines_for_matching` returns only `status='posted'` entries
+   * and excludes storno / correction outright, so an unlinked storno moves this
+   * account's movement while staying invisible in "Omatchade verifikationer".
+   * Measured on prod 2026-08-20 over the 206 single-1930-account companies with
+   * >=10 transactions: 136 reconcile to exactly 0,00, 63 land >=100 kr out, and
+   * the unlinked-hidden-line buckets behind that are posted/storno (127
+   * companies), reversed/bank_transaction (66) and posted/correction (49).
+   *
+   * A non-zero residual is therefore a real finding but usually NOT user error,
+   * so the UI states it factually rather than in destructive red.
+   *
+   * `null` whenever `unmatched_gl_line_total` is null: no honest residual
+   * exists then either.
+   */
+  unexplained_difference: number | null
   /** Counted ledger lines on the account that carry no amount in `currency`
    *  (see {@link ledgerLineAmountIn}). Always 0 on a SEK account. */
   unconvertible_gl_line_count: number
@@ -877,9 +922,12 @@ export async function getReconciliationStatus(
   // rows behind bank_transaction_total.
   const matchedCount = reconcilableTx.filter((tx) => tx.journal_entry_id !== null).length
 
-  const unmatchedTransactionCount = reconcilableTx.filter(
-    (tx) => tx.journal_entry_id === null
-  ).length
+  const unmatchedTx = reconcilableTx.filter((tx) => tx.journal_entry_id === null)
+  const unmatchedTransactionCount = unmatchedTx.length
+  const unmatchedTransactionTotal = unmatchedTx.reduce(
+    (sum, tx) => sum + (Number(tx.amount) || 0),
+    0
+  )
 
   // Unmatched GL lines count (RPC excludes opening_balance, storno and correction
   // since 20260601120000_unlinked_gl_lines_exclude_storno_correction.sql).
@@ -887,9 +935,40 @@ export async function getReconciliationStatus(
   // cash account (a transfer's other leg) counts as unmatched HERE, keeping this
   // number in agreement with the "Omatchade verifikationer" table the
   // reconciliation view derives from the same RPC.
-  const unlinkedLines = await fetchGLLinesForMatching(supabase, companyId, bankAccount, dateFrom, dateTo)
+  // effectiveFrom, NOT the caller's dateFrom: countedLines and countedTx are both
+  // clamped to the IB floor above, and this list has to describe the SAME window
+  // or the card contradicts itself. With the raw dateFrom, a window that opens
+  // before the account's opening balance (the v1 endpoint's "company history"
+  // default, or any multi-year range) counted vouchers from a period whose
+  // movements the reconciliation deliberately drops: unmatched_gl_line_count was
+  // inflated by prior-period history, and the bridge below could never close.
+  const unlinkedLines = await fetchGLLinesForMatching(
+    supabase,
+    companyId,
+    bankAccount,
+    effectiveFrom ?? undefined,
+    dateTo
+  )
 
   const difference = Math.round((bankTotal - glPeriodMovement) * 100) / 100
+
+  // The candidate RPCs project neither `currency` nor `amount_in_currency`, so
+  // on a foreign account every line resolves to null and there is no sum to
+  // report. Deliberately all-or-nothing: a partial sum silently understates the
+  // side it is meant to explain. On SEK, ledgerLineAmountIn never returns null,
+  // so this is always a number for the 95% case.
+  const unmatchedGlAmounts = unlinkedLines.map((line) => ledgerLineAmountIn(line, currency))
+  const unmatchedGlLineTotal = unmatchedGlAmounts.some((a) => a === null)
+    ? null
+    : roundOre(unmatchedGlAmounts.reduce((sum: number, a) => sum + (a ?? 0), 0))
+
+  // difference - unmatched transactions + unmatched vouchers. See the field doc:
+  // zero means every krona of the difference is identified and sitting in a list
+  // the user can open.
+  const unexplainedDifference =
+    unmatchedGlLineTotal === null
+      ? null
+      : roundOre(difference - roundOre(unmatchedTransactionTotal) + unmatchedGlLineTotal)
 
   const notReconcilableReason =
     unconvertibleLines.length > 0 ? 'gl_lines_missing_currency_amount' : null
@@ -919,7 +998,10 @@ export async function getReconciliationStatus(
       unmatchedTransactionCount === 0,
     matched_count: matchedCount,
     unmatched_transaction_count: unmatchedTransactionCount,
+    unmatched_transaction_total: roundOre(unmatchedTransactionTotal),
     unmatched_gl_line_count: unlinkedLines.length,
+    unmatched_gl_line_total: unmatchedGlLineTotal,
+    unexplained_difference: unexplainedDifference,
     unconvertible_gl_line_count: unconvertibleLines.length,
     not_reconcilable_reason: notReconcilableReason,
   }
