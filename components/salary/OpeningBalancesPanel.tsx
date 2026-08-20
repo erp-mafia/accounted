@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * Ingående saldon (payroll cutover) panel on the employee editor.
+ * Ingående saldon (payroll cutover) section on the employee detail page.
  *
  * Mid-year switchers from another payroll system enter per-employee state
  * here: YTD accumulators, vacation balances (incl. sparade dagar per
@@ -12,12 +12,12 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { formatDate } from '@/lib/utils'
+import { DetailSection } from '@/components/ui/detail-section'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Save } from 'lucide-react'
+import { SettingsGroup, SettingsInput, SettingsRow } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -39,6 +39,9 @@ interface OpeningBalancesData {
 const currentYear = new Date().getFullYear()
 /** Sparade dagar origin years: Semesterlagen allows saving max 5 years. */
 const SAVED_YEARS = Array.from({ length: 5 }, (_, i) => String(currentYear - 1 - i))
+
+// Numeric and date fields are sized by their content, not by the row.
+const FIELD_CLASS = 'max-w-44 flex-none tabular-nums'
 
 interface PanelValues {
   cutoverDate: string
@@ -72,6 +75,10 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   const [saving, setSaving] = useState(false)
   const [locked, setLocked] = useState(false)
   const [hasRow, setHasRow] = useState(false)
+  // Collapsed by default: this is a one-time form for switching payroll
+  // system, and 14 empty input rows on every employee is clutter. Opens by
+  // itself once balances exist, so stored values are never hidden.
+  const [expanded, setExpanded] = useState<boolean | null>(null)
 
   const [cutoverDate, setCutoverDate] = useState(`${currentYear}-01-01`)
   const [ytdGross, setYtdGross] = useState('')
@@ -202,151 +209,161 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
 
   if (loading) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('opening_balances_title')}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-        </CardContent>
-      </Card>
+      <DetailSection kicker={t('opening_balances_title')}>
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
+      </DetailSection>
     )
   }
 
   const readOnly = locked || !canWrite
+  const open = expanded ?? hasRow
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{t('opening_balances_title')}</CardTitle>
-        <p className="text-sm text-muted-foreground">{t('opening_balances_description')}</p>
-      </CardHeader>
-      {/* Own form: this panel is its own save scope. It must never be nested
-          inside another form (invalid HTML, and its submit would leak). */}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          handleSave()
-        }}
+    /* Own form: this section is its own save scope. It must never be nested
+       inside another form (invalid HTML, and its submit would leak). The
+       save button closes the expanded form and is a submit, so Enter in any
+       field saves too. */
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        handleSave()
+      }}
+    >
+      <DetailSection
+        kicker={t('opening_balances_title')}
+        help={<HelpPopover>{t('opening_balances_description')}</HelpPopover>}
+        aside={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="-my-1"
+            aria-expanded={open}
+            onClick={() => setExpanded(!open)}
+          >
+            {open ? t('opening_balances_hide') : t('opening_balances_show')}
+          </Button>
+        }
       >
-        <CardContent className="space-y-6">
-        {locked && (
-          <p className="text-sm text-muted-foreground border border-border rounded-lg p-3">
-            {t('opening_balances_locked_notice')}
+        {!open ? (
+          <p className="text-sm text-muted-foreground">
+            {hasRow
+              ? t('opening_balances_collapsed_set', { date: formatDate(cutoverDate) })
+              : t('opening_balances_collapsed_none')}
           </p>
+        ) : (
+        <>
+        {locked && (
+          <p className="mb-3 text-sm text-muted-foreground">{t('opening_balances_locked_notice')}</p>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="ob-cutover">{t('opening_balances_cutover_date')}</Label>
-            <Input
-              id="ob-cutover"
-              type="date"
-              value={cutoverDate}
-              onChange={(e) => setCutoverDate(e.target.value)}
-              disabled={readOnly}
-            />
-            <p className="text-xs text-muted-foreground">{t('opening_balances_cutover_hint')}</p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="ob-karens">{t('opening_balances_karens')}</Label>
-            <Input
-              id="ob-karens"
-              type="number"
-              min={0}
-              max={10}
-              step={1}
-              value={karens}
-              onChange={(e) => setKarens(e.target.value)}
-              disabled={readOnly}
-              className="tabular-nums"
-            />
-            <p className="text-xs text-muted-foreground">{t('opening_balances_karens_hint')}</p>
-          </div>
-        </div>
+        <SettingsRow
+          label={t('opening_balances_cutover_date')}
+          htmlFor="ob-cutover"
+          help={t('opening_balances_cutover_hint')}
+          align="baseline"
+        >
+          <SettingsInput
+            id="ob-cutover"
+            type="date"
+            value={cutoverDate}
+            onChange={(e) => setCutoverDate(e.target.value)}
+            disabled={readOnly}
+            className={FIELD_CLASS}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={t('opening_balances_karens')}
+          htmlFor="ob-karens"
+          help={t('opening_balances_karens_hint')}
+          align="baseline"
+        >
+          <SettingsInput
+            id="ob-karens"
+            type="number"
+            min={0}
+            max={10}
+            step={1}
+            value={karens}
+            onChange={(e) => setKarens(e.target.value)}
+            disabled={readOnly}
+            className={FIELD_CLASS}
+          />
+        </SettingsRow>
 
-        <div>
-          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">
-            {t('opening_balances_ytd_heading')}
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="ob-ytd-gross">{t('opening_balances_ytd_gross')}</Label>
-              <Input id="ob-ytd-gross" type="number" min={0} value={ytdGross}
-                onChange={(e) => setYtdGross(e.target.value)} disabled={readOnly} className="tabular-nums" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ob-ytd-tax">{t('opening_balances_ytd_tax')}</Label>
-              <Input id="ob-ytd-tax" type="number" min={0} value={ytdTax}
-                onChange={(e) => setYtdTax(e.target.value)} disabled={readOnly} className="tabular-nums" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ob-ytd-net">{t('opening_balances_ytd_net')}</Label>
-              <Input id="ob-ytd-net" type="number" min={0} value={ytdNet}
-                onChange={(e) => setYtdNet(e.target.value)} disabled={readOnly} className="tabular-nums" />
-            </div>
-          </div>
-        </div>
+        <SettingsGroup label={t('opening_balances_ytd_heading')} className="pt-6">
+          <SettingsRow label={t('opening_balances_ytd_gross')} htmlFor="ob-ytd-gross" align="baseline">
+            <SettingsInput id="ob-ytd-gross" type="number" min={0} value={ytdGross}
+              onChange={(e) => setYtdGross(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
+          <SettingsRow label={t('opening_balances_ytd_tax')} htmlFor="ob-ytd-tax" align="baseline">
+            <SettingsInput id="ob-ytd-tax" type="number" min={0} value={ytdTax}
+              onChange={(e) => setYtdTax(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
+          <SettingsRow label={t('opening_balances_ytd_net')} htmlFor="ob-ytd-net" align="baseline">
+            <SettingsInput id="ob-ytd-net" type="number" min={0} value={ytdNet}
+              onChange={(e) => setYtdNet(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
+        </SettingsGroup>
 
-        <div>
-          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">
-            {t('opening_balances_vacation_heading')}
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="ob-days-remaining">{t('opening_balances_days_remaining')}</Label>
-              <Input id="ob-days-remaining" type="number" min={0} max={40} step={0.5} value={daysRemaining}
-                onChange={(e) => setDaysRemaining(e.target.value)} disabled={readOnly} className="tabular-nums" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ob-days-taken">{t('opening_balances_days_taken')}</Label>
-              <Input id="ob-days-taken" type="number" min={0} max={40} step={0.5} value={daysTaken}
-                onChange={(e) => setDaysTaken(e.target.value)} disabled={readOnly} className="tabular-nums" />
-              <p className="text-xs text-muted-foreground">{t('opening_balances_days_taken_hint')}</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ob-liability">{t('opening_balances_liability')}</Label>
-              <Input id="ob-liability" type="number" min={0} value={liability}
-                onChange={(e) => setLiability(e.target.value)} disabled={readOnly} className="tabular-nums" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ob-liability-avgifter">{t('opening_balances_liability_avgifter')}</Label>
-              <Input id="ob-liability-avgifter" type="number" min={0} value={liabilityAvgifter}
-                onChange={(e) => setLiabilityAvgifter(e.target.value)} disabled={readOnly} className="tabular-nums" />
-            </div>
-          </div>
-        </div>
+        <SettingsGroup label={t('opening_balances_vacation_heading')} className="pt-6">
+          <SettingsRow label={t('opening_balances_days_remaining')} htmlFor="ob-days-remaining" align="baseline">
+            <SettingsInput id="ob-days-remaining" type="number" min={0} max={40} step={0.5} value={daysRemaining}
+              onChange={(e) => setDaysRemaining(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
+          <SettingsRow
+            label={t('opening_balances_days_taken')}
+            htmlFor="ob-days-taken"
+            help={t('opening_balances_days_taken_hint')}
+            align="baseline"
+          >
+            <SettingsInput id="ob-days-taken" type="number" min={0} max={40} step={0.5} value={daysTaken}
+              onChange={(e) => setDaysTaken(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
+          <SettingsRow label={t('opening_balances_liability')} htmlFor="ob-liability" align="baseline">
+            <SettingsInput id="ob-liability" type="number" min={0} value={liability}
+              onChange={(e) => setLiability(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
+          <SettingsRow label={t('opening_balances_liability_avgifter')} htmlFor="ob-liability-avgifter" align="baseline">
+            <SettingsInput id="ob-liability-avgifter" type="number" min={0} value={liabilityAvgifter}
+              onChange={(e) => setLiabilityAvgifter(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
+        </SettingsGroup>
 
-        <div>
-          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">
-            {t('opening_balances_saved_heading')}
-          </h2>
-          <p className="text-xs text-muted-foreground mb-3">{t('opening_balances_saved_hint')}</p>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            {SAVED_YEARS.map((year) => (
-              <div key={year} className="space-y-2">
-                <Label htmlFor={`ob-saved-${year}`} className="tabular-nums">{year}</Label>
-                <Input
-                  id={`ob-saved-${year}`}
-                  type="number"
-                  min={0}
-                  max={40}
-                  step={0.5}
-                  value={savedByYear[year] ?? ''}
-                  onChange={(e) => setSavedByYear((prev) => ({ ...prev, [year]: e.target.value }))}
-                  disabled={readOnly}
-                  className="tabular-nums"
-                />
-              </div>
-            ))}
-          </div>
-        </div>
+        <SettingsGroup
+          label={t('opening_balances_saved_heading')}
+          help={t('opening_balances_saved_hint')}
+          className="pt-6"
+        >
+          {SAVED_YEARS.map((year, index) => (
+            <SettingsRow
+              key={year}
+              label={<span className="tabular-nums">{year}</span>}
+              htmlFor={`ob-saved-${year}`}
+              align="baseline"
+              borderless={index === SAVED_YEARS.length - 1}
+            >
+              <SettingsInput
+                id={`ob-saved-${year}`}
+                type="number"
+                min={0}
+                max={40}
+                step={0.5}
+                value={savedByYear[year] ?? ''}
+                onChange={(e) => setSavedByYear((prev) => ({ ...prev, [year]: e.target.value }))}
+                disabled={readOnly}
+                className={FIELD_CLASS}
+              />
+            </SettingsRow>
+          ))}
+        </SettingsGroup>
 
         {!readOnly && (
-          <div className="flex justify-end">
-            <Button type="submit" disabled={saving || !dirty}>
-              <Save className="h-4 w-4 mr-2" />
+          <div className="mt-4 flex justify-end">
+            <Button type="submit" size="sm" disabled={saving || !dirty}>
               {saving
                 ? t('opening_balances_saving')
                 : hasRow
@@ -355,8 +372,9 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
             </Button>
           </div>
         )}
-        </CardContent>
-      </form>
-    </Card>
+        </>
+        )}
+      </DetailSection>
+    </form>
   )
 }

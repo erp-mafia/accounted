@@ -11,11 +11,14 @@ import { cn } from '@/lib/utils'
 
 export function DetailSection({
   kicker,
+  help,
   aside,
   children,
   className,
 }: {
   kicker: string
+  /** Section help behind a "?" right after the kicker (convention 7). Pass a <HelpPopover>. */
+  help?: React.ReactNode
   /** Optional right-aligned element on the kicker line: a count, a quiet action. */
   aside?: React.ReactNode
   children: React.ReactNode
@@ -25,8 +28,9 @@ export function DetailSection({
     <section className={className}>
       <div className="flex items-baseline justify-between gap-4 border-b border-border pb-2">
         {/* data-ph-unmask: kickers are static i18n chrome in session replays. */}
-        <h2 data-ph-unmask="" className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <h2 data-ph-unmask="" className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
           {kicker}
+          {help}
         </h2>
         {aside}
       </div>

@@ -13,6 +13,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { cn } from '@/lib/utils'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import {
   FileText,
@@ -46,6 +47,14 @@ interface DocumentRecord {
 interface JournalEntryAttachmentsProps {
   journalEntryId: string
   onCountChange?: (count: number) => void
+  /**
+   * 'section': embedded under a DetailSection kicker that already names the
+   * group and states the empty case (verifikat detail page). Drops the own
+   * border, heading and empty line so nothing is said twice; the action
+   * buttons and the document list stay. Default keeps the self-contained
+   * foldout look used by JournalEntryList.
+   */
+  variant?: 'default' | 'section'
 }
 
 function formatFileSize(bytes: number): string {
@@ -69,7 +78,9 @@ function isPreviewable(type: string | null): boolean {
 export default function JournalEntryAttachments({
   journalEntryId,
   onCountChange,
+  variant = 'default',
 }: JournalEntryAttachmentsProps) {
+  const embedded = variant === 'section'
   const t = useTranslations('journal_attachments')
   const tCommon = useTranslations('common')
   const { toast } = useToast()
@@ -251,7 +262,7 @@ export default function JournalEntryAttachments({
   }
 
   return (
-    <div className="border-t pt-3 mt-3">
+    <div className={embedded ? undefined : 'border-t pt-3 mt-3'}>
       <input
         ref={replaceFileInputRef}
         type="file"
@@ -260,10 +271,12 @@ export default function JournalEntryAttachments({
         onChange={(e) => handleReplaceFileSelected(e.target.files?.[0] ?? null)}
       />
 
-      <div className="flex items-center justify-between mb-2">
-        <h4 className="text-sm font-medium">
-          {t('title')} {documents.length > 0 && `(${documents.length})`}
-        </h4>
+      <div className={cn('mb-2 flex items-center gap-2', embedded ? 'justify-end' : 'justify-between')}>
+        {!embedded && (
+          <h4 className="text-sm font-medium">
+            {t('title')} {documents.length > 0 && `(${documents.length})`}
+          </h4>
+        )}
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
@@ -298,9 +311,11 @@ export default function JournalEntryAttachments({
       )}
 
       {documents.length === 0 && !showUpload ? (
-        <p className="text-sm text-muted-foreground py-1">
-          {t('empty')}
-        </p>
+        !embedded && (
+          <p className="text-sm text-muted-foreground py-1">
+            {t('empty')}
+          </p>
+        )
       ) : (
         <div className="space-y-1">
           {documents.map((doc) => {

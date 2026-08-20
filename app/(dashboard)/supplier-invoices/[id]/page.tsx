@@ -5,15 +5,24 @@ import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from "@/components/ui/skeleton"
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { HelpPopover } from '@/components/ui/help-popover'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Loader2, Pencil, Plus, CalendarClock, Paperclip } from 'lucide-react'
+import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Loader2, Pencil, Plus, CalendarClock, MoreHorizontal } from 'lucide-react'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
@@ -68,13 +77,14 @@ const itemHasAccrual = (item: SupplierInvoiceItem): boolean =>
 
 const accrualMonth = (date: string): string => date.slice(0, 7)
 
-const statusVariants: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
-  registered: 'secondary',
-  approved: 'default',
-  paid: 'success',
+// Chips mark exceptions (design.md convention 5): approved and paid render as
+// muted text in the header; these are the states that deviate and get a chip.
+// Same variants as the list page so the two surfaces read the same.
+const EXCEPTION_STATUS_VARIANTS: Record<string, 'secondary' | 'outline' | 'warning' | 'destructive'> = {
+  registered: 'outline',
   partially_paid: 'warning',
   overdue: 'destructive',
-  disputed: 'destructive',
+  disputed: 'warning',
   credited: 'secondary',
   reversed: 'secondary',
 }
@@ -88,6 +98,8 @@ export default function SupplierInvoiceDetailPage() {
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_detail')
   const tCommon = useTranslations('common')
+  // The list page's "Betald {date}" label, so the header reads like the row.
+  const tList = useTranslations('supplier_invoices')
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
@@ -518,9 +530,9 @@ export default function SupplierInvoiceDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-8">
         <Skeleton className="h-8 w-48" />
-        <Card><CardContent className="p-6"><Skeleton className="h-48 w-full" /></CardContent></Card>
+        <Skeleton className="h-48 w-full" />
       </div>
     )
   }
@@ -538,6 +550,10 @@ export default function SupplierInvoiceDetailPage() {
 
   const items = (invoice.items || []) as SupplierInvoiceItem[]
   const payments = (invoice.payments || []) as SupplierInvoicePayment[]
+  const creditedOriginal =
+    (invoice as SupplierInvoice & {
+      credited_original?: { id: string; supplier_invoice_number: string; arrival_number: number } | null
+    }).credited_original ?? null
 
   // Display-only öresavrundning. The stored total/booked verifikat keep the
   // exact öre; this only adjusts the rendered total. Supplier invoices never
@@ -548,8 +564,82 @@ export default function SupplierInvoiceDetailPage() {
     { ore_rounding: false },
   )
 
+  // Document title: the supplier's own invoice number with the kind spelled
+  // out ("Leverantörsfaktura 4711", "Kreditfaktura K-12"). The arrival number
+  // moves to the meta line and the facts below; an invoice registered without
+  // a supplier number keeps the arrival number as its title.
+  const docNumber = invoice.supplier_invoice_number
+  const title = !docNumber
+    ? t('arrival_header', { number: invoice.arrival_number })
+    : invoice.is_credit_note
+      ? t('title_credit_note', { number: docNumber })
+      : t('title_invoice', { number: docNumber })
+
+  // One status element, same rule as the list page (chips mark exceptions):
+  // approved and paid render as muted text, everything that deviates (waiting
+  // for attest, overdue, partly paid, credited, ...) gets a chip.
+  const status: { label: string; exception: boolean; variant?: 'secondary' | 'outline' | 'warning' | 'destructive' } =
+    invoice.status === 'paid'
+      ? {
+          label: invoice.paid_at
+            ? tList('status_paid_date', { date: formatDate(invoice.paid_at) })
+            : statusLabels.paid,
+          exception: false,
+        }
+      : invoice.status === 'approved'
+        ? { label: statusLabels.approved, exception: false }
+        : {
+            label: statusLabels[invoice.status] || invoice.status,
+            exception: true,
+            variant: EXCEPTION_STATUS_VARIANTS[invoice.status] || 'secondary',
+          }
+
+  const metaParts = [
+    invoice.supplier?.name ?? null,
+    docNumber ? t('arrival_header', { number: invoice.arrival_number }) : null,
+    t('created_at', { date: formatDate(invoice.created_at) }),
+  ].filter(Boolean)
+
+  // Attest keys off approved_at, not the status: the overdue cron flips
+  // unbooked invoices to 'overdue' just by aging, and gating on 'registered'
+  // alone left them with no way through attest (#1206).
+  const canApprove = canApproveSupplierInvoice(invoice) && !invoice.is_credit_note
+  const canMarkPaid = ['approved', 'overdue', 'partially_paid'].includes(invoice.status)
+  const canCredit = canMarkPaid && invoice.status !== 'partially_paid'
+  const canUncredit = invoice.status === 'credited' && !invoice.is_credit_note
+  // Delete is allowed while nothing would be orphaned: no booking, no
+  // payments (server re-checks). 'approved'/'overdue' are included because
+  // the overdue cron flips unbooked invoices there and a registered-only gate
+  // made them undeletable just by aging.
+  const canDelete =
+    ['registered', 'approved', 'overdue'].includes(invoice.status) &&
+    !invoice.is_credit_note &&
+    !invoice.registration_journal_entry_id &&
+    payments.length === 0
+  // Secondary actions collapse into one overflow menu (convention 9: one
+  // obvious next step in the header, the alternatives behind a caret).
+  const hasMenu = canCredit || canDelete
+  // #967: registered-without-booking (deferred booking). Ekonomi books the
+  // registration verifikat from here.
+  const canBookAfterwards =
+    companySettings?.accounting_method === 'accrual' &&
+    !invoice.is_credit_note &&
+    ['registered', 'approved', 'overdue'].includes(invoice.status)
+
+  const accrualInfo = (item: SupplierInvoiceItem) =>
+    itemHasAccrual(item) ? (
+      <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
+        <CalendarClock className="h-3 w-3 shrink-0" />
+        {t('accrual_line_info', {
+          from: accrualMonth(item.accrual_period_start!),
+          to: accrualMonth(item.accrual_period_end!),
+        })}
+        {item.accrual_balance_account && ` · ${item.accrual_balance_account}`}
+      </span>
+    ) : null
+
   return (
-    <div className="space-y-8 max-w-4xl">
+    <div className="space-y-8 stagger-enter">
       {/* Back link + prev/next record pager on their own quiet row, so the
           title below keeps a stable position while stepping between records */}
       <div className="flex items-center justify-between gap-4">
@@ -570,39 +660,38 @@ export default function SupplierInvoiceDetailPage() {
         />
       </div>
 
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h1 className="font-display text-2xl leading-8 tracking-tight">
-                {t('arrival_header', { number: invoice.arrival_number })}
-              </h1>
-              <Badge variant={statusVariants[invoice.status] || 'secondary'}>
-                {statusLabels[invoice.status] || invoice.status}
+      {/* Header: serif title with one status element, a quiet meta line, and
+          the next step on the right. Everything else lives in the ⋯ menu. */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* data-ph-mask: the title carries the supplier's invoice number */}
+            <h1 data-ph-mask="" className="font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            {status.exception ? (
+              <Badge variant={status.variant}>{status.label}</Badge>
+            ) : (
+              <span className="text-sm text-muted-foreground">{status.label}</span>
+            )}
+            {items.some(itemHasAccrual) && (
+              <Badge variant="outline" className="gap-1">
+                <CalendarClock className="h-3 w-3" />
+                {t('badge_accrued')}
               </Badge>
-              {items.some(itemHasAccrual) && (
-                <Badge variant="outline" className="gap-1">
-                  <CalendarClock className="h-3 w-3" />
-                  {t('badge_accrued')}
-                </Badge>
-              )}
-            </div>
-            <p className="text-muted-foreground text-sm sm:text-base truncate">
-              {t('header_subtitle', {
-                supplier: invoice.supplier?.name ?? '',
-                number: invoice.supplier_invoice_number,
-              })}
-            </p>
+            )}
           </div>
+          <p className="mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
         </div>
 
-        {/* Actions */}
-        <div className="flex flex-wrap gap-2">
-          {/* Attest keys off approved_at, not the status: the overdue cron
-              flips unbooked invoices to 'overdue' just by aging, and gating on
-              'registered' alone left them with no way through attest (#1206). */}
-          {canApproveSupplierInvoice(invoice) && !invoice.is_credit_note && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {/* The supplier's own document, reviewed in the browser (#1190). */}
+          {invoice.document_id && (
+            <DocumentViewButton
+              documentId={invoice.document_id}
+              label={t('view_document')}
+              className="text-[13px]"
+            />
+          )}
+          {canApprove && (
             <Button
               onClick={handleApprove}
               disabled={isProcessing || !canWrite}
@@ -618,61 +707,21 @@ export default function SupplierInvoiceDetailPage() {
               {t('approve')}
             </Button>
           )}
-          {/* Delete is allowed while nothing would be orphaned: no booking, no
-              payments (server re-checks). 'approved'/'overdue' are included
-              because the overdue cron flips unbooked invoices there and a
-              registered-only gate made them undeletable just by aging. */}
-          {['registered', 'approved', 'overdue'].includes(invoice.status) &&
-            !invoice.is_credit_note &&
-            !invoice.registration_journal_entry_id &&
-            payments.length === 0 && (
-              <Button
-                variant="destructive"
-                size="icon"
-                onClick={handleDelete}
-                disabled={isProcessing || !canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-                aria-label={t('delete_confirm_label')}
-              >
-                {processingAction === 'delete' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : canWrite ? (
-                  <Trash2 className="h-4 w-4" />
-                ) : (
-                  <Lock className="h-4 w-4" />
-                )}
-              </Button>
-            )}
-          {['approved', 'overdue', 'partially_paid'].includes(invoice.status) && (
-            <>
-              <Button
-                onClick={() => setIsPayDialogOpen(true)}
-                disabled={isProcessing || !canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {canWrite ? <CreditCard className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t('mark_paid')}
-              </Button>
-              {invoice.status !== 'partially_paid' && (
-                <Button
-                  variant="outline"
-                  onClick={handleCredit}
-                  disabled={isProcessing || !canWrite}
-                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-                >
-                  {processingAction === 'credit' ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : canWrite ? (
-                    <FileText className="mr-2 h-4 w-4" />
-                  ) : (
-                    <Lock className="mr-2 h-4 w-4" />
-                  )}
-                  {t('credit_note_button')}
-                </Button>
-              )}
-            </>
+          {/* Attest gates payment: while attest is still pending, Markera
+              betald steps back to a secondary so the header keeps one next
+              step (an aged-but-unattested invoice can have both). */}
+          {canMarkPaid && (
+            <Button
+              variant={canApprove ? 'outline' : 'default'}
+              onClick={() => setIsPayDialogOpen(true)}
+              disabled={isProcessing || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {canWrite ? <CreditCard className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('mark_paid')}
+            </Button>
           )}
-          {invoice.status === 'credited' && !invoice.is_credit_note && (
+          {canUncredit && (
             <Button
               variant="outline"
               onClick={handleUncredit}
@@ -689,360 +738,288 @@ export default function SupplierInvoiceDetailPage() {
               {t('uncredit_button')}
             </Button>
           )}
+
+          {hasMenu && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label={tCommon('more_options')}>
+                  {processingAction === 'credit' || processingAction === 'delete' ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <MoreHorizontal className="h-4 w-4" />
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[240px]">
+                {canCredit && (
+                  <DropdownMenuItem onSelect={() => void handleCredit()} disabled={isProcessing || !canWrite}>
+                    <FileText className="h-4 w-4" />
+                    {t('credit_note_button')}
+                  </DropdownMenuItem>
+                )}
+                {canDelete && (
+                  <>
+                    {canCredit && <DropdownMenuSeparator />}
+                    <DropdownMenuItem
+                      onSelect={() => void handleDelete()}
+                      disabled={isProcessing || !canWrite}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      {t('delete_confirm_label')}
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
 
-      {/* Credit note banner: explain why this row has no edit/delete affordances and where to undo */}
-      {invoice.is_credit_note && (
-        <div className="rounded-lg border bg-muted/40 p-4 flex gap-3 text-sm">
-          <Info className="h-5 w-5 shrink-0 text-muted-foreground mt-0.5" />
-          <div className="space-y-1">
-            <p className="font-medium">{t('credit_note_banner_title')}</p>
-            <p className="text-muted-foreground">
-              {t('credit_note_banner_prefix')}{' '}
-              {(invoice as SupplierInvoice & { credited_original?: { id: string; supplier_invoice_number: string; arrival_number: number } }).credited_original ? (
-                <Link
-                  href={`/supplier-invoices/${(invoice as SupplierInvoice & { credited_original: { id: string; supplier_invoice_number: string; arrival_number: number } }).credited_original.id}`}
-                  className="text-primary hover:underline font-medium"
-                >
-                  {t('credit_note_banner_link', { number: (invoice as SupplierInvoice & { credited_original: { id: string; supplier_invoice_number: string; arrival_number: number } }).credited_original.supplier_invoice_number })}
+      {/* Leverantör and Fakturainformation side by side like an invoice head:
+          who sent it on the left, the facts on the right. */}
+      <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
+        {invoice.supplier && (
+          <DetailSection kicker={t('supplier_section_title')}>
+            <DefRow label={t('def_name')}>
+              <Link href={`/suppliers/${invoice.supplier.id}`} className="hover:underline">
+                {invoice.supplier.name}
+              </Link>
+            </DefRow>
+            {invoice.supplier.org_number && (
+              <DefRow label={t('def_org_number')}>
+                <span className="tabular-nums">{invoice.supplier.org_number}</span>
+              </DefRow>
+            )}
+            <DefRow label={t('def_email')}>
+              {invoice.supplier.email ? (
+                <a href={`mailto:${invoice.supplier.email}`} className="hover:underline">
+                  {invoice.supplier.email}
+                </a>
+              ) : (
+                <DefEmpty />
+              )}
+            </DefRow>
+          </DetailSection>
+        )}
+
+        <DetailSection
+          kicker={t('invoice_info_title')}
+          // A credit note carries no edit/delete affordances of its own; the
+          // way to undo it lives on the original, explained behind the "?".
+          help={invoice.is_credit_note ? <HelpPopover>{t('credit_note_help')}</HelpPopover> : undefined}
+        >
+          <DefRow label={t('arrival_number_label')}>
+            <span className="tabular-nums">{invoice.arrival_number}</span>
+          </DefRow>
+          <DefRow label={t('invoice_number_label')}>
+            {invoice.supplier_invoice_number || <DefEmpty />}
+          </DefRow>
+          <DefRow label={t('invoice_date_label')}>
+            <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
+          </DefRow>
+          <DefRow label={t('due_date_label')}>
+            <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
+          </DefRow>
+          {invoice.delivery_date && (
+            <DefRow label={t('delivery_date_label')}>
+              <span className="tabular-nums">{formatDate(invoice.delivery_date)}</span>
+            </DefRow>
+          )}
+          {invoice.payment_reference && (
+            <DefRow label={t('ocr_reference_label')}>
+              <span className="tabular-nums">{invoice.payment_reference}</span>
+            </DefRow>
+          )}
+          {invoice.reverse_charge && (
+            <DefRow label={t('vat_label')}>{t('reverse_charge_badge')}</DefRow>
+          )}
+          {/* The invoice a credit note cancels, as a row, not a banner. */}
+          {invoice.is_credit_note && (
+            <DefRow label={t('def_credits')}>
+              {creditedOriginal ? (
+                <Link href={`/supplier-invoices/${creditedOriginal.id}`} className="hover:underline">
+                  {creditedOriginal.supplier_invoice_number
+                    ? t('title_invoice', { number: creditedOriginal.supplier_invoice_number })
+                    : t('arrival_header', { number: creditedOriginal.arrival_number })}
                 </Link>
               ) : (
-                <span>{t('credit_note_banner_original_fallback')}</span>
+                <span className="text-muted-foreground">{t('credit_note_banner_original_fallback')}</span>
               )}
-              {t('credit_note_banner_suffix')}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Invoice details */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('invoice_info_title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('arrival_number_label')}</span>
-              <span className="font-mono">{invoice.arrival_number}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('invoice_number_label')}</span>
-              <span>{invoice.supplier_invoice_number}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('invoice_date_label')}</span>
-              <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('due_date_label')}</span>
-              <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
-            </div>
-            {invoice.delivery_date && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('delivery_date_label')}</span>
-                <span className="tabular-nums">{formatDate(invoice.delivery_date)}</span>
-              </div>
-            )}
-            {invoice.payment_reference && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('ocr_reference_label')}</span>
-                <span className="font-mono">{invoice.payment_reference}</span>
-              </div>
-            )}
-            {invoice.reverse_charge && (
-              <div className="mt-2">
-                <Badge variant="warning">{t('reverse_charge_badge')}</Badge>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('amounts_title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('net_excl_vat')}</span>
-              <span className="tabular-nums">{formatCurrency(invoice.subtotal, invoice.currency)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('vat_label')}</span>
-              <span className="tabular-nums">{formatCurrency(invoice.vat_amount, invoice.currency)}</span>
-            </div>
-            {rounding.applies && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('ore_rounding')}</span>
-                <span className="tabular-nums">{formatCurrency(rounding.roundingDelta, invoice.currency)}</span>
-              </div>
-            )}
-            <div className="flex justify-between font-semibold text-base pt-2 border-t">
-              <span>{t('total_label')}</span>
-              <span className="tabular-nums">{formatCurrency(rounding.displayed, invoice.currency)}</span>
-            </div>
-            <div className="flex justify-between pt-2">
-              <span className="text-muted-foreground">{t('paid_label')}</span>
-              <span className="tabular-nums text-success">{formatCurrency(invoice.paid_amount, invoice.currency)}</span>
-            </div>
-            <div className="flex justify-between font-semibold">
-              <span>{t('remaining_label')}</span>
-              <span className="tabular-nums">{formatCurrency(invoice.remaining_amount, invoice.currency)}</span>
-            </div>
-          </CardContent>
-        </Card>
+            </DefRow>
+          )}
+        </DetailSection>
       </div>
 
-      {/* Supplier info */}
-      {invoice.supplier && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('supplier_section_title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm">
-            <Link href={`/suppliers/${invoice.supplier.id}`} className="text-primary hover:underline font-medium">
-              {invoice.supplier.name}
-            </Link>
-            <div className="text-muted-foreground mt-1">
-              {invoice.supplier.org_number && <span>{t('org_number_inline', { number: invoice.supplier.org_number })}</span>}
-              {invoice.supplier.email}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Line items */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('rows_title')}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {/* Desktop table. The cells carry no horizontal padding of their
-              own, so every column after the first gets a pl-4 gutter: without
-              it a right-aligned column runs flush into the next left-aligned
-              one ("8 985 kr5010", "ANTALENHET"). */}
-          <div className="hidden sm:block">
-            <table className="w-full text-sm">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground [&_th:not(:first-child)]:pl-4">
-                <tr className="border-b text-left">
-                  <th className="pb-2">{t('col_description')}</th>
-                  <th className="pb-2 w-16 text-right">{t('col_quantity')}</th>
-                  <th className="pb-2 w-16">{t('col_unit')}</th>
-                  <th className="pb-2 w-28 text-right">{t('col_unit_price')}</th>
-                  <th className="pb-2 w-20">{t('col_account')}</th>
-                  <th className="pb-2 w-16 text-right">{t('col_vat_rate')}</th>
-                  <th className="pb-2 w-28 text-right">{t('col_amount')}</th>
-                  <th className="pb-2 w-24 text-right">{t('col_vat')}</th>
-                </tr>
-              </thead>
-              <tbody className="[&_td:not(:first-child)]:pl-4">
-                {items.map((item) => (
-                  <tr key={item.id} className="border-b last:border-0">
-                    <td className="py-2">
-                      {item.description}
-                      {itemHasAccrual(item) && (
-                        <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                          <CalendarClock className="h-3 w-3 shrink-0" />
-                          <span className="tabular-nums">
-                            {t('accrual_line_info', {
-                              from: accrualMonth(item.accrual_period_start!),
-                              to: accrualMonth(item.accrual_period_end!),
-                            })}
-                            {item.accrual_balance_account && ` · ${item.accrual_balance_account}`}
-                          </span>
-                        </p>
-                      )}
-                    </td>
-                    <td className="py-2 text-right">{item.quantity}</td>
-                    <td className="py-2">{item.unit}</td>
-                    <td className="py-2 text-right tabular-nums">{formatCurrency(item.unit_price, invoice.currency)}</td>
-                    <td className="py-2"><AccountNumber number={item.account_number} /></td>
-                    <td className="py-2 text-right">{Math.round(item.vat_rate * 100)}%</td>
-                    <td className="py-2 text-right tabular-nums">{formatCurrency(item.line_total, invoice.currency)}</td>
-                    <td className="py-2 text-right tabular-nums">{formatCurrency(item.vat_amount, invoice.currency)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {/* Mobile cards */}
-          <div className="sm:hidden space-y-3">
+      {/* Invoice lines: the list-page table idiom straight on the panel, with
+          the totals as a right-aligned block and the total in the serif. */}
+      <DetailSection kicker={t('rows_title')}>
+        <table className="hidden w-full border-collapse text-[13px] md:table">
+          <thead>
+            <tr>
+              <th className={cn(TH_CLASS, 'pl-0')}>{t('col_description')}</th>
+              <th className={cn(TH_CLASS, 'text-right')}>{t('col_quantity')}</th>
+              <th className={TH_CLASS}>{t('col_unit')}</th>
+              <th className={cn(TH_CLASS, 'text-right')}>{t('col_unit_price')}</th>
+              <th className={TH_CLASS}>{t('col_account')}</th>
+              <th className={cn(TH_CLASS, 'text-right')}>{t('col_vat_rate')}</th>
+              <th className={cn(TH_CLASS, 'text-right')}>{t('col_amount')}</th>
+              <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('col_vat')}</th>
+            </tr>
+          </thead>
+          <tbody>
             {items.map((item) => (
-              <div key={item.id} className="border rounded-lg p-3 space-y-1.5">
-                <div className="font-medium text-sm">{item.description}</div>
-                {itemHasAccrual(item) && (
-                  <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <CalendarClock className="h-3 w-3 shrink-0" />
-                    <span className="tabular-nums">
-                      {t('accrual_line_info', {
-                        from: accrualMonth(item.accrual_period_start!),
-                        to: accrualMonth(item.accrual_period_end!),
-                      })}
-                      {item.accrual_balance_account && ` · ${item.accrual_balance_account}`}
-                    </span>
-                  </p>
-                )}
-                <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <span>{item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}</span>
-                  <span className="tabular-nums">{formatCurrency(item.line_total, invoice.currency)}</span>
-                </div>
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span><AccountNumber number={item.account_number} /> · {t('vat_inline', { rate: Math.round(item.vat_rate * 100) })}</span>
-                  <span className="tabular-nums">{t('vat_amount_inline', { amount: formatCurrency(item.vat_amount, invoice.currency) })}</span>
-                </div>
-              </div>
+              <tr key={item.id}>
+                <td className={cn(TD_CLASS, 'pl-0')}>
+                  {item.description}
+                  {accrualInfo(item)}
+                </td>
+                <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{item.quantity}</td>
+                <td className={cn(TD_CLASS, 'text-muted-foreground')}>{item.unit}</td>
+                <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
+                  {formatCurrency(item.unit_price, invoice.currency)}
+                </td>
+                <td className={TD_CLASS}><AccountNumber number={item.account_number} /></td>
+                <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{Math.round(item.vat_rate * 100)}%</td>
+                <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
+                  {formatCurrency(item.line_total, invoice.currency)}
+                </td>
+                <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
+                  {formatCurrency(item.vat_amount, invoice.currency)}
+                </td>
+              </tr>
             ))}
-          </div>
-        </CardContent>
-      </Card>
+          </tbody>
+        </table>
 
-      {/* Payment history */}
-      {payments.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('payment_history_title')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {/* Desktop table: same non-first-column gutter as the line-item
-                table above ("11 231 krb9da9d7c" otherwise). */}
-            <div className="hidden sm:block">
-              <table className="w-full text-sm">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground [&_th:not(:first-child)]:pl-4">
-                  <tr className="border-b text-left">
-                    <th className="pb-2">{t('col_date')}</th>
-                    <th className="pb-2 text-right">{t('col_amount_short')}</th>
-                    <th className="pb-2">{t('col_voucher')}</th>
-                    <th className="pb-2">{t('col_note')}</th>
-                  </tr>
-                </thead>
-                <tbody className="[&_td:not(:first-child)]:pl-4">
-                  {payments.map((p) => (
-                    <tr key={p.id} className="border-b last:border-0">
-                      <td className="py-2 tabular-nums">{formatDate(p.payment_date)}</td>
-                      <td className="py-2 text-right tabular-nums">{formatCurrency(p.amount, p.currency)}</td>
-                      <td className="py-2">
-                        {p.journal_entry_id ? (
-                          <Link href={`/bookkeeping/${p.journal_entry_id}`} className="text-primary hover:underline font-mono text-xs">
-                            {p.journal_entry_id.substring(0, 8)}...
-                          </Link>
-                        ) : '-'}
-                      </td>
-                      <td className="py-2 text-muted-foreground">{p.notes || '-'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {/* Mobile cards */}
-            <div className="sm:hidden space-y-3">
-              {payments.map((p) => (
-                <div key={p.id} className="border rounded-lg p-3 space-y-1">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="tabular-nums">{formatDate(p.payment_date)}</span>
-                    <span className="font-mono font-medium">{formatCurrency(p.amount, p.currency)}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    {p.journal_entry_id ? (
-                      <Link href={`/bookkeeping/${p.journal_entry_id}`} className="text-primary hover:underline font-mono">
-                        {p.journal_entry_id.substring(0, 8)}...
-                      </Link>
-                    ) : <span>-</span>}
-                    <span>{p.notes || ''}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {invoice.document_id && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('document_title')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Paperclip className="h-4 w-4 shrink-0" />
-                <span>{t('document_attached')}</span>
+        {/* Narrow screens: one flat row per line, no numeric columns to cram. */}
+        <div className="divide-y divide-border text-sm md:hidden">
+          {items.map((item) => (
+            <div key={item.id} className="flex items-start justify-between gap-4 py-3">
+              <div className="min-w-0">
+                <p>{item.description}</p>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}
+                </p>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  <AccountNumber number={item.account_number} />
+                  {' · '}{t('vat_inline', { rate: Math.round(item.vat_rate * 100) })}
+                  {' · '}{t('vat_amount_inline', { amount: formatCurrency(item.vat_amount, invoice.currency) })}
+                </p>
+                {accrualInfo(item)}
               </div>
-              <DocumentViewButton
-                documentId={invoice.document_id}
-                label={t('view_document')}
-              />
+              <span className="shrink-0 tabular-nums">
+                {formatCurrency(item.line_total, invoice.currency)}
+              </span>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          ))}
+        </div>
 
-      {/* Journal entries (sambandskrav) */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('vouchers_title')}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm">
-          {invoice.registration_journal_entry_id ? (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('registration_voucher')}</span>
-              <Link
-                href={`/bookkeeping/${invoice.registration_journal_entry_id}`}
-                className="text-primary hover:underline font-mono"
-              >
-                {invoice.registration_journal_entry_id.substring(0, 8)}...
-              </Link>
+        <div className="ml-auto mt-4 w-full max-w-xs space-y-1 text-sm tabular-nums">
+          <div className="flex justify-between gap-4">
+            <span className="text-muted-foreground">{t('net_excl_vat')}</span>
+            <span>{formatCurrency(invoice.subtotal, invoice.currency)}</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span className="text-muted-foreground">{t('vat_label')}</span>
+            <span>{formatCurrency(invoice.vat_amount, invoice.currency)}</span>
+          </div>
+          {rounding.applies && (
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">{t('ore_rounding')}</span>
+              <span>{formatCurrency(rounding.roundingDelta, invoice.currency)}</span>
             </div>
-          ) : companySettings?.accounting_method === 'accrual' &&
-            !invoice.is_credit_note &&
-            ['registered', 'approved', 'overdue'].includes(invoice.status) ? (
-            // #967: registered-without-booking (deferred booking). Ekonomi
-            // books the registration verifikat from here.
-            <div className="flex items-center justify-between gap-3">
+          )}
+          <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2">
+            <span>{t('total_label')}</span>
+            <span className="font-display text-xl">{formatCurrency(rounding.displayed, invoice.currency)}</span>
+          </div>
+        </div>
+      </DetailSection>
+
+      {/* Payment: paid / remaining always, plus the payment events once any
+          exist, so a partly paid invoice exposes what is still open. */}
+      <DetailSection kicker={t('payment_section')}>
+        <DefRow label={t('paid_label')}>
+          <span className="tabular-nums">{formatCurrency(invoice.paid_amount, invoice.currency)}</span>
+        </DefRow>
+        <DefRow label={t('remaining_label')}>
+          <span className={cn('tabular-nums', invoice.status === 'partially_paid' && 'text-attn')}>
+            {formatCurrency(invoice.remaining_amount, invoice.currency)}
+          </span>
+        </DefRow>
+        {payments.length > 0 && (
+          <DefRow label={t('payment_history_title')} className="items-baseline">
+            <ul className="divide-y divide-border">
+              {payments.map((p) => (
+                <li key={p.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 first:pt-0 last:pb-0">
+                  <span className="tabular-nums text-muted-foreground">{formatDate(p.payment_date)}</span>
+                  <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
+                  {p.notes && <span className="min-w-0 truncate text-muted-foreground">{p.notes}</span>}
+                  {p.journal_entry_id && (
+                    <Link
+                      href={`/bookkeeping/${p.journal_entry_id}`}
+                      className="ml-auto text-xs text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      {t('view_voucher')}
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </DefRow>
+        )}
+      </DetailSection>
+
+      {/* Verifikat and underlag (sambandskrav): the booking this invoice
+          produced, and the supplier's document it rests on. */}
+      <DetailSection kicker={t('vouchers_title')}>
+        <DefRow label={t('registration_voucher')}>
+          {invoice.registration_journal_entry_id ? (
+            <Link href={`/bookkeeping/${invoice.registration_journal_entry_id}`} className="hover:underline">
+              {t('view_voucher')}
+            </Link>
+          ) : canBookAfterwards ? (
+            <span className="flex flex-wrap items-center gap-3">
               <span className="text-muted-foreground">{t('not_booked_yet')}</span>
               <Button
                 size="sm"
+                variant="outline"
+                className="-my-1"
                 onClick={handleBook}
                 disabled={isProcessing || !canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {processingAction === 'book' ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : canWrite ? (
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                ) : (
+                ) : !canWrite ? (
                   <Lock className="mr-2 h-4 w-4" />
-                )}
+                ) : null}
                 {t('book_action')}
               </Button>
-            </div>
+            </span>
           ) : (
-            <p className="text-muted-foreground">{t('no_registration_voucher')}</p>
+            <span className="text-muted-foreground">{t('no_registration_voucher')}</span>
           )}
-          {invoice.payment_journal_entry_id && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('payment_voucher')}</span>
-              <Link
-                href={`/bookkeeping/${invoice.payment_journal_entry_id}`}
-                className="text-primary hover:underline font-mono"
-              >
-                {invoice.payment_journal_entry_id.substring(0, 8)}...
-              </Link>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        </DefRow>
+        {invoice.payment_journal_entry_id && (
+          <DefRow label={t('payment_voucher')}>
+            <Link href={`/bookkeeping/${invoice.payment_journal_entry_id}`} className="hover:underline">
+              {t('view_voucher')}
+            </Link>
+          </DefRow>
+        )}
+        {invoice.document_id && (
+          <DefRow label={t('document_title')}>
+            <span className="text-muted-foreground">{t('document_attached')}</span>
+          </DefRow>
+        )}
+      </DetailSection>
 
-      {/* Notes */}
       {invoice.notes && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('notes_title')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">{invoice.notes}</p>
-          </CardContent>
-        </Card>
+        <DetailSection kicker={t('notes_title')}>
+          <p className="py-2 text-sm text-muted-foreground whitespace-pre-wrap">{invoice.notes}</p>
+        </DetailSection>
       )}
 
       <DestructiveConfirmDialog {...confirmDialogProps} />

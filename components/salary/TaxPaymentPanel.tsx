@@ -2,15 +2,17 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { DetailSection, DefRow } from '@/components/ui/detail-section'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Download, Loader2, CheckCircle2, ExternalLink } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { postAction } from '@/lib/browser/post-action'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatDateTime } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 
 interface TaxPaymentPanelProps {
@@ -128,93 +130,73 @@ export function TaxPaymentPanel({
   if (totalAmount <= 0) return null
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{t('tax_title')}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
-          <div>
-            <p className="text-xs text-muted-foreground">{t('tax_label_tax')}</p>
-            <p className="font-semibold tabular-nums">{formatCurrency(totalTax)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t('tax_label_avgifter')}</p>
-            <p className="font-semibold tabular-nums">{formatCurrency(totalAvgifter)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">{t('tax_label_total')}</p>
-            <p className="font-semibold tabular-nums">{formatCurrency(totalAmount)}</p>
-          </div>
-        </div>
-
-        <div className="text-sm text-muted-foreground space-y-1">
-          <p>
-            {t('tax_recipient')} <span className="text-foreground">{t('tax_recipient_value')}</span>
-          </p>
-          <p>
-            {t('tax_due_date')} <span className="text-foreground tabular-nums">{paymentDeadline}</span>
-          </p>
-          <p className="text-xs">
-            {t('tax_ocr_note')}
-          </p>
-        </div>
-
+    <DetailSection
+      kicker={t('tax_title')}
+      help={<HelpPopover>{t('tax_ocr_note')}</HelpPopover>}
+      aside={
+        !readOnly ? (
+          // Quiet action on the kicker line: the skattekonto at Skatteverket
+          // is where the payment lands, not something this page does.
+          <a
+            href="https://www.skatteverket.se/foretag/skatterochavdrag/skattekonto.4.18e1b10334ebe8bc80004481.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(QUIET_LINK_CLASS, 'inline-flex items-center gap-1')}
+          >
+            {t('tax_skattekonto_button')}
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        ) : undefined
+      }
+    >
+      <div>
+        <DefRow label={t('tax_label_tax')}>
+          <span className="tabular-nums">{formatCurrency(totalTax)}</span>
+        </DefRow>
+        <DefRow label={t('tax_label_avgifter')}>
+          <span className="tabular-nums">{formatCurrency(totalAvgifter)}</span>
+        </DefRow>
+        <DefRow label={t('tax_label_total')}>
+          <span className="font-medium tabular-nums">{formatCurrency(totalAmount)}</span>
+        </DefRow>
+        <DefRow label={t('tax_recipient')}>{t('tax_recipient_value')}</DefRow>
+        <DefRow label={t('tax_due_date')}>
+          <span className="tabular-nums">{paymentDeadline}</span>
+        </DefRow>
         {paymentFileGeneratedAt && (
-          <div className="flex items-start gap-2 text-sm text-muted-foreground">
-            <CheckCircle2 className="h-4 w-4 mt-0.5 text-success" />
-            <div>
-              {t('tax_file_generated')}{' '}
-              <span className="text-foreground">
-                {new Date(paymentFileGeneratedAt).toLocaleString('sv-SE')}
-              </span>
-            </div>
-          </div>
+          <DefRow label={t('tax_file_generated')}>
+            <span className="tabular-nums">{formatDateTime(paymentFileGeneratedAt)}</span>
+          </DefRow>
         )}
-
         {taxPaidAt && (
-          <div className="flex items-start gap-2 text-sm text-success">
-            <CheckCircle2 className="h-4 w-4 mt-0.5" />
-            <div>
-              {t('tax_marked_paid')}{' '}
-              <span className="font-medium">{new Date(taxPaidAt).toLocaleString('sv-SE')}</span>
-            </div>
-          </div>
+          <DefRow label={t('tax_marked_paid')}>
+            <span className="tabular-nums">{formatDateTime(taxPaidAt)}</span>
+          </DefRow>
         )}
+      </div>
 
-        {!readOnly && (
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="outline" size="sm" asChild>
-              <a
-                href="https://www.skatteverket.se/foretag/skatterochavdrag/skattekonto.4.18e1b10334ebe8bc80004481.html"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <ExternalLink className="mr-2 h-4 w-4" />
-                {t('tax_skattekonto_button')}
-              </a>
-            </Button>
-            <Button onClick={handleDownload} disabled={downloading || marking}>
-              {downloading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="mr-2 h-4 w-4" />
-              )}
-              {t('tax_download_button')}
-            </Button>
-            {!taxPaidAt && (
-              <Button
-                variant="outline"
-                onClick={handleMarkPaid}
-                disabled={downloading || marking}
-              >
-                {marking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-                {t('tax_mark_paid_button')}
-              </Button>
+      {!readOnly && (
+        <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <Button onClick={handleDownload} disabled={downloading || marking}>
+            {downloading ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="mr-2 h-4 w-4" />
             )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+            {t('tax_download_button')}
+          </Button>
+          {!taxPaidAt && (
+            <Button
+              variant="outline"
+              onClick={handleMarkPaid}
+              disabled={downloading || marking}
+            >
+              {marking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+              {t('tax_mark_paid_button')}
+            </Button>
+          )}
+        </div>
+      )}
+    </DetailSection>
   )
 }
