@@ -231,9 +231,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // `.select('id')` so the inserted transactions can be stamped with the
       // batch id (transactions.bank_file_import_id): the scope key for the
       // owner/admin "undo this import" action. A missing id (upsert error) is
-      // non-fatal: the import proceeds, its rows just stay unlinked, exactly
-      // like a pre-20260820071500 import.
-      const { data: importRow } = await ctx.supabase
+      // non-fatal BY DESIGN: the import proceeds, its rows just stay
+      // unlinked, exactly like a pre-20260820071500 import. Without the row
+      // the batch never appears in the undo history, so nothing falsely
+      // advertises undo for it — but the failure is logged loudly, since an
+      // unattributed batch is permanently exempt from bulk undo.
+      const { data: importRow, error: importRowError } = await ctx.supabase
         .from('bank_file_imports')
         .upsert(
           {
@@ -251,6 +254,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         )
         .select('id')
         .maybeSingle()
+
+      if (importRowError || !importRow?.id) {
+        ctx.log.warn('bank_file_imports upsert failed: batch will import without undo attribution', {
+          filename: file.name,
+          fileHash,
+          error: importRowError?.message ?? 'no row returned',
+        })
+      }
 
       // Convert parsed transactions to the RawTransaction shape that
       // ingestTransactions expects. external_id stays stable so re-imports

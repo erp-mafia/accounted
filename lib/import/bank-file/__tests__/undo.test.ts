@@ -29,7 +29,12 @@ describe('undoBankFileImport', () => {
   })
 
   it('fails with the notFound flag, without calling the RPC, when the import is not found', async () => {
-    enqueue({ data: null, error: { message: 'not found' } })
+    // PGRST116 is PostgREST's ".single() matched zero rows": the one error
+    // code that positively means the row does not exist.
+    enqueue({
+      data: null,
+      error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' },
+    })
 
     const result = await undoBankFileImport(client, 'company-1', 'import-1', 'user-1')
 
@@ -37,6 +42,22 @@ describe('undoBankFileImport', () => {
     // The route maps this to 404 BANK_FILE_UNDO_NOT_FOUND (not the generic 400).
     expect(result.notFound).toBe(true)
     expect(result.error).toBe('Importen hittades inte')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('reports a non-PGRST116 lookup failure as an error, never as notFound (fail closed)', async () => {
+    enqueue({
+      data: null,
+      error: { code: '57014', message: 'canceling statement due to statement timeout' },
+    })
+
+    const result = await undoBankFileImport(client, 'company-1', 'import-1', 'user-1')
+
+    expect(result.success).toBe(false)
+    // A transient fault must not become a permanent-looking 404.
+    expect(result.notFound).toBeUndefined()
+    expect(result.error).toMatch(/Kunde inte läsa importen/)
+    expect(result.error).toMatch(/statement timeout/)
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
 

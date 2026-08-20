@@ -53,12 +53,19 @@ export async function undoBankFileImport(
 ): Promise<UndoBankFileImportResult> {
   // Validate against the RLS-scoped session client BEFORE escalating to the
   // service client: a caller outside the company sees no row and stops here.
-  const { data: importRecord } = await supabase
+  const { data: importRecord, error: lookupError } = await supabase
     .from('bank_file_imports')
     .select('id, status')
     .eq('id', importId)
     .eq('company_id', companyId)
     .single()
+
+  // Only PGRST116 (.single() found zero rows) means "does not exist". Any
+  // other error leaves the row's existence UNKNOWN; reporting it as a 404
+  // would tell the caller a retryable fault is permanent.
+  if (lookupError && lookupError.code !== 'PGRST116') {
+    return { ...FAILED, error: `Kunde inte läsa importen: ${lookupError.message}` }
+  }
 
   if (!importRecord) {
     return { ...FAILED, notFound: true, error: 'Importen hittades inte' }

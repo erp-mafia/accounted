@@ -15,6 +15,7 @@ import {
   createMockRouteParams,
   parseJsonResponse,
 } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
@@ -51,6 +52,7 @@ const makeImportRow = (overrides: Record<string, unknown> = {}) => ({
 describe('GET /api/import/bank-file', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
   })
@@ -111,6 +113,47 @@ describe('GET /api/import/bank-file', () => {
     expect(body.offset).toBe(10)
     expect(findCalls('bank_file_imports', 'eq')).toContainEqual(['status', 'completed'])
     expect(findCalls('bank_file_imports', 'range')).toContainEqual([10, 14])
+  })
+
+  it.each([
+    { name: 'non-numeric limit', searchParams: { limit: 'abc' } },
+    { name: 'partial-integer limit', searchParams: { limit: '12abc' } },
+    { name: 'negative limit', searchParams: { limit: '-1' } },
+    { name: 'zero limit', searchParams: { limit: '0' } },
+    { name: 'limit above the cap', searchParams: { limit: '101' } },
+    { name: 'negative offset', searchParams: { offset: '-5' } },
+    { name: 'non-numeric offset', searchParams: { offset: 'NaN' } },
+    { name: 'unknown status', searchParams: { status: 'sabotage' } },
+  ])('returns a mapped 400 for $name', async ({ searchParams }) => {
+    const response = await GET(
+      createMockRequest('/api/import/bank-file', { searchParams }),
+      staticParams(),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BANK_FILE_LIST_INVALID_QUERY')
+    // Invalid input must never reach the query builder.
+    expect(findCalls('bank_file_imports', 'range')).toEqual([])
+  })
+
+  it('accepts the boundary values limit=1, limit=100 and offset=0', async () => {
+    enqueue({ data: [], count: 0 })
+    enqueue({ data: [], count: 0 })
+
+    const min = await GET(
+      createMockRequest('/api/import/bank-file', { searchParams: { limit: '1', offset: '0' } }),
+      staticParams(),
+    )
+    expect(min.status).toBe(200)
+
+    const max = await GET(
+      createMockRequest('/api/import/bank-file', { searchParams: { limit: '100' } }),
+      staticParams(),
+    )
+    expect(max.status).toBe(200)
+    expect(findCalls('bank_file_imports', 'range')).toContainEqual([0, 0])
+    expect(findCalls('bank_file_imports', 'range')).toContainEqual([0, 99])
   })
 
   it('returns 500 with a Swedish error message on a database error', async () => {
