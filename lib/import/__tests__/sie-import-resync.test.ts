@@ -14,12 +14,14 @@
  *      component, not testable here).
  *
  * The fix: findOverlappingPeriodImports returns ALL overlapping completed
- * rows newest-first; replace mode resolves every row and treats an
- * unresolvable row (not_found / not_completed) as a stale watermark: warn
- * and continue as a fresh import. Genuine refusals (locked period, RPC
- * errors) still abort.
+ * rows newest-first (failing closed on query errors); replace mode resolves
+ * every row and treats an unresolvable row (not_found / not_completed) as a
+ * stale watermark: warn and continue as a fresh import — but only after
+ * positively confirming no posted import entries survive in the year, since
+ * replace_sie_import deletes by fiscal period and entries can outlive their
+ * sie_imports row. Genuine refusals (locked period, RPC errors) still abort.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   executeSIEImport,
   replaceSIEImport,
@@ -27,8 +29,14 @@ import {
   findOverlappingPeriodImports,
 } from '../sie-import'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 import type { ParsedSIEFile, AccountMapping } from '../types'
 import type { SupabaseClient } from '@supabase/supabase-js'
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  eventBus.clear()
+})
 
 function makeParsedFile(overrides?: Partial<ParsedSIEFile>): ParsedSIEFile {
   return {
@@ -149,7 +157,19 @@ describe('findOverlappingPeriodImports', () => {
     expect(orderCalls).toEqual([
       ['imported_at', { ascending: false, nullsFirst: false }],
       ['created_at', { ascending: false }],
+      ['id', { ascending: false }],
     ])
+  })
+
+  it('throws on a query error instead of returning [] (fail closed)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { message: 'connection reset' } })
+
+    await expect(
+      findOverlappingPeriodImports(
+        supabase as unknown as SupabaseClient, 'company-1', '2025-01-01', '2025-12-31'
+      )
+    ).rejects.toThrow(/connection reset/)
   })
 })
 
@@ -333,6 +353,7 @@ describe('executeSIEImport replace mode: re-sync after deletion (issue #1667)', 
     enqueueMany([
       { data: [makePriorImportRow({ id: 'imp-stale' })] }, // findOverlappingPeriodImports
       { data: null }, // replaceSIEImport fetch: row gone (deleted between the two queries)
+      { data: null, count: 0 }, // survivor guard: no posted import entries remain
       { data: null }, // cleanupStaleImportRecords delete
       { data: { id: 'imp-created' } }, // pending sie_imports insert
       { data: [] }, // chart fetch
@@ -358,6 +379,56 @@ describe('executeSIEImport replace mode: re-sync after deletion (issue #1667)', 
     const rpcCalls = (supabase.rpc.mock.calls as [string][])
       .filter(([fn]) => fn === 'replace_sie_import')
     expect(rpcCalls).toHaveLength(0)
+  })
+
+  it('aborts when posted import entries survive a stale watermark, instead of duplicating them', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makePriorImportRow({ id: 'imp-stale' })] }, // findOverlappingPeriodImports
+      { data: null }, // replaceSIEImport fetch: metadata row gone
+      { data: null, count: 42 }, // survivor guard: 42 posted import entries REMAIN in the year
+    ])
+
+    const result = await executeSIEImport(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      makeParsedFile(),
+      mappings,
+      importOptions,
+    )
+
+    // The metadata row is gone but its verifikationer are not: importing
+    // fresh would duplicate them (BFL 4:1), so the year aborts.
+    expect(result.success).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/42 kvarvarande verifikationer/)
+    expect(result.importId).toBeNull()
+  })
+
+  it('aborts when the survivor check itself fails, instead of assuming zero survivors', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makePriorImportRow({ id: 'imp-stale' })] }, // findOverlappingPeriodImports
+      { data: null }, // replaceSIEImport fetch: metadata row gone
+      {
+        data: null,
+        count: null,
+        error: { message: 'canceling statement due to statement timeout' },
+      }, // survivor guard query fails: survivor state UNKNOWN
+    ])
+
+    const result = await executeSIEImport(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      makeParsedFile(),
+      mappings,
+      importOptions,
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/Kunde inte verifiera att tidigare importdata är borttagen/)
+    expect(result.importId).toBeNull()
   })
 
   it('aborts the year when the replace pre-check query fails, instead of importing fresh', async () => {

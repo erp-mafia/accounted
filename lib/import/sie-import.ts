@@ -32,6 +32,7 @@ import {
 // Re-export from the parser (moved there to avoid an import cycle:
 // getEffectiveOpeningBalances needs it) so existing importers keep working.
 export { isBalanceSheetAccount } from './sie-parser'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
@@ -153,17 +154,27 @@ export async function findOverlappingPeriodImports(
   // Range overlap check: start <= other_end AND end >= other_start.
   // Two imports whose räkenskapsår overlap would produce duplicate
   // verifikationer, violating BFL 4:1 (löpande bokföring).
-  const { data } = await supabase
-    .from('sie_imports')
-    .select('*')
-    .eq('company_id', companyId)
-    .eq('status', 'completed')
-    .lte('fiscal_year_start', fiscalYearEnd)
-    .gte('fiscal_year_end', fiscalYearStart)
-    .order('imported_at', { ascending: false, nullsFirst: false })
-    .order('created_at', { ascending: false })
-
-  return (data ?? []) as SIEImport[]
+  //
+  // fetchAllRows throws on any query error: a swallowed error here would
+  // return [] and let replace mode import fresh on top of rows it never
+  // resolved. It also pages past PostgREST's row cap, and the id tiebreak
+  // keeps the pagination order total.
+  const rows = await fetchAllRows<SIEImport>(
+    ({ from, to }) =>
+      supabase
+        .from('sie_imports')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('status', 'completed')
+        .lte('fiscal_year_start', fiscalYearEnd)
+        .gte('fiscal_year_end', fiscalYearStart)
+        .order('imported_at', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(from, to),
+    { dedupeBy: (r) => r.id }
+  )
+  return rows
 }
 
 /**
@@ -315,6 +326,11 @@ export async function replaceSIEImport(
     // The RPC re-checks status inside its transaction; a row that lost the
     // race between our pre-check and the RPC surfaces here as "not found or
     // not in completed status": classify it as the stale watermark it is.
+    // CONTRACT: this regex must match the RAISE EXCEPTION wording in
+    // replace_sie_import (supabase/migrations/*replace_sie_import*.sql).
+    // If that wording changes without this regex, a genuine stale race is
+    // reclassified as rpc_error — which fails closed (the import aborts),
+    // never open.
     const staleRace = /not found or not in completed status/i.test(rpcError.message)
     return {
       success: false,
@@ -2071,6 +2087,7 @@ export async function executeSIEImport(
         )
         let replacedNewestId: string | null = null
         let replacedDeletedEntries = 0
+        let staleSkips = 0
         for (const priorPeriodImport of priorPeriodImports) {
           // Pass the authorising user: this path often runs on an API-key /
           // MCP client where auth.uid() is NULL, and the replace_sie_import
@@ -2087,6 +2104,7 @@ export async function executeSIEImport(
             // user between states (issue #1667: re-sync could not re-import
             // an earlier fiscal year after deletion).
             if (replaceResult.code === 'not_found' || replaceResult.code === 'not_completed') {
+              staleSkips += 1
               result.warnings.push(
                 `Tidigare import ${priorPeriodImport.id} kunde inte ersättas (${replaceResult.error ?? 'okänd orsak'}): dess data är redan borttagen, importen fortsätter som ny import.`
               )
@@ -2123,6 +2141,35 @@ export async function executeSIEImport(
               .eq('id', priorPeriodImport.fiscal_period_id)
               .eq('company_id', companyId)
               .eq('opening_balance_entry_id', priorPeriodImport.opening_balance_entry_id)
+          }
+        }
+        // A stale watermark (not_found / not_completed) only proves the
+        // sie_imports METADATA row is gone: replace_sie_import deletes
+        // entries by (company, fiscal_period, source_type='import'), so
+        // posted entries can outlive their import row. Before trusting the
+        // skip, positively confirm the year holds no surviving posted
+        // import entries — importing on top of survivors would duplicate
+        // verifikationer (BFL 4:1). Fail closed on a failed check.
+        if (staleSkips > 0) {
+          const { count: survivorCount, error: survivorError } = await supabase
+            .from('journal_entries')
+            .select('id', { count: 'exact', head: true })
+            .eq('company_id', companyId)
+            .eq('source_type', 'import')
+            .eq('status', 'posted')
+            .gte('entry_date', fyStart)
+            .lte('entry_date', fyEnd)
+          if (survivorError || typeof survivorCount !== 'number') {
+            result.errors.push(
+              `Kunde inte verifiera att tidigare importdata är borttagen: ${survivorError?.message ?? 'okänt fel'}. Importen avbryts.`
+            )
+            return result
+          }
+          if (survivorCount > 0) {
+            result.errors.push(
+              `Räkenskapsåret har ${survivorCount} kvarvarande verifikationer från en tidigare import vars importpost saknas. Importen avbryts för att undvika dubbletter (BFL 4:1). Ta bort de kvarvarande verifikationerna först.`
+            )
+            return result
           }
         }
         if (replacedNewestId) {
