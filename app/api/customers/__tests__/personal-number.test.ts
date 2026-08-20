@@ -6,27 +6,29 @@ import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnum
 
 const captured: { insert: unknown[]; update: unknown[] } = { insert: [], update: [] }
 let queryResult: { data: unknown; error: unknown } = { data: null, error: null }
+let queryResultsByTable: Record<string, { data: unknown; error: unknown }> = {}
 
-const buildChain = (): unknown =>
+const buildChain = (table: string): unknown =>
   new Proxy(
     {},
     {
       get(_target, prop) {
         if (prop === 'then') {
-          return (resolve: (value: unknown) => void) => resolve(queryResult)
+          return (resolve: (value: unknown) => void) =>
+            resolve(queryResultsByTable[table] ?? queryResult)
         }
         return (...args: unknown[]) => {
           if (prop === 'insert') captured.insert.push(args[0])
           if (prop === 'update') captured.update.push(args[0])
-          return buildChain()
+          return buildChain(table)
         }
       },
     },
   )
 
 const supabase = {
-  from: vi.fn(() => buildChain()),
-  rpc: vi.fn(() => buildChain()),
+  from: vi.fn((table: string) => buildChain(table)),
+  rpc: vi.fn(() => buildChain('rpc')),
 }
 
 const requireAuthMock = vi.fn()
@@ -49,7 +51,11 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 import { POST } from '../route'
 import { PATCH } from '../[id]/route'
 
-type CustomerWrite = { org_number?: string | null; personal_number?: string | null }
+type CustomerWrite = {
+  org_number?: string | null
+  personal_number?: string | null
+  default_payment_terms?: number
+}
 
 // Synthetic personnummer, never a real one.
 const PERSONAL_NUMBER = '19900101-1234'
@@ -79,6 +85,7 @@ describe('personal_number on customer routes', () => {
     captured.insert.length = 0
     captured.update.length = 0
     queryResult = { data: null, error: null }
+    queryResultsByTable = {}
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
     requireWriteMock.mockResolvedValue({ ok: true })
   })
@@ -189,6 +196,32 @@ describe('personal_number on customer routes', () => {
     }>(response)
     expect(body.data.org_number).toBeNull()
     expect(body.data.personal_number).toBe(MASKED)
+  })
+
+  it('inherits the company invoice payment terms when create omits them', async () => {
+    queryResultsByTable = {
+      company_settings: { data: { invoice_default_days: 10 }, error: null },
+      customers: {
+        data: {
+          id: 'customer-1',
+          name: 'Acme AB',
+          customer_type: 'swedish_business',
+          default_payment_terms: 10,
+        },
+        error: null,
+      },
+    }
+
+    const response = await POST(
+      createMockRequest('/api/customers', {
+        method: 'POST',
+        body: { name: 'Acme AB', customer_type: 'swedish_business' },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(200)
+    expect((captured.insert[0] as CustomerWrite).default_payment_terms).toBe(10)
   })
 
   it('returns 400 when individual identifier fields conflict', async () => {

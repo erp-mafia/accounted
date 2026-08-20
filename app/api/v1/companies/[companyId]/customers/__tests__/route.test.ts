@@ -51,7 +51,9 @@ import {
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
-function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: unknown }>) {
+function makeFlexibleSupabase(
+  byTable: Record<string, { data?: unknown; error?: unknown; count?: number }>,
+) {
   // Records insert/update payloads and .select() projection strings so
   // tests can assert what the route writes and which columns it fetches.
   const captured: {
@@ -488,6 +490,35 @@ describe('POST /api/v1/companies/:companyId/customers', () => {
     expect(res.status).toBe(201)
     const body = await res.json()
     expect(body.data.name).toBe('New Co AB')
+  })
+
+  it('inherits company invoice payment terms when the request omits them', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      company_settings: { data: { invoice_default_days: 10 }, error: null },
+      customers: {
+        data: { ...SAMPLE_CUSTOMER, name: 'New Co AB', default_payment_terms: 10 },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'New Co AB',
+        customer_type: 'swedish_business',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(
+      (supabaseMock.captured.insert[0] as { default_payment_terms: number })
+        .default_payment_terms,
+    ).toBe(10)
+    const body = await res.json()
+    expect(body.data.default_payment_terms).toBe(10)
   })
 
   it('masks a legacy individual org_number as personal_number on detail', async () => {

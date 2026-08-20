@@ -208,6 +208,33 @@ describe('POST /api/v1/companies/:companyId/customers/bulk-create', () => {
     expect(insertedCustomer).toBe(false)
   })
 
+  it('inherits company payment terms per omitted item and preserves explicit values', async () => {
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      company_settings: { data: { invoice_default_days: 10 }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await bulkCreate(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/bulk-create?dry_run=true`,
+        {
+          customers: [SAMPLE('Inherited AB'), { ...SAMPLE('Explicit AB'), default_payment_terms: 14 }],
+        },
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const results = body.data.preview.results
+    expect(results[0].data.preview.default_payment_terms).toBe(10)
+    expect(results[1].data.preview.default_payment_terms).toBe(14)
+    expect(
+      supabaseMock.from.mock.calls.filter((call) => call[0] === 'company_settings'),
+    ).toHaveLength(1)
+  })
+
   it('dry-run normalizes legacy individual org_number and returns only a mask', async () => {
     const supabaseMock = makeFlexibleSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },

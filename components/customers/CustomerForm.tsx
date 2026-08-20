@@ -31,12 +31,14 @@ interface CustomerFormProps {
   onSubmit: (data: CreateCustomerInput) => Promise<void>
   isLoading: boolean
   initialData?: Partial<CreateCustomerInput>
+  defaultPaymentTerms?: number
 }
 
 export default function CustomerForm({
   onSubmit,
   isLoading,
   initialData,
+  defaultPaymentTerms = 30,
 }: CustomerFormProps) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -128,7 +130,7 @@ export default function CustomerForm({
       vat_number: initialData?.vat_number || '',
       personal_number: initialData?.personal_number || '',
       language: initialData?.language || 'sv',
-      default_payment_terms: initialData?.default_payment_terms || 30,
+      default_payment_terms: initialData?.default_payment_terms ?? defaultPaymentTerms,
       notes: initialData?.notes || '',
     },
   })

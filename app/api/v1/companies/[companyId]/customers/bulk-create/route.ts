@@ -19,13 +19,17 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
 import type { Customer } from '@/types'
 import { resolveCustomerIdentifiers } from '@/lib/customers/identifiers'
+import {
+  FALLBACK_CUSTOMER_PAYMENT_TERMS,
+  resolveDefaultCustomerPaymentTerms,
+} from '@/lib/customers/payment-terms'
 import {
   encryptCustomerPersonalNumber,
   maskCustomerIdentifiers,
@@ -78,6 +82,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory and covers the WHOLE batch. A retried bulk-create returns the cached full response: it does not retry only the failed items.',
     'Passing all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist; omit the flag or pass false.',
     'org_number uniqueness is enforced at the DB level: items with duplicates fail individually with CUSTOMER_DUPLICATE_ORG_NUMBER.',
+    'Items without default_payment_terms inherit the company invoice setting. An explicit item value overrides it.',
     'VIES validation for eu_business customers is best-effort per item; a VIES timeout leaves vat_number_validated=false but does NOT fail the item.',
   ],
   example: {
@@ -120,6 +125,7 @@ async function createOneCustomer(
   userId: string,
   index: number,
   input: z.infer<typeof CreateCustomerSchema>,
+  companyDefaultPaymentTerms: number,
   dryRun: boolean,
   log: Logger,
 ): Promise<ResultItem> {
@@ -159,7 +165,7 @@ async function createOneCustomer(
           personal_number: identifiers.data.personalNumber,
           vat_number: input.vat_number ?? null,
           vat_number_validated: false,
-          default_payment_terms: input.default_payment_terms ?? 30,
+          default_payment_terms: input.default_payment_terms ?? companyDefaultPaymentTerms,
           notes: input.notes ?? null,
           archived_at: null,
           created_at: null,
@@ -209,7 +215,7 @@ async function createOneCustomer(
       vat_number: input.vat_number ?? null,
       vat_number_validated: vatValidated,
       vat_number_validated_at: vatValidatedAt,
-      default_payment_terms: input.default_payment_terms ?? 30,
+      default_payment_terms: input.default_payment_terms ?? companyDefaultPaymentTerms,
       notes: input.notes ?? null,
     })
     .select(CUSTOMER_RESPONSE_COLUMNS)
@@ -317,6 +323,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
+    let companyDefaultPaymentTerms = FALLBACK_CUSTOMER_PAYMENT_TERMS
+    if (body.customers.some((customer) => customer.default_payment_terms === undefined)) {
+      try {
+        companyDefaultPaymentTerms = await resolveDefaultCustomerPaymentTerms(
+          ctx.supabase,
+          ctx.companyId!,
+        )
+      } catch (error) {
+        return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
+      }
+    }
+
     // Sequential processing: matches /invoices/bulk-create. VIES has its own
     // upstream throughput limits; running a batch of 50 in parallel can trip
     // them. The 50-item cap keeps the worst-case latency bounded.
@@ -328,6 +346,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         ctx.userId,
         i,
         body.customers[i],
+        companyDefaultPaymentTerms,
         ctx.dryRun,
         ctx.log,
       )

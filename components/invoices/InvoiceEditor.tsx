@@ -391,6 +391,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [, setDefaultNotes] = useState<string | null>(null)
   const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false)
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
+  const [customerDefaultPaymentTerms, setCustomerDefaultPaymentTerms] = useState<number | null>(
+    null,
+  )
   const [hasBankDetails, setHasBankDetails] = useState<boolean | null>(null)
   const [showBankSetup, setShowBankSetup] = useState(false)
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
@@ -609,6 +612,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   useEffect(() => {
     if (!company?.id) return
+    setCustomerDefaultPaymentTerms(null)
     fetchCustomers()
     fetchDefaultNotes()
     fetchArticles()
@@ -917,7 +921,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (!company?.id) return
     const { data } = await supabase
       .from('company_settings')
-      .select('invoice_default_notes, default_our_reference, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url, vat_registered, dimensions_enabled, invoice_payment_links_enabled')
+      .select('invoice_default_days, invoice_default_notes, default_our_reference, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url, vat_registered, dimensions_enabled, invoice_payment_links_enabled')
       .eq('company_id', company.id)
       .single()
     if (data?.invoice_default_notes) {
@@ -926,6 +930,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         setValue('notes', data.invoice_default_notes)
       }
     }
+    setCustomerDefaultPaymentTerms(data?.invoice_default_days ?? 30)
     // Pre-fill "Vår referens" from the company default: only when creating a
     // fresh invoice, so an edited draft's own reference is never overwritten.
     if (!isEditMode && !isCopyMode && data?.default_our_reference) {
@@ -3197,10 +3202,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           <DialogHeader>
             <DialogTitle>{t('create_customer_dialog_title')}</DialogTitle>
           </DialogHeader>
-          <CustomerForm
-            onSubmit={handleCreateCustomer}
-            isLoading={isCreatingCustomer}
-          />
+          {customerDefaultPaymentTerms === null ? (
+            <div className="flex h-32 items-center justify-center" role="status">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            </div>
+          ) : (
+            <CustomerForm
+              onSubmit={handleCreateCustomer}
+              isLoading={isCreatingCustomer}
+              defaultPaymentTerms={customerDefaultPaymentTerms}
+            />
+          )}
         </DialogContent>
       </Dialog>
 

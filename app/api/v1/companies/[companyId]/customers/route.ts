@@ -24,6 +24,7 @@ import { validateVatNumber } from '@/lib/vat/vies-client'
 import { eventBus } from '@/lib/events'
 import type { Customer } from '@/types'
 import { resolveCustomerIdentifiers } from '@/lib/customers/identifiers'
+import { resolveDefaultCustomerPaymentTerms } from '@/lib/customers/payment-terms'
 import {
   encryptCustomerPersonalNumber,
   maskCustomerIdentifiers,
@@ -284,6 +285,7 @@ registerEndpoint({
     'org_number uniqueness is enforced at the database level; duplicate inserts return 409 CUSTOMER_DUPLICATE_ORG_NUMBER.',
     'Use personal_number for individual customers. org_number remains accepted as a compatibility alias and is moved into encrypted personal_number storage.',
     'When both identifier fields are supplied for an individual, they must identify the same person.',
+    'When default_payment_terms is omitted, the company invoice setting is used. An explicit value overrides it.',
     'VIES validation runs only on commit. Dry-run skips the external call and leaves vat_number_validated=false in the preview.',
   ],
   example: {
@@ -352,6 +354,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         details: { issues: [identifiers.error] },
       })
     }
+    let defaultPaymentTerms: number
+    try {
+      defaultPaymentTerms = await resolveDefaultCustomerPaymentTerms(
+        ctx.supabase,
+        ctx.companyId!,
+        body.default_payment_terms,
+      )
+    } catch (error) {
+      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
+    }
 
     // Dry-run: validate input, return the would-be record. id, timestamps,
     // and vat_number_validated all populate on commit, not here.
@@ -376,7 +388,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           personal_number: identifiers.data.personalNumber,
           vat_number: body.vat_number ?? null,
           vat_number_validated: false,
-          default_payment_terms: body.default_payment_terms ?? 30,
+          default_payment_terms: defaultPaymentTerms,
           notes: body.notes ?? null,
           archived_at: null,
           created_at: null,
@@ -429,7 +441,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         vat_number_validated: vatValidated,
         vat_number_validated_at: vatValidatedAt,
         language: body.language ?? 'sv',
-        default_payment_terms: body.default_payment_terms ?? 30,
+        default_payment_terms: defaultPaymentTerms,
         notes: body.notes ?? null,
       })
       .select(CUSTOMER_RESPONSE_COLUMNS)

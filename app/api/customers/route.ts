@@ -12,6 +12,7 @@ import {
   maskCustomerIdentifiers,
 } from '@/lib/customers/protect-personal-number'
 import { resolveCustomerIdentifiers } from '@/lib/customers/identifiers'
+import { resolveDefaultCustomerPaymentTerms } from '@/lib/customers/payment-terms'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -67,6 +68,17 @@ export const POST = withRouteContext(
         details: { issues: [identifiers.error] },
       })
     }
+    let defaultPaymentTerms: number
+    try {
+      defaultPaymentTerms = await resolveDefaultCustomerPaymentTerms(
+        supabase,
+        companyId!,
+        body.default_payment_terms,
+      )
+    } catch (error) {
+      log.error('customer payment terms lookup failed', error as Error)
+      return errorResponseFromCode('CUSTOMER_CREATE_FAILED', log, { requestId })
+    }
 
     const { data, error } = await supabase
       .from('customers')
@@ -90,7 +102,7 @@ export const POST = withRouteContext(
         vat_number: body.vat_number,
         personal_number: encryptCustomerPersonalNumber(identifiers.data.personalNumber),
         language: body.language || 'sv',
-        default_payment_terms: body.default_payment_terms || 30,
+        default_payment_terms: defaultPaymentTerms,
         notes: body.notes,
       })
       .select()

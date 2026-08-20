@@ -18,18 +18,23 @@ import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useCompanySettings } from '@/components/settings/useSettings'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
+
+function CustomerFormSkeleton() {
+  return (
+    <div className="space-y-4 py-4" role="status">
+      <Skeleton className="h-10 w-full" />
+      <Skeleton className="h-10 w-full" />
+      <Skeleton className="h-24 w-full" />
+    </div>
+  )
+}
 
 const CustomerForm = dynamic(
   () => import('@/components/customers/CustomerForm'),
   {
-    loading: () => (
-      <div className="space-y-4 py-4" role="status">
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-24 w-full" />
-      </div>
-    ),
+    loading: CustomerFormSkeleton,
   },
 )
 
@@ -63,6 +68,7 @@ function compareStrings(a: string, b: string): number {
 
 function CustomersPageInner() {
   const { canWrite } = useCanWrite()
+  const { settings, isLoading: settingsLoading } = useCompanySettings()
   const [customers, setCustomers] = useState<Customer[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
@@ -282,10 +288,15 @@ function CustomersPageInner() {
               <DialogHeader>
                 <DialogTitle>{t('add_customer')}</DialogTitle>
               </DialogHeader>
-              <CustomerForm
-                onSubmit={handleCreateCustomer}
-                isLoading={isCreating}
-              />
+              {settingsLoading ? (
+                <CustomerFormSkeleton />
+              ) : (
+                <CustomerForm
+                  onSubmit={handleCreateCustomer}
+                  isLoading={isCreating}
+                  defaultPaymentTerms={settings?.invoice_default_days ?? 30}
+                />
+              )}
             </DialogContent>
           </Dialog>
         </div>
