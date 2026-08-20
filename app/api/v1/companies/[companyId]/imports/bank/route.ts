@@ -228,7 +228,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // upsert gives duplicate-rerun protection within one company. The
       // old (user_id, file_hash) key and its cross-company pre-check
       // (BANK_IMPORT_DUPLICATE_OTHER_COMPANY) are gone.
-      await ctx.supabase
+      // The row id is captured so every ingested transaction can be stamped
+      // with its batch (bank_file_import_id), keeping v1 imports undoable via
+      // undo_bank_file_import exactly like dashboard imports (#1672).
+      const { data: importRecord } = await ctx.supabase
         .from('bank_file_imports')
         .upsert(
           {
@@ -244,6 +247,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           },
           { onConflict: 'company_id,file_hash' },
         )
+        .select('id')
+        .maybeSingle()
 
       // Convert parsed transactions to the RawTransaction shape that
       // ingestTransactions expects. external_id stays stable so re-imports
@@ -290,6 +295,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         ctx.companyId!,
         ctx.userId,
         raw,
+        // Batch provenance for undo. A failed upsert read leaves the option
+        // unset (rows import fine, just without the undo link), matching the
+        // route's existing best-effort posture on the bank_file_imports row.
+        importRecord?.id ? { bankFileImportId: importRecord.id as string } : undefined,
       )
 
       // Mark the bank_file_imports row complete. The unique constraint is

@@ -164,6 +164,9 @@ function BankFileImportWizard() {
 
   // Import result
   const [ingestResult, setIngestResult] = useState<IngestResult | null>(null)
+  // bank_file_imports id of the executed batch: enables "Ångra importen" (#1672).
+  const [bankImportId, setBankImportId] = useState<string | null>(null)
+  const [bankIsUndoing, setBankIsUndoing] = useState(false)
 
   // Advisory duplicate preview: which parsed rows ingest will skip because
   // they already exist. Fetched from check-duplicates after every (re-)parse;
@@ -363,6 +366,7 @@ function BankFileImportWizard() {
       }
 
       setIngestResult(data.data)
+      setBankImportId(typeof data.data?.import_id === 'string' ? data.data.import_id : null)
       setBankStep('result')
 
       toast({
@@ -384,11 +388,49 @@ function BankFileImportWizard() {
     setFileHash('')
     setFilename('')
     setIngestResult(null)
+    setBankImportId(null)
     setBankError(null)
     setBankErrorTitle(null)
     setSkattekontoDetected(false)
     setRawFileContent('')
     setDuplicateInfo(null)
+  }
+
+  // Undo the just-executed import: deletes the batch's unbooked rows
+  // (ignored included) and reports what was left in place (#1672).
+  // Plain function (not useCallback): it closes over handleNewImport, which
+  // is itself recreated per render.
+  const handleUndoBankImport = async (importId: string) => {
+    setBankIsUndoing(true)
+    try {
+      const res = await fetch(`/api/import/bank-file/${importId}/undo`, { method: 'DELETE' })
+      const data = await res.json()
+
+      if (!res.ok) {
+        toast({
+          title: tTx('import_undo_failed_title'),
+          description: getErrorMessage(data, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
+      }
+
+      const report = data.data ?? {}
+      const skipped = (report.skipped_booked ?? 0) + (report.skipped_matched ?? 0)
+      toast({
+        title: tTx('import_undo_success_title'),
+        description:
+          tTx('import_undo_success_desc', { count: report.deleted ?? 0 }) +
+          (skipped > 0 ? ` ${tTx('import_undo_skipped_desc', { count: skipped })}` : ''),
+      })
+
+      // Reset the wizard so the user can re-import a corrected file.
+      handleNewImport()
+    } catch {
+      toast({ title: 'Anslutningsfel', description: 'Kunde inte nå servern.', variant: 'destructive' })
+    } finally {
+      setBankIsUndoing(false)
+    }
   }
 
   return (
@@ -493,6 +535,9 @@ function BankFileImportWizard() {
         <BankFileResultStep
           result={ingestResult}
           onNewImport={handleNewImport}
+          importId={bankImportId}
+          onUndo={handleUndoBankImport}
+          isUndoing={bankIsUndoing}
         />
       )}
     </div>

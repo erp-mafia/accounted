@@ -126,7 +126,9 @@ export const POST = withRouteContext(
         sieOverlap = data ?? null
       }
 
-      const ingestOptions: IngestOptions = {}
+      // Stamp every inserted row with the batch id so the import can be
+      // undone as a unit (undo_bank_file_import RPC, #1672).
+      const ingestOptions: IngestOptions = { bankFileImportId: importRecord.id }
       if (settlement_account) ingestOptions.settlementAccount = settlement_account
       if (role === 'viewer') ingestOptions.rawInsertOnly = true
       if (sieOverlap) ingestOptions.skipAutoCategorization = true

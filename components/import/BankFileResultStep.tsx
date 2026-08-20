@@ -4,25 +4,48 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
   CheckCircle,
   XCircle,
   ArrowRight,
   RotateCcw,
+  Undo2,
+  Loader2,
 } from 'lucide-react'
 import type { IngestResult } from '@/lib/transactions/ingest'
 
 interface BankFileResultStepProps {
   result: IngestResult
   onNewImport: () => void
+  /** bank_file_imports id of the batch just imported; enables undo (#1672). */
+  importId?: string | null
+  /** Undo the whole import (unbooked rows, ignored included). Owner/admin only. */
+  onUndo?: (importId: string) => Promise<void> | void
+  isUndoing?: boolean
 }
 
 export default function BankFileResultStep({
   result,
   onNewImport,
+  importId = null,
+  onUndo,
+  isUndoing = false,
 }: BankFileResultStepProps) {
   const t = useTranslations('transactions')
+  const { dialogProps, confirm } = useDestructiveConfirm()
   const isSuccess = result.imported > 0 || result.duplicates > 0
+
+  const handleUndoClick = async () => {
+    if (!importId || !onUndo) return
+    const ok = await confirm({
+      title: t('import_undo_confirm_title'),
+      description: t('import_undo_confirm_body'),
+      confirmLabel: t('import_undo_confirm_label'),
+    })
+    if (!ok) return
+    await onUndo(importId)
+  }
 
   return (
     <div className="space-y-6">
@@ -120,10 +143,27 @@ export default function BankFileResultStep({
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onNewImport}>
-          <RotateCcw className="mr-2 h-4 w-4" />
-          Ny import
-        </Button>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button variant="outline" className="min-h-11" onClick={onNewImport}>
+            <RotateCcw className="mr-2 h-4 w-4" />
+            Ny import
+          </Button>
+          {isSuccess && result.imported > 0 && importId && onUndo && (
+            <Button
+              variant="outline"
+              className="min-h-11 text-destructive hover:text-destructive"
+              onClick={handleUndoClick}
+              disabled={isUndoing}
+            >
+              {isUndoing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Undo2 className="mr-2 h-4 w-4" />
+              )}
+              {t('import_undo_button')}
+            </Button>
+          )}
+        </div>
         {isSuccess && (
           <Button className="min-h-11" asChild>
             <Link href="/transactions">
@@ -133,6 +173,8 @@ export default function BankFileResultStep({
           </Button>
         )}
       </div>
+
+      <DestructiveConfirmDialog {...dialogProps} />
     </div>
   )
 }

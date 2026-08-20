@@ -949,6 +949,9 @@ export async function ingestTransactions(
         import_source: raw.import_source || null,
         counterparty_iban: raw.counterparty_iban || null,
         counterparty_account: raw.counterparty_account || null,
+        // Batch provenance: which bank_file_imports row inserted this
+        // transaction. Drives the bulk "undo this import" path (#1672).
+        bank_file_import_id: options?.bankFileImportId ?? null,
       })
       .select()
       .single()

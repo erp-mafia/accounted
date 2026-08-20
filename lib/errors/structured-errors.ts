@@ -1706,6 +1706,33 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bankfilsimporten misslyckades.',
     message_en: 'Bank file import failed.',
   },
+  BANK_FILE_UNDO_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Endast ägare eller administratörer kan ångra en bankfilsimport.',
+    message_en: 'Only company owners and admins can undo a bank file import.',
+  },
+  BANK_FILE_UNDO_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Importen hittades inte.',
+    message_en: 'Import not found.',
+  },
+  BANK_FILE_UNDO_BAD_STATUS: {
+    httpStatus: 409,
+    message_sv: 'Importen är redan ångrad eller kan inte ångras i sitt nuvarande läge.',
+    message_en: 'The import is already undone or cannot be undone in its current state.',
+  },
+  BANK_FILE_UNDO_NO_LINK: {
+    httpStatus: 409,
+    message_sv:
+      'Importen gjordes innan ångra-funktionen fanns, så transaktionerna kan inte kopplas till den automatiskt. Kontakta supporten om raderna behöver tas bort.',
+    message_en:
+      'This import predates the undo feature, so its transactions cannot be linked to it automatically. Contact support if the rows need to be removed.',
+  },
+  BANK_FILE_UNDO_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Importen kunde inte ångras. Försök igen.',
+    message_en: 'Failed to undo the import. Please try again.',
+  },
   BANK_FILE_SKATTEKONTO_DETECTED: {
     httpStatus: 400,
     message_sv:

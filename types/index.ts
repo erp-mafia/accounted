@@ -4061,6 +4061,11 @@ export interface IngestOptions {
   /** Only INSERT transactions + dedup. Skip reconciliation, invoice matching,
    * supplier matching, and auto-categorization. For viewer imports. */
   rawInsertOnly?: boolean
+  /** bank_file_imports batch row that owns this ingest call. Stamped onto
+   * every inserted transaction (bank_file_import_id) so the batch can be
+   * undone as a unit (undo_bank_file_import RPC, issue #1672). Only the
+   * bank-file execute route sets this; PSD2 sync and MCP leave it unset. */
+  bankFileImportId?: string
 }
 
 /** Result of the transaction ingestion pipeline */
