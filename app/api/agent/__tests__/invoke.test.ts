@@ -50,6 +50,13 @@ vi.mock('@/lib/agent/intents/registry', () => ({
   getIntent: (...args: unknown[]) => getIntentMock(...args),
 }))
 
+// Deployment-level AI availability (distinct from the per-company paywall).
+// Default: available, so the ownership tests below exercise the real flow.
+const aiStatusMock = vi.fn()
+vi.mock('@/lib/ai', () => ({
+  getAiStatus: () => aiStatusMock(),
+}))
+
 const runChatTurnMock = vi.fn()
 vi.mock('@/lib/agent/chat/run-turn', () => ({
   runChatTurn: (...args: unknown[]) => runChatTurnMock(...args),
@@ -92,6 +99,7 @@ beforeEach(() => {
   checkRateMock.mockResolvedValue({ ok: true })
   getIntentMock.mockReturnValue({ id: 'general.help', sheetTitle: 'Assistenten' })
   runChatTurnMock.mockResolvedValue(undefined)
+  aiStatusMock.mockReturnValue({ configured: true, assistantAvailable: true, provider: 'bedrock' })
 })
 
 describe('POST /api/agent/invoke', () => {
@@ -117,6 +125,20 @@ describe('POST /api/agent/invoke', () => {
     const res = await POST(createMockRequest('/api/agent/invoke', { method: 'POST', body: body() }))
     const { status } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(400)
+  })
+
+  // A self-host without an AI key, or on an OpenAI-compatible endpoint the
+  // chat loop does not speak yet: say so up front with a distinct code, never
+  // open a stream that dies on the first model call, never confuse it with
+  // the paywall.
+  it('returns 503 ai_unconfigured when the deployment has no assistant backend', async () => {
+    aiStatusMock.mockReturnValue({ configured: false, assistantAvailable: false, provider: 'bedrock' })
+    enqueuePreamble()
+    const res = await POST(createMockRequest('/api/agent/invoke', { method: 'POST', body: body() }))
+    const { status, body: json } = await parseJsonResponse<{ error: string; code: string }>(res)
+    expect(status).toBe(503)
+    expect(json.code).toBe('ai_unconfigured')
+    expect(runChatTurnMock).not.toHaveBeenCalled()
   })
 
   it('returns 403 when the user is not a member of the company', async () => {

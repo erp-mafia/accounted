@@ -21,6 +21,21 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn().mockResolvedValue({ id: 'doc-1' }),
 }))
 
+// The staged (deferred) upload path only exists when AI is configured on this
+// deployment: an unconfigured one skips synchronously (ai_unconfigured). These
+// tests simulate a configured deployment; the model call itself is mocked.
+vi.mock('@/lib/ai', () => ({
+  getAiStatus: () => ({
+    provider: 'bedrock',
+    configured: true,
+    reason: 'ok',
+    capabilities: { pdfNative: true, imageInput: true, toolUse: true, forcedToolChoice: true, strictJsonSchema: false },
+    models: { assistant: 'm', heavy: 'm', extraction: 'm' },
+    pdfMode: 'native',
+    assistantAvailable: true,
+  }),
+}))
+
 vi.mock('@/lib/rate-limits/inbox', () => ({
   checkInboxUploadRateLimit: vi.fn().mockResolvedValue({ ok: true }),
 }))

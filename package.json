@@ -27,6 +27,7 @@
     "test:pg": "vitest run --project pg-real"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "2.0.69",
     "@anthropic-ai/bedrock-sdk": "0.29.1",
     "@anthropic-ai/sdk": "0.95.0",
     "@hookform/resolvers": "^5.4.0",
@@ -50,6 +51,7 @@
     "@upstash/redis": "^1.38.0",
     "@use-gesture/react": "^10.3.1",
     "@vercel/speed-insights": "^2.0.0",
+    "ai": "6.0.259",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",

@@ -26,7 +26,10 @@ export type CoreEvent =
   | { type: 'journal_entry.reversed'; payload: { originalEntry: JournalEntry; reversalEntry: JournalEntry; userId: string; companyId: string } }
   | { type: 'journal_entry.deleted'; payload: { entryId: string; voucherSeries: string; voucherNumber: number; userId: string; companyId: string } }
   // Documents
-  | { type: 'document.uploaded'; payload: { document: DocumentAttachment; userId: string; companyId: string } }
+  // extractionOwner: set by the invoice inbox on documents it extracts itself,
+  // so the document-extraction extension yields instead of racing it (the
+  // inbox row does not exist yet when this event fires inside uploadDocument).
+  | { type: 'document.uploaded'; payload: { document: DocumentAttachment; userId: string; companyId: string; extractionOwner?: 'invoice-inbox' } }
   | { type: 'document.accessed'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
   | { type: 'document.deleted'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
   // Invoicing

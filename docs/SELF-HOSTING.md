@@ -199,7 +199,7 @@ Additionally, migration 048 schedules a `pg_cron` job inside the database that m
 
 ### AI Features
 
-All AI features (automatic interpretation of uploaded receipts and invoices via the `document-extraction` and `invoice-inbox` extensions, and the in-app AI assistant) run Claude. There are two ways to provide credentials; pick one.
+All AI features (automatic interpretation of uploaded receipts and invoices via the `document-extraction` and `invoice-inbox` extensions, and the in-app AI assistant) run on one configured backend. There are three ways to provide one; pick one. Note that the agent surface most integrations use, the MCP server, needs no AI backend at all: it is your own agent (Claude, Codex, a local model) talking to the ledger, so a deployment without any of the credentials below is still fully usable that way.
 
 The stock self-hosted image includes both extraction extensions, so these credentials cover emailed invoices and documents uploaded in the app.
 
@@ -219,18 +219,37 @@ AWS_REGION=eu-north-1   # default
 
 Set both static AWS keys explicitly. The AI assistant's client can fall back to the standard AWS credential provider chain (instance profile, IRSA) when they are absent, but document extraction requires `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and silently returns empty results without them.
 
-Optional model overrides, in either setup:
+**Option 3: any OpenAI-compatible endpoint.** Any provider that implements the chat-completions API, which is how you run the AI features on a Swedish inference provider for a fully sovereign deployment. Document extraction (receipts, invoices, HTML mail invoices) and the single-call AI jobs run here; the in-app chat assistant does not yet and answers `503 ai_unconfigured` until it does (the MCP server is unaffected).
 
 ```bash
-BEDROCK_MODEL_ID=claude-sonnet-5         # document extraction model
-BEDROCK_OPUS_MODEL_ID=...                # assistant model, heavy intents
-BEDROCK_SONNET_MODEL_ID=...              # assistant model, standard intents
-AI_PROVIDER=bedrock|anthropic            # force the backend (see below)
+AI_BASE_URL=https://api.example.se/v1   # the provider's OpenAI-compatible base URL
+AI_API_KEY=...
+AI_MODEL=...                            # a model id is required: there is no default for an arbitrary endpoint
+AI_EXTRACTION_MODEL=...                 # optional: a vision model for document reading, if AI_MODEL is not one
 ```
 
-When both credential sets are present, Bedrock wins, so that adding an Anthropic key for an experiment cannot silently move production inference out of eu-north-1. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
+Three things about such endpoints are declared rather than probed, because the app cannot tell from the outside:
 
-Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted, and the AI assistant cannot answer.
+- `AI_VISION=false` says the configured model cannot read images. Images and PDFs are then skipped honestly (the inbox row lands with the empty skeleton and the "AI-tolkning kördes inte" hint) instead of failing with a 400 on every upload; HTML mail invoices still extract as text on any model.
+- `AI_PDF_MODE` defaults to `rasterize` here: most such endpoints have no PDF input, so the first `AI_PDF_MAX_PAGES` pages (default 4) are rendered to images with poppler's `pdftoppm`, which the self-host image installs. If the binary is missing, PDFs are skipped with `pdf_rasterizer_missing` rather than failing. A provider that accepts the OpenAI `file` content part can use `AI_PDF_MODE=native`.
+- `AI_STRICT_JSON=true` asks for `response_format: json_schema` on providers that enforce it. The default (JSON answered in prose, then parsed and validated) works on every model and is what hosted runs.
+
+Optional model overrides, in any setup:
+
+```bash
+AI_MODEL=...                             # default model for every tier (OpenAI-compatible: required)
+AI_EXTRACTION_MODEL=...                  # document extraction model
+AI_HEAVY_MODEL=...                       # assistant model, heavy intents
+AI_ASSISTANT_MODEL=...                   # assistant model, standard intents
+AI_EXTRACTION_MAX_TOKENS=8192            # output cap for document extraction
+AI_PROVIDER=bedrock|anthropic|openai-compatible   # force the backend (see below)
+```
+
+The pre-existing names `BEDROCK_MODEL_ID`, `BEDROCK_OPUS_MODEL_ID`, `BEDROCK_SONNET_MODEL_ID` and `BEDROCK_MAX_TOKENS` keep working as the same overrides (extraction, heavy, standard, extraction cap) on every backend; the `AI_*` names take precedence when both are set. Claude deployments default every tier to `claude-sonnet-5`.
+
+When several credential sets are present, Bedrock wins, then the direct Anthropic API, then the OpenAI-compatible endpoint, so that adding a key for an experiment cannot silently move production inference out of eu-north-1. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
+
+Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted (the upload UI sees that immediately rather than waiting for a timeout), and the AI assistant answers `503 ai_unconfigured`.
 
 #### Verifying the setup
 
@@ -248,7 +267,7 @@ npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
 
 It prints the resolved provider and model ids first, then exercises a plain request, a streamed turn carrying the assistant's full parameter set (adaptive thinking, effort, prompt caching and a tool), and finally extraction of the file you pass. It exits non-zero if any step fails, so it works as a post-deploy check.
 
-> **Note:** `OPENAI_API_KEY` from earlier versions is not read by any code path; there is no OpenAI route in the app. Pluggable providers beyond Claude are tracked in [#1406](https://github.com/erp-mafia/accounted/issues/1406).
+> **Note:** `OPENAI_API_KEY` from earlier versions is not read by any code path. To use OpenAI itself, point Option 3 at `https://api.openai.com/v1`; the app has no provider-specific OpenAI integration, only the OpenAI-compatible one. Background: [#1406](https://github.com/erp-mafia/accounted/issues/1406).
 
 ### Email (Invoice Sending and Reminders)
 

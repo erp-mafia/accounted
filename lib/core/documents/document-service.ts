@@ -503,7 +503,8 @@ export async function completePendingDocumentUpload(
   uploadId: string,
   fileName: string,
   mimeType: string,
-  now: number = Date.now()
+  now: number = Date.now(),
+  options: { extractionOwner?: 'invoice-inbox' } = {}
 ): Promise<CompletedPendingDocumentUpload> {
   const serviceClient = createServiceClientNoCookies()
   const storage = serviceClient.storage.from(DOCUMENTS_BUCKET)
@@ -594,7 +595,12 @@ export async function completePendingDocumentUpload(
   const document = data as DocumentAttachment
   await eventBus.emit({
     type: 'document.uploaded',
-    payload: { document, userId, companyId },
+    payload: {
+      document,
+      userId,
+      companyId,
+      ...(options.extractionOwner ? { extractionOwner: options.extractionOwner } : {}),
+    },
   })
 
   return { document, buffer }
@@ -646,6 +652,13 @@ export async function uploadDocument(
      * WhatsApp intake precedent: the loser stores a copy, nothing corrupts.
      */
     dedupeByContent?: boolean
+    /**
+     * Who runs AI extraction on this document. The invoice inbox extracts
+     * the documents it ingests itself (and mirrors the result onto the
+     * document row), so it declares ownership here and the
+     * document-extraction extension yields. Default: the extension extracts.
+     */
+    extractionOwner?: 'invoice-inbox'
   } = {}
 ): Promise<DocumentAttachment & { deduplicated?: boolean }> {
   await ensureDocumentsBucket()
@@ -775,7 +788,12 @@ export async function uploadDocument(
 
   await eventBus.emit({
     type: 'document.uploaded',
-    payload: { document: result, userId, companyId },
+    payload: {
+      document: result,
+      userId,
+      companyId,
+      ...(metadata.extractionOwner ? { extractionOwner: metadata.extractionOwner } : {}),
+    },
   })
 
   return result

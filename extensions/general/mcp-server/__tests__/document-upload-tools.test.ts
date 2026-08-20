@@ -129,6 +129,10 @@ describe('MCP model-free document upload tools', () => {
       uploadId,
       'invoice.pdf',
       'application/pdf',
+      undefined,
+      // The inbox item created right after owns extraction; the
+      // document-extraction extension must yield on the uploaded event.
+      { extractionOwner: 'invoice-inbox' },
     )
     expect(inboxInsert.insert).toHaveBeenCalledWith(
       expect.objectContaining({ id: uploadId, document_id: uploadId }),

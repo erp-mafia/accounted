@@ -6,11 +6,15 @@ import { useEffect, useState } from 'react'
 // pipeline completes, fails, or times out. Returns the derived status the
 // upload UI binds to.
 //
-// "Disabled" semantics: if the document-extraction extension isn't enabled
-// (the column stays NULL forever), we don't know server-side. Instead we
-// stop polling after EXTRACTION_TIMEOUT_MS and bubble status='disabled' so
-// the UI can quietly fall back ("Uppladdat" without an AI hint): no scary
-// error for a feature the customer didn't pay for.
+// "Disabled" semantics: the server answers 'disabled' as soon as it knows
+// no extraction will happen (AI not configured on this deployment, company
+// not entitled, self-generated document: see the route), so the UI can
+// quietly fall back ("Uppladdat" without an AI hint) on the first poll: no
+// scary error for a feature the customer didn't pay for, and no 30 s hang
+// on a self-host without an AI key. The client-side timeout stays as the
+// last resort for the one case the server cannot see: the
+// document-extraction extension switched off entirely (the column stays
+// NULL forever).
 //
 // Reasonable timeout: typical extraction takes 2-8s on Sonnet via Bedrock.
 // 30s is generous and keeps the UX responsive on flaky links.

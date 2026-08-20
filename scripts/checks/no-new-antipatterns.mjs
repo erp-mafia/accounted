@@ -102,6 +102,13 @@
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
+ *  11. direct-ai-client: a file outside lib/ai that imports createAiClient,
+ *      calls `.messages.create/stream(` on an Anthropic client, or imports
+ *      the Vercel AI SDK. Every model call goes through getAiService() so the
+ *      backend (Bedrock on hosted, a Swedish OpenAI-compatible endpoint on a
+ *      sovereign self-host) stays an environment decision. Allowlist of the
+ *      pre-abstraction call sites in this file, may only shrink.
+ *
  *   node scripts/checks/no-new-antipatterns.mjs --update   # re-baseline after a migration ratchets the count down
  *
  * Exit code 1 if either check regressed past its baseline.
@@ -516,6 +523,51 @@ function findFoldedPublicFlags() {
 // - MockDataImportDialog: CSV preview built on the Table primitive, which
 //   self-wraps in overflow-auto (components/ui/table.tsx).
 // - PaymentFileDialog: payment-line table wrapped in an overflow-x-auto div.
+// 11. direct-ai-client. Every model call goes through the job-shaped service
+// in lib/ai (getAiService): that is what lets hosted stay on Bedrock while a
+// sovereign self-host points at an OpenAI-compatible Swedish endpoint, and
+// what stops new AI surfaces from hard-wiring one SDK. Outside lib/ai/, a
+// file may not import createAiClient, call `.messages.create/stream(` on an
+// Anthropic client, or import the Vercel AI SDK (`ai`, `@ai-sdk/*`). The
+// allowlist is the pre-abstraction call sites that still speak the Anthropic
+// SDK directly (chat loop, composer, receipt hunt, WhatsApp interpreter, the
+// legacy smoke script); it may only shrink as they migrate or are deleted.
+const DIRECT_AI_CLIENT_ALLOWED = new Set([
+  'lib/agent/chat/run-turn.ts',
+  'lib/agent/composer/atom-selection.ts',
+  'lib/agent/composer/client.ts',
+  'lib/agent/composer/narrative.ts',
+  'lib/agent/composer/prewarm.ts',
+  'lib/receipt-hunt/adjudicate.ts',
+  'lib/receipt-hunt/mail-intelligence.ts',
+  'extensions/general/whatsapp-inbox/lib/interpret-answer.ts',
+  'scripts/smoke-ai.ts',
+  // Out-of-tree CI reviewer with its own pinned SDK install (see the
+  // compliance workflow); deliberately not part of the app's AI layer.
+  'scripts/swedish-compliance-review.mjs',
+])
+const DIRECT_AI_CLIENT_RES = [
+  { rule: 'createAiClient-import', re: /import[^;]*\bcreateAiClient\b[^;]*from\s+['"]@\/lib\/ai\/provider['"]/ },
+  { rule: 'anthropic-messages-call', re: /\.messages\.(create|stream)\(/ },
+  { rule: 'ai-sdk-import', re: /from\s+['"](ai|ai\/[\w-]+|@ai-sdk\/[\w-]+)['"]/ },
+]
+
+function findDirectAiClients() {
+  const out = []
+  for (const dir of ['lib', 'app', 'extensions', 'components', 'scripts']) {
+    for (const file of walk(path.join(ROOT, dir), ['.ts', '.tsx', '.mjs'])) {
+      const r = rel(file)
+      if (r.startsWith('lib/ai/')) continue
+      if (r.includes('/__tests__/') || r.endsWith('.test.ts') || r.endsWith('.test.tsx')) continue
+      const src = fs.readFileSync(file, 'utf8')
+      for (const { rule, re } of DIRECT_AI_CLIENT_RES) {
+        if (re.test(src)) out.push({ file: r, rule })
+      }
+    }
+  }
+  return out
+}
+
 const DIALOG_NOWRAP_ALLOWED = new Set([
   'components/extensions/shared/MockDataImportDialog.tsx',
   'components/supplier-invoices/PaymentFileDialog.tsx',
@@ -599,6 +651,27 @@ const PINNED_DEPS = [
       '0.32.0 (grouped dependabot bump #884) broke Bedrock streaming in prod: empty stream, ' +
       '"request ended without sending any chunks", taking down the AI assistant + invoice OCR. ' +
       'Keep 0.29.1 until 0.32.x streaming is verified against Bedrock.',
+  },
+  {
+    name: '@anthropic-ai/sdk',
+    version: '0.95.0',
+    reason:
+      'Declared explicitly at the version bedrock-sdk 0.29.1 pulls in transitively (#1406 Tier 1), so ' +
+      'the lockfile dedupes to one copy; a drift here is a second SDK copy and an untested wire surface.',
+  },
+  {
+    name: 'ai',
+    version: '6.0.259',
+    reason:
+      'Vercel AI SDK backs lib/ai/services/openai-compatible.ts (Tier 2 BYO endpoints). Major versions ' +
+      'rename core APIs; upgrades are deliberate PRs with the provider test suite, never a silent bump.',
+  },
+  {
+    name: '@ai-sdk/openai-compatible',
+    version: '2.0.69',
+    reason:
+      'Paired with ai 6.x; the provider package follows its own major cadence and must move together with ' +
+      'the core pin in one reviewed change.',
   },
 ]
 
@@ -931,6 +1004,7 @@ const current = {
   offLadderRadii: findOffLadderRadii(),
   foldedPublicFlags: findFoldedPublicFlags(),
   dialogOverflowRisk: findDialogOverflowRisks(),
+  directAiClients: findDirectAiClients(),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1093,6 +1167,25 @@ if (current.foldedPublicFlags.length) {
   )
 }
 
+// 1e1c. direct-ai-client: allowlist in this file, may only shrink. A file
+// outside the allowlist that talks to a model SDK directly is a NEW
+// violation; allowlisted files that no longer do are reported as progress.
+const newDirectAi = current.directAiClients.filter((f) => !DIRECT_AI_CLIENT_ALLOWED.has(f.file))
+const directAiFilesNow = new Set(current.directAiClients.map((f) => f.file))
+const migratedDirectAi = [...DIRECT_AI_CLIENT_ALLOWED].filter((f) => !directAiFilesNow.has(f))
+if (newDirectAi.length) {
+  failed = true
+  console.error(
+    `\n✗ direct-ai-client: ${newDirectAi.length} file(s) outside lib/ai talk to a model SDK directly:`,
+  )
+  newDirectAi.forEach((f) => console.error(`    ${f.file}  (${f.rule})`))
+  console.error(
+    '  → use getAiService() from @/lib/ai (generateText / generateStructured / extractFromDocument).\n' +
+      '    Hosted and self-host resolve the backend from the environment there; a direct SDK call\n' +
+      '    hard-wires one provider and breaks the sovereign self-host path.',
+  )
+}
+
 // 1e2. hand-rolled-invariant: counted, may only go down.
 if (current.handRolledInvariants > (baseline.handRolledInvariants?.count ?? Infinity)) {
   failed = true
@@ -1223,6 +1316,13 @@ if (
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
   console.log('    Run with --update to ratchet the baseline down and lock in the gains.')
 }
+if (migratedDirectAi.length) {
+  console.log(
+    `\n✓ direct-ai-client progress: ${migratedDirectAi.length} allowlisted file(s) no longer call a model SDK directly.` +
+      ' Remove them from DIRECT_AI_CLIENT_ALLOWED in this script to lock it in:',
+  )
+  migratedDirectAi.forEach((f) => console.log(`    ${f}`))
+}
 if (gatedSinceBaseline.length) {
   console.log(
     `\n✓ ungated-extension-route progress: ${gatedSinceBaseline.length} allowlisted route(s) now gated or gone.` +
@@ -1236,5 +1336,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s)).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

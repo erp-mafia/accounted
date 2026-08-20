@@ -7,6 +7,7 @@ import { getActiveCompanyId } from '@/lib/company/context'
 import { getIntent } from '@/lib/agent/intents/registry'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { runChatTurn, friendlyModelError } from '@/lib/agent/chat/run-turn'
+import { getAiStatus } from '@/lib/ai'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -116,6 +117,20 @@ export async function POST(request: Request) {
 
   const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.ai)
   if (capBlocked) return capBlocked
+
+  // Distinct from the paywall: the deployment has no AI backend the chat
+  // loop can run on (no credentials, or an OpenAI-compatible endpoint, which
+  // the loop does not speak yet). Answer up front instead of opening a
+  // stream that dies on the first model call.
+  if (!getAiStatus().assistantAvailable) {
+    return NextResponse.json(
+      {
+        error: 'Assistenten är inte konfigurerad på den här installationen.',
+        code: 'ai_unconfigured',
+      },
+      { status: 503 },
+    )
+  }
 
   // Resolve the conversation BEFORE any side effect below (the onboarding
   // intake stamp): a request that is about to be rejected must not write.

@@ -1,6 +1,8 @@
 import { after } from 'next/server'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { extractInvoiceFields, emptyResult } from './extract-invoice-fields'
+import { mirrorExtractionToDocument } from './mirror-extraction'
+import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -9,6 +11,16 @@ import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import type { InvoiceExtractionResult } from '@/types'
 import { PDFDocument } from 'pdf-lib'
 import path from 'node:path'
+
+// Verdicts decidable before touching the file. `ai_unconfigured` is the
+// deployment-level "no AI backend" state (self-host without a key), distinct
+// from the per-company paywall (`no_ai_entitlement`).
+type SyncSkipReason =
+  | 'no_ai_entitlement'
+  | 'client_opt_out'
+  | 'sandbox'
+  | 'ai_unconfigured'
+  | null
 
 /**
  * Defensive filename sanitisation for content arriving from .eml inner
@@ -231,6 +243,9 @@ export async function uploadAndExtract(
     // two inboxes, re-hunted by a sweep, or uploaded twice must not become a
     // second archived document.
     dedupeByContent: true,
+    // This function extracts (sync or deferred) and mirrors the outcome onto
+    // the document row; the document-extraction extension must not race it.
+    extractionOwner: 'invoice-inbox',
   })
 
   if (doc.deduplicated) {
@@ -342,14 +357,20 @@ export async function uploadAndExtract(
   // decidable without touching the PDF; too_many_pages is not (it only fires
   // when the slice fallback fails) and is resolved below, on whichever path
   // (sync or deferred) actually attempts the slice.
-  const syncSkipReason: 'no_ai_entitlement' | 'client_opt_out' | 'sandbox' | null =
+  // `ai_unconfigured` (no AI credentials/model on this deployment, the
+  // self-host "key not set yet" state) is decided up front as well: a call
+  // that can never succeed must not take the deferred path and leave the row
+  // in 'processing' until the sweep.
+  const syncSkipReason: SyncSkipReason =
     !hasAiEntitlement
       ? 'no_ai_entitlement'
       : sandbox
         ? 'sandbox'
         : opts.skipExtraction
           ? 'client_opt_out'
-          : null
+          : !getAiStatus().configured
+            ? 'ai_unconfigured'
+            : null
 
   if (opts.deferExtraction && syncSkipReason === null) {
     // Staged path: extraction WILL call Bedrock, so create the row now and
@@ -424,7 +445,7 @@ export async function uploadAndExtract(
   // page-count. Opt-out outranks the page gate (an opted-out caller never
   // extracts regardless of length), and too_many_pages only fires when the
   // slice fallback also failed (encrypted/malformed PDF).
-  const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'client_opt_out' | 'sandbox' | null =
+  const skipReason: SyncSkipReason | 'too_many_pages' =
     syncSkipReason ??
     (gatedByPageCount && slicedBuffer == null ? 'too_many_pages' : null)
   const skipExtraction = skipReason !== null
@@ -434,13 +455,14 @@ export async function uploadAndExtract(
   // fields via /items/:id/extracted-data before converting to a supplier
   // invoice. extracted_data is never null in the DB; an empty skeleton
   // keeps downstream readers (UI, MCP) happy.
-  const { data: extracted, rawText } = skipExtraction
-    ? { data: emptyResult(), rawText: null }
+  const extraction = skipExtraction
+    ? { data: emptyResult(), rawText: null, model: null, skipped: null }
     : await extractInvoiceFields({
         buffer: Buffer.from(slicedBuffer ?? file.buffer),
         mimeType: file.type,
         fileName: file.name,
       })
+  const { data: extracted, rawText } = extraction
   if (!skipExtraction && slicedBuffer != null && pageCount != null) {
     extracted.pages = { total: pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
   }
@@ -483,6 +505,15 @@ export async function uploadAndExtract(
     .single()
 
   if (inboxError) throw new Error(`Failed to create inbox item: ${inboxError.message}`)
+
+  // The extension yielded to us (extractionOwner); put the outcome where it
+  // would have written it, so the document row tells the same story.
+  await mirrorExtractionToDocument(doc.id, {
+    data: extracted,
+    rawText,
+    model: extraction.model ?? null,
+    skipped: skipReason ?? extraction.skipped ?? null,
+  })
 
   try {
     await appendProcessingHistory({
@@ -552,8 +583,9 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
       // an unsliceable long PDF becomes the too_many_pages skip.
       let extracted: InvoiceExtractionResult = emptyResult()
       let rawText: string | null = null
+      let model: string | null = null
       let extractionSkipped = false
-      let skipReason: 'too_many_pages' | null = null
+      let skipReason: string | null = null
       try {
         const slicedBuffer = job.gatedByPageCount
           ? await slicePdfForExtraction(job.file.buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
@@ -569,6 +601,14 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
           })
           extracted = result.data
           rawText = result.rawText
+          model = result.model ?? null
+          if (result.skipped) {
+            // No model call could be made (AI unconfigured, no vision on this
+            // backend, rasterizer missing). Same UI affordance as the other
+            // skips: the row lands with the empty skeleton and the hint.
+            extractionSkipped = true
+            skipReason = result.skipped
+          }
           if (slicedBuffer != null && job.pageCount != null) {
             extracted.pages = { total: job.pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
           }
@@ -608,6 +648,13 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
       }
       if (!Array.isArray(claimed) || claimed.length === 0) return
 
+      await mirrorExtractionToDocument(job.documentId, {
+        data: extracted,
+        rawText,
+        model,
+        skipped: skipReason,
+      })
+
       try {
         await appendProcessingHistory({
           companyId: job.companyId,
@@ -646,6 +693,7 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
           })
           .eq('id', job.itemId)
           .eq('status', 'processing')
+        await mirrorExtractionToDocument(job.documentId, { data: null, rawText: null })
       } catch {
         // The sweep cron is the recovery of last resort.
       }
