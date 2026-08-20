@@ -4,7 +4,7 @@ This guide is for operators who want Accounted on Swedish (or strictly EU) infra
 
 Two honest framings up front:
 
-- **What you get is regulatory-risk elimination, not a legal verdict.** Hosted Accounted runs on Supabase and Vercel in AWS eu-north-1 (Stockholm) with AI inference on AWS Bedrock inside the EU. That is lawful today under the EU-US Data Privacy Framework. What a self-host on Swedish providers removes is the *exposure*: no provider in the chain is subject to US extraterritorial law (the CLOUD Act), which is exactly the risk Sweden's national cloud policy of May 2026 names. The policy is principles for the public sector, not a mandate; it is still the document a procurement officer can point at.
+- **What you get is regulatory-risk elimination, not a legal verdict.** Hosted Accounted runs on Supabase and Vercel in AWS eu-north-1 (Stockholm) with AI inference on AWS Bedrock inside the EU; each of those providers operates under its own GDPR transfer mechanisms and contract terms (Data Privacy Framework participation and/or standard contractual clauses, documented in their DPAs), and whether that combination satisfies your policy is your assessment to make, not a conclusion this guide draws. What a self-host on Swedish providers removes is the *exposure*: no provider in the chain is subject to US extraterritorial law (the CLOUD Act), which is exactly the risk Sweden's national cloud policy of May 2026 names. That holds only for the chain you actually run: a sovereign deployment that keeps a US-dependent service such as Resend for outbound email has that one touchpoint left (section 6 lists them). The policy is principles for the public sector, not a mandate; it is still the document a procurement officer can point at.
 - **Not every Swedish accounting vendor runs on US clouds**, so do not buy this guide as a claim that "everyone else does". Buy it because you want to be able to prove, provider by provider, where your books are.
 
 Everything here is free to run under the AGPL. Services that only Accounted can operate (bank sync through our PSD2 licence, Skatteverket API submission, company lookup, provider migration) are hosted-only today; a connector subscription for self-hosted instances is planned but **not yet available** (see "What is and is not covered" below). Manual filing of VAT and AGI declarations (file generation, you upload at Skatteverket) is always free and works on a self-host.
@@ -98,7 +98,7 @@ These are the things that cost people an afternoon. Source: the upstream Docker 
 
 - **`API_EXTERNAL_URL` now includes the `/auth/v1` path** (docker 0.7.0, July 2026): `API_EXTERNAL_URL=https://supabase.example.com/auth/v1`. Older guides show it without the path; GoTrue then builds wrong links.
 - **Postgres 17 is the default image** since docker 0.6.0 (June 2026). Never start the 17 image on a 15 data directory: use upstream's `utils/upgrade-pg17.sh` (needs roughly twice the database size free, and back up the pgsodium root key from the `db-config` volume first). https://supabase.com/docs/guides/self-hosting/postgres-upgrade-17
-- **The gateway is Envoy from docker 0.8.0** (August 2026), Kong before that. The diagrams in SELF-HOSTING.md say `kong`; the role is the same, the container name differs.
+- **The gateway depends on your release**: `self-hosted/v0.7.x` runs Kong by default (Envoy via the `docker-compose.envoy.yml` overlay), `self-hosted/v0.8.0` and later run Envoy by default (Kong via `docker-compose.kong.yml`). The diagrams in SELF-HOSTING.md say `kong`; the role is the same.
 - **Studio is single-project** in self-hosted mode (`STUDIO_DEFAULT_ORGANIZATION` / `STUDIO_DEFAULT_PROJECT`); a byrå hosting many client companies still runs one Supabase project, since Accounted's multi-tenancy is inside the database.
 - **No managed backups, no PITR.** Upstream says so plainly. This is why the next section exists.
 - **Storage backend**: by default storage-api writes files to `./volumes/storage` (`STORAGE_BACKEND=file`). To put documents straight onto Swedish S3, set `STORAGE_BACKEND=s3` with `STORAGE_S3_BUCKET`, `STORAGE_S3_ENDPOINT`, `STORAGE_S3_REGION`, `STORAGE_S3_FORCE_PATH_STYLE=true` and the bucket's `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in the storage service. Accounted's `documents` bucket is WORM at the application level either way (migration 024); Object Lock on the S3 side adds the provider-level guarantee.
@@ -108,7 +108,7 @@ These are the things that cost people an afternoon. Source: the upstream Docker 
 Swedish bookkeeping law requires the ledger and its underlag to be kept for seven years after the end of the fiscal year, and self-hosted Supabase gives you no backups. Two scripts in this repo cover the minimum:
 
 - `scripts/self-host/backup.sh`: logical `pg_dump` (custom format) of the Supabase database, a tar of the storage volume (the documents), optionally the `db-config` Docker volume (the pgsodium root key; without it Vault-encrypted columns are unreadable after a restore), SHA-256 manifest, uploaded to an S3-compatible bucket with optional **COMPLIANCE-mode Object Lock**.
-- `scripts/self-host/restore.sh <name> --yes`: downloads a set, verifies checksums, restores the database (`pg_restore --clean`), unpacks storage and db-config.
+- `scripts/self-host/restore.sh <name> --yes`: downloads a set, verifies checksums, restores the database (`pg_restore --clean`; any reported error stops it before storage is touched, re-run with `RESTORE_TOLERATE_ERRORS=1` once you have read the log and the errors are the expected "already exists" kind on a Supabase target), unpacks storage and db-config.
 
 Requirements on the host running them: `pg_dump`/`pg_restore` matching the server major, `tar`, `gzip`, AWS CLI v2 (talks to any S3-compatible endpoint via `--endpoint-url`), and `docker` only if you back up the db-config volume.
 
@@ -128,11 +128,12 @@ export BACKUP_DB_CONFIG_VOLUME='supabase_db-config'
 ```cron
 # nightly set, 35 days immutable (covers mistakes, keeps storage bounded)
 0 2 * * *   . /root/.env.backup && BACKUP_OBJECT_LOCK_DAYS=35 /opt/accounted/scripts/self-host/backup.sh
-# yearly archive copy after bokslut, seven years plus margin, COMPLIANCE mode
-0 3 15 1 *  . /root/.env.backup && BACKUP_LABEL=yearly BACKUP_OBJECT_LOCK_DAYS=2700 /opt/accounted/scripts/self-host/backup.sh
+# yearly archive copy after bokslut, seven years plus margin, COMPLIANCE mode,
+# app stopped for the window so database and documents are one consistent set
+0 3 15 1 *  . /root/.env.backup && BACKUP_LABEL=yearly BACKUP_OBJECT_LOCK_DAYS=2700 BACKUP_QUIESCE_CMD='docker compose -f /opt/accounted/docker-compose.yml stop app cron' BACKUP_RESUME_CMD='docker compose -f /opt/accounted/docker-compose.yml start app cron' /opt/accounted/scripts/self-host/backup.sh
 ```
 
-Alert on a non-zero exit (the script is silent on success and loud on failure). Storage grows by one dump plus one storage tar per run; the nightly lock expires and a lifecycle rule on the bucket can expire old nightly objects, the yearly ones cannot be deleted before their date by anyone.
+Alert on a non-zero exit: the script prints a few progress lines on success and fails loudly; if your cron mails stdout, add `>/dev/null` to the entry and keep stderr. The database dump and the storage tar are taken one after the other, so an upload landing in that window gives a set with a document row but no file (or the reverse); the nightly run accepts that (the next night covers it), and for the yearly archive run set `BACKUP_QUIESCE_CMD` / `BACKUP_RESUME_CMD` to stop and start the app containers around the run so the set is consistent. Storage grows by one dump plus one storage tar per run; the nightly lock expires and a lifecycle rule on the bucket can expire old nightly objects, the yearly ones cannot be deleted before their date by anyone.
 
 ### Restore drill (do this once before you need it)
 

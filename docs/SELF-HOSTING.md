@@ -182,7 +182,7 @@ There is no admin account or invite system: any email address can sign up. You c
 
 ## Scheduled Jobs
 
-The cron sidecar runs the schedule in [`docker/crontab.self-hosted`](../docker/crontab.self-hosted). That file is generated from the `crons` array in `vercel.json` (the single source of truth, shared with the hosted service) by `npm run crontabs:generate`, and a test fails CI if it drifts, so this guide does not repeat the table: open the file for exact times. As of this writing it holds 23 jobs, in these groups:
+The cron sidecar runs the schedule in [`docker/crontab.self-hosted`](../docker/crontab.self-hosted). That file is generated from the `crons` array in `vercel.json` (the single source of truth, shared with the hosted service) by `npm run crontabs:generate`, and a test fails CI if it drifts, so this guide does not repeat the table: open the file for the exact jobs and times. They fall into these groups:
 
 - **Every minute / every few minutes**: webhook dispatch, WhatsApp and invoice-inbox sweeps (crash recovery for staged uploads).
 - **Hourly**: recurring invoices, cloud-backup auto-sync, idempotency-key cleanup.
@@ -354,7 +354,7 @@ flowchart LR
 
 ### Setup outline
 
-1. **Bring up Supabase** following [supabase.com/docs/guides/self-hosting/docker](https://supabase.com/docs/guides/self-hosting/docker). Generate your own `JWT_SECRET`, `ANON_KEY`, and `SERVICE_ROLE_KEY` (Supabase ships `sh utils/generate-keys.sh`). Pick a hostname for the API gateway (e.g. `supabase.example.com`) and point `SUPABASE_PUBLIC_URL` at it and `API_EXTERNAL_URL` at it **including the `/auth/v1` path** (upstream docker 0.7.0, July 2026, changed this). The gateway container is `kong` up to docker 0.7 and `envoy` from 0.8.0 (August 2026); the diagram above says `kong`, the role is the same.
+1. **Bring up Supabase** following [supabase.com/docs/guides/self-hosting/docker](https://supabase.com/docs/guides/self-hosting/docker). Generate your own `JWT_SECRET`, `ANON_KEY`, and `SERVICE_ROLE_KEY` (Supabase ships `sh utils/generate-keys.sh`). Pick a hostname for the API gateway (e.g. `supabase.example.com`) and point `SUPABASE_PUBLIC_URL` at it and `API_EXTERNAL_URL` at it **including the `/auth/v1` path** (upstream docker 0.7.0, July 2026, changed this). The API gateway depends on the upstream release you check out: `self-hosted/v0.7.x` runs Kong by default and offers Envoy through the `docker-compose.envoy.yml` overlay; `self-hosted/v0.8.0` and later run Envoy by default and keep Kong available through `docker-compose.kong.yml`. The diagram above says `kong`; the role is the same, the container name follows your release and overlays.
 
 2. **Apply the Accounted migrations** directly via `psql`: the Supabase CLI (`db push`) assumes a cloud project, so run the SQL files against the self-hosted database container:
 

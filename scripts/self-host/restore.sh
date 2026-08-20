@@ -21,6 +21,12 @@
 #                            db-config archive into (do this BEFORE the
 #                            database container first starts).
 #   RESTORE_WORKDIR          optional scratch dir.
+#   RESTORE_TOLERATE_ERRORS  optional: set to 1 to continue when pg_restore
+#                            reports errors (exit status 1). Default is to
+#                            STOP before touching storage and show the error
+#                            log: on a Supabase target some "already exists"
+#                            errors are routine, but a partial restore must
+#                            be a decision you take knowingly, not a default.
 #
 # Order that works: (1) bring up a fresh Supabase stack with the SAME
 # JWT_SECRET / ANON_KEY / SERVICE_ROLE_KEY as the old one (or re-issue keys to
@@ -28,6 +34,8 @@
 # (4) restore storage, (5) restart storage-api, (6) run
 # `scripts/smoke-ai-provider.ts`-style checks and log in.
 set -euo pipefail
+# Downloaded dumps are the whole ledger: never world-readable.
+umask 077
 
 NAME="${1:-}"
 CONFIRM="${2:-}"
@@ -63,6 +71,7 @@ if command -v sha256sum >/dev/null 2>&1; then SHA="sha256sum"; else SHA="shasum 
 
 WORK="${RESTORE_WORKDIR:-$(mktemp -d "${TMPDIR:-/tmp}/accounted-restore.XXXXXX")}"
 mkdir -p "$WORK"
+chmod 700 "$WORK"
 cleanup() { [ -z "${RESTORE_WORKDIR:-}" ] && rm -rf "$WORK"; }
 trap cleanup EXIT
 
@@ -94,16 +103,26 @@ fi
 # credentials part of the URL.
 echo "restore: restoring database into ${RESTORE_DATABASE_URL##*@} (objects are dropped and recreated)"
 # --clean --if-exists: drop objects before recreating them. --no-owner /
-# --no-privileges: the fresh stack owns its roles. Exit status 1 from
-# pg_restore means "errors occurred" (typically harmless "does not exist" on
-# a clean target); anything else is fatal.
+# --no-privileges: the fresh stack owns its roles. pg_restore exits 1 when
+# any restore operation failed; that can be a routine "already exists" on a
+# Supabase target or a genuinely missing table, and the script cannot tell
+# which. Default: stop here, show the log, restore nothing further. The
+# operator reads the log and re-runs with RESTORE_TOLERATE_ERRORS=1 if the
+# errors are the expected kind.
+PG_LOG="${WORK}/pg_restore.log"
 set +e
-pg_restore --clean --if-exists --no-owner --no-privileges --dbname "$RESTORE_DATABASE_URL" "${WORK}/${NAME}.db.dump"
+pg_restore --clean --if-exists --no-owner --no-privileges --dbname "$RESTORE_DATABASE_URL" \
+  "${WORK}/${NAME}.db.dump" 2> "$PG_LOG"
 rc=$?
 set -e
-if [ "$rc" -gt 1 ]; then
-  echo "restore: pg_restore failed with status ${rc}" >&2
-  exit "$rc"
+if [ "$rc" -ne 0 ]; then
+  echo "restore: pg_restore exited with status ${rc}; errors reported:" >&2
+  grep -E "^pg_restore: (error|warning)" "$PG_LOG" | head -40 >&2 || tail -40 "$PG_LOG" >&2
+  if [ "$rc" -ne 1 ] || [ "${RESTORE_TOLERATE_ERRORS:-0}" != "1" ]; then
+    echo "restore: stopping before storage. Inspect the errors above; if they are the expected \"already exists\" kind on a Supabase target, re-run with RESTORE_TOLERATE_ERRORS=1." >&2
+    exit "$rc"
+  fi
+  echo "restore: continuing despite pg_restore errors (RESTORE_TOLERATE_ERRORS=1)" >&2
 fi
 echo "restore: database restored (pg_restore status ${rc})"
 

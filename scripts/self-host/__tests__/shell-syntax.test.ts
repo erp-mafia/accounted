@@ -19,9 +19,10 @@ describe('self-host shell scripts', () => {
       expect(() => execFileSync('bash', ['-n', join(DIR, name)])).not.toThrow()
     })
 
-    it(`${name} sets strict mode`, () => {
+    it(`${name} sets strict mode and a private umask`, () => {
       const src = readFileSync(join(DIR, name), 'utf8')
       expect(src).toContain('set -euo pipefail')
+      expect(src).toContain('umask 077')
     })
   }
 

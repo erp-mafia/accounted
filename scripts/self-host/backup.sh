@@ -41,9 +41,24 @@
 #                            retention. COMPLIANCE retention cannot be shortened.
 #   BACKUP_WORKDIR           optional: scratch directory, default mktemp.
 #   BACKUP_LABEL             optional: name fragment, default "nightly".
+#   BACKUP_QUIESCE_CMD       optional: a command run BEFORE the dump and
+#   BACKUP_RESUME_CMD          AFTER the upload (also on failure), e.g.
+#                            "docker compose -f /opt/accounted/docker-compose.yml stop app cron"
+#                            and the matching "start". The database dump and
+#                            the storage tar are taken one after the other;
+#                            an upload landing between them leaves a document
+#                            row without its file (or the reverse) in that
+#                            set. Stopping the app for the window makes the
+#                            set consistent; recommended for the yearly
+#                            archive run, optional for nightly runs where the
+#                            next night's set covers the gap.
 #
-# Exit status is non-zero on any failure; a cron wrapper should alert on that.
+# Prints a short progress log on stdout; exit status is non-zero on any
+# failure, which is what a cron wrapper should alert on.
 set -euo pipefail
+# Dumps, archives and manifests are the whole ledger: never world-readable,
+# whatever the operator's default umask is.
+umask 077
 
 : "${BACKUP_DATABASE_URL:?BACKUP_DATABASE_URL is required}"
 : "${BACKUP_S3_ENDPOINT:?BACKUP_S3_ENDPOINT is required}"
@@ -70,7 +85,14 @@ if command -v sha256sum >/dev/null 2>&1; then SHA="sha256sum"; else SHA="shasum 
 
 WORK="${BACKUP_WORKDIR:-$(mktemp -d "${TMPDIR:-/tmp}/accounted-backup.XXXXXX")}"
 mkdir -p "$WORK"
-cleanup() { [ -z "${BACKUP_WORKDIR:-}" ] && rm -rf "$WORK"; }
+chmod 700 "$WORK"
+QUIESCED=0
+cleanup() {
+  if [ "$QUIESCED" = 1 ] && [ -n "${BACKUP_RESUME_CMD:-}" ]; then
+    bash -c "$BACKUP_RESUME_CMD" || echo "backup: BACKUP_RESUME_CMD failed; check that the app is running" >&2
+  fi
+  [ -z "${BACKUP_WORKDIR:-}" ] && rm -rf "$WORK"
+}
 trap cleanup EXIT
 
 upload() {
@@ -88,6 +110,12 @@ upload() {
 }
 
 echo "backup: starting ${NAME}"
+
+if [ -n "${BACKUP_QUIESCE_CMD:-}" ]; then
+  bash -c "$BACKUP_QUIESCE_CMD"
+  QUIESCED=1
+  echo "backup: application quiesced for a consistent set"
+fi
 
 # 1. Database: custom-format dump (compressed, selective restore possible).
 #    --no-owner/--no-privileges so it restores into a fresh Supabase stack
