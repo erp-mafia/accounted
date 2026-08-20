@@ -11,8 +11,9 @@ import path from 'node:path'
  *
  * - lib/ai/provider.ts: hosted inference is Claude on Amazon Bedrock by
  *   credential precedence, default region eu-north-1 (AWS_REGION overrides).
- *   A direct Anthropic API path exists for self-hosted deployments. There is
- *   no OpenAI code path at all.
+ *   A direct Anthropic API path exists for self-hosted deployments, and an
+ *   OpenAI-compatible protocol client for operator-configured BYO endpoints
+ *   (AI_BASE_URL); nothing defaults to or calls OpenAI's hosted API.
  * - instrumentation-client.ts + lib/analytics/replay-masking.ts: session
  *   replay masking is deny-by-default with no input-mask exceptions.
  *
@@ -61,10 +62,19 @@ function posthogRow(): string {
 }
 
 describe('AI provider disclosures match the code', () => {
-  it('has no OpenAI dependency or code path to disclose', () => {
+  it('has no code path that sends data to OpenAI the company', () => {
+    // The only openai-named dependency is the protocol client for
+    // operator-configured self-host endpoints (AI_BASE_URL); it must never
+    // default to OpenAI's hosted API.
     const deps = { ...PKG.dependencies, ...PKG.devDependencies }
-    expect(Object.keys(deps).filter((name) => name.toLowerCase().includes('openai'))).toEqual([])
-    expect(code(PROVIDER).toLowerCase()).not.toContain('openai')
+    expect(Object.keys(deps).filter((name) => name.toLowerCase().includes('openai'))).toEqual([
+      '@ai-sdk/openai-compatible',
+    ])
+    expect(code(PROVIDER)).not.toContain('api.openai.com')
+    expect(code(read('lib/ai/services/openai-compatible.ts'))).not.toContain('api.openai.com')
+    // The openai-compatible provider is only reachable when the operator
+    // points AI_BASE_URL somewhere; without it the provider is unconfigured.
+    expect(code(PROVIDER)).toMatch(/openai-compatible'\) return !!process\.env\.AI_BASE_URL/)
   })
 
   it('never mentions OpenAI on the privacy or DPA page', () => {
