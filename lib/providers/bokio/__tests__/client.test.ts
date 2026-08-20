@@ -4,6 +4,7 @@ import {
   BokioClient,
   BokioResponseError,
   normalizeBokioAccessToken,
+  unwrapBokioCompanyInformation,
 } from '../client';
 import { BOKIO_BASE_URL } from '../config';
 
@@ -89,12 +90,85 @@ describe('BokioClient', () => {
     },
   );
 
-  it('keeps an invalid response envelope distinct from a company 404', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(Response.json({ name: 'Unexpected shape' }));
+  it('accepts the flat company object the live v1 API returns (no envelope)', async () => {
+    // Observed on api.bokio.se/v1 in production 2026-08-20: a 200 whose body
+    // is the company itself, not `{ companyInformation }` as the spec says.
+    vi.mocked(fetch).mockResolvedValueOnce(
+      Response.json({
+        id: COMPANY_ID,
+        name: 'Testbolaget AB',
+        companyType: 'limitedCompany',
+        organizationNumber: '5566778899',
+        email: 'ekonomi@example.se',
+        hasBBA: false,
+        address: { line1: 'Testgatan 1', city: 'STOCKHOLM', postalCode: '111 23', country: 'SE' },
+      }),
+    );
+
+    const result = await new BokioClient().getCompany<Record<string, unknown>>(
+      'integration-token',
+      COMPANY_ID,
+    );
+
+    expect(result).toMatchObject({
+      id: COMPANY_ID,
+      name: 'Testbolaget AB',
+      organizationNumber: '5566778899',
+    });
+  });
+
+  it.each([
+    ['empty object', {}],
+    ['null envelope', { companyInformation: null }],
+    ['empty envelope', { companyInformation: {} }],
+    ['envelope without identifying fields', { companyInformation: { foo: 'bar' } }],
+    ['array body', []],
+    ['paged list body', { items: [], totalItems: 0, totalPages: 0, currentPage: 1 }],
+  ])('keeps an unusable response body (%s) distinct from a company 404', async (_label, body) => {
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json(body));
 
     await expect(
       new BokioClient().getCompany('integration-token', COMPANY_ID),
     ).rejects.toBeInstanceOf(BokioResponseError);
+  });
+});
+
+describe('unwrapBokioCompanyInformation', () => {
+  it('prefers the documented envelope when present', () => {
+    expect(
+      unwrapBokioCompanyInformation({ companyInformation: { id: COMPANY_ID }, id: 'outer' }),
+    ).toEqual({ id: COMPANY_ID });
+  });
+
+  it('falls back to a flat company object', () => {
+    expect(unwrapBokioCompanyInformation({ id: COMPANY_ID, name: 'Testbolaget AB' })).toEqual({
+      id: COMPANY_ID,
+      name: 'Testbolaget AB',
+    });
+  });
+
+  it('does not fall back to outer fields when the envelope is malformed', () => {
+    expect(
+      unwrapBokioCompanyInformation({ companyInformation: { foo: 'bar' }, id: COMPANY_ID }),
+    ).toBeNull();
+    expect(
+      unwrapBokioCompanyInformation({ companyInformation: {}, name: 'Outer AB' }),
+    ).toBeNull();
+  });
+
+  it.each([
+    null,
+    'text',
+    42,
+    [],
+    {},
+    { companyInformation: 'nope' },
+    { companyInformation: {} },
+    { companyInformation: { foo: 'bar' } },
+    { companyInformation: [{ id: COMPANY_ID }] },
+    { foo: 'bar' },
+  ])('returns null for %j', (body) => {
+    expect(unwrapBokioCompanyInformation(body)).toBeNull();
   });
 });
 
