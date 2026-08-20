@@ -4,8 +4,11 @@ import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
-import { isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
+import {
+  encryptCustomerPersonalNumber,
+  maskCustomerIdentifiers,
+} from '@/lib/customers/protect-personal-number'
+import { resolveCustomerIdentifiers } from '@/lib/customers/identifiers'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
@@ -40,7 +43,9 @@ export const GET = withRouteContext(
       .eq('company_id', companyId)
       .order('invoice_date', { ascending: false })
 
-    return NextResponse.json({ data: { ...maskCustomerRow(data), invoices: invoices || [] } })
+    return NextResponse.json({
+      data: { ...maskCustomerIdentifiers(data), invoices: invoices || [] },
+    })
   },
 )
 
@@ -73,26 +78,17 @@ export const PATCH = withRouteContext(
       return errorResponseFromCode('CUSTOMER_UPDATE_FAILED', opLog, { requestId })
     }
 
-    // No ordinary read returns the stored personnummer, only '********-1234',
-    // or '********-????' when the stored value could not be decrypted. A
-    // client that PATCHes back a customer it just read therefore submits one
-    // of those, and it counts as "field not supplied": it carries no new
-    // value, so it must not be validated, stored or treated as a clear.
-    // CustomerForm strips it before sending, but the guard belongs here too:
-    // any other client (script, agent, future UI) that skips it would
-    // otherwise destroy the value.
-    //
-    // Both forms are recognized via lib/customers/mask-personal-number.ts so
-    // this route, UpdateCustomerSchema and the form cannot disagree about what
-    // counts as a mask. They previously each carried their own '-1234'-only
-    // copy, which made an undecryptable row uneditable in every field, not
-    // just this one.
-    const personalNumberSubmitted =
-      body.personal_number !== undefined && !isMaskedPersonalNumber(body.personal_number)
-
-    const effectiveType = body.customer_type ?? existing.customer_type
-    if (personalNumberSubmitted && body.personal_number && effectiveType !== 'individual') {
-      return errorResponseFromCode('CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED', opLog, { requestId })
+    const identifiers = resolveCustomerIdentifiers(body, {
+      currentCustomerType: existing.customer_type,
+    })
+    if (!identifiers.ok) {
+      if (identifiers.error.message.includes('only allowed')) {
+        return errorResponseFromCode('CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED', opLog, { requestId })
+      }
+      return errorResponseFromCode('VALIDATION_ERROR', opLog, {
+        requestId,
+        details: { issues: [identifiers.error] },
+      })
     }
 
     const updateData: Record<string, unknown> = {}
@@ -114,14 +110,16 @@ export const PATCH = withRouteContext(
     if (body.postal_code !== undefined) updateData.postal_code = body.postal_code
     if (body.city !== undefined) updateData.city = body.city
     if (body.country !== undefined) updateData.country = body.country
-    if (body.org_number !== undefined) updateData.org_number = body.org_number
+    if (identifiers.data.orgNumber !== undefined) {
+      updateData.org_number = identifiers.data.orgNumber
+    }
     if (body.vat_number !== undefined) updateData.vat_number = body.vat_number
-    if (personalNumberSubmitted) {
+    if (identifiers.data.personalNumber !== undefined) {
       // Stored as ciphertext; customers_personal_number_check accepts that
       // shape only (20260726110000).
-      updateData.personal_number = encryptCustomerPersonalNumber(body.personal_number)
-    } else if (body.customer_type !== undefined && effectiveType !== 'individual') {
-      updateData.personal_number = null
+      updateData.personal_number = encryptCustomerPersonalNumber(
+        identifiers.data.personalNumber,
+      )
     }
     if (body.language !== undefined) updateData.language = body.language
     if (body.default_payment_terms !== undefined) updateData.default_payment_terms = body.default_payment_terms
@@ -142,7 +140,7 @@ export const PATCH = withRouteContext(
       if (error.code === '23505') {
         return errorResponseFromCode('CUSTOMER_DUPLICATE_ORG_NUMBER', opLog, {
           requestId,
-          details: { orgNumber: body.org_number },
+          details: { field: 'org_number' },
         })
       }
       opLog.error('customer update failed', error)
@@ -184,7 +182,7 @@ export const PATCH = withRouteContext(
       }
     }
 
-    return NextResponse.json({ data: maskCustomerRow(data) })
+    return NextResponse.json({ data: maskCustomerIdentifiers(data) })
   },
   { requireWrite: true },
 )

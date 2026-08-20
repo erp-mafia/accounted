@@ -2,6 +2,7 @@
  * Integration tests for POST /api/v1/companies/:companyId/customers/bulk-create.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { encryptPersonnummer } from '@/lib/salary/personnummer'
 
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') {
@@ -205,6 +206,71 @@ describe('POST /api/v1/companies/:companyId/customers/bulk-create', () => {
     // No `customers` insert was attempted.
     const insertedCustomer = supabaseMock.from.mock.calls.some((c) => c[0] === 'customers')
     expect(insertedCustomer).toBe(false)
+  })
+
+  it('dry-run normalizes legacy individual org_number and returns only a mask', async () => {
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await bulkCreate(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/bulk-create?dry_run=true`,
+        {
+          customers: [
+            {
+              name: 'Private customer',
+              customer_type: 'individual',
+              org_number: '19900101-1234',
+            },
+          ],
+        },
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    const preview = body.data.preview.results[0].data.preview
+    expect(preview.org_number).toBeNull()
+    expect(preview.personal_number).toBe('********-1234')
+  })
+
+  it('masks stored personal_number in a successful bulk response', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: {
+          data: {
+            id: 'c1',
+            name: 'Private customer',
+            customer_type: 'individual',
+            org_number: null,
+            personal_number: encryptPersonnummer('19900101-1234'),
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/bulk-create`, {
+        customers: [
+          {
+            name: 'Private customer',
+            customer_type: 'individual',
+            personal_number: '19900101-1234',
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.results[0].data.org_number).toBeNull()
+    expect(body.data.results[0].data.personal_number).toBe('********-1234')
   })
 
   it('rejects empty customers array', async () => {

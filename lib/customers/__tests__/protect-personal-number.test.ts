@@ -18,6 +18,7 @@ import { encryptPersonnummer } from '@/lib/salary/personnummer'
 import {
   encryptCustomerPersonalNumber,
   maskCustomerRow,
+  maskCustomerIdentifiers,
   maskEmbeddedCustomer,
   maskStoredCustomerPersonalNumber,
   revealStoredCustomerPersonalNumber,
@@ -196,6 +197,38 @@ describe('maskCustomerRow', () => {
     const withoutKey: { id: string; personal_number?: string | null } = { id: 'c1' }
     expect(maskCustomerRow(withNull).personal_number).toBeNull()
     expect(maskCustomerRow(withoutKey).personal_number).toBeNull()
+  })
+})
+
+describe('maskCustomerIdentifiers', () => {
+  it('moves a legacy individual org_number into the masked response field', () => {
+    expect(
+      maskCustomerIdentifiers({
+        id: 'c1',
+        customer_type: 'individual',
+        org_number: PERSONAL_NUMBER,
+        personal_number: null,
+      }),
+    ).toEqual({
+      id: 'c1',
+      customer_type: 'individual',
+      org_number: null,
+      personal_number: MASKED,
+    })
+  })
+
+  it('leaves a business org_number visible', () => {
+    expect(
+      maskCustomerIdentifiers({
+        customer_type: 'swedish_business',
+        org_number: '556000-0000',
+        personal_number: null,
+      }),
+    ).toEqual({
+      customer_type: 'swedish_business',
+      org_number: '556000-0000',
+      personal_number: null,
+    })
   })
 })
 

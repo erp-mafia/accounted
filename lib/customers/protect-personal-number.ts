@@ -4,6 +4,7 @@ import {
   UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
   maskCustomerPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
+import { INDIVIDUAL_CUSTOMER_TYPES } from '@/lib/customers/identifiers'
 
 const log = createLogger('customers/protect-personal-number')
 
@@ -69,6 +70,32 @@ export function maskCustomerRow<T extends { personal_number?: string | null }>(r
 }
 
 /**
+ * Mask the canonical personnummer field and hide legacy personnummer values
+ * that were stored in org_number for individual customers.
+ */
+export function maskCustomerIdentifiers<
+  T extends {
+    customer_type?: string
+    org_number?: string | null
+    personal_number?: string | null
+  },
+>(row: T): T {
+  if (!INDIVIDUAL_CUSTOMER_TYPES.has(row.customer_type ?? '')) {
+    return maskCustomerRow(row)
+  }
+
+  const personalNumber = row.personal_number
+    ? maskStoredCustomerPersonalNumber(row.personal_number)
+    : maskCustomerPersonalNumber(row.org_number)
+
+  return {
+    ...row,
+    org_number: null,
+    personal_number: personalNumber,
+  }
+}
+
+/**
  * Mask the personnummer on a row that EMBEDS a customer, e.g. the
  * `customer:customers(*)` join every invoice endpoint selects.
  *
@@ -86,5 +113,5 @@ export function maskEmbeddedCustomer<T>(row: T): T {
   if (!row || typeof row !== 'object') return row
   const embedded = (row as { customer?: { personal_number?: string | null } | null }).customer
   if (!embedded || typeof embedded !== 'object') return row
-  return { ...row, customer: maskCustomerRow(embedded) }
+  return { ...row, customer: maskCustomerIdentifiers(embedded) }
 }

@@ -38,6 +38,9 @@ export const UNDECRYPTABLE_PERSONAL_NUMBER_MASK = '********-????'
  */
 export const PERSONAL_NUMBER_MASK_RE = /^\*{8}-(?:\d{4}|\?{4})$/
 
+/** Plaintext personnummer forms accepted when creating a customer. */
+export const PERSONAL_NUMBER_PLAINTEXT_RE = /^(?:\d{6}|\d{8})[-+]?\d{4}$/
+
 /** True when `value` is a masked display form rather than a real personnummer. */
 export function isMaskedPersonalNumber(value: unknown): boolean {
   return typeof value === 'string' && PERSONAL_NUMBER_MASK_RE.test(value)

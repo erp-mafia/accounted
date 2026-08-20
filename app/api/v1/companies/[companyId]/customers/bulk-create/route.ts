@@ -25,6 +25,11 @@ import { validateVatNumber } from '@/lib/vat/vies-client'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
 import type { Customer } from '@/types'
+import { resolveCustomerIdentifiers } from '@/lib/customers/identifiers'
+import {
+  encryptCustomerPersonalNumber,
+  maskCustomerIdentifiers,
+} from '@/lib/customers/protect-personal-number'
 
 const BulkCreateRequest = z.object({
   customers: z.array(CreateCustomerSchema).min(1).max(50),
@@ -56,7 +61,7 @@ const BulkCreateResponse = z.object({
 // Same projection as the single-create endpoint: keeps response shapes
 // identical so callers can union the two surfaces transparently.
 const CUSTOMER_RESPONSE_COLUMNS =
-  'id, name, customer_type, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, personal_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 registerEndpoint({
   operation: 'customers.bulk-create',
@@ -118,12 +123,25 @@ async function createOneCustomer(
   dryRun: boolean,
   log: Logger,
 ): Promise<ResultItem> {
+  const identifiers = resolveCustomerIdentifiers(input, { create: true })
+  if (!identifiers.ok) {
+    return {
+      ok: false,
+      request_index: index,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid customer identifiers.',
+        details: { field: identifiers.error.field },
+      },
+    }
+  }
+
   if (dryRun) {
     return {
       ok: true,
       request_index: index,
       data: {
-        preview: {
+        preview: maskCustomerIdentifiers({
           id: null,
           name: input.name,
           customer_type: input.customer_type,
@@ -137,7 +155,8 @@ async function createOneCustomer(
           postal_code: input.postal_code ?? null,
           city: input.city ?? null,
           country: input.country ?? 'Sweden',
-          org_number: input.org_number ?? null,
+          org_number: identifiers.data.orgNumber,
+          personal_number: identifiers.data.personalNumber,
           vat_number: input.vat_number ?? null,
           vat_number_validated: false,
           default_payment_terms: input.default_payment_terms ?? 30,
@@ -145,7 +164,7 @@ async function createOneCustomer(
           archived_at: null,
           created_at: null,
           updated_at: null,
-        },
+        }),
       },
     }
   }
@@ -185,7 +204,8 @@ async function createOneCustomer(
       postal_code: input.postal_code ?? null,
       city: input.city ?? null,
       country: input.country ?? 'Sweden',
-      org_number: input.org_number ?? null,
+      org_number: identifiers.data.orgNumber,
+      personal_number: encryptCustomerPersonalNumber(identifiers.data.personalNumber),
       vat_number: input.vat_number ?? null,
       vat_number_validated: vatValidated,
       vat_number_validated_at: vatValidatedAt,
@@ -228,12 +248,13 @@ async function createOneCustomer(
 
   // Emit customer.created per success. Same cast pattern as the single
   // POST: projection omits internal scoping fields we re-inject here.
+  const safeData = maskCustomerIdentifiers(data)
   try {
     await eventBus.emit({
       type: 'customer.created',
       payload: {
         customer: {
-          ...(data as Record<string, unknown>),
+          ...(safeData as Record<string, unknown>),
           user_id: userId,
           company_id: companyId,
         } as unknown as Customer,
@@ -247,7 +268,7 @@ async function createOneCustomer(
     })
   }
 
-  return { ok: true, request_index: index, data }
+  return { ok: true, request_index: index, data: safeData }
 }
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(

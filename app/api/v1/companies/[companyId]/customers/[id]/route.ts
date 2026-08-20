@@ -21,6 +21,11 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
+import { resolveCustomerIdentifiers } from '@/lib/customers/identifiers'
+import {
+  encryptCustomerPersonalNumber,
+  maskCustomerIdentifiers,
+} from '@/lib/customers/protect-personal-number'
 
 // v1-only extension: allow PATCH to set archived_at back to null to
 // un-archive a customer. Restricted to literal `null` so the caller can't
@@ -45,6 +50,7 @@ const CustomerDetail = z.object({
   city: z.string().nullable(),
   country: z.string(),
   org_number: z.string().nullable(),
+  personal_number: z.string().nullable(),
   vat_number: z.string().nullable(),
   vat_number_validated: z.boolean(),
   default_payment_terms: z.number(),
@@ -60,7 +66,7 @@ const OPEN_INVOICE_STATUSES = ['sent', 'partially_paid', 'overdue']
 // Explicit projection. Excludes user_id, company_id (internal scoping),
 // and vat_number_validated_at (internal timestamp not in the public schema).
 const CUSTOMER_DETAIL_COLUMNS =
-  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, personal_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 const OPEN_INVOICE_COLUMNS =
   'id, invoice_number, invoice_date, due_date, status, currency, total, remaining_amount'
@@ -202,7 +208,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     }
 
     return ok(
-      { ...customer, ...(invoices !== undefined ? { invoices } : {}) },
+      {
+        ...maskCustomerIdentifiers(customer),
+        ...(invoices !== undefined ? { invoices } : {}),
+      },
       {
         requestId: ctx.requestId,
         partialExpansions: partialExpansions.length > 0 ? partialExpansions : undefined,
@@ -292,6 +301,41 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     }
     const body = parsed.data
 
+    if (Object.keys(body).length === 0) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'body', message: 'At least one field must be supplied for update.' },
+      })
+    }
+
+    const { data: current, error: currentError } = await ctx.supabase
+      .from('customers')
+      .select(CUSTOMER_DETAIL_COLUMNS)
+      .eq('company_id', ctx.companyId!)
+      .eq('id', customerId)
+      .maybeSingle()
+
+    if (currentError) {
+      return v1ErrorResponse(currentError, ctx.log, { requestId: ctx.requestId })
+    }
+    if (!current) {
+      ctx.log.warn('customers.update: not found', { customerId, companyId: ctx.companyId })
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+        requestId: ctx.requestId,
+        details: { resource: 'customer' },
+      })
+    }
+
+    const identifiers = resolveCustomerIdentifiers(body, {
+      currentCustomerType: current.customer_type,
+    })
+    if (!identifiers.ok) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { issues: [identifiers.error] },
+      })
+    }
+
     // Build the partial update set. Fields explicitly set to undefined in
     // the body are not in the resulting object (Zod strips undefined). null
     // IS allowed and means "clear the field" (or, for archived_at, "un-archive").
@@ -309,7 +353,6 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       'postal_code',
       'city',
       'country',
-      'org_number',
       'vat_number',
       'language',
       'default_payment_terms',
@@ -323,6 +366,14 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     if (body.customer_number !== undefined) {
       updateData.customer_number = body.customer_number || null
     }
+    if (identifiers.data.orgNumber !== undefined) {
+      updateData.org_number = identifiers.data.orgNumber
+    }
+    if (identifiers.data.personalNumber !== undefined) {
+      updateData.personal_number = encryptCustomerPersonalNumber(
+        identifiers.data.personalNumber,
+      )
+    }
 
     if (Object.keys(updateData).length === 0) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -334,25 +385,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     // Dry-run: fetch the current record, merge with the proposed changes,
     // return the merged preview. No DB write.
     if (ctx.dryRun) {
-      const { data: current, error: fetchErr } = await ctx.supabase
-        .from('customers')
-        .select(CUSTOMER_DETAIL_COLUMNS)
-        .eq('company_id', ctx.companyId!)
-        .eq('id', customerId)
-        .maybeSingle()
-
-      if (fetchErr) {
-        return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-      }
-      if (!current) {
-        ctx.log.warn('customers.update dry-run: not found', { customerId, companyId: ctx.companyId })
-        return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-          requestId: ctx.requestId,
-          details: { resource: 'customer' },
-        })
-      }
-
-      return dryRunPreview({ ...current, ...updateData }, { requestId: ctx.requestId, log: ctx.log })
+      return dryRunPreview(
+        maskCustomerIdentifiers({ ...current, ...updateData }),
+        { requestId: ctx.requestId, log: ctx.log },
+      )
     }
 
     // Best-effort VIES re-validation if vat_number is changing on an
@@ -361,17 +397,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     // guaranteed to reflect committed DB state, not a stale value from a
     // separate fire-and-forget update.
     if (body.vat_number !== undefined) {
-      const wouldBeType =
-        body.customer_type ??
-        // Need the existing type if the caller didn't change it.
-        (
-          await ctx.supabase
-            .from('customers')
-            .select('customer_type')
-            .eq('company_id', ctx.companyId!)
-            .eq('id', customerId)
-            .maybeSingle()
-        ).data?.customer_type
+      const wouldBeType = body.customer_type ?? current.customer_type
       if (wouldBeType === 'eu_business') {
         if (body.vat_number) {
           try {
@@ -418,7 +444,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
-    return ok(data, { requestId: ctx.requestId })
+    return ok(maskCustomerIdentifiers(data), { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
 )
@@ -509,7 +535,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       }
 
       return dryRunPreview(
-        { ...current, archived_at: new Date().toISOString() },
+        maskCustomerIdentifiers({ ...current, archived_at: new Date().toISOString() }),
         { requestId: ctx.requestId, log: ctx.log },
       )
     }

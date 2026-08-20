@@ -4,7 +4,7 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { textColumn, integerColumn } from '@/lib/reports/xlsx-export'
 import { buildRegisterExport, parseExportFormat, todayIso } from '@/lib/export/register-export'
-import { maskStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
+import { maskCustomerIdentifiers } from '@/lib/customers/protect-personal-number'
 import type { Customer } from '@/types'
 
 /**
@@ -57,8 +57,10 @@ export const GET = withRouteContext(
               textColumn('Anteckning'),
             ],
             rows: customers,
-            mapRow: (c) => [
-              c.name,
+            mapRow: (customer) => {
+              const c = maskCustomerIdentifiers(customer)
+              return [
+                c.name,
               // personal_number holds AES-256-GCM ciphertext (migration
               // 20260726110000). Decrypt-and-mask exactly like the customer
               // read surfaces: the export shows a member the same
@@ -66,19 +68,20 @@ export const GET = withRouteContext(
               // the full personnummer (GDPR Art. 5(1)(f) data minimization on
               // a file that leaves the system). Decrypt failures fall back to
               // a placeholder mask instead of aborting the export.
-              c.org_number ?? maskStoredCustomerPersonalNumber(c.personal_number),
-              c.customer_type,
-              c.email,
-              c.phone,
-              c.address_line1,
-              c.address_line2,
-              c.postal_code,
-              c.city,
-              c.country,
-              c.vat_number,
-              c.default_payment_terms,
-              c.notes,
-            ],
+                c.org_number ?? c.personal_number,
+                c.customer_type,
+                c.email,
+                c.phone,
+                c.address_line1,
+                c.address_line2,
+                c.postal_code,
+                c.city,
+                c.country,
+                c.vat_number,
+                c.default_payment_terms,
+                c.notes,
+              ]
+            },
           },
         ],
         { format, slug: 'kunder', companyName: companyRow?.company_name ?? '', date: todayIso() },

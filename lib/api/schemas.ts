@@ -21,7 +21,11 @@ import {
   normalizeHouseworkType,
 } from '@/lib/invoices/rot-rut-rules'
 import { NON_IBAN_CURRENCIES } from '@/lib/invoices/payment-accounts'
-import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
+import {
+  PERSONAL_NUMBER_INPUT_RE,
+  PERSONAL_NUMBER_PLAINTEXT_RE,
+} from '@/lib/customers/mask-personal-number'
+import { resolveCustomerIdentifiers } from '@/lib/customers/identifiers'
 import type { AuditAction, Currency } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
@@ -919,18 +923,19 @@ export const CreateCustomerSchema = z.object({
   vat_number: z.string().optional(),
   personal_number: z
     .string()
-    .regex(/^(\d{6}|\d{8})[-+]?\d{4}$/, 'Invalid personal number')
+    .regex(PERSONAL_NUMBER_PLAINTEXT_RE, 'Invalid personal number')
     .optional()
     .nullable(),
   language: z.enum(['sv', 'en']).optional(),
   default_payment_terms: z.number().int().positive().optional(),
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
-  if (customer.personal_number && customer.customer_type !== 'individual') {
+  const identifiers = resolveCustomerIdentifiers(customer, { create: true })
+  if (!identifiers.ok) {
     ctx.addIssue({
       code: 'custom',
-      path: ['personal_number'],
-      message: 'Personal number is only allowed for individual customers',
+      path: [identifiers.error.field],
+      message: identifiers.error.message,
     })
   }
   if (
@@ -982,6 +987,18 @@ export const UpdateCustomerSchema = z.object({
   default_payment_terms: z.number().int().positive().optional(),
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
+  if (customer.customer_type !== undefined) {
+    const identifiers = resolveCustomerIdentifiers(customer, {
+      currentCustomerType: customer.customer_type,
+    })
+    if (!identifiers.ok) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [identifiers.error.field],
+        message: identifiers.error.message,
+      })
+    }
+  }
   if (
     (customer.invoice_email_cc_addresses?.length ?? 0)
     + (customer.invoice_email_bcc_addresses?.length ?? 0)

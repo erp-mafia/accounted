@@ -39,7 +39,7 @@ export const GET = withRouteContext(
 
     const { data, error } = await supabase
       .from('customers')
-      .select('id, personal_number')
+      .select('id, customer_type, org_number, personal_number')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -55,13 +55,15 @@ export const GET = withRouteContext(
       })
     }
 
-    if (!data.personal_number) {
+    const storedValue =
+      data.personal_number || (data.customer_type === 'individual' ? data.org_number : null)
+    if (!storedValue) {
       return errorResponseFromCode('CUSTOMER_NO_PERSONAL_NUMBER', opLog, { requestId })
     }
 
     let personalNumber: string | null
     try {
-      personalNumber = revealStoredCustomerPersonalNumber(data.personal_number)
+      personalNumber = revealStoredCustomerPersonalNumber(storedValue)
     } catch (err) {
       // Same row state the mask renders as '********-????'. Answer with the
       // specific code so the UI can tell the user to retype it, rather than

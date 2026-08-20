@@ -49,7 +49,7 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 import { POST } from '../route'
 import { PATCH } from '../[id]/route'
 
-type CustomerWrite = { personal_number?: string | null }
+type CustomerWrite = { org_number?: string | null; personal_number?: string | null }
 
 // Synthetic personnummer, never a real one.
 const PERSONAL_NUMBER = '19900101-1234'
@@ -154,6 +154,59 @@ describe('personal_number on customer routes', () => {
     expect(decryptPersonnummer(written)).toBe(PERSONAL_NUMBER)
     // Read back masked: no read path returns the personnummer itself.
     expect(body.data.personal_number).toBe(MASKED)
+  })
+
+  it('accepts legacy org_number input but stores it only as encrypted personal_number', async () => {
+    queryResult = {
+      data: {
+        id: 'customer-1',
+        name: 'Anna Andersson',
+        customer_type: 'individual',
+        org_number: null,
+        personal_number: encryptPersonnummer(PERSONAL_NUMBER),
+      },
+      error: null,
+    }
+
+    const response = await POST(
+      createMockRequest('/api/customers', {
+        method: 'POST',
+        body: {
+          name: 'Anna Andersson',
+          customer_type: 'individual',
+          org_number: PERSONAL_NUMBER,
+        },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(200)
+    const written = captured.insert[0] as CustomerWrite
+    expect(written.org_number).toBeNull()
+    expect(decryptPersonnummer(written.personal_number as string)).toBe(PERSONAL_NUMBER)
+    const { body } = await parseJsonResponse<{
+      data: { org_number: null; personal_number: string }
+    }>(response)
+    expect(body.data.org_number).toBeNull()
+    expect(body.data.personal_number).toBe(MASKED)
+  })
+
+  it('returns 400 when individual identifier fields conflict', async () => {
+    const response = await POST(
+      createMockRequest('/api/customers', {
+        method: 'POST',
+        body: {
+          name: 'Anna Andersson',
+          customer_type: 'individual',
+          org_number: '900101-1234',
+          personal_number: '900101-5678',
+        },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(400)
+    expect(captured.insert).toHaveLength(0)
   })
 
   it('updates the personal number for an existing private customer', async () => {

@@ -23,6 +23,11 @@ import { CreateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import { eventBus } from '@/lib/events'
 import type { Customer } from '@/types'
+import { resolveCustomerIdentifiers } from '@/lib/customers/identifiers'
+import {
+  encryptCustomerPersonalNumber,
+  maskCustomerIdentifiers,
+} from '@/lib/customers/protect-personal-number'
 
 // Mirror the canonical CustomerTypeSchema from lib/api/schemas.ts. Only
 // 'individual' refers to a natural person (Swedish sole trader / enskild
@@ -40,6 +45,7 @@ const CustomerSummary = z.object({
   customer_type: CustomerType,
   email: z.string().nullable(),
   org_number: z.string().nullable(),
+  personal_number: z.string().nullable(),
   vat_number: z.string().nullable(),
   default_payment_terms: z.number(),
   archived_at: z.string().nullable(),
@@ -51,7 +57,7 @@ const CustomersListResponse = listEnvelope(CustomerSummary)
 // Explicit projection: never SELECT *. Schema migrations adding columns
 // must update this list before the field becomes visible on the public API.
 const CUSTOMER_SUMMARY_COLUMNS =
-  'id, name, customer_type, email, org_number, vat_number, default_payment_terms, archived_at, created_at'
+  'id, name, customer_type, email, org_number, personal_number, vat_number, default_payment_terms, archived_at, created_at'
 
 registerEndpoint({
   operation: 'customers.list',
@@ -66,7 +72,7 @@ registerEndpoint({
     'Fetching a single customer you already know the id of: use GET /api/v1/companies/{companyId}/customers/{id}. Suppliers are a separate resource.',
   pitfalls: [
     'Archived customers are hidden by default; the dashboard makes the same choice.',
-    'org_number is included so callers can match against external CRM identifiers; for sole traders (enskild firma) it equals the personnummer.',
+    'personal_number is masked in every response. Legacy individual records stored in org_number are returned through personal_number and org_number is null.',
   ],
   example: {
     response: {
@@ -170,6 +176,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       customer_type: string
       email: string | null
       org_number: string | null
+      personal_number: string | null
       vat_number: string | null
       default_payment_terms: number
       archived_at: string | null
@@ -199,12 +206,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const customers = trimmed.map((r) => {
       const isIndividual = INDIVIDUAL_TYPES.has(r.customer_type)
+      const safe = maskCustomerIdentifiers(r)
       return {
-        id: r.id,
-        name: r.name,
-        customer_type: r.customer_type,
-        email: r.email,
-        org_number: isIndividual ? null : r.org_number,
+        id: safe.id,
+        name: safe.name,
+        customer_type: safe.customer_type,
+        email: safe.email,
+        org_number: safe.org_number,
+        personal_number: safe.personal_number,
         vat_number: isIndividual ? null : r.vat_number,
         default_payment_terms: r.default_payment_terms,
         archived_at: r.archived_at,
@@ -244,6 +253,7 @@ const CustomerCreated = z.object({
   city: z.string().nullable(),
   country: z.string(),
   org_number: z.string().nullable(),
+  personal_number: z.string().nullable(),
   vat_number: z.string().nullable(),
   vat_number_validated: z.boolean(),
   default_payment_terms: z.number(),
@@ -256,7 +266,7 @@ const CustomerCreated = z.object({
 // Drop vat_number_validated_at: declared in neither CustomerCreated nor
 // CustomerDetail; an internal timestamp with no documented consumer.
 const CUSTOMER_RESPONSE_COLUMNS =
-  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, personal_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 registerEndpoint({
   operation: 'customers.create',
@@ -272,7 +282,8 @@ registerEndpoint({
   pitfalls: [
     'Idempotency-Key is mandatory: calls without it return 400 VALIDATION_ERROR.',
     'org_number uniqueness is enforced at the database level; duplicate inserts return 409 CUSTOMER_DUPLICATE_ORG_NUMBER.',
-    'For Swedish sole traders (customer_type=individual), org_number IS the personnummer. List responses mask it; the create endpoint accepts it as input.',
+    'Use personal_number for individual customers. org_number remains accepted as a compatibility alias and is moved into encrypted personal_number storage.',
+    'When both identifier fields are supplied for an individual, they must identify the same person.',
     'VIES validation runs only on commit. Dry-run skips the external call and leaves vat_number_validated=false in the preview.',
   ],
   example: {
@@ -334,12 +345,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const body = parsed.data
+    const identifiers = resolveCustomerIdentifiers(body, { create: true })
+    if (!identifiers.ok) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { issues: [identifiers.error] },
+      })
+    }
 
     // Dry-run: validate input, return the would-be record. id, timestamps,
     // and vat_number_validated all populate on commit, not here.
     if (ctx.dryRun) {
       return dryRunPreview(
-        {
+        maskCustomerIdentifiers({
           id: null,
           name: body.name,
           customer_type: body.customer_type,
@@ -354,7 +372,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           postal_code: body.postal_code ?? null,
           city: body.city ?? null,
           country: body.country ?? 'Sweden',
-          org_number: body.org_number ?? null,
+          org_number: identifiers.data.orgNumber,
+          personal_number: identifiers.data.personalNumber,
           vat_number: body.vat_number ?? null,
           vat_number_validated: false,
           default_payment_terms: body.default_payment_terms ?? 30,
@@ -362,7 +381,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           archived_at: null,
           created_at: null,
           updated_at: null,
-        },
+        }),
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
@@ -404,7 +423,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         postal_code: body.postal_code ?? null,
         city: body.city ?? null,
         country: body.country ?? 'Sweden',
-        org_number: body.org_number ?? null,
+        org_number: identifiers.data.orgNumber,
+        personal_number: encryptCustomerPersonalNumber(identifiers.data.personalNumber),
         vat_number: body.vat_number ?? null,
         vat_number_validated: vatValidated,
         vat_number_validated_at: vatValidatedAt,
@@ -434,11 +454,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // Cast through `unknown` because the response projection deliberately
     // omits internal scoping fields (user_id, company_id) the Customer type
     // requires; we re-inject them on the payload from ctx.
+    const safeData = maskCustomerIdentifiers(data)
     try {
       await eventBus.emit({
         type: 'customer.created',
         payload: {
-          customer: { ...(data as Record<string, unknown>), user_id: ctx.userId, company_id: ctx.companyId! } as unknown as Customer,
+          customer: { ...(safeData as Record<string, unknown>), user_id: ctx.userId, company_id: ctx.companyId! } as unknown as Customer,
           companyId: ctx.companyId!,
           userId: ctx.userId,
         },
@@ -447,7 +468,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       ctx.log.warn('customer.created emit failed', err as Error)
     }
 
-    return created(data, { requestId: ctx.requestId })
+    return created(safeData, { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
 )

@@ -3,6 +3,7 @@
  * /api/v1/companies/:companyId/customers/:id.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
 
 beforeAll(() => {
   // Belt-and-braces: ensure we never reach a real DB from this test suite.
@@ -188,6 +189,7 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
     // Individual: org_number & vat_number masked to null in the list.
     const individualRow = body.data.find((c: { customer_type: string }) => c.customer_type === 'individual')
     expect(individualRow.org_number).toBeNull()
+    expect(individualRow.personal_number).toBe('********-9876')
     expect(individualRow.vat_number).toBeNull()
     // Business: Bolagsverket-public org_number remains visible.
     const businessRow = body.data.find((c: { customer_type: string }) => c.customer_type === 'swedish_business')
@@ -488,6 +490,114 @@ describe('POST /api/v1/companies/:companyId/customers', () => {
     expect(body.data.name).toBe('New Co AB')
   })
 
+  it('masks a legacy individual org_number as personal_number on detail', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: {
+          data: {
+            ...SAMPLE_CUSTOMER,
+            customer_type: 'individual',
+            org_number: '19900101-1234',
+            personal_number: null,
+            vat_number: null,
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await getCustomer(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.org_number).toBeNull()
+    expect(body.data.personal_number).toBe('********-1234')
+  })
+
+  it('stores personal_number encrypted and returns only the mask', async () => {
+    withWriteScope()
+    const personalNumber = '19900101-1234'
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: {
+        data: {
+          ...SAMPLE_CUSTOMER,
+          name: 'Private customer',
+          customer_type: 'individual',
+          org_number: null,
+          personal_number: encryptPersonnummer(personalNumber),
+          vat_number: null,
+          vat_number_validated: false,
+        },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Private customer',
+        customer_type: 'individual',
+        personal_number: personalNumber,
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    const insert = supabaseMock.captured.insert[0] as {
+      org_number?: string | null
+      personal_number?: string | null
+    }
+    expect(insert.org_number).toBeNull()
+    expect(insert.personal_number).not.toBe(personalNumber)
+    expect(decryptPersonnummer(insert.personal_number as string)).toBe(personalNumber)
+    const body = await res.json()
+    expect(body.data.org_number).toBeNull()
+    expect(body.data.personal_number).toBe('********-1234')
+  })
+
+  it('normalizes legacy individual org_number input into encrypted personal_number', async () => {
+    withWriteScope()
+    const personalNumber = '19900101-1234'
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: {
+        data: {
+          ...SAMPLE_CUSTOMER,
+          name: 'Private customer',
+          customer_type: 'individual',
+          org_number: null,
+          personal_number: encryptPersonnummer(personalNumber),
+          vat_number: null,
+          vat_number_validated: false,
+        },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Private customer',
+        customer_type: 'individual',
+        org_number: personalNumber,
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    const insert = supabaseMock.captured.insert[0] as {
+      org_number?: string | null
+      personal_number?: string | null
+    }
+    expect(insert.org_number).toBeNull()
+    expect(decryptPersonnummer(insert.personal_number as string)).toBe(personalNumber)
+  })
+
   it('rejects requests without an Idempotency-Key header', async () => {
     withWriteScope()
     mockServiceClient.mockReturnValue(
@@ -681,6 +791,68 @@ describe('PATCH /api/v1/companies/:companyId/customers/:id', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.default_payment_terms).toBe(14)
+  })
+
+  it('encrypts personal_number on update and returns only the mask', async () => {
+    withWriteScope()
+    const personalNumber = '19900101-1234'
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: {
+        data: {
+          ...SAMPLE_CUSTOMER,
+          customer_type: 'individual',
+          org_number: null,
+          personal_number: encryptPersonnummer(personalNumber),
+          vat_number: null,
+          vat_number_validated: false,
+        },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        personal_number: personalNumber,
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const update = supabaseMock.captured.update[0] as { personal_number?: string | null }
+    expect(update.personal_number).not.toBe(personalNumber)
+    expect(decryptPersonnummer(update.personal_number as string)).toBe(personalNumber)
+    const body = await res.json()
+    expect(body.data.personal_number).toBe('********-1234')
+  })
+
+  it('rejects conflicting legacy and canonical personal number updates', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: {
+        data: {
+          ...SAMPLE_CUSTOMER,
+          customer_type: 'individual',
+          org_number: null,
+          personal_number: encryptPersonnummer('19900101-1234'),
+        },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        org_number: '900101-1234',
+        personal_number: '900101-5678',
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect(supabaseMock.captured.update).toHaveLength(0)
   })
 
   it('rejects an empty body', async () => {

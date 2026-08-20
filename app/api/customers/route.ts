@@ -7,7 +7,11 @@ import { validateVatNumber } from '@/lib/vat/vies-client'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
-import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import {
+  encryptCustomerPersonalNumber,
+  maskCustomerIdentifiers,
+} from '@/lib/customers/protect-personal-number'
+import { resolveCustomerIdentifiers } from '@/lib/customers/identifiers'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -41,7 +45,7 @@ export const GET = withRouteContext(
 
     rows.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'sv'))
 
-    return NextResponse.json({ data: rows.map(maskCustomerRow) })
+    return NextResponse.json({ data: rows.map(maskCustomerIdentifiers) })
   },
 )
 
@@ -56,6 +60,13 @@ export const POST = withRouteContext(
     })
     if (!result.success) return result.response
     const body = result.data
+    const identifiers = resolveCustomerIdentifiers(body, { create: true })
+    if (!identifiers.ok) {
+      return errorResponseFromCode('VALIDATION_ERROR', log, {
+        requestId,
+        details: { issues: [identifiers.error] },
+      })
+    }
 
     const { data, error } = await supabase
       .from('customers')
@@ -75,9 +86,9 @@ export const POST = withRouteContext(
         postal_code: body.postal_code,
         city: body.city,
         country: body.country || 'Sweden',
-        org_number: body.org_number,
+        org_number: identifiers.data.orgNumber,
         vat_number: body.vat_number,
-        personal_number: encryptCustomerPersonalNumber(body.personal_number),
+        personal_number: encryptCustomerPersonalNumber(identifiers.data.personalNumber),
         language: body.language || 'sv',
         default_payment_terms: body.default_payment_terms || 30,
         notes: body.notes,
@@ -89,7 +100,7 @@ export const POST = withRouteContext(
       if (error.code === '23505') {
         return errorResponseFromCode('CUSTOMER_DUPLICATE_ORG_NUMBER', log, {
           requestId,
-          details: { orgNumber: body.org_number },
+          details: { field: 'org_number' },
         })
       }
       log.error('customer insert failed', error)
@@ -123,7 +134,7 @@ export const POST = withRouteContext(
       }
     }
 
-    const safeCustomer = maskCustomerRow(data)
+    const safeCustomer = maskCustomerIdentifiers(data)
     await eventBus.emit({
       type: 'customer.created',
       payload: { customer: safeCustomer as Customer, companyId: companyId!, userId: user.id },
