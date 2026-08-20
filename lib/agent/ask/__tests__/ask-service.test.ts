@@ -6,6 +6,14 @@ vi.mock('@/lib/ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/ai')>()
   return { ...actual, getAiService: () => ({ generateText }) }
 })
+const buildLedgerTools = vi.fn()
+const buildAssistantSnapshot = vi.fn()
+vi.mock('../ledger-tools', () => ({
+  buildLedgerTools: (...a: unknown[]) => buildLedgerTools(...a),
+}))
+vi.mock('../snapshot', () => ({
+  buildAssistantSnapshot: (...a: unknown[]) => buildAssistantSnapshot(...a),
+}))
 
 import { answerAssistantQuestion } from '../ask-service'
 
@@ -21,6 +29,8 @@ function supabaseWith(company: { name?: string; entity_type?: string } | null): 
 beforeEach(() => {
   vi.clearAllMocks()
   generateText.mockResolvedValue({ text: 'Svar', model: 'qwen3.8', usage: {} })
+  buildLedgerTools.mockReturnValue([])
+  buildAssistantSnapshot.mockResolvedValue('')
 })
 
 describe('answerAssistantQuestion', () => {
@@ -68,5 +78,55 @@ describe('answerAssistantQuestion', () => {
     await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
     const call = generateText.mock.calls[0][0]
     expect(call.prompt.startsWith('Fråga:')).toBe(true)
+  })
+
+  it('without a userId: no tools, no snapshot, the no-tool system prompt', async () => {
+    await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
+    expect(buildLedgerTools).not.toHaveBeenCalled()
+    const call = generateText.mock.calls[0][0]
+    expect(call.tools).toBeUndefined()
+    expect(call.system).toContain('Svara utifrån den kontext du får')
+    expect(call.system).not.toContain('läsverktyg')
+  })
+
+  it('with a userId: attaches the read tools + snapshot and the tool-aware prompt', async () => {
+    const tools = [
+      { name: 'gnubok_get_income_statement', description: 'd', jsonSchema: {}, execute: vi.fn() },
+    ]
+    buildLedgerTools.mockReturnValue(tools)
+    buildAssistantSnapshot.mockResolvedValue('Status: momsregistrerad (momsperiod: quarterly).')
+
+    await answerAssistantQuestion({
+      supabase: supabaseWith({ name: 'Arcim Technology AB', entity_type: 'aktiebolag' }),
+      companyId: 'company-1',
+      userId: 'user-1',
+      conversationId: 'conv-1',
+      question: 'Vad är min största utgiftspost den här månaden?',
+    })
+
+    expect(buildLedgerTools).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'conv-1')
+    const call = generateText.mock.calls[0][0]
+    expect(call.tools).toBe(tools)
+    expect(call.maxSteps).toBe(5)
+    // tool-aware system prompt
+    expect(call.system).toContain('läsverktyg')
+    expect(call.system).not.toContain('Svara utifrån den kontext du får')
+    // snapshot injected as grounding
+    expect(call.prompt).toContain('Företagets nuläge')
+    expect(call.prompt).toContain('Status: momsregistrerad (momsperiod: quarterly).')
+  })
+
+  it('honours a custom maxSteps', async () => {
+    buildLedgerTools.mockReturnValue([
+      { name: 'gnubok_get_vat_report', description: 'd', jsonSchema: {}, execute: vi.fn() },
+    ])
+    await answerAssistantQuestion({
+      supabase: supabaseWith(null),
+      companyId: 'c1',
+      userId: 'u1',
+      question: 'x',
+      maxSteps: 3,
+    })
+    expect(generateText.mock.calls[0][0].maxSteps).toBe(3)
   })
 })

@@ -186,3 +186,117 @@ describe('buildAnthropicDocumentContent', () => {
     ])
   })
 })
+
+describe('generateText read-only tool loop', () => {
+  it('calls a tool, feeds the JSON result back, and returns the final answer with summed usage', async () => {
+    const execute = vi.fn().mockResolvedValue({ largest: '5010', amount: 12345 })
+    const svc = createAnthropicFamilyService(readAiConfig())
+
+    // Turn 1: the model asks for a report.
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'tool_use',
+      content: [
+        { type: 'text', text: 'Kollar.' },
+        { type: 'tool_use', id: 'tu_1', name: 'gnubok_get_income_statement', input: { period: '2026-07' } },
+      ],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    })
+    // Turn 2: the model answers with the figure.
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: 'Din största utgift är 12 345 kr (konto 5010).' }],
+      usage: { input_tokens: 20, output_tokens: 8 },
+    })
+
+    const result = await svc.generateText({
+      tier: 'assistant',
+      system: 'S',
+      prompt: 'Vad är min största utgift?',
+      maxTokens: 500,
+      tools: [
+        { name: 'gnubok_get_income_statement', description: 'd', jsonSchema: { type: 'object' }, execute },
+      ],
+      maxSteps: 4,
+    })
+
+    expect(execute).toHaveBeenCalledWith({ period: '2026-07' })
+    expect(result.text).toBe('Din största utgift är 12 345 kr (konto 5010).')
+    expect(mockCreate).toHaveBeenCalledTimes(2)
+
+    // First turn carries the tools; second turn carries the tool_result.
+    expect(mockCreate.mock.calls[0][0].tools[0].name).toBe('gnubok_get_income_statement')
+    const secondMessages = mockCreate.mock.calls[1][0].messages
+    expect(secondMessages).toHaveLength(3) // user, assistant(tool_use), user(tool_result)
+    const toolResult = secondMessages[2].content[0]
+    expect(toolResult.type).toBe('tool_result')
+    expect(toolResult.tool_use_id).toBe('tu_1')
+    expect(JSON.parse(toolResult.content)).toEqual({ largest: '5010', amount: 12345 })
+
+    // Usage summed across both turns.
+    expect(result.usage.inputTokens).toBe(30)
+    expect(result.usage.outputTokens).toBe(13)
+  })
+
+  it('surfaces a tool failure as an is_error result rather than throwing', async () => {
+    const execute = vi.fn().mockRejectedValue(new Error('report timeout'))
+    const svc = createAnthropicFamilyService(readAiConfig())
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'tool_use',
+      content: [{ type: 'tool_use', id: 'tu', name: 'gnubok_get_vat_report', input: {} }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: 'Kunde inte hämta momsrapporten just nu.' }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    const result = await svc.generateText({
+      tier: 'assistant',
+      prompt: 'Momsen?',
+      maxTokens: 100,
+      tools: [{ name: 'gnubok_get_vat_report', description: 'd', jsonSchema: {}, execute }],
+    })
+    const toolResult = mockCreate.mock.calls[1][0].messages[2].content[0]
+    expect(toolResult.is_error).toBe(true)
+    expect(JSON.parse(toolResult.content).error).toContain('report timeout')
+    expect(result.text).toBe('Kunde inte hämta momsrapporten just nu.')
+  })
+
+  it('forces a final tools-off answer when the step budget is exhausted', async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true })
+    const svc = createAnthropicFamilyService(readAiConfig())
+    // Every turn keeps asking for the tool → never terminates on its own.
+    mockCreate.mockResolvedValue({
+      stop_reason: 'tool_use',
+      content: [{ type: 'tool_use', id: 'tu', name: 't', input: {} }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    // The forced final turn (index 2) returns real text.
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'tool_use',
+      content: [{ type: 'tool_use', id: 'tu', name: 't', input: {} }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'tool_use',
+      content: [{ type: 'tool_use', id: 'tu', name: 't', input: {} }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: 'Sammanfattning utan fler verktygsanrop.' }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    const result = await svc.generateText({
+      tier: 'assistant',
+      prompt: 'x',
+      maxTokens: 100,
+      tools: [{ name: 't', description: 'd', jsonSchema: {}, execute }],
+      maxSteps: 2,
+    })
+    // 2 loop turns + 1 forced final = 3 calls; the final call omits tools.
+    expect(mockCreate).toHaveBeenCalledTimes(3)
+    expect(mockCreate.mock.calls[2][0].tools).toBeUndefined()
+    expect(result.text).toBe('Sammanfattning utan fler verktygsanrop.')
+  })
+})

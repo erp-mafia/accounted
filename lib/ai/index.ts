@@ -10,6 +10,7 @@ export type {
   AiPdfMode,
   AiProviderKind,
   AiService,
+  AiToolDef,
   AiStatus,
   AiTier,
   AiUsage,

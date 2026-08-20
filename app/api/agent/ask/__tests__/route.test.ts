@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
+vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: () => requireAuthMock() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn().mockResolvedValue('company-1') }))

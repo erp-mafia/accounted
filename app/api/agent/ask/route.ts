@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
@@ -15,16 +16,23 @@ import {
 } from '@/lib/agent/ask/persist'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
+// The assistant answers over the read-only MCP tools, which are registered
+// into the agent tool registry by the mcp-server extension at load. Without
+// this the registry is empty and the assistant falls back to snapshot-only,
+// so a hosted deploy would silently lose its ledger tools.
+ensureInitialized()
+
 /**
- * POST /api/agent/ask: a single-call, provider-agnostic assistant answer.
+ * POST /api/agent/ask: a single-call, provider-agnostic assistant answer over a
+ * bounded read-only tool loop.
  *
  * Unlike POST /api/agent/invoke (the streaming Anthropic chat runtime, which
  * is gated on `assistantAvailable` and only runs on the Anthropic family),
- * this endpoint uses getAiService().generateText, so it runs on ANY configured
- * backend, including an OpenAI-compatible local model. It is therefore gated
- * on `configured`, not `assistantAvailable`. This is the replacement chat
- * surface's server side (audit Option A / rip): a page posts its context and
- * a question, gets one answer back.
+ * this endpoint answers through getAiService().generateText, so it runs on ANY
+ * configured backend, including an OpenAI-compatible local model. It is
+ * therefore gated on `configured`, not `assistantAvailable`. The service
+ * attaches the read-only MCP tools so it can fetch real figures (audit Option
+ * A / rip): a page posts its context and a question, gets one answer back.
  */
 
 const Schema = z.object({
@@ -93,6 +101,7 @@ export async function POST(request: Request): Promise<Response> {
       const result = await answerAssistantQuestion({
         supabase,
         companyId,
+        userId: user.id,
         question: parsed.data.question,
         pageContext: parsed.data.context,
         tier: parsed.data.tier,
@@ -127,6 +136,8 @@ export async function POST(request: Request): Promise<Response> {
     const result = await answerAssistantQuestion({
       supabase,
       companyId,
+      userId: user.id,
+      conversationId,
       question: parsed.data.question,
       pageContext: parsed.data.context,
       tier: parsed.data.tier,
