@@ -108,6 +108,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/fiscal-periods/:id/currency-revaluation': 'bookkeeping:write',
   // Compliance check (Accounted's defensible edge).
   'GET /api/v1/companies/:companyId/compliance/check': 'compliance:read',
+  // #1663: filed momsdeklaration read (SKV inlamnat/beslutat). Rides
+  // compliance:read, mirroring the MCP gnubok_vat_declaration_status mapping.
+  'GET /api/v1/companies/:companyId/skatteverket/vat-declarations': 'compliance:read',
   // Phase 4 PR-3: Documents (multipart).
   'POST /api/v1/companies/:companyId/documents': 'documents:write',
   'GET /api/v1/companies/:companyId/documents/:id/download': 'documents:read',

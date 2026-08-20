@@ -3297,6 +3297,11 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     message_en: 'Skatteverket rate limit exceeded.',
     retryable: true,
   },
+  SKATTEVERKET_API_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Skatteverkets tjänst svarade med ett fel. Se detaljerna och försök igen.',
+    message_en: 'The Skatteverket API returned an error. See details for the upstream message.',
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────
