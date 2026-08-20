@@ -274,7 +274,7 @@ The cron sidecar calls `/api/connector/sync/cron` hourly (it is listed in `docke
 curl -sf -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/connector/sync/cron
 ```
 
-The **bank connector** proxy is live (`app.gnubok.se/api/connect/bank/*`): with `bank_sync` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials while the bank session id and all transaction data stay in the instance's own database. Skatteverket, company lookup and migration through the connector ship in following releases; until each lands, a key is validated and its grants are written, and the unshipped services stay unconfigured.
+The **bank** and **Skatteverket** connector proxies are live (`app.gnubok.se/api/connect/bank/*` and `/api/connect/skv/*`): with `bank_sync` / `skatteverket` in your key's scopes, the instance connects a bank through Arcim's PSD2 credentials and files VAT/AGI + syncs skattekonto through Arcim's registered Skatteverket client, while all tokens (the bank session id, the SKV BankID tokens) stay encrypted in the instance's own database. Company lookup and migration through the connector ship in following releases; until each lands, a key is validated and its grants are written, and the unshipped services stay unconfigured. On the instance, Skatteverket still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY` (the tokens are stored there, so the encryption key is the operator's).
 
 ### Push Notifications
 
