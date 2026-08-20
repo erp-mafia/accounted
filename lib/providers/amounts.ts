@@ -66,6 +66,17 @@ export interface ResolvedVat {
  * Returns only what the inputs support. With just a gross total, both fields
  * come back undefined rather than net = gross and VAT = 0: "we only know what
  * the customer paid" is the honest reading, and the caller flags it.
+ *
+ * The returned pair ALWAYS satisfies `net + vat === gross`. Providers state
+ * all three independently and they need not agree: Fortnox's `Total` is the
+ * amount to pay after öresavrundning, while `Net + TotalVAT` is the unrounded
+ * `Gross`, so the two differ by up to 50 öre. Passing both through as stated
+ * would put that gap into the invoice row, where `subtotal + vat_amount` no
+ * longer equals `total`; the header booking path derives the 1510 debit from
+ * the sum of its credits, so the receivable would land a few öre away from
+ * what the customer actually owes while the verifikat still balanced. The VAT
+ * is the figure that must survive intact (it reaches the momsdeklaration), so
+ * the gap is absorbed into the net.
  */
 export function resolveVatTriple(params: {
   gross: number;
@@ -74,9 +85,8 @@ export function resolveVatTriple(params: {
 }): ResolvedVat {
   const { gross, net, vat } = params;
 
-  if (net !== undefined && vat !== undefined) return { net, vat };
-  if (net !== undefined) return { net, vat: roundOre(gross - net) };
   if (vat !== undefined) return { net: roundOre(gross - vat), vat };
+  if (net !== undefined) return { net, vat: roundOre(gross - net) };
 
   return {};
 }

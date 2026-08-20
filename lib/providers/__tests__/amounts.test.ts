@@ -43,9 +43,23 @@ describe('resolveVatTriple', () => {
       .toEqual({ net: 1476000, vat: 369000 });
   });
 
-  it('passes both through when both are stated', () => {
+  it('passes both through when both are stated and they agree', () => {
     expect(resolveVatTriple({ gross: 100, net: 80, vat: 20 }))
       .toEqual({ net: 80, vat: 20 });
+  });
+
+  it('keeps net + vat === gross when the provider states three that disagree', () => {
+    // Fortnox `Total` is post-öresavrundning while Net + TotalVAT is the
+    // unrounded Gross. Passing both through as stated would leave
+    // subtotal + vat_amount != total on the invoice row, and the header
+    // booking path derives the 1510 debit from the sum of its credits: the
+    // receivable would sit a few öre off what the customer owes, with the
+    // verifikat still balancing so nothing flags it.
+    const resolved = resolveVatTriple({ gross: 1250, net: 1000.4, vat: 250 });
+
+    expect(resolved.vat).toBe(250);
+    expect(resolved.net).toBe(1000);
+    expect((resolved.net ?? 0) + (resolved.vat ?? 0)).toBe(1250);
   });
 
   it('resolves NOTHING from a gross alone', () => {
