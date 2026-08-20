@@ -54,6 +54,12 @@ set -euo pipefail
 export AWS_DEFAULT_REGION="${BACKUP_S3_REGION:-us-east-1}"
 PREFIX="${BACKUP_S3_PREFIX:-accounted}"
 LABEL="${BACKUP_LABEL:-nightly}"
+# The label becomes S3 keys, file names and container arguments: keep it to
+# the same character set restore.sh accepts.
+if ! [[ "$LABEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "backup: invalid BACKUP_LABEL \"$LABEL\" (letters, digits, . _ - only)" >&2
+  exit 2
+fi
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 NAME="${LABEL}-${STAMP}"
 

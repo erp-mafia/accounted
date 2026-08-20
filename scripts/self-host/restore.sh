@@ -39,6 +39,13 @@ if [ "$CONFIRM" != "--yes" ]; then
   echo "restore: refusing to run without --yes (this overwrites the target database)" >&2
   exit 2
 fi
+# The name becomes S3 keys, local file names and container arguments: only
+# the characters backup.sh can produce are accepted, so nothing shell- or
+# path-like ever reaches those places.
+if ! [[ "$NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "restore: invalid backup name \"$NAME\" (expected e.g. nightly-20260820T020000Z)" >&2
+  exit 2
+fi
 
 : "${RESTORE_DATABASE_URL:?RESTORE_DATABASE_URL is required}"
 : "${BACKUP_S3_ENDPOINT:?BACKUP_S3_ENDPOINT is required}"
@@ -77,12 +84,15 @@ echo "restore: checksums verified"
 
 if [ "$HAVE_DBCONFIG" = 1 ] && [ -n "${RESTORE_DB_CONFIG_VOLUME:-}" ]; then
   command -v docker >/dev/null 2>&1 || { echo "restore: RESTORE_DB_CONFIG_VOLUME set but docker not found" >&2; exit 2; }
+  # No shell inside the container: tar receives the path as an argument.
   docker run --rm -v "${RESTORE_DB_CONFIG_VOLUME}:/dst" -v "${WORK}:/in:ro" alpine:3 \
-    sh -c "tar -C /dst -xzf /in/${NAME}.db-config.tar.gz"
+    tar -C /dst -xzf "/in/${NAME}.db-config.tar.gz"
   echo "restore: db-config volume restored (${RESTORE_DB_CONFIG_VOLUME})"
 fi
 
-echo "restore: restoring database into ${RESTORE_DATABASE_URL%%@*}@... (objects are dropped and recreated)"
+# Log only what follows the last "@" (host, port, database): never the
+# credentials part of the URL.
+echo "restore: restoring database into ${RESTORE_DATABASE_URL##*@} (objects are dropped and recreated)"
 # --clean --if-exists: drop objects before recreating them. --no-owner /
 # --no-privileges: the fresh stack owns its roles. Exit status 1 from
 # pg_restore means "errors occurred" (typically harmless "does not exist" on

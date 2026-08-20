@@ -35,6 +35,25 @@ describe('self-host shell scripts', () => {
     expect(status).not.toBe(0)
   })
 
+  it('restore.sh rejects a backup name with shell metacharacters before doing anything', () => {
+    let status = 0
+    let stderr = ''
+    try {
+      execFileSync('bash', [join(DIR, 'restore.sh'), 'nightly-2026; rm -rf /', '--yes'], BARE_ENV)
+    } catch (err) {
+      status = (err as { status?: number }).status ?? -1
+      stderr = String((err as { stderr?: Buffer }).stderr ?? '')
+    }
+    expect(status).toBe(2)
+    expect(stderr).toContain('invalid backup name')
+  })
+
+  it('restore.sh never runs a shell inside the helper container', () => {
+    const src = readFileSync(join(DIR, 'restore.sh'), 'utf8')
+    expect(src).not.toMatch(/sh -c/)
+    expect(readFileSync(join(DIR, 'backup.sh'), 'utf8')).not.toMatch(/sh -c/)
+  })
+
   it('restore.sh refuses to run without --yes', () => {
     let status = 0
     let stderr = ''
