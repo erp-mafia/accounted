@@ -134,13 +134,17 @@ export default function TransactionBookingDialog({
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
   const [bankAccount, setBankAccount] = useState<string | null>(null)
   const [bankAccountName, setBankAccountName] = useState<string | null>(null)
-  const [suggestedCounterAccount, setSuggestedCounterAccount] = useState('')
+  const [categorySuggestion, setCategorySuggestion] = useState<{
+    debit_account?: string
+    credit_account?: string
+    fromCategory: string
+  } | null>(null)
 
   useEffect(() => {
     if (!open || !transaction) return
     setBankAccount(null)
     setBankAccountName(null)
-    setSuggestedCounterAccount('')
+    setCategorySuggestion(null)
     let cancelled = false
     fetch('/api/cash-accounts')
       .then((r) => {
@@ -180,10 +184,11 @@ export default function TransactionBookingDialog({
         const top = templates.find((s) => s.debit_account && s.credit_account)
         const categories = (data.suggestions?.[transaction.id] ?? []) as Array<{ account?: string | null }>
         const fromCategory = categories.find((s) => s.account)?.account ?? ''
-        const bank = '1930'
-        setSuggestedCounterAccount(
-          counterAccountFromSuggestion(top ?? null, bank, transaction.amount < 0) || fromCategory || '',
-        )
+        setCategorySuggestion({
+          debit_account: top?.debit_account,
+          credit_account: top?.credit_account,
+          fromCategory,
+        })
       })
       .catch(() => {})
     return () => { cancelled = true }
@@ -192,6 +197,12 @@ export default function TransactionBookingDialog({
   if (!transaction) return null
 
   const isIncome = transaction.amount > 0
+  const suggestedCounterAccount =
+    counterAccountFromSuggestion(
+      categorySuggestion,
+      bankAccount ?? '1930',
+      transaction.amount < 0,
+    ) || categorySuggestion?.fromCategory || ''
 
   const handleBooked = async (transactionId: string, journalEntryId: string, matched = false) => {
     // Link any attached documents to the new journal entry: freshly uploaded
