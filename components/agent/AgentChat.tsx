@@ -296,19 +296,21 @@ export default function AgentChat({
     // the composer is already replaced by the upgrade note.
     if (!hasAi) return
 
-    // Seed-message path: render the user's pre-baked starter in the timeline
-    // and send it as the first turn's user_message (skips intent.capture +
-    // promptTemplate). Empty seed runs the normal capture-driven flow.
+    // Seed-message path: the user arrived with a pre-baked starter (e.g. an
+    // "ask about this" button), an explicit intent to ask something: render it
+    // and send it as the first turn's user_message. This still auto-fires
+    // because the user chose to.
+    //
+    // No EMPTY auto-fire (audit 2026-08-18): opening /chat with nothing to say
+    // used to fire a full turn to generate a greeting, and 27-75% of those
+    // conversations were then never typed in: a model call and a wait for a
+    // greeting nobody asked for. The chat now opens ready for input; the first
+    // turn runs when the user actually sends something.
     if (seedUserMessage && seedUserMessage.trim().length > 0) {
       setMessages([{ role: 'user', text: seedUserMessage.trim() }])
       void startTurn({
         conversationId: initialConversationId ?? null,
         userMessage: seedUserMessage.trim(),
-      })
-    } else {
-      void startTurn({
-        conversationId: initialConversationId ?? null,
-        userMessage: '',
       })
     }
     return () => {

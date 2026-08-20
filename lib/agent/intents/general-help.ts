@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
+import { SONNET_MODEL } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
 // general.help: always-present "Fråga min assistent" from the top nav.
@@ -94,11 +94,11 @@ export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCapture
 
   model: SONNET_MODEL,
 
-  // Reason before answering: this is the broad chat surface where the agent
-  // answered regulatory questions from memory and narrated its steps. Thinking
-  // moves the reasoning into its own channel so the visible reply is a single
-  // consolidated answer.
-  thinking: { effort: EFFORT_STANDARD },
+  // No extended thinking on the broad /chat surface (audit 2026-08-18): it was
+  // the single biggest latency source here, adaptive thinking is unavailable on
+  // the OpenAI-compatible/local backends this assistant is moving to, and the
+  // ground rules already forbid answering regulatory questions from memory. The
+  // reply is a single consolidated answer either way.
 
   capture: async ({ route }) => ({ route: route ?? null }),
 
