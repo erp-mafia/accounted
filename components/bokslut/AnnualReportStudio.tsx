@@ -48,6 +48,8 @@ interface AnnualReportStudioProps {
   hasUnsavedNarrative: boolean
   narrativeRevision: string | null
   onVersionsChanged?: (versions: AnnualReportVersionSummary[]) => void
+  /** Blocking-issue count once the compliance check has loaded, null while loading. */
+  onBlockingCountChanged?: (count: number | null) => void
 }
 
 type NullableBoolean = boolean | null
@@ -91,6 +93,7 @@ export function AnnualReportStudio({
   hasUnsavedNarrative,
   narrativeRevision,
   onVersionsChanged,
+  onBlockingCountChanged,
 }: AnnualReportStudioProps) {
   const t = useTranslations('annualReportStudio')
   const { toast } = useToast()
@@ -143,6 +146,11 @@ export function AnnualReportStudio({
     () => compliance?.validation.issues.filter((issue) => issue.severity === 'error') ?? [],
     [compliance],
   )
+  // The signature section further down explains why "Låst version" is empty
+  // in terms of this count, so it must not read 0 while we are still loading.
+  useEffect(() => {
+    onBlockingCountChanged?.(compliance ? blockingIssues.length : null)
+  }, [compliance, blockingIssues.length, onBlockingCountChanged])
   const digitalOnlyIssues = useMemo(() => {
     const generalCodes = new Set(compliance?.validation.issues.map((issue) => issue.code) ?? [])
     return (
@@ -496,7 +504,7 @@ export function AnnualReportStudio({
         </div>
       </section>
 
-      <section>
+      <section id="ar-fullstandighetskontroll" className="scroll-mt-24">
         <div className="mb-1 flex items-center gap-2 px-1">
           <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('checks_title')}</h3>
           <div className="h-px flex-1 bg-border/60" />
@@ -561,6 +569,13 @@ export function AnnualReportStudio({
               {t('lock_version')}
             </Button>
           </div>
+          {(blockingIssues.length > 0 || hasUnsavedNarrative) && (
+            <p className="text-right text-xs leading-5 text-muted-foreground">
+              {hasUnsavedNarrative
+                ? t('lock_hint_unsaved')
+                : t('lock_hint_blocked', { count: blockingIssues.length })}
+            </p>
+          )}
         </div>
       </section>
 

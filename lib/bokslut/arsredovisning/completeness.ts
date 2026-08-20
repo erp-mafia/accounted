@@ -289,30 +289,37 @@ export function validateAnnualReportCompleteness(
     push(issues, 'AR-NOTES-EMPTY', 'error', 'notes', 'Årsredovisningen saknar noter.')
   }
 
-  const disclosureChecks: Array<[boolean, string, string]> = [
+  // Each confirmation is a checkbox under "Lagstadgade upplysningar" on the
+  // årsredovisning page, persisted by "Spara texten". Say so: a bare "är
+  // inte bekräftad" left a real user hunting for the switch (2026-08-20).
+  const disclosureChecks: Array<[boolean, string, string, string]> = [
     [
       disclosures.long_term_debt_over_five_years_confirmed,
       'AR-NOTE-LONG-DEBT-UNCONFIRMED',
       'Uppgiften om långfristiga skulder som förfaller efter mer än fem år är inte bekräftad.',
+      'Kryssa i "Jag har kontrollerat uppgiften" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
     ],
     [
       disclosures.securities_pledged_confirmed,
       'AR-NOTE-SECURITIES-UNCONFIRMED',
       'Uppgiften om ställda säkerheter är inte bekräftad.',
+      'Kryssa i "Jag har kontrollerat ställda säkerheter" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
     ],
     [
       disclosures.contingent_liabilities_confirmed,
       'AR-NOTE-CONTINGENT-UNCONFIRMED',
       'Uppgiften om eventualförpliktelser är inte bekräftad.',
+      'Kryssa i "Jag har kontrollerat eventualförpliktelser" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
     ],
     [
       disclosures.parent_company_confirmed,
       'AR-NOTE-PARENT-UNCONFIRMED',
       'Uppgiften om koncern- och moderföretagsförhållanden är inte bekräftad.',
+      'Kryssa i "Jag har kontrollerat koncernförhållandet" under Lagstadgade upplysningar längre ner och klicka på Spara texten.',
     ],
   ]
-  for (const [confirmed, code, message] of disclosureChecks) {
-    if (!confirmed) push(issues, code, 'error', 'notes', message)
+  for (const [confirmed, code, message, remediation] of disclosureChecks) {
+    if (!confirmed) push(issues, code, 'error', 'notes', message, remediation)
   }
 
   if (report.accounting_framework === 'k3') {

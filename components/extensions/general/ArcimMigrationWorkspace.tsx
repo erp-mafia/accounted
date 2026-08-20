@@ -1069,6 +1069,7 @@ function OptionsStep({
   onStart: () => void
   onBack: () => void
 }) {
+  const t = useTranslations('extensions')
   const [showConfirm, setShowConfirm] = useState(false)
 
   const toggleOption = (key: keyof MigrationOptions) => {
@@ -1155,7 +1156,7 @@ function OptionsStep({
               <div className="flex items-center gap-3 border-t border-border py-3">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium">Verifikationsserie</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">Serie för importerade verifikationer</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{t('ext_arcim_option_series_help')}</p>
                 </div>
                 <Input
                   className="w-16 text-center"
@@ -1597,6 +1598,13 @@ function DocumentImportFollowUp({
             ? t('ext_arcim_documents_discovery_error')
             : t('ext_arcim_documents_import_error')}
       </p>
+      {state.problem?.providerMessage && (
+        <p className="text-xs text-muted-foreground">
+          {t('ext_arcim_documents_provider_message', {
+            message: state.problem.providerMessage,
+          })}
+        </p>
+      )}
       {state.problem?.requestId && (
         <p className="text-xs text-muted-foreground">
           {t('ext_arcim_documents_error_reference', {

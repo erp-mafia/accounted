@@ -63,6 +63,8 @@ export interface ArcimDocumentImportProblem {
   requestId: string | null
   reconnectRequired: boolean
   message?: string
+  /** What the source system (Fortnox/Bokio) itself answered, when known. */
+  providerMessage?: string
 }
 
 export function documentOAuthProblemFromReason(
@@ -211,16 +213,25 @@ function problemFromPayload(payload: unknown): ArcimDocumentImportProblem {
   const error = (payload as { error?: unknown } | null)?.error
   const structured =
     error && typeof error === 'object'
-      ? (error as { code?: unknown; requestId?: unknown })
+      ? (error as { code?: unknown; requestId?: unknown; details?: unknown })
       : null
   const code = typeof structured?.code === 'string' ? structured.code : null
   const requestId =
     typeof structured?.requestId === 'string' ? structured.requestId : null
+  const details =
+    structured?.details && typeof structured.details === 'object'
+      ? (structured.details as { providerMessage?: unknown })
+      : null
+  const providerMessage =
+    typeof details?.providerMessage === 'string' && details.providerMessage.trim()
+      ? details.providerMessage.trim()
+      : null
 
   return {
     code,
     requestId,
     reconnectRequired: code === PROVIDER_DOCUMENT_SCOPES_REQUIRED,
+    ...(providerMessage ? { providerMessage } : {}),
   }
 }
 

@@ -2404,11 +2404,11 @@ export async function executeSIEImport(
       const totalSkipped = voucherResults.skippedEmpty + voucherResults.skippedSingleLine + voucherResults.skippedUnbalanced + voucherResults.skippedUnmapped
       if (totalSkipped > 0) {
         const parts: string[] = []
-        if (voucherResults.skippedEmpty > 0) parts.push(`${voucherResults.skippedEmpty} tomma`)
+        if (voucherResults.skippedEmpty > 0) parts.push(`${voucherResults.skippedEmpty} ${voucherResults.skippedEmpty === 1 ? 'tom' : 'tomma'}`)
         if (voucherResults.skippedUnbalanced > 0) parts.push(`${voucherResults.skippedUnbalanced} obalanserade`)
         if (voucherResults.skippedUnmapped > 0) parts.push(`${voucherResults.skippedUnmapped} med ej mappade konton`)
         result.warnings.push(
-          `${totalSkipped} verifikationer hoppades över (ofullständiga i källsystemet): ${parts.join(', ')}`
+          `${totalSkipped} ${totalSkipped === 1 ? 'verifikation' : 'verifikationer'} hoppades över (${totalSkipped === 1 ? 'ofullständig' : 'ofullständiga'} i källsystemet): ${parts.join(', ')}`
         )
       }
 
@@ -2419,7 +2419,7 @@ export async function executeSIEImport(
           .slice(0, 10)
           .map(d => d.voucherId)
         result.warnings.push(
-          `${voucherResults.skippedSingleLine} enradsverifikationer hoppades över (kan vara periodiseringar/manuella justeringar): ${singleLineDetails.join(', ')}${voucherResults.skippedSingleLine > 10 ? '...' : ''}`
+          `${voucherResults.skippedSingleLine} ${voucherResults.skippedSingleLine === 1 ? 'enradsverifikation' : 'enradsverifikationer'} hoppades över (kan vara periodiseringar/manuella justeringar): ${singleLineDetails.join(', ')}${voucherResults.skippedSingleLine > 10 ? '...' : ''}`
         )
       }
 

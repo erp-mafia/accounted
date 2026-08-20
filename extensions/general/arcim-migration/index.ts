@@ -36,6 +36,7 @@ import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
 import type { ProviderName } from '@/lib/providers/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { createLogger } from '@/lib/logger'
 
 const moduleLog = createLogger('extensions/arcim-migration')
@@ -1371,7 +1372,18 @@ export const arcimMigrationExtension: Extension = {
           })
           return NextResponse.json({ success: true, dryRun, result })
         } catch (error) {
-          log.error('arcim import-documents failed', error as Error)
+          // "400 Bad Request" alone told us nothing when a live Fortnox
+          // discovery failed (2026-08-20): keep status, Fortnox's own
+          // message and a body excerpt in the log, and hand the message
+          // to the UI so the user sees what the source system said.
+          const providerStatus = error instanceof FortnoxApiError ? error.statusCode : undefined
+          const providerMessage = fortnoxErrorMessage(error)
+          log.error('arcim import-documents failed', error as Error, {
+            providerStatus,
+            providerMessage,
+            providerBody:
+              error instanceof FortnoxApiError ? error.body?.slice(0, 500) : undefined,
+          })
           if (error instanceof FortnoxDocumentScopesRequiredError) {
             return errorResponseFromCode(
               'PROVIDER_DOCUMENT_SCOPES_REQUIRED',
@@ -1380,7 +1392,11 @@ export const arcimMigrationExtension: Extension = {
             )
           }
           return errorResponseFromCode('PROVIDER_IMPORT_DOCUMENTS_FAILED', moduleLog, {
-            details: { reason: error instanceof Error ? error.message : 'unknown' },
+            details: {
+              reason: error instanceof Error ? error.message : 'unknown',
+              ...(providerStatus ? { providerStatus } : {}),
+              ...(providerMessage ? { providerMessage } : {}),
+            },
           })
         }
       },

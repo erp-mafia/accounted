@@ -35,7 +35,11 @@ import {
   downloadBokioUpload,
   type BokioUpload,
 } from '@/lib/providers/bokio/attachments'
-import { FortnoxApiError, FortnoxClient } from '@/lib/providers/fortnox/client'
+import {
+  FortnoxApiError,
+  FortnoxClient,
+  isFortnoxPermissionError,
+} from '@/lib/providers/fortnox/client'
 import {
   downloadFortnoxArchiveFile,
   fetchFortnoxFileConnections,
@@ -213,7 +217,7 @@ function fortnoxSource(
           }
         })
       } catch (error) {
-        if (error instanceof FortnoxApiError && error.statusCode === 403) {
+        if (isFortnoxPermissionError(error)) {
           throw new FortnoxDocumentScopesRequiredError()
         }
         throw error
@@ -386,11 +390,7 @@ export async function importProviderDocuments(
         }
       }
 
-      if (
-        provider === 'fortnox' &&
-        finalError instanceof FortnoxApiError &&
-        finalError.statusCode === 403
-      ) {
+      if (provider === 'fortnox' && isFortnoxPermissionError(finalError)) {
         throw new FortnoxDocumentScopesRequiredError()
       }
 

@@ -53,7 +53,16 @@ export async function fetchFortnoxFinancialYears(
   return years;
 }
 
-/** Fetch and deduplicate voucher file connections for each financial year. */
+/**
+ * Fetch and deduplicate voucher file connections for each financial year.
+ *
+ * Fortnox is asked per financial year first. If it answers 400 to the
+ * `financialyear` filter (seen live 2026-08-20: the resource took the filter
+ * in the docs' POST example but rejected the list call), one unfiltered
+ * listing is fetched instead and rows are selected on their own VoucherYear.
+ * A 400 that is really a missing scope/licence surfaces again on the
+ * unfiltered call and propagates to the caller's permission handling.
+ */
 export async function fetchFortnoxFileConnections(
   client: FortnoxClient,
   accessToken: string,
@@ -61,21 +70,16 @@ export async function fetchFortnoxFileConnections(
 ): Promise<FortnoxFileConnection[]> {
   const connections: FortnoxFileConnection[] = [];
   const seen = new Set<string>();
+  const wantedYears = new Set(financialYearIds);
 
-  for (const financialYearId of new Set(financialYearIds)) {
-    const rawConnections = await client.getPaginated<Record<string, unknown>>(
-      accessToken,
-      `/voucherfileconnections?financialyear=${financialYearId}`,
-      'VoucherFileConnections',
-      { pageSize: PAGE_SIZE },
-    );
-
+  const collect = (rawConnections: Record<string, unknown>[]) => {
     for (const raw of rawConnections) {
       const fileId = typeof raw.FileId === 'string' ? raw.FileId.trim() : '';
       const series = typeof raw.VoucherSeries === 'string' ? raw.VoucherSeries.trim() : '';
       const number = finiteInteger(raw.VoucherNumber);
       const itemFinancialYearId = finiteInteger(raw.VoucherYear);
       if (!fileId || !series || number == null || itemFinancialYearId == null) continue;
+      if (!wantedYears.has(itemFinancialYearId)) continue;
 
       const key = `${fileId}|${itemFinancialYearId}|${series}|${number}`;
       if (seen.has(key)) continue;
@@ -90,6 +94,30 @@ export async function fetchFortnoxFileConnections(
         financialYearId: itemFinancialYearId,
       });
     }
+  };
+
+  for (const financialYearId of wantedYears) {
+    let rawConnections: Record<string, unknown>[];
+    try {
+      rawConnections = await client.getPaginated<Record<string, unknown>>(
+        accessToken,
+        `/voucherfileconnections?financialyear=${financialYearId}`,
+        'VoucherFileConnections',
+        { pageSize: PAGE_SIZE },
+      );
+    } catch (error) {
+      if (!(error instanceof FortnoxApiError) || error.statusCode !== 400) throw error;
+      collect(
+        await client.getPaginated<Record<string, unknown>>(
+          accessToken,
+          '/voucherfileconnections',
+          'VoucherFileConnections',
+          { pageSize: PAGE_SIZE },
+        ),
+      );
+      break;
+    }
+    collect(rawConnections);
   }
 
   return connections;

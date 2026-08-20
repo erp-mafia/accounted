@@ -17,6 +17,40 @@ export class FortnoxApiError extends Error {
   }
 }
 
+/**
+ * Human-readable message from a Fortnox error body
+ * ({"ErrorInformation":{"error":1,"message":"...","code":2000423}}), or null
+ * when the body is empty or not in that shape.
+ */
+export function fortnoxErrorMessage(error: unknown): string | null {
+  if (!(error instanceof FortnoxApiError) || !error.body) return null;
+  try {
+    const parsed = JSON.parse(error.body) as {
+      ErrorInformation?: { message?: unknown; Message?: unknown };
+      message?: unknown;
+    };
+    const message =
+      parsed?.ErrorInformation?.message ?? parsed?.ErrorInformation?.Message ?? parsed?.message;
+    return typeof message === 'string' && message.trim() ? message.trim().slice(0, 300) : null;
+  } catch {
+    const text = error.body.trim();
+    return text ? text.slice(0, 300) : null;
+  }
+}
+
+/**
+ * Missing scope or licence. Fortnox documents 403 for failed authorisation,
+ * but live answers for an unlicensed/unscoped resource have also come back
+ * as 400 with a behörighet/scope/licens message, so both are recognised.
+ */
+export function isFortnoxPermissionError(error: unknown): error is FortnoxApiError {
+  if (!(error instanceof FortnoxApiError)) return false;
+  if (error.statusCode === 403) return true;
+  if (error.statusCode !== 400) return false;
+  const text = `${error.body ?? ''} ${fortnoxErrorMessage(error) ?? ''}`;
+  return /beh[öo]righet|scope|licens|licence|license|permission|unauthori[sz]ed/i.test(text);
+}
+
 function isRetryableError(error: unknown): boolean {
   if (isTimeoutError(error)) return true;
   if (error instanceof FortnoxApiError) {
