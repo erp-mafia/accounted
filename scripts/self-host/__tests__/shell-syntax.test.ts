@@ -49,10 +49,14 @@ describe('self-host shell scripts', () => {
     expect(stderr).toContain('invalid backup name')
   })
 
-  it('restore.sh never runs a shell inside the helper container', () => {
-    const src = readFileSync(join(DIR, 'restore.sh'), 'utf8')
-    expect(src).not.toMatch(/sh -c/)
-    expect(readFileSync(join(DIR, 'backup.sh'), 'utf8')).not.toMatch(/sh -c/)
+  it('neither script runs a shell inside the docker helper container', () => {
+    // `docker run ... sh -c "<string with ${NAME}>"` would let a crafted
+    // backup name execute inside the container; tar must get the path as a
+    // direct argument. (The operator-supplied quiesce/resume hooks in
+    // backup.sh run through bash on the host by design; they are config.)
+    const dockerShell = /docker run[^\n]*(\\\n[^\n]*)*?\bsh -c/
+    expect(readFileSync(join(DIR, 'restore.sh'), 'utf8')).not.toMatch(dockerShell)
+    expect(readFileSync(join(DIR, 'backup.sh'), 'utf8')).not.toMatch(dockerShell)
   })
 
   it('restore.sh refuses to run without --yes', () => {
