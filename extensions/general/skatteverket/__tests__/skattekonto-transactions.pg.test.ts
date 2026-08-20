@@ -104,24 +104,51 @@ describe('skattekonto_transactions.pg: is_ignored', () => {
 
     // The pre-existing company-scoped UPDATE policy covers the new column:
     // a member can ignore and unignore under RLS with no policy change.
+    // withUserContext ALWAYS rolls back (tests/pg/setup.ts), so the write and
+    // its verification must both happen inside the same transaction; reading
+    // back on the pool connection afterwards would always see the pre-write
+    // value and say nothing about the policy. rowCount is the actual proof:
+    // an RLS-filtered UPDATE silently matches zero rows instead of raising.
     await withUserContext(a.userId, async (client) => {
-      await client.query(
+      const ignored = await client.query(
         `UPDATE public.skattekonto_transactions SET is_ignored = true WHERE id = $1`,
         [id],
       )
-    })
-    const mid = await getPool().query<{ is_ignored: boolean }>(
-      `SELECT is_ignored FROM public.skattekonto_transactions WHERE id = $1`,
-      [id],
-    )
-    expect(mid.rows[0]!.is_ignored).toBe(true)
+      expect(ignored.rowCount).toBe(1)
+      const mid = await client.query<{ is_ignored: boolean }>(
+        `SELECT is_ignored FROM public.skattekonto_transactions WHERE id = $1`,
+        [id],
+      )
+      expect(mid.rows[0]!.is_ignored).toBe(true)
 
-    await withUserContext(a.userId, async (client) => {
-      await client.query(
+      const unignored = await client.query(
         `UPDATE public.skattekonto_transactions SET is_ignored = false WHERE id = $1`,
         [id],
       )
+      expect(unignored.rowCount).toBe(1)
+      const after = await client.query<{ is_ignored: boolean }>(
+        `SELECT is_ignored FROM public.skattekonto_transactions WHERE id = $1`,
+        [id],
+      )
+      expect(after.rows[0]!.is_ignored).toBe(false)
     })
+  })
+
+  it('RLS keeps a non-member from ignoring another company\'s row', async () => {
+    const a = await seedCompany()
+    const b = await seedCompany()
+    const id = await insertSkattekontoTransaction({ companyId: a.companyId, dedupKey: 'id:999' })
+
+    // Company B's member is scoped out by the USING clause, so the UPDATE is
+    // filtered to zero rows rather than erroring: assert the row is untouched.
+    await withUserContext(b.userId, async (client) => {
+      const res = await client.query(
+        `UPDATE public.skattekonto_transactions SET is_ignored = true WHERE id = $1`,
+        [id],
+      )
+      expect(res.rowCount).toBe(0)
+    })
+
     const after = await getPool().query<{ is_ignored: boolean }>(
       `SELECT is_ignored FROM public.skattekonto_transactions WHERE id = $1`,
       [id],
