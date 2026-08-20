@@ -11,7 +11,7 @@ const DIR = join(__dirname, '..')
 const SCRIPTS = ['backup.sh', 'restore.sh']
 // A clean environment: none of the BACKUP_* / RESTORE_* variables, so the
 // scripts' own guards are what runs.
-const BARE_ENV: ExecFileSyncOptions = { env: { PATH: process.env.PATH ?? '' }, stdio: 'pipe' }
+const BARE_ENV: ExecFileSyncOptions = { env: { PATH: process.env.PATH ?? '', NODE_ENV: 'test' }, stdio: 'pipe' }
 
 describe('self-host shell scripts', () => {
   for (const name of SCRIPTS) {
