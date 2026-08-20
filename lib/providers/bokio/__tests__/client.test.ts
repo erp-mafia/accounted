@@ -120,6 +120,8 @@ describe('BokioClient', () => {
   it.each([
     ['empty object', {}],
     ['null envelope', { companyInformation: null }],
+    ['empty envelope', { companyInformation: {} }],
+    ['envelope without identifying fields', { companyInformation: { foo: 'bar' } }],
     ['array body', []],
     ['paged list body', { items: [], totalItems: 0, totalPages: 0, currentPage: 1 }],
   ])('keeps an unusable response body (%s) distinct from a company 404', async (_label, body) => {
@@ -145,12 +147,29 @@ describe('unwrapBokioCompanyInformation', () => {
     });
   });
 
-  it.each([null, 'text', 42, [], {}, { companyInformation: 'nope' }, { foo: 'bar' }])(
-    'returns null for %j',
-    (body) => {
-      expect(unwrapBokioCompanyInformation(body)).toBeNull();
-    },
-  );
+  it('does not fall back to outer fields when the envelope is malformed', () => {
+    expect(
+      unwrapBokioCompanyInformation({ companyInformation: { foo: 'bar' }, id: COMPANY_ID }),
+    ).toBeNull();
+    expect(
+      unwrapBokioCompanyInformation({ companyInformation: {}, name: 'Outer AB' }),
+    ).toBeNull();
+  });
+
+  it.each([
+    null,
+    'text',
+    42,
+    [],
+    {},
+    { companyInformation: 'nope' },
+    { companyInformation: {} },
+    { companyInformation: { foo: 'bar' } },
+    { companyInformation: [{ id: COMPANY_ID }] },
+    { foo: 'bar' },
+  ])('returns null for %j', (body) => {
+    expect(unwrapBokioCompanyInformation(body)).toBeNull();
+  });
 });
 
 describe('normalizeBokioAccessToken', () => {

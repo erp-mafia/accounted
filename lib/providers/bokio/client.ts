@@ -43,26 +43,34 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function looksLikeBokioCompany(value: unknown): value is Record<string, unknown> {
+  return (
+    isPlainObject(value) &&
+    (typeof value['id'] === 'string' ||
+      typeof value['name'] === 'string' ||
+      typeof value['organizationNumber'] === 'string')
+  );
+}
+
 /**
  * Extract the company object from a company-information response body.
- * Prefers the documented `companyInformation` envelope; otherwise accepts the
- * flat object the live API returns, as long as it carries an identifying
- * field (so `{}` or an unrelated JSON object is still rejected). Returns null
- * when neither shape yields a company.
+ * If the documented `companyInformation` envelope key is present, the company
+ * must be inside it (a malformed envelope is rejected, never bypassed via
+ * outer fields); otherwise the flat object the live API returns is accepted.
+ * Either way the object must carry an identifying field, so `{}` or an
+ * unrelated JSON object is rejected. Returns null when no company is found.
  */
 export function unwrapBokioCompanyInformation(
   body: unknown,
 ): Record<string, unknown> | null {
   if (!isPlainObject(body)) return null;
 
-  const wrapped = body['companyInformation'];
-  if (isPlainObject(wrapped)) return wrapped;
+  if ('companyInformation' in body) {
+    const wrapped = body['companyInformation'];
+    return looksLikeBokioCompany(wrapped) ? wrapped : null;
+  }
 
-  const looksLikeCompany =
-    typeof body['id'] === 'string' ||
-    typeof body['name'] === 'string' ||
-    typeof body['organizationNumber'] === 'string';
-  return looksLikeCompany ? body : null;
+  return looksLikeBokioCompany(body) ? body : null;
 }
 
 function isRetryableError(error: unknown): boolean {
