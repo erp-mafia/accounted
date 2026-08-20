@@ -73,3 +73,18 @@ describe('PAID_OPERATION_CAPABILITY_MAP', () => {
     expect(new Set(Object.values(PAID_OPERATION_CAPABILITY_MAP))).toEqual(stagingMcpCaps)
   })
 })
+
+describe('CONNECTOR_CAPABILITIES', () => {
+  it('names only real capability keys, with the two connector-only keys outside the paid set', async () => {
+    const { CAPABILITY, CONNECTOR_CAPABILITIES, PAID_CAPABILITIES, isConnectorCapability } = await import('../keys')
+    const all = new Set(Object.values(CAPABILITY))
+    for (const key of CONNECTOR_CAPABILITIES) expect(all.has(key), key).toBe(true)
+    expect(CONNECTOR_CAPABILITIES).toEqual(['bank_sync', 'skatteverket', 'org_lookup', 'migration'])
+    // org_lookup and migration stay free on hosted (not PAID) but still need
+    // Accounted's services, hence connector-gated on a self-host.
+    expect(PAID_CAPABILITIES).not.toContain('org_lookup')
+    expect(PAID_CAPABILITIES).not.toContain('migration')
+    expect(isConnectorCapability('ai')).toBe(false)
+    expect(isConnectorCapability('bank_sync')).toBe(true)
+  })
+})
