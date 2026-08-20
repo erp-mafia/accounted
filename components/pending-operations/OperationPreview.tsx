@@ -7,7 +7,8 @@
 // keep markup and classNames in lockstep with the design system, not with any
 // one consumer.
 
-import { Fragment, createContext, useContext } from 'react'
+import { Fragment, createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import { cn, formatCurrency } from '@/lib/utils'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
@@ -32,6 +33,40 @@ export interface OperationPreviewInput {
  * default {} and previews show the bare number, never a wrong name).
  */
 export const AccountNamesContext = createContext<Record<string, string>>({})
+
+function accountLabel(number: string | undefined, names: Record<string, string>): string {
+  if (!number) return ''
+  if (names[number]) return names[number]
+  const fallback = getAccountName(number)
+  return fallback !== number ? fallback : ''
+}
+
+function useResolvedAccountNames(fromContext: Record<string, string>): Record<string, string> {
+  const [fetched, setFetched] = useState<Record<string, string>>({})
+  const contextReady = Object.keys(fromContext).length > 0
+  useEffect(() => {
+    if (contextReady) return
+    let alive = true
+    void fetch('/api/bookkeeping/accounts')
+      .then((r) => r.json())
+      .then(({ data }) => {
+        if (!alive) return
+        setFetched(
+          Object.fromEntries(
+            ((data ?? []) as Array<{ account_number: string; account_name: string }>).map((a) => [
+              a.account_number,
+              a.account_name,
+            ]),
+          ),
+        )
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [contextReady])
+  return useMemo(() => ({ ...fetched, ...fromContext }), [fetched, fromContext])
+}
 
 /** Render '-' instead of "NaN kr" when a preview payload omits an amount. */
 function money(v: unknown, currency: string): string {
@@ -72,12 +107,11 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
                     The line text follows only when it adds something the name
                     does not already say. */}
                 <span className="text-foreground">
-                  {(line.account_number && accountNames[line.account_number]) || line.description || ''}
+                  {accountLabel(line.account_number, accountNames) || line.description || ''}
                 </span>
                 {line.description &&
-                line.account_number &&
-                accountNames[line.account_number] &&
-                line.description !== accountNames[line.account_number] ? (
+                accountLabel(line.account_number, accountNames) &&
+                line.description !== accountLabel(line.account_number, accountNames) ? (
                   <span className="text-muted-foreground"> · {line.description}</span>
                 ) : null}
               </span>
@@ -132,9 +166,9 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
             <div key={i} className="flex justify-between font-mono text-xs">
               <span>
                 {line.account_number}{' '}
-                {accountNames[line.account_number] || line.description}
-                {accountNames[line.account_number] &&
-                line.description !== accountNames[line.account_number] ? (
+                {accountLabel(line.account_number, accountNames) || line.description}
+                {accountLabel(line.account_number, accountNames) &&
+                line.description !== accountLabel(line.account_number, accountNames) ? (
                   <span className="text-muted-foreground"> · {line.description}</span>
                 ) : null}
               </span>
@@ -247,13 +281,14 @@ type VoucherLine = {
 }
 
 function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency?: string }) {
+  const accountNames = useContext(AccountNamesContext)
   return (
     <div className="border-t pt-2 space-y-1">
       {lines.map((line, i) => (
         <div key={i} className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs items-baseline">
           <span className="font-mono text-muted-foreground">{line.account_number}</span>
           <span className="truncate">
-            {line.account_name || line.line_description || '-'}
+            {line.account_name || accountLabel(line.account_number, accountNames) || line.line_description || '-'}
           </span>
           <span className="font-mono tabular-nums text-right w-24">
             {line.debit_amount > 0 ? formatCurrency(line.debit_amount, currency || 'SEK') : ''}
@@ -460,6 +495,7 @@ function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
 }
 
 function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
+  const accountNames = useContext(AccountNamesContext)
   const amount = (n: number | undefined) =>
     n && n > 0 ? n.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''
   return (
@@ -478,7 +514,13 @@ function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
             <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
               {line.account ?? line.account_number}
             </td>
-            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>{line.description ?? ''}</td>
+            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>
+              {(() => {
+                const name = accountLabel(line.account ?? line.account_number, accountNames)
+                if (name && line.description && line.description !== name) return `${name} · ${line.description}`
+                return name || line.description || ''
+              })()}
+            </td>
             <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
               {amount(line.debit ?? line.debit_amount)}
             </td>
@@ -520,6 +562,8 @@ function GenericPreview({ data }: { data: Record<string, unknown> }) {
 }
 
 export function OperationPreview({ op }: { op: OperationPreviewInput }) {
+  const fromContext = useContext(AccountNamesContext)
+  const names = useResolvedAccountNames(fromContext)
   const body = (() => {
     switch (op.operation_type) {
       case 'categorize_transaction':
@@ -544,5 +588,5 @@ export function OperationPreview({ op }: { op: OperationPreviewInput }) {
         return <GenericPreview data={op.preview_data} />
     }
   })()
-  return body
+  return <AccountNamesContext.Provider value={names}>{body}</AccountNamesContext.Provider>
 }

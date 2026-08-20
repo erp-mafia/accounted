@@ -1539,6 +1539,10 @@ export default function JournalEntryForm({
                   value={line.account_number}
                   accounts={accounts}
                   catalog={catalog}
+                  selectedName={
+                    accounts.find((a) => a.account_number === line.account_number)?.account_name
+                    ?? catalog.find((a) => a.account_number === line.account_number)?.account_name
+                  }
                   notActivatedLabel={t('account_not_activated')}
                   onChange={(num) => updateLine(index, 'account_number', num)}
                   onCommit={() => focusDebit(index)}
@@ -1694,6 +1698,10 @@ export default function JournalEntryForm({
                     value={line.account_number}
                     accounts={accounts}
                     catalog={catalog}
+                    selectedName={
+                      accounts.find((a) => a.account_number === line.account_number)?.account_name
+                      ?? catalog.find((a) => a.account_number === line.account_number)?.account_name
+                    }
                     notActivatedLabel={t('account_not_activated')}
                     onChange={(num) => updateLine(index, 'account_number', num)}
                     onCommit={() => focusDebit(index)}
