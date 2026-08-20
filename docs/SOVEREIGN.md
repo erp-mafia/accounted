@@ -43,9 +43,9 @@ Three things carry the sovereign claim, in order of how much they matter:
 | Document archive with SHA-256 integrity and WORM bucket | Company lookup (TIC), migration from Fortnox/Visma/Bokio/Björn Lundén via the Arcim gateway |
 | MCP server, API keys, staged approvals | Receipt hunt in a connected mailbox (Accounted's Google OAuth app), WhatsApp intake (Accounted's Meta credentials), Stripe billing |
 | AI document extraction on a BYO endpoint; HTML mail invoices | In-app chat assistant on a BYO OpenAI-compatible endpoint (port pending) |
-| Push notifications (your VAPID keys), invoice email via Resend (see the US-dependency note) | |
+| Push notifications (your VAPID keys), invoice email via your own SMTP relay or Resend (section 6) | |
 
-The hosted-only column is what the planned connector subscription will unlock for self-hosted instances (priced at parity with hosted, per active company). Until it exists, the code for those extensions is in the image but their settings screens will tell you they are unconfigured.
+The hosted-only column is what the connector subscription unlocks for self-hosted instances (priced at parity with hosted, per active company). Keys are issued manually by Accounted for now (self-serve later); the instance side is `GNUBOK_CONNECTOR_KEY` plus an hourly sync that writes the capability grants, described in [SELF-HOSTING.md, Connector subscription](SELF-HOSTING.md#connector-subscription-self-hosted-instances). The proxied services themselves ship in a following release; until then a key is validated and the grants are written, nothing more, and the extensions' settings screens will tell you they are unconfigured.
 
 ## 3. Choosing Swedish infrastructure
 
@@ -148,7 +148,7 @@ A sovereign deployment still has these touchpoints. None carries accounting data
 
 - **Image distribution**: the app image is pulled from GitHub Container Registry (`ghcr.io/erp-mafia/gnubok`), and the cron sidecar downloads `supercronic` from GitHub Releases at build time. Mirror both into your own registry for an air-gapped setup (build from source: `docker compose -f docker-compose.yml -f docker-compose.build.yml up --build`).
 - **Fonts**: `next/font/google` downloads Geist and Hedvig Letters Serif **at build time** and self-hosts them; browsers never call Google. The GitHub-built image therefore has no runtime font dependency; a source build fetches them once during `next build`.
-- **Invoice email**: the email extension sends through Resend (US). Until an SMTP mailer lands (planned), either leave invoice email unconfigured (invoices download as PDF) or accept Resend for outbound mail, which carries invoice PDFs to your customers but no ledger data.
+- **Invoice email**: the email extension sends through Resend (US) by default. Set `EMAIL_PROVIDER=smtp` with your own relay (a Swedish mail provider, an M365/Workspace relay, Postfix on the host; variables in [SELF-HOSTING.md, Email](SELF-HOSTING.md#email-invoice-sending-and-reminders)) to keep outbound mail Swedish too, or leave invoice email unconfigured (invoices download as PDF). Resend carries invoice PDFs to your customers but no ledger data.
 - **Telemetry**: none. Analytics (PostHog), Vercel Speed Insights and error tracking are hosted-only and switched off by `NEXT_PUBLIC_SELF_HOSTED=true`; there is no call-home licence check, by design.
 - **Upstream services you opt into**: Enable Banking, Skatteverket, TIC, the migration gateway, Google OAuth for receipt hunt, Meta for WhatsApp are hosted-only today (section 2) and simply stay unconfigured.
 
@@ -160,5 +160,5 @@ A sovereign deployment still has these touchpoints. None carries accounting data
 - [ ] `NEXT_PUBLIC_SELF_HOSTED=true`, `CRON_SECRET` set, cron sidecar healthy (`docker compose ps`), `/api/health` green.
 - [ ] Backup bucket created **with Object Lock**, `backup.sh` scheduled nightly + yearly, one restore drill completed and timed.
 - [ ] AI: either none (MCP-only deployment) or `AI_BASE_URL`/`AI_API_KEY`/`AI_MODEL` set and `npx tsx scripts/smoke-ai-provider.ts receipt.pdf` green.
-- [ ] Decide on invoice email (Resend or none) and record it in your register.
+- [ ] Decide on invoice email (your SMTP relay, Resend, or none) and record it in your register.
 - [ ] Read the national cloud policy yourself before quoting it to a buyer: it is principles, not mandates. https://www.regeringen.se/informationsmaterial/2026/05/en-molnpolicy-for-sverige--for-okad-sakerhet-effektivitet-och-innovation-i-den-offentliga-forvaltningen/
