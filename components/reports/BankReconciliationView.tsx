@@ -1,12 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { Fragment, useState, useEffect, useCallback, useRef } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
@@ -17,10 +16,14 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { AccountNumber } from '@/components/ui/account-number'
-import { AlertCircle, ArrowRightLeft, ChevronDown, ChevronRight, Landmark, Link2, Unlink, Play, Eye, EyeOff, PiggyBank, MoreHorizontal } from 'lucide-react'
+import { AlertCircle, ArrowRightLeft, ChevronDown, ChevronRight, Landmark, Link2, Unlink, Play, EyeOff, PiggyBank, MoreHorizontal } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
+// Pure module, safe in the client bundle: lib/reconciliation/bank-reconciliation
+// pulls in the event bus and the match log and must never be imported here.
+import { hasVoucherCandidate } from '@/lib/reconciliation/voucher-candidate'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { CashAccountSelector } from '@/components/common/CashAccountSelector'
+import type { DateRangeValue } from '@/components/common/ReportDateRange'
 import { MatchVerifikationPicker, type UnlinkedGLLine } from '@/components/reconciliation/MatchVerifikationPicker'
 import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
@@ -212,6 +215,12 @@ interface BankReconciliationViewProps {
   /** period_start / period_end of that period; seeds the date window (#751). */
   periodBounds: { start: string; end: string } | null
   /**
+   * Narrowing applied by the page-level ReportDateRange. Empty (`{}` or
+   * undefined) means the whole räkenskapsår, which is what a reconciliation
+   * normally runs over.
+   */
+  dateRange?: DateRangeValue
+  /**
    * Deep-link bridge (?autorun=1, e.g. from the transactions inbox banner):
    * runs the dry-run preview automatically ONCE, only after the first load has
    * recorded appliedDates and while the typed dates still match it, so the
@@ -220,7 +229,12 @@ interface BankReconciliationViewProps {
   autoRun?: boolean
 }
 
-export function BankReconciliationView({ periodId, periodBounds, autoRun }: BankReconciliationViewProps) {
+export function BankReconciliationView({
+  periodId,
+  periodBounds,
+  dateRange,
+  autoRun,
+}: BankReconciliationViewProps) {
   const t = useTranslations('reports')
   const [status, setStatus] = useState<ReconciliationStatus | null>(null)
   const [unmatchedTx, setUnmatchedTx] = useState<UnmatchedTransaction[]>([])
@@ -238,29 +252,29 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
   // its OWN selector inside the action bar and gate the first fetch on a
   // `periodReady` flag, but that selector lived below the loading-skeleton
   // early-return, so it never mounted, the flag never flipped, and the page hung
-  // on a permanent skeleton (#771). dateFrom/dateTo are seeded from periodBounds
-  // here and stay editable as a manual override (applied via "Filtrera").
-  const [dateFrom, setDateFrom] = useState(periodBounds?.start ?? '')
-  const [dateTo, setDateTo] = useState(() => {
-    const today = new Date().toISOString().slice(0, 10)
-    if (periodBounds && periodBounds.end < today) return periodBounds.end
-    return today
-  })
+  // on a permanent skeleton (#771).
+  //
+  // Narrowing inside the year is owned by the page too (ReportDateRange), so
+  // this view no longer holds date state at all. It used to render its own
+  // "Datum från / Datum till" inputs behind a "Filtrera" button: a second
+  // period control competing with the header's picker (convention 8), and the
+  // source of the "typed but not applied" state that had to be explained in an
+  // attention line. The window now changes only through a control that applies
+  // immediately, so there is nothing to be dirty.
   const [accountNumber, setAccountNumber] = useState('1930')
   const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
-  // Date filters apply on demand (the "Filtrera" button or an account switch),
-  // never on every keystroke. Editing a date used to re-create fetchAll and
-  // re-trigger its effect: the "switching months reloads automatically"
-  // annoyance. fetchAll reads the live dates from refs so an explicit run always
-  // uses the latest typed values without putting them in its dependency array.
-  const dateFromRef = useRef(dateFrom)
-  const dateToRef = useRef(dateTo)
-  useEffect(() => {
-    dateFromRef.current = dateFrom
-  }, [dateFrom])
-  useEffect(() => {
-    dateToRef.current = dateTo
-  }, [dateTo])
+  // The window the whole surface runs on: the räkenskapsår, narrowed by the
+  // page's range control when it is set. `toDate` is clamped to today for a
+  // still-open year so the view never claims to reconcile into the future
+  // (the ledger can hold future-dated vouchers; the bank feed cannot).
+  const { windowFrom, windowTo } = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    const from = dateRange?.fromDate ?? periodBounds?.start ?? ''
+    const periodEnd = periodBounds?.end
+    const to =
+      dateRange?.toDate ?? (periodEnd && periodEnd < today ? periodEnd : today)
+    return { windowFrom: from, windowTo: to }
+  }, [dateRange?.fromDate, dateRange?.toDate, periodBounds?.start, periodBounds?.end])
 
   const [dryRunResults, setDryRunResults] = useState<DryRunMatch[] | null>(null)
   // Which preview rows apply on "Tillämpa". Strong matches (≥0.85) are
@@ -340,17 +354,7 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
   // that still needs one.
   const unmatchedGlLines = glLines.filter((l) => !(l.linked_transaction_count ?? 0))
 
-  // The typed dates differ from what the lists (and preview/apply) run against.
-  // Surfaced as a hint so a user can't edit a date, skip Filtrera, and believe
-  // the preview covered the window they typed.
-  const datesDirty =
-    appliedDates !== null && (appliedDates.from !== dateFrom || appliedDates.to !== dateTo)
 
-  // Promote the preview flow while there is unmatched work and no preview has
-  // run yet: an attention line above the toolbar plus the Förhandsgranska
-  // button in the default (filled) variant. Suppressed while datesDirty: that
-  // state owns the page's single attention line and disables the button anyway.
-  const previewPromoted = unmatchedTx.length > 0 && dryRunResults === null && !datesDirty
 
   // Every ticked preview pair is a strong match (>= the Stark badge floor):
   // the apply button relabels to "Matcha X starka träffar" and the apply
@@ -409,8 +413,8 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
     rankedFetchInFlight.current.clear()
     rankedGenerationRef.current++
     try {
-      const fromValue = dateFromRef.current
-      const toValue = dateToRef.current
+      const fromValue = windowFrom
+      const toValue = windowTo
       const params = new URLSearchParams()
       if (fromValue) params.set('date_from', fromValue)
       if (toValue) params.set('date_to', toValue)
@@ -481,48 +485,27 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
       // it off while the fresh one is still running.
       if (!signal.aborted) setLoading(false)
     }
-    // Deliberately excludes dateFrom/dateTo: editing a date must NOT auto-fetch
-    // (it read from refs above). Re-runs on account / currency change, on the
-    // matched-toggle flip (which changes the candidate set), and on mount; the
-    // "Filtrera" button calls fetchAll() explicitly for date changes.
-  }, [accountNumber, accountCurrency, includeMatched])
-
-  // Re-seed the date window whenever the selected räkenskapsår changes (driven
-  // by the page-level FiscalYearSelector in the report header). dateTo is clamped
-  // to today for the current (open) year so we don't claim to reconcile into the
-  // future; a past year ends at its period_end.
-  //
-  // We write dateFromRef/dateToRef SYNCHRONOUSLY here, not just the state: fetchAll
-  // reads the window from the refs, and the [dateFrom]/[dateTo] sync effects above
-  // only refresh them on the NEXT commit: too late for the fetch effect below,
-  // which runs on this same period-switch commit. Without the synchronous ref
-  // write the first load after a year switch would use the PREVIOUS period's
-  // window (off-by-one). This effect MUST stay declared ABOVE the fetch effect so
-  // React runs it first.
-  //
-  // Keyed on periodId ONLY: switching the bank account must re-fetch (via the
-  // fetch effect, whose fetchAll identity changes) but must NOT re-seed the dates
-  // and discard a manual "Datum från/till" edit.
-  useEffect(() => {
-    if (!periodBounds) return
-    const today = new Date().toISOString().slice(0, 10)
-    const from = periodBounds.start
-    const to = periodBounds.end < today ? periodBounds.end : today
-    setDateFrom(from)
-    setDateTo(to)
-    dateFromRef.current = from
-    dateToRef.current = to
+    // The window is now a prop-derived value that only changes when the user
+    // picks a different year or range, so it belongs in the dependency list:
+    // there is no keystroke-level churn to protect against any more, and the
+    // lists must never lag behind the control that sets them.
+    //
+    // periodId is in here as belt-and-braces: the window is derived from
+    // periodBounds, so a year switch normally changes it, but a period with no
+    // bounds would derive the SAME window for every year and silently skip the
+    // refetch. Keying on the id too makes a year switch always reload. The lint
+    // rule cannot see that because the id is not read inside the callback.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [periodId])
+  }, [accountNumber, accountCurrency, includeMatched, windowFrom, windowTo, periodId])
 
-  // Load on mount, when the bank account / currency / matched-toggle change
-  // (fetchAll identity), and when the räkenskapsår switches (periodId). fetchAll
-  // reads the window from the refs, which the effect above has already refreshed
-  // for a period switch. Manual date edits intentionally do NOT auto-fetch: that
-  // stays on the explicit "Filtrera" button (which calls fetchAll() directly).
+  // Load on mount and whenever fetchAll's identity changes: bank account,
+  // currency, the matched-toggle, or the window itself. The old off-by-one trap
+  // here (a year switch fetching the PREVIOUS year's window because the date
+  // refs updated a commit late) is gone with the refs: windowFrom/windowTo are
+  // derived during render, so the fetch below always sees the current window.
   useEffect(() => {
     fetchAll()
-  }, [fetchAll, periodId])
+  }, [fetchAll])
 
   // Reset transient per-account UI state when the selected account changes. A
   // verifikation pick or a dry-run preview computed for the previous account is
@@ -578,22 +561,31 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
     }
   }
 
-  // One-shot autorun bridge (?autorun=1): trigger the same dry-run the
-  // Förhandsgranska button runs, exactly once, and only once the first load
-  // has recorded appliedDates with the typed dates still matching it
-  // (datesDirty false). Firing earlier could preview a different window than
-  // the on-screen lists. Consumed even when there is nothing to preview, so a
-  // later data refresh never surprises the user with an unprompted run.
-  const autoRunConsumedRef = useRef(false)
+  // Run the matcher automatically once per window, instead of waiting for a
+  // button many users never found: the old flow left people matching a whole
+  // migration row by row next to a control that said only "Förhandsgranska".
+  // It is a dry run, so nothing is written and nothing is applied without the
+  // explicit Tillämpa below. Gated on the first load having recorded
+  // appliedDates, so the preview can never cover a different window than the
+  // on-screen lists.
+  const autoRunConsumedRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!autoRun || autoRunConsumedRef.current) return
-    if (loading || !appliedDates || datesDirty) return
-    autoRunConsumedRef.current = true
-    if (unmatchedTx.length > 0) void handleDryRun()
+    if (loading || !appliedDates) return
+    // Once per window+account, so a silent refetch or a matched-toggle flip on
+    // the same window does not re-fire it, while switching year or account does.
+    const runKey = `${accountNumber}:${appliedDates.from}:${appliedDates.to}`
+    if (autoRunConsumedRef.current === runKey) return
+    // Nothing to match: don't spend a server-side matching pass on a clean
+    // window. ?autorun=1 (the transactions-inbox deep link) is an explicit
+    // "run it" and overrides that, so the user who clicked it still gets a
+    // result rather than silence.
+    if (!autoRun && unmatchedTx.length === 0) return
+    autoRunConsumedRef.current = runKey
+    void handleDryRun()
     // handleDryRun is recreated every render; the consumed-ref guarantees the
     // single run, so depending on it would only add noise.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRun, loading, appliedDates, datesDirty, unmatchedTx.length])
+  }, [autoRun, loading, appliedDates, accountNumber, unmatchedTx.length])
 
   const toggleMatchSelection = (key: string) => {
     setSelectedPairs((prev) => {
@@ -709,12 +701,12 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
       const generation = rankedGenerationRef.current
       try {
         const params = new URLSearchParams()
-        // The APPLIED window: the same one the lists and preview run against.
-        // Reading the live refs here would let a typed-but-not-filtered date
-        // silently give this row a different candidate set than the tables on
-        // screen. Refs are only the pre-first-load fallback.
-        const from = appliedDates?.from ?? dateFromRef.current
-        const to = appliedDates?.to ?? dateToRef.current
+        // The APPLIED window: the same one the lists and preview run against,
+        // so a row can never be offered a candidate set the tables on screen
+        // were not built from. The derived window is the pre-first-load
+        // fallback (they agree except while a fresh load is in flight).
+        const from = appliedDates?.from ?? windowFrom
+        const to = appliedDates?.to ?? windowTo
         if (from) params.set('date_from', from)
         if (to) params.set('date_to', to)
         params.set('account_number', accountNumber)
@@ -733,7 +725,7 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
         rankedFetchInFlight.current.delete(transactionId)
       }
     },
-    [accountNumber, includeMatched, rankedCandidates, appliedDates],
+    [accountNumber, includeMatched, rankedCandidates, appliedDates, windowFrom, windowTo],
   )
 
   /** Open one row's match picker (closing any other) and fetch its ranked
@@ -1072,6 +1064,20 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
   // What the reconciliation leaves out, as one line instead of three stacked
   // paragraphs. Amounts stay on screen (BFL: the user must be able to see what
   // was excluded); the legal reasoning moved into the tooltip beside them.
+  // Unmatched rows that no voucher on this account could settle: bookkeeping,
+  // not reconciliation. Counted once here rather than per row.
+  const bookOnlyCount = unmatchedTx.filter(
+    (tx) => !hasVoucherCandidate(tx.amount, unmatchedGlLines, accountCurrency),
+  ).length
+  // Land on the account being reconciled, not on every bank source: an
+  // `acct:<id>` filter is exactly the scope this page is showing. Falls back to
+  // all bank rows when the cash account has not loaded yet, which is a wider
+  // list but never a wrong one.
+  const reconciledCashAccountId = cashAccounts.find(
+    (a) => a.ledger_account === accountNumber,
+  )?.id
+  const bookOnlySource = reconciledCashAccountId ? `acct:${reconciledCashAccountId}` : 'bank'
+
   const excludedItems: string[] = []
   if (status) {
     if (status.gl_1930_opening_balance !== 0) {
@@ -1276,45 +1282,25 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
 
       {/* Toolbar: flat on the panel, no box (UI-migration language) */}
       <div className="space-y-3">
-        {/* Promote the bulk flow before the first preview: many users never
-            found Förhandsgranska and matched a whole migration row by row. */}
-        {previewPromoted && !runLoading && (
-          <AttnLine>{t('recon_unmatched_attn', { count: unmatchedTx.length })}</AttnLine>
-        )}
-        <div className="flex flex-wrap items-end gap-4">
+        {/* The page's one ochre sentence (convention 6) now reports a run in
+            progress. The old line counted unmatched rows and pointed at the
+            button to press; with the matcher running by itself that promotion
+            is obsolete by construction, and the count it carried is already on
+            the card ("N poster kvar att förklara") and the section header. */}
+        {runLoading && <AttnLine>{t('recon_matching_attn')}</AttnLine>}
+        <div className="flex flex-wrap items-center gap-3">
           <CashAccountSelector
             value={accountNumber}
             onChange={setAccountNumber}
           />
-          <div>
-            <Label>Datum från</Label>
-            <Input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="mt-1"
-            />
-          </div>
-          <div>
-            <Label>Datum till</Label>
-            <Input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="mt-1"
-            />
-          </div>
-          <Button onClick={() => fetchAll()} variant={datesDirty ? 'default' : 'outline'}>
-            Filtrera
-          </Button>
           <div className="flex-1" />
           <Button
             onClick={handleDryRun}
-            disabled={runLoading || datesDirty}
-            variant={previewPromoted ? 'default' : 'outline'}
+            disabled={runLoading}
+            variant="outline"
           >
-            <Eye className="h-4 w-4 mr-2" />
-            {runLoading ? 'Analyserar...' : 'Förhandsgranska'}
+            <Link2 className="h-4 w-4 mr-2" />
+            {runLoading ? t('recon_matching') : t('recon_match_automatically')}
           </Button>
           {dryRunResults && dryRunResults.length > 0 && (
             <Button onClick={handleApply} disabled={applyLoading || selectedPairs.size === 0}>
@@ -1327,12 +1313,6 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
             </Button>
           )}
         </div>
-        {datesDirty && (
-          <AttnLine>
-            Datumfiltret är ändrat men inte tillämpat: klicka Filtrera för att uppdatera
-            listorna innan du förhandsgranskar.
-          </AttnLine>
-        )}
       </div>
 
       {/* Dry Run Preview */}
@@ -1413,6 +1393,17 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
               Omatchade transaktioner ({unmatchedTx.length})
             </h2>
             <div className="flex items-center gap-3">
+              {/* The split that matters on this page: rows a voucher could
+                  settle are reconciliation work and stay here; the rest are
+                  unbooked affärshändelser and belong in Transaktioner, which
+                  already does that job well. */}
+              {bookOnlyCount > 0 && (
+                <Button asChild size="sm" variant="ghost" className="h-8 text-xs">
+                  <Link href={`/transactions?source=${bookOnlySource}`}>
+                    {t('recon_book_rest', { count: bookOnlyCount })}
+                  </Link>
+                </Button>
+              )}
               {unmatchedGlLines.length > 0 && (
                 <p className="text-xs text-muted-foreground">
                   {unmatchedGlLines.length} verifikation{unmatchedGlLines.length === 1 ? '' : 'er'} att matcha mot
@@ -1456,6 +1447,7 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
                 {unmatchedTx.map((tx) => {
                   const isPositive = tx.amount > 0
                   const isOpen = expandedTxId === tx.id
+                  const hasCandidate = hasVoucherCandidate(tx.amount, unmatchedGlLines, accountCurrency)
                   // Quick-book options matching the transaction's direction. The
                   // bank leg books to the SELECTED account (the categorize endpoint
                   // rewrites it from the cash_account_id), so these are correct on
@@ -1483,26 +1475,42 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
                           {formatDate(tx.date)}
                         </td>
                         <td className={TD_CLASS}>
-                          <button
-                            type="button"
-                            onClick={() => toggleExpandedTx(tx.id)}
-                            aria-expanded={isOpen}
-                            className="flex max-w-full items-center gap-1.5 text-left transition-colors duration-150 hover:text-foreground"
-                          >
-                            {isOpen ? (
-                              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                            ) : (
-                              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                            )}
-                            <span className="truncate">{tx.description}</span>
-                            {/* Inline, not a sub-row: convention 4 keeps list
-                                rows one line high. */}
-                            {tx.reference && (
-                              <span className="shrink-0 text-xs text-muted-foreground">
-                                · {tx.reference}
-                              </span>
-                            )}
-                          </button>
+                          {/* Only a row that HAS something to expand into is a
+                              toggle. On a row no voucher can settle, a chevron
+                              and a click target that opens nothing is a dead
+                              affordance: it renders as plain text and the action
+                              cell offers Bokför instead.
+                              The reference sits inline rather than on a second
+                              line: convention 4 keeps list rows one line high. */}
+                          {hasCandidate ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleExpandedTx(tx.id)}
+                              aria-expanded={isOpen}
+                              className="flex max-w-full items-center gap-1.5 text-left transition-colors duration-150 hover:text-foreground"
+                            >
+                              {isOpen ? (
+                                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                              ) : (
+                                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                              )}
+                              <span className="truncate">{tx.description}</span>
+                              {tx.reference && (
+                                <span className="shrink-0 text-xs text-muted-foreground">
+                                  · {tx.reference}
+                                </span>
+                              )}
+                            </button>
+                          ) : (
+                            <span className="flex max-w-full items-center gap-1.5 pl-5">
+                              <span className="truncate">{tx.description}</span>
+                              {tx.reference && (
+                                <span className="shrink-0 text-xs text-muted-foreground">
+                                  · {tx.reference}
+                                </span>
+                              )}
+                            </span>
+                          )}
                         </td>
                         <td
                           className={`${TD_CLASS} text-right tabular-nums ${
@@ -1513,17 +1521,30 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
                           {formatCurrency(tx.amount, tx.currency)}
                         </td>
                         <td className={`${TD_CLASS} text-right`}>
-                          {/* Opens the picker; the button INSIDE it performs the
-                              match. Two controls labelled "Matcha" in one row
-                              would read as the same action twice. */}
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-8 text-xs"
-                            onClick={() => toggleExpandedTx(tx.id)}
-                          >
-                            {isOpen ? 'Stäng' : 'Välj verifikat'}
-                          </Button>
+                          {/* A row with no voucher that could possibly settle it
+                              is not reconciliation work at all, it is bookkeeping:
+                              send it to the surface that does that instead of
+                              offering a picker that holds nothing for it.
+                              ?highlight= opens the row's categorize panel. */}
+                          {hasCandidate ? (
+                            // Opens the picker; the button INSIDE it performs the
+                            // match. Two controls labelled "Matcha" in one row
+                            // would read as the same action twice.
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 text-xs"
+                              onClick={() => toggleExpandedTx(tx.id)}
+                            >
+                              {isOpen ? 'Stäng' : 'Välj verifikat'}
+                            </Button>
+                          ) : (
+                            <Button asChild size="sm" variant="ghost" className="h-8 text-xs">
+                              <Link href={`/transactions?highlight=${tx.id}`}>
+                                {t('recon_book_row')}
+                              </Link>
+                            </Button>
+                          )}
                         </td>
                         <td className={`${TD_CLASS} text-right`}>
                 <DropdownMenu>
@@ -1611,7 +1632,7 @@ export function BankReconciliationView({ periodId, periodBounds, autoRun }: Bank
                 </DropdownMenu>
                         </td>
                       </tr>
-                      {isOpen && (
+                      {isOpen && hasCandidate && (
                         <tr className="bg-secondary/20">
                           <td colSpan={5} className="px-3 pb-4 pt-1 align-top">
                             <div className="space-y-2">
