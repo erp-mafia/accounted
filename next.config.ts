@@ -60,6 +60,15 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_BUILD_ID: process.env.VERCEL_GIT_COMMIT_SHA ?? '',
   },
+  // The build type-checks what ships: tsconfig.build.json extends
+  // tsconfig.json and excludes tests. tsconfig.json stays the editor/ESLint
+  // view of the whole repo. Next 16.3's default CLI checker checks the complete
+  // project it is given and no longer drops test-file diagnostics the way the
+  // old API checker did, so without this the build would fail on test typing
+  // debt that vitest never type-checks (see DECISIONS.md 2026-08-20).
+  typescript: {
+    tsconfigPath: 'tsconfig.build.json',
+  },
   // Multiple lockfiles exist above this project (e.g. a parent yarn.lock),
   // which makes Turbopack infer the wrong workspace root. Pin it explicitly.
   turbopack: {

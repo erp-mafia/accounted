@@ -1,0 +1,19 @@
+{
+  // The production build's type-check: what ships. tsconfig.json stays the
+  // editor/ESLint view of the whole repo, tests included; this file only
+  // narrows `exclude` (an override replaces the parent list, so the parent's
+  // entries are repeated). Selected by typescript.tsconfigPath in
+  // next.config.ts. Next's CLI checker (default since 16.3) checks the
+  // complete project it is given, so tests must be excluded here rather than
+  // relying on the old API checker, which silently dropped their diagnostics.
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "dev_docs",
+    "tests",
+    "**/__tests__/**",
+    "**/__mocks__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ]
+}
