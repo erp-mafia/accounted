@@ -39,6 +39,32 @@ function bokioAuthorizationHeader(accessToken: string): string {
   return `Bearer ${normalizeBokioAccessToken(accessToken)}`;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Extract the company object from a company-information response body.
+ * Prefers the documented `companyInformation` envelope; otherwise accepts the
+ * flat object the live API returns, as long as it carries an identifying
+ * field (so `{}` or an unrelated JSON object is still rejected). Returns null
+ * when neither shape yields a company.
+ */
+export function unwrapBokioCompanyInformation(
+  body: unknown,
+): Record<string, unknown> | null {
+  if (!isPlainObject(body)) return null;
+
+  const wrapped = body['companyInformation'];
+  if (isPlainObject(wrapped)) return wrapped;
+
+  const looksLikeCompany =
+    typeof body['id'] === 'string' ||
+    typeof body['name'] === 'string' ||
+    typeof body['organizationNumber'] === 'string';
+  return looksLikeCompany ? body : null;
+}
+
 function isRetryableError(error: unknown): boolean {
   if (isTimeoutError(error)) return true;
   if (error instanceof BokioApiError) {
@@ -234,24 +260,34 @@ export class BokioClient {
     );
   }
 
+  /**
+   * Probe one company via the documented v1 company-information endpoint.
+   *
+   * Bokio's published v1 spec wraps the body as `{ companyInformation: {...} }`,
+   * but the live api.bokio.se/v1 returns the company object flat
+   * (`{ id, name, organizationNumber, companyType, address, ... }`). Both are
+   * accepted: a valid token must never be reported as a failure because the
+   * spec and the deployed API disagree on the envelope.
+   */
   async getCompany<T>(
     accessToken: string,
     companyId: string,
   ): Promise<T | null> {
     try {
       const normalizedCompanyId = companyId.trim();
-      const response = await this.get<{ companyInformation?: T }>(
+      const response = await this.get<unknown>(
         accessToken,
         `/companies/${encodeURIComponent(normalizedCompanyId)}/company-information`,
       );
 
-      if (response.companyInformation == null) {
+      const company = unwrapBokioCompanyInformation(response);
+      if (company == null) {
         throw new BokioResponseError(
-          'Bokio company-information response is missing companyInformation',
+          'Bokio company-information response contains no company object',
         );
       }
 
-      return response.companyInformation;
+      return company as T;
     } catch (err) {
       if (err instanceof BokioApiError && err.statusCode === 404) {
         return null;
