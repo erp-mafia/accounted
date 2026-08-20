@@ -102,7 +102,11 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * statement rows via a mapped batch (same shape as every other file importer);
  * the row shape is covered by the execute route tests and the pg-real suite.
  */
-const UNRESOLVED_CEILING = 379
+// 2026-08-20: +1 for lib/connect/instance/sync.ts, whose capability_grants
+// upsert is a per-company x per-scope row array built at runtime (one chunked
+// bulk write); the columns it writes are the same five the Stripe grant writer
+// uses literally, so the literal guard already covers them.
+const UNRESOLVED_CEILING = 380
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
