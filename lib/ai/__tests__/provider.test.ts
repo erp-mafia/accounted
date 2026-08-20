@@ -11,6 +11,8 @@ import {
 
 const AI_ENV_KEYS = [
   'AI_PROVIDER',
+  'AI_BASE_URL',
+  'AI_API_KEY',
   'ANTHROPIC_API_KEY',
   'AWS_ACCESS_KEY_ID',
   'AWS_SECRET_ACCESS_KEY',
@@ -98,6 +100,11 @@ describe('hasAiCredentials', () => {
   it('is false for a half-configured AWS key pair', () => {
     process.env.AWS_ACCESS_KEY_ID = 'AKIAEXAMPLE'
     expect(hasAiCredentials()).toBe(false)
+  })
+
+  it('is true for an OpenAI-compatible base URL with no key (keyless local server)', () => {
+    process.env.AI_BASE_URL = 'http://localhost:11434/v1'
+    expect(hasAiCredentials()).toBe(true)
   })
 
   it('is true for an Anthropic key', () => {

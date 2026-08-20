@@ -219,13 +219,14 @@ AWS_REGION=eu-north-1   # default
 
 Set both static AWS keys explicitly. The AI assistant's client can fall back to the standard AWS credential provider chain (instance profile, IRSA) when they are absent, but document extraction requires `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and silently returns empty results without them.
 
-**Option 3: any OpenAI-compatible endpoint.** Any provider that implements the chat-completions API, which is how you run the AI features on a Swedish inference provider for a fully sovereign deployment. Document extraction (receipts, invoices, HTML mail invoices) and the single-call AI jobs run here; the in-app chat assistant does not yet and answers `503 ai_unconfigured` until it does (the MCP server is unaffected).
+**Option 3: any OpenAI-compatible endpoint.** Any server that implements the chat-completions API: a Swedish inference provider for a fully sovereign deployment, or a **local model** on the same machine (llama.cpp's `server`, Ollama's `/v1`, LM Studio, vLLM). Document extraction (receipts, invoices, HTML mail invoices) and the single-call assistant (`/api/agent/ask`) run here on any provider; the older streaming chat panel is being replaced by that single-call surface.
 
 ```bash
-AI_BASE_URL=https://api.example.se/v1   # the provider's OpenAI-compatible base URL
-AI_API_KEY=...
-AI_MODEL=...                            # a model id is required: there is no default for an arbitrary endpoint
-AI_EXTRACTION_MODEL=...                 # optional: a vision model for document reading, if AI_MODEL is not one
+AI_BASE_URL=http://localhost:11434/v1   # the endpoint's OpenAI-compatible base URL (here: a local Ollama)
+AI_MODEL=qwen3.8                        # a model id is required: there is no default for an arbitrary endpoint
+# AI_API_KEY=...                        # OPTIONAL: only when the endpoint needs auth. A local server usually
+#                                       #   has none, so leave it unset; a hosted provider gives you a key.
+# AI_EXTRACTION_MODEL=...               # optional: a vision model for document reading, if AI_MODEL is not one
 ```
 
 Three things about such endpoints are declared rather than probed, because the app cannot tell from the outside:

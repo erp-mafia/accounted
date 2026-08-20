@@ -14,7 +14,8 @@ import type { AiCapabilities, AiPdfMode, AiStatus, AiTier } from './types'
  * Variables (all optional; legacy BEDROCK_* names keep working):
  *
  *   AI_PROVIDER              bedrock | anthropic | openai-compatible (else auto-detect)
- *   AI_BASE_URL, AI_API_KEY  OpenAI-compatible endpoint (e.g. a Swedish provider)
+ *   AI_BASE_URL              OpenAI-compatible endpoint (Swedish provider or a local model)
+ *   AI_API_KEY               optional: only when that endpoint requires auth
  *   AI_MODEL                 default model id for every tier
  *   AI_ASSISTANT_MODEL       per-tier overrides (fallbacks: BEDROCK_SONNET_MODEL_ID,
  *   AI_HEAVY_MODEL             BEDROCK_OPUS_MODEL_ID, BEDROCK_MODEL_ID respectively)

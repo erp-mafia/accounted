@@ -77,9 +77,17 @@ describe('provider resolution with an OpenAI-compatible endpoint', () => {
     expect(resolveAiProvider()).toBe('openai-compatible')
   })
 
-  it('needs BOTH base url and key before it counts as credentials', () => {
+  // AI_API_KEY is optional: a local OpenAI-compatible server usually has no
+  // auth, so a base URL alone counts as configured. A key is added only when
+  // the endpoint requires one.
+  it('counts a base URL alone as credentials (keyless local server)', () => {
     process.env.AI_PROVIDER = 'openai-compatible'
-    process.env.AI_BASE_URL = 'https://api.berget.ai/v1'
+    process.env.AI_BASE_URL = 'http://localhost:11434/v1'
+    expect(hasAiCredentials()).toBe(true)
+  })
+
+  it('is not configured with no base URL at all', () => {
+    process.env.AI_PROVIDER = 'openai-compatible'
     expect(hasAiCredentials()).toBe(false)
   })
 

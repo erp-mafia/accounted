@@ -9,7 +9,8 @@ import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
  * implementation detail. Self-hosted deployments generally have no AWS
  * account at all, so they get the direct Anthropic API with a plain
  * ANTHROPIC_API_KEY, or any OpenAI-compatible endpoint (the Swedish inference
- * providers a sovereign self-host points at) via AI_BASE_URL + AI_API_KEY.
+ * providers a sovereign self-host points at, or a local model) via
+ * AI_BASE_URL (+ AI_API_KEY when the endpoint requires auth).
  *
  * The two Anthropic-family backends share the `messages.create/stream`
  * surface this factory hands out. The OpenAI-compatible backend does not: it
@@ -71,7 +72,7 @@ export function resolveAiProvider(): AiProvider {
 
   if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) return 'bedrock'
   if (process.env.ANTHROPIC_API_KEY) return 'anthropic'
-  if (process.env.AI_BASE_URL && process.env.AI_API_KEY) return 'openai-compatible'
+  if (process.env.AI_BASE_URL) return 'openai-compatible'
   return 'bedrock'
 }
 
@@ -87,7 +88,11 @@ export function resolveAiProvider(): AiProvider {
 export function hasAiCredentials(): boolean {
   const provider = resolveAiProvider()
   if (provider === 'anthropic') return !!process.env.ANTHROPIC_API_KEY
-  if (provider === 'openai-compatible') return !!(process.env.AI_BASE_URL && process.env.AI_API_KEY)
+  // AI_API_KEY is optional: a local OpenAI-compatible server (llama.cpp,
+  // Ollama, LM Studio, vLLM) usually has no auth, so a base URL alone counts
+  // as configured. When a hosted Swedish provider needs a key, the operator
+  // sets AI_API_KEY and the service sends it as a Bearer token.
+  if (provider === 'openai-compatible') return !!process.env.AI_BASE_URL
   return !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
 }
 

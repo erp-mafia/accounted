@@ -43,7 +43,9 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
   const provider = createOpenAICompatible({
     name: 'accounted-byo',
     baseURL: cfg.baseUrl ?? '',
-    apiKey: cfg.apiKey ?? '',
+    // Only send a key when one is configured: a keyless local server would
+    // reject or ignore an empty Bearer, and omitting it means no auth header.
+    ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}),
     supportsStructuredOutputs: cfg.strictJson,
   })
   const capabilities = capabilitiesFor(cfg)
