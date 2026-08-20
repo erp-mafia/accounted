@@ -294,12 +294,33 @@ npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
 
 ### Email (Invoice Sending and Reminders)
 
+Outbound mail (invoices, reminders, payslips) goes through one of two providers. Auth/account mail is sent by Supabase Auth and is not affected.
+
+**Option 1: Resend** (what hosted runs):
+
 ```bash
 RESEND_API_KEY=re_...
 RESEND_FROM_EMAIL=noreply@your-domain.com
 ```
 
-Requires a [Resend](https://resend.com) account with a verified sender domain. Without this, invoices can still be generated as PDFs but cannot be emailed.
+Requires a [Resend](https://resend.com) account with a verified sender domain.
+
+**Option 2: your own SMTP relay** (a Swedish mail provider, a Microsoft 365 / Google Workspace relay, Postfix on the host):
+
+```bash
+EMAIL_PROVIDER=smtp
+SMTP_HOST=smtp.example.se
+SMTP_PORT=587                         # default 587; 465 with SMTP_SECURE=true
+SMTP_SECURE=false                     # true = implicit TLS, false = STARTTLS
+SMTP_USER=...                         # optional for an internal relay
+SMTP_PASS=...
+SMTP_FROM_EMAIL=faktura@your-domain.se
+# SMTP_TLS_REJECT_UNAUTHORIZED=false  # only for a LAN relay with a self-signed certificate
+```
+
+`EMAIL_PROVIDER` is optional: with a `RESEND_API_KEY` present Resend is used, otherwise `SMTP_HOST` selects SMTP, so adding SMTP variables next to an existing Resend key never moves mail by accident. Set it explicitly when both are configured. The From header is built the same way on both providers (`<sender name> via <app name> <from address>`), and the delivery-status webhook is Resend-only.
+
+Without either, invoices can still be generated as PDFs but cannot be emailed.
 
 ### Push Notifications
 

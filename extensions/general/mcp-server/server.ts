@@ -6560,7 +6560,7 @@ export const tools: McpTool[] = [
 
       const emailService = getEmailService()
       if (!emailService.isConfigured()) {
-        throw new Error('Email service not configured. Ensure RESEND_API_KEY and RESEND_FROM_EMAIL are set.')
+        throw new Error('Email service not configured. Ensure RESEND_API_KEY and RESEND_FROM_EMAIL are set (or SMTP_HOST and SMTP_FROM_EMAIL with EMAIL_PROVIDER=smtp).')
       }
 
       const { data: invoice, error: invoiceError } = await supabase

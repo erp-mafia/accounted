@@ -673,6 +673,13 @@ const PINNED_DEPS = [
       'Paired with ai 6.x; the provider package follows its own major cadence and must move together with ' +
       'the core pin in one reviewed change.',
   },
+  {
+    name: 'nodemailer',
+    version: '9.0.5',
+    reason:
+      'SMTP mailer for self-hosts (extensions/general/email/lib/smtp-service.ts). Zero-dependency MIT-0 ' +
+      'package on the outbound-mail path; bumps are deliberate, reviewed PRs (audit surface), never silent.',
+  },
 ]
 
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
