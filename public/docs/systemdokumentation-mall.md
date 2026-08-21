@@ -227,7 +227,7 @@ Momsperiod: [ ] Månad  [ ] Kvartal  [ ] Helår
 
 9.2. Behandlingshistoriken genereras automatiskt av systemet och kan inte ändras av användaren.
 
-9.3. Behandlingshistoriken exporteras under **Importera/Exportera > Exportera > Säkerhetsbackup**. Exporten är en ZIP-fil som innehåller `revision/behandlingshistorik.json` (alla ändringar) och `revision/systemdokumentation.json` (kontoplan, verifikationsserier, arkiveringsprinciper), utöver SIE-filer, rapporter och underlag.
+9.3. Behandlingshistoriken tas fram under **Rapporter > Behandlingshistorik** per räkenskapsår eller datumintervall och kan laddas ner som PDF, CSV eller Excel. Rapporten visar registreringstidpunkt, utförare och detaljer för varje bokföringspost samt ändringar i bokföringssystemet (kontoplan, inställningar, räkenskapsår, importer, åtkomst) och anger programversionen. Behandlingshistoriken ingår även i säkerhetsbackupen under **Importera/Exportera > Exportera > Säkerhetsbackup**: ZIP-filen innehåller `revision/behandlingshistorik.json` (alla ändringar) och `revision/systemdokumentation.json` (kontoplan, verifikationsserier, arkiveringsprinciper, programversion), utöver SIE-filer, rapporter och underlag.
 
 ## 10. Import och export
 
