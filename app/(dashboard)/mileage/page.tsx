@@ -114,6 +114,11 @@ export default function MileagePage() {
   const [showMore, setShowMore] = useState(false)
   const [saving, setSaving] = useState(false)
   const [prefill, setPrefill] = useState<RoutePrefill | null>(null)
+  const [distanceSuggestion, setDistanceSuggestion] = useState<{
+    km: number
+    fromLabel: string
+    toLabel: string
+  } | null>(null)
 
   const [bookOpen, setBookOpen] = useState(false)
   const [bookFrom, setBookFrom] = useState('')
@@ -210,6 +215,47 @@ export default function MileagePage() {
   const disownPrefill = (field: 'distance_km' | 'purpose') => {
     if (!prefill || !prefill[field]) return
     setPrefill({ ...prefill, [field]: '' })
+  }
+
+  // Distance suggestion (OpenStreetMap via our proxy): debounced lookup once
+  // both endpoints are typed, create mode only. It never writes the field by
+  // itself; the user applies it with a click and can still edit freely.
+  useEffect(() => {
+    setDistanceSuggestion(null)
+    if (!formOpen || editingId) return
+    const from = form.from_location.trim()
+    const to = form.to_location.trim()
+    if (from.length < 2 || to.length < 2) return
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      fetch(
+        `/api/mileage/distance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+        { signal: controller.signal }
+      )
+        .then((res) => (res.ok ? res.json() : null))
+        .then((body) => {
+          if (typeof body?.data?.distance_km === 'number') {
+            setDistanceSuggestion({
+              km: body.data.distance_km,
+              fromLabel: body.data.from_label,
+              toLabel: body.data.to_label,
+            })
+          }
+        })
+        .catch(() => {
+          // Suggestion only: a failed lookup shows nothing.
+        })
+    }, 700)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [form.from_location, form.to_location, formOpen, editingId])
+
+  const applyDistanceSuggestion = () => {
+    if (!distanceSuggestion) return
+    disownPrefill('distance_km')
+    setForm((prev) => ({ ...prev, distance_km: String(distanceSuggestion.km) }))
   }
 
   const submitForm = async () => {
@@ -549,6 +595,21 @@ export default function MileagePage() {
                 {Boolean(prefill?.distance_km) && (
                   <p className="text-xs text-muted-foreground">{t('route_prefill_hint')}</p>
                 )}
+                {!editingId &&
+                  distanceSuggestion &&
+                  form.distance_km !== String(distanceSuggestion.km) && (
+                    <button
+                      type="button"
+                      className="text-left text-xs text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground transition-colors duration-150"
+                      title={t('distance_suggestion_route', {
+                        from: distanceSuggestion.fromLabel,
+                        to: distanceSuggestion.toLabel,
+                      })}
+                      onClick={applyDistanceSuggestion}
+                    >
+                      {t('distance_suggestion', { km: distanceSuggestion.km })}
+                    </button>
+                  )}
               </div>
               {!editingId && (
                 <div className="flex items-end pb-2">

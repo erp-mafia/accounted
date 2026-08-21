@@ -187,6 +187,23 @@ export default function PrivacyPolicyPage() {
                       eventuella underbiträden utanför EES.
                     </td>
                   </tr>
+                  <tr className="border-b">
+                    <td className="py-2 pr-4 font-medium">OpenStreetMap (OSMF)</td>
+                    <td className="py-2 pr-4">
+                      Avståndsförslag i körjournalen: när du skriver en från-
+                      och tilladress skickas adresstexterna, via vår server och
+                      utan användar-ID eller andra identifierare, till
+                      OpenStreetMaps geokodnings- och ruttjänster (Nominatim
+                      och OSRM) för att föreslå körsträckan. Endast
+                      adresstexterna skickas, och bara när du använder
+                      körjournalen.
+                    </td>
+                    <td className="py-2 pr-4">EU/Storbritannien</td>
+                    <td className="py-2">
+                      Anrop från vår server utan identifierare; Storbritannien
+                      omfattas av EU:s adekvansbeslut.
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>

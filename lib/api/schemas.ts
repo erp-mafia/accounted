@@ -3581,6 +3581,11 @@ export const MileageSalaryPushSchema = z
     message: 'Milersättning bokförs per kalenderår: dela upp perioden per år',
   })
 
+export const MileageDistanceQuerySchema = z.object({
+  from: z.string().trim().min(2).max(200),
+  to: z.string().trim().min(2).max(200),
+})
+
 // ============================================================
 // Bank file import
 // ============================================================
