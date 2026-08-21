@@ -27,6 +27,7 @@ import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import VatTreatmentSelect from './VatTreatmentSelect'
+import AiCategorizeProposal from './AiCategorizeProposal'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { TransactionCategory, VatTreatment, BASAccount, EntityType, LinePatternEntry } from '@/types'
@@ -437,6 +438,22 @@ export default function QuickReviewDialog({
           <div className="rounded-lg border border-destructive/30 bg-destructive/[0.05] px-3 py-2">
             <p className="text-xs text-destructive leading-snug">{rateError}</p>
           </div>
+        )}
+
+        {/* AI booking proposal: pre-fills account + VAT and explains why.
+            Falls back silently to the deterministic defaults on error. */}
+        {tx.id && (
+          <AiCategorizeProposal
+            key={tx.id}
+            transactionId={tx.id}
+            open={open}
+            onApply={(account, vat) => {
+              handleAccountChange(account)
+              // handleAccountChange clears VAT for class-2 accounts; for the
+              // rest, apply the proposed treatment.
+              if (!account.startsWith('2')) setVatTreatment(vat)
+            }}
+          />
         )}
 
         {/* Template or Category */}
