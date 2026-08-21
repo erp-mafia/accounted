@@ -315,18 +315,43 @@ function resolveInvoiceVat(
 
   // A rate stated on a line beats one divided out of the totals: mixed-rate
   // invoices divide out to a blended figure that matches no statutory rate.
-  const statedPercent = dto.lines.find((line) => line.taxPercent != null)?.taxPercent
-  const rate = statedPercent != null
-    ? snapToSwedishRate(statedPercent)
-    : subtotal > 0
-      ? snapToSwedishRate(vatAmount / subtotal)
-      : null
+  // Distinct rates actually stated on the lines. A rate stated on a line beats
+  // one divided out of the totals, because a mixed-rate invoice divides out to
+  // a blended figure matching no statutory rate at all (25 % goods plus 6 %
+  // books lands near 21 %).
+  const statedRates = [...new Set(
+    dto.lines
+      .filter((line) => line.taxPercent != null)
+      .map((line) => snapToSwedishRate(line.taxPercent as number) ?? (line.taxPercent as number)),
+  )]
+
+  // Mixed rates store `vat_rate: null` while keeping a treatment, matching what
+  // buildInvoiceWriteData does for a natively created mixed invoice
+  // (`isMixedRate ? null : theRate`). Labelling the whole invoice with its
+  // first line's rate would assert 25 % on an invoice that is 25 % and 6 %.
+  // The money is unaffected: the booking engine groups per ITEM rate, which is
+  // why the per-line vat_rate/vat_amount above have to be right.
+  const isMixed = statedRates.length > 1
+  const rate = isMixed
+    ? null
+    : statedRates.length === 1
+      ? snapToSwedishRate(statedRates[0])
+      : subtotal > 0
+        ? snapToSwedishRate(vatAmount / subtotal)
+        : null
+
+  // A mixed invoice still needs a treatment for the non-null column; the
+  // highest stated rate is the one that decides which revenue account the
+  // no-items fallback would reach for, and it is the safest of the set.
+  const treatmentRate = isMixed ? Math.max(...statedRates) : rate
 
   return {
     subtotal,
     vatAmount,
     rate,
-    treatment: rate !== null ? treatmentForRate(rate, dto.currencyCode) : 'standard_25',
+    treatment: treatmentRate !== null
+      ? treatmentForRate(treatmentRate, dto.currencyCode)
+      : 'standard_25',
     // A VAT amount was established; only its rate could not be classified.
     unresolved: false,
   }

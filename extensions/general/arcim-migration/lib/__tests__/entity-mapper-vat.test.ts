@@ -176,6 +176,28 @@ describe('mapSalesInvoice: line items carry the VAT the engine books', () => {
     expect(items[0]).toMatchObject({ line_total: 1000, vat_rate: 25, vat_amount: 250 })
   })
 
+  it('stores vat_rate null for a mixed-rate invoice, like a native one', () => {
+    // buildInvoiceWriteData stores `isMixedRate ? null : theRate`. Labelling
+    // the header with the first line's rate would assert 25 % on an invoice
+    // that is 25 % and 6 %.
+    const { invoice, items } = mapSalesInvoice(
+      salesDto({
+        legalMonetaryTotal: { payableAmount: { value: 1310, currencyCode: 'SEK' } },
+        taxTotal: { taxAmount: { value: 310, currencyCode: 'SEK' } },
+        lines: [
+          { id: '1', lineExtensionAmount: { value: 1000, currencyCode: 'SEK' }, taxPercent: 25 },
+          { id: '2', lineExtensionAmount: { value: 1000, currencyCode: 'SEK' }, taxPercent: 6 },
+        ],
+      }),
+      USER, COMPANY, COUNTERPARTY,
+    )
+
+    expect(invoice.vat_rate).toBeNull()
+    // The money is per line, which is what the booking engine groups on.
+    expect(items[0]).toMatchObject({ vat_rate: 25, vat_amount: 250 })
+    expect(items[1]).toMatchObject({ vat_rate: 6, vat_amount: 60 })
+  })
+
   it('does not label a line 25 % when nothing established a rate', () => {
     const { items } = mapSalesInvoice(
       salesDto({
