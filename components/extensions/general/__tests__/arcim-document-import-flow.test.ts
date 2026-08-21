@@ -3,6 +3,7 @@ import {
   ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
   INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
   PROVIDER_DOCUMENT_SCOPES_REQUIRED,
+  PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   ArcimDocumentImportRequestError,
   arcimDocumentImportReducer,
   documentOAuthProblemFromReason,
@@ -166,6 +167,36 @@ describe('Fortnox document follow-up state', () => {
       code: PROVIDER_DOCUMENT_SCOPES_REQUIRED,
       requestId: 'req_scope',
       reconnectRequired: true,
+    })
+  })
+
+  // The scopes are missing from the connect request itself, so offering a
+  // reconnect would loop the user forever (Klura AB, 2026-08-20).
+  it('never offers a reconnect when the scopes are unavailable to the integration', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
+            message: 'scopes unavailable',
+            requestId: 'req_unavailable',
+          },
+        }),
+        { status: 403, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+
+    const error = await requestArcimDocumentImport(
+      'consent-1',
+      true,
+      fetcher,
+    ).catch((caught) => caught)
+
+    expect(error).toBeInstanceOf(ArcimDocumentImportRequestError)
+    expect(error.problem).toEqual({
+      code: PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
+      requestId: 'req_unavailable',
+      reconnectRequired: false,
     })
   })
 })

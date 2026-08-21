@@ -1,5 +1,14 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import { generateText, jsonSchema, Output, type ModelMessage, type UserContent } from 'ai'
+import {
+  generateText,
+  jsonSchema,
+  Output,
+  stepCountIs,
+  tool,
+  type ModelMessage,
+  type ToolSet,
+  type UserContent,
+} from 'ai'
 import { capabilitiesFor, type ResolvedAiConfig } from '../config'
 import { extractJsonObject } from '../json'
 import { rasterizePdf } from '../rasterize-pdf'
@@ -7,6 +16,7 @@ import type {
   AiDocumentInput,
   AiService,
   AiTier,
+  AiToolDef,
   AiUsage,
   ExtractFromDocumentRequest,
   ExtractFromDocumentResult,
@@ -16,6 +26,31 @@ import type {
   GenerateTextRequest,
   GenerateTextResult,
 } from '../types'
+
+const DEFAULT_MAX_STEPS = 4
+
+/**
+ * Map our provider-agnostic tool defs onto the AI SDK's tool() shape. The SDK
+ * runs the loop itself (calls execute, feeds the result back) up to the
+ * stopWhen bound. Returns undefined when there is nothing to attach.
+ */
+function toSdkTools(defs: AiToolDef[] | undefined): ToolSet | undefined {
+  if (!defs || defs.length === 0) return undefined
+  const out: ToolSet = {}
+  for (const def of defs) {
+    out[def.name] = tool({
+      description: def.description,
+      inputSchema: jsonSchema<Record<string, unknown>>(def.jsonSchema),
+      execute: async (args) => {
+        const result = await def.execute((args ?? {}) as Record<string, unknown>)
+        // The SDK serialises whatever we return as the tool result; null is a
+        // valid "nothing" that a model reads fine, undefined is not.
+        return result ?? null
+      },
+    })
+  }
+  return out
+}
 
 /**
  * Any endpoint speaking the OpenAI chat-completions API, through the Vercel
@@ -122,11 +157,15 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
 
     async generateText(req: GenerateTextRequest): Promise<GenerateTextResult> {
       const model = modelFor(req.tier)
+      // Only attach tools when the configured model advertises tool use; a
+      // text-only local model still answers, just from the prompt (+ snapshot).
+      const tools = capabilities.toolUse ? toSdkTools(req.tools) : undefined
       const result = await generateText({
         model: provider(model),
         ...(req.system ? { system: req.system } : {}),
         prompt: req.prompt,
         maxOutputTokens: req.maxTokens,
+        ...(tools ? { tools, stopWhen: stepCountIs(req.maxSteps ?? DEFAULT_MAX_STEPS) } : {}),
       })
       return { text: result.text.trim(), model, usage: usageOf(result) }
     },

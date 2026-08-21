@@ -48,11 +48,39 @@ export interface AiUsage {
   cacheReadInputTokens: number | null
 }
 
+/**
+ * A tool the model may call during a bounded generateText loop.
+ *
+ * Provider-agnostic by construction: the OpenAI-compatible service maps it to
+ * a Vercel AI SDK `tool()` and lets the SDK drive the loop; the Anthropic-
+ * family service maps it to a Messages `tool` block and runs the loop by hand.
+ * `execute` runs the tool and returns any JSON-serialisable value, which is
+ * fed back to the model as the tool result. Only ever pass READ-only tools:
+ * this path has no approval-card surface for staged writes.
+ */
+export interface AiToolDef {
+  name: string
+  description: string
+  /** JSON Schema (draft-07 subset) for the tool's arguments. */
+  jsonSchema: Record<string, unknown>
+  execute: (args: Record<string, unknown>) => Promise<unknown>
+}
+
 export interface GenerateTextRequest {
   tier: AiTier
   system?: string
   prompt: string
   maxTokens: number
+  /**
+   * Read-only tools the model may call to gather data before answering. When
+   * present AND the backend supports tool use (capabilities.toolUse), the
+   * service runs a bounded tool loop of up to `maxSteps` model turns; a
+   * backend without tool support ignores them and answers from the prompt
+   * alone (so a snapshot in the prompt is the fallback grounding).
+   */
+  tools?: AiToolDef[]
+  /** Max model turns in the tool loop (default 4). Ignored when `tools` is absent. */
+  maxSteps?: number
 }
 
 export interface GenerateTextResult {

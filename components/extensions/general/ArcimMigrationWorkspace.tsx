@@ -35,6 +35,7 @@ import {
   arcimDocumentImportReducer,
   documentOAuthProblemFromReason,
   parseArcimDocumentOAuthResume,
+  PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   requestArcimDocumentImport,
   resolveArcimDocumentFollowUpProvider,
   watchArcimOAuthPopup,
@@ -1586,11 +1587,17 @@ function DocumentImportFollowUp({
 
   const reconnectRequired = state.problem?.reconnectRequired === true
   const discoveryFailed = state.phase === 'discovery-error'
+  // Fortnox has not granted the file permissions to the integration itself, so
+  // neither reconnecting nor retrying can succeed: state it and offer nothing.
+  const scopesUnavailable =
+    state.problem?.code === PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE
   return (
     <section className="space-y-3" aria-live="polite">
       {title}
       <p className="text-sm text-destructive">
-        {state.problem?.message
+        {scopesUnavailable
+          ? t('ext_arcim_documents_scope_unavailable')
+          : state.problem?.message
           ? state.problem.message
           : reconnectRequired
           ? t('ext_arcim_documents_scope_error')
@@ -1612,21 +1619,23 @@ function DocumentImportFollowUp({
           })}
         </p>
       )}
-      <Button
-        className="min-h-11"
-        onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
-      >
-        {reconnectRequired ? (
-          <RefreshCw className="mr-2 h-4 w-4" />
-        ) : (
-          <RotateCcw className="mr-2 h-4 w-4" />
-        )}
-        {reconnectRequired
-          ? t('ext_arcim_documents_reconnect_action')
-          : discoveryFailed
-            ? t('ext_arcim_documents_retry_discovery')
-            : t('ext_arcim_documents_retry_import')}
-      </Button>
+      {!scopesUnavailable && (
+        <Button
+          className="min-h-11"
+          onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
+        >
+          {reconnectRequired ? (
+            <RefreshCw className="mr-2 h-4 w-4" />
+          ) : (
+            <RotateCcw className="mr-2 h-4 w-4" />
+          )}
+          {reconnectRequired
+            ? t('ext_arcim_documents_reconnect_action')
+            : discoveryFailed
+              ? t('ext_arcim_documents_retry_discovery')
+              : t('ext_arcim_documents_retry_import')}
+        </Button>
+      )}
     </section>
   )
 }
@@ -2192,7 +2201,7 @@ export default function ArcimMigrationWorkspace({
   const handleReconnect = useCallback(async (
     provider: ArcimProvider,
     existingConsentId: string,
-    options?: { onFailure?: () => void },
+    options?: { onFailure?: () => void; documentScopes?: boolean },
   ) => {
     setError(null)
     setAuthExpired(false)
@@ -2215,7 +2224,11 @@ export default function ArcimMigrationWorkspace({
       const res = await fetch('/api/extensions/ext/arcim-migration/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, reconnect: true }),
+        body: JSON.stringify({
+          provider,
+          reconnect: true,
+          documentScopes: options?.documentScopes === true,
+        }),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -2328,6 +2341,9 @@ export default function ArcimMigrationWorkspace({
     storeDocumentOAuthResume(reconnectAction)
     dispatchDocumentImport({ type: 'reconnect-started' })
     void handleReconnect('fortnox', consentId, {
+      // The whole point of this reconnect is the attachment permissions, so
+      // this is the one path that asks Fortnox for them.
+      documentScopes: true,
       onFailure: () => {
         dispatchDocumentImport(
           reconnectAction === 'discover'
@@ -2711,6 +2727,13 @@ export default function ArcimMigrationWorkspace({
           setMigrationProgress(progress)
           setMigrationStep(`Importerar bokföringsdata (SIE): fil ${i + 1} av ${filesToImport.length}...`)
 
+          // Name the year in every per-file failure: a multi-year re-sync
+          // that dies on ONE year must say which, or the user cannot act on
+          // it (issue #1667: the current year re-imported, the prior year
+          // refused, and the error never said so).
+          const fiscalYear = filesToImport[i].status?.fiscalYear
+          const yearLabel = fiscalYear ? `Räkenskapsår ${fiscalYear}: ` : ''
+
           const res = await fetch('/api/extensions/ext/arcim-migration/import-sie', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2728,7 +2751,10 @@ export default function ArcimMigrationWorkspace({
 
           if (!res.ok) {
             const data = await res.json().catch(() => ({}))
-            throw apiError(data, `SIE import HTTP ${res.status}`)
+            const err = apiError(data, `SIE import HTTP ${res.status}`)
+            throw err instanceof UserFacingError
+              ? new UserFacingError(`${yearLabel}${err.message}`)
+              : err
           }
 
           const result = await res.json() as ImportResult
@@ -2740,8 +2766,8 @@ export default function ArcimMigrationWorkspace({
           // först" message masks the real error.
           if (!result.success) {
             throw new UserFacingError(result.errors.length > 0
-              ? result.errors.join('\n')
-              : 'SIE-importen misslyckades utan felmeddelande.')
+              ? `${yearLabel}${result.errors.join('\n')}`
+              : `${yearLabel}SIE-importen misslyckades utan felmeddelande.`)
           }
         }
       }

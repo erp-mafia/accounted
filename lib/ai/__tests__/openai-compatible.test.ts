@@ -102,6 +102,31 @@ describe('createOpenAICompatibleService', () => {
     })
   })
 
+  it('generateText forwards read-only tools to the model when provided', async () => {
+    const svc = createOpenAICompatibleService(readAiConfig())
+    const execute = vi.fn().mockResolvedValue({ ok: true })
+    await svc.generateText({
+      tier: 'assistant',
+      prompt: 'Vad är min största utgift?',
+      maxTokens: 50,
+      tools: [
+        { name: 'gnubok_get_income_statement', description: 'd', jsonSchema: { type: 'object' }, execute },
+      ],
+      maxSteps: 4,
+    })
+    // The AI SDK converts our defs and hands them to the model on the wire.
+    const passedTools = doGenerate.mock.calls[0][0].tools as Array<{ name: string }>
+    expect(Array.isArray(passedTools)).toBe(true)
+    expect(passedTools.some((t) => t.name === 'gnubok_get_income_statement')).toBe(true)
+  })
+
+  it('generateText attaches no tools when none are provided (plain single call)', async () => {
+    const svc = createOpenAICompatibleService(readAiConfig())
+    await svc.generateText({ tier: 'assistant', prompt: 'Hej', maxTokens: 50 })
+    const passedTools = doGenerate.mock.calls[0][0].tools
+    expect(passedTools == null || (Array.isArray(passedTools) && passedTools.length === 0)).toBe(true)
+  })
+
   it('extractFromDocument sends an image as an image part followed by the instruction', async () => {
     const svc = createOpenAICompatibleService(readAiConfig())
     const jpeg = Buffer.from('JPEG')

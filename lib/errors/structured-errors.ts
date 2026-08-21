@@ -1713,6 +1713,26 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_en:
       'This file looks like a Skatteverket tax account statement. Use the skattekonto import instead.',
   },
+  BANK_FILE_UNDO_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bankfilsimporten kunde inte hittas.',
+    message_en: 'Bank file import not found.',
+  },
+  BANK_FILE_UNDO_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Bankfilsimporten kunde inte ångras.',
+    message_en: 'Failed to undo bank file import.',
+  },
+  BANK_FILE_UNDO_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Endast ägare eller administratörer kan ångra en bankfilsimport.',
+    message_en: 'Only company owners and admins can undo a bank file import.',
+  },
+  BANK_FILE_LIST_INVALID_QUERY: {
+    httpStatus: 400,
+    message_sv: 'Ogiltiga listparametrar: limit måste vara 1-100, offset ett icke-negativt heltal och status ett giltigt importstatus.',
+    message_en: 'Invalid list parameters: limit must be 1-100, offset a nonnegative integer, and status a valid import status.',
+  },
 }
 
 const SKATTEKONTO_FILE: Record<string, StructuredErrorEntry> = {
@@ -2016,6 +2036,13 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
       'Fortnox-anslutningen saknar behörighet till Arkiv och Koppla fil. Koppla om Fortnox och godkänn behörigheterna för att importera underlag.',
     message_en:
       'The Fortnox connection lacks Archive and Connect file access. Reconnect Fortnox and approve those permissions to import documents.',
+  },
+  PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE: {
+    httpStatus: 403,
+    message_sv:
+      'Filimport från Fortnox är inte påslagen än: behörigheterna Arkiv och Koppla fil saknas för Accounted-integrationen hos Fortnox. Att koppla om hjälper inte, vi aktiverar det så snart behörigheten är på plats. Allt annat i migreringen är importerat.',
+    message_en:
+      'Fortnox file import is not enabled yet: the Archive and Connect file permissions are missing for the Accounted integration at Fortnox. Reconnecting will not help; we enable this as soon as the permission is in place. Everything else in the migration was imported.',
   },
   PROVIDER_DISCONNECT_FAILED: {
     httpStatus: 500,

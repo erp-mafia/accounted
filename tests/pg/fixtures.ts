@@ -137,13 +137,15 @@ export async function insertTransaction(params: {
   journalEntryId?: string | null
   cashAccountId?: string | null
   isIgnored?: boolean
+  bankFileImportId?: string | null
 }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.transactions
        (id, company_id, user_id, currency, amount, date, description,
-        external_id, journal_entry_id, cash_account_id, is_ignored, category)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'uncategorized')`,
+        external_id, journal_entry_id, cash_account_id, is_ignored,
+        bank_file_import_id, category)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'uncategorized')`,
     [
       id,
       params.companyId,
@@ -156,6 +158,7 @@ export async function insertTransaction(params: {
       params.journalEntryId ?? null,
       params.cashAccountId ?? null,
       params.isIgnored ?? false,
+      params.bankFileImportId ?? null,
     ],
   )
   return id

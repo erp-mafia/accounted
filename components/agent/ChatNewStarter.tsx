@@ -3,6 +3,8 @@
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import AgentChat from './AgentChat'
+import AskConsole from './AskConsole'
+import { CHAT_INTENT_ID } from '@/lib/agent/ask/persist'
 import AgentAvatar from './AgentAvatar'
 import SandboxAgentPreview from './SandboxAgentPreview'
 import { useAgentSheet } from './AgentSheetProvider'
@@ -25,6 +27,16 @@ export default function ChatNewStarter({
   const isSandbox = companyCtx?.isSandbox ?? false
   const agentName = identity.displayName?.trim() || 'Din assistent'
   const [swapped, setSwapped] = useState(false)
+  const isSingleCall = intentId === CHAT_INTENT_ID
+
+  const swapToConversation = (id: string) => {
+    // Swap once, after the turn is created. For the single-call console both
+    // the question and the answer are already persisted by the time we get the
+    // id back, so /chat/[id] hydrates the full thread.
+    if (swapped) return
+    setSwapped(true)
+    router.replace(`/chat/${id}`)
+  }
 
   return (
     <>
@@ -41,6 +53,13 @@ export default function ChatNewStarter({
       <div className="flex-1 min-h-0 flex flex-col">
         {isSandbox ? (
           <SandboxAgentPreview agentName={agentName} />
+        ) : isSingleCall ? (
+          <AskConsole
+            seedUserMessage={seedUserMessage}
+            initialConversationId={null}
+            onConversationCreated={swapToConversation}
+            scrollerClassName="px-6 py-8"
+          />
         ) : (
           <AgentChat
             intentId={intentId}
@@ -51,9 +70,7 @@ export default function ChatNewStarter({
               // Wait for the first turn to finish before swapping the URL:
               // otherwise the unmount aborts the in-flight stream and
               // /chat/[id] hydrates with only the user message.
-              if (swapped) return
-              setSwapped(true)
-              router.replace(`/chat/${id}`)
+              swapToConversation(id)
             }}
             scrollerClassName="px-6 py-8"
           />

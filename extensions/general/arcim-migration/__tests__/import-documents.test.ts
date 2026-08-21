@@ -479,6 +479,36 @@ describe('importProviderDocuments', () => {
     ).rejects.toThrow('Fortnox consent lacks archive/connectfile scope: reconnect required')
   })
 
+  // Six companies hit exactly this between 2026-08-13 and 08-19 and were told
+  // "kunde inte importera underlag, försök igen", with a retry that could not
+  // work: Fortnox answers an unscoped attachment listing with 400 plus a
+  // behörighet message, not only with 403.
+  it('treats a Fortnox 400 that names the missing permission as the same failure', async () => {
+    const supabase = wireFortnox()
+    mockFetchFortnoxFinancialYears.mockRejectedValue(
+      new FortnoxApiError(
+        'bad request',
+        400,
+        JSON.stringify({
+          ErrorInformation: {
+            error: 1,
+            message: 'Otillräcklig behörighet för att utföra anropet',
+            code: 2000663,
+          },
+        }),
+      ),
+    )
+
+    await expect(
+      importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+      }),
+    ).rejects.toThrow('Fortnox consent lacks archive/connectfile scope: reconnect required')
+  })
+
   it('explains that a Fortnox archive-download 403 requires reconnecting', async () => {
     const supabase = wireFortnox()
     mockDownloadFortnoxArchiveFile.mockRejectedValue(

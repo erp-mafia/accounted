@@ -323,7 +323,47 @@ describe('OAuth redirect_uri symmetry between authorize and exchange', () => {
     )
 
     expect(res.status).toBe(200)
-    expect(getAuthUrl).toHaveBeenCalledWith('fortnox', 'otc-code-1', OVERRIDE_URI)
+    expect(getAuthUrl).toHaveBeenCalledWith(
+      'fortnox',
+      'otc-code-1',
+      OVERRIDE_URI,
+      // A first connect never asks for the voucher-attachment scopes: those
+      // carry a Fortnox licence requirement and belong to the opt-in underlag
+      // reconnect only.
+      { documentScopes: undefined },
+    )
+  })
+
+  // The underlag follow-up is the only caller allowed to widen the consent.
+  it('reconnect asks for the attachment scopes only when the underlag flow requests them', async () => {
+    ;(listConsents as Mock).mockResolvedValue([
+      { id: 'consent-1', provider: 'fortnox', status: 1 },
+    ])
+
+    const reconnect = (documentScopes?: boolean) =>
+      connectHandler(
+        createMockRequest('http://localhost/api/extensions/ext/arcim-migration/connect', {
+          method: 'POST',
+          body: { provider: 'fortnox', reconnect: true, ...(documentScopes === undefined ? {} : { documentScopes }) },
+        }),
+        connectCtx(),
+      )
+
+    expect((await reconnect(true)).status).toBe(200)
+    expect(getAuthUrl).toHaveBeenLastCalledWith(
+      'fortnox',
+      'otc-code-1',
+      OVERRIDE_URI,
+      { documentScopes: true },
+    )
+
+    expect((await reconnect()).status).toBe(200)
+    expect(getAuthUrl).toHaveBeenLastCalledWith(
+      'fortnox',
+      'otc-code-1',
+      OVERRIDE_URI,
+      { documentScopes: false },
+    )
   })
 
   it('exchange leg passes the SAME env-override redirect URI to exchangeAuthToken', async () => {
