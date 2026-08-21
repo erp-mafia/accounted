@@ -105,29 +105,54 @@ export async function fetchVatDeclarationStatus(
       const res = await skvRequestWithAuth(
         resolved.auth, 'GET', `/${view}/${redovisare}/${redovisningsperiod}`,
       )
+      // Parse the 2xx body BEFORE writing the audit row, so a success status
+      // with an unreadable body is recorded as skv_error, not 'ok', and maps
+      // to SKATTEVERKET_API_ERROR instead of escaping as an internal 500.
+      let body: unknown = null
+      let bodyUnparseable = false
+      if (res.ok) {
+        try {
+          body = await res.json()
+        } catch {
+          bodyUnparseable = true
+        }
+      }
       // 404 means "nothing on file for the period": a normal answer, not an
       // upstream failure. Same audit convention as the MCP status tool.
+      const upstreamOk = (res.ok && !bodyUnparseable) || res.status === 404
       await writeSkatteverketAudit(ctx, {
         endpoint: view,
         agRegistreradId: redovisare,
         redovisningsperiod,
-        outcome: res.ok || res.status === 404 ? 'ok' : 'skv_error',
+        outcome: upstreamOk ? 'ok' : 'skv_error',
         responseStatus: res.status,
       })
       if (res.status === 404) return { ok: true, body: null }
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
+      if (!res.ok || bodyUnparseable) {
+        // The upstream body is logged server-side only. Forwarding it verbatim
+        // to API consumers would leak Skatteverket system details; the caller
+        // gets the status code and a generic Swedish message.
+        const text = bodyUnparseable
+          ? '<2xx body was not valid JSON>'
+          : await res.text().catch(() => '')
+        ctx.log.warn('skv declaration-status upstream error', {
+          view,
+          status: res.status,
+          body: text.slice(0, 500),
+        })
         return {
           ok: false,
           failure: {
             ok: false,
             code: 'SKATTEVERKET_API_ERROR',
             http_status: 502,
-            error: `Skatteverket svarade med ${res.status}: ${text.slice(0, 200)}`,
+            error: bodyUnparseable
+              ? 'Skatteverket svarade med ett svar som inte kunde tolkas.'
+              : `Skatteverket svarade med ${res.status}.`,
           },
         }
       }
-      return { ok: true, body: await res.json() }
+      return { ok: true, body }
     }
 
     let submitted: unknown = null

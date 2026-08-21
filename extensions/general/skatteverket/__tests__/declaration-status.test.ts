@@ -206,7 +206,29 @@ describe('fetchVatDeclarationStatus', () => {
     })
     expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 502 })
     expect((result as { error: string }).error).toContain('500')
+    // The upstream body is logged server-side only, never forwarded to the
+    // API consumer (it can leak Skatteverket system details).
+    expect((result as { error: string }).error).not.toContain('internt')
     expect(mockWriteAudit.mock.calls[0][1]).toMatchObject({ outcome: 'skv_error' })
+  })
+
+  it('2xx with an unparseable body → SKATTEVERKET_API_ERROR 502 with skv_error audit', async () => {
+    mockSkvRequestWithAuth.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected end of JSON input')
+      },
+      text: async () => '',
+    })
+    const result = await fetchVatDeclarationStatus(supabase, 'user-1', 'company-1', {
+      periodType: 'monthly', year: 2026, period: 3,
+    })
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_API_ERROR', http_status: 502 })
+    expect(mockWriteAudit.mock.calls[0][1]).toMatchObject({
+      outcome: 'skv_error',
+      responseStatus: 200,
+    })
   })
 
   it('SkatteverketAuthError → structured code via skvAuthCodeToStructured', async () => {
