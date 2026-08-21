@@ -152,7 +152,7 @@ export function PeppolReceiveSettings() {
   return (
     <SettingsGroup label={t('heading')}>
       <SettingsRow label={t('access_label')} align="baseline">
-        <div className="min-w-0 flex-1 space-y-1 text-sm">
+        <div className="min-w-0 flex-1 space-y-2 text-sm">
           {loadFailed ? (
             <SettingsRowNote>{t('load_failed')}</SettingsRowNote>
           ) : state === null ? (
@@ -160,34 +160,38 @@ export function PeppolReceiveSettings() {
           ) : !transportAvailable ? (
             <SettingsRowNote>{t('provider_required')}</SettingsRowNote>
           ) : (
-            <>
-              <span>{accessLine}</span>
+            <div className="space-y-1">
+              <span className="block">{accessLine}</span>
               {sendsLine && <SettingsRowNote className="block tabular-nums">{sendsLine}</SettingsRowNote>}
-            </>
+            </div>
+          )}
+          {/* The request controls live under the status text and wrap: a long
+              checkbox label next to a button in a shrink-0 end slot pushed the
+              whole settings panel wider than its column. */}
+          {state !== null && transportAvailable && (access?.status === 'none' || access?.status === 'disabled') && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <label className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0 rounded-sm border-border"
+                  checked={wantsReceiving}
+                  onChange={(event) => setWantsReceiving(event.target.checked)}
+                  disabled={isRequesting || !canWrite}
+                />
+                <span>{t('request_receiving_label')}</span>
+              </label>
+              <Button
+                type="button"
+                variant="outline"
+                className="ml-auto"
+                onClick={() => void requestAccess()}
+                disabled={isRequesting || !canWrite}
+              >
+                {isRequesting ? t('request_sending') : t('request_button')}
+              </Button>
+            </div>
           )}
         </div>
-        {state !== null && transportAvailable && (access?.status === 'none' || access?.status === 'disabled') && (
-          <SettingsRowEnd className="flex-col items-end gap-2 md:flex-row md:items-center">
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded-sm border-border"
-                checked={wantsReceiving}
-                onChange={(event) => setWantsReceiving(event.target.checked)}
-                disabled={isRequesting || !canWrite}
-              />
-              {t('request_receiving_label')}
-            </label>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void requestAccess()}
-              disabled={isRequesting || !canWrite}
-            >
-              {isRequesting ? t('request_sending') : t('request_button')}
-            </Button>
-          </SettingsRowEnd>
-        )}
       </SettingsRow>
 
       {/* Receiving is a separate grant (one contracted slot each): the switch
