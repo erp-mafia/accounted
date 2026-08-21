@@ -6,9 +6,12 @@
  * provider-neutral `PeppolTransport` boundary.
  *
  * API facts (https://api.qvalia.io, verified 2026-08-21):
- * - Production `https://api.qvalia.com`, sandbox `https://api-qa.qvalia.com`,
- *   separate keys per environment.
- * - Auth: `Authorization: ApiKey <key>` (older samples send the bare key).
+ * - Production `https://api.qvalia.com`, sandbox `https://api-test.qvalia.com`
+ *   (the public docs say api-qa; the onboarding mail says api-test and that one
+ *   answers), separate keys per environment.
+ * - Auth: the bare key in `Authorization: <key>` (verified live against the
+ *   sandbox 2026-08-21; the `ApiKey <key>` form in the newest docs answers 401
+ *   for this key, so it is opt-in via QVALIA_AUTH_SCHEME=apikey).
  * - Partner model: every call is `/partner/{partnerRegNo}/...`; transactions
  *   are `/partner/{partnerRegNo}/transaction/{accountRegNo}/invoices/outgoing`.
  *   In the consolidated setup all customer Peppol IDs live under one account
@@ -45,7 +48,7 @@ import {
 
 export const QVALIA_PROVIDER = 'qvalia'
 export const QVALIA_PRODUCTION_BASE_URL = 'https://api.qvalia.com'
-export const QVALIA_SANDBOX_BASE_URL = 'https://api-qa.qvalia.com'
+export const QVALIA_SANDBOX_BASE_URL = 'https://api-test.qvalia.com'
 export const QVALIA_DEFAULT_WEBHOOK_HEADER = 'x-accounted-webhook-key'
 
 export type QvaliaAuthScheme = 'apikey' | 'raw'
@@ -88,7 +91,7 @@ export function readQvaliaConfigFromEnv(
   if (!/^https:\/\//i.test(baseUrl)) return null
 
   const authSchemeRaw = env.QVALIA_AUTH_SCHEME?.trim().toLowerCase()
-  const authScheme: QvaliaAuthScheme = authSchemeRaw === 'raw' ? 'raw' : 'apikey'
+  const authScheme: QvaliaAuthScheme = authSchemeRaw === 'apikey' ? 'apikey' : 'raw'
 
   return {
     apiKey,
@@ -357,10 +360,33 @@ export function normalizeQvaliaWebhook(payload: QvaliaWebhookPayload): QvaliaNor
   }
 }
 
+/**
+ * Qvalia's lookup returns document types as SMP service URLs, e.g.
+ * `https://smp-test.qvalia.com/iso6523-actorid-upis::0007:5567321707/services/busdox-docid-qns::urn:oasis:...::2.1`
+ * (verified live 2026-08-21), sometimes percent-encoded. Reduce them to the
+ * bare Peppol document type identifier so capabilities compare by value.
+ */
+export function normalizePeppolDocumentTypeId(value: string): string {
+  let candidate = value.trim()
+  const servicesIndex = candidate.indexOf('/services/')
+  if (/^https?:\/\//i.test(candidate) && servicesIndex !== -1) {
+    candidate = candidate.slice(servicesIndex + '/services/'.length)
+  }
+  try {
+    candidate = decodeURIComponent(candidate)
+  } catch {
+    // keep as-is when not percent-encoded
+  }
+  const schemeMatch = /^(busdox-docid-qns|peppol-doctype-wildcard)::/.exec(candidate)
+  if (schemeMatch) candidate = candidate.slice(schemeMatch[0].length)
+  return candidate
+}
+
 function capabilityFromDocType(value: string): PeppolRecipientCapability {
+  const documentTypeId = normalizePeppolDocumentTypeId(value)
   return {
-    documentTypeId: value,
-    processId: value === PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID ? PEPPOL_BIS_BILLING_PROFILE_ID : '',
+    documentTypeId,
+    processId: documentTypeId === PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID ? PEPPOL_BIS_BILLING_PROFILE_ID : '',
   }
 }
 

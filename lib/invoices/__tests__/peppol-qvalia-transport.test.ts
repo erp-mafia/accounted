@@ -11,6 +11,7 @@ import {
   describeQvaliaErrorBody,
   extractUblDocumentId,
   extractUblJsonSupplierEndpoint,
+  normalizePeppolDocumentTypeId,
   normalizeQvaliaWebhook,
   readQvaliaConfigFromEnv,
   type QvaliaConfig,
@@ -71,35 +72,35 @@ describe('readQvaliaConfigFromEnv', () => {
     })).toBeNull()
   })
 
-  it('defaults the account to the partner number, ApiKey auth and the documented header', () => {
+  it('defaults the account to the partner number, the bare-key auth that the sandbox accepts, and the documented header', () => {
     const parsed = readQvaliaConfigFromEnv({
       QVALIA_API_KEY: ' k ',
       QVALIA_PARTNER_REG_NO: 'SE1',
-      QVALIA_BASE_URL: 'https://api-qa.qvalia.com/',
+      QVALIA_BASE_URL: 'https://api-test.qvalia.com/',
       QVALIA_WEBHOOK_SECRET: 's',
     })
     expect(parsed).toEqual({
       apiKey: 'k',
       partnerRegNo: 'SE1',
       accountRegNo: 'SE1',
-      baseUrl: 'https://api-qa.qvalia.com',
-      authScheme: 'apikey',
+      baseUrl: 'https://api-test.qvalia.com',
+      authScheme: 'raw',
       webhookSecret: 's',
       webhookHeader: 'x-accounted-webhook-key',
     })
   })
 
-  it('honours an explicit account number, raw auth and a custom header', () => {
+  it('honours an explicit account number, the ApiKey prefix and a custom header', () => {
     const parsed = readQvaliaConfigFromEnv({
       QVALIA_API_KEY: 'k',
       QVALIA_PARTNER_REG_NO: 'SE1',
       QVALIA_ACCOUNT_REG_NO: 'SE2',
       QVALIA_BASE_URL: 'https://api.qvalia.com',
-      QVALIA_AUTH_SCHEME: 'raw',
+      QVALIA_AUTH_SCHEME: 'apikey',
       QVALIA_WEBHOOK_HEADER: 'X-Custom',
     })
     expect(parsed?.accountRegNo).toBe('SE2')
-    expect(parsed?.authScheme).toBe('raw')
+    expect(parsed?.authScheme).toBe('apikey')
     expect(parsed?.webhookHeader).toBe('x-custom')
   })
 })
@@ -143,7 +144,8 @@ describe('Qvalia transport: lookupRecipient', () => {
         matches: [{
           participantID: { scheme: 'iso6523-actorid-upis', value: '0007:5566778899' },
           docTypes: [
-            { scheme: 'busdox-docid-qns', value: PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID },
+            // Live shape: the SMP service URL wraps the document type id.
+            { scheme: 'busdox-docid-qns', value: `https://smp-test.qvalia.com/iso6523-actorid-upis::0007:5566778899/services/busdox-docid-qns::${PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID}` },
             { scheme: 'busdox-docid-qns', value: 'urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2::CreditNote##urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0::2.1' },
           ],
         }],
@@ -422,6 +424,19 @@ describe('Qvalia transport: retrieveEvidence', () => {
 })
 
 describe('helpers', () => {
+  it('reduces SMP service URLs to bare Peppol document type ids', () => {
+    expect(normalizePeppolDocumentTypeId(
+      `https://smp-test.qvalia.com/iso6523-actorid-upis::0007:5567321707/services/busdox-docid-qns::${PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID}`,
+    )).toBe(PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID)
+    expect(normalizePeppolDocumentTypeId(
+      'https://smp-test.qvalia.com/iso6523-actorid-upis::0007:1/services/peppol-doctype-wildcard::urn:oasis:names:specification:ubl:schema:xsd:Invoice-2::Invoice##urn:peppol:pint:selfbilling-1%40aunz-1::2.1',
+    )).toBe('urn:oasis:names:specification:ubl:schema:xsd:Invoice-2::Invoice##urn:peppol:pint:selfbilling-1@aunz-1::2.1')
+    expect(normalizePeppolDocumentTypeId(`busdox-docid-qns::${PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID}`))
+      .toBe(PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID)
+    expect(normalizePeppolDocumentTypeId(PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID))
+      .toBe(PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID)
+  })
+
   it('extracts the UBL document id and the seller endpoint', () => {
     expect(extractUblDocumentId(XML)).toBe('F-2026-42')
     expect(extractUblDocumentId('<cbc:ID schemeID="x">A &amp; B</cbc:ID>')).toBe('A & B')
