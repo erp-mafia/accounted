@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import type { AuditLogEntry } from '@/types'
 import {
+  AUDITED_TABLES,
+  AUDIT_ROW_FILTER,
+  GLOBAL_ACTIONS,
   auditRowToEvent,
   buildBehandlingshistorikExport,
   collapseBursts,
@@ -72,6 +77,23 @@ const baseEntry = {
   reverses_id: null,
   correction_of_id: null,
 }
+
+// ============================================================
+// audit_log row filter: the literal in the query must track the constants
+// ============================================================
+
+describe('AUDIT_ROW_FILTER', () => {
+  it('is built from AUDITED_TABLES and GLOBAL_ACTIONS', () => {
+    expect(AUDIT_ROW_FILTER).toBe(
+      `table_name.in.(${AUDITED_TABLES.join(',')}),action.in.(${GLOBAL_ACTIONS.join(',')})`,
+    )
+  })
+
+  it('is the exact literal used in the audit_log query (schema guard needs a literal there)', () => {
+    const source = readFileSync(path.join(__dirname, '..', 'behandlingshistorik.ts'), 'utf-8')
+    expect(source).toContain(`.or(\n        '${AUDIT_ROW_FILTER}',\n      )`)
+  })
+})
 
 // ============================================================
 // diffFields
@@ -530,7 +552,7 @@ describe('generateBehandlingshistorik', () => {
         },
       ],
       journal_entry_rattelse_log: [{ data: [] }, { data: [] }],
-      company_migration_resets: [{ data: [] }],
+      company_migration_resets: [{ data: [] }, { data: [] }],
       sie_imports: [
         {
           data: [
@@ -588,7 +610,7 @@ describe('generateBehandlingshistorik', () => {
         { data: [auditRow({ id: 'a1', table_name: 'chart_of_accounts', action: 'DELETE', created_at: '2026-03-15T08:00:00.000Z', old_state: { account_number: '6540', account_name: 'IT' } })] },
       ],
       journal_entry_rattelse_log: [{ data: [] }],
-      company_migration_resets: [{ data: [] }],
+      company_migration_resets: [{ data: [] }, { data: [] }],
       sie_imports: [{ data: [] }],
       bank_file_imports: [{ data: [] }],
     }

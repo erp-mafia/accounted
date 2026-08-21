@@ -185,7 +185,7 @@ export interface RawBehandlingshistorikEvent extends Omit<BehandlingshistorikEve
 // ============================================================
 
 /** audit_log tables the report reads. Everything else (registers) is out of scope per BFN's commentary. */
-const AUDITED_TABLES = [
+export const AUDITED_TABLES = [
   'journal_entries',
   'chart_of_accounts',
   'company_settings',
@@ -199,12 +199,20 @@ const AUDITED_TABLES = [
 ] as const
 
 /** Actions that matter regardless of table (security / integrity / retention). */
-const GLOBAL_ACTIONS = [
+export const GLOBAL_ACTIONS = [
   'SECURITY_EVENT',
   'INTEGRITY_FAILURE',
   'RETENTION_BLOCK',
   'DOCUMENT_DELETE_BLOCKED',
 ] as const
+
+/**
+ * PostgREST `or` filter selecting the rows above. Written as one literal so the
+ * schema guard (tests/schema/no-phantom-columns.test.ts) can resolve the column
+ * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
+ */
+export const AUDIT_ROW_FILTER =
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)'
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   manual: 'Manuell',
@@ -1262,7 +1270,6 @@ async function fetchAuditRows(
   recordIds: string[],
 ): Promise<AuditLogEntry[]> {
   const byId = new Map<string, AuditLogEntry>()
-  const tableFilter = `table_name.in.(${AUDITED_TABLES.join(',')}),action.in.(${GLOBAL_ACTIONS.join(',')})`
 
   const windowed = await fetchAllRows<AuditLogEntry>(({ from, to }) =>
     supabase
@@ -1271,7 +1278,11 @@ async function fetchAuditRows(
       .eq('company_id', companyId)
       .gte('created_at', window.fromTs)
       .lte('created_at', window.toTs)
-      .or(tableFilter)
+      // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
+      // resolves string literals here. A test pins the two to each other.
+      .or(
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED)',
+      )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .range(from, to),
@@ -1329,13 +1340,29 @@ async function fetchRattelseRows(
 }
 
 async function fetchMigrationResets(supabase: SupabaseClient, companyId: string): Promise<MigrationResetRow[]> {
-  const { data, error } = await supabase
+  // Two equality queries instead of one `.or()`: the reset row is relevant to
+  // both the archived source company and its replacement, and the schema guard
+  // resolves plain column filters statically.
+  const byId = new Map<string, MigrationResetRow>()
+  const asSource = await supabase
     .from('company_migration_resets')
     .select('id, source_company_id, replacement_company_id, actor_id, reason, source_counts, created_at')
-    .or(`source_company_id.eq.${companyId},replacement_company_id.eq.${companyId}`)
+    .eq('source_company_id', companyId)
     .order('created_at', { ascending: true })
-  if (error) throw new Error(`Failed to fetch migration resets: ${error.message}`)
-  return (data as MigrationResetRow[] | null) ?? []
+  if (asSource.error) throw new Error(`Failed to fetch migration resets: ${asSource.error.message}`)
+  const asReplacement = await supabase
+    .from('company_migration_resets')
+    .select('id, source_company_id, replacement_company_id, actor_id, reason, source_counts, created_at')
+    .eq('replacement_company_id', companyId)
+    .order('created_at', { ascending: true })
+  if (asReplacement.error) throw new Error(`Failed to fetch migration resets: ${asReplacement.error.message}`)
+  for (const row of [
+    ...((asSource.data as MigrationResetRow[] | null) ?? []),
+    ...((asReplacement.data as MigrationResetRow[] | null) ?? []),
+  ]) {
+    byId.set(row.id, row)
+  }
+  return [...byId.values()]
 }
 
 async function fetchSieImports(supabase: SupabaseClient, companyId: string): Promise<SieImportRow[]> {
