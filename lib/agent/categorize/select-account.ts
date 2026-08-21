@@ -256,10 +256,22 @@ function parsePick(value: unknown, validIds: Set<string>): RawPick {
   }
 }
 
-const MODEL_CONF_WEIGHT: Record<'high' | 'medium' | 'low', number> = {
-  high: 0.95,
-  medium: 0.75,
-  low: 0.5,
+// A backtest against real bookings showed the model reports "high" almost
+// always, so its verbalized confidence can't drive the score. Instead:
+// - a pick BACKED by a deterministic candidate takes that candidate's
+//   confidence (the retrieval signal), only pulled down when the model itself
+//   is unsure;
+// - an UNBACKED pick (a pure category guess no candidate agreed with) is capped
+//   below the "säker" threshold, however sure the model claims to be.
+const BACKED_MODEL_FACTOR: Record<'high' | 'medium' | 'low', number> = {
+  high: 1,
+  medium: 0.9,
+  low: 0.75,
+}
+const UNBACKED_CONFIDENCE: Record<'high' | 'medium' | 'low', number> = {
+  high: 0.7, // stays under the säker band (0.8): a guess is never "säker"
+  medium: 0.5,
+  low: 0.3,
 }
 
 /**
@@ -313,13 +325,11 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
   let category: TransactionCategory | null = null
   let vatTreatment: VatTreatment | null = null
   let fromCandidate = false
-  let candidateConfidence = 0
 
   if (choice.kind === 'candidate') {
     const cand = input.candidates.find((c) => c.account === choice.account)
     account = choice.account
     fromCandidate = true
-    candidateConfidence = cand?.confidence ?? 0
     vatTreatment = cand?.vatTreatment ?? null
   } else if (choice.kind === 'category') {
     category = choice.category
@@ -332,12 +342,25 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
   const reverseCharge = winningSample.reverseCharge && choice.kind !== 'needs_review'
   if (reverseCharge && input.vatRegistered) vatTreatment = 'reverse_charge'
 
-  // Combined confidence: model conf × agreement, floored by the deterministic
-  // candidate signal when a known candidate won. needs_review is always 0.
+  // Confidence is driven by DETERMINISTIC BACKING, not the model's self-report.
+  // "backing" = the confidence of a candidate that independently points at the
+  // chosen account (a candidate pick backs itself; a category pick is backed
+  // only if a candidate resolved to the same account). needs_review is 0.
+  const backing =
+    choice.kind === 'needs_review'
+      ? 0
+      : (input.candidates.find((c) => c.account === account)?.confidence ?? 0)
+
   let confidence = 0
   if (choice.kind !== 'needs_review') {
-    confidence = MODEL_CONF_WEIGHT[winningSample.confidence] * agreement
-    if (fromCandidate) confidence = Math.max(confidence, candidateConfidence * agreement)
+    confidence =
+      backing > 0
+        ? // Memory backs the pick → the retrieval signal, tempered by self-
+          // consistency; the model's own confidence only pulls it down when low.
+          agreement * backing * BACKED_MODEL_FACTOR[winningSample.confidence]
+        : // Pure model guess → capped below "säker"; verbalized confidence is
+          // not trusted to lift an unbacked pick past a suggestion.
+          agreement * UNBACKED_CONFIDENCE[winningSample.confidence]
     confidence = roundOre(Math.min(1, confidence))
   }
 
