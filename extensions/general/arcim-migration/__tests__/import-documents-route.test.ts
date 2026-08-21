@@ -18,6 +18,19 @@ vi.mock('../lib/import-documents', () => {
   }
 })
 
+const fortnoxOAuth = vi.hoisted(() => ({ documentScopesApproved: false }))
+
+vi.mock('@/lib/providers/fortnox/oauth', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/lib/providers/fortnox/oauth')>()
+  return {
+    ...actual,
+    get FORTNOX_DOCUMENT_SCOPES_APPROVED() {
+      return fortnoxOAuth.documentScopesApproved
+    },
+  }
+})
+
 vi.mock('../lib/provider-client', () => {
   class ProviderTokenInvalidError extends Error {
     constructor(
@@ -106,6 +119,7 @@ describe('POST /import-documents', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     eventBus.clear()
+    fortnoxOAuth.documentScopesApproved = false
   })
 
   it('passes dry-run discovery through without storing documents', async () => {
@@ -138,7 +152,8 @@ describe('POST /import-documents', () => {
     )
   })
 
-  it('returns an actionable 403 when Fortnox lacks archive/connectfile scopes', async () => {
+  it('asks the user to reconnect only once the connect request carries the scopes', async () => {
+    fortnoxOAuth.documentScopesApproved = true
     ;(importProviderDocuments as Mock).mockRejectedValue(
       new FortnoxDocumentScopesRequiredError(),
     )
@@ -152,6 +167,27 @@ describe('POST /import-documents', () => {
     expect(body.error.code).toBe('PROVIDER_DOCUMENT_SCOPES_REQUIRED')
     expect(body.error.message).toContain('Koppla om Fortnox')
     expect(body.error.message_en).toContain('Reconnect Fortnox')
+  })
+
+  // Klura AB, 2026-08-20: the connect request does not ask Fortnox for Arkiv
+  // and Koppla fil at all, so the reconnect advice sent the user around a loop
+  // four times (and to buy the Fortnox Arkiv module) for nothing.
+  it('says the permission is missing on our side while the scopes are unapproved', async () => {
+    fortnoxOAuth.documentScopesApproved = false
+    ;(importProviderDocuments as Mock).mockRejectedValue(
+      new FortnoxDocumentScopesRequiredError(),
+    )
+
+    const response = await handler(request(false), buildContext())
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en?: string }
+    }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE')
+    expect(body.error.message).not.toContain('Koppla om Fortnox')
+    expect(body.error.message).toContain('Att koppla om hjälper inte')
+    expect(body.error.message_en).toContain('Reconnecting will not help')
   })
 })
 

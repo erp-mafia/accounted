@@ -5442,6 +5442,7 @@
     "ext_arcim_documents_discovery_error": "The migration is complete, but we could not check the documents in Fortnox. Try again without rerunning the migration.",
     "ext_arcim_documents_import_error": "The migration is still complete, but the documents could not be imported. Try again; documents already imported will be skipped.",
     "ext_arcim_documents_scope_error": "The Fortnox connection lacks access to Archive and Connect file. Reconnect Fortnox and approve those permissions to continue.",
+    "ext_arcim_documents_scope_unavailable": "Fortnox file import is not enabled yet: the Archive and Connect file permissions are missing for the Accounted integration at Fortnox. Reconnecting will not help; we enable this as soon as the permission is in place. Everything else in the migration was imported.",
     "ext_arcim_documents_reconnect_action": "Reconnect Fortnox",
     "ext_arcim_documents_retry_discovery": "Check again",
     "ext_arcim_documents_retry_import": "Try importing again",

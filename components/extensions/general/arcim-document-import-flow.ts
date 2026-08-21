@@ -4,6 +4,13 @@ export const ARCIM_DOCUMENT_IMPORT_ENDPOINT =
 export const PROVIDER_DOCUMENT_SCOPES_REQUIRED =
   'PROVIDER_DOCUMENT_SCOPES_REQUIRED'
 
+/**
+ * The connect request does not ask Fortnox for Arkiv and Koppla fil at all,
+ * so no reconnect can grant them: the error offers no action, only the truth.
+ */
+export const PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE =
+  'PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE'
+
 export const ARCIM_DOCUMENT_OAUTH_RESUME_KEY =
   'arcim-document-oauth-resume'
 
