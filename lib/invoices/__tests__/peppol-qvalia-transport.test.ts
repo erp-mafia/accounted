@@ -468,3 +468,74 @@ describe('helpers', () => {
     expect(describeQvaliaErrorBody(null)).toBeNull()
   })
 })
+
+describe('Qvalia transport: receiving side', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+  const transport = createQvaliaTransport(config, { fetch: fetchMock })
+
+  beforeEach(() => {
+    fetchMock.mockReset()
+  })
+
+  it('registers a recipient with business card and both billing document types', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: 'registered', peppolId: '0007:5595386219' }))
+    const result = await transport.registerRecipient!({
+      participant: { scheme: '0007', identifier: '5595386219' },
+      businessCard: { companyName: 'Arcim Technology AB', countryCode: 'SE', geographicalInformation: 'Stockholm', vatNumber: 'SE559538621901', orgNumber: '5595386219' },
+      documentTypes: [
+        { processId: PEPPOL_BIS_BILLING_PROFILE_ID, documentTypeId: PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID },
+      ],
+    })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toBe('https://api-qa.qvalia.com/partner/SE5560000000/account/SE5560000000/peppol/0007%3A5595386219')
+    expect(init?.method).toBe('PUT')
+    const body = JSON.parse(String(init?.body))
+    expect(body.businessCard).toEqual({
+      companyName: 'Arcim Technology AB', countryCode: 'SE', geographicalInformation: 'Stockholm',
+      VAT: 'SE559538621901', orgNr: '5595386219', suffix: '',
+    })
+    expect(body.docTypes).toEqual([{ profile: PEPPOL_BIS_BILLING_PROFILE_ID, document: PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID }])
+    expect(result).toMatchObject({ status: 'registered', providerAccountReference: 'SE5560000000' })
+  })
+
+  it('treats an unregister of an unknown id as done and surfaces other failures', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }))
+    await expect(transport.unregisterRecipient!({ scheme: '0007', identifier: '1' })).resolves.toBeUndefined()
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('DELETE')
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: 'boom' }))
+    await expect(transport.unregisterRecipient!({ scheme: '0007', identifier: '1' })).rejects.toMatchObject({ kind: 'unavailable' })
+  })
+
+  it('lists unread inbound invoices through the marking endpoint and keeps the payload', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      status: 'success',
+      data: [
+        { integrationId: 'in-1', Invoice: { 'cbc:ID': [{ _: '20267497' }] } },
+        { integrationId: 'in-2', Invoice: { 'cbc:ID': [{ _: '20267498' }] } },
+      ],
+    }))
+    const messages = await transport.listInboundDocuments!({ documentType: 'Invoice', limit: 10 })
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      'https://api-qa.qvalia.com/partner/SE5560000000/transaction/SE5560000000/invoices/incoming/readinvoices?limit=10',
+    )
+    expect(messages.map((m) => m.providerDocumentId)).toEqual(['in-1', 'in-2'])
+    expect(messages[0]).toMatchObject({ provider: 'qvalia', documentType: 'Invoice' })
+    expect(messages[0].payload).toHaveProperty('Invoice')
+  })
+
+  it('re-syncs with includeRead, handles 204 as empty, and reads credit notes from their own collection', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    expect(await transport.listInboundDocuments!({ documentType: 'CreditNote', includeRead: true })).toEqual([])
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/creditnotes/incoming?includeRead=true&limit=25')
+  })
+
+  it('fetches the exact inbound XML and returns null when the provider has nothing', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(XML, { status: 200, headers: { 'content-type': 'application/xml' } }))
+    expect(await transport.fetchInboundDocumentXml!('in-1', 'Invoice')).toBe(XML)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toContain('/invoices/incoming?integrationId=in-1&includeRead=true&limit=1')
+    expect((init?.headers as Record<string, string>).accept).toBe('application/xml')
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    expect(await transport.fetchInboundDocumentXml!('in-2', 'Invoice')).toBeNull()
+  })
+})

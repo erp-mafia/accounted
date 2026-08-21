@@ -2210,6 +2210,25 @@
     "enable_help": "Visar betalningslänksfältet i fakturaredigeraren. Med Stripe anslutet skapas en betalningslänk automatiskt när fakturan skickas.",
     "toast_save_failed": "Kunde inte spara"
   },
+  "settings_peppol": {
+    "heading": "E-faktura via Peppol",
+    "enable_label": "Ta emot e-fakturor via Peppol",
+    "enable_help": "Publicerar bolagets Peppol-id (0007 + organisationsnummer) hos vår Peppol-operatör så att leverantörer kan skicka e-fakturor direkt till Accounted. Mottagna fakturor hamnar i leverantörsfakturainkorgen. Att skicka e-fakturor kräver ingen registrering.",
+    "status_label": "Status",
+    "status_off": "Inte registrerad",
+    "status_pending": "Registrering pågår",
+    "status_registered": "Registrerad, tar emot e-fakturor",
+    "status_failed": "Registreringen misslyckades",
+    "peppol_id_label": "Peppol-id",
+    "provider_required": "En avtalad och konfigurerad Peppol-operatör krävs innan mottagning kan aktiveras.",
+    "loading": "Hämtar status…",
+    "load_failed": "Kunde inte läsa Peppol-status. Ladda om sidan.",
+    "toast_registered_title": "Registrerad för Peppol",
+    "toast_registered_description": "Bolagets Peppol-id är publicerat. Det kan ta en stund innan det syns i Peppol-katalogen.",
+    "toast_deregistered_title": "Avregistrerad från Peppol",
+    "toast_deregistered_description": "Bolagets Peppol-id är borttaget hos operatören.",
+    "toast_failed_title": "Kunde inte ändra Peppol-registreringen"
+  },
   "settings_pdf_print": {
     "coming_soon": "Kommer snart",
     "heading": "Utskrift & PDF",

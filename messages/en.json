@@ -2210,6 +2210,25 @@
     "enable_help": "Shows the payment link field in the invoice editor. With Stripe connected, a payment link is created automatically when the invoice is sent.",
     "toast_save_failed": "Could not save"
   },
+  "settings_peppol": {
+    "heading": "E-invoicing via Peppol",
+    "enable_label": "Receive e-invoices via Peppol",
+    "enable_help": "Publishes the company's Peppol id (0007 + organisation number) through our Peppol access point so suppliers can send e-invoices straight into Accounted. Received invoices land in the supplier invoice inbox. Sending e-invoices needs no registration.",
+    "status_label": "Status",
+    "status_off": "Not registered",
+    "status_pending": "Registration in progress",
+    "status_registered": "Registered, receiving e-invoices",
+    "status_failed": "Registration failed",
+    "peppol_id_label": "Peppol id",
+    "provider_required": "A contracted and configured Peppol access point is required before receiving can be enabled.",
+    "loading": "Loading status…",
+    "load_failed": "Could not read the Peppol status. Reload the page.",
+    "toast_registered_title": "Registered for Peppol",
+    "toast_registered_description": "The company's Peppol id is published. It can take a moment before it shows in the Peppol directory.",
+    "toast_deregistered_title": "Deregistered from Peppol",
+    "toast_deregistered_description": "The company's Peppol id has been removed at the access point.",
+    "toast_failed_title": "Could not change the Peppol registration"
+  },
   "settings_pdf_print": {
     "coming_soon": "Coming soon",
     "heading": "Print & PDF",

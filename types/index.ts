@@ -2922,7 +2922,7 @@ export interface SIEAccountMapping {
 // receipt ack) but AI extraction has not landed yet; extracted_data is NULL
 // until the deferred worker (or the sweep cron) flips it to 'received'.
 export type InboxItemStatus = 'received' | 'processing' | 'error'
-export type InboxItemSource = 'email' | 'upload' | 'whatsapp'
+export type InboxItemSource = 'email' | 'upload' | 'whatsapp' | 'mail_hunt' | 'peppol'
 
 export type CompanyInboxStatus = 'active' | 'deprecated' | 'blocked'
 
@@ -3012,7 +3012,15 @@ export interface InboxChannelContext {
    * everything else on this type belongs to the WhatsApp branch and is absent
    * on them.
    */
-  channel: 'whatsapp' | 'mail_hunt'
+  channel: 'whatsapp' | 'mail_hunt' | 'peppol'
+  /** Set by lib/invoices/peppol-inbox-delivery.ts: provenance of a received e-invoice. */
+  peppol_provider?: string | null
+  /** The provider's id for the received document (Qvalia integrationId). */
+  peppol_document_id?: string | null
+  peppol_document_type?: 'Invoice' | 'CreditNote' | null
+  peppol_sender_endpoint?: string | null
+  /** Archived exact UBL XML, when the inbox document is a rendering (embedded PDF) instead. */
+  peppol_xml_document_id?: string | null
   /** Set by lib/receipt-hunt/ingest.ts: which mailbox the receipt came out of. */
   mail_mailbox?: string | null
   mail_provider?: 'gmail' | 'microsoft' | null

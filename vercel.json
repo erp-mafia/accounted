@@ -93,6 +93,10 @@
     {
       "path": "/api/receipt-hunt/cron",
       "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/peppol/inbound/cron",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

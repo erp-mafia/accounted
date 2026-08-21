@@ -290,6 +290,15 @@ function looksLikeXhtml(bytes: Uint8Array): boolean {
   return head.startsWith('<?xml') || head.startsWith('<!doctype html') || head.startsWith('<html')
 }
 
+/** UBL and other XML payloads: an XML declaration or an element root after an optional BOM. */
+function looksLikeXml(bytes: Uint8Array): boolean {
+  const offset = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF ? 3 : 0
+  const head = Buffer.from(bytes.slice(offset, offset + 256))
+    .toString('utf8')
+    .replace(/^[\s\uFEFF]+/, '')
+  return head.startsWith('<?xml') || /^<[A-Za-z_][\w.:-]*/.test(head)
+}
+
 /**
  * JSON has no binary magic number either. For the declared type
  * application/json (raw PSD2 responses archived as räkenskapsinformation per
@@ -319,6 +328,13 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
   if (declaredMimeType === 'application/xhtml+xml') {
     if (looksLikeXhtml(new Uint8Array(buffer))) return null
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XHTML/XML-dokument.`
+  }
+  // Received Peppol e-invoices are archived as the exact UBL XML (the
+  // räkenskapsinformation is the XML itself). Same shape check as XHTML: an
+  // XML declaration or an element root, never loosened for binary types.
+  if (declaredMimeType === 'application/xml' || declaredMimeType === 'text/xml') {
+    if (looksLikeXml(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XML-dokument.`
   }
   // HTML mail underlag from the invoice-inbox inbound pipeline. Same
   // doctype/root-element check as XHTML: the pipeline wraps fragment-shaped
