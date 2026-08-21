@@ -101,8 +101,13 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * 2026-08-17 +1: lib/import/skattekonto-file/import-service.ts inserts parsed
  * statement rows via a mapped batch (same shape as every other file importer);
  * the row shape is covered by the execute route tests and the pg-real suite.
+ *
+ * 2026-08-21 +1: lib/invoices/peppol-inbound.ts updates the processing state
+ * of an inbound Peppol document through one helper (five literal shapes:
+ * routed / unrouted / converted / failed, all partial); the column set is
+ * pinned by peppol-inbound.test.ts and the pg-real immutability test.
  */
-const UNRESOLVED_CEILING = 379
+const UNRESOLVED_CEILING = 380
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

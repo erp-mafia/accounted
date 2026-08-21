@@ -97,6 +97,56 @@ export interface PeppolWebhookRequest {
   rawBody: Uint8Array
 }
 
+/** What the SMP publishes about a receiving participant (Peppol Directory business card). */
+export interface PeppolBusinessCard {
+  companyName: string
+  countryCode: string
+  geographicalInformation?: string | null
+  vatNumber?: string | null
+  orgNumber?: string | null
+}
+
+export interface PeppolDocumentTypeRegistration {
+  /** Process identifier, e.g. urn:fdc:peppol.eu:2017:poacc:billing:01:1.0 */
+  processId: string
+  /** Document type identifier, e.g. the BIS Billing 3 Invoice id. */
+  documentTypeId: string
+}
+
+export interface PeppolRecipientRegistrationInput {
+  participant: PeppolParticipant
+  businessCard: PeppolBusinessCard
+  documentTypes: PeppolDocumentTypeRegistration[]
+  description?: string | null
+}
+
+export interface PeppolRecipientRegistration {
+  status: 'registered' | 'updated'
+  participant: PeppolParticipant
+  /** Provider account the identifier is attached to (Qvalia accountRegNo). */
+  providerAccountReference: string | null
+  raw: Record<string, unknown>
+}
+
+export type PeppolInboundDocumentType = 'Invoice' | 'CreditNote'
+
+/** One inbound document as the provider hands it over, before Accounted reads it. */
+export interface PeppolInboundMessage {
+  provider: string
+  providerDocumentId: string
+  documentType: PeppolInboundDocumentType
+  /** UBL-JSON payload (the provider's rendering of the received XML). */
+  payload: Record<string, unknown>
+  receivedAt: string | null
+}
+
+export interface PeppolInboundListOptions {
+  documentType: PeppolInboundDocumentType
+  limit?: number
+  /** Include documents already handed over once (re-sync); default only unread. */
+  includeRead?: boolean
+}
+
 /**
  * Provider-neutral failure raised by an adapter. `retryable` separates an
  * operational problem (network, rate limit, credentials) from a verdict on the
@@ -125,6 +175,25 @@ export interface PeppolTransport {
   submit(submission: PeppolSubmission): Promise<PeppolSubmissionReceipt>
   verifyWebhook(request: PeppolWebhookRequest): Promise<PeppolVerifiedEvent[]>
   retrieveEvidence(providerSubmissionId: string): Promise<PeppolDeliveryEvidence[]>
+  /**
+   * Receiving side. Optional: a send-only provider leaves these undefined and
+   * the product keeps receiving switched off for it.
+   */
+  registerRecipient?(input: PeppolRecipientRegistrationInput): Promise<PeppolRecipientRegistration>
+  unregisterRecipient?(participant: PeppolParticipant): Promise<void>
+  listInboundDocuments?(options: PeppolInboundListOptions): Promise<PeppolInboundMessage[]>
+  /** The exact received document, for the archive (räkenskapsinformation). */
+  fetchInboundDocumentXml?(
+    providerDocumentId: string,
+    documentType: PeppolInboundDocumentType,
+  ): Promise<string | null>
+  /**
+   * Pull the provider's current delivery status for an outbound submission
+   * and return it as verified events (same shape as a webhook, `idempotencyKey`
+   * unresolved). For providers without webhooks, or as a safety net when a
+   * webhook was missed. Returns [] when the provider has nothing new to say.
+   */
+  pollDeliveryStatus?(providerSubmissionId: string): Promise<PeppolVerifiedEvent[]>
 }
 
 const transports = new Map<string, PeppolTransport>()

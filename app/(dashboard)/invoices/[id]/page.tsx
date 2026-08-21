@@ -227,6 +227,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Whether this deployment has a contracted Access Point switched on; the
   // menu item stays a truthful "provider required" note otherwise.
   const [peppolTransportAvailable, setPeppolTransportAvailable] = useState(false)
+  // Per-company grant from the operators; without it the send item explains
+  // how to ask instead of pretending to work.
+  const [peppolAccess, setPeppolAccess] = useState<{
+    send_enabled: boolean
+    max_sends: number | null
+    sent_count: number
+    remaining_sends: number | null
+  } | null>(null)
   const [peppolDeliveries, setPeppolDeliveries] = useState<PeppolDeliveryView[]>([])
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -910,11 +918,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const payload = (await response.json()) as {
         data?: PeppolDeliveryView[]
         transport?: { available?: boolean }
+        access?: { send_enabled: boolean; max_sends: number | null; sent_count: number; remaining_sends: number | null }
       }
       const rows = Array.isArray(payload.data) ? [...payload.data] : []
       rows.sort((a, b) => (a.status_at < b.status_at ? 1 : a.status_at > b.status_at ? -1 : 0))
       setPeppolDeliveries(rows)
       setPeppolTransportAvailable(payload.transport?.available === true)
+      setPeppolAccess(payload.access ?? null)
     } catch {
       // Peppol status is supplementary; the page stays usable without it.
     }
@@ -1334,7 +1344,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // assigns the number server-side, so the menu shows once a provider is on.
   const showPeppolActions = !isSelfBilled && isRealInvoice && !isCreditNote
     && (!!invoice.invoice_number || peppolTransportAvailable)
-  const canSendPeppol = peppolTransportAvailable && PEPPOL_SENDABLE_STATUSES.has(invoice.status)
+  const peppolSendGranted = !!peppolAccess?.send_enabled
+  const peppolSendsLeft = peppolAccess?.remaining_sends === null || peppolAccess?.remaining_sends === undefined
+    ? true
+    : peppolAccess.remaining_sends > 0
+  const canSendPeppol = peppolTransportAvailable && peppolSendGranted && peppolSendsLeft
+    && PEPPOL_SENDABLE_STATUSES.has(invoice.status)
   const peppolRecipientLabel = invoice.customer?.org_number
     ? `0007:${invoice.customer.org_number.replace(/\D/g, '')}`
     : '0007'
@@ -1604,13 +1619,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       <FileCheck2 className="h-4 w-4" />
                       {t('prepare_peppol_delivery')}
                     </DropdownMenuItem>
-                    {peppolTransportAvailable ? (
+                    {peppolTransportAvailable && peppolSendGranted && peppolSendsLeft ? (
                       <DropdownMenuItem
                         onSelect={() => setShowPeppolSendDialog(true)}
                         disabled={isSendingPeppol || !canWrite || !canSendPeppol}
                       >
                         <Send className="h-4 w-4" />
                         {t('send_via_peppol')}
+                      </DropdownMenuItem>
+                    ) : peppolTransportAvailable ? (
+                      <DropdownMenuItem disabled className="items-start">
+                        <Send className="mt-0.5 h-4 w-4" />
+                        <span className="min-w-0">
+                          <span className="block">{t('send_via_peppol')}</span>
+                          <span className="block text-[11px] leading-snug text-muted-foreground">
+                            {peppolSendGranted ? t('peppol_send_limit_reached') : t('peppol_access_required')}
+                          </span>
+                        </span>
                       </DropdownMenuItem>
                     ) : (
                       <DropdownMenuItem disabled className="items-start">

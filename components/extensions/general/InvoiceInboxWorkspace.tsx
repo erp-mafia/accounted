@@ -43,6 +43,7 @@ import {
   ChevronRight,
   Sparkles,
   Maximize2,
+  Globe,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
@@ -59,7 +60,7 @@ import { copyInboxAddress, type AddressCopyState } from '@/components/extensions
 import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
-import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
+import type { InboxChannelContext, InvoiceExtractionResult, InboxItemSource } from '@/types'
 import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
 import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
@@ -145,7 +146,7 @@ interface InboxItem {
   // instant receipt ack) but the deferred AI extraction has not landed;
   // extracted_data is null until the realtime flip to 'received'.
   status: 'received' | 'processing' | 'error'
-  source: 'email' | 'upload' | 'whatsapp'
+  source: InboxItemSource
   created_at: string
   email_from: string | null
   email_subject: string | null
@@ -2140,6 +2141,9 @@ function InboxRow({
             <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
           ) : item.source === 'whatsapp' ? (
             <WhatsAppMark className="h-3 w-3 shrink-0" />
+          ) : item.source === 'peppol' ? (
+            // Received as a structured e-invoice over the Peppol network.
+            <Globe className="h-3 w-3 text-muted-foreground shrink-0" aria-label="Peppol" />
           ) : item.channel_context?.mail_provider === 'gmail' ? (
             // The hunt records which mailbox it pulled a receipt from, so the
             // brand is known rather than guessed. Mail that arrived by

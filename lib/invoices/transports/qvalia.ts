@@ -36,9 +36,14 @@ import {
   PeppolTransportError,
   type PeppolDeliveryEvidence,
   type PeppolDeliveryStatus,
+  type PeppolInboundDocumentType,
+  type PeppolInboundListOptions,
+  type PeppolInboundMessage,
   type PeppolParticipant,
   type PeppolRecipientCapability,
   type PeppolRecipientLookup,
+  type PeppolRecipientRegistration,
+  type PeppolRecipientRegistrationInput,
   type PeppolSubmission,
   type PeppolSubmissionReceipt,
   type PeppolTransport,
@@ -413,7 +418,7 @@ export function createQvaliaTransport(
   const transactionBase = `${config.baseUrl}/partner/${partner}/transaction/${account}`
 
   async function request(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     url: string,
     init: { headers?: Record<string, string>; body?: string } = {},
   ): Promise<Response> {
@@ -636,11 +641,156 @@ export function createQvaliaTransport(
     }]
   }
 
+  // ---- receiving side -------------------------------------------------
+
+  async function registerRecipient(input: PeppolRecipientRegistrationInput): Promise<PeppolRecipientRegistration> {
+    const peppolId = `${input.participant.scheme}:${input.participant.identifier}`
+    const url = `${config.baseUrl}/partner/${partner}/account/${account}/peppol/${encodePathSegment(peppolId)}`
+    const body = {
+      description: input.description ?? `Accounted: ${input.businessCard.companyName}`,
+      businessCard: {
+        companyName: input.businessCard.companyName,
+        countryCode: input.businessCard.countryCode,
+        geographicalInformation: input.businessCard.geographicalInformation ?? '',
+        VAT: input.businessCard.vatNumber ?? '',
+        orgNr: input.businessCard.orgNumber ?? '',
+        suffix: '',
+      },
+      docTypes: input.documentTypes.map((type) => ({ profile: type.processId, document: type.documentTypeId })),
+    }
+    const response = await request('PUT', url, {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const { text, json } = await readBody(response)
+    if (!response.ok) throw classifyHttpFailure(response.status, json, text)
+    const record = asRecord(json)
+    const status = asString(record?.status)
+    return {
+      status: status === 'updated' ? 'updated' : 'registered',
+      participant: input.participant,
+      providerAccountReference: config.accountRegNo,
+      raw: record ?? {},
+    }
+  }
+
+  async function unregisterRecipient(participant: PeppolParticipant): Promise<void> {
+    const peppolId = `${participant.scheme}:${participant.identifier}`
+    const url = `${config.baseUrl}/partner/${partner}/account/${account}/peppol/${encodePathSegment(peppolId)}`
+    const response = await request('DELETE', url)
+    if (response.status === 404 || response.status === 204) return
+    const { text, json } = await readBody(response)
+    if (!response.ok) throw classifyHttpFailure(response.status, json, text)
+  }
+
+  function inboundPath(documentType: PeppolInboundDocumentType): { collection: string; read: string } {
+    return documentType === 'CreditNote'
+      ? { collection: 'creditnotes', read: 'readcreditnotes' }
+      : { collection: 'invoices', read: 'readinvoices' }
+  }
+
+  async function listInboundDocuments(options: PeppolInboundListOptions): Promise<PeppolInboundMessage[]> {
+    const { collection, read } = inboundPath(options.documentType)
+    const limit = Math.min(Math.max(options.limit ?? 25, 1), 100)
+    // The "read" endpoint returns only documents not yet handed over and marks
+    // them read; the plain endpoint with includeRead=true re-syncs everything.
+    const url = options.includeRead
+      ? `${transactionBase}/${collection}/incoming?includeRead=true&limit=${limit}`
+      : `${transactionBase}/${collection}/incoming/${read}?limit=${limit}`
+    const response = await request('GET', url)
+    if (response.status === 204) return []
+    const { text, json } = await readBody(response)
+    if (!response.ok) throw classifyHttpFailure(response.status, json, text)
+    const data = asRecord(json)?.data ?? json
+    const items = Array.isArray(data) ? data : data ? [data] : []
+    const messages: PeppolInboundMessage[] = []
+    for (const item of items) {
+      const record = asRecord(item)
+      const integrationId = extractIntegrationId(record)
+      if (!record || !integrationId) continue
+      messages.push({
+        provider: QVALIA_PROVIDER,
+        providerDocumentId: integrationId,
+        documentType: options.documentType,
+        payload: record,
+        receivedAt: asString(record.createdAt) ?? asString(record.created_at) ?? null,
+      })
+    }
+    return messages
+  }
+
+  async function fetchInboundDocumentXml(
+    providerDocumentId: string,
+    documentType: PeppolInboundDocumentType,
+  ): Promise<string | null> {
+    const { collection } = inboundPath(documentType)
+    const url = `${transactionBase}/${collection}/incoming?integrationId=${encodeURIComponent(providerDocumentId)}&includeRead=true&limit=1`
+    const response = await request('GET', url, { headers: { accept: 'application/xml' } })
+    if (response.status === 204 || response.status === 404) return null
+    const text = await response.text()
+    if (!response.ok) throw classifyHttpFailure(response.status, null, text)
+    return text.trim().startsWith('<') ? text : null
+  }
+
+  /**
+   * Outbound status by polling `/invoices/outgoing/status`: the message-log
+   * status is the same free text the `document_delivery` webhook carries, so
+   * it goes through the same mapping. An empty `metadata` (nothing has
+   * happened since acceptance) yields no event.
+   */
+  async function pollDeliveryStatus(providerSubmissionId: string): Promise<PeppolVerifiedEvent[]> {
+    const url = `${transactionBase}/invoices/outgoing/status?integrationId=${encodeURIComponent(providerSubmissionId)}&includeRead=true&limit=1`
+    const response = await request('GET', url)
+    if (response.status === 204 || response.status === 404) return []
+    const { text, json } = await readBody(response)
+    if (!response.ok) throw classifyHttpFailure(response.status, json, text)
+    const data = asRecord(json)?.data ?? json
+    const items = Array.isArray(data) ? data : data ? [data] : []
+    const events: PeppolVerifiedEvent[] = []
+    for (const item of items) {
+      const record = asRecord(item)
+      const metadata = asRecord(record?.metadata)
+      const status = asString(metadata?.status)
+      if (!status) continue
+      const normalized = normalizeQvaliaWebhook({
+        eventType: 'document_delivery',
+        direction: 'outgoing',
+        integrationId: providerSubmissionId,
+        status: { status },
+      })
+      if (!normalized) continue
+      const occurredAt = asString(metadata?.updatedAt) ?? asString(record?.updatedAt) ?? now().toISOString()
+      events.push({
+        provider: QVALIA_PROVIDER,
+        providerTenantId: config.accountRegNo,
+        providerSubmissionId,
+        // Same dedupe key as the webhook would use for this transition, so a
+        // later webhook for the same status is a harmless duplicate.
+        providerEventId: `document_delivery:${providerSubmissionId}:${status}`,
+        idempotencyKey: null,
+        eventCode: 'status_poll',
+        normalizedStatus: normalized.normalizedStatus,
+        isTerminal: normalized.isTerminal,
+        detail: normalized.detail,
+        occurredAt,
+        rawPayload: record ?? {},
+        eventSha256: sha256Hex(`${providerSubmissionId}:${status}:${text}`),
+        verificationMethod: 'provider_poll',
+      })
+    }
+    return events
+  }
+
   return {
     provider: QVALIA_PROVIDER,
     lookupRecipient,
     submit,
     verifyWebhook,
     retrieveEvidence,
+    registerRecipient,
+    unregisterRecipient,
+    listInboundDocuments,
+    fetchInboundDocumentXml,
+    pollDeliveryStatus,
   }
 }

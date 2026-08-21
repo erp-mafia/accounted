@@ -19,6 +19,7 @@ import {
   type TrialBalanceLike,
 } from './archive-csv'
 import { buildArchiveReadme, buildDriveFolderReadme } from './archive-readme'
+import { currentAppVersion } from './app-version'
 import type { GeneralLedgerReport } from './general-ledger'
 import type {
   AuditLogEntry,
@@ -866,6 +867,14 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     file: 'peppol_delivery_evidence.json',
     orderBy: 'created_at',
   },
+  // Receiving side: which identifiers the company published, and every
+  // inbound e-invoice with the exact received XML (the underlag itself).
+  { name: 'peppol_registrations', file: 'peppol_registrations.json', orderBy: 'created_at' },
+  {
+    name: 'peppol_inbound_documents',
+    file: 'peppol_inbound_documents.json',
+    orderBy: 'received_at',
+  },
   { name: 'recurring_invoice_schedules', file: 'recurring_invoice_schedules.json' },
   // Supplier invoicing
   { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },
@@ -1014,6 +1023,8 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  * a portable räkenskapsinformation backup.
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
+  // Operator-side Peppol access grant and sending cap: platform configuration, not the company's räkenskapsinformation.
+  peppol_access: 'platform access grant (status, sending cap); no bookkeeping content',
   agent_conversations: 'AI assistant state, not räkenskapsinformation',
   agent_memory: 'AI assistant state, not räkenskapsinformation',
   agent_profiles: 'AI assistant state, not räkenskapsinformation',
@@ -1373,6 +1384,9 @@ async function buildSystemDoc(
       name: branding.appName.toLowerCase(),
       description: 'Bokforingssystem for enskild firma och aktiebolag',
       url: branding.appUrl,
+      // BFNAR 2013:2 p. 9.16 second paragraph: program versions are system
+      // changes that affect processing; the archive names the running build.
+      version: currentAppVersion(),
     },
     kontoplan: {
       standard: 'BAS 2026',
@@ -1407,6 +1421,15 @@ async function buildSystemDoc(
       bank: 'Enable Banking (PSD2)',
       email: 'Resend',
       export_format: 'SIE4',
+    },
+    // BFNAR 2013:2 p. 9.15: where and how the behandlingshistorik is produced.
+    behandlingshistorik: {
+      beskrivning:
+        'Skapas automatiskt (BFL 5 kap. 11 §, BFNAR 2013:2 punkt 9.16): registreringstidpunkt och utförare för varje bokföringspost (journal_entries), förändringar via databasens oföränderliga ändringslogg audit_log (kontoplan, inställningar som styr bokföringen, räkenskapsår, API-nycklar, makuleringar, raderingar), rättelser i samma verifikat (journal_entry_rattelse_log) samt SIE-, bankfils- och migreringsloggar.',
+      rapport:
+        'Rapporter > Export & arkiv > Behandlingshistorik: per räkenskapsår eller datumintervall, som PDF, CSV eller Excel',
+      arkivfil: 'revision/behandlingshistorik.json i denna säkerhetsbackup (råa loggrader)',
+      tidszon: 'Europe/Stockholm i rapporten, UTC i JSON-filen',
     },
     generated_at: new Date().toISOString(),
     fiscal_periods: periods.map((p) => ({

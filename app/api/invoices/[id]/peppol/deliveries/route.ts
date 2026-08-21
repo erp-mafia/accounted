@@ -4,8 +4,10 @@ import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { ensureInitialized } from '@/lib/init'
+import { getPeppolAccessSummary } from '@/lib/invoices/peppol-access'
 import { listPeppolDeliverySummaries } from '@/lib/invoices/peppol-delivery'
 import { getPeppolTransportAvailability } from '@/lib/invoices/peppol-transport'
+import { createServiceClient } from '@/lib/supabase/server'
 
 ensureInitialized()
 
@@ -39,9 +41,11 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         companyId,
         invoiceId,
       })
+      const access = await getPeppolAccessSummary({ supabase, service: createServiceClient(), companyId })
       return privateNoStore(NextResponse.json({
         data: deliveries,
         transport: getPeppolTransportAvailability(),
+        access,
       }))
     } catch (err) {
       return privateNoStore(errorResponse(err, log, { requestId }))

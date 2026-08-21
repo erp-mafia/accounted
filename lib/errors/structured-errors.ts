@@ -1294,6 +1294,69 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Peppol-operatören kunde inte nås just nu. Fakturan har inte skickats; försök igen om en stund.',
     message_en: 'The Peppol access point could not be reached. The invoice has not been sent; try again shortly.',
   },
+  // /api/settings/peppol: publishing a company's identifier for receiving.
+  PEPPOL_RECEIVING_UNSUPPORTED: {
+    httpStatus: 503,
+    message_sv: 'Den konfigurerade Peppol-operatören stöder inte mottagning av e-fakturor.',
+    message_en: 'The configured Peppol access point does not support receiving e-invoices.',
+  },
+  PEPPOL_SANDBOX_NOT_ALLOWED: {
+    httpStatus: 403,
+    message_sv: 'Peppol-registrering är inte tillgänglig i demobolaget. Skapa ett riktigt konto för att ta emot e-fakturor.',
+    message_en: 'Peppol registration is not available in the demo company. Create a real account to receive e-invoices.',
+  },
+  PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED: {
+    httpStatus: 422,
+    message_sv: 'Bolaget behöver ett giltigt organisationsnummer i företagsinställningarna innan det kan ta emot e-fakturor via Peppol.',
+    message_en: 'The company needs a valid organisation number in company settings before it can receive e-invoices via Peppol.',
+  },
+  PEPPOL_REGISTRATION_PERSONAL_NUMBER: {
+    httpStatus: 422,
+    message_sv: 'Enskild firma med personnummer kan ännu inte registreras för Peppol: det skulle publicera personuppgifter i Peppol-katalogen. Stöd för GLN-nummer kommer.',
+    message_en: 'A sole trader identified by a personal identity number cannot be registered for Peppol yet: it would publish personal data in the Peppol directory. GLN support is coming.',
+  },
+  PEPPOL_REGISTRATION_COMPANY_NAME_REQUIRED: {
+    httpStatus: 422,
+    message_sv: 'Bolaget behöver ett företagsnamn i företagsinställningarna innan det kan registreras för Peppol.',
+    message_en: 'The company needs a company name in company settings before it can be registered for Peppol.',
+  },
+  PEPPOL_REGISTRATION_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Peppol-operatören kunde inte genomföra registreringen. Försök igen om en stund.',
+    message_en: 'The Peppol access point could not complete the registration. Try again shortly.',
+  },
+  PEPPOL_REGISTRATION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bolaget är inte registrerat för Peppol-mottagning.',
+    message_en: 'The company is not registered for Peppol receiving.',
+  },
+  // Peppol access is granted per company by the operators (#546): locked by
+  // default, requested from settings, enabled with a sending cap.
+  PEPPOL_ACCESS_REQUIRED: {
+    httpStatus: 403,
+    message_sv: 'Peppol är inte aktiverat för det här bolaget. Begär åtkomst under Inställningar > Fakturering > E-faktura via Peppol, så aktiverar vi det.',
+    message_en: 'Peppol is not enabled for this company. Request access under Settings > Invoicing > E-invoicing via Peppol and we will enable it.',
+  },
+  PEPPOL_SEND_LIMIT_REACHED: {
+    httpStatus: 409,
+    message_sv: 'Bolaget har använt sina Peppol-sändningar. Hör av dig till support för fler.',
+    message_en: 'The company has used its Peppol sends. Contact support for more.',
+  },
+  PEPPOL_RECEIVING_NOT_ENABLED: {
+    httpStatus: 403,
+    message_sv: 'Mottagning via Peppol är inte aktiverad för det här bolaget. Hör av dig till support så öppnar vi en plats.',
+    message_en: 'Receiving via Peppol is not enabled for this company. Contact support and we will open a slot.',
+  },
+  PEPPOL_ACCESS_ALREADY_ENABLED: {
+    httpStatus: 409,
+    message_sv: 'Peppol är redan aktiverat för bolaget.',
+    message_en: 'Peppol is already enabled for the company.',
+  },
+  PEPPOL_REGISTRATION_CAP_REACHED: {
+    httpStatus: 409,
+    message_sv: 'Alla platser för Peppol-mottagning är upptagna just nu. Hör av dig till support så öppnar vi fler. Att skicka e-fakturor fungerar ändå.',
+    message_en: 'All Peppol receiving slots are taken right now. Contact support and we will open more. Sending e-invoices works regardless.',
+  },
 }
 
 const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
@@ -1543,6 +1606,11 @@ const REPORT: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Rapporten kunde inte genereras.',
     message_en: 'Failed to generate the report.',
+  },
+  REPORT_PDF_TOO_LARGE: {
+    httpStatus: 413,
+    message_sv: 'Rapporten är för stor för PDF. Ladda ner den som CSV eller Excel i stället.',
+    message_en: 'The report is too large for PDF. Download it as CSV or Excel instead.',
   },
 }
 

@@ -56,6 +56,10 @@ const INK2DeclarationView = dynamic(() =>
   import('./INK2DeclarationView').then((module) => ({ default: module.INK2DeclarationView })),
   { loading: ReportViewLoading },
 )
+const BehandlingshistorikView = dynamic(() =>
+  import('./BehandlingshistorikView').then((module) => ({ default: module.BehandlingshistorikView })),
+  { loading: ReportViewLoading },
+)
 const BankReconciliationView = dynamic(() =>
   import('./BankReconciliationView').then((module) => ({ default: module.BankReconciliationView })),
   { loading: ReportViewLoading },
@@ -269,6 +273,8 @@ function FocusedView({
       return <ARLedgerView periodId={periodId} />
     case 'supplier-ledger':
       return <SupplierLedgerView periodId={periodId} />
+    case 'behandlingshistorik':
+      return <BehandlingshistorikView periodId={periodId} dateRange={dateRange} />
     case 'bank-reconciliation':
       return (
         <BankReconciliationView
