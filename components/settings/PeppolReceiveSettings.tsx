@@ -55,6 +55,7 @@ export function PeppolReceiveSettings() {
   const [loadFailed, setLoadFailed] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isRequesting, setIsRequesting] = useState(false)
+  const [wantsReceiving, setWantsReceiving] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -86,7 +87,7 @@ export function PeppolReceiveSettings() {
       const response = await fetch('/api/settings/peppol/access', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ wants_receiving: wantsReceiving }),
       })
       const body = await response.json().catch(() => null) as {
         error?: { code?: string; message?: string; message_en?: string }
@@ -103,7 +104,7 @@ export function PeppolReceiveSettings() {
     } finally {
       setIsRequesting(false)
     }
-  }, [load, localeKey, t, toast])
+  }, [load, localeKey, t, toast, wantsReceiving])
 
   const toggleReceiving = useCallback(async (next: boolean) => {
     setIsSaving(true)
@@ -133,7 +134,7 @@ export function PeppolReceiveSettings() {
   const accessLine = (() => {
     if (!access) return null
     switch (access.status) {
-      case 'enabled': return t('access_enabled')
+      case 'enabled': return access.receive_enabled ? t('access_enabled_receiving') : t('access_enabled_send_only')
       case 'requested': return t('access_requested')
       case 'disabled': return t('access_disabled')
       default: return t('access_none')
@@ -166,7 +167,17 @@ export function PeppolReceiveSettings() {
           )}
         </div>
         {state !== null && transportAvailable && (access?.status === 'none' || access?.status === 'disabled') && (
-          <SettingsRowEnd>
+          <SettingsRowEnd className="flex-col items-end gap-2 md:flex-row md:items-center">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded-sm border-border"
+                checked={wantsReceiving}
+                onChange={(event) => setWantsReceiving(event.target.checked)}
+                disabled={isRequesting || !canWrite}
+              />
+              {t('request_receiving_label')}
+            </label>
             <Button
               type="button"
               variant="outline"
@@ -179,26 +190,23 @@ export function PeppolReceiveSettings() {
         )}
       </SettingsRow>
 
-      <SettingsRow label={t('enable_label')} help={t('enable_help')}>
-        <SettingsRowEnd>
-          <Switch
-            checked={isOn}
-            onCheckedChange={(value) => void toggleReceiving(value)}
-            disabled={isSaving || !canWrite || !receivingAvailable || state === null}
-            aria-label={t('enable_label')}
-          />
-        </SettingsRowEnd>
-      </SettingsRow>
-      <SettingsRow label={t('status_label')} borderless>
-        <div className="min-w-0 space-y-1 text-sm">
-          {state === null || loadFailed ? (
-            <SettingsRowNote>{loadFailed ? t('load_failed') : t('loading')}</SettingsRowNote>
-          ) : !transportAvailable ? (
-            <SettingsRowNote>{t('provider_required')}</SettingsRowNote>
-          ) : !receivingAvailable && !isOn ? (
-            <SettingsRowNote>{t('receive_not_enabled')}</SettingsRowNote>
-          ) : (
-            <>
+      {/* Receiving is a separate grant (one contracted slot each): the switch
+          exists only once the operators granted it, or a registration already
+          exists that the company must be able to see and withdraw. */}
+      {(receivingAvailable || isOn) && (
+        <>
+          <SettingsRow label={t('enable_label')} help={t('enable_help')}>
+            <SettingsRowEnd>
+              <Switch
+                checked={isOn}
+                onCheckedChange={(value) => void toggleReceiving(value)}
+                disabled={isSaving || !canWrite || !receivingAvailable || state === null}
+                aria-label={t('enable_label')}
+              />
+            </SettingsRowEnd>
+          </SettingsRow>
+          <SettingsRow label={t('status_label')} borderless>
+            <div className="min-w-0 space-y-1 text-sm">
               <span>{registrationStatusLabel}</span>
               {registration && registration.status !== 'deregistered' && (
                 <SettingsRowNote className="block tabular-nums">
@@ -208,10 +216,10 @@ export function PeppolReceiveSettings() {
               {registration?.status === 'failed' && registration.last_error && (
                 <SettingsRowNote className="block">{registration.last_error}</SettingsRowNote>
               )}
-            </>
-          )}
-        </div>
-      </SettingsRow>
+            </div>
+          </SettingsRow>
+        </>
+      )}
     </SettingsGroup>
   )
 }

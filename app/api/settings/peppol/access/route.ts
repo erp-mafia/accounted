@@ -18,7 +18,9 @@ import { getSupportRecipientEmail } from '@/lib/support'
 ensureInitialized()
 
 const RequestAccessSchema = z.object({
-  note: z.string().trim().max(2000).optional(),
+  note: z.string().trim().max(1800).optional(),
+  /** The company also wants to receive (one of the contracted tenant slots). */
+  wants_receiving: z.boolean().optional(),
 })
 
 function escapeHtml(value: string): string {
@@ -37,7 +39,13 @@ export const POST = withRouteContext(
   async (request, { supabase, companyId, user, log, requestId }) => {
     const validation = await validateBody(request, RequestAccessSchema)
     if (!validation.success) return validation.response
-    const note = validation.data.note?.trim() || null
+    const wantsReceiving = validation.data.wants_receiving === true
+    const userNote = validation.data.note?.trim() || null
+    // The receiving wish travels in the request note so the operators see it
+    // in `access.ts list` and in the mail, and grant it with --receive.
+    const note = [wantsReceiving ? '[vill ta emot e-fakturor]' : null, userNote]
+      .filter((part): part is string => !!part)
+      .join(' ') || null
 
     if (await isSandboxCompany(supabase, companyId)) {
       return privateNoStore(errorResponseFromCode('PEPPOL_SANDBOX_NOT_ALLOWED', log, { requestId }))
@@ -62,16 +70,16 @@ export const POST = withRouteContext(
           const orgNumber = (company as { org_number?: string | null } | null)?.org_number ?? 'saknas'
           const sent = await emailService.sendEmail({
             to: getSupportRecipientEmail(),
-            subject: `[${getBranding().appName.toLowerCase()} peppol] Åtkomstbegäran: ${companyName}`,
+            subject: `[${getBranding().appName.toLowerCase()} peppol] Åtkomstbegäran${wantsReceiving ? ' (+ mottagning)' : ''}: ${companyName}`,
             replyTo: user.email,
             html: [
               `<p><strong>Bolag:</strong> ${escapeHtml(companyName)} (${escapeHtml(orgNumber)})</p>`,
               `<p><strong>Company ID:</strong> ${companyId}</p>`,
               `<p><strong>Begärd av:</strong> ${escapeHtml(user.email ?? '')} (${user.id})</p>`,
               note ? `<hr /><p>${escapeHtml(note).replace(/\n/g, '<br />')}</p>` : '',
-              `<hr /><p>Aktivera: <code>npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 50</code></p>`,
+              `<hr /><p>Aktivera: <code>npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 50${wantsReceiving ? ' --receive' : ''}</code></p>`,
             ].join('\n'),
-            text: `Bolag: ${companyName} (${orgNumber})\nCompany ID: ${companyId}\nBegärd av: ${user.email ?? ''} (${user.id})\n\n${note ?? ''}\n\nAktivera: npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 50`,
+            text: `Bolag: ${companyName} (${orgNumber})\nCompany ID: ${companyId}\nBegärd av: ${user.email ?? ''} (${user.id})\n\n${note ?? ''}\n\nAktivera: npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 50${wantsReceiving ? ' --receive' : ''}`,
           })
           if (!sent.success) {
             log.warn('peppol access request e-mail failed', { companyId, reason: sent.error })

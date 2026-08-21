@@ -2240,7 +2240,10 @@
     "request_failed_title": "Kunde inte skicka begäran",
     "sends_used": "{used} av {max} sändningar använda",
     "sends_unlimited": "{used} sändningar, ingen gräns",
-    "receive_not_enabled": "Mottagning aktiveras av oss på begäran (begränsat antal platser)."
+    "receive_not_enabled": "Mottagning aktiveras av oss på begäran (begränsat antal platser).",
+    "request_receiving_label": "Vi vill också ta emot e-fakturor via Peppol (begränsat antal platser, aktiveras av oss)",
+    "access_enabled_receiving": "Aktiverat för att skicka och ta emot e-fakturor.",
+    "access_enabled_send_only": "Aktiverat för att skicka e-fakturor. Mottagning ingår inte; skriv till support om ni vill ta emot."
   },
   "settings_pdf_print": {
     "coming_soon": "Kommer snart",

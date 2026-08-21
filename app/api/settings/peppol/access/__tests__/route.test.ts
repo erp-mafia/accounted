@@ -92,7 +92,7 @@ describe('POST /api/settings/peppol/access', () => {
     enqueue({ data: { company_name: 'Kund AB', org_number: '556677-8899' }, error: null }) // company settings
     service.enqueue({ data: requestedRow, error: null })                          // summary read
 
-    const response = await post({ note: 'Vi fakturerar Region Skåne' })
+    const response = await post({ note: 'Vi fakturerar Region Skåne', wants_receiving: true })
     const body = await response.json()
 
     expect(response.status).toBe(201)
@@ -101,8 +101,12 @@ describe('POST /api/settings/peppol/access', () => {
     const mail = sendEmailMock.mock.calls[0][0] as { to: string; subject: string; text: string }
     expect(mail.to).toBe('support@example.test')
     expect(mail.subject).toContain('Kund AB')
+    expect(mail.subject).toContain('mottagning')
     expect(mail.text).toContain('company-1')
     expect(mail.text).toContain('Region Skåne')
+    expect(mail.text).toContain('--receive')
+    const upsert = service.calls.find((c) => c.method === 'upsert')?.args[0] as Record<string, unknown>
+    expect(upsert.request_note).toBe('[vill ta emot e-fakturor] Vi fakturerar Region Skåne')
   })
 
   it('is idempotent for a repeated request (no second e-mail) and 409 when already enabled', async () => {

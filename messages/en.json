@@ -2240,7 +2240,10 @@
     "request_failed_title": "Could not send the request",
     "sends_used": "{used} of {max} sends used",
     "sends_unlimited": "{used} sends, no limit",
-    "receive_not_enabled": "Receiving is enabled by us on request (limited number of slots)."
+    "receive_not_enabled": "Receiving is enabled by us on request (limited number of slots).",
+    "request_receiving_label": "We also want to receive e-invoices via Peppol (limited number of slots, enabled by us)",
+    "access_enabled_receiving": "Enabled for sending and receiving e-invoices.",
+    "access_enabled_send_only": "Enabled for sending e-invoices. Receiving is not included; write to support if you want to receive."
   },
   "settings_pdf_print": {
     "coming_soon": "Coming soon",
