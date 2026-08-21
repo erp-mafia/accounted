@@ -440,6 +440,8 @@ describe('helpers', () => {
   it('extracts the UBL document id and the seller endpoint', () => {
     expect(extractUblDocumentId(XML)).toBe('F-2026-42')
     expect(extractUblDocumentId('<cbc:ID schemeID="x">A &amp; B</cbc:ID>')).toBe('A & B')
+    // Entities are decoded in one pass: "&amp;lt;" is the literal text "&lt;".
+    expect(extractUblDocumentId('<cbc:ID>X &amp;lt; Y</cbc:ID>')).toBe('X &lt; Y')
     expect(extractUblDocumentId('<nothing/>')).toBeNull()
     expect(extractUblJsonSupplierEndpoint({
       Invoice: { AccountingSupplierParty: [{ Party: [{ EndpointID: [{ _: '1', schemeID: '0007' }] }] }] },

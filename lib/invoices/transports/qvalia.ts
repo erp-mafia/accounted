@@ -233,12 +233,10 @@ function classifyHttpFailure(status: number, body: unknown, text: string): Qvali
 export function extractUblDocumentId(xml: string): string | null {
   const match = /<cbc:ID(?:\s[^>]*)?>([^<]+)<\/cbc:ID>/.exec(xml)
   if (!match) return null
+  // Single pass: a sequential chain would double-unescape "&amp;lt;".
+  const entities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
   const value = match[1]
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
+    .replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => entities[name])
     .trim()
   return value || null
 }
