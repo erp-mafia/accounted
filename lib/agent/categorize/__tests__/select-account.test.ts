@@ -121,23 +121,37 @@ describe('selectAccount', () => {
       expect(generateStructured).toHaveBeenCalledTimes(1)
     })
 
-    it('lower agreement lowers the combined confidence', async () => {
+    it('lower agreement lowers an unbacked (category-guess) confidence', async () => {
       generateStructured
         .mockResolvedValueOnce(pick('cat:expense_office', { confidence: 'high' }))
         .mockResolvedValueOnce(pick('cat:expense_office', { confidence: 'high' }))
         .mockResolvedValueOnce(pick('cat:expense_travel', { confidence: 'high' }))
       const split = await selectAccount(input({ candidates: [], samples: 3 }))
-      // 2/3 agreement × 0.95 model weight
-      expect(split.confidence).toBeCloseTo(0.63, 1)
+      // No candidate backs the pick → unbacked: 2/3 agreement × 0.7 (high) ≈ 0.47.
+      expect(split.confidence).toBeCloseTo(0.47, 1)
       expect(split.agreement).toBe(0.67)
     })
 
-    it('a high-confidence candidate floors the score at its deterministic confidence × agreement', async () => {
-      // model says "low", but the chosen candidate is a 0.9 counterparty template
+    it('an unbacked category guess never reaches the säker band, however sure the model is', async () => {
+      generateStructured.mockResolvedValue(pick('cat:expense_software', { confidence: 'high' }))
+      const res = await selectAccount(input({ candidates: [], samples: 1 }))
+      // high model conf, full agreement, but no deterministic backing → capped at 0.7 (< 0.8).
+      expect(res.confidence).toBeLessThan(0.8)
+      expect(res.confidence).toBeCloseTo(0.7, 2)
+    })
+
+    it('a backed pick takes the candidate confidence, only reduced when the model is unsure', async () => {
+      // model says "low", but the chosen candidate is a 0.9 counterparty template.
       generateStructured.mockResolvedValue(pick('cand:0', { confidence: 'low' }))
       const res = await selectAccount(input({ samples: 1 }))
-      // low weight 0.5 vs candidate 0.9 × agreement 1 → floored to 0.9
-      expect(res.confidence).toBe(0.9)
+      // backing 0.9 × agreement 1 × low-factor 0.75 = 0.675.
+      expect(res.confidence).toBeCloseTo(0.68, 2)
+    })
+
+    it('a backed pick the model is sure about keeps the full candidate confidence', async () => {
+      generateStructured.mockResolvedValue(pick('cand:0', { confidence: 'high' }))
+      const res = await selectAccount(input({ samples: 1 }))
+      expect(res.confidence).toBe(0.9) // 0.9 × 1 × 1
     })
   })
 

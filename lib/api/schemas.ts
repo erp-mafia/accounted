@@ -2495,6 +2495,21 @@ export const AuditTrailQuerySchema = z.object({
   page_size: z.coerce.number().int().min(1).max(200).default(50),
 })
 
+/**
+ * GET /api/reports/behandlingshistorik (BFL 5 kap. 11 §). period_id is the
+ * fiscal period; from_date/to_date narrow to a sub-range inside it (validated
+ * against the period bounds by the route, like the other fiscal-range reports).
+ */
+export const BehandlingshistorikQuerySchema = z.object({
+  period_id: z.string().min(1),
+  from_date: isoDate.optional(),
+  to_date: isoDate.optional(),
+  category: z
+    .enum(['verifikation', 'kontoplan', 'installningar', 'period', 'import', 'atkomst', 'ovrigt'])
+    .optional(),
+  format: z.enum(['json', 'csv', 'xlsx', 'pdf']).default('json'),
+})
+
 // ============================================================
 // Voucher gap schemas
 // ============================================================
