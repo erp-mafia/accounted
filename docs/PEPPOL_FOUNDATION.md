@@ -80,11 +80,22 @@ Inbound invoices are a separate acceptance slice. It requires provider webhook a
 
 The UI downloads a locally checked XML file and can prepare an immutable delivery snapshot. Both actions state that they did not send the invoice. Once an adapter exists, sending must be a distinct confirmation flow that performs recipient lookup, shows the discovered participant and capabilities, and records the resulting timeline. The download remains available for diagnosis and interoperability testing.
 
-### Credentials and commercial decision
+### Access point: Qvalia (decided 2026-08-21)
 
-Emil must choose and contract a certified access-point provider before full send or receive can be completed.
+The contract with Qvalia (certified Swedish Access Point + SMP, partner model) was signed on 2026-08-21. The adapter lives in `lib/invoices/transports/qvalia.ts` and implements the `PeppolTransport` boundary:
 
-### Storecove versus Qvalia
+- recipient lookup: `GET /partner/{partnerRegNo}/peppol/lookup/{scheme:id}?docTypeRoot=Invoice`;
+- submission: `POST /partner/{partnerRegNo}/transaction/{accountRegNo}/invoices/outgoing` with the staged UBL XML (`content-type: application/xml`); the returned `integrationId` is the provider submission id; a `409` (same document id and receiver) is recovered to the existing `integrationId` only when Qvalia's stored copy carries the same seller endpoint, otherwise it stays a duplicate error;
+- webhooks: `POST /api/webhooks/peppol/qvalia`, authenticated by the shared secret Accounted configures as Qvalia's outbound auth header (Qvalia does not sign webhooks); events are at-least-once and deduplicated on `eventType + globalTransactionId + status.status`; `status.status` is free text, so the mapping is tolerant and unknown wording never advances beyond `submission_accepted`;
+- evidence: the message-log status and Qvalia's stored XML copy, recorded as `qvalia_message_record`.
+
+Configuration is environment-only (`PEPPOL_TRANSPORT_PROVIDER=qvalia` plus `QVALIA_API_KEY`, `QVALIA_PARTNER_REG_NO`, `QVALIA_BASE_URL`, `QVALIA_WEBHOOK_SECRET`, optional `QVALIA_ACCOUNT_REG_NO`, `QVALIA_WEBHOOK_HEADER`, `QVALIA_AUTH_SCHEME`; see `.env.example`). `lib/init.ts` registers the adapter when the credentials are present; the product only sends when the provider is also selected. `scripts/peppol/qvalia-probe.ts` is the first-contact probe against the sandbox (auth scheme, child accounts, registered Peppol IDs, lookup, send).
+
+`POST /api/invoices/{id}/peppol/send` performs the send: stage the exact XML, look up the recipient, record `recipient_verified` and `submitting`, submit, record `submission_accepted` with the provider submission id, and only then issue a draft with the mark-sent semantics (`issueAndBookInvoice`: F-number, status, verifikat under faktureringsmetoden, PDF archived as underlag). A synchronous rejection is recorded as a terminal `failed` event so the identical document is never re-sent; an operational failure is `retryable_failure` and a retry is allowed. Resending an exact XML that already carries a provider submission id is an idempotent replay, never a second transmission.
+
+v1 uses Qvalia's consolidated setup (every company's documents under Accounted's partner account, `accountRegNo = partnerRegNo`). Still open: per-company participant registration (`PUT /partner/{p}/account/{a}/peppol/{0007:orgnr}` with business card and Invoice + CreditNote document types), the multi-tenant child-account model if pricing favours it, credit notes, `0088` GLN for enskild firma, inbound documents, and the release-pinned validation stack.
+
+### Storecove versus Qvalia (historical, pre-contract)
 
 Storecove is the stronger fit for the lifecycle already modeled. Its official API documents recipient discovery, caller-supplied `idempotencyGuid`, a returned submission `guid`, tenant correlation, asynchronous sending webhooks, and a dedicated evidence endpoint. Its sandbox supports webhook simulation and the OpenPeppol test network. A Storecove adapter still requires a commercial contract and credentials; these public semantics do not prove Accounted's tenant is authorized or onboarded.
 

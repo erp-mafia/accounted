@@ -79,6 +79,23 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { Invoice, InvoiceItem, Customer, InvoiceStatus, InvoiceReminder, InvoiceDocumentType } from '@/types'
+
+/** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
+interface PeppolDeliveryView {
+  id: string
+  recipient_scheme: string
+  recipient_identifier: string
+  status: string
+  status_at: string
+  status_detail: string | null
+  provider_submission_id: string | null
+}
+const PEPPOL_STATUS_KEYS = new Set([
+  'staged', 'recipient_verified', 'submitting', 'retryable_failure', 'submission_accepted',
+  'transport_succeeded', 'recipient_acknowledged', 'business_accepted', 'business_rejected',
+  'no_route', 'failed',
+])
+const PEPPOL_SENDABLE_STATUSES = new Set<InvoiceStatus>(['draft', 'sent', 'overdue'])
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Why the downloaded file is not the invoice the customer received. One key
@@ -205,6 +222,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isDownloadingConfirmation, setIsDownloadingConfirmation] = useState(false)
   const [showConfirmationSendDialog, setShowConfirmationSendDialog] = useState(false)
   const [isPreparingPeppol, setIsPreparingPeppol] = useState(false)
+  const [isSendingPeppol, setIsSendingPeppol] = useState(false)
+  const [showPeppolSendDialog, setShowPeppolSendDialog] = useState(false)
+  // Whether this deployment has a contracted Access Point switched on; the
+  // menu item stays a truthful "provider required" note otherwise.
+  const [peppolTransportAvailable, setPeppolTransportAvailable] = useState(false)
+  const [peppolDeliveries, setPeppolDeliveries] = useState<PeppolDeliveryView[]>([])
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
@@ -233,6 +256,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   useEffect(() => {
     fetchInvoice()
   }, [id])
+
+  // Peppol status and transport availability for invoices that can carry an
+  // e-invoice; refreshed when the invoice changes state (draft -> sent).
+  useEffect(() => {
+    if (!invoice || invoice.id !== id) return
+    const eligible = (!invoice.document_type || invoice.document_type === 'invoice')
+      && !invoice.credited_invoice_id
+      && !invoice.is_self_billed
+    if (!eligible) return
+    void loadPeppolDeliveries()
+  }, [id, invoice?.id, invoice?.status, invoice?.invoice_number]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * Read the delivery history, keeping "read failed" distinct from "nothing
@@ -869,6 +903,66 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  async function loadPeppolDeliveries() {
+    try {
+      const response = await fetch(`/api/invoices/${encodeURIComponent(id)}/peppol/deliveries`)
+      if (!response.ok) return
+      const payload = (await response.json()) as {
+        data?: PeppolDeliveryView[]
+        transport?: { available?: boolean }
+      }
+      const rows = Array.isArray(payload.data) ? [...payload.data] : []
+      rows.sort((a, b) => (a.status_at < b.status_at ? 1 : a.status_at > b.status_at ? -1 : 0))
+      setPeppolDeliveries(rows)
+      setPeppolTransportAvailable(payload.transport?.available === true)
+    } catch {
+      // Peppol status is supplementary; the page stays usable without it.
+    }
+  }
+
+  async function sendViaPeppol() {
+    if (!invoice) return
+    setIsSendingPeppol(true)
+
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/peppol/send`, { method: 'POST' })
+      const body = await response.json().catch(() => null) as {
+        data?: { already_submitted?: boolean; issuance?: { ok: boolean } | null }
+        error?: { code?: string; message?: string; message_en?: string }
+      } | null
+      if (!response.ok) {
+        throw body?.error ?? new Error(t('peppol_send_failed_description'))
+      }
+
+      setShowPeppolSendDialog(false)
+      const issuanceFailed = !!body?.data?.issuance && !body.data.issuance.ok
+      toast({
+        title: t('peppol_sent_title'),
+        description: body?.data?.already_submitted
+          ? t('peppol_already_sent_description')
+          : issuanceFailed
+            ? t('peppol_issue_failed_description')
+            : t('peppol_sent_description'),
+        ...(issuanceFailed ? { variant: 'destructive' as const } : {}),
+      })
+      await fetchInvoice()
+      await loadPeppolDeliveries()
+    } catch (error) {
+      toast({
+        title: t('peppol_send_failed_title'),
+        description: error instanceof Error
+          ? getUserErrorMessage(error, { locale: locale.startsWith('sv') ? 'sv' : 'en' })
+          : getUserErrorMessage(error, {
+              context: 'invoice',
+              locale: locale.startsWith('sv') ? 'sv' : 'en',
+            }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSendingPeppol(false)
+    }
+  }
+
   /**
    * Show one specific document in the browser instead of saving it (#1190):
    * granskning should not require leaving the app for the Downloads folder.
@@ -1236,7 +1330,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     (invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'paid') &&
     isRealInvoice &&
     !creditNote
-  const showPeppolActions = !isSelfBilled && isRealInvoice && !isCreditNote && !!invoice.invoice_number
+  // Download/prepare need the F-number (the XML carries it); sending a draft
+  // assigns the number server-side, so the menu shows once a provider is on.
+  const showPeppolActions = !isSelfBilled && isRealInvoice && !isCreditNote
+    && (!!invoice.invoice_number || peppolTransportAvailable)
+  const canSendPeppol = peppolTransportAvailable && PEPPOL_SENDABLE_STATUSES.has(invoice.status)
+  const peppolRecipientLabel = invoice.customer?.org_number
+    ? `0007:${invoice.customer.org_number.replace(/\D/g, '')}`
+    : '0007'
+  const peppolStatusLabel = (status: string) =>
+    PEPPOL_STATUS_KEYS.has(status) ? t(`peppol_status_${status}`) : status
+  const latestPeppolDelivery = peppolDeliveries[0] ?? null
   const showDestructive =
     invoice.status !== 'cancelled' &&
     invoice.status !== 'credited' &&
@@ -1486,26 +1590,39 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 {showPeppolActions && (
                   <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={() => void downloadPeppolXml()} disabled={isDownloadingPeppol}>
+                    <DropdownMenuItem
+                      onSelect={() => void downloadPeppolXml()}
+                      disabled={isDownloadingPeppol || !invoice.invoice_number}
+                    >
                       <FileText className="h-4 w-4" />
                       {t('download_peppol_xml')}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onSelect={() => void preparePeppolDelivery()}
-                      disabled={isPreparingPeppol || !canWrite}
+                      disabled={isPreparingPeppol || !canWrite || !invoice.invoice_number}
                     >
                       <FileCheck2 className="h-4 w-4" />
                       {t('prepare_peppol_delivery')}
                     </DropdownMenuItem>
-                    <DropdownMenuItem disabled className="items-start">
-                      <Send className="mt-0.5 h-4 w-4" />
-                      <span className="min-w-0">
-                        <span className="block">{t('send_via_peppol')}</span>
-                        <span className="block text-[11px] leading-snug text-muted-foreground">
-                          {t('peppol_provider_required')}
+                    {peppolTransportAvailable ? (
+                      <DropdownMenuItem
+                        onSelect={() => setShowPeppolSendDialog(true)}
+                        disabled={isSendingPeppol || !canWrite || !canSendPeppol}
+                      >
+                        <Send className="h-4 w-4" />
+                        {t('send_via_peppol')}
+                      </DropdownMenuItem>
+                    ) : (
+                      <DropdownMenuItem disabled className="items-start">
+                        <Send className="mt-0.5 h-4 w-4" />
+                        <span className="min-w-0">
+                          <span className="block">{t('send_via_peppol')}</span>
+                          <span className="block text-[11px] leading-snug text-muted-foreground">
+                            {t('peppol_provider_required')}
+                          </span>
                         </span>
-                      </span>
-                    </DropdownMenuItem>
+                      </DropdownMenuItem>
+                    )}
                   </>
                 )}
                 {showDestructive && (
@@ -2018,6 +2135,27 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {/* The legacy empty state asserts "sent before delivery history
           existed". A failed read produces the same empty list, so that
           claim would be a guess: say what actually happened instead. */}
+      {latestPeppolDelivery && (
+        <DetailSection kicker={t('peppol_status_title')}>
+          <DefRow label={t('peppol_status_recipient')}>
+            <span className="tabular-nums">
+              {latestPeppolDelivery.recipient_scheme}:{latestPeppolDelivery.recipient_identifier}
+            </span>
+          </DefRow>
+          <DefRow label={t('peppol_status_label')}>
+            <span>{peppolStatusLabel(latestPeppolDelivery.status)}</span>
+            {latestPeppolDelivery.status_detail && (
+              <span className="block text-xs text-muted-foreground">
+                {latestPeppolDelivery.status_detail}
+              </span>
+            )}
+          </DefRow>
+          <DefRow label={t('peppol_status_updated')}>
+            <span className="tabular-nums">{formatDate(latestPeppolDelivery.status_at)}</span>
+          </DefRow>
+        </DetailSection>
+      )}
+
       {isRealInvoice && !isSelfBilled && deliveriesUnreadable && (
         <DetailSection kicker={t('delivery_history_title')}>
           <p className="text-sm text-muted-foreground">
@@ -2049,6 +2187,31 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {/* Remove/cancel confirmation. An unissued credit-note draft and an
           unnumbered invoice draft are hard deleted; other numbered drafts are
           retained as cancelled to preserve their number series. */}
+      {/* Peppol send confirmation (convention 10: confirm up front). */}
+      <Dialog open={showPeppolSendDialog} onOpenChange={setShowPeppolSendDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('peppol_send_confirm_title')}</DialogTitle>
+            <DialogDescription>
+              {t('peppol_send_confirm_description', { recipient: peppolRecipientLabel })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowPeppolSendDialog(false)}
+              disabled={isSendingPeppol}
+            >
+              {t('delete_dialog_cancel')}
+            </Button>
+            <Button onClick={() => void sendViaPeppol()} disabled={isSendingPeppol}>
+              {isSendingPeppol && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isSendingPeppol ? t('peppol_sending') : t('peppol_send_confirm_action')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>

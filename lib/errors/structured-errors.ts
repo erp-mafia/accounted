@@ -1248,6 +1248,34 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Detta dokument är inte en offert.',
     message_en: 'This document is not a quote.',
   },
+  // POST /api/invoices/{id}/peppol/send. The Access Point is an environment
+  // decision (PEPPOL_TRANSPORT_PROVIDER + adapter credentials); the product
+  // never pretends to send when no adapter is switched on.
+  PEPPOL_TRANSPORT_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Peppol-utskick är inte aktiverat i den här miljön. En avtalad Peppol-operatör måste vara konfigurerad.',
+    message_en: 'Peppol sending is not enabled in this environment. A contracted Peppol access point must be configured.',
+  },
+  PEPPOL_SEND_INVALID_STATUS: {
+    httpStatus: 409,
+    message_sv: 'Bara utkast och skickade fakturor kan skickas via Peppol. Makulerade, krediterade och proformafakturor kan inte skickas.',
+    message_en: 'Only draft and sent invoices can be sent via Peppol. Cancelled, credited and proforma invoices cannot be sent.',
+  },
+  PEPPOL_RECIPIENT_NOT_REACHABLE: {
+    httpStatus: 422,
+    message_sv: 'Mottagaren är inte registrerad för att ta emot e-fakturor via Peppol. Kontrollera organisationsnumret eller skicka fakturan på annat sätt.',
+    message_en: 'The recipient is not registered to receive e-invoices via Peppol. Check the organisation number or deliver the invoice another way.',
+  },
+  PEPPOL_SUBMISSION_REJECTED: {
+    httpStatus: 422,
+    message_sv: 'Peppol-operatören avvisade fakturan vid valideringen. Fakturan har inte skickats.',
+    message_en: 'The Peppol access point rejected the invoice during validation. The invoice has not been sent.',
+  },
+  PEPPOL_SUBMISSION_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Peppol-operatören kunde inte nås just nu. Fakturan har inte skickats; försök igen om en stund.',
+    message_en: 'The Peppol access point could not be reached. The invoice has not been sent; try again shortly.',
+  },
 }
 
 const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {

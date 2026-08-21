@@ -66,7 +66,12 @@ export interface PeppolVerifiedEvent {
   providerTenantId: string | null
   providerSubmissionId: string | null
   providerEventId: string | null
-  idempotencyKey: string
+  /**
+   * Accounted's delivery idempotency key. A provider webhook only knows its
+   * own submission id, so an adapter returns `null` here and the webhook route
+   * resolves the key from `providerSubmissionId` before persisting.
+   */
+  idempotencyKey: string | null
   eventCode: string
   normalizedStatus: PeppolDeliveryStatus
   isTerminal: boolean
@@ -90,6 +95,28 @@ export interface PeppolDeliveryEvidence {
 export interface PeppolWebhookRequest {
   headers: Headers
   rawBody: Uint8Array
+}
+
+/**
+ * Provider-neutral failure raised by an adapter. `retryable` separates an
+ * operational problem (network, rate limit, credentials) from a verdict on the
+ * document itself (rejected, duplicate); the send route records them as
+ * different lifecycle events.
+ */
+export class PeppolTransportError extends Error {
+  readonly retryable: boolean
+  readonly detail: string | null
+
+  constructor(message: string, options: { retryable: boolean; detail?: string | null; cause?: unknown }) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined)
+    this.name = 'PeppolTransportError'
+    this.retryable = options.retryable
+    this.detail = options.detail ?? null
+  }
+}
+
+export function isPeppolTransportError(error: unknown): error is PeppolTransportError {
+  return error instanceof PeppolTransportError
 }
 
 export interface PeppolTransport {

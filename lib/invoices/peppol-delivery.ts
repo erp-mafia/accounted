@@ -81,6 +81,9 @@ export async function persistVerifiedPeppolEvent(args: {
   event: PeppolVerifiedEvent
 }): Promise<PeppolDeliverySummary> {
   const { event } = args
+  if (!event.idempotencyKey) {
+    throw new Error('Peppol event idempotency key must be resolved before it is recorded')
+  }
   const { data, error } = await args.supabase.rpc('record_peppol_delivery_event', {
     p_company_id: args.companyId,
     p_idempotency_key: event.idempotencyKey,

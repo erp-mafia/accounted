@@ -3,8 +3,11 @@ import { z } from 'zod'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { ensureInitialized } from '@/lib/init'
 import { listPeppolDeliverySummaries } from '@/lib/invoices/peppol-delivery'
 import { getPeppolTransportAvailability } from '@/lib/invoices/peppol-transport'
+
+ensureInitialized()
 
 const paramsSchema = z.object({ id: z.uuid() })
 

@@ -9,6 +9,10 @@ import {
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 const requireAuthMock = vi.fn()
 
+vi.mock('@/lib/init', () => ({
+  ensureInitialized: vi.fn(),
+}))
+
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
