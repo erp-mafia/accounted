@@ -9668,7 +9668,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_document_upload',
     title: 'Create Document Upload',
-    description: 'Create a short-lived URL for a model-free document upload. PUT the raw file bytes (max 10 MB) to upload_url, then call gnubok_complete_document_upload with the same upload_id and file_name. upload_url is served from this MCP server\'s own origin, so sandboxes that only allow the MCP host can reach it.',
+    description: 'Create a short-lived URL for a model-free document upload. PUT the raw file bytes (max 10 MB) to upload_url, then call gnubok_complete_document_upload with the same upload_id and file_name.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9716,6 +9716,8 @@ export const tools: McpTool[] = [
         uploadId,
         fileName,
       )
+      // Served from the app origin: agent sandboxes (Claude Desktop) only
+      // reach the MCP host, not <project>.supabase.co. See storage-proxy.ts.
       return {
         upload_id: reservation.uploadId,
         upload_url: toSameOriginStorageUrl(reservation.signedUrl),
@@ -10607,7 +10609,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_document_content',
     title: 'Get Document Content',
-    description: 'Get a 5-minute signed download URL for a document so the agent can read its contents (e.g. with vision). Use after gnubok_list_unmatched_documents to inspect a specific PDF before deciding which transaction it matches. The URL is served from this MCP server\'s own origin.',
+    description: 'Get a 5-minute signed download URL for a document so the agent can read its contents (e.g. with vision). Use after gnubok_list_unmatched_documents to inspect a specific PDF before deciding which transaction it matches.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
