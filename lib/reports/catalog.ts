@@ -317,6 +317,21 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     route: '/import?view=export#sie-export',
     libraryOnly: true,
   },
+  {
+    // Behandlingshistorik (BFL 5 kap. 11 §, BFNAR 2013:2 p. 9.16): the
+    // per-räkenskapsår processing history revisorer ask for at bokslut. Lives
+    // with export & arkiv like Visma's Bokföring > Rapporter placement; the
+    // date sub-range narrows to "what happened between these dates".
+    slug: 'behandlingshistorik',
+    labelKey: 'name_behandlingshistorik',
+    descKey: 'desc_behandlingshistorik',
+    category: 'export',
+    params: 'fiscal-range',
+    exports: ['xlsx'],
+    libraryOnly: true,
+    searchTerms:
+      'behandlingshistorik audit trail audit log händelselogg ändringslogg logg historik vem gjorde vad processing history revision systemdokumentation',
+  },
 ]
 
 /** Reports that take a fiscal period + optional date sub-range. */
