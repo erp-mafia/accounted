@@ -153,7 +153,9 @@ export async function archiveInboundPeppolMessage(args: {
   }
 
   const recipient = document?.customer.endpoint ?? null
-  const insert = {
+  const { data, error } = await service
+    .from('peppol_inbound_documents')
+    .insert({
     provider: message.provider,
     provider_document_id: message.providerDocumentId,
     document_type: message.documentType,
@@ -173,10 +175,7 @@ export async function archiveInboundPeppolMessage(args: {
     ubl_json: message.payload,
     summary: document ? { warnings: document.warnings, lines: document.lines.length, attachments: document.attachments.length } : { unparsed: true },
     received_at: message.receivedAt ?? new Date().toISOString(),
-  }
-  const { data, error } = await service
-    .from('peppol_inbound_documents')
-    .insert(insert)
+    })
     .select('*')
     .single()
   if (error || !data) {

@@ -11,9 +11,10 @@ async function insertRegistration(companyId: string, userId: string, identifier:
   await getPool().query(
     `INSERT INTO public.peppol_registrations
        (id, company_id, user_id, provider, provider_account_reference,
-        participant_scheme, participant_identifier, status, registered_at)
+        participant_scheme, participant_identifier, status, registered_at, deregistered_at)
      VALUES ($1, $2, $3, 'qvalia', 'SE5595386219', '0007', $4, $5,
-             CASE WHEN $5 = 'registered' THEN now() ELSE NULL END)`,
+             CASE WHEN $5 = 'registered' THEN now() ELSE NULL END,
+             CASE WHEN $5 = 'deregistered' THEN now() ELSE NULL END)`,
     [id, companyId, userId, identifier, status],
   )
   return id
@@ -47,10 +48,6 @@ describe('peppol_registrations', () => {
 
     // A deregistered history row does not block a new live one.
     await insertRegistration(b.companyId, b.userId, '5567321707', 'deregistered')
-    await getPool().query(
-      `UPDATE public.peppol_registrations SET deregistered_at = now() WHERE company_id = $1`,
-      [b.companyId],
-    )
     await expect(insertRegistration(b.companyId, b.userId, '5567321707')).resolves.toBeTruthy()
   })
 

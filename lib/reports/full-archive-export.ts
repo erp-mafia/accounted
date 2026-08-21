@@ -866,6 +866,14 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     file: 'peppol_delivery_evidence.json',
     orderBy: 'created_at',
   },
+  // Receiving side: which identifiers the company published, and every
+  // inbound e-invoice with the exact received XML (the underlag itself).
+  { name: 'peppol_registrations', file: 'peppol_registrations.json', orderBy: 'created_at' },
+  {
+    name: 'peppol_inbound_documents',
+    file: 'peppol_inbound_documents.json',
+    orderBy: 'received_at',
+  },
   { name: 'recurring_invoice_schedules', file: 'recurring_invoice_schedules.json' },
   // Supplier invoicing
   { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },
