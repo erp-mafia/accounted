@@ -44,7 +44,18 @@ ALTER TABLE public.peppol_access ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "view own-company peppol access"
   ON public.peppol_access FOR SELECT
   USING (company_id IN (SELECT public.user_company_ids()));
-REVOKE ALL ON public.peppol_access FROM PUBLIC, anon;
+-- Supabase's default privileges hand every new table ALL to authenticated;
+-- take that back so a member's UPDATE is a hard "permission denied" rather
+-- than an RLS-filtered no-op, then grant the one thing members need.
+REVOKE ALL ON public.peppol_access FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.peppol_access TO authenticated;
+
+-- Same tightening for the two receiving tables from 20260821170000, which
+-- revoked from PUBLIC and anon only (their RLS already blocked writes; this
+-- makes the refusal explicit at the privilege level too).
+REVOKE ALL ON public.peppol_registrations FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.peppol_registrations TO authenticated;
+REVOKE ALL ON public.peppol_inbound_documents FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.peppol_inbound_documents TO authenticated;
 
 NOTIFY pgrst, 'reload schema';
