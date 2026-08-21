@@ -25,7 +25,12 @@ import {
 import { roundOre } from '@/lib/money'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { validateVatNumber } from '@/lib/vat/vies-client'
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import {
+  looksLikeSwedishPersonalNumber,
+  normalizeReroutedPersonalNumber,
+  orgNumberHoldsPersonalNumber,
+} from '@/lib/customers/personal-number-shape'
+import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import {
   normalizeVatRateToDecimal,
@@ -359,7 +364,7 @@ async function commitCreateCustomer(
   // Same GDPR guard as CreateCustomerSchema: identifiers are only masked on
   // customer_type='individual' rows, so a personnummer stored as a business
   // org_number would be shown unmasked everywhere.
-  const orgNumber = (params.org_number as string) || null
+  let orgNumber = (params.org_number as string) || null
   if (
     orgNumber &&
     params.customer_type !== 'individual' &&
@@ -371,6 +376,21 @@ async function commitCreateCustomer(
         + '(customer_type=individual) i stället, så maskeras numret i listor.',
       status: 400,
     }
+  }
+
+  // The personnummer arrives from staging already encrypted
+  // (personal_number_encrypted; params never hold the plaintext). An
+  // operation staged before gnubok_create_customer had a personal_number
+  // input may still carry the personnummer in org_number on an individual:
+  // it is stored encrypted in personal_number and org_number is cleared,
+  // same as every other write path.
+  let personalNumberEncrypted =
+    typeof params.personal_number_encrypted === 'string' && params.personal_number_encrypted
+      ? params.personal_number_encrypted
+      : null
+  if (orgNumberHoldsPersonalNumber(params.customer_type as string, orgNumber)) {
+    personalNumberEncrypted ??= encryptCustomerPersonalNumber(normalizeReroutedPersonalNumber(orgNumber!))
+    orgNumber = null
   }
 
   // Unset payment terms follow the company's own default, not a hardcoded 30.
@@ -391,6 +411,7 @@ async function commitCreateCustomer(
       email: (params.email as string) || null,
       org_number: orgNumber,
       vat_number: (params.vat_number as string) || null,
+      personal_number: personalNumberEncrypted,
       default_payment_terms: defaultPaymentTerms,
       address_line1: (params.address as string) || null,
       postal_code: (params.postal_code as string) || null,

@@ -93,8 +93,8 @@ Creates a new customer for the company. Requires Idempotency-Key (UUID). Support
 **Pitfalls:**
 - Idempotency-Key is mandatory: calls without it return 400 VALIDATION_ERROR.
 - org_number uniqueness is enforced at the database level; duplicate inserts return 409 CUSTOMER_DUPLICATE_ORG_NUMBER.
-- For Swedish sole traders (customer_type=individual), org_number IS the personnummer. List responses mask it; the create endpoint accepts it as input.
-- An org_number shaped like a Swedish personnummer is rejected for business customer_types: create the customer as customer_type=individual (personal_number or org_number) so the number is masked and protected.
+- A personnummer-shaped org_number on customer_type=individual is treated as the personnummer submitted in the wrong field: it is stored encrypted as personal_number, returned masked (********-1234), and org_number is left empty. Prefer passing it as personal_number. Next to a different personal_number in the same body it is a 400.
+- An org_number shaped like a Swedish personnummer is rejected for business customer_types: create the customer as customer_type=individual with personal_number so the number is masked and protected.
 - personal_number is accepted only for customer_type=individual, stored encrypted, and returned in the masked form ********-1234.
 - If default_payment_terms is omitted, it defaults to the company setting invoice_default_days, falling back to 30.
 - VIES validation runs only on commit. Dry-run skips the external call and leaves vat_number_validated=false in the preview.
@@ -243,7 +243,7 @@ Patches the customer with the supplied fields. All fields optional. Idempotent (
 - org_number uniqueness is enforced at DB level: 23505 → 409 CUSTOMER_DUPLICATE_ORG_NUMBER.
 - VIES re-validation is best-effort and runs only on commit. A VIES timeout does not fail the update.
 - personal_number: a plaintext value is stored encrypted (individual customers only); the masked form a read returned (********-1234) means "leave unchanged" and is never stored; null clears it. Changing customer_type away from individual clears any stored personal_number.
-- An org_number shaped like a Swedish personnummer is rejected for business customer_types (400 CUSTOMER_ORG_NUMBER_IS_PERSONAL).
+- An org_number shaped like a Swedish personnummer is rejected for business customer_types (400 CUSTOMER_ORG_NUMBER_IS_PERSONAL). On an individual it is the personnummer in the wrong field: it is stored encrypted as personal_number and org_number is cleared; next to a different personal_number in the same body it is 400 CUSTOMER_PERSONAL_NUMBER_CONFLICT.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

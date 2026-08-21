@@ -2341,6 +2341,13 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The org number looks like a Swedish personal identity number. Save the customer as an individual instead, so the number is stored protected and masked in lists.',
   },
+  CUSTOMER_PERSONAL_NUMBER_CONFLICT: {
+    httpStatus: 400,
+    message_sv:
+      'Kunden fick två olika personnummer: ett i fältet personnummer och ett i fältet organisationsnummer. En privatperson har sitt personnummer i fältet personnummer; lämna organisationsnumret tomt.',
+    message_en:
+      'The customer was given two different personal identity numbers: one in personal_number and one in org_number. An individual customer keeps its personnummer in personal_number; leave org_number empty.',
+  },
   ARTICLE_DELETE_FAILED: {
     httpStatus: 500,
     message_sv: 'Artikeln kunde inte tas bort.',

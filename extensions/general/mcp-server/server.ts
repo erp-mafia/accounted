@@ -73,6 +73,21 @@ import {
 } from '@/lib/reports/vat-filing-gate'
 import { findRcBasisGaps } from '@/lib/reports/rc-basis-gaps'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import {
+  looksLikeSwedishPersonalNumber,
+  normalizeReroutedPersonalNumber,
+  orgNumberHoldsPersonalNumber,
+  personalNumberDigits,
+} from '@/lib/customers/personal-number-shape'
+import {
+  PERSONAL_NUMBER_PLAINTEXT_RE,
+  maskCustomerPersonalNumber,
+} from '@/lib/customers/mask-personal-number'
+import {
+  encryptCustomerPersonalNumber,
+  maskStoredCustomerPersonalNumber,
+} from '@/lib/customers/protect-personal-number'
+import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import { fetchEntryLines, fetchLinesByEntryIds, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
@@ -597,6 +612,14 @@ interface StageOptions {
    */
   idempotencyKey?: string
   /**
+   * Payload hashed for the idempotency replay check instead of `params`.
+   * Needed when params carry a non-deterministic derivative of the input
+   * (random-IV ciphertext, see gnubok_create_customer): hashing params would
+   * make an identical retry look like a different payload and fail with
+   * IDEMPOTENCY_KEY_REUSE. Must itself be free of plaintext PII.
+   */
+  idempotencyParams?: Record<string, unknown>
+  /**
    * ISO yyyy-MM-dd date used to look up period_status before staging. When
    * provided, the response includes a `period_status` envelope so agents and
    * widgets can detect locked/closed periods without a round-trip. Failure to
@@ -699,7 +722,7 @@ async function stagePendingOperation(
   //    same key UUID submitted under a different company is treated as a
   //    fresh request, not a replay.
   const requestHash = options.idempotencyKey
-    ? hashRequest({ operationType, params, companyId })
+    ? hashRequest({ operationType, params: options.idempotencyParams ?? params, companyId })
     : null
   if (options.idempotencyKey && requestHash) {
     const cached = await checkIdempotencyKey(supabase, userId, companyId, options.idempotencyKey, requestHash)
@@ -4593,12 +4616,19 @@ export const tools: McpTool[] = [
     async execute(_args, companyId, userId, supabase) {
       // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
       // 1000 rows. Page on the unique id, then re-sort by name for display.
-      let customers: { id: string; name: string }[]
+      type ListedCustomer = {
+        id: string
+        name: string
+        customer_type: string
+        org_number: string | null
+        personal_number: string | null
+      }
+      let rows: ListedCustomer[]
       try {
-        customers = await fetchAllRows<{ id: string; name: string }>(({ from, to }) =>
+        rows = await fetchAllRows<ListedCustomer>(({ from, to }) =>
           supabase
             .from('customers')
-            .select('id, name, customer_type, email, org_number, vat_number, default_payment_terms, city, country')
+            .select('id, name, customer_type, email, org_number, vat_number, personal_number, default_payment_terms, city, country')
             .eq('company_id', companyId)
             .order('id', { ascending: true })
             .range(from, to)
@@ -4606,7 +4636,26 @@ export const tools: McpTool[] = [
       } catch (error) {
         throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
       }
-      customers.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
+      rows.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
+
+      // GDPR art. 5.1 c, same rule as the v1 list: an individual's
+      // personnummer never leaves this tool raw. personal_number is stored as
+      // ciphertext and is exposed only as personal_number_masked
+      // (********-1234); a legacy individual row that still carries the
+      // personnummer in org_number (written before the write paths started
+      // moving it into personal_number) shows it masked the same way, and its
+      // org_number is nulled rather than listed.
+      const customers = rows.map(({ personal_number, ...customer }) => {
+        if (customer.customer_type !== 'individual') return customer
+        const legacyInOrgNumber = orgNumberHoldsPersonalNumber(customer.customer_type, customer.org_number)
+        return {
+          ...customer,
+          org_number: legacyInOrgNumber ? null : customer.org_number,
+          personal_number_masked:
+            maskStoredCustomerPersonalNumber(personal_number)
+            ?? (legacyInOrgNumber ? maskCustomerPersonalNumber(customer.org_number) : null),
+        }
+      })
 
       return { customers, count: customers.length }
     },
@@ -4629,9 +4678,10 @@ export const tools: McpTool[] = [
         },
         customer_number: { type: 'string', maxLength: 32 },
         email: { type: 'string', description: 'Email address' },
-        org_number: { type: 'string', description: 'Swedish org number' },
+        org_number: { type: 'string', description: 'Swedish org number (business types). A personnummer belongs in personal_number.' },
+        personal_number: { type: 'string', description: 'Personnummer for customer_type=individual. Encrypted at staging, masked on read.' },
         vat_number: { type: 'string', description: 'EU VAT number' },
-        payment_terms: { type: 'number', description: 'Payment terms in days (default 30)' },
+        payment_terms: { type: 'number', description: 'Days. Default: the company setting, else 30.' },
         address: { type: 'string', description: 'Street address' },
         postal_code: { type: 'string' },
         city: { type: 'string' },
@@ -4672,24 +4722,83 @@ export const tools: McpTool[] = [
         throw new Error('customer_number must be at most 32 characters.')
       }
 
-      const params = {
+      // Identifiers. A personnummer belongs in personal_number on an
+      // individual and nowhere else. The business-type guard mirrors
+      // CreateCustomerSchema (nothing masks org_number, GDPR art. 5.1 c); a
+      // personnummer-shaped org_number on an individual is the personnummer
+      // submitted in the wrong field, which is all an agent COULD do before
+      // this tool had a personal_number input, so it is moved rather than
+      // refused. Everything is checked here, at staging, so the user never
+      // approves an operation that then fails at commit.
+      const orgNumberArg = typeof args.org_number === 'string' ? args.org_number.trim() : ''
+      const personalNumberArg = typeof args.personal_number === 'string' ? args.personal_number.trim() : ''
+      if (orgNumberArg && customerType !== 'individual' && looksLikeSwedishPersonalNumber(orgNumberArg)) {
+        throw new Error(
+          'org_number looks like a Swedish personal identity number (personnummer). Create the customer with '
+          + 'customer_type "individual" and pass the number as personal_number instead, so it is stored encrypted '
+          + 'and masked in lists.',
+        )
+      }
+      if (personalNumberArg && customerType !== 'individual') {
+        throw new Error('personal_number is only allowed for customer_type "individual".')
+      }
+      let orgNumber: string | null = orgNumberArg || null
+      let personalNumber: string | null = personalNumberArg || null
+      if (orgNumberHoldsPersonalNumber(customerType, orgNumber)) {
+        const rerouted = normalizeReroutedPersonalNumber(orgNumber!)
+        if (personalNumber && personalNumberDigits(personalNumber) !== personalNumberDigits(rerouted)) {
+          throw new Error(
+            'org_number looks like a personnummer and differs from personal_number. An individual customer keeps '
+            + 'its personnummer in personal_number; leave org_number empty.',
+          )
+        }
+        personalNumber = personalNumber ?? rerouted
+        orgNumber = null
+      }
+      if (personalNumber && !PERSONAL_NUMBER_PLAINTEXT_RE.test(personalNumber)) {
+        throw new Error('personal_number must be a Swedish personnummer: YYYYMMDD-XXXX, YYMMDD-XXXX or the digits alone.')
+      }
+
+      // Resolved at staging, not at commit, so the approval preview shows the
+      // terms the row will actually get: the caller's value, else the
+      // company's invoice_default_days, else 30. (Staging `|| 30` here is why
+      // #1708's fix never reached the MCP path.)
+      const paymentTermsArg = Number(args.payment_terms)
+      const paymentTerms = await resolveDefaultPaymentTerms(
+        supabase,
+        companyId,
+        Number.isFinite(paymentTermsArg) && paymentTermsArg > 0 ? paymentTermsArg : undefined,
+      )
+
+      const preview: Record<string, unknown> = {
         name: name.trim(),
         customer_type: customerType,
         customer_number: customerNumber || null,
         email: (args.email as string) || null,
-        org_number: (args.org_number as string) || null,
+        org_number: orgNumber,
         vat_number: (args.vat_number as string) || null,
-        payment_terms: Number(args.payment_terms) || 30,
+        payment_terms: paymentTerms,
         address: (args.address as string) || null,
         postal_code: (args.postal_code as string) || null,
         city: (args.city as string) || null,
         country: (args.country as string) || 'Sweden',
+        // The preview (and the approval UI that renders it) only ever sees
+        // the masked form.
+        personal_number_masked: personalNumber ? maskCustomerPersonalNumber(personalNumber) : null,
+      }
+      // PII rule (staging-pii-guard): pending_operations.params never holds
+      // a plaintext personnummer. Encrypted here, same as create_employee;
+      // the executor stores the ciphertext as-is.
+      const { personal_number_masked: _masked, ...paramsBase } = preview
+      const params: Record<string, unknown> = {
+        ...paramsBase,
+        personal_number_encrypted: personalNumber ? encryptCustomerPersonalNumber(personalNumber) : null,
       }
 
       return stagePendingOperation(supabase, companyId, userId, 'create_customer',
-        `Ny kund: ${params.name}`,
+        `Ny kund: ${preview.name as string}`,
         params,
-        params, // params ARE the preview for customers
+        preview,
         actor,
         {
           description: 'Once approved, you can invoice this customer with gnubok_create_invoice using the returned customer_id.',
@@ -4698,6 +4807,9 @@ export const tools: McpTool[] = [
         {
           dryRun: Boolean(args.dry_run),
           idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          // The ciphertext has a random IV, so params differ on every call;
+          // the masked preview is the stable identity of the request.
+          idempotencyParams: preview,
         }
       )
     },

@@ -22,7 +22,12 @@ import {
 } from '@/lib/invoices/rot-rut-rules'
 import { NON_IBAN_CURRENCIES } from '@/lib/invoices/payment-accounts'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import {
+  looksLikeSwedishPersonalNumber,
+  normalizeReroutedPersonalNumber,
+  orgNumberHoldsPersonalNumber,
+  personalNumberDigits,
+} from '@/lib/customers/personal-number-shape'
 import type { AuditAction, Currency } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
@@ -951,6 +956,23 @@ export const CreateCustomerSchema = z.object({
         + 'instead, so it is stored encrypted and masked in list responses.',
     })
   }
+  // An individual's personnummer submitted as org_number is moved into
+  // personal_number by the transform below. Next to a DIFFERENT
+  // personal_number in the same body the two conflict, and guessing which
+  // one the caller meant is worse than a 400.
+  if (
+    customer.personal_number
+    && orgNumberHoldsPersonalNumber(customer.customer_type, customer.org_number)
+    && personalNumberDigits(customer.org_number!) !== personalNumberDigits(customer.personal_number)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['org_number'],
+      message:
+        'org_number looks like a Swedish personal identity number (personnummer) and differs from '
+        + 'personal_number. An individual customer keeps its personnummer in personal_number; leave org_number empty.',
+    })
+  }
   if (
     (customer.invoice_email_cc_addresses?.length ?? 0)
     + (customer.invoice_email_bcc_addresses?.length ?? 0)
@@ -961,6 +983,21 @@ export const CreateCustomerSchema = z.object({
       path: ['invoice_email_cc_addresses'],
       message: `At most ${MAX_INVOICE_EMAIL_COPY_RECIPIENTS} customer invoice copy recipients are allowed in total`,
     })
+  }
+}).transform((customer) => {
+  // A personnummer-shaped org_number on customer_type='individual' IS the
+  // personnummer, submitted in the wrong field (the MCP create tool had no
+  // personal_number input until 2026-08-21, and the v1 docs long said
+  // "org_number accepted as input" for individuals). Nothing masks
+  // org_number, so it is moved into personal_number, where the routes
+  // encrypt it and every read returns ********-1234, and org_number is left
+  // empty. With an equal personal_number already present only the duplicate
+  // is dropped; an unequal one was refused above.
+  if (!orgNumberHoldsPersonalNumber(customer.customer_type, customer.org_number)) return customer
+  return {
+    ...customer,
+    org_number: undefined,
+    personal_number: customer.personal_number || normalizeReroutedPersonalNumber(customer.org_number!),
   }
 })
 

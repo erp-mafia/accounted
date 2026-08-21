@@ -176,9 +176,16 @@ describe('tools/list payload size guard', () => {
     //     longer needs a second staged update after create. The property has
     //     no description (name + maxLength are the whole contract); headroom
     //     before the change was ~11 tokens, so even that minimal form crossed.
+    //   * 59.75K to 59.85K with personal_number on gnubok_create_customer: a
+    //     private person's personnummer had no input at all on the MCP path,
+    //     so agents put it in org_number, where nothing masks it (GDPR art.
+    //     5.1 c; 134 such rows across 10 companies on prod). The property is
+    //     the contract; its description and the org_number/payment_terms
+    //     descriptions were trimmed to one short sentence first; headroom
+    //     before the change was ~11 tokens, so even the trimmed form crossed.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(59_750)
+    expect(approxTokens).toBeLessThan(59_850)
   })
 })

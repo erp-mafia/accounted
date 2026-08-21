@@ -729,6 +729,79 @@ describe('CreateCustomerSchema', () => {
   })
 })
 
+// Where an individual's personnummer lands (#1707 follow-up). Synthetic
+// personnummer throughout, never a real one.
+describe('CreateCustomerSchema: personnummer placement', () => {
+  it('moves a personnummer-shaped org_number on an individual into personal_number', () => {
+    const result = CreateCustomerSchema.safeParse({
+      name: 'Anna Andersson',
+      customer_type: 'individual',
+      org_number: '19900101-1234',
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.personal_number).toBe('19900101-1234')
+      expect(result.data.org_number).toBeUndefined()
+    }
+  })
+
+  it('strips whitespace from the moved value so it matches the personnummer input forms', () => {
+    const result = CreateCustomerSchema.safeParse({
+      name: 'Anna Andersson',
+      customer_type: 'individual',
+      org_number: '19900101 1234',
+    })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.personal_number).toBe('199001011234')
+  })
+
+  it('drops org_number when it duplicates personal_number', () => {
+    const result = CreateCustomerSchema.safeParse({
+      name: 'Anna Andersson',
+      customer_type: 'individual',
+      org_number: '199001011234',
+      personal_number: '19900101-1234',
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.personal_number).toBe('19900101-1234')
+      expect(result.data.org_number).toBeUndefined()
+    }
+  })
+
+  it('rejects an org_number that is a different personnummer than personal_number', () => {
+    const result = CreateCustomerSchema.safeParse({
+      name: 'Anna Andersson',
+      customer_type: 'individual',
+      org_number: '19850505-5555',
+      personal_number: '19900101-1234',
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.join('.') === 'org_number')).toBe(true)
+    }
+  })
+
+  it('still rejects a personnummer-shaped org_number on a business customer', () => {
+    const result = CreateCustomerSchema.safeParse(validCustomer({ org_number: '19900101-1234' }))
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues.some((issue) => issue.path.join('.') === 'org_number')).toBe(true)
+    }
+  })
+
+  it('leaves a legal-entity organisationsnummer alone on every customer_type', () => {
+    for (const customer_type of ['individual', 'swedish_business'] as const) {
+      const result = CreateCustomerSchema.safeParse({ name: 'X', customer_type, org_number: '556677-8899' })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.org_number).toBe('556677-8899')
+        expect(result.data.personal_number).toBeUndefined()
+      }
+    }
+  })
+})
+
 // ============================================================
 // Supplier schemas
 // ============================================================

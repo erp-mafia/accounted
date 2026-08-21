@@ -174,6 +174,12 @@ function CustomerPreview({ data }: { data: Record<string, unknown> }) {
           <span className="font-mono">{String(data.org_number)}</span>
         </>
       ) : null}
+      {data.personal_number_masked ? (
+        <>
+          <span className="text-muted-foreground">Personnr</span>
+          <span className="font-mono">{String(data.personal_number_masked)}</span>
+        </>
+      ) : null}
     </div>
   )
 }
