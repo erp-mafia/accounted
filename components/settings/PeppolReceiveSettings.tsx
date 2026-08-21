@@ -150,7 +150,7 @@ export function PeppolReceiveSettings() {
 
   return (
     <SettingsGroup label={t('heading')}>
-      <SettingsRow label={t('access_label')} align="start">
+      <SettingsRow label={t('access_label')} align="baseline">
         <div className="min-w-0 flex-1 space-y-1 text-sm">
           {loadFailed ? (
             <SettingsRowNote>{t('load_failed')}</SettingsRowNote>

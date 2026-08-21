@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
-import { createMockRequest, createQueuedMockSupabase } from '@/tests/helpers'
+import { createMockRequest, createMockRouteParams, createQueuedMockSupabase } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 const service = createQueuedMockSupabase()
@@ -61,7 +61,7 @@ describe('POST /api/settings/peppol/access', () => {
   })
 
   function post(body: unknown = {}) {
-    return POST(createMockRequest('/api/settings/peppol/access', { method: 'POST', body }))
+    return POST(createMockRequest('/api/settings/peppol/access', { method: 'POST', body }), createMockRouteParams({}))
   }
 
   it('returns 401 when not authenticated', async () => {

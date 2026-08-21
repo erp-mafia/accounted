@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
-import { createMockRequest, createQueuedMockSupabase } from '@/tests/helpers'
+import { createMockRequest, createMockRouteParams, createQueuedMockSupabase } from '@/tests/helpers'
 import { registerPeppolTransport, type PeppolTransport } from '@/lib/invoices/peppol-transport'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
@@ -90,14 +90,14 @@ describe('/api/settings/peppol', () => {
       supabase: mockSupabase,
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
-    const response = await GET(createMockRequest('/api/settings/peppol'))
+    const response = await GET(createMockRequest('/api/settings/peppol'), createMockRouteParams({}))
     expect(response.status).toBe(401)
   })
 
   it('GET tells the truth when no access point is switched on', async () => {
     delete process.env.PEPPOL_TRANSPORT_PROVIDER
     enqueue({ data: null, error: null })                               // access row (none)
-    const response = await GET(createMockRequest('/api/settings/peppol'))
+    const response = await GET(createMockRequest('/api/settings/peppol'), createMockRouteParams({}))
     const body = await response.json()
     expect(response.status).toBe(200)
     expect(body.data).toMatchObject({
@@ -113,7 +113,7 @@ describe('/api/settings/peppol', () => {
     enqueue({ data: [registeredRow], error: null })
     enqueue({ data: enabledAccess, error: null })                       // access row
     service.enqueue({ data: null, error: null, count: 3 })              // sends used
-    const response = await GET(createMockRequest('/api/settings/peppol'))
+    const response = await GET(createMockRequest('/api/settings/peppol'), createMockRouteParams({}))
     const body = await response.json()
     expect(response.status).toBe(200)
     expect(body.data.receiving_supported).toBe(true)
@@ -124,12 +124,12 @@ describe('/api/settings/peppol', () => {
 
   it('POST refuses without a transport and in the sandbox', async () => {
     delete process.env.PEPPOL_TRANSPORT_PROVIDER
-    expect((await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }))).status).toBe(503)
+    expect((await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }), createMockRouteParams({}))).status).toBe(503)
 
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'qvalia'
     unregister = registerPeppolTransport(makeTransport())
     enqueue({ data: { is_sandbox: true }, error: null })
-    const response = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }))
+    const response = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }), createMockRouteParams({}))
     expect(response.status).toBe(403)
     expect((await response.json()).error.code).toBe('PEPPOL_SANDBOX_NOT_ALLOWED')
   })
@@ -139,14 +139,14 @@ describe('/api/settings/peppol', () => {
     unregister = registerPeppolTransport(transport)
     enqueue({ data: { is_sandbox: false }, error: null })
     service.enqueue({ data: null, error: null })                        // no access row
-    const locked = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }))
+    const locked = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }), createMockRouteParams({}))
     expect(locked.status).toBe(403)
     expect((await locked.json()).error.code).toBe('PEPPOL_ACCESS_REQUIRED')
 
     reset(); service.reset()
     enqueue({ data: { is_sandbox: false }, error: null })
     service.enqueue({ data: { ...enabledAccess, receive_enabled: false }, error: null })
-    const sendOnly = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }))
+    const sendOnly = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }), createMockRouteParams({}))
     expect(sendOnly.status).toBe(403)
     expect((await sendOnly.json()).error.code).toBe('PEPPOL_RECEIVING_NOT_ENABLED')
     expect(transport.registerRecipient).not.toHaveBeenCalled()
@@ -162,7 +162,7 @@ describe('/api/settings/peppol', () => {
     service.enqueue({ data: { id: 'reg-1' }, error: null })    // insert pending
     service.enqueue({ data: registeredRow, error: null })      // finalize
 
-    const response = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }))
+    const response = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }), createMockRouteParams({}))
     const body = await response.json()
     expect(response.status).toBe(201)
     expect(body.data.registration).toMatchObject({ status: 'registered', participant_scheme: '0007' })
@@ -174,7 +174,7 @@ describe('/api/settings/peppol', () => {
     enqueue({ data: { is_sandbox: false }, error: null })
     service.enqueue({ data: enabledAccess, error: null })
     enqueue({ data: { org_number: '800101-1234', company_name: 'Firma', vat_number: null, city: null, country: 'SE' }, error: null })
-    const response = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }))
+    const response = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }), createMockRouteParams({}))
     expect(response.status).toBe(422)
     expect((await response.json()).error.code).toBe('PEPPOL_REGISTRATION_PERSONAL_NUMBER')
   })
@@ -184,13 +184,13 @@ describe('/api/settings/peppol', () => {
     unregister = registerPeppolTransport(transport)
     service.enqueue({ data: [registeredRow], error: null })
     service.enqueue({ data: { ...registeredRow, status: 'deregistered', deregistered_at: '2026-08-21T17:00:00.000Z' }, error: null })
-    const ok = await DELETE(createMockRequest('/api/settings/peppol', { method: 'DELETE' }))
+    const ok = await DELETE(createMockRequest('/api/settings/peppol', { method: 'DELETE' }), createMockRouteParams({}))
     expect(ok.status).toBe(200)
     expect((await ok.json()).data.registration.status).toBe('deregistered')
     expect(transport.unregisterRecipient).toHaveBeenCalledWith({ scheme: '0007', identifier: '5595386219' })
 
     service.enqueue({ data: [], error: null })
-    const missing = await DELETE(createMockRequest('/api/settings/peppol', { method: 'DELETE' }))
+    const missing = await DELETE(createMockRequest('/api/settings/peppol', { method: 'DELETE' }), createMockRouteParams({}))
     expect(missing.status).toBe(404)
   })
 })
