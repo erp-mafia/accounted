@@ -8,6 +8,7 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getAiStatus } from '@/lib/ai'
 import { gatherCandidates } from '@/lib/agent/categorize/candidates'
+import { gatherUnderlag } from '@/lib/agent/categorize/underlag'
 import { selectAccount } from '@/lib/agent/categorize/select-account'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { EntityType, Transaction } from '@/types'
@@ -80,7 +81,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const { data: tx } = await supabase
     .from('transactions')
-    .select('id, merchant_name, description, original_description, amount, date, currency, category, is_business')
+    .select('id, merchant_name, description, original_description, amount, date, currency, category, is_business, document_id')
     .eq('id', parsed.data.transaction_id)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -92,6 +93,18 @@ export async function POST(request: Request): Promise<Response> {
   ])
 
   try {
+    // Gather the matched receipt/invoice text when the caller didn't supply it:
+    // this is what lifts the cold-start case — the model reads the actual
+    // supplier + line items, not just the bank line. Best-effort; '' if none.
+    const underlag =
+      parsed.data.underlag ??
+      (await gatherUnderlag(
+        supabase,
+        companyId,
+        (tx as Transaction).id,
+        (tx as { document_id?: string | null }).document_id,
+      ))
+
     const candidates = await gatherCandidates(supabase, companyId, tx as Transaction)
     const selection = await selectAccount({
       transaction: {
@@ -101,7 +114,7 @@ export async function POST(request: Request): Promise<Response> {
         date: (tx as Transaction).date,
         currency: (tx as Transaction).currency,
       },
-      underlag: parsed.data.underlag,
+      underlag,
       candidates,
       entityType: ((company?.entity_type as EntityType | undefined) ?? 'enskild_firma'),
       vatRegistered: settings?.vat_registered ?? false,

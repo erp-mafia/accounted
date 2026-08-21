@@ -18,6 +18,8 @@ const aiStatus = vi.fn()
 vi.mock('@/lib/ai', () => ({ getAiStatus: () => aiStatus() }))
 const gatherCandidates = vi.fn()
 vi.mock('@/lib/agent/categorize/candidates', () => ({ gatherCandidates: (...a: unknown[]) => gatherCandidates(...a) }))
+const gatherUnderlag = vi.fn()
+vi.mock('@/lib/agent/categorize/underlag', () => ({ gatherUnderlag: (...a: unknown[]) => gatherUnderlag(...a) }))
 const selectAccount = vi.fn()
 vi.mock('@/lib/agent/categorize/select-account', () => ({ selectAccount: (...a: unknown[]) => selectAccount(...a) }))
 
@@ -54,6 +56,7 @@ beforeEach(() => {
   requireCapability.mockResolvedValue(null)
   aiStatus.mockReturnValue({ configured: true })
   gatherCandidates.mockResolvedValue([{ account: '5410', label: 'Material', vatTreatment: 'standard_25', source: 'counterparty_template', confidence: 0.9 }])
+  gatherUnderlag.mockResolvedValue('Kvitto: Biltema, totalt 499 SEK.')
   selectAccount.mockResolvedValue({
     account: '5410', category: null, vatTreatment: 'standard_25', reverseCharge: false,
     confidence: 0.86, modelConfidence: 'high', agreement: 1, reasoning: 'r',
@@ -101,9 +104,18 @@ describe('POST /api/agent/categorize', () => {
     expect(b.data.account).toBe('5410')
     expect(b.data.confidence).toBe(0.86)
     expect(b.data.candidates[0].account).toBe('5410')
-    // entity type + vat_registered threaded from the company rows; underlag + samples passed through
+    // A caller-supplied underlag is used verbatim (no server gather).
+    expect(gatherUnderlag).not.toHaveBeenCalled()
     expect(selectAccount).toHaveBeenCalledWith(
       expect.objectContaining({ entityType: 'aktiebolag', vatRegistered: true, underlag: 'Biltema AB 499 kr', samples: 3 }),
+    )
+  })
+
+  it('gathers underlag server-side when the caller did not supply it', async () => {
+    await POST(createMockRequest('/x', { method: 'POST', body: body() }))
+    expect(gatherUnderlag).toHaveBeenCalled()
+    expect(selectAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ underlag: 'Kvitto: Biltema, totalt 499 SEK.' }),
     )
   })
 })
