@@ -1330,6 +1330,28 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bolaget är inte registrerat för Peppol-mottagning.',
     message_en: 'The company is not registered for Peppol receiving.',
   },
+  // Peppol access is granted per company by the operators (#546): locked by
+  // default, requested from settings, enabled with a sending cap.
+  PEPPOL_ACCESS_REQUIRED: {
+    httpStatus: 403,
+    message_sv: 'Peppol är inte aktiverat för det här bolaget. Begär åtkomst under Inställningar > Fakturering > E-faktura via Peppol, så aktiverar vi det.',
+    message_en: 'Peppol is not enabled for this company. Request access under Settings > Invoicing > E-invoicing via Peppol and we will enable it.',
+  },
+  PEPPOL_SEND_LIMIT_REACHED: {
+    httpStatus: 409,
+    message_sv: 'Bolaget har använt sina Peppol-sändningar. Hör av dig till support för fler.',
+    message_en: 'The company has used its Peppol sends. Contact support for more.',
+  },
+  PEPPOL_RECEIVING_NOT_ENABLED: {
+    httpStatus: 403,
+    message_sv: 'Mottagning via Peppol är inte aktiverad för det här bolaget. Hör av dig till support så öppnar vi en plats.',
+    message_en: 'Receiving via Peppol is not enabled for this company. Contact support and we will open a slot.',
+  },
+  PEPPOL_ACCESS_ALREADY_ENABLED: {
+    httpStatus: 409,
+    message_sv: 'Peppol är redan aktiverat för bolaget.',
+    message_en: 'Peppol is already enabled for the company.',
+  },
   PEPPOL_REGISTRATION_CAP_REACHED: {
     httpStatus: 409,
     message_sv: 'Alla platser för Peppol-mottagning är upptagna just nu. Hör av dig till support så öppnar vi fler. Att skicka e-fakturor fungerar ändå.',

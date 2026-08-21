@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { useCallback, useEffect, useState } from 'react'
+import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -22,16 +23,28 @@ interface PeppolRegistrationView {
   last_error: string | null
 }
 
+interface PeppolAccessView {
+  status: 'none' | 'requested' | 'enabled' | 'disabled'
+  send_enabled: boolean
+  receive_enabled: boolean
+  max_sends: number | null
+  sent_count: number
+  remaining_sends: number | null
+}
+
 interface PeppolSettingsPayload {
   transport: { available: boolean }
   receiving_supported: boolean
+  access: PeppolAccessView
   registration: PeppolRegistrationView | null
 }
 
 /**
- * Receiving e-invoices via Peppol: publishes the company's 0007:orgnr through
- * the contracted Access Point. One switch, the truth about its state next to
- * it. Sending needs no registration, so this row is only about receiving.
+ * E-invoicing via Peppol for one company. Access is granted per company by
+ * the operators (it costs per document and receiving consumes a contracted
+ * slot), so the first row is the grant itself: ask, wait, see what you got.
+ * Receiving is a second, separate grant and its switch publishes the
+ * company's 0007:orgnr through the Access Point.
  */
 export function PeppolReceiveSettings() {
   const t = useTranslations('settings_peppol')
@@ -41,6 +54,7 @@ export function PeppolReceiveSettings() {
   const [state, setState] = useState<PeppolSettingsPayload | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [isRequesting, setIsRequesting] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -59,11 +73,39 @@ export function PeppolReceiveSettings() {
     void load()
   }, [load])
 
+  const localeKey = locale.startsWith('sv') ? 'sv' : 'en'
+  const access = state?.access ?? null
   const registration = state?.registration ?? null
   const isOn = registration?.status === 'registered' || registration?.status === 'pending'
-  const available = !!state?.transport.available && !!state?.receiving_supported
+  const transportAvailable = !!state?.transport.available
+  const receivingAvailable = transportAvailable && !!state?.receiving_supported && !!access?.receive_enabled
 
-  const toggle = useCallback(async (next: boolean) => {
+  const requestAccess = useCallback(async () => {
+    setIsRequesting(true)
+    try {
+      const response = await fetch('/api/settings/peppol/access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const body = await response.json().catch(() => null) as {
+        error?: { code?: string; message?: string; message_en?: string }
+      } | null
+      if (!response.ok) throw body?.error ?? new Error()
+      toast({ title: t('request_sent_title'), description: t('request_sent_description') })
+      await load()
+    } catch (error) {
+      toast({
+        title: t('request_failed_title'),
+        description: getUserErrorMessage(error, { locale: localeKey }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsRequesting(false)
+    }
+  }, [load, localeKey, t, toast])
+
+  const toggleReceiving = useCallback(async (next: boolean) => {
     setIsSaving(true)
     try {
       const response = await fetch('/api/settings/peppol', { method: next ? 'POST' : 'DELETE' })
@@ -79,43 +121,85 @@ export function PeppolReceiveSettings() {
     } catch (error) {
       toast({
         title: t('toast_failed_title'),
-        description: getUserErrorMessage(error, { locale: locale.startsWith('sv') ? 'sv' : 'en' }),
+        description: getUserErrorMessage(error, { locale: localeKey }),
         variant: 'destructive',
       })
       await load()
     } finally {
       setIsSaving(false)
     }
-  }, [load, locale, t, toast])
+  }, [load, localeKey, t, toast])
 
-  const statusLabel = (() => {
-    if (!registration || registration.status === 'deregistered') return t('status_off')
-    return t(`status_${registration.status}`)
+  const accessLine = (() => {
+    if (!access) return null
+    switch (access.status) {
+      case 'enabled': return t('access_enabled')
+      case 'requested': return t('access_requested')
+      case 'disabled': return t('access_disabled')
+      default: return t('access_none')
+    }
   })()
+  const sendsLine = access?.send_enabled
+    ? access.max_sends === null
+      ? t('sends_unlimited', { used: access.sent_count })
+      : t('sends_used', { used: access.sent_count, max: access.max_sends })
+    : null
+  const registrationStatusLabel = !registration || registration.status === 'deregistered'
+    ? t('status_off')
+    : t(`status_${registration.status}`)
 
   return (
     <SettingsGroup label={t('heading')}>
+      <SettingsRow label={t('access_label')} align="start">
+        <div className="min-w-0 flex-1 space-y-1 text-sm">
+          {loadFailed ? (
+            <SettingsRowNote>{t('load_failed')}</SettingsRowNote>
+          ) : state === null ? (
+            <SettingsRowNote>{t('loading')}</SettingsRowNote>
+          ) : !transportAvailable ? (
+            <SettingsRowNote>{t('provider_required')}</SettingsRowNote>
+          ) : (
+            <>
+              <span>{accessLine}</span>
+              {sendsLine && <SettingsRowNote className="block tabular-nums">{sendsLine}</SettingsRowNote>}
+            </>
+          )}
+        </div>
+        {state !== null && transportAvailable && (access?.status === 'none' || access?.status === 'disabled') && (
+          <SettingsRowEnd>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void requestAccess()}
+              disabled={isRequesting || !canWrite}
+            >
+              {isRequesting ? t('request_sending') : t('request_button')}
+            </Button>
+          </SettingsRowEnd>
+        )}
+      </SettingsRow>
+
       <SettingsRow label={t('enable_label')} help={t('enable_help')}>
         <SettingsRowEnd>
           <Switch
             checked={isOn}
-            onCheckedChange={(value) => void toggle(value)}
-            disabled={isSaving || !canWrite || !available || state === null}
+            onCheckedChange={(value) => void toggleReceiving(value)}
+            disabled={isSaving || !canWrite || !receivingAvailable || state === null}
             aria-label={t('enable_label')}
           />
         </SettingsRowEnd>
       </SettingsRow>
       <SettingsRow label={t('status_label')} borderless>
         <div className="min-w-0 space-y-1 text-sm">
-          {loadFailed ? (
-            <SettingsRowNote>{t('load_failed')}</SettingsRowNote>
-          ) : state === null ? (
-            <SettingsRowNote>{t('loading')}</SettingsRowNote>
-          ) : !available ? (
+          {state === null || loadFailed ? (
+            <SettingsRowNote>{loadFailed ? t('load_failed') : t('loading')}</SettingsRowNote>
+          ) : !transportAvailable ? (
             <SettingsRowNote>{t('provider_required')}</SettingsRowNote>
+          ) : !receivingAvailable && !isOn ? (
+            <SettingsRowNote>{t('receive_not_enabled')}</SettingsRowNote>
           ) : (
             <>
-              <span>{statusLabel}</span>
+              <span>{registrationStatusLabel}</span>
               {registration && registration.status !== 'deregistered' && (
                 <SettingsRowNote className="block tabular-nums">
                   {t('peppol_id_label')} {registration.participant_scheme}:{registration.participant_identifier}

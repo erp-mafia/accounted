@@ -1023,6 +1023,8 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  * a portable räkenskapsinformation backup.
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
+  // Operator-side Peppol access grant and sending cap: platform configuration, not the company's räkenskapsinformation.
+  peppol_access: 'platform access grant (status, sending cap); no bookkeeping content',
   agent_conversations: 'AI assistant state, not räkenskapsinformation',
   agent_memory: 'AI assistant state, not räkenskapsinformation',
   agent_profiles: 'AI assistant state, not räkenskapsinformation',

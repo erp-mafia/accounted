@@ -17,6 +17,7 @@ import {
   stagePeppolDelivery,
   type PeppolDeliverySummary,
 } from '@/lib/invoices/peppol-delivery'
+import { checkPeppolSendPermission } from '@/lib/invoices/peppol-access'
 import { generatePeppolDocumentOrResponse, loadPeppolRecords } from '@/lib/invoices/peppol-document'
 import {
   getPeppolTransport,
@@ -112,6 +113,21 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       }))
     }
 
+    // Access is granted per company by the operators and capped in sends:
+    // refuse before any invoice data is touched.
+    const service = createServiceClient()
+    const permission = await checkPeppolSendPermission({ service, companyId })
+    if (!permission.ok) {
+      return privateNoStore(errorResponseFromCode(permission.code, log, {
+        requestId,
+        details: {
+          access_status: permission.summary.status,
+          max_sends: permission.summary.max_sends,
+          sent_count: permission.summary.sent_count,
+        },
+      }))
+    }
+
     const records = await loadPeppolRecords({ supabase, companyId, invoiceId, log, requestId })
     if (!records.ok) return records.response
     const { invoice, company } = records
@@ -153,7 +169,6 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!generated.ok) return generated.response
     const document = generated.document
 
-    const service = createServiceClient()
     const provider = transport.provider
     // Consolidated Qvalia setup: one provider account for every company. The
     // adapter resolves the account; the lifecycle only needs a stable label.

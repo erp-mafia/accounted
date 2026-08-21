@@ -13,6 +13,11 @@ vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
 }))
 
+const serviceTables = createQueuedMockSupabase()
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => serviceTables.supabase,
+}))
+
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))

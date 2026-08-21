@@ -24,6 +24,13 @@ vi.mock('@/lib/supabase/server', () => ({
 import { DELETE, GET, POST } from '../route'
 
 const user = { id: 'user-1', email: 'owner@example.test' }
+const enabledAccess = {
+  company_id: 'company-1', status: 'enabled', max_sends: 50, receive_enabled: true,
+  requested_at: null, requested_by: null, request_note: null,
+  enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'jakob', disabled_at: null, note: null,
+  created_at: '2026-08-21T16:00:00.000Z', updated_at: '2026-08-21T16:00:00.000Z',
+}
+
 const registeredRow = {
   id: 'reg-1',
   company_id: 'company-1',
@@ -89,12 +96,14 @@ describe('/api/settings/peppol', () => {
 
   it('GET tells the truth when no access point is switched on', async () => {
     delete process.env.PEPPOL_TRANSPORT_PROVIDER
+    enqueue({ data: null, error: null })                               // access row (none)
     const response = await GET(createMockRequest('/api/settings/peppol'))
     const body = await response.json()
     expect(response.status).toBe(200)
     expect(body.data).toMatchObject({
       transport: { available: false },
       receiving_supported: false,
+      access: { status: 'none', send_enabled: false },
       registration: null,
     })
   })
@@ -102,10 +111,13 @@ describe('/api/settings/peppol', () => {
   it('GET returns the live registration when the adapter supports receiving', async () => {
     unregister = registerPeppolTransport(makeTransport())
     enqueue({ data: [registeredRow], error: null })
+    enqueue({ data: enabledAccess, error: null })                       // access row
+    service.enqueue({ data: null, error: null, count: 3 })              // sends used
     const response = await GET(createMockRequest('/api/settings/peppol'))
     const body = await response.json()
     expect(response.status).toBe(200)
     expect(body.data.receiving_supported).toBe(true)
+    expect(body.data.access).toMatchObject({ status: 'enabled', send_enabled: true, receive_enabled: true, sent_count: 3, remaining_sends: 47 })
     expect(body.data.registration).toMatchObject({ status: 'registered', participant_identifier: '5595386219' })
     expect(body.data.registration).not.toHaveProperty('business_card')
   })
@@ -122,10 +134,29 @@ describe('/api/settings/peppol', () => {
     expect((await response.json()).error.code).toBe('PEPPOL_SANDBOX_NOT_ALLOWED')
   })
 
+  it('POST refuses receiving without an access grant, and without the receiving flag', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    enqueue({ data: { is_sandbox: false }, error: null })
+    service.enqueue({ data: null, error: null })                        // no access row
+    const locked = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }))
+    expect(locked.status).toBe(403)
+    expect((await locked.json()).error.code).toBe('PEPPOL_ACCESS_REQUIRED')
+
+    reset(); service.reset()
+    enqueue({ data: { is_sandbox: false }, error: null })
+    service.enqueue({ data: { ...enabledAccess, receive_enabled: false }, error: null })
+    const sendOnly = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }))
+    expect(sendOnly.status).toBe(403)
+    expect((await sendOnly.json()).error.code).toBe('PEPPOL_RECEIVING_NOT_ENABLED')
+    expect(transport.registerRecipient).not.toHaveBeenCalled()
+  })
+
   it('POST registers the company and returns the minimized registration', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
     enqueue({ data: { is_sandbox: false }, error: null })
+    service.enqueue({ data: enabledAccess, error: null })               // access grant with receiving
     enqueue({ data: { org_number: '559538-6219', company_name: 'Arcim Technology AB', vat_number: 'SE559538621901', city: 'Stockholm', country: 'SE' }, error: null })
     service.enqueue({ data: [], error: null })                 // existing
     service.enqueue({ data: { id: 'reg-1' }, error: null })    // insert pending
@@ -141,6 +172,7 @@ describe('/api/settings/peppol', () => {
   it('POST maps a personnummer-based company to a 422 with the reason', async () => {
     unregister = registerPeppolTransport(makeTransport())
     enqueue({ data: { is_sandbox: false }, error: null })
+    service.enqueue({ data: enabledAccess, error: null })
     enqueue({ data: { org_number: '800101-1234', company_name: 'Firma', vat_number: null, city: null, country: 'SE' }, error: null })
     const response = await POST(createMockRequest('/api/settings/peppol', { method: 'POST' }))
     expect(response.status).toBe(422)

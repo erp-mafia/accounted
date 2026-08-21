@@ -3,6 +3,7 @@ import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { ensureInitialized } from '@/lib/init'
+import { getPeppolAccess, getPeppolAccessSummary } from '@/lib/invoices/peppol-access'
 import {
   deregisterCompanyFromPeppolReceiving,
   getPeppolRegistration,
@@ -52,10 +53,12 @@ export const GET = withRouteContext(
       const registration = resolved
         ? await getPeppolRegistration({ supabase, companyId, provider: resolved.provider })
         : null
+      const access = await getPeppolAccessSummary({ supabase, service: createServiceClient(), companyId })
       return privateNoStore(NextResponse.json({
         data: {
           transport: availability,
           receiving_supported: !!resolved?.transport.registerRecipient,
+          access,
           registration: registrationPayload(registration),
         },
       }))
@@ -75,6 +78,14 @@ export const POST = withRouteContext(
     }
     if (await isSandboxCompany(supabase, companyId)) {
       return privateNoStore(errorResponseFromCode('PEPPOL_SANDBOX_NOT_ALLOWED', log, { requestId }))
+    }
+    // Receiving consumes a contracted tenant slot: operators grant it per company.
+    const access = await getPeppolAccess(createServiceClient(), companyId)
+    if (!access || access.status !== 'enabled') {
+      return privateNoStore(errorResponseFromCode('PEPPOL_ACCESS_REQUIRED', log, { requestId }))
+    }
+    if (!access.receive_enabled) {
+      return privateNoStore(errorResponseFromCode('PEPPOL_RECEIVING_NOT_ENABLED', log, { requestId }))
     }
 
     const { data: settings, error: settingsError } = await supabase

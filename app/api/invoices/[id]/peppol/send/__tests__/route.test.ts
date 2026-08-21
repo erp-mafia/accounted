@@ -16,6 +16,7 @@ import {
 } from '@/lib/invoices/peppol-transport'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const serviceTables = createQueuedMockSupabase()
 const requireAuthMock = vi.fn()
 const serviceRpcMock = vi.fn()
 const issueAndBookMock = vi.fn()
@@ -37,7 +38,10 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 vi.mock('@/lib/supabase/server', () => ({
-  createServiceClient: () => ({ rpc: (...args: unknown[]) => serviceRpcMock(...args) }),
+  createServiceClient: () => ({
+    from: (...args: unknown[]) => serviceTables.supabase.from(...(args as [string])),
+    rpc: (...args: unknown[]) => serviceRpcMock(...args),
+  }),
 }))
 
 vi.mock('@/lib/invoices/issue-and-book-invoice', () => ({
@@ -135,6 +139,21 @@ function makeTransport(overrides: Partial<PeppolTransport> = {}): PeppolTranspor
   }
 }
 
+const accessRow = {
+  company_id: 'company-1',
+  status: 'enabled',
+  max_sends: 50,
+  receive_enabled: false,
+  requested_at: null, requested_by: null, request_note: null,
+  enabled_at: '2026-08-21T16:00:00.000Z', enabled_by: 'jakob', disabled_at: null, note: null,
+  created_at: '2026-08-21T16:00:00.000Z', updated_at: '2026-08-21T16:00:00.000Z',
+}
+/** Peppol access is per company: grant it (service reads access row, then the send count). */
+function grantAccess(maxSends: number | null = 50, sent = 0) {
+  serviceTables.enqueue({ data: { ...accessRow, max_sends: maxSends }, error: null })
+  serviceTables.enqueue({ data: null, error: null, count: sent })
+}
+
 /** The service-role RPC echoes the event's status back as the projection. */
 function serviceRpcEcho() {
   serviceRpcMock.mockImplementation(async (_fn: string, args: Record<string, unknown>) => ({
@@ -157,6 +176,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    serviceTables.reset()
     serviceRpcEcho()
     process.env.PEPPOL_TRANSPORT_PROVIDER = 'qvalia'
     process.env.QVALIA_PARTNER_REG_NO = 'SE5560000000'
@@ -208,8 +228,31 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
     expect(body.error.details.reason).toBe('provider_selection_required')
   })
 
+  it('refuses a company without a Peppol grant before touching the invoice', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    serviceTables.enqueue({ data: null, error: null })              // no access row
+    const response = await send()
+    expect(response.status).toBe(403)
+    expect((await response.json()).error.code).toBe('PEPPOL_ACCESS_REQUIRED')
+    expect(transport.submit).not.toHaveBeenCalled()
+  })
+
+  it('refuses once the company has used its sending cap', async () => {
+    const transport = makeTransport()
+    unregister = registerPeppolTransport(transport)
+    grantAccess(5, 5)
+    const response = await send()
+    expect(response.status).toBe(409)
+    const body = await response.json()
+    expect(body.error.code).toBe('PEPPOL_SEND_LIMIT_REACHED')
+    expect(body.error.details).toMatchObject({ max_sends: 5, sent_count: 5 })
+    expect(transport.submit).not.toHaveBeenCalled()
+  })
+
   it('returns 404 when the invoice is not in the active company', async () => {
     unregister = registerPeppolTransport(makeTransport())
+    grantAccess()
     enqueue({ data: null, error: { message: 'not found' } })
     const response = await send()
     expect(response.status).toBe(404)
@@ -218,6 +261,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
 
   it('rejects cancelled and proforma invoices with a state conflict', async () => {
     unregister = registerPeppolTransport(makeTransport())
+    grantAccess()
     enqueue({ data: invoiceRow({ status: 'cancelled' }), error: null })
     enqueue({ data: company, error: null })
     const response = await send()
@@ -235,6 +279,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
       }),
     })
     unregister = registerPeppolTransport(transport)
+    grantAccess()
     enqueue({ data: invoiceRow(), error: null })
     enqueue({ data: company, error: null })
     enqueue({ data: stagedDelivery, error: null })
@@ -252,6 +297,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
   it('looks up, submits the staged XML and records the lifecycle for an already issued invoice', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
+    grantAccess()
     enqueue({ data: invoiceRow(), error: null })
     enqueue({ data: company, error: null })
     enqueue({ data: stagedDelivery, error: null })
@@ -294,6 +340,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
   it('issues and books a draft only after the network accepted it', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
+    grantAccess()
     enqueue({ data: invoiceRow({ status: 'draft' }), error: null })
     enqueue({ data: company, error: null })
     enqueue({ data: stagedDelivery, error: null })
@@ -315,6 +362,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
 
   it('reports a failed issuance without pretending the network send did not happen', async () => {
     unregister = registerPeppolTransport(makeTransport())
+    grantAccess()
     issueAndBookMock.mockResolvedValue({ ok: false, errorCode: 'INVOICE_MARK_SENT_RACE' })
     enqueue({ data: invoiceRow({ status: 'draft' }), error: null })
     enqueue({ data: company, error: null })
@@ -334,6 +382,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
   it('replays idempotently when the exact XML was already handed to the network', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
+    grantAccess()
     enqueue({ data: invoiceRow(), error: null })
     enqueue({ data: company, error: null })
     enqueue({
@@ -360,6 +409,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
       ),
     })
     unregister = registerPeppolTransport(transport)
+    grantAccess()
     enqueue({ data: invoiceRow({ status: 'draft' }), error: null })
     enqueue({ data: company, error: null })
     enqueue({ data: stagedDelivery, error: null })
@@ -386,6 +436,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
       ),
     })
     unregister = registerPeppolTransport(transport)
+    grantAccess()
     enqueue({ data: invoiceRow(), error: null })
     enqueue({ data: company, error: null })
     enqueue({ data: stagedDelivery, error: null })
@@ -405,6 +456,7 @@ describe('POST /api/invoices/[id]/peppol/send', () => {
   it('refuses to resend an exact document the access point already rejected', async () => {
     const transport = makeTransport()
     unregister = registerPeppolTransport(transport)
+    grantAccess()
     enqueue({ data: invoiceRow(), error: null })
     enqueue({ data: company, error: null })
     enqueue({
