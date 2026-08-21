@@ -1928,7 +1928,15 @@
     "invite_expires": "Går ut {date}",
     "revoke_aria": "Återkalla inbjudan till {email}",
     "revoked_toast": "Inbjudan återkallades.",
-    "revoke_failed": "Inbjudan kunde inte återkallas."
+    "revoke_failed": "Inbjudan kunde inte återkallas.",
+    "resend_aria": "Skicka inbjudan till {email} igen",
+    "resend_toast": "Inbjudan skickades igen.",
+    "resend_failed": "Inbjudan kunde inte skickas igen.",
+    "invite_link_sent": "Inbjudan mejlades till {email}. Länken kan även delas direkt.",
+    "invite_link_not_sent": "Mejlet till {email} kunde inte skickas. Inbjudan gäller ändå, dela länken direkt.",
+    "invite_link_copy_action": "Kopiera inbjudningslänk",
+    "invite_link_copied_toast": "Inbjudningslänken kopierades.",
+    "invite_link_copy_failed": "Länken kunde inte kopieras."
   },
   "settings_booking_templates": {
     "title": "Bokföringsmallar",

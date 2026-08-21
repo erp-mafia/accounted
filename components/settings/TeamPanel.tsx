@@ -2,7 +2,7 @@
 
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
-import { Loader2, Mail, Plus, Trash2 } from 'lucide-react'
+import { Loader2, Mail, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -49,6 +49,19 @@ interface TeamInvitation {
 }
 
 /**
+ * The shareable accept link from the latest invite create/re-send response.
+ * Raw tokens are never stored server-side (only their hash), so the link
+ * exists exactly once: here, until the next navigation. It is kept visible
+ * so a failed mail send never dead-ends the inviter (the Arbore case: the
+ * invitation quietly waits for a mail that never arrives).
+ */
+interface ShareableInvite {
+  email: string
+  url: string
+  sent: boolean
+}
+
+/**
  * Team roster panel. Read-only for personal teams (exactly the pre-WL-08
  * rendering); on a byrå team where the caller may manage members
  * (canInvite = owner/admin), the same flat rows gain a role select and a
@@ -78,6 +91,8 @@ export function TeamPanel() {
   const [isSending, setIsSending] = useState(false)
   const [changingRoleId, setChangingRoleId] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
+  const [resendingId, setResendingId] = useState<string | null>(null)
+  const [shareInvite, setShareInvite] = useState<ShareableInvite | null>(null)
   // Confirm-up-front (UI convention 10): removal opens a dialog describing
   // the outcome; the DELETE only fires from its confirm button.
   const [removeTarget, setRemoveTarget] = useState<TeamMember | null>(null)
@@ -186,21 +201,61 @@ export function TeamPanel() {
     }
   }
 
-  const handleRevokeInvite = async (inviteId: string) => {
-    setRevokingId(inviteId)
+  const handleRevokeInvite = async (invite: TeamInvitation) => {
+    setRevokingId(invite.id)
     try {
-      const res = await fetch(`/api/team/invite/${inviteId}`, { method: 'DELETE' })
+      const res = await fetch(`/api/team/invite/${invite.id}`, { method: 'DELETE' })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
         toast({ title: errorTitle(data, t('revoke_failed')), variant: 'destructive' })
         return
       }
+      // A revoked invitation's link is dead: never keep offering it.
+      setShareInvite((current) => (current?.email === invite.email ? null : current))
       toast({ title: t('revoked_toast') })
     } catch {
       toast({ title: t('revoke_failed'), variant: 'destructive' })
     } finally {
       setRevokingId(null)
       void fetchMembers()
+    }
+  }
+
+  const handleResendInvite = async (invite: TeamInvitation) => {
+    setResendingId(invite.id)
+    try {
+      const res = await fetch(`/api/team/invite/${invite.id}`, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast({ title: errorTitle(data, t('resend_failed')), variant: 'destructive' })
+        return
+      }
+      const payload = (data as { data?: { email_sent?: boolean; inviteUrl?: string } } | null)?.data
+      if (payload?.inviteUrl) {
+        setShareInvite({
+          email: invite.email,
+          url: payload.inviteUrl,
+          sent: payload.email_sent !== false,
+        })
+      }
+      toast({
+        title: t('resend_toast'),
+        description: payload?.email_sent === false ? t('invite_mail_not_sent') : undefined,
+      })
+      void fetchMembers()
+    } catch {
+      toast({ title: t('resend_failed'), variant: 'destructive' })
+    } finally {
+      setResendingId(null)
+    }
+  }
+
+  const handleCopyInviteLink = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      toast({ title: t('invite_link_copied_toast') })
+    } catch {
+      toast({ title: t('invite_link_copy_failed'), variant: 'destructive' })
     }
   }
 
@@ -221,11 +276,16 @@ export function TeamPanel() {
         toast({ title: errorTitle(data, t('invite_failed')), variant: 'destructive' })
         return
       }
-      const sent = (data as { data?: { email_sent?: boolean } } | null)?.data?.email_sent
+      const payload = (data as { data?: { email_sent?: boolean; inviteUrl?: string } } | null)?.data
+      const sent = payload?.email_sent
+      // Persist the shareable link next to the pending list: a failed send
+      // leaves the invitation valid, and the toast alone is too easy to miss
+      // (the Arbore case), so the recovery path stays visible on the page.
+      if (payload?.inviteUrl) {
+        setShareInvite({ email, url: payload.inviteUrl, sent: sent !== false })
+      }
       toast({
         title: t('invite_sent_toast'),
-        // A failed send leaves the invitation valid: tell the inviter the
-        // mail did not go out so they share the link instead of waiting.
         description: sent === false ? t('invite_mail_not_sent') : undefined,
       })
       setInviteEmail('')
@@ -357,10 +417,24 @@ export function TeamPanel() {
               <Button
                 variant="ghost"
                 size="icon"
+                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                aria-label={t('resend_aria', { email: inv.email })}
+                onClick={() => void handleResendInvite(inv)}
+                disabled={resendingId === inv.id || revokingId === inv.id}
+              >
+                {resendingId === inv.id ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
                 aria-label={t('revoke_aria', { email: inv.email })}
-                onClick={() => void handleRevokeInvite(inv.id)}
-                disabled={revokingId === inv.id}
+                onClick={() => void handleRevokeInvite(inv)}
+                disabled={revokingId === inv.id || resendingId === inv.id}
               >
                 {revokingId === inv.id ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -371,6 +445,36 @@ export function TeamPanel() {
             </div>
           )
         })}
+
+      {/* Shareable accept link from the latest invite/re-send: one sentence,
+          not a banner. The failed-send case is the page's single attn line;
+          the sent case is a quiet muted line with the same copy action, since
+          the link is a legitimate share path either way. */}
+      {canManage && shareInvite && (
+        <div className="px-1 pt-3" role="status" aria-live="polite">
+          {shareInvite.sent ? (
+            <p className="text-[12.5px] leading-5 text-muted-foreground">
+              {t('invite_link_sent', { email: shareInvite.email })}{' '}
+              <button
+                type="button"
+                onClick={() => void handleCopyInviteLink(shareInvite.url)}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                {t('invite_link_copy_action')}
+              </button>
+            </p>
+          ) : (
+            <AttnLine
+              action={{
+                label: t('invite_link_copy_action'),
+                onClick: () => void handleCopyInviteLink(shareInvite.url),
+              }}
+            >
+              {t('invite_link_not_sent', { email: shareInvite.email })}
+            </AttnLine>
+          )}
+        </div>
+      )}
 
       {/* Inline invite: the list's own last row instead of a separate card. */}
       {canManage && (

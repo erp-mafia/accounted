@@ -5,23 +5,13 @@ import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
-import { getEmailService } from '@/lib/email/service'
-import { getSenderForBrand, getBaseUrlForBrand } from '@/lib/email/brand-sender'
-import { resolveBrandForTeam } from '@/lib/branding/resolve'
-import {
-  generateTeamInviteEmailSubject,
-  generateTeamInviteEmailHtml,
-  generateTeamInviteEmailText,
-} from '@/lib/email/invite-templates'
-import { createLogger } from '@/lib/logger'
+import { sendTeamInviteMail } from '@/lib/email/send-team-invite'
 
 // Loads the email extension so getEmailService() returns the Resend
 // implementation instead of the noop default (same reason as the company
 // invite route: without this the invite mail silently no-ops in a fresh
 // process).
 ensureInitialized()
-
-const log = createLogger('team-invite')
 
 /**
  * Kept verbatim from the pre-unfreeze hardcoded 403: personal teams remain
@@ -197,46 +187,17 @@ export async function POST(request: NextRequest) {
     invitationId = (inserted as { id: string }).id
   }
 
-  // Brand mail (WL-13): the byrå team's brand drives sender identity and the
-  // accept link's base URL; a brandless team gets the canonical URL and the
-  // platform sender exactly as before.
-  const brand = await resolveBrandForTeam(teamId)
-  const sender = getSenderForBrand(brand)
-  const appUrl = getBaseUrlForBrand(brand)
-  const inviteUrl = `${appUrl}/invite/${token}`
-
-  // Send the invitation email. Non-blocking like the company-invite mail: a
+  // Brand mail (WL-13) via the shared helper: the byrå team's brand drives
+  // sender identity and the accept link's base URL; a brandless team gets the
+  // canonical URL and the platform sender exactly as before. Non-blocking: a
   // failed send leaves the invitation valid and surfaces email_sent: false so
   // the inviter knows to share the link directly.
-  let emailSent = false
-  const emailService = getEmailService()
-  if (emailService.isConfigured()) {
-    const emailData = {
-      inviterEmail: user.email || '',
-      inviteUrl,
-      appName: sender.brand?.appName,
-    }
-    const result = await emailService.sendEmail({
-      to: email,
-      subject: generateTeamInviteEmailSubject(emailData),
-      html: generateTeamInviteEmailHtml(emailData),
-      text: generateTeamInviteEmailText(emailData),
-      fromName: sender.fromName ?? undefined,
-      fromAddress: sender.fromAddress ?? undefined,
-      replyTo: sender.replyTo ?? undefined,
-    })
-    if (result.success) {
-      emailSent = true
-      log.info('team invite email sent', { to: email, teamId, messageId: result.messageId })
-    } else {
-      log.error('team invite email send failed', new Error(result.error ?? 'unknown'), {
-        to: email,
-        teamId,
-      })
-    }
-  } else {
-    log.warn('email service not configured: team invite email skipped', { to: email, teamId })
-  }
+  const { inviteUrl, emailSent } = await sendTeamInviteMail({
+    teamId,
+    email,
+    inviterEmail: user.email || '',
+    token,
+  })
 
   return NextResponse.json({
     data: {

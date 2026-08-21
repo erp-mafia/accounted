@@ -1928,7 +1928,15 @@
     "invite_expires": "Expires {date}",
     "revoke_aria": "Revoke the invitation to {email}",
     "revoked_toast": "The invitation was revoked.",
-    "revoke_failed": "The invitation could not be revoked."
+    "revoke_failed": "The invitation could not be revoked.",
+    "resend_aria": "Resend the invitation to {email}",
+    "resend_toast": "The invitation was resent.",
+    "resend_failed": "The invitation could not be resent.",
+    "invite_link_sent": "The invitation was emailed to {email}. You can also share the link directly.",
+    "invite_link_not_sent": "The email to {email} could not be sent. The invitation is still valid; share the link directly.",
+    "invite_link_copy_action": "Copy invitation link",
+    "invite_link_copied_toast": "The invitation link was copied.",
+    "invite_link_copy_failed": "The link could not be copied."
   },
   "settings_booking_templates": {
     "title": "Bookkeeping templates",
