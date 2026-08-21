@@ -19,6 +19,13 @@
  *   npx tsx scripts/peppol/qvalia-probe.ts send path/to/invoice.xml
  *       Submits a BIS Billing 3 XML through the adapter. Sandbox only: the
  *       script refuses a production base URL.
+ *   npx tsx scripts/peppol/qvalia-probe.ts webhook
+ *       Shows the partner webhook subscription (URL, event types, auth type).
+ *   npx tsx scripts/peppol/qvalia-probe.ts webhook-configure https://host/api/webhooks/peppol/qvalia
+ *       Creates or updates the partner webhook subscription for all three
+ *       event types and attaches QVALIA_WEBHOOK_SECRET as the api_key header
+ *       (QVALIA_WEBHOOK_HEADER) that our route verifies. Requires the secret
+ *       in the environment; prints the webhook id.
  *
  * Nothing here touches Accounted's database. The API key is never printed.
  */
@@ -66,6 +73,18 @@ async function rawGet(path: string, scheme: 'apikey' | 'raw' = config!.authSchem
   })
 }
 
+async function rawSend(method: 'PUT' | 'POST', path: string, body: unknown): Promise<Response> {
+  return fetch(`${config!.baseUrl}${path}`, {
+    method,
+    headers: {
+      Authorization: headerFor(config!.authScheme),
+      accept: 'application/json',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+}
+
 async function main(): Promise<void> {
   console.log(`Qvalia probe against ${config!.baseUrl} as partner ${config!.partnerRegNo} (account ${config!.accountRegNo})`)
 
@@ -88,6 +107,36 @@ async function main(): Promise<void> {
       await show(
         'GET /partner/{p}/transaction/{a}/invoices/outgoing/status',
         await rawGet(`/partner/${partner}/transaction/${account}/invoices/outgoing/status?includeRead=true&limit=3`),
+      )
+      return
+    }
+    case 'webhook': {
+      await show('GET /partner/{p}/webhook/configure', await rawGet(`/partner/${partner}/webhook/configure`))
+      return
+    }
+    case 'webhook-configure': {
+      if (!argument || !/^https:\/\//.test(argument)) {
+        throw new Error('webhook-configure expects an https URL, e.g. https://app.accounted.se/api/webhooks/peppol/qvalia')
+      }
+      if (!config!.webhookSecret) throw new Error('Set QVALIA_WEBHOOK_SECRET first (openssl rand -hex 32)')
+      const configured = await show(
+        'PUT /partner/{p}/webhook/configure',
+        await rawSend('PUT', `/partner/${partner}/webhook/configure`, {
+          url: argument,
+          types: ['new_document', 'document_delivery', 'document_error'],
+        }),
+      )
+      const webhookId = configured && typeof configured === 'object' && 'id' in configured
+        ? String((configured as { id: unknown }).id)
+        : null
+      if (!webhookId) throw new Error('Qvalia did not return a webhook id')
+      await show(
+        'POST /partner/{p}/webhook/{id}/auth (api_key header)',
+        await rawSend('POST', `/partner/${partner}/webhook/${encodeURIComponent(webhookId)}/auth`, {
+          type: 'api_key',
+          header: config!.webhookHeader,
+          value: config!.webhookSecret,
+        }),
       )
       return
     }
