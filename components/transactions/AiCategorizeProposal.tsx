@@ -34,9 +34,20 @@ interface ProposalDto {
   reverseCharge: boolean
   confidence: number
   agreement: number
+  modelConfidence: 'high' | 'medium' | 'low'
+  fromCandidate: boolean
   reasoning: string
   choice: { kind: 'candidate' | 'category' | 'needs_review' }
   candidates: CandidateDto[]
+}
+
+/** What the dialog needs to log a calibration sample when the user books. */
+export interface AiProposalMeta {
+  account: string
+  confidence: number
+  agreement: number
+  modelConfidence: 'high' | 'medium' | 'low'
+  source: string
 }
 
 type State =
@@ -51,6 +62,8 @@ interface Props {
   open: boolean
   /** Apply an account + VAT to the dialog fields. */
   onApply: (account: string, vat: VatTreatment | 'none') => void
+  /** Surface the proposal metadata so the dialog can log a calibration sample on book. */
+  onProposal?: (meta: AiProposalMeta) => void
 }
 
 type Band = 'sure' | 'likely' | 'review'
@@ -63,7 +76,7 @@ function bandOf(p: ProposalDto): Band {
 
 const BAND_LABEL: Record<Band, string> = { sure: 'Säker', likely: 'Trolig', review: 'Välj konto' }
 
-export default function AiCategorizeProposal({ transactionId, open, onApply }: Props) {
+export default function AiCategorizeProposal({ transactionId, open, onApply, onProposal }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' })
   // Apply the pick to the dialog exactly once per fetch, so the user's later
   // manual edits are never clobbered by a re-render.
@@ -98,15 +111,34 @@ export default function AiCategorizeProposal({ transactionId, open, onApply }: P
     }
   }, [open, transactionId])
 
-  // Pre-fill the dialog once, when a confident proposal with a real account arrives.
+  const reportedRef = useRef(false)
+
+  // When a proposal with a real account arrives: surface its metadata to the
+  // dialog (for calibration logging on book) and pre-fill the fields.
   useEffect(() => {
     if (state.status !== 'ready') return
     const p = state.proposal
-    if (!p.account || appliedRef.current === p.account) return
-    if (bandOf(p) === 'review') return
+    if (!p.account) return
+
+    if (!reportedRef.current) {
+      reportedRef.current = true
+      const source = p.fromCandidate
+        ? (p.candidates.find((c) => c.account === p.account)?.source ?? 'candidate')
+        : 'category'
+      onProposal?.({
+        account: p.account,
+        confidence: p.confidence,
+        agreement: p.agreement,
+        modelConfidence: p.modelConfidence,
+        source,
+      })
+    }
+
+    // Pre-fill only when it's not the low "review" band, and only once.
+    if (appliedRef.current === p.account || bandOf(p) === 'review') return
     appliedRef.current = p.account
     onApply(p.account, p.vatTreatment ?? 'none')
-  }, [state, onApply])
+  }, [state, onApply, onProposal])
 
   if (state.status === 'loading') {
     return (

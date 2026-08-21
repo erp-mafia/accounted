@@ -1024,6 +1024,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   booking_template_usage: 'usage telemetry',
   calendar_feeds: 'feed tokens (secrets)',
   capability_grants: 'entitlement state',
+  categorize_calibration_samples: 'auto-booking confidence telemetry, not räkenskapsinformation',
   chat_messages: 'AI assistant state, not räkenskapsinformation',
   chat_sessions: 'AI assistant state, not räkenskapsinformation',
   company_capability_config: 'entitlement state',

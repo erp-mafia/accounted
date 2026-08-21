@@ -27,7 +27,7 @@ import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import VatTreatmentSelect from './VatTreatmentSelect'
-import AiCategorizeProposal from './AiCategorizeProposal'
+import AiCategorizeProposal, { type AiProposalMeta } from './AiCategorizeProposal'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { TransactionCategory, VatTreatment, BASAccount, EntityType, LinePatternEntry } from '@/types'
@@ -91,6 +91,9 @@ export default function QuickReviewDialog({
   const [accountOverride, setAccountOverride] = useState(defaultAccount ?? '')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'none'>(defaultVat)
   const [accounts, setAccounts] = useState<BASAccount[]>([])
+  // The AI proposal shown this session, kept so we can log a calibration sample
+  // (proposed vs actually booked) once the user confirms.
+  const [aiProposal, setAiProposal] = useState<AiProposalMeta | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
@@ -291,6 +294,24 @@ export default function QuickReviewDialog({
         Object.keys(cleanedDims).length > 0 ? cleanedDims : undefined,
       )
 
+      // Calibration telemetry: what the model proposed vs what was actually
+      // booked. Best-effort and fire-and-forget — never blocks the booking.
+      if (journalEntryId && aiProposal) {
+        void fetch('/api/agent/categorize/outcome', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            confidence: aiProposal.confidence,
+            agreement: aiProposal.agreement,
+            model_confidence: aiProposal.modelConfidence,
+            source: aiProposal.source,
+            proposed_account: aiProposal.account,
+            booked_account: override ?? catDefault,
+            amount: Math.abs(sekAmount),
+          }),
+        }).catch(() => {})
+      }
+
       // Attach the uploaded underlag to the verifikat the booking just created.
       // BFL 5 kap 7 § requires the verifikation to reference its underlag and
       // BFL 7 kap requires that underlag to be archived with it; the verifikat
@@ -447,6 +468,7 @@ export default function QuickReviewDialog({
             key={tx.id}
             transactionId={tx.id}
             open={open}
+            onProposal={setAiProposal}
             onApply={(account, vat) => {
               handleAccountChange(account)
               // handleAccountChange clears VAT for class-2 accounts; for the
