@@ -259,6 +259,8 @@ Momsperiod: [ ] Månad  [ ] Kvartal  [ ] Helår
 
 [ANGE YTTERLIGARE INTEGRATIONER OM TILLÄMPLIGT, t.ex. import från Fortnox, Visma, Bokio, Björn Lundén eller Briox]
 
+[SJÄLVHOSTAD DRIFT: raden för Amazon Bedrock ovan beskriver den hostade tjänstens standardkonfiguration. Om din installation använder en annan AI-leverantör (t.ex. AI_PROVIDER=anthropic med direkt Anthropic-API, eller en egen endpoint via AI_BASE_URL) gäller inte skrivningen "datan lämnar inte EU" automatiskt; uppdatera raden så att den beskriver din faktiska leverantör, region och ditt faktiska dataflöde]
+
 **Notering om maskinell behandling:** förslag från maskinella hjälpmedel bokförs aldrig automatiskt utan att en användare har granskat och godkänt dem. Godkännandet loggas i behandlingshistoriken.
 
 ## 12. API-nycklar och maskinell åtkomst
