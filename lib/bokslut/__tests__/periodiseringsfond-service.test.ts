@@ -6,6 +6,8 @@ import {
   listExistingPeriodiseringsfonder,
   getPeriodiseringsfondCohortAccount,
   getSchablonintaktRate,
+  resolveSchablonintaktRate,
+  SchablonintaktRateNotConfiguredError,
   PFOND_AB_RATE,
   PFOND_MAX_HOLD_YEARS,
   type ExistingFond,
@@ -35,8 +37,62 @@ describe('getSchablonintaktRate', () => {
     expect(getSchablonintaktRate(2026)).toBe(0.0255)
   })
 
-  it('fails closed for unmapped years: a statutory rate is never guessed', () => {
+  it('covers every closing year since the 100 %-of-SLR rule (2020-2024), floored at 0.5 %', () => {
+    // SLR 30 Nov of the preceding year per Riksgälden: 2019 -0.09 %,
+    // 2020 -0.10 %, 2021 0.23 % (all floored), 2022 1.94 %, 2023 2.62 %.
+    expect(getSchablonintaktRate(2020)).toBe(0.005)
+    expect(getSchablonintaktRate(2021)).toBe(0.005)
+    expect(getSchablonintaktRate(2022)).toBe(0.005)
+    expect(getSchablonintaktRate(2023)).toBe(0.0194)
+    expect(getSchablonintaktRate(2024)).toBe(0.0262)
+  })
+
+  it('fails closed for unmapped years with a typed, registry-coded error', () => {
     expect(() => getSchablonintaktRate(2030)).toThrow(/not configured/)
+    expect(() => getSchablonintaktRate(2030)).toThrow(SchablonintaktRateNotConfiguredError)
+    // 2019 closings can be brutet år under the old 72 %-of-SLR factor: kept unmapped.
+    expect(() => getSchablonintaktRate(2019)).toThrow(SchablonintaktRateNotConfiguredError)
+    try {
+      getSchablonintaktRate(2030)
+    } catch (err) {
+      expect((err as SchablonintaktRateNotConfiguredError).code).toBe(
+        'SCHABLONINTAKT_RATE_NOT_CONFIGURED',
+      )
+      expect((err as SchablonintaktRateNotConfiguredError).fiscalYear).toBe(2030)
+    }
+  })
+})
+
+describe('resolveSchablonintaktRate', () => {
+  const fond = (opening_balance: number): ExistingFond => ({
+    account_number: '2120',
+    cohort_year: 2020,
+    balance: opening_balance,
+    opening_balance,
+    must_return_this_year: false,
+  })
+
+  it('returns 0 without consulting the table when no fond has an opening balance', () => {
+    // The common no-fond AB: an unmapped year must never break its bokslut.
+    expect(resolveSchablonintaktRate(2019, [])).toBe(0)
+    expect(resolveSchablonintaktRate(2030, [])).toBe(0)
+    // A fond avsatt in THIS bokslut (opening 0) yields no schablonintäkt either.
+    expect(resolveSchablonintaktRate(2030, [fond(0)])).toBe(0)
+  })
+
+  it('returns the table rate when a fond carried an opening balance', () => {
+    expect(resolveSchablonintaktRate(2024, [fond(100_000)])).toBe(0.0262)
+  })
+
+  it('still fails closed for an unmapped year when fonder exist', () => {
+    expect(() => resolveSchablonintaktRate(2030, [fond(100_000)])).toThrow(
+      SchablonintaktRateNotConfiguredError,
+    )
+  })
+
+  it('prefers a caller-supplied override regardless of the table', () => {
+    expect(resolveSchablonintaktRate(2030, [fond(100_000)], 0.03)).toBe(0.03)
+    expect(resolveSchablonintaktRate(2024, [], 0.03)).toBe(0.03)
   })
 })
 

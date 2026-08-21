@@ -355,6 +355,24 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bokslutsåtgärder måste utföras innan perioden kan stängas.',
     message_en: 'Year-end closing must be executed before the period can be closed.',
   },
+  // Bokslutsdispositioner: the schablonintäkt on periodiseringsfonder
+  // (IL 30 kap 6a §) needs the SLR for the closing year, kept in a table in
+  // lib/bokslut/reserves/periodiseringsfond-service.ts that is extended each
+  // December. Only raised when the company actually holds fonder at the start
+  // of the year (no fonder: no rate needed). 500 on purpose: it is a
+  // server-side configuration gap, not a user error, and it must show up in
+  // runtime-error clustering so the annual update is not missed.
+  SCHABLONINTAKT_RATE_NOT_CONFIGURED: {
+    httpStatus: 500,
+    message_sv:
+      'Statslåneräntan för det här räkenskapsåret saknas i systemet, så schablonintäkten på periodiseringsfonderna kan inte beräknas ännu. Kontakta supporten så lägger vi in den.',
+    message_en:
+      'The statslåneränta (SLR) for this closing year is not configured, so the schablonintäkt on periodiseringsfonder cannot be calculated yet. Contact support to have it added.',
+    remediation: {
+      description:
+        'Wait for the SLR table update, or pass schablonintaktRate explicitly on periodiseringsfond_avsattning / periodiseringsfond_ateforing items when posting dispositions.',
+    },
+  },
   TRANSACTION_ALREADY_CATEGORIZED: {
     httpStatus: 409,
     message_sv:
