@@ -242,18 +242,32 @@ export function extractUblDocumentId(xml: string): string | null {
 }
 
 /**
- * Dig the seller endpoint identifier out of a UBL-JSON invoice as Qvalia
- * returns it (OASIS UBL 2.1 JSON: arrays everywhere, text under `_`).
+ * UBL-JSON as Qvalia returns it (verified live 2026-08-21): xml2js style, so
+ * element keys keep their namespace prefix (`cac:AccountingSupplierParty`,
+ * `cbc:EndpointID`), every element is an array, text sits under `_` and
+ * attributes under `$`. The OASIS UBL-JSON form (unprefixed keys, attributes
+ * beside `_`) is accepted too.
  */
+function ublChild(record: Record<string, unknown> | null, name: string): unknown {
+  if (!record) return undefined
+  return record[name] ?? record[`cac:${name}`] ?? record[`cbc:${name}`]
+}
+
+function ublAttribute(element: Record<string, unknown> | null, name: string): string | null {
+  if (!element) return null
+  return asString(element[name]) ?? asString(asRecord(element.$)?.[name])
+}
+
+/** Dig the seller endpoint identifier out of a UBL-JSON invoice message. */
 export function extractUblJsonSupplierEndpoint(message: unknown): PeppolParticipant | null {
   const record = asRecord(message)
   if (!record) return null
-  const invoice = asRecord(record.Invoice) ?? record
-  const supplierParty = firstRecord(invoice.AccountingSupplierParty)
-  const party = firstRecord(supplierParty?.Party)
-  const endpoint = firstRecord(party?.EndpointID)
+  const invoice = asRecord(ublChild(record, 'Invoice')) ?? record
+  const supplierParty = firstRecord(ublChild(invoice, 'AccountingSupplierParty'))
+  const party = firstRecord(ublChild(supplierParty, 'Party'))
+  const endpoint = firstRecord(ublChild(party, 'EndpointID'))
   const identifier = asString(endpoint?._)
-  const scheme = asString(endpoint?.schemeID)
+  const scheme = ublAttribute(endpoint, 'schemeID')
   if (!identifier || !scheme) return null
   return { scheme, identifier }
 }

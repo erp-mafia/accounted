@@ -271,8 +271,10 @@ describe('Qvalia transport: submit', () => {
       data: [{
         integrationId: 'int-dup',
         Invoice: {
-          ID: [{ _: 'F-2026-42' }],
-          AccountingSupplierParty: [{ Party: [{ EndpointID: [{ _: '556016-0680', schemeID: '0007' }] }] }],
+          'cbc:ID': [{ _: 'F-2026-42' }],
+          'cac:AccountingSupplierParty': [{
+            'cac:Party': [{ 'cbc:EndpointID': [{ _: '556016-0680', $: { schemeID: '0007' } }] }],
+          }],
         },
       }],
     }))
@@ -446,6 +448,16 @@ describe('helpers', () => {
     expect(extractUblJsonSupplierEndpoint({
       Invoice: { AccountingSupplierParty: [{ Party: [{ EndpointID: [{ _: '1', schemeID: '0007' }] }] }] },
     })).toEqual({ scheme: '0007', identifier: '1' })
+    // Qvalia's live shape: prefixed keys, attributes under `$`.
+    expect(extractUblJsonSupplierEndpoint({
+      Invoice: {
+        $: { xmlns: 'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2' },
+        'cac:AccountingSupplierParty': [{
+          'cac:Party': [{ 'cbc:EndpointID': [{ _: '5567321707', $: { schemeID: '0007' } }] }],
+        }],
+      },
+      integrationId: 'a5845a11-4e5a-4700-bca3-e670a6cd8a79',
+    })).toEqual({ scheme: '0007', identifier: '5567321707' })
     expect(extractUblJsonSupplierEndpoint({ Invoice: {} })).toBeNull()
   })
 

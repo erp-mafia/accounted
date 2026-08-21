@@ -16,6 +16,9 @@
  *       Lists the Peppol identifiers registered on the partner account.
  *   npx tsx scripts/peppol/qvalia-probe.ts outgoing
  *       Lists the three latest outgoing invoice statuses (read-only).
+ *   npx tsx scripts/peppol/qvalia-probe.ts incoming [integrationId]
+ *       Lists the latest incoming invoice statuses, or prints one incoming
+ *       invoice as XML (read-only: uses the non-marking endpoint).
  *   npx tsx scripts/peppol/qvalia-probe.ts send path/to/invoice.xml
  *       Submits a BIS Billing 3 XML through the adapter. Sandbox only: the
  *       script refuses a production base URL.
@@ -107,6 +110,22 @@ async function main(): Promise<void> {
       await show(
         'GET /partner/{p}/transaction/{a}/invoices/outgoing/status',
         await rawGet(`/partner/${partner}/transaction/${account}/invoices/outgoing/status?includeRead=true&limit=3`),
+      )
+      return
+    }
+    case 'incoming': {
+      if (argument) {
+        const response = await fetch(
+          `${config!.baseUrl}/partner/${partner}/transaction/${account}/invoices/incoming?integrationId=${encodeURIComponent(argument)}&includeRead=true&limit=1`,
+          { headers: { Authorization: headerFor(config!.authScheme), accept: 'application/xml' } },
+        )
+        console.log(`HTTP ${response.status}`)
+        console.log((await response.text()).slice(0, 6000))
+        return
+      }
+      await show(
+        'GET /partner/{p}/transaction/{a}/invoices/incoming/status',
+        await rawGet(`/partner/${partner}/transaction/${account}/invoices/incoming/status?includeRead=true&limit=5`),
       )
       return
     }
