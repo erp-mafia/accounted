@@ -33,6 +33,29 @@ export type StorageProxyResolution =
   | { ok: true; url: string }
   | { ok: false; reason: 'unsupported_path' | 'missing_token' | 'storage_unconfigured' }
 
+/**
+ * True when every segment of the (still percent-encoded) object path is a
+ * plain name: no empty segment, no `.`/`..` in raw or percent-encoded form
+ * (`%2e%2e`, `.%2e`, `%2e.`: the WHATWG URL parser normalises those away,
+ * which would let `sign/documents/%2e%2e/other/x` leave the documents
+ * bucket), no backslash (a path separator for https URLs), no malformed
+ * escapes.
+ */
+function hasOnlyPlainSegments(objectPath: string): boolean {
+  for (const segment of objectPath.split('/')) {
+    if (segment === '') return false
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(segment)
+    } catch {
+      return false
+    }
+    if (decoded === '.' || decoded === '..') return false
+    if (decoded.includes('\\') || decoded.includes('/')) return false
+  }
+  return true
+}
+
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '')
 }
@@ -89,14 +112,66 @@ export function resolveUpstreamStorageUrl(
 ): StorageProxyResolution {
   const upstream = upstreamStorageOrigin()
   if (!upstream) return { ok: false, reason: 'storage_unconfigured' }
-  if (!ALLOWED_OBJECT_PATH_RE.test(objectPath) || objectPath.includes('..')) {
+  if (!ALLOWED_OBJECT_PATH_RE.test(objectPath) || !hasOnlyPlainSegments(objectPath)) {
     return { ok: false, reason: 'unsupported_path' }
   }
   if (!search.get('token')) return { ok: false, reason: 'missing_token' }
 
   const query = search.toString()
-  return {
-    ok: true,
-    url: `${upstream}${UPSTREAM_OBJECT_PREFIX}${objectPath}${query ? `?${query}` : ''}`,
+  const url = `${upstream}${UPSTREAM_OBJECT_PREFIX}${objectPath}${query ? `?${query}` : ''}`
+  // Belt and braces: whatever fetch() will actually request, after URL
+  // normalisation, must still sit inside the allowlist.
+  let normalisedPath: string
+  try {
+    normalisedPath = new URL(url).pathname
+  } catch {
+    return { ok: false, reason: 'unsupported_path' }
   }
+  if (
+    !normalisedPath.startsWith(UPSTREAM_OBJECT_PREFIX) ||
+    !ALLOWED_OBJECT_PATH_RE.test(normalisedPath.slice(UPSTREAM_OBJECT_PREFIX.length))
+  ) {
+    return { ok: false, reason: 'unsupported_path' }
+  }
+
+  return { ok: true, url }
+}
+
+/**
+ * Read a request body into memory, aborting as soon as it exceeds `maxBytes`
+ * instead of buffering an unbounded payload first and measuring afterwards
+ * (the proxy is unauthenticated until Storage checks the token, so a
+ * self-host without a platform body limit must not be forced to hold an
+ * arbitrary upload in RAM). Returns null when the cap is exceeded.
+ */
+export async function readBodyWithCap(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+): Promise<ArrayBuffer | null> {
+  if (!body) return new ArrayBuffer(0)
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel()
+        return null
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    out.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return out.buffer
 }

@@ -2,6 +2,7 @@ import { createLogger } from '@/lib/logger'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   STORAGE_PROXY_ROUTE,
+  readBodyWithCap,
   resolveUpstreamStorageUrl,
 } from '@/lib/core/documents/storage-proxy'
 
@@ -104,10 +105,14 @@ async function proxy(request: Request, method: 'GET' | 'HEAD' | 'PUT'): Promise<
     if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES) {
       return withCors(errorResponseFromCode('STORAGE_PROXY_BODY_TOO_LARGE', log))
     }
-    body = await request.arrayBuffer()
-    if (body.byteLength > MAX_UPLOAD_BYTES) {
+    // Stream with a cap: the declared length is advisory (absent or wrong),
+    // and the token is only validated upstream, so never buffer an unbounded
+    // body before measuring it.
+    const read = await readBodyWithCap(request.body, MAX_UPLOAD_BYTES)
+    if (read === null) {
       return withCors(errorResponseFromCode('STORAGE_PROXY_BODY_TOO_LARGE', log))
     }
+    body = read
     if (!headers.has('content-type')) headers.set('content-type', 'application/octet-stream')
   }
 

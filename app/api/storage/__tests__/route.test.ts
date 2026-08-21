@@ -122,6 +122,26 @@ describe('/api/storage/[...path] same-origin Storage proxy', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('rejects an oversized upload that lies about (or omits) its content-length, without buffering it all', async () => {
+    let pulled = 0
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled++
+        controller.enqueue(new Uint8Array(1024 * 1024))
+      },
+    })
+    const request = new Request(
+      'https://app.accounted.se/api/storage/upload/sign/documents/co-1/big.pdf?token=t',
+      { method: 'PUT', body: endless, duplex: 'half' } as RequestInit,
+    )
+
+    const response = await PUT(request)
+
+    expect(response.status).toBe(413)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(pulled).toBeLessThan(60)
+  })
+
   it('reports Storage being unreachable as 502 instead of crashing', async () => {
     fetchMock.mockRejectedValue(new Error('ECONNRESET'))
 

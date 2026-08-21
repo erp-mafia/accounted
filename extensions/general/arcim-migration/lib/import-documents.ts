@@ -27,8 +27,11 @@
  *
  * Resumable: one call works through the provider's attachment list (sorted
  * by provider id so the order is stable between calls) until `timeBudgetMs`
- * is spent, then returns `partial: true` with `nextCursor`. The caller loops,
- * passing the cursor back, until `partial` is false. A 113-file Fortnox
+ * is spent, then returns `partial: true` with `nextCursor` = the id of the
+ * last attachment it handled. The caller loops, passing the cursor back,
+ * until `partial` is false. The cursor is an id, not an index, so a file the
+ * provider adds or removes mid-sweep shifts nothing: the next slice simply
+ * continues after the last handled id in sorted order. A 113-file Fortnox
  * import used to run every file inline inside one request and hit the
  * hosted 300 s function limit after ~17 files (2026-08-21); the UI then
  * showed a generic failure even though the files it did reach were linked.
@@ -91,8 +94,8 @@ export interface ImportDocumentsOptions {
   consentId: string
   /** Resolve + report what would be attached without downloading or writing. */
   dryRun?: boolean
-  /** Index into the stable attachment order to resume from (default 0). */
-  cursor?: number
+  /** Resume after this provider attachment id (sorted order); omit to start from the top. */
+  cursor?: string | null
   /**
    * Wall-clock budget for this call. Once spent, the sweep stops after the
    * attachment in flight and reports `nextCursor`. Default leaves headroom
@@ -124,8 +127,8 @@ export interface ImportDocumentsResult {
   total: number
   /** True when the time budget ran out before the end of the list. */
   partial: boolean
-  /** Pass back as `cursor` to continue; null when the sweep is complete. */
-  nextCursor: number | null
+  /** Last handled attachment id; pass back as `cursor` to continue. Null when complete. */
+  nextCursor: string | null
 }
 
 interface ProviderAttachment {
@@ -269,7 +272,7 @@ export async function importProviderDocuments(
     userId,
     consentId,
     dryRun = false,
-    cursor = 0,
+    cursor = null,
     timeBudgetMs = DEFAULT_IMPORT_DOCUMENTS_TIME_BUDGET_MS,
     now = Date.now,
   } = opts
@@ -324,13 +327,14 @@ export async function importProviderDocuments(
     ),
   ])
 
-  // Stable order across calls: the cursor is an index into this list, and a
-  // provider may page its listing differently from one call to the next.
+  // Stable order across calls: a provider may page its listing differently
+  // from one call to the next, and the cursor is "continue after this id".
   const attachments = [...listedAttachments].sort((a, b) =>
     a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
   )
   result.total = attachments.length
-  const startIndex = Math.min(Math.max(0, Math.floor(cursor)), attachments.length)
+  const firstAfterCursor = cursor ? attachments.findIndex((a) => a.id > cursor) : 0
+  const startIndex = firstAfterCursor === -1 ? attachments.length : firstAfterCursor
 
   // Index gnubok verifikat by (period, series, number) for in-memory resolution.
   const voucherIndex = buildVoucherIndex(vouchers)
@@ -357,10 +361,10 @@ export async function importProviderDocuments(
   for (let index = startIndex; index < attachments.length; index++) {
     // Always make progress: at least one attachment per call, then stop at
     // the budget so the route answers well inside the function limit and the
-    // caller resumes from here.
+    // caller resumes after the last handled id.
     if (index > startIndex && now() - startedAt >= timeBudgetMs) {
       result.partial = true
-      result.nextCursor = index
+      result.nextCursor = attachments[index - 1].id
       break
     }
     const attachment = attachments[index]
@@ -468,7 +472,7 @@ export async function importProviderDocuments(
   log.info('document import complete', {
     companyId,
     dryRun,
-    cursor: startIndex,
+    cursor,
     total: result.total,
     scanned: result.scanned,
     linked: result.linked,

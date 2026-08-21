@@ -685,7 +685,7 @@ describe('importProviderDocuments', () => {
         scanned: 1,
         linked: 1,
         partial: true,
-        nextCursor: 1,
+        nextCursor: 'file-a',
       })
       // Sorted by provider id, so the first slice is file-a, not file-c.
       expect(mockUpload.mock.calls[0][3]).toMatchObject({ name: 'a.pdf' })
@@ -695,7 +695,7 @@ describe('importProviderDocuments', () => {
         companyId: COMPANY,
         userId: USER,
         consentId: 'c1',
-        cursor: first.nextCursor as number,
+        cursor: first.nextCursor,
         timeBudgetMs: 1_000_000,
         now: () => clock,
       })
@@ -720,10 +720,10 @@ describe('importProviderDocuments', () => {
         now: () => 0,
       })
 
-      expect(result).toMatchObject({ scanned: 1, linked: 1, partial: true, nextCursor: 1 })
+      expect(result).toMatchObject({ scanned: 1, linked: 1, partial: true, nextCursor: 'file-a' })
     })
 
-    it('treats a cursor past the end as a complete, empty slice', async () => {
+    it('treats a cursor past the last id as a complete, empty slice', async () => {
       const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
 
       const result = await importProviderDocuments({
@@ -731,11 +731,46 @@ describe('importProviderDocuments', () => {
         companyId: COMPANY,
         userId: USER,
         consentId: 'c1',
-        cursor: 99,
+        cursor: 'file-z',
       })
 
       expect(result).toMatchObject({ total: 3, scanned: 0, linked: 0, partial: false, nextCursor: null })
       expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('resumes after the last handled id even when the provider list changed in between', async () => {
+      // Slice 1 handled file-a. Before slice 2, Fortnox gained a file sorting
+      // BEFORE the resume point (file-0) and lost file-b. An index cursor
+      // would now skip one; an id cursor continues with everything > file-a.
+      const supabase = wireFortnox({
+        connections: [
+          { ...FORTNOX_CONNECTION, fileId: 'file-0', name: '0.pdf' },
+          { ...FORTNOX_CONNECTION, fileId: 'file-a', name: 'a.pdf' },
+          { ...FORTNOX_CONNECTION, fileId: 'file-c', name: 'c.pdf' },
+          { ...FORTNOX_CONNECTION, fileId: 'file-d', name: 'd.pdf' },
+        ],
+      })
+      // Distinct bytes per file: the default mock returns the same bytes for
+      // every download, and identical content on the same verifikat is
+      // (correctly) deduped, which is not what this test is about.
+      mockDownloadFortnoxArchiveFile.mockImplementation(async (_client, _token, id) => ({
+        bytes: bytesOf('PDF-' + id),
+        contentType: 'application/pdf',
+      }))
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        cursor: 'file-a',
+      })
+
+      expect(result).toMatchObject({ total: 4, scanned: 2, linked: 2, partial: false })
+      expect(mockUpload.mock.calls.map((call) => (call[3] as { name: string }).name)).toEqual([
+        'c.pdf',
+        'd.pdf',
+      ])
     })
   })
 })

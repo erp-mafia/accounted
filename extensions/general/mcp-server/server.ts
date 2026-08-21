@@ -13577,7 +13577,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        download_url: { type: ['string', 'null'], description: 'Signed Supabase Storage URL, valid 1 hour; null when estimate_only=true. Restricted-egress proxies may 403; needs a network with Supabase egress.' },
+        download_url: { type: ['string', 'null'], description: 'Signed download URL, valid 1 hour, on the app origin (direct Storage URL only when NEXT_PUBLIC_APP_URL is unset); null when estimate_only=true.' },
         storage_path: { type: ['string', 'null'] },
         file_name: { type: 'string' },
         size_bytes: { type: 'number' },

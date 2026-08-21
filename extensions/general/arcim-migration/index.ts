@@ -1363,22 +1363,23 @@ export const arcimMigrationExtension: Extension = {
 
         let consentId: string | undefined
         let dryRun = false
-        let cursor = 0
+        let cursor: string | null = null
         try {
           const body = (await request.json()) as {
             consentId?: string
             dryRun?: boolean
-            cursor?: number
+            cursor?: string
           }
           consentId = body?.consentId
           dryRun = body?.dryRun === true
-          // Resume point from a previous partial call (see import-documents.ts);
-          // anything but a non-negative integer restarts from the top, which
-          // is always safe: already-archived receipts are skipped by hash.
+          // Resume point from a previous partial call (the last handled
+          // provider attachment id, see import-documents.ts); anything else
+          // restarts from the top, which is always safe: already-archived
+          // receipts are skipped by hash.
           cursor =
-            typeof body?.cursor === 'number' && Number.isInteger(body.cursor) && body.cursor >= 0
+            typeof body?.cursor === 'string' && body.cursor.length > 0 && body.cursor.length <= 256
               ? body.cursor
-              : 0
+              : null
         } catch {
           // empty/invalid body: consentId check below rejects it
         }

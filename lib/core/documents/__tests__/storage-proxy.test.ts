@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  readBodyWithCap,
   resolveUpstreamStorageUrl,
   toSameOriginStorageUrl,
 } from '../storage-proxy'
@@ -103,6 +104,38 @@ describe('resolveUpstreamStorageUrl', () => {
     })
   })
 
+  it('rejects dot segments in every spelling the URL parser would normalise away', () => {
+    const token = new URLSearchParams('token=t')
+    for (const evil of [
+      'sign/documents/%2e%2e/avatars/x',
+      'sign/documents/.%2e/avatars/x',
+      'sign/documents/%2e./avatars/x',
+      'sign/documents/%2E%2E/avatars/x',
+      'sign/documents/a/../../avatars/x',
+      'sign/documents/./x',
+      'sign/documents/a//x',
+      'sign/documents/a%5c..%5cavatars/x',
+      'sign/documents/a\\..\\avatars/x',
+      'sign/documents/a%2f..%2favatars/x',
+      'sign/documents/%zz/x',
+      'upload/sign/documents/%2e%2e/avatars/x',
+    ]) {
+      expect(resolveUpstreamStorageUrl(evil, token), evil).toEqual({
+        ok: false,
+        reason: 'unsupported_path',
+      })
+    }
+  })
+
+  it('still accepts real keys with spaces, non-ASCII and dots inside names', () => {
+    const token = new URLSearchParams('token=t')
+    const resolved = resolveUpstreamStorageUrl(
+      'sign/documents/co-1/user-1/faktura%20maj%20%C3%A5r.2026.pdf',
+      token,
+    )
+    expect(resolved.ok).toBe(true)
+  })
+
   it('requires the signed token', () => {
     expect(resolveUpstreamStorageUrl('sign/documents/a.pdf', new URLSearchParams())).toEqual({
       ok: false,
@@ -115,5 +148,43 @@ describe('resolveUpstreamStorageUrl', () => {
     expect(
       resolveUpstreamStorageUrl('sign/documents/a.pdf', new URLSearchParams('token=t')),
     ).toEqual({ ok: false, reason: 'storage_unconfigured' })
+  })
+})
+
+describe('readBodyWithCap', () => {
+  function stream(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
+    return new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk)
+        controller.close()
+      },
+    })
+  }
+
+  it('concatenates a body under the cap', async () => {
+    const out = await readBodyWithCap(
+      stream([new TextEncoder().encode('%PDF'), new TextEncoder().encode('-1.4')]),
+      100,
+    )
+    expect(out && new TextDecoder().decode(out)).toBe('%PDF-1.4')
+  })
+
+  it('returns null as soon as the running total passes the cap, without draining the rest', async () => {
+    let pulled = 0
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled++
+        controller.enqueue(new Uint8Array(1024))
+      },
+    })
+
+    const out = await readBodyWithCap(endless, 4096)
+
+    expect(out).toBeNull()
+    expect(pulled).toBeLessThan(10)
+  })
+
+  it('treats a missing body as empty', async () => {
+    expect((await readBodyWithCap(null, 10))?.byteLength).toBe(0)
   })
 })

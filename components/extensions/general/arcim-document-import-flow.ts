@@ -65,9 +65,10 @@ export interface ArcimDocumentImportResult {
   unmatchedSamples: { uploadId: string; voucher: string; date: string }[]
   /** Attachments in the provider's whole list (not just this call). */
   total: number
-  /** The server stopped at its time budget; continue from nextCursor. */
+  /** The server stopped at its time budget; continue after nextCursor. */
   partial: boolean
-  nextCursor: number | null
+  /** Provider id of the last handled attachment, or null when complete. */
+  nextCursor: string | null
 }
 
 const MAX_UNMATCHED_SAMPLES = 20
@@ -312,7 +313,9 @@ function normalizeDocumentImportResult(
     total: typeof result.total === 'number' ? result.total : result.scanned,
     partial: result.partial === true,
     nextCursor:
-      typeof result.nextCursor === 'number' && result.partial === true ? result.nextCursor : null,
+      typeof result.nextCursor === 'string' && result.nextCursor.length > 0 && result.partial === true
+        ? result.nextCursor
+        : null,
   }
 }
 
@@ -324,7 +327,7 @@ export async function requestArcimDocumentImport(
   consentId: string,
   dryRun: boolean,
   fetcher: typeof fetch = fetch,
-  cursor?: number,
+  cursor?: string,
 ): Promise<ArcimDocumentImportResult> {
   const response = await fetcher(ARCIM_DOCUMENT_IMPORT_ENDPOINT, {
     method: 'POST',
@@ -354,12 +357,16 @@ export async function requestArcimDocumentImport(
 /** Far above any real list: a guard against a server that never completes. */
 const MAX_IMPORT_ROUNDS = 500
 
+export const ARCIM_DOCUMENT_IMPORT_STALLED = 'ARCIM_DOCUMENT_IMPORT_STALLED'
+
 /**
  * Run the real import to completion: the route works through one time-budgeted
  * slice per call and hands back a cursor, so this loops until the server says
  * it reached the end, reporting running totals after every slice. A thrown
  * request error aborts the loop; the slices already archived stay linked and
- * the next attempt skips them by hash.
+ * the next attempt skips them by hash. A server that keeps answering "partial"
+ * without advancing (or past the round guard) is reported as a failure, never
+ * as a completed import: the retry button resumes safely.
  */
 export async function runArcimDocumentImportToCompletion(
   consentId: string,
@@ -370,23 +377,24 @@ export async function runArcimDocumentImportToCompletion(
 ): Promise<ArcimDocumentImportResult> {
   const fetcher = options.fetcher ?? fetch
   let accumulated: ArcimDocumentImportResult | null = null
-  let cursor: number | undefined
+  let cursor: string | undefined
 
   for (let round = 0; round < MAX_IMPORT_ROUNDS; round++) {
     const slice = await requestArcimDocumentImport(consentId, false, fetcher, cursor)
     accumulated = mergeArcimDocumentImportResults(accumulated, slice)
-    // Complete, or a cursor that would not advance (the server always makes
-    // progress; treat anything else as the end rather than spinning).
-    if (
-      !slice.partial ||
-      slice.nextCursor === null ||
-      (cursor !== undefined && slice.nextCursor <= cursor)
-    ) {
+    if (!slice.partial) {
       return { ...accumulated, partial: false, nextCursor: null }
+    }
+    if (slice.nextCursor === null || (cursor !== undefined && slice.nextCursor <= cursor)) {
+      break
     }
     cursor = slice.nextCursor
     options.onProgress?.(accumulated)
   }
 
-  return accumulated as ArcimDocumentImportResult
+  throw new ArcimDocumentImportRequestError({
+    code: ARCIM_DOCUMENT_IMPORT_STALLED,
+    requestId: null,
+    reconnectRequired: false,
+  })
 }
