@@ -127,19 +127,28 @@ async function main() {
   let cleared = 0
   let skipped = 0
   for (const r of affected) {
-    const patch: Record<string, unknown> = { org_number: null }
-    if (!r.personal_number) {
-      patch.personal_number = encryptCustomerPersonalNumber(normalizeReroutedPersonalNumber(r.org_number!))
-    }
     // Guard on the exact current value: a concurrent edit or a re-run cannot
     // double-apply, and a row that changed underneath is skipped, not clobbered.
-    const { data, error } = await sb
-      .from('customers')
-      .update(patch)
-      .eq('id', r.id)
-      .eq('company_id', r.company_id)
-      .eq('org_number', r.org_number!)
-      .select('id')
+    // Two literal payloads rather than one built at runtime, so the
+    // no-phantom-columns scanner can resolve both.
+    const { data, error } = r.personal_number
+      ? await sb
+          .from('customers')
+          .update({ org_number: null })
+          .eq('id', r.id)
+          .eq('company_id', r.company_id)
+          .eq('org_number', r.org_number!)
+          .select('id')
+      : await sb
+          .from('customers')
+          .update({
+            org_number: null,
+            personal_number: encryptCustomerPersonalNumber(normalizeReroutedPersonalNumber(r.org_number!)),
+          })
+          .eq('id', r.id)
+          .eq('company_id', r.company_id)
+          .eq('org_number', r.org_number!)
+          .select('id')
     if (error) {
       console.error(`  FAILED customer ${r.id}: ${error.message}`)
       continue
