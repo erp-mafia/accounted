@@ -108,6 +108,45 @@ describe('fetchSalesInvoicesHydrated (fortnox)', () => {
     expect(requested.filter((u) => /\/invoices\/\d/.test(u))).toHaveLength(0);
   });
 
+  it('stops the whole pass when the provider rejects the token', async () => {
+    // 401/403 fails identically for every remaining invoice. Issuing hundreds
+    // more doomed calls would spend the Fortnox rate-limit budget (shared
+    // platform-wide) for nothing.
+    // More invoices than HYDRATION_CONCURRENCY, so the abort has something
+    // left to prevent: the first few are already in flight when the first 401
+    // lands, and everything after that must never be requested.
+    const many = Array.from({ length: 20 }, (_, i) => ({ ...OPEN, DocumentNumber: 100 + i }));
+    stubFetch((url) => url.includes('/invoices/1')
+      ? new Response('unauthorized', { status: 401 })
+      : json(listResponse(many)));
+
+    const { invoices, hydration } = await fetchSalesInvoicesHydrated('fortnox', 'token');
+
+    expect(hydration.abortedBy).toBe('auth');
+    expect(hydration.hydrated).toBe(0);
+    // Every invoice is still returned, unhydrated.
+    expect(invoices).toHaveLength(20);
+    // Only the concurrency window was spent, not all 20.
+    const details = requested.filter((u) => /\/invoices\/\d\d\d/.test(u));
+    expect(details.length).toBeGreaterThan(0);
+    expect(details.length).toBeLessThanOrEqual(3);
+  });
+
+  it('does not stop the pass on a 404 for one invoice', async () => {
+    // A missing invoice is about that invoice, not the credential.
+    stubFetch((url) => {
+      if (url.includes('/invoices/4')) return new Response('gone', { status: 404 });
+      if (url.includes('/invoices/5')) return json(detailFor(5, 500));
+      return json(listResponse([OPEN, PAID]));
+    });
+
+    const { hydration } = await fetchSalesInvoicesHydrated('fortnox', 'token');
+
+    expect(hydration.abortedBy).toBeUndefined();
+    expect(hydration.failed).toBe(1);
+    expect(hydration.hydrated).toBe(1);
+  });
+
   it('keeps the list-form invoice when its detail fetch fails', async () => {
     stubFetch((url) => url.includes('/invoices/4')
       ? new Response('boom', { status: 404 })

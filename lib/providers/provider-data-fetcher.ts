@@ -382,6 +382,13 @@ export interface HydrationReport {
   failed: number;
   /** Needed but not attempted because the time budget ran out. */
   skippedForBudget: number;
+  /**
+   * Set when hydration stopped early. `auth` means the provider rejected the
+   * token or the scope, so every remaining call would fail the same way and
+   * issuing them would just burn the shared rate-limit budget; `budget` means
+   * the clock ran out. Absent when the pass ran to completion.
+   */
+  abortedBy?: 'auth' | 'budget';
 }
 
 const EMPTY_HYDRATION_REPORT: HydrationReport = {
@@ -579,15 +586,29 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   const hydrated = [...items];
   const report: HydrationReport = { ...EMPTY_HYDRATION_REPORT, needed: pending.length };
   const deadline = Date.now() + budgetMs;
+  let aborted: 'auth' | 'budget' | null = null;
 
   await mapWithConcurrency(pending, HYDRATION_CONCURRENCY, async ({ dto, index }) => {
+    if (aborted) {
+      report.skippedForBudget++;
+      return;
+    }
     if (Date.now() >= deadline) {
+      aborted = 'budget';
       report.skippedForBudget++;
       return;
     }
 
     try {
-      const raw = await fetchDetail(dto);
+      // Race the clock as well as checking it beforehand. The provider clients
+      // retry 429s and 5xx with backoff (Fortnox: 6 attempts, up to 60 s
+      // apart), so a call that starts one millisecond inside the budget can
+      // still be retrying minutes later. Without this bound, three concurrent
+      // calls hitting a rate-limit wall would hold the whole migration past
+      // its 300 s function ceiling. The underlying request is not cancelled,
+      // but control returns and the remaining invoices are reported as
+      // unhydrated instead of the run dying.
+      const raw = await withDeadline(fetchDetail(dto), deadline);
       if (!raw) {
         report.failed++;
         return;
@@ -595,9 +616,28 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
       hydrated[index] = mapper(raw) as T;
       report.hydrated++;
     } catch (err) {
-      // A detail fetch that fails must not lose the invoice: the list form is
-      // incomplete, not wrong, and the migration reports the shortfall.
       report.failed++;
+
+      if (err instanceof HydrationDeadlineError) {
+        aborted = 'budget';
+        return;
+      }
+
+      // A rejected token or a missing scope fails identically for every
+      // remaining invoice. Issuing hundreds more doomed calls would spend the
+      // rate-limit budget (shared platform-wide, see acquire()) for nothing
+      // and bury the real cause under a wall of identical warnings.
+      if (isAuthFailure(err)) {
+        aborted = 'auth';
+        console.warn(
+          `[provider-data-fetcher] ${label} hydration stopped: provider rejected the token or scope`,
+          err instanceof Error ? err.message : String(err),
+        );
+        return;
+      }
+
+      // Anything else is per-invoice: the list form is incomplete, not wrong,
+      // so the invoice is kept and the shortfall reported.
       console.warn(
         `[provider-data-fetcher] ${label} detail fetch failed for ${dto.id}:`,
         err instanceof Error ? err.message : String(err),
@@ -605,12 +645,50 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
     }
   });
 
+  if (aborted) report.abortedBy = aborted;
+
   console.log(
     `[provider-data-fetcher] ${label} hydration: ${report.hydrated}/${report.needed} hydrated, `
-    + `${report.failed} failed, ${report.skippedForBudget} left for budget`,
+    + `${report.failed} failed, ${report.skippedForBudget} not attempted`
+    + (aborted ? ` (stopped early: ${aborted})` : ''),
   );
 
   return { items: hydrated, report };
+}
+
+/** Thrown when a detail fetch is still outstanding at the budget deadline. */
+class HydrationDeadlineError extends Error {
+  constructor() {
+    super('Hydration budget exhausted while a detail fetch was in flight');
+    this.name = 'HydrationDeadlineError';
+  }
+}
+
+/** Resolve `promise`, or reject with HydrationDeadlineError at `deadline`. */
+function withDeadline<T>(promise: Promise<T>, deadline: number): Promise<T> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return Promise.reject(new HydrationDeadlineError());
+
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new HydrationDeadlineError()), remaining);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
+/**
+ * Does this error mean the credential itself is refused?
+ *
+ * Every provider client throws its own error class carrying `statusCode`, so
+ * the shape is read structurally rather than by instanceof across six classes.
+ * 401 and 403 are the credential answers; a 404 is about one invoice and must
+ * not stop the pass.
+ */
+function isAuthFailure(err: unknown): boolean {
+  const status = (err as { statusCode?: unknown } | null)?.statusCode;
+  return status === 401 || status === 403;
 }
 
 /**
