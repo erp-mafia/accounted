@@ -1330,6 +1330,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bolaget är inte registrerat för Peppol-mottagning.',
     message_en: 'The company is not registered for Peppol receiving.',
   },
+  PEPPOL_REGISTRATION_CAP_REACHED: {
+    httpStatus: 409,
+    message_sv: 'Alla platser för Peppol-mottagning är upptagna just nu. Hör av dig till support så öppnar vi fler. Att skicka e-fakturor fungerar ändå.',
+    message_en: 'All Peppol receiving slots are taken right now. Contact support and we will open more. Sending e-invoices works regardless.',
+  },
 }
 
 const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {

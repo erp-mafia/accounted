@@ -95,6 +95,32 @@ export function preparePeppolParticipant(settings: ParticipantSettings): PeppolP
 
 const LIVE_STATUSES: PeppolRegistrationStatus[] = ['pending', 'registered']
 
+/**
+ * How many companies may publish a receiving identifier through our provider
+ * account. The Qvalia partner contract is priced per tenant (10 to start), so
+ * the product refuses the eleventh instead of silently exceeding the contract.
+ * Unset or invalid means no cap (self-hosted with an own provider account).
+ */
+export function getPeppolReceivingCap(env: Record<string, string | undefined> = process.env): number | null {
+  const raw = env.PEPPOL_RECEIVING_MAX_REGISTRATIONS?.trim()
+  if (!raw) return null
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+export async function countLivePeppolRegistrations(args: {
+  supabase: SupabaseClient
+  provider: string
+}): Promise<number> {
+  const { count, error } = await args.supabase
+    .from('peppol_registrations')
+    .select('id', { count: 'exact', head: true })
+    .eq('provider', args.provider)
+    .in('status', LIVE_STATUSES)
+  if (error) throw new Error(`Failed to count Peppol registrations: ${error.message}`)
+  return count ?? 0
+}
+
 /** The live registration for a company at a provider, else the most recent history row. */
 export async function getPeppolRegistration(args: {
   supabase: SupabaseClient
@@ -122,6 +148,7 @@ export type RegisterPeppolResult =
         | 'PEPPOL_REGISTRATION_PERSONAL_NUMBER'
         | 'PEPPOL_REGISTRATION_COMPANY_NAME_REQUIRED'
         | 'PEPPOL_RECEIVING_UNSUPPORTED'
+        | 'PEPPOL_REGISTRATION_CAP_REACHED'
     }
   | { ok: false; code: 'PEPPOL_REGISTRATION_FAILED'; detail: string | null }
 
@@ -150,6 +177,11 @@ export async function registerCompanyForPeppolReceiving(args: {
   if (live) {
     rowId = live.id
   } else {
+    const cap = getPeppolReceivingCap()
+    if (cap !== null) {
+      const liveCount = await countLivePeppolRegistrations({ supabase: service, provider: transport.provider })
+      if (liveCount >= cap) return { ok: false, code: 'PEPPOL_REGISTRATION_CAP_REACHED' }
+    }
     const { data, error } = await service
       .from('peppol_registrations')
       .insert({

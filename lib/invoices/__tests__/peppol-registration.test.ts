@@ -136,6 +136,33 @@ describe('registerCompanyForPeppolReceiving', () => {
     expect(failed?.args[0]).toMatchObject({ status: 'failed', last_error: 'Qvalia answered 500: smp down' })
   })
 
+  it('refuses the registration past the contracted cap, and lets an already-registered company through', async () => {
+    process.env.PEPPOL_RECEIVING_MAX_REGISTRATIONS = '10'
+    try {
+      const transport = makeTransport()
+      enqueue({ data: [], error: null })                       // no registration for this company
+      enqueue({ data: null, error: null, count: 10 })          // live count at the cap
+      expect(await registerCompanyForPeppolReceiving({
+        service, companyId: 'company-1', userId: 'user-1', transport, settings,
+      })).toEqual({ ok: false, code: 'PEPPOL_REGISTRATION_CAP_REACHED' })
+      expect(transport.registerRecipient).not.toHaveBeenCalled()
+
+      // A company that already holds a live row re-registers without consuming a slot.
+      reset()
+      enqueue({ data: [{ ...registeredRow, status: 'failed', registered_at: null }], error: null })
+      enqueue({ data: registeredRow, error: null })
+      // failed is not live, so the cap applies: count below cap lets it in
+      reset()
+      enqueue({ data: [registeredRow], error: null })          // live row exists
+      enqueue({ data: registeredRow, error: null })            // finalize update
+      expect((await registerCompanyForPeppolReceiving({
+        service, companyId: 'company-1', userId: 'user-1', transport, settings,
+      })).ok).toBe(true)
+    } finally {
+      delete process.env.PEPPOL_RECEIVING_MAX_REGISTRATIONS
+    }
+  })
+
   it('stops before the network on a personnummer and on a send-only transport', async () => {
     const transport = makeTransport()
     expect(await registerCompanyForPeppolReceiving({
