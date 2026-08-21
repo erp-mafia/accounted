@@ -5463,6 +5463,7 @@
     "ext_arcim_documents_import_action": "Also import documents from Fortnox",
     "ext_arcim_documents_not_now": "Not now",
     "ext_arcim_documents_importing": "Importing and linking the documents to the vouchers...",
+    "ext_arcim_documents_import_progress": "{done} of {total} documents processed. The import continues automatically.",
     "ext_arcim_documents_reconnecting": "Waiting for Fortnox to reconnect...",
     "ext_arcim_documents_discovery_error": "The migration is complete, but we could not check the documents in Fortnox. Try again without rerunning the migration.",
     "ext_arcim_documents_import_error": "The migration is still complete, but the documents could not be imported. Try again; documents already imported will be skipped.",

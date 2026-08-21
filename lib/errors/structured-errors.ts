@@ -2076,6 +2076,33 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte importera underlag från leverantören.',
     message_en: 'Failed to import documents from provider.',
   },
+  // Same-origin storage proxy (/api/storage): signed Storage URLs served
+  // from the app's own host for agent sandboxes that only reach the MCP host.
+  STORAGE_PROXY_UNSUPPORTED_PATH: {
+    httpStatus: 404,
+    message_sv: 'Sökvägen stöds inte av lagringsproxyn.',
+    message_en: 'The storage proxy does not serve this path.',
+  },
+  STORAGE_PROXY_TOKEN_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Länken saknar sin signerade token.',
+    message_en: 'The link is missing its signed token.',
+  },
+  STORAGE_PROXY_BODY_TOO_LARGE: {
+    httpStatus: 413,
+    message_sv: 'Filen är för stor för att laddas upp via länken.',
+    message_en: 'The file is too large to upload through this link.',
+  },
+  STORAGE_PROXY_UNCONFIGURED: {
+    httpStatus: 503,
+    message_sv: 'Lagringen är inte konfigurerad på den här servern.',
+    message_en: 'Storage is not configured on this server.',
+  },
+  STORAGE_PROXY_UPSTREAM_UNAVAILABLE: {
+    httpStatus: 502,
+    message_sv: 'Lagringen svarade inte.',
+    message_en: 'Storage did not respond.',
+  },
   PROVIDER_DOCUMENT_SCOPES_REQUIRED: {
     httpStatus: 403,
     message_sv:

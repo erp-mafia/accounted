@@ -7,6 +7,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { createLogger } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/server'
 import type { DocumentAttachment } from '@/types'
+import type { DocumentExtractionOwner } from '@/lib/events/types'
 
 const log = createLogger('document-extraction')
 
@@ -62,9 +63,17 @@ export const documentExtractionExtension: Extension = {
           document: DocumentAttachment
           userId: string
           companyId: string
-          extractionOwner?: 'invoice-inbox'
+          extractionOwner?: DocumentExtractionOwner
         }
         if (extractionOwner === 'invoice-inbox') return
+        if (extractionOwner === 'none') {
+          // The uploader already holds the booking (provider underlag import
+          // links each file to its posted verifikat): a model pass would cost
+          // a paid call per file and, run inline, blew the 300 s route budget
+          // on a 113-file Fortnox import (2026-08-21). Stamp so nothing polls.
+          await stamp(createServiceClient(), document.id, 'skipped:opted_out')
+          return
+        }
         await extractAndPersist(document, companyId)
       },
     },

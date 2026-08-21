@@ -177,11 +177,16 @@ describe('importProviderDocuments', () => {
     expect(userId).toBe(USER)
     expect(companyId).toBe(COMPANY)
     expect(file).toMatchObject({ name: 'Kvitto.pdf', type: 'application/pdf' })
+    // extractionOwner 'none': the file arrives linked to its posted
+    // verifikat, so no paid model pass (it was the inline extraction that
+    // blew the hosted function budget on a 113-file import).
     expect(metadata).toEqual({
       upload_source: 'api',
       journal_entry_id: 'je-1',
       idempotency_key: 'je-1',
+      extractionOwner: 'none',
     })
+    expect(result).toMatchObject({ total: 1, partial: false, nextCursor: null })
   })
 
   it('skips a receipt already archived on the same verifikat (sha256 + journal entry idempotency)', async () => {
@@ -268,6 +273,7 @@ describe('importProviderDocuments', () => {
       upload_source: 'api',
       journal_entry_id: 'je-1',
       idempotency_key: 'je-1',
+      extractionOwner: 'none',
     })
   })
 
@@ -647,5 +653,89 @@ describe('importProviderDocuments', () => {
     expect(result).toMatchObject({ scanned: 1, linked: 1, failed: 0 })
     const [, , , file] = mockUpload.mock.calls[0]
     expect(file).toMatchObject({ name: 'Kvitto.jpg', type: 'image/jpeg' })
+  })
+
+  describe('time budget and cursor (resumable sweep)', () => {
+    const THREE_CONNECTIONS: FortnoxFileConnection[] = [
+      { ...FORTNOX_CONNECTION, fileId: 'file-c', name: 'c.pdf' },
+      { ...FORTNOX_CONNECTION, fileId: 'file-a', name: 'a.pdf' },
+      { ...FORTNOX_CONNECTION, fileId: 'file-b', name: 'b.pdf' },
+    ]
+
+    it('stops after the attachment in flight once the budget is spent and hands back a cursor', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+      // Each download "costs" 100 ms of wall clock; the budget allows one.
+      let clock = 0
+      mockDownloadFortnoxArchiveFile.mockImplementation(async () => {
+        clock += 100
+        return { bytes: bytesOf('FORTNOX-PDF-' + clock), contentType: 'application/pdf' }
+      })
+
+      const first = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        timeBudgetMs: 50,
+        now: () => clock,
+      })
+
+      expect(first).toMatchObject({
+        total: 3,
+        scanned: 1,
+        linked: 1,
+        partial: true,
+        nextCursor: 1,
+      })
+      // Sorted by provider id, so the first slice is file-a, not file-c.
+      expect(mockUpload.mock.calls[0][3]).toMatchObject({ name: 'a.pdf' })
+
+      const second = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        cursor: first.nextCursor as number,
+        timeBudgetMs: 1_000_000,
+        now: () => clock,
+      })
+
+      expect(second).toMatchObject({ total: 3, scanned: 2, linked: 2, partial: false, nextCursor: null })
+      expect(mockUpload.mock.calls.map((call) => (call[3] as { name: string }).name)).toEqual([
+        'a.pdf',
+        'b.pdf',
+        'c.pdf',
+      ])
+    })
+
+    it('always processes at least one attachment per call even when the budget is already spent', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        timeBudgetMs: 0,
+        now: () => 0,
+      })
+
+      expect(result).toMatchObject({ scanned: 1, linked: 1, partial: true, nextCursor: 1 })
+    })
+
+    it('treats a cursor past the end as a complete, empty slice', async () => {
+      const supabase = wireFortnox({ connections: THREE_CONNECTIONS })
+
+      const result = await importProviderDocuments({
+        supabase,
+        companyId: COMPANY,
+        userId: USER,
+        consentId: 'c1',
+        cursor: 99,
+      })
+
+      expect(result).toMatchObject({ total: 3, scanned: 0, linked: 0, partial: false, nextCursor: null })
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
   })
 })

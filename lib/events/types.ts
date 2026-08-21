@@ -18,6 +18,14 @@ import type {
 // Core Event Types: discriminated union of all system events
 // ============================================================
 
+/**
+ * Who runs AI extraction on an uploaded document.
+ * - 'invoice-inbox': the inbox extracts and mirrors the result itself.
+ * - 'none': nobody should; the caller already holds the booking.
+ * Unset: the document-extraction extension extracts (default).
+ */
+export type DocumentExtractionOwner = 'invoice-inbox' | 'none'
+
 export type CoreEvent =
   // Bookkeeping
   | { type: 'journal_entry.drafted'; payload: { entry: JournalEntry; userId: string; companyId: string } }
@@ -29,7 +37,11 @@ export type CoreEvent =
   // extractionOwner: set by the invoice inbox on documents it extracts itself,
   // so the document-extraction extension yields instead of racing it (the
   // inbox row does not exist yet when this event fires inside uploadDocument).
-  | { type: 'document.uploaded'; payload: { document: DocumentAttachment; userId: string; companyId: string; extractionOwner?: 'invoice-inbox' } }
+  // 'none' is an explicit opt-out: the uploader already knows the booking
+  // (provider underlag import links each file to its posted verifikat), so
+  // running a paid model over it would buy nothing. The extension stamps the
+  // row as skipped instead of extracting.
+  | { type: 'document.uploaded'; payload: { document: DocumentAttachment; userId: string; companyId: string; extractionOwner?: DocumentExtractionOwner } }
   | { type: 'document.accessed'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
   | { type: 'document.deleted'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
   // Invoicing

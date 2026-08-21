@@ -37,6 +37,7 @@ import {
   parseArcimDocumentOAuthResume,
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   requestArcimDocumentImport,
+  runArcimDocumentImportToCompletion,
   resolveArcimDocumentFollowUpProvider,
   watchArcimOAuthPopup,
   type ArcimDocumentImportProblem,
@@ -1477,10 +1478,26 @@ function DocumentImportFollowUp({
           ? t('ext_arcim_documents_importing')
           : t('ext_arcim_documents_reconnecting')
 
+    // Running totals arrive after each server slice of a real import; the
+    // dry-run result that sits in state while the first slice runs is not
+    // progress, so it stays silent.
+    const progress =
+      state.phase === 'importing' && state.result && !state.result.dryRun && state.result.total > 0
+        ? state.result
+        : null
+
     return (
       <section className="space-y-3" aria-live="polite">
         {title}
         <SpinnerLine>{label}</SpinnerLine>
+        {progress && (
+          <p className="text-sm tabular-nums text-muted-foreground">
+            {t('ext_arcim_documents_import_progress', {
+              done: progress.scanned,
+              total: progress.total,
+            })}
+          </p>
+        )}
       </section>
     )
   }
@@ -2316,7 +2333,12 @@ export default function ArcimMigrationWorkspace({
   const runDocumentImport = useCallback(async (currentConsentId: string) => {
     dispatchDocumentImport({ type: 'import-started' })
     try {
-      const result = await requestArcimDocumentImport(currentConsentId, false)
+      // One route call per time-budgeted slice; the helper loops until the
+      // server reports the end and feeds running totals back for the UI.
+      const result = await runArcimDocumentImportToCompletion(currentConsentId, {
+        onProgress: (progress) =>
+          dispatchDocumentImport({ type: 'import-progress', result: progress }),
+      })
       dispatchDocumentImport({ type: 'import-succeeded', result })
     } catch (documentError) {
       dispatchDocumentImport({

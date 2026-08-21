@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { eventBus } from '@/lib/events'
+import type { DocumentExtractionOwner } from '@/lib/events/types'
 import type { DocumentAttachment, DocumentUploadSource } from '@/types'
 
 /**
@@ -504,7 +505,7 @@ export async function completePendingDocumentUpload(
   fileName: string,
   mimeType: string,
   now: number = Date.now(),
-  options: { extractionOwner?: 'invoice-inbox' } = {}
+  options: { extractionOwner?: DocumentExtractionOwner } = {}
 ): Promise<CompletedPendingDocumentUpload> {
   const serviceClient = createServiceClientNoCookies()
   const storage = serviceClient.storage.from(DOCUMENTS_BUCKET)
@@ -656,9 +657,10 @@ export async function uploadDocument(
      * Who runs AI extraction on this document. The invoice inbox extracts
      * the documents it ingests itself (and mirrors the result onto the
      * document row), so it declares ownership here and the
-     * document-extraction extension yields. Default: the extension extracts.
+     * document-extraction extension yields. 'none' opts out entirely (the
+     * caller already knows the booking). Default: the extension extracts.
      */
-    extractionOwner?: 'invoice-inbox'
+    extractionOwner?: DocumentExtractionOwner
   } = {}
 ): Promise<DocumentAttachment & { deduplicated?: boolean }> {
   await ensureDocumentsBucket()

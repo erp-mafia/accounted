@@ -209,6 +209,7 @@ import {
   uploadDocument,
   MAX_DOCUMENT_SIZE,
 } from '@/lib/core/documents/document-service'
+import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from '@/extensions/general/invoice-inbox/lib/mirror-extraction'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
@@ -9667,7 +9668,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_document_upload',
     title: 'Create Document Upload',
-    description: 'Create a short-lived URL for a model-free document upload. PUT the raw file bytes (max 10 MB) to upload_url, then call gnubok_complete_document_upload with the same upload_id and file_name.',
+    description: 'Create a short-lived URL for a model-free document upload. PUT the raw file bytes (max 10 MB) to upload_url, then call gnubok_complete_document_upload with the same upload_id and file_name. upload_url is served from this MCP server\'s own origin, so sandboxes that only allow the MCP host can reach it.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9717,7 +9718,7 @@ export const tools: McpTool[] = [
       )
       return {
         upload_id: reservation.uploadId,
-        upload_url: reservation.signedUrl,
+        upload_url: toSameOriginStorageUrl(reservation.signedUrl),
         expires_at: reservation.expiresAt,
       }
     },
@@ -10606,7 +10607,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_document_content',
     title: 'Get Document Content',
-    description: 'Get a 5-minute signed download URL for a document so the agent can read its contents (e.g. with vision). Use after gnubok_list_unmatched_documents to inspect a specific PDF before deciding which transaction it matches.',
+    description: 'Get a 5-minute signed download URL for a document so the agent can read its contents (e.g. with vision). Use after gnubok_list_unmatched_documents to inspect a specific PDF before deciding which transaction it matches. The URL is served from this MCP server\'s own origin.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -10664,7 +10665,7 @@ export const tools: McpTool[] = [
         file_name: doc.file_name,
         mime_type: doc.mime_type,
         size_bytes: doc.file_size_bytes,
-        signed_url: signed.signedUrl,
+        signed_url: toSameOriginStorageUrl(signed.signedUrl),
         expires_at: expiresAt,
       }
     },
@@ -13679,7 +13680,7 @@ export const tools: McpTool[] = [
       const expiresAt = new Date(Date.now() + SIGNED_URL_TTL_SECONDS * 1000).toISOString()
 
       return {
-        download_url: signed.signedUrl,
+        download_url: toSameOriginStorageUrl(signed.signedUrl),
         storage_path: storagePath,
         file_name: fileName,
         size_bytes: zipBuffer.byteLength,

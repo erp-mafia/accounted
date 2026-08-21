@@ -1363,10 +1363,22 @@ export const arcimMigrationExtension: Extension = {
 
         let consentId: string | undefined
         let dryRun = false
+        let cursor = 0
         try {
-          const body = (await request.json()) as { consentId?: string; dryRun?: boolean }
+          const body = (await request.json()) as {
+            consentId?: string
+            dryRun?: boolean
+            cursor?: number
+          }
           consentId = body?.consentId
           dryRun = body?.dryRun === true
+          // Resume point from a previous partial call (see import-documents.ts);
+          // anything but a non-negative integer restarts from the top, which
+          // is always safe: already-archived receipts are skipped by hash.
+          cursor =
+            typeof body?.cursor === 'number' && Number.isInteger(body.cursor) && body.cursor >= 0
+              ? body.cursor
+              : 0
         } catch {
           // empty/invalid body: consentId check below rejects it
         }
@@ -1382,15 +1394,20 @@ export const arcimMigrationExtension: Extension = {
             userId: user.id,
             consentId,
             dryRun,
+            cursor,
           })
           log.info('arcim import-documents completed', {
             companyId,
             dryRun,
+            cursor,
+            total: result.total,
             scanned: result.scanned,
             linked: result.linked,
             skipped: result.skipped,
             unmatched: result.unmatched,
             failed: result.failed,
+            partial: result.partial,
+            nextCursor: result.nextCursor,
           })
           return NextResponse.json({ success: true, dryRun, result })
         } catch (error) {

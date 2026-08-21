@@ -64,6 +64,13 @@ beforeEach(() => {
 describe('document-extraction handler', () => {
   // THE dedupe: inbox-owned documents are extracted (and mirrored) by the
   // inbox itself. The handler used to race it and pay a second model call.
+  it('stamps and skips when the uploader opted out (already-booked provider underlag)', async () => {
+    await handler(payload({ extractionOwner: 'none' }))
+
+    expect(extractMock).not.toHaveBeenCalled()
+    expect(lastStamp()).toBe('skipped:opted_out')
+  })
+
   it('yields entirely when the inbox owns extraction', async () => {
     await handler(payload({ extractionOwner: 'invoice-inbox' }))
     expect(supabase.from).not.toHaveBeenCalled()

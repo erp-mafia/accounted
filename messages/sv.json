@@ -5463,6 +5463,7 @@
     "ext_arcim_documents_import_action": "Importera även underlag från Fortnox",
     "ext_arcim_documents_not_now": "Inte nu",
     "ext_arcim_documents_importing": "Importerar och kopplar underlagen till verifikaten...",
+    "ext_arcim_documents_import_progress": "{done} av {total} underlag behandlade. Importen fortsätter automatiskt.",
     "ext_arcim_documents_reconnecting": "Väntar på att Fortnox ska kopplas om...",
     "ext_arcim_documents_discovery_error": "Migreringen är klar, men vi kunde inte kontrollera underlagen i Fortnox. Försök igen utan att köra om migreringen.",
     "ext_arcim_documents_import_error": "Migreringen är fortfarande klar, men underlagen kunde inte importeras. Försök igen; redan importerade underlag hoppas över.",
