@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -175,6 +175,7 @@ export default function MileagePage() {
     setForm(emptyForm())
     setShowMore(false)
     setPrefill(null)
+    invalidateSuggestLookup()
     setSuggestStatus({ kind: 'idle' })
     setFormOpen(true)
   }
@@ -184,6 +185,7 @@ export default function MileagePage() {
     setForm(formFromTrip(trip, true))
     setShowMore(Boolean(trip.vehicle_registration || trip.odometer_start || trip.visited || trip.notes))
     setPrefill(null)
+    invalidateSuggestLookup()
     setSuggestStatus({ kind: 'idle' })
     setFormOpen(true)
   }
@@ -193,6 +195,7 @@ export default function MileagePage() {
     setForm(formFromTrip(trip, false))
     setShowMore(false)
     setPrefill(null)
+    invalidateSuggestLookup()
     setSuggestStatus({ kind: 'idle' })
     setFormOpen(true)
   }
@@ -209,7 +212,9 @@ export default function MileagePage() {
       next.purpose = result.purpose
       setPrefill(result.prefill)
     }
-    // A changed endpoint invalidates any suggestion hint for the old route.
+    // A changed endpoint invalidates any suggestion hint for the old route,
+    // including one still in flight.
+    invalidateSuggestLookup()
     setSuggestStatus({ kind: 'idle' })
     setForm(next)
   }
@@ -231,16 +236,28 @@ export default function MileagePage() {
   const canSuggestDistance =
     !editingId && form.from_location.trim().length >= 2 && form.to_location.trim().length >= 2
 
+  // Any event that makes an in-flight lookup stale (route edit, manual km
+  // edit, dialog close/reopen) bumps the generation; a response is applied
+  // only if its generation is still current, so a slow lookup can never
+  // write an old route's distance into a changed form.
+  const suggestGeneration = useRef(0)
+
+  const invalidateSuggestLookup = () => {
+    suggestGeneration.current += 1
+  }
+
   const suggestDistance = async () => {
     if (!canSuggestDistance || suggestStatus.kind === 'loading') return
     const from = form.from_location.trim()
     const to = form.to_location.trim()
+    const generation = ++suggestGeneration.current
     setSuggestStatus({ kind: 'loading' })
     try {
       const res = await fetch(
         `/api/mileage/distance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
       )
       const body = res.ok ? await res.json() : null
+      if (generation !== suggestGeneration.current) return
       if (typeof body?.data?.distance_km === 'number' && body.data.distance_km > 0) {
         disownPrefill('distance_km')
         setForm((prev) => ({ ...prev, distance_km: String(body.data.distance_km) }))
@@ -253,7 +270,7 @@ export default function MileagePage() {
         setSuggestStatus({ kind: 'none' })
       }
     } catch {
-      setSuggestStatus({ kind: 'none' })
+      if (generation === suggestGeneration.current) setSuggestStatus({ kind: 'none' })
     }
   }
 
@@ -500,7 +517,13 @@ export default function MileagePage() {
         </table>
       )}
 
-      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+      <Dialog
+        open={formOpen}
+        onOpenChange={(open) => {
+          if (!open) invalidateSuggestLookup()
+          setFormOpen(open)
+        }}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{editingId ? t('edit_trip') : t('new_trip')}</DialogTitle>
@@ -602,6 +625,7 @@ export default function MileagePage() {
                   value={form.distance_km}
                   onChange={(e) => {
                     disownPrefill('distance_km')
+                    invalidateSuggestLookup()
                     setSuggestStatus((s) => (s.kind === 'applied' ? { kind: 'idle' } : s))
                     setForm({ ...form, distance_km: e.target.value })
                   }}

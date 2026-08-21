@@ -19,7 +19,7 @@ export default function PrivacyPolicyPage() {
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-08-19
+            Senast uppdaterad: 2026-08-21
           </p>
         </div>
 
@@ -193,17 +193,22 @@ export default function PrivacyPolicyPage() {
 
             <p className="mt-4">
               Utöver underbiträdena ovan använder körjournalens avståndsförslag
-              två självständiga mottagare som vi inte har biträdesavtal med:
-              OpenStreetMap Foundation (geokodningstjänsten Nominatim,
-              Storbritannien/EU; Storbritannien omfattas av EU:s
-              adekvansbeslut) och FOSSGIS e.V. (ruttberäkningstjänsten,
-              Tyskland). Uppgifterna skickas bara när du själv klickar på
-              &quot;Föreslå sträcka&quot; i körjournalen, och då skickas endast
-              adresstexterna du angett, via vår server och utan användar-ID
-              eller andra kontouppgifter. Tänk på att en adress du anger, till
-              exempel en hemadress, i sig kan vara en personuppgift; skriv
-              platsnamn i stället för exakta adresser om du inte vill att de
-              skickas.
+              två självständiga mottagare som vi inte har biträdesavtal med.
+              Uppgifterna skickas bara när du själv klickar på
+              &quot;Föreslå sträcka&quot; i körjournalen, via vår server och
+              utan användar-ID eller andra kontouppgifter, och varje mottagare
+              får olika uppgifter: OpenStreetMap Foundation (geokodningstjänsten
+              Nominatim, Storbritannien/EU; Storbritannien omfattas av EU:s
+              adekvansbeslut) tar emot adresstexterna du angett och översätter
+              dem till kartkoordinater, och FOSSGIS e.V.
+              (ruttberäkningstjänsten, Tyskland) tar därefter emot endast
+              koordinaterna, aldrig adresstexterna. För att minska antalet
+              anrop mellanlagrar vår server adresstexter, koordinater och
+              beräknade sträckor i arbetsminnet i upp till 24 timmar; de
+              skrivs inte till databasen och kopplas inte till ditt konto.
+              Tänk på att en adress du anger, till exempel en hemadress, i sig
+              kan vara en personuppgift; skriv platsnamn i stället för exakta
+              adresser om du inte vill att de skickas.
             </p>
 
             <p className="mt-4 text-sm text-muted-foreground">
