@@ -1544,6 +1544,11 @@ const REPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Rapporten kunde inte genereras.',
     message_en: 'Failed to generate the report.',
   },
+  REPORT_PDF_TOO_LARGE: {
+    httpStatus: 413,
+    message_sv: 'Rapporten är för stor för PDF. Ladda ner den som CSV eller Excel i stället.',
+    message_en: 'The report is too large for PDF. Download it as CSV or Excel instead.',
+  },
 }
 
 const VAT_REPORT: Record<string, StructuredErrorEntry> = {

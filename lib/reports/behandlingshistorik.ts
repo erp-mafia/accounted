@@ -434,6 +434,15 @@ function fmtValue(value: unknown, key?: string): string {
     if (value.length === 0) return '(tomt)'
     return truncate(value.map((v) => (typeof v === 'string' ? v : JSON.stringify(v))).join(', '))
   }
+  if (typeof value === 'object') {
+    // Settings maps such as default_voucher_series_per_source_type read better
+    // as "import: A, manual: A" than as raw JSON.
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length === 0) return '(tomt)'
+    return truncate(
+      entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', '),
+    )
+  }
   return truncate(JSON.stringify(value))
 }
 
@@ -1513,6 +1522,7 @@ export async function generateBehandlingshistorik(
     total_events: finalEvents.length,
     by_category: byCategory,
     events: finalEvents,
+    category_filter: params.categories && params.categories.length > 0 ? [...params.categories] : null,
   }
 }
 

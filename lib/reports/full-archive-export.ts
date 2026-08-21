@@ -19,6 +19,7 @@ import {
   type TrialBalanceLike,
 } from './archive-csv'
 import { buildArchiveReadme, buildDriveFolderReadme } from './archive-readme'
+import { currentAppVersion } from './app-version'
 import type { GeneralLedgerReport } from './general-ledger'
 import type {
   AuditLogEntry,
@@ -1373,6 +1374,9 @@ async function buildSystemDoc(
       name: branding.appName.toLowerCase(),
       description: 'Bokforingssystem for enskild firma och aktiebolag',
       url: branding.appUrl,
+      // BFNAR 2013:2 p. 9.16 second paragraph: program versions are system
+      // changes that affect processing; the archive names the running build.
+      version: currentAppVersion(),
     },
     kontoplan: {
       standard: 'BAS 2026',
@@ -1407,6 +1411,15 @@ async function buildSystemDoc(
       bank: 'Enable Banking (PSD2)',
       email: 'Resend',
       export_format: 'SIE4',
+    },
+    // BFNAR 2013:2 p. 9.15: where and how the behandlingshistorik is produced.
+    behandlingshistorik: {
+      beskrivning:
+        'Skapas automatiskt (BFL 5 kap. 11 §, BFNAR 2013:2 punkt 9.16): registreringstidpunkt och utförare för varje bokföringspost (journal_entries), förändringar via databasens oföränderliga ändringslogg audit_log (kontoplan, inställningar som styr bokföringen, räkenskapsår, API-nycklar, makuleringar, raderingar), rättelser i samma verifikat (journal_entry_rattelse_log) samt SIE-, bankfils- och migreringsloggar.',
+      rapport:
+        'Rapporter > Export & arkiv > Behandlingshistorik: per räkenskapsår eller datumintervall, som PDF, CSV eller Excel',
+      arkivfil: 'revision/behandlingshistorik.json i denna säkerhetsbackup (råa loggrader)',
+      tidszon: 'Europe/Stockholm i rapporten, UTC i JSON-filen',
     },
     generated_at: new Date().toISOString(),
     fiscal_periods: periods.map((p) => ({

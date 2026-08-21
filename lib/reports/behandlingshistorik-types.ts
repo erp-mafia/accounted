@@ -72,6 +72,8 @@ export interface BehandlingshistorikReport {
   total_events: number
   by_category: Record<BehandlingshistorikCategory, number>
   events: BehandlingshistorikEvent[]
+  /** Category filter the report was generated with, if any (shown as "Urval" on the document). */
+  category_filter?: BehandlingshistorikCategory[] | null
 }
 
 /** Swedish category labels for exports and the statutory document. */

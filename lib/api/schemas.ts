@@ -2507,7 +2507,7 @@ export const BehandlingshistorikQuerySchema = z.object({
   category: z
     .enum(['verifikation', 'kontoplan', 'installningar', 'period', 'import', 'atkomst', 'ovrigt'])
     .optional(),
-  format: z.enum(['json', 'csv', 'xlsx']).default('json'),
+  format: z.enum(['json', 'csv', 'xlsx', 'pdf']).default('json'),
 })
 
 // ============================================================

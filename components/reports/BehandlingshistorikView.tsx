@@ -130,6 +130,7 @@ export function BehandlingshistorikView({
         </div>
         <ReportExportMenu
           items={[
+            { format: 'pdf', href: `/api/reports/behandlingshistorik?${query}&format=pdf` },
             { format: 'xlsx', href: `/api/reports/behandlingshistorik?${query}&format=xlsx` },
             { format: 'csv', href: `/api/reports/behandlingshistorik?${query}&format=csv` },
           ]}

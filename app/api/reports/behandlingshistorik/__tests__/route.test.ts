@@ -29,16 +29,29 @@ vi.mock('@/lib/reports/behandlingshistorik', () => ({
   resolveUserLabelsFromProfiles: vi.fn().mockResolvedValue(new Map()),
 }))
 
+// The PDF layout itself is covered by the template test; here the renderer is
+// a stub so the route test stays fast and asserts only the HTTP contract.
+vi.mock('@react-pdf/renderer', () => ({
+  renderToBuffer: vi.fn().mockResolvedValue(Buffer.from('%PDF-1.4 stub', 'utf-8')),
+}))
+vi.mock('@/lib/reports/behandlingshistorik-pdf-template', () => ({
+  BehandlingshistorikPDF: vi.fn().mockReturnValue({ type: 'Document' }),
+}))
+
+import { renderToBuffer } from '@react-pdf/renderer'
 import {
   generateBehandlingshistorik,
   buildBehandlingshistorikExport,
   resolveUserLabelsFromProfiles,
 } from '@/lib/reports/behandlingshistorik'
-import { GET } from '../route'
+import { BehandlingshistorikPDF } from '@/lib/reports/behandlingshistorik-pdf-template'
+import { GET, PDF_EVENT_LIMIT } from '../route'
 
 const mockGenerate = vi.mocked(generateBehandlingshistorik)
 const mockExport = vi.mocked(buildBehandlingshistorikExport)
 const mockResolve = vi.mocked(resolveUserLabelsFromProfiles)
+const mockRender = vi.mocked(renderToBuffer)
+const mockPdfTemplate = vi.mocked(BehandlingshistorikPDF)
 
 function authed() {
   requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
@@ -98,7 +111,7 @@ describe('GET /api/reports/behandlingshistorik', () => {
   })
 
   it('returns 400 on an unknown format', async () => {
-    const res = await call('/api/reports/behandlingshistorik?period_id=period-1&format=pdf')
+    const res = await call('/api/reports/behandlingshistorik?period_id=period-1&format=docx')
     expect(res.status).toBe(400)
   })
 
@@ -180,5 +193,28 @@ describe('GET /api/reports/behandlingshistorik', () => {
     const body = await res.json()
     expect(body.error.code).toBe('REPORT_GENERATION_FAILED')
     expect(JSON.stringify(body)).not.toContain('audit_log')
+  })
+
+  it('streams the PDF with an attachment filename and renders the template with the report', async () => {
+    mockGenerate.mockResolvedValue(sampleReport)
+    const res = await call('/api/reports/behandlingshistorik?period_id=period-1&format=pdf')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('application/pdf')
+    expect(res.headers.get('Content-Disposition')).toContain('attachment')
+    expect(res.headers.get('Content-Disposition')).toContain('behandlingshistorik-testbolaget-ab-20261231.pdf')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(mockPdfTemplate).toHaveBeenCalledWith({ report: sampleReport })
+    expect(mockRender).toHaveBeenCalledTimes(1)
+    const text = await res.text()
+    expect(text.startsWith('%PDF-')).toBe(true)
+  })
+
+  it('refuses the PDF with 413 when the report exceeds the render limit, without rendering', async () => {
+    mockGenerate.mockResolvedValue({ ...sampleReport, total_events: PDF_EVENT_LIMIT + 1 })
+    const res = await call('/api/reports/behandlingshistorik?period_id=period-1&format=pdf')
+    expect(res.status).toBe(413)
+    const body = await res.json()
+    expect(body.error.code).toBe('REPORT_PDF_TOO_LARGE')
+    expect(mockRender).not.toHaveBeenCalled()
   })
 })

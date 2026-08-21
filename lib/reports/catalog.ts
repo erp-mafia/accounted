@@ -327,7 +327,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     descKey: 'desc_behandlingshistorik',
     category: 'export',
     params: 'fiscal-range',
-    exports: ['xlsx'],
+    exports: ['pdf', 'xlsx'],
     libraryOnly: true,
     searchTerms:
       'behandlingshistorik audit trail audit log händelselogg ändringslogg logg historik vem gjorde vad processing history revision systemdokumentation',
