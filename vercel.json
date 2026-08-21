@@ -97,6 +97,10 @@
     {
       "path": "/api/peppol/inbound/cron",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/peppol/outbound/status/cron",
+      "schedule": "5,20,35,50 * * * *"
     }
   ]
 }

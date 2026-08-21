@@ -187,6 +187,13 @@ export interface PeppolTransport {
     providerDocumentId: string,
     documentType: PeppolInboundDocumentType,
   ): Promise<string | null>
+  /**
+   * Pull the provider's current delivery status for an outbound submission
+   * and return it as verified events (same shape as a webhook, `idempotencyKey`
+   * unresolved). For providers without webhooks, or as a safety net when a
+   * webhook was missed. Returns [] when the provider has nothing new to say.
+   */
+  pollDeliveryStatus?(providerSubmissionId: string): Promise<PeppolVerifiedEvent[]>
 }
 
 const transports = new Map<string, PeppolTransport>()

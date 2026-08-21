@@ -539,3 +539,39 @@ describe('Qvalia transport: receiving side', () => {
     expect(await transport.fetchInboundDocumentXml!('in-2', 'Invoice')).toBeNull()
   })
 })
+
+describe('Qvalia transport: pollDeliveryStatus', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+  const transport = createQvaliaTransport(config, { fetch: fetchMock, now: () => new Date('2026-08-21T12:00:00.000Z') })
+
+  beforeEach(() => {
+    fetchMock.mockReset()
+  })
+
+  it('turns a message-log status into the same event a webhook would carry', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      status: 'success',
+      data: [{ uuid: 'int-1', readAt: null, metadata: { status: 'processed', updatedAt: '2026-08-21T11:59:00.000Z' } }],
+    }))
+    const [event] = await transport.pollDeliveryStatus!('int-1')
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/invoices/outgoing/status?integrationId=int-1&includeRead=true&limit=1')
+    expect(event).toMatchObject({
+      provider: 'qvalia',
+      providerSubmissionId: 'int-1',
+      providerEventId: 'document_delivery:int-1:processed',
+      idempotencyKey: null,
+      eventCode: 'status_poll',
+      normalizedStatus: 'transport_succeeded',
+      isTerminal: false,
+      occurredAt: '2026-08-21T11:59:00.000Z',
+      verificationMethod: 'provider_poll',
+    })
+  })
+
+  it('yields nothing when the provider has no status yet or answers 204', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: 'success', data: [{ uuid: 'int-1', readAt: null, metadata: {} }] }))
+    expect(await transport.pollDeliveryStatus!('int-1')).toEqual([])
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    expect(await transport.pollDeliveryStatus!('int-1')).toEqual([])
+  })
+})

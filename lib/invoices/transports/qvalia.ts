@@ -732,6 +732,55 @@ export function createQvaliaTransport(
     return text.trim().startsWith('<') ? text : null
   }
 
+  /**
+   * Outbound status by polling `/invoices/outgoing/status`: the message-log
+   * status is the same free text the `document_delivery` webhook carries, so
+   * it goes through the same mapping. An empty `metadata` (nothing has
+   * happened since acceptance) yields no event.
+   */
+  async function pollDeliveryStatus(providerSubmissionId: string): Promise<PeppolVerifiedEvent[]> {
+    const url = `${transactionBase}/invoices/outgoing/status?integrationId=${encodeURIComponent(providerSubmissionId)}&includeRead=true&limit=1`
+    const response = await request('GET', url)
+    if (response.status === 204 || response.status === 404) return []
+    const { text, json } = await readBody(response)
+    if (!response.ok) throw classifyHttpFailure(response.status, json, text)
+    const data = asRecord(json)?.data ?? json
+    const items = Array.isArray(data) ? data : data ? [data] : []
+    const events: PeppolVerifiedEvent[] = []
+    for (const item of items) {
+      const record = asRecord(item)
+      const metadata = asRecord(record?.metadata)
+      const status = asString(metadata?.status)
+      if (!status) continue
+      const normalized = normalizeQvaliaWebhook({
+        eventType: 'document_delivery',
+        direction: 'outgoing',
+        integrationId: providerSubmissionId,
+        status: { status },
+      })
+      if (!normalized) continue
+      const occurredAt = asString(metadata?.updatedAt) ?? asString(record?.updatedAt) ?? now().toISOString()
+      events.push({
+        provider: QVALIA_PROVIDER,
+        providerTenantId: config.accountRegNo,
+        providerSubmissionId,
+        // Same dedupe key as the webhook would use for this transition, so a
+        // later webhook for the same status is a harmless duplicate.
+        providerEventId: `document_delivery:${providerSubmissionId}:${status}`,
+        idempotencyKey: null,
+        eventCode: 'status_poll',
+        normalizedStatus: normalized.normalizedStatus,
+        isTerminal: normalized.isTerminal,
+        detail: normalized.detail,
+        occurredAt,
+        rawPayload: record ?? {},
+        eventSha256: sha256Hex(`${providerSubmissionId}:${status}:${text}`),
+        verificationMethod: 'provider_poll',
+      })
+    }
+    return events
+  }
+
   return {
     provider: QVALIA_PROVIDER,
     lookupRecipient,
@@ -742,5 +791,6 @@ export function createQvaliaTransport(
     unregisterRecipient,
     listInboundDocuments,
     fetchInboundDocumentXml,
+    pollDeliveryStatus,
   }
 }
