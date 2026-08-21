@@ -37,7 +37,9 @@ describe('fetchDistanceSuggestion', () => {
     })
     expect(fetchImpl).toHaveBeenCalledTimes(3)
     expect(String(fetchImpl.mock.calls[0][0])).toContain('nominatim.openstreetmap.org')
-    expect(String(fetchImpl.mock.calls[2][0])).toContain('router.project-osrm.org')
+    // FOSSGIS instance on purpose: the project-osrm.org demo server is
+    // restricted to non-commercial use.
+    expect(String(fetchImpl.mock.calls[2][0])).toContain('routing.openstreetmap.de')
     // OSRM wants lon,lat ordering.
     expect(String(fetchImpl.mock.calls[2][0])).toContain('14.80,56.87;14.55,56.89')
   })
@@ -89,5 +91,58 @@ describe('fetchDistanceSuggestion', () => {
     await fetchDistanceSuggestion('hemma', 'jobbet', OPTS(fetchImpl))
 
     expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not suggest a distance that rounds to 0 km', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(geocodeHit('56.87', '14.80', 'A')))
+      .mockResolvedValueOnce(jsonResponse(geocodeHit('56.87', '14.80', 'B')))
+      .mockResolvedValueOnce(jsonResponse({ code: 'Ok', routes: [{ distance: 30 }] }))
+
+    expect(await fetchDistanceSuggestion('Storgatan 1', 'Storgatan 3', OPTS(fetchImpl))).toBeNull()
+  })
+
+  it('does not collide cache keys when an address contains the "|" character', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(geocodeHit('59.40', '17.94', 'Kista|Stockholm')))
+      .mockResolvedValueOnce(jsonResponse(geocodeHit('59.86', '17.64', 'Uppsala')))
+      .mockResolvedValueOnce(jsonResponse({ code: 'Ok', routes: [{ distance: 60_000 }] }))
+      .mockResolvedValueOnce(jsonResponse(geocodeHit('59.40', '17.94', 'Kista')))
+      .mockResolvedValueOnce(jsonResponse(geocodeHit('59.33', '18.06', 'Stockholm|Uppsala')))
+      .mockResolvedValueOnce(jsonResponse({ code: 'Ok', routes: [{ distance: 12_000 }] }))
+
+    const a = await fetchDistanceSuggestion('Kista|Stockholm', 'Uppsala', OPTS(fetchImpl))
+    // Same '|'-joined text, different route: must NOT be served a's cache.
+    const b = await fetchDistanceSuggestion('Kista', 'Stockholm|Uppsala', OPTS(fetchImpl))
+
+    expect(a?.distance_km).toBe(60)
+    expect(b?.distance_km).toBe(12)
+    expect(fetchImpl).toHaveBeenCalledTimes(6)
+  })
+
+  it('bails out instead of queueing when the politeness wait exceeds the bound', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(geocodeHit('56.87', '14.80', 'Växjö, Sverige')))
+      .mockResolvedValueOnce(jsonResponse(OSRM_OK))
+
+    // 'Växjö'/'växjö' share a geocode cache entry, so the first lookup makes
+    // one live Nominatim call and reserves one 10s slot. The next uncached
+    // route would have to wait far past MAX_QUEUE_WAIT_MS and must bail to
+    // null without any upstream call instead of holding the handler open.
+    const first = await fetchDistanceSuggestion('Växjö', 'växjö', {
+      fetchImpl,
+      minIntervalMs: 10_000,
+    })
+    const second = await fetchDistanceSuggestion('Ljungby', 'Markaryd', {
+      fetchImpl,
+      minIntervalMs: 10_000,
+    })
+
+    expect(first?.distance_km).toBe(47.3)
+    expect(second).toBeNull()
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 })

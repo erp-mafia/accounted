@@ -187,26 +187,24 @@ export default function PrivacyPolicyPage() {
                       eventuella underbiträden utanför EES.
                     </td>
                   </tr>
-                  <tr className="border-b">
-                    <td className="py-2 pr-4 font-medium">OpenStreetMap (OSMF)</td>
-                    <td className="py-2 pr-4">
-                      Avståndsförslag i körjournalen: när du skriver en från-
-                      och tilladress skickas adresstexterna, via vår server och
-                      utan användar-ID eller andra identifierare, till
-                      OpenStreetMaps geokodnings- och ruttjänster (Nominatim
-                      och OSRM) för att föreslå körsträckan. Endast
-                      adresstexterna skickas, och bara när du använder
-                      körjournalen.
-                    </td>
-                    <td className="py-2 pr-4">EU/Storbritannien</td>
-                    <td className="py-2">
-                      Anrop från vår server utan identifierare; Storbritannien
-                      omfattas av EU:s adekvansbeslut.
-                    </td>
-                  </tr>
                 </tbody>
               </table>
             </div>
+
+            <p className="mt-4">
+              Utöver underbiträdena ovan använder körjournalens avståndsförslag
+              två självständiga mottagare som vi inte har biträdesavtal med:
+              OpenStreetMap Foundation (geokodningstjänsten Nominatim,
+              Storbritannien/EU; Storbritannien omfattas av EU:s
+              adekvansbeslut) och FOSSGIS e.V. (ruttberäkningstjänsten,
+              Tyskland). Uppgifterna skickas bara när du själv klickar på
+              &quot;Föreslå sträcka&quot; i körjournalen, och då skickas endast
+              adresstexterna du angett, via vår server och utan användar-ID
+              eller andra kontouppgifter. Tänk på att en adress du anger, till
+              exempel en hemadress, i sig kan vara en personuppgift; skriv
+              platsnamn i stället för exakta adresser om du inte vill att de
+              skickas.
+            </p>
 
             <p className="mt-4 text-sm text-muted-foreground">
               AI-funktioner är frivilliga och kräver separat samtycke före

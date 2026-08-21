@@ -114,11 +114,12 @@ export default function MileagePage() {
   const [showMore, setShowMore] = useState(false)
   const [saving, setSaving] = useState(false)
   const [prefill, setPrefill] = useState<RoutePrefill | null>(null)
-  const [distanceSuggestion, setDistanceSuggestion] = useState<{
-    km: number
-    fromLabel: string
-    toLabel: string
-  } | null>(null)
+  const [suggestStatus, setSuggestStatus] = useState<
+    | { kind: 'idle' }
+    | { kind: 'loading' }
+    | { kind: 'none' }
+    | { kind: 'applied'; fromLabel: string; toLabel: string }
+  >({ kind: 'idle' })
 
   const [bookOpen, setBookOpen] = useState(false)
   const [bookFrom, setBookFrom] = useState('')
@@ -174,6 +175,7 @@ export default function MileagePage() {
     setForm(emptyForm())
     setShowMore(false)
     setPrefill(null)
+    setSuggestStatus({ kind: 'idle' })
     setFormOpen(true)
   }
 
@@ -182,6 +184,7 @@ export default function MileagePage() {
     setForm(formFromTrip(trip, true))
     setShowMore(Boolean(trip.vehicle_registration || trip.odometer_start || trip.visited || trip.notes))
     setPrefill(null)
+    setSuggestStatus({ kind: 'idle' })
     setFormOpen(true)
   }
 
@@ -190,6 +193,7 @@ export default function MileagePage() {
     setForm(formFromTrip(trip, false))
     setShowMore(false)
     setPrefill(null)
+    setSuggestStatus({ kind: 'idle' })
     setFormOpen(true)
   }
 
@@ -205,6 +209,8 @@ export default function MileagePage() {
       next.purpose = result.purpose
       setPrefill(result.prefill)
     }
+    // A changed endpoint invalidates any suggestion hint for the old route.
+    setSuggestStatus({ kind: 'idle' })
     setForm(next)
   }
 
@@ -217,45 +223,38 @@ export default function MileagePage() {
     setPrefill({ ...prefill, [field]: '' })
   }
 
-  // Distance suggestion (OpenStreetMap via our proxy): debounced lookup once
-  // both endpoints are typed, create mode only. It never writes the field by
-  // itself; the user applies it with a click and can still edit freely.
-  useEffect(() => {
-    setDistanceSuggestion(null)
-    if (!formOpen || editingId) return
+  // Distance suggestion (OpenStreetMap via our proxy), create mode only.
+  // Deliberately click-triggered, never as-you-type: Nominatim's usage
+  // policy forbids autocomplete-style traffic, and an explicit request is
+  // also what makes overwriting the km field the user's own action. The
+  // value stays fully editable afterwards.
+  const canSuggestDistance =
+    !editingId && form.from_location.trim().length >= 2 && form.to_location.trim().length >= 2
+
+  const suggestDistance = async () => {
+    if (!canSuggestDistance || suggestStatus.kind === 'loading') return
     const from = form.from_location.trim()
     const to = form.to_location.trim()
-    if (from.length < 2 || to.length < 2) return
-    const controller = new AbortController()
-    const timer = setTimeout(() => {
-      fetch(
-        `/api/mileage/distance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
-        { signal: controller.signal }
+    setSuggestStatus({ kind: 'loading' })
+    try {
+      const res = await fetch(
+        `/api/mileage/distance?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
       )
-        .then((res) => (res.ok ? res.json() : null))
-        .then((body) => {
-          if (typeof body?.data?.distance_km === 'number') {
-            setDistanceSuggestion({
-              km: body.data.distance_km,
-              fromLabel: body.data.from_label,
-              toLabel: body.data.to_label,
-            })
-          }
+      const body = res.ok ? await res.json() : null
+      if (typeof body?.data?.distance_km === 'number' && body.data.distance_km > 0) {
+        disownPrefill('distance_km')
+        setForm((prev) => ({ ...prev, distance_km: String(body.data.distance_km) }))
+        setSuggestStatus({
+          kind: 'applied',
+          fromLabel: body.data.from_label,
+          toLabel: body.data.to_label,
         })
-        .catch(() => {
-          // Suggestion only: a failed lookup shows nothing.
-        })
-    }, 700)
-    return () => {
-      clearTimeout(timer)
-      controller.abort()
+      } else {
+        setSuggestStatus({ kind: 'none' })
+      }
+    } catch {
+      setSuggestStatus({ kind: 'none' })
     }
-  }, [form.from_location, form.to_location, formOpen, editingId])
-
-  const applyDistanceSuggestion = () => {
-    if (!distanceSuggestion) return
-    disownPrefill('distance_km')
-    setForm((prev) => ({ ...prev, distance_km: String(distanceSuggestion.km) }))
   }
 
   const submitForm = async () => {
@@ -580,36 +579,59 @@ export default function MileagePage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="distance_km">
-                  {editingId ? t('field_km_total') : t('field_km')}
-                </Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="distance_km">
+                    {editingId ? t('field_km_total') : t('field_km')}
+                  </Label>
+                  {!editingId && (
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors duration-150 disabled:opacity-50 disabled:pointer-events-none"
+                      disabled={!canSuggestDistance || suggestStatus.kind === 'loading'}
+                      onClick={suggestDistance}
+                    >
+                      {suggestStatus.kind === 'loading'
+                        ? t('distance_suggest_loading')
+                        : t('distance_suggest_action')}
+                    </button>
+                  )}
+                </div>
                 <Input
                   id="distance_km"
                   inputMode="decimal"
                   value={form.distance_km}
                   onChange={(e) => {
                     disownPrefill('distance_km')
+                    setSuggestStatus((s) => (s.kind === 'applied' ? { kind: 'idle' } : s))
                     setForm({ ...form, distance_km: e.target.value })
                   }}
                 />
                 {Boolean(prefill?.distance_km) && (
                   <p className="text-xs text-muted-foreground">{t('route_prefill_hint')}</p>
                 )}
-                {!editingId &&
-                  distanceSuggestion &&
-                  form.distance_km !== String(distanceSuggestion.km) && (
-                    <button
-                      type="button"
-                      className="text-left text-xs text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground transition-colors duration-150"
-                      title={t('distance_suggestion_route', {
-                        from: distanceSuggestion.fromLabel,
-                        to: distanceSuggestion.toLabel,
-                      })}
-                      onClick={applyDistanceSuggestion}
+                {suggestStatus.kind === 'none' && (
+                  <p className="text-xs text-muted-foreground">{t('distance_suggestion_none')}</p>
+                )}
+                {suggestStatus.kind === 'applied' && (
+                  <p
+                    className="text-xs text-muted-foreground"
+                    title={`${suggestStatus.fromLabel} → ${suggestStatus.toLabel}`}
+                  >
+                    {t('distance_suggestion_route', {
+                      from: suggestStatus.fromLabel.split(',')[0],
+                      to: suggestStatus.toLabel.split(',')[0],
+                    })}
+                    {' · '}
+                    <a
+                      href="https://www.openstreetmap.org/copyright"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline hover:text-foreground"
                     >
-                      {t('distance_suggestion', { km: distanceSuggestion.km })}
-                    </button>
-                  )}
+                      © OpenStreetMap contributors
+                    </a>
+                  </p>
+                )}
               </div>
               {!editingId && (
                 <div className="flex items-end pb-2">

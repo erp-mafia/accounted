@@ -29,7 +29,11 @@ export interface DistanceFetchOptions {
 }
 
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search'
-const OSRM_URL = 'https://router.project-osrm.org/route/v1/driving'
+// FOSSGIS e.V.'s public OSRM instance (the one osm.org itself routes with).
+// Unlike router.project-osrm.org it carries no non-commercial restriction;
+// its policy asks for max 1 req/s, no heavy usage, a valid User-Agent and
+// visible attribution, all of which this module and the UI provide.
+const OSRM_URL = 'https://routing.openstreetmap.de/routed-car/route/v1/driving'
 // Nominatim's usage policy requires an identifying User-Agent.
 const USER_AGENT = 'Accounted korjournal (https://accounted.se)'
 const REQUEST_TIMEOUT_MS = 5_000
@@ -47,9 +51,16 @@ interface CacheEntry<T> {
 const geocodeCache = new Map<string, CacheEntry<GeocodeHit | null>>()
 const suggestionCache = new Map<string, CacheEntry<DistanceSuggestion | null>>()
 
+// Newline can never appear in normalizeQuery output (all whitespace collapses
+// to single spaces), so it is a collision-free separator between the two
+// endpoints; '|' would let 'Kista|Stockholm'->'Uppsala' share a key with
+// 'Kista'->'Stockholm|Uppsala'. Same reasoning as route-memory's ROUTE_KEY.
+const ROUTE_CACHE_SEPARATOR = String.fromCharCode(10)
+
 export function clearDistanceCachesForTests(): void {
   geocodeCache.clear()
   suggestionCache.clear()
+  nominatimNextSlot = 0
 }
 
 function cacheGet<T>(cache: Map<string, CacheEntry<T>>, key: string): CacheEntry<T> | undefined {
@@ -76,14 +87,19 @@ function normalizeQuery(value: string): string {
 }
 
 // In-instance politeness spacing for live Nominatim calls. Serverless
-// instances cannot guarantee a global rate, but combined with the client
-// debounce and the 24h caches this keeps a single instance well under
-// the 1 req/s policy.
+// instances cannot guarantee a global rate, but combined with the
+// click-triggered lookup and the 24h caches this keeps a single instance
+// well under the 1 req/s policy. The queue is bounded: rather than holding
+// request handlers open, a lookup that would wait longer than
+// MAX_QUEUE_WAIT_MS bails out (uncached, so a later retry can succeed)
+// without reserving a slot.
 let nominatimNextSlot = 0
+const MAX_QUEUE_WAIT_MS = 3_000
 
 async function waitForNominatimSlot(minIntervalMs: number): Promise<void> {
   const now = Date.now()
   const waitMs = nominatimNextSlot - now
+  if (waitMs > MAX_QUEUE_WAIT_MS) throw new Error('geocoding queue saturated')
   nominatimNextSlot = Math.max(now, nominatimNextSlot) + minIntervalMs
   if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs))
 }
@@ -126,8 +142,11 @@ async function fetchRouteKm(
 
   const body = (await res.json()) as { code?: string; routes?: Array<{ distance?: number }> }
   const meters = body.code === 'Ok' ? body.routes?.[0]?.distance : undefined
-  if (typeof meters !== 'number' || !(meters > 0)) return null
-  return Math.round(meters / 100) / 10
+  if (typeof meters !== 'number') return null
+  const km = Math.round(meters / 100) / 10
+  // Guard the ROUNDED value: 30 m rounds to 0.0 km, which the trip form
+  // rejects (km must be > 0), so it must never be suggested.
+  return km > 0 ? km : null
 }
 
 /**
@@ -143,7 +162,7 @@ export async function fetchDistanceSuggestion(
   const fetchImpl = options.fetchImpl ?? fetch
   const minIntervalMs = options.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS
 
-  const routeCacheKey = `${normalizeQuery(from)}|${normalizeQuery(to)}`
+  const routeCacheKey = normalizeQuery(from) + ROUTE_CACHE_SEPARATOR + normalizeQuery(to)
   const cached = cacheGet(suggestionCache, routeCacheKey)
   if (cached) return cached.value
 
