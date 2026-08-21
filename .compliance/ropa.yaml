@@ -228,6 +228,47 @@ processing_activities:
       - bankid_signing_required_for_filing
       - immutable_audit_log
 
+  - id: moms.declaration_status_read
+    name: Avläsning av inlämnad momsdeklaration och beslut från Skatteverket
+    purpose: >-
+      Läsa tillbaka en redan inlämnad momsdeklaration (inlamnat) och
+      Skatteverkets beslut (beslutat) för en period, på begäran av en
+      medlem i företaget via v1 REST-API:t eller MCP, så att bokföringen
+      kan stämmas av mot faktiskt inlämnade uppgifter. Läsning sker live
+      mot Skatteverket; deklarationsinnehållet lagras inte hos oss, endast
+      en audit-rad om att anropet gjordes.
+    lawful_basis: art_6_1_b   # service provision: read-back requested by the customer
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.government_id          # orgnummer (juridiska personer) eller pnr
+      - user.financial.tax          # rutor 05-62 i det inlämnade underlaget/beslutet
+    recipients:
+      - name: Skatteverket
+        country: SE
+        role: legal_recipient
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: Sweden-to-Sweden flow; no third-country transfer.
+    retention:
+      # Response bodies are returned to the caller and never persisted.
+      # Only the outbound call metadata lands in the audit log.
+      duration: 7y
+      basis: bfl_7_kap
+      stored_in:
+        - skatteverket_api_audit_log
+    security_measures:
+      - rls_company_scoped
+      - rbac_company_member_role_check
+      - tls_1_3_to_skatteverket
+      - immutable_audit_log
+      - no_payload_body_persisted
+      - upstream_error_bodies_logged_server_side_only
+
   - id: psd2.cash_account_mirror
     name: PSD2-konton speglas till cash_accounts
     purpose: >-

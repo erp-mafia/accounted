@@ -164,4 +164,7 @@ import '@/app/api/v1/companies/[companyId]/articles/route'
 // #1348: company-settings write (PATCH, MCP-tool-identical field set).
 import '@/app/api/v1/companies/[companyId]/settings/route'
 
+// #1663: filed momsdeklaration read (SKV inlamnat/beslutat).
+import '@/app/api/v1/companies/[companyId]/skatteverket/vat-declarations/route'
+
 export {}

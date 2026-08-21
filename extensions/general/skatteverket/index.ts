@@ -45,6 +45,7 @@ import {
   agiKontrolleraIU,
 } from './lib/agi-client'
 import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
+import { fetchVatDeclarationStatus } from './lib/declaration-status'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
 import { readAgiSubmissionStatus } from './lib/agi-submission-status'
 import {
@@ -2502,6 +2503,10 @@ export const skatteverketExtension: Extension = {
   services: {
     commitSubmitVatDeclaration,
     commitSubmitAgi,
+    // Read service for the v1 REST endpoint (issue #1663): filed
+    // momsdeklarationer (inlamnat) and beslut (beslutat). Contract in
+    // lib/skatteverket/declaration-status.ts.
+    fetchVatDeclarationStatus,
   },
 }
 
