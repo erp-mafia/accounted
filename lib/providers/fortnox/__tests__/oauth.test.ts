@@ -32,9 +32,19 @@ describe('Fortnox OAuth scopes', () => {
   // user is never told to reconnect for a permission the connect request does
   // not ask for. Flipping it here without enabling the scopes in the Fortnox
   // Developer Portal reintroduces the 2026-08-13 invalid_scope outage.
-  it('keeps the document scopes flagged as not approved, and names both of them', () => {
-    expect(FORTNOX_DOCUMENT_SCOPES_APPROVED).toBe(false);
+  it('has the document scopes approved in the portal, and names both of them', () => {
+    expect(FORTNOX_DOCUMENT_SCOPES_APPROVED).toBe(true);
     expect(FORTNOX_DOCUMENT_SCOPES).toEqual(['archive', 'connectfile']);
+  });
+
+  // The whole point of the opt-in consent: this is the only scope list that
+  // carries the attachment permissions, and the ordinary connect above still
+  // must not, so no customer is asked for an Arkivplats licence to connect.
+  it('puts the attachment scopes in the document consent only', () => {
+    expect(fortnoxConsentScopes({ documents: true })).toContain('archive');
+    expect(fortnoxConsentScopes({ documents: true })).toContain('connectfile');
+    expect(fortnoxConsentScopes()).not.toContain('archive');
+    expect(fortnoxConsentScopes()).not.toContain('connectfile');
   });
 
   // Even once the portal registration lands, opting in must never cost the

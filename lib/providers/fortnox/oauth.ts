@@ -20,17 +20,20 @@ export const FORTNOX_DOCUMENT_SCOPES = ['archive', 'connectfile'];
 
 /**
  * Whether the registered Fortnox app has Arkivplats and Koppla filer enabled in
- * the Fortnox Developer Portal (integration 39254). Requesting a scope the app
- * lacks makes the authorize endpoint reject with invalid_scope BEFORE login,
- * which kills every Fortnox connect (prod incident 2026-08-13), so this stays
- * false until the portal registration has both. Flip it in the same change that
- * enables them there.
+ * the Fortnox Developer Portal (integration 39254). True since 2026-08-21, when
+ * the portal registration was confirmed to carry both.
+ *
+ * Requesting a scope the app lacks makes the authorize endpoint reject with
+ * invalid_scope BEFORE login, so set this back to false the moment the portal
+ * loses them, rather than leaving the underlag reconnect pointed at a scope
+ * Fortnox will refuse (prod incident 2026-08-13, when the ordinary connect
+ * still carried these scopes and every Fortnox connection died).
  *
  * It gates the opt-in document consent below and the document-import error
  * message, never the ordinary connect: a user is never told to reconnect for a
  * permission we don't ask for (support case Klura AB, 2026-08-20).
  */
-export const FORTNOX_DOCUMENT_SCOPES_APPROVED: boolean = false;
+export const FORTNOX_DOCUMENT_SCOPES_APPROVED: boolean = true;
 
 /**
  * The scopes a Fortnox consent is minted with. The document scopes are opt-in
