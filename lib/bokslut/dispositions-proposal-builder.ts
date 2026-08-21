@@ -9,10 +9,10 @@ import { loadTaxAdjustmentSnapshot } from './tax-provision/tax-adjustment-servic
 import { calculateSarskildLoneskatt } from './tax-provision/sarskild-loneskatt-calculator'
 import {
   getPeriodiseringsfondCohortAccount,
-  getSchablonintaktRate,
   listExistingPeriodiseringsfonder,
   proposeAvsattning,
   proposeAteforing,
+  resolveSchablonintaktRate,
 } from './reserves/periodiseringsfond-service'
 import { calculateOveravskrivningar } from './reserves/overavskrivningar-calculator'
 import type { CompletedDisposition, DispositionsProposal, ProposedDisposition } from './types'
@@ -98,8 +98,10 @@ export async function buildDispositionsProposal(
     period.period_start,
     period.opening_balance_entry_id,
   )
+  // Rate resolves lazily: a company without opening fonder never touches
+  // the SLR table, so an unmapped year cannot break its bokslut.
   const ateforing = proposeAteforing(existingFonder, {
-    schablonintaktRate: getSchablonintaktRate(fiscalYear),
+    schablonintaktRate: resolveSchablonintaktRate(fiscalYear, existingFonder),
   })
   proposals.push(...ateforing.proposals)
   const ateforingTotal = ateforing.proposals.reduce((sum, p) => sum + p.amount, 0)

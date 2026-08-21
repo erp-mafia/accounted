@@ -17,10 +17,10 @@ import {
 import { calculateSarskildLoneskatt } from '@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator'
 import {
   getPeriodiseringsfondCohortAccount,
-  getSchablonintaktRate,
   listExistingPeriodiseringsfonder,
   proposeAvsattning,
   proposeAteforing,
+  resolveSchablonintaktRate,
 } from '@/lib/bokslut/reserves/periodiseringsfond-service'
 import { proposeOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-service'
 import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
@@ -32,10 +32,11 @@ import type { JournalEntry } from '@/types'
 
 /**
  * The schablonintäkt rate (IL 30 kap 6a §) defaults per fiscal year via
- * getSchablonintaktRate (statslåneräntan 30 nov året före det kalenderår
- * beskattningsåret går ut, lägst 0.5 %). Caller can override per request
- * via `schablonintaktRate` in the POST body; a future Riksbanken
- * integration will fetch the rate automatically.
+ * resolveSchablonintaktRate (statslåneräntan 30 nov året före det kalenderår
+ * beskattningsåret går ut, lägst 0.5 %; only consulted when the company holds
+ * fonder at the start of the year). Caller can override per request via
+ * `schablonintaktRate` in the POST body; a future Riksbanken integration
+ * will fetch the rate automatically.
  *
  * Canonical bokslut order. Each calculator re-reads the trial balance to
  * derive its base, so earlier items must post before later items see their
@@ -333,9 +334,9 @@ async function computeProposal(
             period.opening_balance_entry_id,
           ),
         ])
+      const schablonintaktRate = resolveSchablonintaktRate(fiscalYear, existingFonder)
       const schablonintakt = existingFonder.reduce(
-        (sum, fund) =>
-          sum + Math.max(0, fund.opening_balance) * getSchablonintaktRate(fiscalYear),
+        (sum, fund) => sum + Math.max(0, fund.opening_balance) * schablonintaktRate,
         0,
       )
       const manuallyBookedTax = Math.max(
@@ -380,7 +381,11 @@ async function computeProposal(
         period.period_start,
         period.opening_balance_entry_id,
       )
-      const schablonintaktRate = item.schablonintaktRate ?? getSchablonintaktRate(fiscalYear)
+      const schablonintaktRate = resolveSchablonintaktRate(
+        fiscalYear,
+        existing,
+        item.schablonintaktRate,
+      )
       // Schablonintäkt applies to the fond balance at the START of the tax
       // year (IL 30 kap 6a §): opening balances, regardless of what has
       // been avsatt or återfört during the period.
@@ -442,7 +447,7 @@ async function computeProposal(
       )
       const result = proposeAteforing(existing, {
         returns: item.returns,
-        schablonintaktRate: item.schablonintaktRate ?? getSchablonintaktRate(fiscalYear),
+        schablonintaktRate: resolveSchablonintaktRate(fiscalYear, existing, item.schablonintaktRate),
       })
       // Combine multiple cohort reversals into a single voucher with multiple
       // lines so we don't blow up voucher numbering, but each fond is its own
