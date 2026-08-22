@@ -678,6 +678,16 @@ const LINK_TX_JE: Record<string, StructuredErrorEntry> = {
     message_en:
       'Transaction and invoice currency must match to link to an existing voucher. Use the match-invoice flow for cross-currency settlement.',
   },
+  // Raw database failure on the transaction or invoice UPDATE. The service
+  // puts the Postgres message in details.reason; callers append it so the
+  // constraint or trigger that fired is visible to the agent instead of a
+  // bare code (a customer hit this reproducibly on certain positive amounts
+  // and could not tell us why).
+  LINK_TX_DB_ERROR: {
+    httpStatus: 500,
+    message_sv: 'Kopplingen kunde inte sparas i databasen.',
+    message_en: 'Linking the transaction to the journal entry failed at the database.',
+  },
 }
 
 const MATCH_SI: Record<string, StructuredErrorEntry> = {
