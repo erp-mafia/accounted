@@ -16244,9 +16244,9 @@ export const tools: McpTool[] = [
       properties: {
         status: { type: 'string', enum: ['committed', 'rejected', 'failed'] },
         operation_id: { type: 'string' },
-        data: { type: 'object', description: 'On success: the executor result. On failure: executor-provided details, e.g. { reason } with the database message behind LINK_TX_DB_ERROR.' },
+        data: { type: 'object' },
         error: { type: 'string' },
-        error_code: { type: 'string', description: 'Structured error code for `error` when the executor has one (e.g. LINK_TX_DB_ERROR).' },
+        error_code: { type: 'string' },
         auto_rejected: { type: 'boolean' },
       },
       required: ['status', 'operation_id'],
