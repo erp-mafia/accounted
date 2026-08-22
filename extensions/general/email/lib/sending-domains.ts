@@ -142,9 +142,17 @@ export async function getSendingDomain(
  * user must publish. The DB insert goes first so the unique indexes
  * (lower(domain), company_id) serialize concurrent claims before we ever
  * talk to Resend; every failure after that rolls the row back.
+ *
+ * Two clients on purpose: `supabase` is the caller's RLS client (proves
+ * owner/admin membership on the insert and the rollback delete); `writer` is
+ * a service-role client for the verification state (resend_domain_id,
+ * dns_records, status), which the tenant guard trigger
+ * (20260822130000) refuses from tenant JWTs. Every writer query still filters
+ * on company_id: defense in depth, never the only check.
  */
 export async function claimSendingDomain(
   supabase: SupabaseClient,
+  writer: SupabaseClient,
   companyId: string,
   rawDomain: string,
 ): Promise<SendingDomainResult<CompanySendingDomain>> {
@@ -232,7 +240,7 @@ export async function claimSendingDomain(
     // mapping the status anyway keeps the helper honest about what Resend
     // said rather than hardcoding 'pending'.
     const status = mapResendSendingStatus(fetched.data.status)
-    const { data: updated, error: updateError } = await supabase
+    const { data: updated, error: updateError } = await writer
       .from('company_sending_domains')
       .update({
         resend_domain_id: resendDomainId,
@@ -270,6 +278,7 @@ export async function claimSendingDomain(
  */
 export async function checkSendingDomainVerification(
   supabase: SupabaseClient,
+  writer: SupabaseClient,
   companyId: string,
 ): Promise<SendingDomainResult<CompanySendingDomain>> {
   const row = await getSendingDomain(supabase, companyId)
@@ -306,7 +315,7 @@ export async function checkSendingDomainVerification(
     }
 
     const status = mapResendSendingStatus(fetched.data.status)
-    const { data: updated, error: updateError } = await supabase
+    const { data: updated, error: updateError } = await writer
       .from('company_sending_domains')
       .update({
         status,
@@ -450,9 +459,16 @@ export async function removeSendingDomain(
 }
 
 /**
+ * Outcome of applying a domain webhook event. The route maps `error` to an
+ * HTTP 500 so Resend (Svix) retries; `no_match` is acknowledged with 200
+ * because the event belongs to a domain this table does not track (platform
+ * sender, inbox domains) and retrying would never change that.
+ */
+export type WebhookApplyOutcome = 'applied' | 'no_match' | 'error'
+
+/**
  * Applies a Resend `domain.updated` webhook event so verification flips
- * without the user pressing "Kontrollera igen". No-op when the domain id is
- * unknown (platform sender, inbox domains). Returns whether a row matched.
+ * without the user pressing "Kontrollera igen".
  *
  * The event's status carries no capability breakdown, so before flipping a
  * row to verified the sending capability is confirmed with Resend; on a
@@ -461,14 +477,15 @@ export async function removeSendingDomain(
 export async function applySendingDomainStatusFromWebhook(
   supabase: SupabaseClient,
   event: { id: string; status: string; records?: unknown },
-): Promise<boolean> {
-  const { data: row } = await supabase
+): Promise<WebhookApplyOutcome> {
+  const { data: row, error: lookupError } = await supabase
     .from('company_sending_domains')
     .select('id, verified_at')
     .eq('resend_domain_id', event.id)
     .maybeSingle()
 
-  if (!row) return false
+  if (lookupError) return 'error'
+  if (!row) return 'no_match'
   const current = row as { id: string; verified_at: string | null }
 
   const status = mapResendSendingStatus(event.status as DomainStatus)
@@ -491,7 +508,7 @@ export async function applySendingDomainStatusFromWebhook(
           last_checked_at: new Date().toISOString(),
         })
         .eq('id', current.id)
-      return !error
+      return error ? 'error' : 'applied'
     }
   }
 
@@ -506,5 +523,5 @@ export async function applySendingDomainStatusFromWebhook(
     })
     .eq('id', current.id)
 
-  return !error
+  return error ? 'error' : 'applied'
 }

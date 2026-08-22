@@ -163,7 +163,8 @@ describe('POST /sending-domain', () => {
     const { status, body } = await parseJsonResponse<{ data: typeof ROW }>(res)
     expect(status).toBe(200)
     expect(body.data.id).toBe('row-1')
-    expect(claimMock).toHaveBeenCalledWith(expect.anything(), 'company-1', 'hansbolag.example')
+    // (tenant RLS client, service-role writer, company, domain)
+    expect(claimMock).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'company-1', 'hansbolag.example')
   })
 
   it('propagates the helper status code', async () => {
@@ -242,7 +243,7 @@ describe('POST /delivery-status: domain.updated', () => {
       created_at: '2026-08-22T10:00:00Z',
       data: { id: 'rd_1', name: 'hansbolag.example', status: 'verified', records: [] },
     })
-    webhookApplyMock.mockResolvedValue(true)
+    webhookApplyMock.mockResolvedValue('applied')
     const res = await route.handler(
       createMockRequest('/delivery-status', { method: 'POST', body: { type: 'domain.updated' } }),
       undefined,
@@ -251,5 +252,27 @@ describe('POST /delivery-status: domain.updated', () => {
     expect(status).toBe(200)
     expect(body.data.applied).toBe(true)
     expect(webhookApplyMock).toHaveBeenCalledWith(expect.anything(), { id: 'rd_1', status: 'verified', records: [] })
+  })
+
+  it('acknowledges an unknown domain with 200 but answers 500 on a database error so Svix retries', async () => {
+    process.env.RESEND_DELIVERY_WEBHOOK_SECRET = 'whsec_test'
+    verifyWebhookMock.mockReturnValue({
+      type: 'domain.updated',
+      created_at: '2026-08-22T10:00:00Z',
+      data: { id: 'rd_other', name: 'other.example', status: 'verified', records: [] },
+    })
+    const request = () =>
+      createMockRequest('/delivery-status', { method: 'POST', body: { type: 'domain.updated' } })
+
+    webhookApplyMock.mockResolvedValue('no_match')
+    const ignored = await parseJsonResponse<{ data: { applied: boolean; reason: string } }>(
+      await route.handler(request(), undefined),
+    )
+    expect(ignored.status).toBe(200)
+    expect(ignored.body.data).toEqual({ applied: false, reason: 'no_matching_domain' })
+
+    webhookApplyMock.mockResolvedValue('error')
+    const failed = await route.handler(request(), undefined)
+    expect(failed.status).toBe(500)
   })
 })

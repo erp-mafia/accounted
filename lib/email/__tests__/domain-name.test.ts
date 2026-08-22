@@ -48,6 +48,12 @@ describe('normalizeSenderLocalPart', () => {
     expect(normalizeSenderLocalPart('ekonomi.ab_1-x')).toBe('ekonomi.ab_1-x')
   })
 
+  it('rejects trailing and consecutive dots (dot-atom rule)', () => {
+    expect(normalizeSenderLocalPart('faktura.')).toBeNull()
+    expect(normalizeSenderLocalPart('fak..tura')).toBeNull()
+    expect(normalizeSenderLocalPart('fak.tura')).toBe('fak.tura')
+  })
+
   it('rejects header-breaking or out-of-alphabet input', () => {
     expect(normalizeSenderLocalPart('')).toBeNull()
     expect(normalizeSenderLocalPart('.faktura')).toBeNull()

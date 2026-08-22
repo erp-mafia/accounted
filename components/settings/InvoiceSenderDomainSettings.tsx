@@ -92,8 +92,11 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
   }, [applyRow])
 
   useEffect(() => {
+    // Only owners/admins can ever see the section: skip the request (and its
+    // capability lookups) for everyone else.
+    if (!canManage) return
     void fetchDomain()
-  }, [fetchDomain])
+  }, [canManage, fetchDomain])
 
   const fail = useCallback(
     (title: string, err: unknown) => {
@@ -240,6 +243,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
               placeholder="dittbolag.se"
               className="max-w-xs"
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return
                 if (e.key === 'Enter') void handleClaim()
               }}
             />

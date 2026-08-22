@@ -127,7 +127,14 @@ export const emailExtension: Extension = {
           )
         }
 
-        const result = await claimSendingDomain(ctx!.supabase, ctx!.companyId, body.domain)
+        // Verification state is service-role only (tenant guard trigger);
+        // the user client still does the insert, so RLS proves membership.
+        const result = await claimSendingDomain(
+          ctx!.supabase,
+          createServiceClientNoCookies(),
+          ctx!.companyId,
+          body.domain,
+        )
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
         return NextResponse.json({ data: result.data })
       },
@@ -141,7 +148,11 @@ export const emailExtension: Extension = {
         const denied = await guardSendingDomainRoute(ctx, { write: true })
         if (denied) return denied
 
-        const result = await checkSendingDomainVerification(ctx!.supabase, ctx!.companyId)
+        const result = await checkSendingDomainVerification(
+          ctx!.supabase,
+          createServiceClientNoCookies(),
+          ctx!.companyId,
+        )
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
         return NextResponse.json({ data: result.data })
       },
@@ -218,12 +229,21 @@ export const emailExtension: Extension = {
         // without the user pressing "Kontrollera igen" (requires the event
         // type to be subscribed on the Resend webhook; harmless when it isn't).
         if (event.type === 'domain.updated') {
-          const matched = await applySendingDomainStatusFromWebhook(createServiceClientNoCookies(), {
+          const outcome = await applySendingDomainStatusFromWebhook(createServiceClientNoCookies(), {
             id: event.data.id,
             status: event.data.status,
             records: event.data.records,
           })
-          return NextResponse.json({ data: { applied: matched, reason: matched ? undefined : 'no_matching_domain' } })
+          // A database error must not be acknowledged: Svix retries non-2xx
+          // with backoff, which is exactly the recovery wanted for a
+          // transient failure (same rule as the delivery status below).
+          if (outcome === 'error') {
+            log.error('failed to apply domain status', undefined, { domainId: event.data.id })
+            return NextResponse.json({ error: 'Failed to record domain status' }, { status: 500 })
+          }
+          return NextResponse.json({
+            data: { applied: outcome === 'applied', reason: outcome === 'no_match' ? 'no_matching_domain' : undefined },
+          })
         }
 
         const report = toDeliveryReport(event)

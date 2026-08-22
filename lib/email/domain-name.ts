@@ -34,10 +34,17 @@ export function isValidHostname(domain: string): boolean {
   return /[a-z]/.test(labels[labels.length - 1])
 }
 
-/** Local part of a sender address: conservative dot-atom subset, lowercase. */
-export const SENDER_LOCAL_PART_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
+/**
+ * Local part of a sender address: conservative dot-atom subset, lowercase.
+ * Dots may only separate atoms (RFC 5322 dot-atom): no leading, trailing or
+ * consecutive dots. Mirrored by the CHECK constraint in
+ * 20260822130000_company_sending_domains_tenant_guard.sql.
+ */
+export const SENDER_LOCAL_PART_PATTERN = /^[a-z0-9_-]+(\.[a-z0-9_-]+)*$/
+const SENDER_LOCAL_PART_MAX_LENGTH = 64
 
 export function normalizeSenderLocalPart(raw: string): string | null {
   const value = String(raw ?? '').trim().toLowerCase()
+  if (value.length === 0 || value.length > SENDER_LOCAL_PART_MAX_LENGTH) return null
   return SENDER_LOCAL_PART_PATTERN.test(value) ? value : null
 }

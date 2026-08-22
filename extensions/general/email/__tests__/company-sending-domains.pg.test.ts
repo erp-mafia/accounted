@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { getPool, withUserContext } from '@/tests/pg/setup'
+import { getPool, withUserContext, runAsServiceRole } from '@/tests/pg/setup'
 import { insertAuthUser, insertCompany, insertCompanyMember } from '@/tests/pg/fixtures'
 
 /**
@@ -106,6 +106,138 @@ describe('company_sending_domains', () => {
     await expect(
       getPool().query(`UPDATE public.company_sending_domains SET sender_name = '' WHERE company_id = $1`, [companyId]),
     ).rejects.toThrow(/sender_name_check/)
+
+    // Dot-atom rule (20260822130000): no trailing or consecutive dots.
+    for (const bad of ['faktura.', 'fak..tura', '.faktura']) {
+      await expect(
+        getPool().query(`UPDATE public.company_sending_domains SET sender_local_part = $2 WHERE company_id = $1`, [
+          companyId,
+          bad,
+        ]),
+      ).rejects.toThrow(/sender_local_part_check/)
+    }
+    const ok = await getPool().query(
+      `UPDATE public.company_sending_domains SET sender_local_part = 'fak.tura' WHERE company_id = $1`,
+      [companyId],
+    )
+    expect(ok.rowCount).toBe(1)
+  })
+
+  it('a Resend domain id maps to at most one row', async () => {
+    await getPool().query(
+      `UPDATE public.company_sending_domains SET resend_domain_id = 'rd_unique' WHERE company_id = $1`,
+      [companyId],
+    )
+    await expect(
+      getPool().query(
+        `INSERT INTO public.company_sending_domains (company_id, domain, resend_domain_id) VALUES ($1, $2, 'rd_unique')`,
+        [otherCompanyId, `other-${domain}`],
+      ),
+    ).rejects.toThrow(/idx_company_sending_domains_resend_id/)
+  })
+
+  it('rejects a malformed or non-lowercase domain (domain_shape CHECK)', async () => {
+    await expect(
+      getPool().query(`UPDATE public.company_sending_domains SET domain = 'Not A Domain' WHERE company_id = $1`, [
+        companyId,
+      ]),
+    ).rejects.toThrow(/company_sending_domains_domain_shape/)
+    await expect(
+      getPool().query(`UPDATE public.company_sending_domains SET domain = 'Upper.Example' WHERE company_id = $1`, [
+        companyId,
+      ]),
+    ).rejects.toThrow(/company_sending_domains_domain_shape/)
+  })
+
+  it('tenant guard: an owner cannot open a claim as verified, nor touch verification state', async () => {
+    // Fresh owner + company so the unique indexes do not interfere.
+    const forgerId = await insertAuthUser()
+    const forgerCompanyId = await insertCompany({ createdBy: forgerId })
+    await insertCompanyMember({ companyId: forgerCompanyId, userId: forgerId, role: 'owner' })
+
+    await expect(
+      withUserContext(forgerId, (c) =>
+        c.query(
+          `INSERT INTO public.company_sending_domains (company_id, domain, status)
+           VALUES ($1, $2, 'verified')`,
+          [forgerCompanyId, `forged-${domain}`],
+        ),
+      ),
+    ).rejects.toThrow(/tenant claim starts as pending/)
+
+    await expect(
+      withUserContext(forgerId, (c) =>
+        c.query(
+          `INSERT INTO public.company_sending_domains (company_id, domain, resend_domain_id)
+           VALUES ($1, $2, 'rd_forged')`,
+          [forgerCompanyId, `forged-${domain}`],
+        ),
+      ),
+    ).rejects.toThrow(/tenant claim starts as pending/)
+
+    // A pending claim is fine for the tenant (what the route does)...
+    const pending = await withUserContext(forgerId, (c) =>
+      c.query(
+        `INSERT INTO public.company_sending_domains (company_id, domain) VALUES ($1, $2) RETURNING status`,
+        [forgerCompanyId, `forged-${domain}`],
+      ),
+    )
+    expect(pending.rows[0].status).toBe('pending')
+
+    // ...but on the seeded row the owner can neither verify it nor retarget it.
+    await expect(
+      withUserContext(ownerId, (c) =>
+        c.query(`UPDATE public.company_sending_domains SET status = 'verified' WHERE company_id = $1`, [companyId]),
+      ),
+    ).rejects.toThrow(/server-managed/)
+    await expect(
+      withUserContext(ownerId, (c) =>
+        c.query(`UPDATE public.company_sending_domains SET domain = 'other.example' WHERE company_id = $1`, [
+          companyId,
+        ]),
+      ),
+    ).rejects.toThrow(/server-managed/)
+    await expect(
+      withUserContext(ownerId, (c) =>
+        c.query(`UPDATE public.company_sending_domains SET resend_domain_id = 'rd_x' WHERE company_id = $1`, [
+          companyId,
+        ]),
+      ),
+    ).rejects.toThrow(/server-managed/)
+
+    // Sender presentation stays tenant-editable.
+    const presentation = await withUserContext(ownerId, (c) =>
+      c.query(
+        `UPDATE public.company_sending_domains
+            SET sender_local_part = 'ekonomi', sender_name = 'Ekonomi', enabled = true
+          WHERE company_id = $1`,
+        [companyId],
+      ),
+    )
+    expect(presentation.rowCount).toBe(1)
+  })
+
+  it('tenant guard: the service role and direct sessions may write verification state', async () => {
+    await runAsServiceRole(async (c) => {
+      const r = await c.query(
+        `UPDATE public.company_sending_domains
+            SET status = 'verified', resend_domain_id = 'rd_pg', verified_at = now(), last_checked_at = now()
+          WHERE company_id = $1`,
+        [companyId],
+      )
+      expect(r.rowCount).toBe(1)
+    })
+    const { rows } = await getPool().query(
+      `SELECT status, resend_domain_id FROM public.company_sending_domains WHERE company_id = $1`,
+      [companyId],
+    )
+    expect(rows[0]).toEqual({ status: 'verified', resend_domain_id: 'rd_pg' })
+    // Direct (superuser) session: allowed, used by the other tests above.
+    const direct = await getPool().query(
+      `UPDATE public.company_sending_domains SET status = 'pending' WHERE company_id = $1`,
+      [companyId],
+    )
+    expect(direct.rowCount).toBe(1)
   })
 
   it('one domain per company, and a domain belongs to one company (case-insensitive)', async () => {

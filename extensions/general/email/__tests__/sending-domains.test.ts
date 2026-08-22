@@ -112,7 +112,7 @@ describe('isSendingOnlyProfile', () => {
 describe('claimSendingDomain', () => {
   it('rejects an invalid domain without touching the DB or Resend', async () => {
     const { client, calls } = sb()
-    const result = await claimSendingDomain(client, 'company-1', 'nodots')
+    const result = await claimSendingDomain(client, client, 'company-1', 'nodots')
     expect(result).toEqual({ ok: false, status: 400, error: expect.stringMatching(/Ogiltig/) })
     expect(calls).toHaveLength(0)
     expect(domainsMock.create).not.toHaveBeenCalled()
@@ -120,7 +120,7 @@ describe('claimSendingDomain', () => {
 
   it('rejects a reserved domain', async () => {
     const { client } = sb()
-    const result = await claimSendingDomain(client, 'company-1', 'platform.example')
+    const result = await claimSendingDomain(client, client, 'company-1', 'platform.example')
     expect(result.ok).toBe(false)
     expect(domainsMock.create).not.toHaveBeenCalled()
   })
@@ -135,7 +135,7 @@ describe('claimSendingDomain', () => {
       error: null,
     })
 
-    const result = await claimSendingDomain(client, 'company-1', 'HansBolag.example')
+    const result = await claimSendingDomain(client, client, 'company-1', 'HansBolag.example')
     expect(result.ok).toBe(true)
     expect(domainsMock.create).toHaveBeenCalledWith({
       name: 'hansbolag.example',
@@ -148,10 +148,31 @@ describe('claimSendingDomain', () => {
     expect(updateArgs?.[0]).toMatchObject({ resend_domain_id: 'rd_1', dns_records: [DKIM_RECORD], status: 'pending' })
   })
 
+  it('writes the verification state through the service-role writer, not the tenant client', async () => {
+    const tenant = sb()
+    const writer = sb()
+    tenant.enqueue({ data: { ...ROW, resend_domain_id: null, dns_records: null } }) // insert (RLS client)
+    writer.enqueue({ data: ROW }) // update (service role)
+    domainsMock.create.mockResolvedValue({ data: { id: 'rd_1' }, error: null })
+    domainsMock.get.mockResolvedValue({
+      data: { id: 'rd_1', status: 'not_started', records: [DKIM_RECORD], capabilities: SENDING_ONLY },
+      error: null,
+    })
+
+    const result = await claimSendingDomain(tenant.client, writer.client, 'company-1', 'hansbolag.example')
+    expect(result.ok).toBe(true)
+    expect(tenant.findCall('company_sending_domains', 'update')).toBeUndefined()
+    expect(writer.findCall('company_sending_domains', 'update')?.[0]).toMatchObject({ resend_domain_id: 'rd_1' })
+    // Still scoped to the company on the service-role path.
+    expect(writer.findCalls('company_sending_domains', 'eq')).toEqual(
+      expect.arrayContaining([['company_id', 'company-1']]),
+    )
+  })
+
   it('maps a unique-violation on company_id to a 409 about the existing domain', async () => {
     const { client, enqueue } = sb()
     enqueue({ data: null, error: { code: '23505', message: 'duplicate key idx_company_sending_domains_company' } })
-    const result = await claimSendingDomain(client, 'company-1', 'hansbolag.example')
+    const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
     expect(result).toEqual({ ok: false, status: 409, error: expect.stringMatching(/redan en avsändardomän/) })
   })
 
@@ -161,7 +182,7 @@ describe('claimSendingDomain', () => {
     enqueue({ data: null }) // rollback delete
     domainsMock.create.mockResolvedValue({ data: null, error: { message: 'Domain already exists' } })
 
-    const result = await claimSendingDomain(client, 'company-1', 'hansbolag.example')
+    const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
     expect(result).toEqual({ ok: false, status: 409, error: expect.stringMatching(/finns redan/) })
     expect(domainsMock.list).not.toHaveBeenCalled()
     expect(findCalls('company_sending_domains', 'delete')).toHaveLength(1)
@@ -176,7 +197,7 @@ describe('claimSendingDomain', () => {
     domainsMock.get.mockResolvedValue({ data: { id: 'rd_1', status: 'pending', records: [], capabilities: SENDING_ONLY }, error: null })
     domainsMock.remove.mockResolvedValue({ data: null, error: null })
 
-    const result = await claimSendingDomain(client, 'company-1', 'hansbolag.example')
+    const result = await claimSendingDomain(client, client, 'company-1', 'hansbolag.example')
     expect(result.ok).toBe(false)
     expect(domainsMock.remove).toHaveBeenCalledWith('rd_1')
   })
@@ -186,7 +207,7 @@ describe('checkSendingDomainVerification', () => {
   it('404s without a row', async () => {
     const { client, enqueue } = sb()
     enqueue({ data: null })
-    const result = await checkSendingDomainVerification(client, 'company-1')
+    const result = await checkSendingDomainVerification(client, client, 'company-1')
     expect(result).toMatchObject({ ok: false, status: 404 })
   })
 
@@ -200,7 +221,7 @@ describe('checkSendingDomainVerification', () => {
       error: null,
     })
 
-    const result = await checkSendingDomainVerification(client, 'company-1')
+    const result = await checkSendingDomainVerification(client, client, 'company-1')
     expect(result.ok).toBe(true)
     expect(domainsMock.verify).toHaveBeenCalledWith('rd_1')
     const updateArgs = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>
@@ -216,7 +237,7 @@ describe('checkSendingDomainVerification', () => {
       data: { id: 'rd_1', status: 'verified', records: [], capabilities: { sending: 'disabled', receiving: 'enabled' } },
       error: null,
     })
-    const result = await checkSendingDomainVerification(client, 'company-1')
+    const result = await checkSendingDomainVerification(client, client, 'company-1')
     expect(result).toMatchObject({ ok: false, status: 409 })
   })
 })
@@ -301,11 +322,28 @@ describe('removeSendingDomain', () => {
 })
 
 describe('applySendingDomainStatusFromWebhook', () => {
-  it('returns false for an unknown Resend domain id', async () => {
+  it('returns no_match for an unknown Resend domain id', async () => {
     const { client, enqueue } = sb()
     enqueue({ data: null })
-    await expect(applySendingDomainStatusFromWebhook(client, { id: 'rd_other', status: 'verified' })).resolves.toBe(false)
+    await expect(applySendingDomainStatusFromWebhook(client, { id: 'rd_other', status: 'verified' })).resolves.toBe(
+      'no_match',
+    )
     expect(domainsMock.get).not.toHaveBeenCalled()
+  })
+
+  it('returns error (so the webhook is retried) when the lookup or the update fails', async () => {
+    const lookupFail = sb()
+    lookupFail.enqueue({ data: null, error: { message: 'db down' } })
+    await expect(
+      applySendingDomainStatusFromWebhook(lookupFail.client, { id: 'rd_1', status: 'failed' }),
+    ).resolves.toBe('error')
+
+    const updateFail = sb()
+    updateFail.enqueue({ data: { id: 'row-1', verified_at: null } })
+    updateFail.enqueue({ data: null, error: { message: 'db down' } })
+    await expect(
+      applySendingDomainStatusFromWebhook(updateFail.client, { id: 'rd_1', status: 'failed' }),
+    ).resolves.toBe('error')
   })
 
   it('flips to verified only after confirming the sending capability with Resend', async () => {
@@ -314,7 +352,7 @@ describe('applySendingDomainStatusFromWebhook', () => {
     enqueue({ data: null }) // update
     domainsMock.get.mockResolvedValue({ data: { id: 'rd_1', capabilities: SENDING_ONLY }, error: null })
     const ok = await applySendingDomainStatusFromWebhook(client, { id: 'rd_1', status: 'verified', records: [DKIM_RECORD] })
-    expect(ok).toBe(true)
+    expect(ok).toBe('applied')
     const update = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>
     expect(update.status).toBe('verified')
     expect(update.dns_records).toEqual([DKIM_RECORD])
@@ -327,7 +365,7 @@ describe('applySendingDomainStatusFromWebhook', () => {
     enqueue({ data: null })
     domainsMock.get.mockResolvedValue({ data: null, error: { message: 'nope' } })
     const ok = await applySendingDomainStatusFromWebhook(client, { id: 'rd_1', status: 'verified' })
-    expect(ok).toBe(true)
+    expect(ok).toBe('applied')
     const update = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>
     expect(update.status).toBeUndefined()
   })
@@ -337,7 +375,7 @@ describe('applySendingDomainStatusFromWebhook', () => {
     enqueue({ data: { id: 'row-1', verified_at: '2026-08-01T00:00:00Z' } })
     enqueue({ data: null })
     const ok = await applySendingDomainStatusFromWebhook(client, { id: 'rd_1', status: 'failed' })
-    expect(ok).toBe(true)
+    expect(ok).toBe('applied')
     expect(domainsMock.get).not.toHaveBeenCalled()
     const update = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>
     expect(update.status).toBe('failed')

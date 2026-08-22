@@ -17,6 +17,17 @@ function sanitizeHeaderPart(s: string): string {
   return s.replace(/[\r\n<>]/g, '').trim()
 }
 
+// RFC 5322 "specials" that make a bare display name ambiguous (a comma splits
+// the mailbox list, a quote or parenthesis opens a token). Names without any
+// of them stay bare so existing headers are byte-identical.
+const DISPLAY_NAME_SPECIALS = /[()<>[\]:;@\\,."]/
+
+/** Quote a display name only when RFC 5322 requires it; escape `\` and `"`. */
+export function encodeDisplayName(name: string): string {
+  if (!DISPLAY_NAME_SPECIALS.test(name)) return name
+  return `"${name.replace(/[\\"]/g, (c) => `\\${c}`)}"`
+}
+
 // Conservative address shape for an explicit From: the local part comes from
 // our own validated column and the domain is a verified hostname, so this is
 // a last-line guard against a malformed row, not a full RFC 5322 parser.
@@ -44,7 +55,7 @@ export function buildFromHeader(input: {
     const address = input.from.address.trim().toLowerCase()
     const name = sanitizeHeaderPart(input.from.name)
     if (FROM_ADDRESS_PATTERN.test(address) && name) {
-      return `${name} <${address}>`
+      return `${encodeDisplayName(name)} <${address}>`
     }
     // A malformed explicit sender falls through to the platform default
     // rather than failing the send: the fallback is the whole point.
@@ -52,8 +63,8 @@ export function buildFromHeader(input: {
 
   const safeFromName = input.fromName ? sanitizeHeaderPart(input.fromName) : null
   return safeFromName
-    ? `${safeFromName} via ${safeAppName} <${DEFAULT_FROM_EMAIL}>`
-    : `${safeAppName} <${DEFAULT_FROM_EMAIL}>`
+    ? `${encodeDisplayName(`${safeFromName} via ${safeAppName}`)} <${DEFAULT_FROM_EMAIL}>`
+    : `${encodeDisplayName(safeAppName)} <${DEFAULT_FROM_EMAIL}>`
 }
 
 function optionalAddressList(addresses: string | string[] | undefined): string[] | undefined {
@@ -87,11 +98,11 @@ export class ResendEmailService implements EmailService {
     }
 
     const from = buildFromHeader({ fromName, from: options.from })
+    const platformFrom = buildFromHeader({ fromName })
 
     try {
       const resend = getResendClient()
-      const response = await resend.emails.send({
-        from,
+      const payload = {
         to: Array.isArray(to) ? to : [to],
         cc: optionalAddressList(cc),
         bcc: optionalAddressList(bcc),
@@ -106,7 +117,22 @@ export class ResendEmailService implements EmailService {
             : Buffer.from(att.content),
           contentType: att.contentType,
         })),
-      })
+      }
+      let response = await resend.emails.send({ from, ...payload })
+
+      // A company's own sending domain can stop being accepted after the
+      // fact (DKIM removed, Resend flipped the domain to failed before the
+      // webhook or a manual re-check caught up). Resend rejected the send,
+      // so nothing went out: retry once as the platform sender rather than
+      // letting every invoice for that company fail. The row is corrected by
+      // the next verification check; this only keeps mail flowing.
+      if (response.error && from !== platformFrom) {
+        log.warn('Resend rejected the company sender, retrying as the platform sender', {
+          from,
+          error: response.error.message,
+        })
+        response = await resend.emails.send({ from: platformFrom, ...payload })
+      }
 
       if (response.error) {
         log.error('Resend error:', response.error)
