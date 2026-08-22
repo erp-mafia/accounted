@@ -123,11 +123,10 @@ export async function sendReminder(
     return { success: false, error: 'Customer has no email' }
   }
 
-  // Same gate as invoice send: a reminder with no payment account for the
-  // invoice currency would either print nothing to pay to or (before this
-  // gate) the SEK account's IBAN on a EUR invoice, and a customer has paid
-  // to the wrong account that way. Skip and surface it; the user fixes the
-  // currency account under Inställningar and the next run picks it up.
+  // Backstop for direct callers: processOverdueReminders applies this same
+  // gate BEFORE booking the fee and inserting the reminder row. A reminder
+  // with no payment account for the invoice currency would print nothing to
+  // pay to, or (before this gate) the SEK account's IBAN on a EUR invoice.
   const currency = invoice.currency
   if (!hasUsableInvoicePaymentAccount(resolveInvoicePaymentAccount(company, currency), currency)) {
     log.warn('Skipping reminder: no payment account configured for invoice currency', {
@@ -283,6 +282,35 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
 
     if (!reminderLevel) {
       log.info(`Skipping invoice ${invoice.invoice_number}: no reminder needed (${daysOverdue} days overdue, existing levels: ${existingLevels.join(', ')})`)
+      continue
+    }
+
+    // Payment-account gate, BEFORE any write: the fee journal entry and the
+    // invoice_reminders row below must not exist for a reminder that never
+    // goes out (that would book a 60 kr fee and burn the level for an email
+    // the customer never got). Same rule as invoice send: no usable account
+    // for the invoice currency means no reminder until the user configures
+    // one under Inställningar; the level stays open and fires next run.
+    const invoiceCurrency = invoice.currency
+    if (
+      !hasUsableInvoicePaymentAccount(
+        resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency),
+        invoiceCurrency,
+      )
+    ) {
+      log.warn('Skipping reminder: no payment account configured for invoice currency', {
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        currency: invoiceCurrency,
+      })
+      results.push({
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        customerEmail: customer.email,
+        reminderLevel,
+        success: false,
+        error: `INVOICE_PAYMENT_ACCOUNT_MISSING:${invoiceCurrency}`,
+      })
       continue
     }
 
