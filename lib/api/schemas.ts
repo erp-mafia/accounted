@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
+import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
 import {
   accountNumberSchema,
   isoDateSchema,
@@ -2307,12 +2308,9 @@ const defaultVatRate = z
   .nullable()
   .optional()
 
-export const AccountVatTreatmentSchema = z.enum([
-  'standard_25', 'reduced_12', 'reduced_6', 'exempt',
-  'reverse_charge_domestic', 'reverse_charge_eu_goods',
-  'reverse_charge_eu_services', 'reverse_charge_non_eu_services',
-  'export_goods', 'export_services', 'vmb', 'rental_voluntary',
-])
+// Single source of truth for treatments is lib/vat/account-vat-treatment.ts;
+// the DB CHECK on chart_of_accounts.default_vat_treatment mirrors it per class.
+export const AccountVatTreatmentSchema = z.enum(ACCOUNT_VAT_TREATMENTS)
 
 const defaultVatTreatment = AccountVatTreatmentSchema.nullable().optional()
 

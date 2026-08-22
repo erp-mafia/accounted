@@ -15,7 +15,7 @@ export const RUTA_05_EXCLUDED_ACCOUNTS = new Set([
 const RUTA_05_STATIC_RATE_ACCOUNTS = new Set(['3000'])
 const DOMESTIC_SALES_RATE_BY_SUFFIX: Record<string, number> = { '1': 0.25, '2': 0.12, '3': 0.06 }
 const CONTRADICTING_ACCOUNT_NAME =
-  /momsfri|momsfritt|utan moms|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|\b0\s*%/i
+  /momsfri|momsfritt|utan moms|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|\boss\b|\b0\s*%/i
 
 function inferDomesticSalesRate(accountNumber: string, accountName: string): number | null {
   const accountMatch = /^30\d([123])$/.exec(accountNumber)

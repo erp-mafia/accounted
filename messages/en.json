@@ -5312,6 +5312,7 @@
     "vat_treatment_export_services": "Services outside the EU",
     "vat_treatment_vmb": "Margin scheme (box 07)",
     "vat_treatment_rental_voluntary": "Voluntary VAT on rental income (box 08)",
+    "vat_treatment_oss": "OSS sales to EU consumers (reported in OSS, not on the VAT return)",
     "vat_rate_label": "VAT rate",
     "vat_rate_none": "None",
     "vat_review_confirm_all": "Confirm all suggested ({count})",
