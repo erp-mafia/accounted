@@ -590,11 +590,9 @@ const AUTO_PERIOD_DATE_KEYS = [
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
-/** BAS account numbers are 4-6 digit strings; never arithmetic on them. */
-const ACCOUNT_NUMBER_RE = /^\d{4,6}$/
-
 /**
- * Coerce a single account-number argument to a trimmed string. Accepts a
+ * Coerce a single account-number argument to a trimmed string (validated
+ * against ACCOUNT_NUMBER_RE from lib/invariants/account-number). Accepts a
  * string or a finite integer (hosts that skip inputSchema validation send
  * `1930` as a JSON number); everything else is a validation error rather than
  * a silently dropped filter.
@@ -627,7 +625,7 @@ function normalizeAccountList(value: unknown): string[] | undefined {
       ? value.split(',')
       : [value]
   const list = raw
-    .filter((v) => !(typeof v === 'string' && v.trim() === ''))
+    .filter((v) => v != null && !(typeof v === 'string' && v.trim() === ''))
     .map((v) => normalizeAccountNumber(v, 'accounts') as string)
   return list.length > 0 ? list : undefined
 }
@@ -7333,12 +7331,16 @@ export const tools: McpTool[] = [
 
       // ── Filters: validated before any DB work so bad input fails fast.
       const filters = (args.filters && typeof args.filters === 'object' ? args.filters : {}) as Record<string, unknown>
-      const accounts = Array.isArray(filters.accounts) ? (filters.accounts as string[]) : undefined
+      // Same normalization as gnubok_query_journal: a bare number or string
+      // must narrow the match set, never be silently dropped. This is a bulk
+      // WRITE path (retags up to 500 posted lines), so a dropped account
+      // filter would widen the scope of the retag.
+      const accounts = normalizeAccountList(filters.accounts)
       if (accounts && accounts.length > 50) {
         throw new Error('filters.accounts is capped at 50: use account_from/account_to for ranges')
       }
-      const accountFrom = typeof filters.account_from === 'string' ? filters.account_from : undefined
-      const accountTo = typeof filters.account_to === 'string' ? filters.account_to : undefined
+      const accountFrom = normalizeAccountNumber(filters.account_from, 'filters.account_from')
+      const accountTo = normalizeAccountNumber(filters.account_to, 'filters.account_to')
       const dateFrom = typeof filters.date_from === 'string' ? filters.date_from : undefined
       const dateTo = typeof filters.date_to === 'string' ? filters.date_to : undefined
       const text = typeof filters.text === 'string' ? filters.text.trim() : ''
