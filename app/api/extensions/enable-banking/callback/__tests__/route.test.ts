@@ -342,6 +342,178 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(mirrored.external_uid).toBe('acc-new')
   })
 
+  it('does not let a stale-uid mirrored row block the IBAN reuse of its own ledger on renewal', async () => {
+    // In-place renewal ("Förnya") of a connection whose ASPSP mints new uids
+    // on every re-auth. The connection already mirrors 1930/1940 under the OLD
+    // uids. Those ledgers must NOT be pre-seeded into the resolver's exclude
+    // set: the IBAN match on the stale row is the mapping to promote, and
+    // excluding it made every renewal allocate a fresh 19xx sub-account.
+    let callIndex = 0
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) {
+        return mockChain({
+          data: {
+            id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'SEB', status: 'expired',
+            accounts_data: [
+              { uid: 'acc-old-1', iban: 'SE1234', name: 'Företagskonto', currency: 'SEK', enabled: true },
+              { uid: 'acc-old-2', iban: 'SE5678', name: 'Sparkonto', currency: 'SEK', enabled: true },
+            ],
+          },
+          error: null,
+        })
+      }
+      if (table === 'cash_accounts') {
+        return mockChain({
+          data: [
+            { external_uid: 'acc-old-1', ledger_account: '1930' },
+            { external_uid: 'acc-old-2', ledger_account: '1940' },
+          ],
+          error: null,
+        })
+      }
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn(() => chain)
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.in = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: { id: 'conn-1', bank_name: 'SEB', company_id: 'company-1', user_id: 'user-1', status: 'expired' },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+
+    // Resolver stand-in: answer the IBAN hit only when the caller did NOT
+    // exclude that ledger (mirrors resolvePsd2LedgerAccount's guard), else
+    // fall back to the allocator.
+    const ibanLedgers: Record<string, { ledger: string; rowId: string }> = {
+      SE1234: { ledger: '1930', rowId: 'row-1' },
+      SE5678: { ledger: '1940', rowId: 'row-2' },
+    }
+    const seenExcludes: string[][] = []
+    mockAllocate.mockImplementation(
+      async (_s: unknown, _c: unknown, _u: unknown, input: { iban?: string; currency: string; exclude?: ReadonlySet<string> }) => {
+        const exclude = input.exclude ?? new Set<string>()
+        seenExcludes.push([...exclude].sort())
+        const hit = input.iban ? ibanLedgers[input.iban] : undefined
+        if (hit && !exclude.has(hit.ledger)) {
+          return { ledgerAccount: hit.ledger, reuseCashAccountId: hit.rowId, source: 'iban' }
+        }
+        for (let n = 1931; n <= 1959; n++) {
+          const candidate = String(n)
+          if (!exclude.has(candidate) && !['1932', '1933', '1934'].includes(candidate)) return candidate
+        }
+        return null
+      },
+    )
+
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-3',
+      accounts: [
+        { uid: 'acc-new-1', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+        { uid: 'acc-new-2', account_id: { iban: 'SE5678' }, name: 'Sparkonto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2024-12-31T00:00:00Z' },
+      aspsp: { name: 'SEB', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    expect(response.status).toBe(200)
+    await response.text()
+
+    // The first resolver call saw no pre-seeded excludes (no new-session uid
+    // matched a mirrored row), the second saw only the ledger just claimed.
+    expect(seenExcludes).toEqual([[], ['1930']])
+    // Both accounts land back on their own ledgers and promote their rows.
+    const mirrored = mockUpsertFromPsd2.mock.calls.map(
+      (c) => c[2] as { ledger_account: string; reuse_cash_account_id: string | null; external_uid: string },
+    )
+    expect(mirrored.map((m) => [m.external_uid, m.ledger_account, m.reuse_cash_account_id])).toEqual([
+      ['acc-new-1', '1930', 'row-1'],
+      ['acc-new-2', '1940', 'row-2'],
+    ])
+  })
+
+  it('keeps a previously deselected account deselected on renewal, by IBAN or uid', async () => {
+    // "SEB Credit" was set to "Synkas ej" (enabled:false) in the old
+    // connection. On renewal it comes back under a NEW uid (same IBAN) and a
+    // no-IBAN card comes back under the SAME uid. Both must stay deselected;
+    // only the genuinely new account defaults to enabled.
+    const capturedUpdates: Record<string, unknown>[] = []
+    let callIndex = 0
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) {
+        return mockChain({
+          data: {
+            id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'SEB', status: 'expired',
+            accounts_data: [
+              { uid: 'acc-old-1', iban: 'SE1234', name: 'Företagskonto', currency: 'SEK', enabled: true },
+              { uid: 'card-old', iban: 'SE9999', name: 'SEB Credit', currency: 'SEK', enabled: false },
+              { uid: 'card-noiban', name: 'Privatkort', currency: 'SEK', enabled: false },
+            ],
+          },
+          error: null,
+        })
+      }
+      if (table === 'cash_accounts') return mockChain({ data: [], error: null })
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn((payload: Record<string, unknown>) => {
+        capturedUpdates.push(payload)
+        return chain
+      })
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.in = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: { id: 'conn-1', bank_name: 'SEB', company_id: 'company-1', user_id: 'user-1', status: 'expired' },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-4',
+      accounts: [
+        { uid: 'acc-new-1', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+        { uid: 'card-new', account_id: { iban: 'SE 9999' }, name: 'SEB Credit', currency: 'SEK' },
+        { uid: 'card-noiban', name: 'Privatkort', currency: 'SEK' },
+        { uid: 'acc-brand-new', account_id: { iban: 'SE4444' }, name: 'Nytt konto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2024-12-31T00:00:00Z' },
+      aspsp: { name: 'SEB', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    expect(response.status).toBe(200)
+    await response.text()
+
+    const accountsData = capturedUpdates[0].accounts_data as Array<{ uid: string; enabled: boolean }>
+    expect(Object.fromEntries(accountsData.map((a) => [a.uid, a.enabled]))).toEqual({
+      'acc-new-1': true,
+      'card-new': false,
+      'card-noiban': false,
+      'acc-brand-new': true,
+    })
+    // The mirror carries the same flag, so cash_accounts.enabled is not
+    // flipped back to true by the renewal.
+    const mirroredEnabled = Object.fromEntries(
+      mockUpsertFromPsd2.mock.calls.map((c) => {
+        const input = c[2] as { external_uid: string; enabled: boolean }
+        return [input.external_uid, input.enabled]
+      }),
+    )
+    expect(mirroredEnabled).toEqual({
+      'acc-new-1': true,
+      'card-new': false,
+      'card-noiban': false,
+      'acc-brand-new': true,
+    })
+  })
+
   it('runs the same-bank supersede pass with the new session, accounts, and connection identity', async () => {
     // Fresh connect while an EXPIRED sibling to the same bank exists: the
     // supersede pass (unit-tested separately) must be handed everything it

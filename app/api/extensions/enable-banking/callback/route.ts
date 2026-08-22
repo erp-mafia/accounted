@@ -329,12 +329,22 @@ async function finalizeConnection(
   // carried sibling scope onto an account whose own scope is NOT explicit.
   const priorScopeByIban = new Map<string, { scope: string; explicit: boolean }>()
   const priorScopeByUid = new Map<string, { scope: string; explicit: boolean }>()
+  // The user's earlier sync choice per account ("Synkas ej" = enabled:false)
+  // must survive a renewal: a deselected private card that comes back
+  // pre-checked lands its transactions in the company's books the moment the
+  // user saves the picker with defaults. Matched by IBAN first (uids can
+  // change on re-auth), then by uid.
+  const priorEnabledByIban = new Map<string, boolean>()
+  const priorEnabledByUid = new Map<string, boolean>()
   for (const prior of priorAccounts) {
     const priorIban = normalizeIban(prior.iban)
     const priorScope = prior.dedup_scope || priorIban || prior.uid
     const priorEntry = { scope: priorScope, explicit: Boolean(prior.dedup_scope) }
     if (priorIban && !priorScopeByIban.has(priorIban)) priorScopeByIban.set(priorIban, priorEntry)
     if (!priorScopeByUid.has(prior.uid)) priorScopeByUid.set(prior.uid, priorEntry)
+    const priorEnabled = prior.enabled !== false
+    if (priorIban && !priorEnabledByIban.has(priorIban)) priorEnabledByIban.set(priorIban, priorEnabled)
+    if (!priorEnabledByUid.has(prior.uid)) priorEnabledByUid.set(prior.uid, priorEnabled)
   }
 
   const accountsMetadata: StoredAccount[] = accounts.map((account: AccountInfo) => {
@@ -344,10 +354,14 @@ async function finalizeConnection(
       iban: account.account_id?.iban,
       name: account.name || account.product,
       currency: account.currency,
-      // Default to enabled. The user is presented with a picker
-      // immediately after this callback to uncheck unwanted accounts
-      // before any transactions are fetched.
-      enabled: true,
+      // Carry the user's earlier choice for an account we have seen before;
+      // only genuinely new accounts default to enabled. The picker shown
+      // right after this callback pre-checks from this flag, and no
+      // transactions are fetched before the user saves it.
+      enabled:
+        (normalizedIban ? priorEnabledByIban.get(normalizedIban) : undefined) ??
+        priorEnabledByUid.get(account.uid) ??
+        true,
       // Pin the external_id account scope at first ingest so it survives
       // re-authorizations. Byte-identical to the derivation lib/sync.ts
       // applied before this field existed (normalized IBAN, else uid).
@@ -479,7 +493,20 @@ async function finalizeConnection(
       (r) => [r.external_uid, r.ledger_account],
     ),
   )
-  const assignedLedgers = new Set<string>(existingLedgerByUid.values())
+  // Only ledgers still claimed by a uid the bank returned in THIS session
+  // block the resolver. A row whose uid the ASPSP retired on re-auth (SEB
+  // mints new uids on every renewal) is exactly the row the IBAN match must
+  // promote; seeding its ledger into the exclude set made the resolver reject
+  // its own IBAN hit and allocate a fresh 19xx slot per renewal, so the chart
+  // grew a dead sub-account each time. Stale ledgers are still safe from the
+  // allocator: findFreeLedgerAccount skips every ledger a cash_accounts row
+  // holds, whatever its uid.
+  const sessionUids = new Set(accountsMetadata.map((a) => a.uid))
+  const assignedLedgers = new Set<string>(
+    [...existingLedgerByUid.entries()]
+      .filter(([uid]) => sessionUids.has(uid))
+      .map(([, ledger]) => ledger),
+  )
   let accountsDataDirty = carriedScopeDirty
 
   for (const account of accountsMetadata) {
