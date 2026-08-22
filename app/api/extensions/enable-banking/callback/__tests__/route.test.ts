@@ -453,6 +453,11 @@ describe('GET /api/extensions/enable-banking/callback', () => {
               { uid: 'acc-old-1', iban: 'SE1234', name: 'Företagskonto', currency: 'SEK', enabled: true },
               { uid: 'card-old', iban: 'SE9999', name: 'SEB Credit', currency: 'SEK', enabled: false },
               { uid: 'card-noiban', name: 'Privatkort', currency: 'SEK', enabled: false },
+              // Same IBAN listed twice (one resource per balance type): the
+              // user unticked the duplicate and kept the main one. Exact uid
+              // identity must win over the IBAN fallback in both directions.
+              { uid: 'dup-resource', iban: 'SE7777', name: 'Lönekonto (saldo)', currency: 'SEK', enabled: false },
+              { uid: 'main-resource', iban: 'SE7777', name: 'Lönekonto', currency: 'SEK', enabled: true },
             ],
           },
           error: null,
@@ -482,6 +487,8 @@ describe('GET /api/extensions/enable-banking/callback', () => {
         { uid: 'card-new', account_id: { iban: 'SE 9999' }, name: 'SEB Credit', currency: 'SEK' },
         { uid: 'card-noiban', name: 'Privatkort', currency: 'SEK' },
         { uid: 'acc-brand-new', account_id: { iban: 'SE4444' }, name: 'Nytt konto', currency: 'SEK' },
+        { uid: 'dup-resource', account_id: { iban: 'SE7777' }, name: 'Lönekonto (saldo)', currency: 'SEK' },
+        { uid: 'main-resource', account_id: { iban: 'SE7777' }, name: 'Lönekonto', currency: 'SEK' },
       ],
       access: { valid_until: '2024-12-31T00:00:00Z' },
       aspsp: { name: 'SEB', country: 'SE' },
@@ -497,6 +504,8 @@ describe('GET /api/extensions/enable-banking/callback', () => {
       'card-new': false,
       'card-noiban': false,
       'acc-brand-new': true,
+      'dup-resource': false,
+      'main-resource': true,
     })
     // The mirror carries the same flag, so cash_accounts.enabled is not
     // flipped back to true by the renewal.
@@ -511,6 +520,8 @@ describe('GET /api/extensions/enable-banking/callback', () => {
       'card-new': false,
       'card-noiban': false,
       'acc-brand-new': true,
+      'dup-resource': false,
+      'main-resource': true,
     })
   })
 

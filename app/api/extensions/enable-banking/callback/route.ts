@@ -332,8 +332,9 @@ async function finalizeConnection(
   // The user's earlier sync choice per account ("Synkas ej" = enabled:false)
   // must survive a renewal: a deselected private card that comes back
   // pre-checked lands its transactions in the company's books the moment the
-  // user saves the picker with defaults. Matched by IBAN first (uids can
-  // change on re-auth), then by uid.
+  // user saves the picker with defaults. Matched by uid first (exact resource
+  // identity; one session can list the same IBAN twice, e.g. one resource per
+  // balance type), then by IBAN for ASPSPs that mint new uids on re-auth.
   const priorEnabledByIban = new Map<string, boolean>()
   const priorEnabledByUid = new Map<string, boolean>()
   for (const prior of priorAccounts) {
@@ -359,8 +360,8 @@ async function finalizeConnection(
       // right after this callback pre-checks from this flag, and no
       // transactions are fetched before the user saves it.
       enabled:
-        (normalizedIban ? priorEnabledByIban.get(normalizedIban) : undefined) ??
         priorEnabledByUid.get(account.uid) ??
+        (normalizedIban ? priorEnabledByIban.get(normalizedIban) : undefined) ??
         true,
       // Pin the external_id account scope at first ingest so it survives
       // re-authorizations. Byte-identical to the derivation lib/sync.ts
