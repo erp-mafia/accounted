@@ -95,6 +95,10 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
 })
 
+vi.mock('@/lib/email/invoice-sender', () => ({
+  resolveInvoiceSender: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({
     isConfigured: () => true,

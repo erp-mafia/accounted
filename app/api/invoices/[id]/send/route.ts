@@ -5,6 +5,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
+import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailText,
@@ -481,6 +482,7 @@ export const POST = withRouteContext(
         text,
         replyTo: company.email || undefined,
         fromName: company.company_name,
+        from: await resolveInvoiceSender(supabase, companyId!, company.company_name),
         filename,
         pdfBuffer,
       })

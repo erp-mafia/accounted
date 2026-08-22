@@ -2964,6 +2964,31 @@ export interface CompanyInboundDomain {
   updated_at: string
 }
 
+export type CompanySendingDomainStatus = 'pending' | 'verified' | 'failed'
+
+// A DNS record the user must publish to verify their custom sending domain
+// (verbatim from the Resend domains API; same shape as the inbound records).
+export type SendingDomainDnsRecord = InboundDomainDnsRecord
+
+// Opt-in per-company sender identity for invoice email. Only a row with
+// status = 'verified' AND enabled = true changes the From header; everything
+// else falls back to the platform sender.
+export interface CompanySendingDomain {
+  id: string
+  company_id: string
+  domain: string
+  status: CompanySendingDomainStatus
+  sender_local_part: string
+  sender_name: string | null
+  enabled: boolean
+  resend_domain_id: string | null
+  dns_records: SendingDomainDnsRecord[] | null
+  verified_at: string | null
+  last_checked_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface InvoiceInboxItem {
   id: string
   user_id: string

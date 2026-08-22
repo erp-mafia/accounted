@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { getEmailService } from '@/lib/email/service'
+import { resolveInvoiceSender, type InvoiceSenderIdentity } from '@/lib/email/invoice-sender'
 import {
   generateReminderEmailHtml,
   generateReminderEmailText,
@@ -110,6 +111,7 @@ export async function sendReminder(
   reminderLevel: 1 | 2 | 3,
   actionToken: string,
   surcharges: ReminderSurcharges,
+  sender?: InvoiceSenderIdentity,
 ): Promise<{ success: boolean; error?: string }> {
   const customer = invoice.customer
 
@@ -139,7 +141,8 @@ export async function sendReminder(
     html: generateReminderEmailHtml(emailData),
     text: generateReminderEmailText(emailData),
     replyTo: company.email || undefined,
-    fromName: company.company_name || undefined
+    fromName: company.company_name || undefined,
+    from: sender,
   })
 
   return result
@@ -385,6 +388,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
         interestDays: interest.days,
         reminderFee,
       },
+      await resolveInvoiceSender(supabase, invoice.company_id, company.company_name),
     )
 
     if (sendResult.success) {

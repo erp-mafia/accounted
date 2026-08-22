@@ -47,6 +47,12 @@ import { InvoicePDF } from '@/lib/invoices/pdf-template'
 
 const mockSendEmail = vi.fn()
 const mockIsConfigured = vi.fn()
+// The sender resolver reads company_sending_domains; keep it out of the
+// queued-mock sequence (its own tests live in lib/email/__tests__).
+vi.mock('@/lib/email/invoice-sender', () => ({
+  resolveInvoiceSender: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({
     sendEmail: (...args: unknown[]) => mockSendEmail(...args),

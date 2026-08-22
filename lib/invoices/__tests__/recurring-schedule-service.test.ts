@@ -46,6 +46,10 @@ vi.mock('@/lib/extensions/payment-links', () => ({
 
 const mockSendEmail = vi.fn()
 const mockIsConfigured = vi.fn()
+vi.mock('@/lib/email/invoice-sender', () => ({
+  resolveInvoiceSender: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({
     sendEmail: (...args: unknown[]) => mockSendEmail(...args),

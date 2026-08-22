@@ -7,6 +7,7 @@ import { PeppolReceiveSettings } from '@/components/settings/PeppolReceiveSettin
 import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
 import { InvoiceEmailTextsSettings } from '@/components/settings/InvoiceEmailTextsSettings'
 import { InvoiceEmailRecipientsSettings } from '@/components/settings/InvoiceEmailRecipientsSettings'
+import { InvoiceSenderDomainSettings } from '@/components/settings/InvoiceSenderDomainSettings'
 import { InvoicePreviewCard } from '@/components/settings/InvoicePreviewCard'
 import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
@@ -74,6 +75,8 @@ export function InvoicingSettingsContent() {
 
       {/* Fixed invoice email recipients: explicit save (owner/admin only) */}
       <InvoiceEmailRecipientsSettings settings={settings} onUpdate={updateSettings} />
+
+      <InvoiceSenderDomainSettings companyName={settings.company_name ?? null} />
 
       {/* Invoice email texts: autosaves on blur */}
       <InvoiceEmailTextsSettings settings={settings} onUpdate={updateSettings} />

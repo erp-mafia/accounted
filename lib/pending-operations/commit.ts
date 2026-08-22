@@ -104,6 +104,7 @@ import {
 } from '@/lib/pending-operations/skatteverket-commit'
 import { PartialCommitError } from '@/lib/pending-operations/errors'
 import { getEmailService } from '@/lib/email/service'
+import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import { hasCapability, CAPABILITY_BLOCKED_MESSAGE_SV } from '@/lib/entitlements/has-capability'
 import { PAID_OPERATION_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import {
@@ -2489,6 +2490,7 @@ async function commitSendInvoice(
       text,
       replyTo: company.email || undefined,
       fromName: company.company_name,
+      from: await resolveInvoiceSender(supabase, companyId, company.company_name),
       filename,
       pdfBuffer,
     })

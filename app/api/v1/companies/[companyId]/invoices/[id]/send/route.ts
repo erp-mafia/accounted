@@ -50,6 +50,7 @@ import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
+import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailSubject,
@@ -622,6 +623,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         text,
         replyTo: settings.email ?? undefined,
         fromName: settings.company_name ?? undefined,
+        from: await resolveInvoiceSender(ctx.supabase, ctx.companyId!, settings.company_name),
         filename,
         pdfBuffer,
       })
