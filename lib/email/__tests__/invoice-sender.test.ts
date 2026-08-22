@@ -41,6 +41,20 @@ describe('senderFromRow', () => {
     })
   })
 
+  it('never sends as a reserved platform domain or a malformed domain, even from a verified row', () => {
+    const previous = process.env.RESEND_FROM_EMAIL
+    process.env.RESEND_FROM_EMAIL = 'noreply@platform.example'
+    try {
+      expect(senderFromRow({ ...VERIFIED_ROW, domain: 'platform.example' }, 'X')).toBeUndefined()
+      expect(senderFromRow({ ...VERIFIED_ROW, domain: 'mail.platform.example' }, 'X')).toBeUndefined()
+      expect(senderFromRow({ ...VERIFIED_ROW, domain: 'not a host' }, 'X')).toBeUndefined()
+      expect(senderFromRow(VERIFIED_ROW, 'X')).toEqual({ name: 'X', address: 'faktura@hansbolag.example' })
+    } finally {
+      if (previous === undefined) delete process.env.RESEND_FROM_EMAIL
+      else process.env.RESEND_FROM_EMAIL = previous
+    }
+  })
+
   it('returns undefined for missing, unverified, paused, or nameless rows', () => {
     expect(senderFromRow(null, 'X')).toBeUndefined()
     expect(senderFromRow({ ...VERIFIED_ROW, status: 'pending' }, 'X')).toBeUndefined()

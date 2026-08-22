@@ -34,6 +34,39 @@ export function isValidHostname(domain: string): boolean {
   return /[a-z]/.test(labels[labels.length - 1])
 }
 
+function hostnameOf(value: string | undefined): string | null {
+  if (!value) return null
+  try {
+    return new URL(value).hostname.toLowerCase() || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Domains no tenant may ever send as: the platform's own sender domain
+ * (RESEND_FROM_EMAIL), the shared inbound domain, and the app host, plus
+ * their subdomains. Read from env on every call (cheap, and tests flip env).
+ */
+export function reservedSenderDomains(): string[] {
+  const reserved: string[] = []
+  const fromDomain = process.env.RESEND_FROM_EMAIL
+    ? normalizeDomainName(process.env.RESEND_FROM_EMAIL)
+    : null
+  if (fromDomain) reserved.push(fromDomain)
+  const inbound = process.env.RESEND_INBOUND_DOMAIN?.toLowerCase()
+  if (inbound) reserved.push(inbound)
+  const appHost = hostnameOf(process.env.NEXT_PUBLIC_APP_URL)
+  if (appHost) reserved.push(appHost)
+  return reserved
+}
+
+/** True when `domain` is a reserved platform domain or a subdomain of one. */
+export function isReservedSenderDomain(domain: string): boolean {
+  const d = domain.toLowerCase()
+  return reservedSenderDomains().some((r) => d === r || d.endsWith(`.${r}`))
+}
+
 /**
  * Local part of a sender address: conservative dot-atom subset, lowercase.
  * Dots may only separate atoms (RFC 5322 dot-atom): no leading, trailing or

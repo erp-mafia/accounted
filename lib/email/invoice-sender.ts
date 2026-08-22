@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import type { CompanySendingDomain } from '@/types'
+import { isReservedSenderDomain, isValidHostname } from '@/lib/email/domain-name'
 
 /**
  * Sender identity for invoice email: the From header's display name and
@@ -33,6 +34,12 @@ export function senderFromRow(
   companyName: string | null | undefined,
 ): InvoiceSenderIdentity | undefined {
   if (!row || row.status !== 'verified' || !row.enabled) return undefined
+  // Last line of defense at send time: never send as a platform domain, and
+  // never trust a row whose domain is not a plain hostname, whatever the DB
+  // says (the claim/verify paths and the tenant guard trigger enforce this
+  // earlier; a tampered row must still not reach the From header).
+  const domain = row.domain.toLowerCase()
+  if (!isValidHostname(domain) || isReservedSenderDomain(domain)) return undefined
   const name = (row.sender_name ?? companyName ?? '').trim()
   if (!name) return undefined
   return { name, address: buildSenderAddress(row.sender_local_part, row.domain) }

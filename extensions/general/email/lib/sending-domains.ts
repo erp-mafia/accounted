@@ -2,7 +2,11 @@ import { Resend } from 'resend'
 import type { DomainStatus } from 'resend'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanySendingDomain, CompanySendingDomainStatus } from '@/types'
-import { normalizeDomainName, normalizeSenderLocalPart } from '@/lib/email/domain-name'
+import {
+  isReservedSenderDomain,
+  normalizeDomainName,
+  normalizeSenderLocalPart,
+} from '@/lib/email/domain-name'
 
 /**
  * Per-company outbound sending domains (opt-in): the Resend side of the
@@ -53,41 +57,32 @@ const PUBLIC_EMAIL_DOMAINS = new Set([
   'passagen.se',
 ])
 
-function hostnameOf(value: string | undefined): string | null {
-  if (!value) return null
-  try {
-    return new URL(value).hostname.toLowerCase() || null
-  } catch {
-    return null
-  }
-}
-
 /**
  * Domains a tenant may never claim as a sending domain: public mailbox
- * providers, the platform's own sender domain (RESEND_FROM_EMAIL), the
- * shared inbound domain, and the app host (plus subdomains of each).
- * Returns a Swedish error message, or null when claimable.
+ * providers, and the platform's reserved domains (RESEND_FROM_EMAIL domain,
+ * shared inbound domain, app host, plus subdomains; see
+ * isReservedSenderDomain, which resolveInvoiceSender enforces again at send
+ * time). Returns a Swedish error message, or null when claimable.
  */
 export function validateClaimableSendingDomain(domain: string): string | null {
   if (PUBLIC_EMAIL_DOMAINS.has(domain)) {
     return 'Publika e-postdomäner (t.ex. Gmail, Outlook) kan inte användas. Ange en domän som bolaget äger.'
   }
-
-  const reserved: string[] = []
-  const fromEmail = process.env.RESEND_FROM_EMAIL
-  const fromDomain = fromEmail ? normalizeDomainName(fromEmail) : null
-  if (fromDomain) reserved.push(fromDomain)
-  const inbound = process.env.RESEND_INBOUND_DOMAIN?.toLowerCase()
-  if (inbound) reserved.push(inbound)
-  const appHost = hostnameOf(process.env.NEXT_PUBLIC_APP_URL)
-  if (appHost) reserved.push(appHost)
-
-  for (const r of reserved) {
-    if (domain === r || domain.endsWith(`.${r}`)) {
-      return 'Den här domänen är reserverad och kan inte användas som avsändardomän.'
-    }
+  if (isReservedSenderDomain(domain)) {
+    return 'Den här domänen är reserverad och kan inte användas som avsändardomän.'
   }
   return null
+}
+
+/**
+ * Resend's view of a domain must be the domain our row claims. A tenant can
+ * delete and re-insert its pending row (same id, different domain) while a
+ * claim is mid-flight, so every verification-state write re-checks the name
+ * instead of trusting the row id alone.
+ */
+function resendNameMatchesRow(resendName: string | undefined, rowDomain: string): boolean {
+  if (!resendName) return false
+  return (normalizeDomainName(resendName) ?? resendName.toLowerCase()) === rowDomain.toLowerCase()
 }
 
 // `temporary_failure` is a runtime status the Resend API can still return but
@@ -240,6 +235,10 @@ export async function claimSendingDomain(
     // mapping the status anyway keeps the helper honest about what Resend
     // said rather than hardcoding 'pending'.
     const status = mapResendSendingStatus(fetched.data.status)
+    // Bind the Resend domain only to the row we inserted, still carrying the
+    // domain we registered and not yet bound: a concurrent tenant
+    // delete + re-insert under the same id (different domain) matches zero
+    // rows, which .single() reports as an error and we roll back below.
     const { data: updated, error: updateError } = await writer
       .from('company_sending_domains')
       .update({
@@ -251,6 +250,8 @@ export async function claimSendingDomain(
       })
       .eq('id', inserted.id)
       .eq('company_id', companyId)
+      .eq('domain', domain)
+      .is('resend_domain_id', null)
       .select('*')
       .single()
 
@@ -311,6 +312,13 @@ export async function checkSendingDomainVerification(
         status: 409,
         error:
           'Domänen är inte konfigurerad för utskick hos e-postleverantören. Ta bort den och lägg till den igen.',
+      }
+    }
+    if (!resendNameMatchesRow(fetched.data.name, row.domain)) {
+      return {
+        ok: false,
+        status: 409,
+        error: 'Domänen stämmer inte med e-postleverantörens registrering. Ta bort den och lägg till den igen.',
       }
     }
 
@@ -480,21 +488,26 @@ export async function applySendingDomainStatusFromWebhook(
 ): Promise<WebhookApplyOutcome> {
   const { data: row, error: lookupError } = await supabase
     .from('company_sending_domains')
-    .select('id, verified_at')
+    .select('id, domain, verified_at')
     .eq('resend_domain_id', event.id)
     .maybeSingle()
 
   if (lookupError) return 'error'
   if (!row) return 'no_match'
-  const current = row as { id: string; verified_at: string | null }
+  const current = row as { id: string; domain: string; verified_at: string | null }
 
   const status = mapResendSendingStatus(event.status as DomainStatus)
 
   if (status === 'verified') {
+    // Confirm with Resend that the domain can send AND is still the domain
+    // the row claims before flipping to verified (see resendNameMatchesRow).
     let sendingConfirmed = false
     try {
       const fetched = await getResend().domains.get(event.id)
-      sendingConfirmed = !fetched.error && fetched.data?.capabilities?.sending === 'enabled'
+      sendingConfirmed =
+        !fetched.error &&
+        fetched.data?.capabilities?.sending === 'enabled' &&
+        resendNameMatchesRow(fetched.data?.name, current.domain)
     } catch {
       sendingConfirmed = false
     }

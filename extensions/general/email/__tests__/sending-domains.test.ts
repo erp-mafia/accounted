@@ -163,10 +163,17 @@ describe('claimSendingDomain', () => {
     expect(result.ok).toBe(true)
     expect(tenant.findCall('company_sending_domains', 'update')).toBeUndefined()
     expect(writer.findCall('company_sending_domains', 'update')?.[0]).toMatchObject({ resend_domain_id: 'rd_1' })
-    // Still scoped to the company on the service-role path.
+    // Still scoped to the company on the service-role path, and bound only to
+    // the row that still carries the registered domain and no Resend id (a
+    // concurrent tenant delete + re-insert under the same id matches nothing).
     expect(writer.findCalls('company_sending_domains', 'eq')).toEqual(
-      expect.arrayContaining([['company_id', 'company-1']]),
+      expect.arrayContaining([
+        ['id', 'row-1'],
+        ['company_id', 'company-1'],
+        ['domain', 'hansbolag.example'],
+      ]),
     )
+    expect(writer.findCall('company_sending_domains', 'is')).toEqual(['resend_domain_id', null])
   })
 
   it('maps a unique-violation on company_id to a 409 about the existing domain', async () => {
@@ -217,7 +224,13 @@ describe('checkSendingDomainVerification', () => {
     enqueue({ data: { ...ROW, status: 'verified' } })
     domainsMock.verify.mockResolvedValue({ data: {}, error: null })
     domainsMock.get.mockResolvedValue({
-      data: { id: 'rd_1', status: 'verified', records: [{ ...DKIM_RECORD, status: 'verified' }], capabilities: SENDING_ONLY },
+      data: {
+        id: 'rd_1',
+        name: 'hansbolag.example',
+        status: 'verified',
+        records: [{ ...DKIM_RECORD, status: 'verified' }],
+        capabilities: SENDING_ONLY,
+      },
       error: null,
     })
 
@@ -227,6 +240,19 @@ describe('checkSendingDomainVerification', () => {
     const updateArgs = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>
     expect(updateArgs.status).toBe('verified')
     expect(typeof updateArgs.verified_at).toBe('string')
+  })
+
+  it('refuses to flip when Resend reports a different domain name than the row (swapped row)', async () => {
+    const { client, enqueue, findCall } = sb()
+    enqueue({ data: { ...ROW, domain: 'platform.example' } })
+    domainsMock.verify.mockResolvedValue({ data: {}, error: null })
+    domainsMock.get.mockResolvedValue({
+      data: { id: 'rd_1', name: 'hansbolag.example', status: 'verified', records: [], capabilities: SENDING_ONLY },
+      error: null,
+    })
+    const result = await checkSendingDomainVerification(client, client, 'company-1')
+    expect(result).toMatchObject({ ok: false, status: 409 })
+    expect(findCall('company_sending_domains', 'update')).toBeUndefined()
   })
 
   it('refuses to flip a domain without the sending capability', async () => {
@@ -346,11 +372,28 @@ describe('applySendingDomainStatusFromWebhook', () => {
     ).resolves.toBe('error')
   })
 
+  it('keeps the stored status when Resend names a different domain than the row (swapped row)', async () => {
+    const { client, enqueue, findCall } = sb()
+    enqueue({ data: { id: 'row-1', domain: 'platform.example', verified_at: null } })
+    enqueue({ data: null }) // update (records/last_checked only)
+    domainsMock.get.mockResolvedValue({
+      data: { id: 'rd_1', name: 'hansbolag.example', capabilities: SENDING_ONLY },
+      error: null,
+    })
+    const ok = await applySendingDomainStatusFromWebhook(client, { id: 'rd_1', status: 'verified' })
+    expect(ok).toBe('applied')
+    const update = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>
+    expect(update.status).toBeUndefined()
+  })
+
   it('flips to verified only after confirming the sending capability with Resend', async () => {
     const { client, enqueue, findCall } = sb()
-    enqueue({ data: { id: 'row-1', verified_at: null } })
+    enqueue({ data: { id: 'row-1', domain: 'hansbolag.example', verified_at: null } })
     enqueue({ data: null }) // update
-    domainsMock.get.mockResolvedValue({ data: { id: 'rd_1', capabilities: SENDING_ONLY }, error: null })
+    domainsMock.get.mockResolvedValue({
+      data: { id: 'rd_1', name: 'hansbolag.example', capabilities: SENDING_ONLY },
+      error: null,
+    })
     const ok = await applySendingDomainStatusFromWebhook(client, { id: 'rd_1', status: 'verified', records: [DKIM_RECORD] })
     expect(ok).toBe('applied')
     const update = findCall('company_sending_domains', 'update')?.[0] as Record<string, unknown>

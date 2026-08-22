@@ -248,11 +248,21 @@ describe('company_sending_domains', () => {
       ]),
     ).rejects.toThrow(/idx_company_sending_domains_company/)
 
+    // Same domain for another company: the global unique index wins.
+    await expect(
+      getPool().query(`INSERT INTO public.company_sending_domains (company_id, domain) VALUES ($1, $2)`, [
+        otherCompanyId,
+        domain,
+      ]),
+    ).rejects.toThrow(/idx_company_sending_domains_domain/)
+    // Case variants never reach the index: the domain_shape CHECK
+    // (20260822130000) requires lowercase, so uniqueness is case-insensitive
+    // by construction.
     await expect(
       getPool().query(`INSERT INTO public.company_sending_domains (company_id, domain) VALUES ($1, $2)`, [
         otherCompanyId,
         domain.toUpperCase(),
       ]),
-    ).rejects.toThrow(/idx_company_sending_domains_domain/)
+    ).rejects.toThrow(/company_sending_domains_domain_shape/)
   })
 })
