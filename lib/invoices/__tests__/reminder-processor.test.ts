@@ -28,6 +28,10 @@ vi.mock('@supabase/ssr', () => {
   }
 })
 
+vi.mock('@/lib/email/invoice-sender', () => ({
+  resolveInvoiceSender: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({
     sendEmail: vi.fn().mockResolvedValue({ success: true }),

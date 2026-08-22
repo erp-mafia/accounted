@@ -1041,6 +1041,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   company_capability_config: 'entitlement state',
   company_inbound_domains: 'inbound-mail infrastructure',
   company_inboxes: 'inbound-mail infrastructure',
+  company_sending_domains: 'outbound-mail infrastructure (sender domain verification state)',
   company_invitations: 'membership state, meaningless outside the platform',
   company_members: 'membership state, meaningless outside the platform',
   company_subscriptions: 'billing state',

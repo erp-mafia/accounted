@@ -31,6 +31,7 @@ import {
 } from '@/lib/invoices/pdf-render-helpers'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
+import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
@@ -661,6 +662,7 @@ async function sendInvoiceFromSchedule(
       text,
       replyTo: company.email || undefined,
       fromName: company.company_name ?? undefined,
+      from: await resolveInvoiceSender(supabase, companyId, company.company_name),
       filename,
       pdfBuffer,
     })

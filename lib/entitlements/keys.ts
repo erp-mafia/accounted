@@ -34,6 +34,14 @@ export const CAPABILITY = {
   woocommerce_sync: 'woocommerce_sync',
   /** Shopify store sync: orders/refunds imported as a transaction feed. */
   shopify_sync: 'shopify_sync',
+  /**
+   * Invoice email from the company's own verified sending domain (Resend
+   * domain per company). Opt-in: granted manually per company, NOT part of
+   * PAID_CAPABILITIES, so it is never trial-seeded or written by the Stripe
+   * subscription sync. Without the grant the settings section is hidden and
+   * mail keeps leaving from the platform sender.
+   */
+  custom_sender_domain: 'custom_sender_domain',
 } as const
 
 export type CapabilityKey = (typeof CAPABILITY)[keyof typeof CAPABILITY]
