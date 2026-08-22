@@ -6442,7 +6442,7 @@ async function commitPendingOperationInner(
     // the approver sees WHY, not just that it failed.
     const failureDetails =
       result.data && Object.keys(result.data).length > 0 ? result.data : null
-    await supabase
+    const { error: rejectWriteError } = await supabase
       .from('pending_operations')
       .update({
         status: 'rejected',
@@ -6462,6 +6462,19 @@ async function commitPendingOperationInner(
             },
       })
       .eq('id', pendingOp.id)
+    if (rejectWriteError) {
+      // Same contract as the finalize branch below: the row stays in
+      // 'committing' and the daily recovery sweep
+      // (recover-stuck-committing.ts) resolves it; log loudly with the ids
+      // and the failure we could not persist so nothing is lost silently.
+      log.error('failed to mark pending_operation rejected (left in committing)', rejectWriteError, {
+        pendingOperationId: pendingOp.id,
+        operationType: pendingOp.operation_type,
+        companyId,
+        executorError: result.error,
+        executorErrorCode: result.errorCode ?? null,
+      })
+    }
     if (isAutoReject) {
       return {
         status: 'rejected',
