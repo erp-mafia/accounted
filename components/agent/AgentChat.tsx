@@ -206,6 +206,26 @@ export default function AgentChat({
   onStatus,
 }: AgentChatProps) {
   const [conversationId, setConversationId] = useState<string | null>(initialConversationId ?? null)
+  // "Clear the proposals I didn't approve" — rejects the conversation's
+  // still-pending staged operations in one call so they don't linger in
+  // Granskning, then drops the cards from view.
+  const [clearingProposals, setClearingProposals] = useState(false)
+  async function handleClearProposals() {
+    const convId = conversationId
+    if (!convId || clearingProposals) return
+    setClearingProposals(true)
+    try {
+      await fetch(`/api/agent/conversations/${convId}/reject-pending`, { method: 'POST' })
+      // Committed proposals are already booked (their card was only a
+      // confirmation); pending ones the server just rejected. Either way, drop
+      // the cards so the conversation reads as resolved.
+      setMessages((prev) => prev.map((m) => (m.staged ? { ...m, staged: undefined } : m)))
+    } catch {
+      // best-effort: leave the cards if the request failed
+    } finally {
+      setClearingProposals(false)
+    }
+  }
   // Track whether the first-turn callback has fired so the bootstrap
   // starters get exactly one notification even if a turn fires before
   // the conversation_id event (defensive: order shouldn't matter).
@@ -866,6 +886,22 @@ export default function AgentChat({
         </button>
       )}
       </div>
+
+      {/* One-tap cleanup: when the assistant staged several proposals and the
+          user only approved some, clear the rest here instead of rejecting each
+          one in Granskning. */}
+      {conversationId && messages.some((m) => m.staged && m.staged.length > 0) && (
+        <div className="flex justify-end border-t border-border px-5 py-2">
+          <button
+            type="button"
+            onClick={() => void handleClearProposals()}
+            disabled={clearingProposals}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+          >
+            {clearingProposals ? 'Rensar…' : 'Rensa förslag som inte godkänts'}
+          </button>
+        </div>
+      )}
 
       {/* Paywall: /api/agent/invoke 403s without the ai capability. Replace
           the composer with an upsell so an already-open conversation (or a
