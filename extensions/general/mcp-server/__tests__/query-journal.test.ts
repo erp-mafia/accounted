@@ -769,3 +769,98 @@ describe('gnubok_query_journal: free-text search', () => {
     ).rejects.not.toThrow(/private_internal/)
   })
 })
+
+/**
+ * Hosts don't always enforce inputSchema, so `accounts` arrives as a bare
+ * number or string in the wild. Before the normalizer, `accounts: 1630`
+ * silently dropped the filter (a number has no `.length`) while
+ * applied_filters still echoed it, and `accounts: "1630"` was spread into its
+ * digits by `.in()`. Record every `.in()` call on journal_entry_lines so the
+ * assertion is on the actual predicate, not just the echo.
+ */
+function makeRecordingEntryLinesMock() {
+  const inCalls: Array<{ table: string; column: string; values: unknown }> = []
+  // One parent entry so the two-step fetch actually issues the lines query
+  // (fetchEntryLines short-circuits on zero entries); the lines page is empty.
+  const rowsFor = (table: string) =>
+    table === 'journal_entries'
+      ? [{ id: 'je-1', entry_date: '2026-01-15', voucher_series: 'A', voucher_number: 1, status: 'posted' }]
+      : []
+  const chain = (table: string): unknown =>
+    new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) =>
+              resolve({ data: rowsFor(table), error: null, count: rowsFor(table).length })
+          }
+          if (prop === 'range') return () => ({ data: rowsFor(table), error: null, count: rowsFor(table).length })
+          if (prop === 'in') {
+            return (column: string, values: unknown) => {
+              inCalls.push({ table, column, values })
+              return chain(table)
+            }
+          }
+          return () => chain(table)
+        },
+      },
+    )
+  const supabase = { from: vi.fn().mockImplementation((table: string) => chain(table)) } as never
+  return { supabase, inCalls }
+}
+
+describe('gnubok_query_journal: accounts argument normalization', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_query_journal')!
+  const lineAccountFilters = (calls: Array<{ table: string; column: string; values: unknown }>) =>
+    calls.filter((c) => c.table === 'journal_entry_lines' && c.column === 'account_number')
+
+  it('applies a bare number `accounts: 1630` as ["1630"] and echoes the normalized value', async () => {
+    const { supabase, inCalls } = makeRecordingEntryLinesMock()
+    const result = (await tool().execute(
+      { accounts: 1630 },
+      'company-1', 'user-1', supabase,
+    )) as { applied_filters: { accounts: unknown } }
+
+    const filters = lineAccountFilters(inCalls)
+    expect(filters.length).toBeGreaterThan(0)
+    for (const f of filters) expect(f.values).toEqual(['1630'])
+    expect(result.applied_filters.accounts).toEqual(['1630'])
+  })
+
+  it('applies a bare string `accounts: "1630"` as ["1630"], not as its digits', async () => {
+    const { supabase, inCalls } = makeRecordingEntryLinesMock()
+    await tool().execute({ accounts: '1630' }, 'company-1', 'user-1', supabase)
+    const filters = lineAccountFilters(inCalls)
+    expect(filters.length).toBeGreaterThan(0)
+    for (const f of filters) expect(f.values).toEqual(['1630'])
+  })
+
+  it('accepts a comma-separated string and integer array items', async () => {
+    const { supabase, inCalls } = makeRecordingEntryLinesMock()
+    await tool().execute({ accounts: '1930, 1940' }, 'company-1', 'user-1', supabase)
+    expect(lineAccountFilters(inCalls)[0]?.values).toEqual(['1930', '1940'])
+
+    const second = makeRecordingEntryLinesMock()
+    await tool().execute({ accounts: [1930, '1940'] }, 'company-1', 'user-1', second.supabase)
+    expect(lineAccountFilters(second.inCalls)[0]?.values).toEqual(['1930', '1940'])
+  })
+
+  it('rejects non-account values instead of dropping the filter', async () => {
+    const { supabase } = makeRecordingEntryLinesMock()
+    await expect(
+      tool().execute({ accounts: 'kontorsmaterial' }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/accounts must be an account number/)
+    await expect(
+      tool().execute({ account_from: 4000 as unknown as string, account_to: { x: 1 } }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/account_to must be an account number/)
+  })
+
+  it('still caps accounts at 50 after normalization', async () => {
+    const { supabase } = makeRecordingEntryLinesMock()
+    const accounts = Array.from({ length: 51 }, (_, i) => 1000 + i).join(',')
+    await expect(
+      tool().execute({ accounts }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/capped at 50/)
+  })
+})

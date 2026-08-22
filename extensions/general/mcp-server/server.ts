@@ -590,6 +590,48 @@ const AUTO_PERIOD_DATE_KEYS = [
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
+/** BAS account numbers are 4-6 digit strings; never arithmetic on them. */
+const ACCOUNT_NUMBER_RE = /^\d{4,6}$/
+
+/**
+ * Coerce a single account-number argument to a trimmed string. Accepts a
+ * string or a finite integer (hosts that skip inputSchema validation send
+ * `1930` as a JSON number); everything else is a validation error rather than
+ * a silently dropped filter.
+ */
+function normalizeAccountNumber(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  const str =
+    typeof value === 'number' && Number.isInteger(value)
+      ? String(value)
+      : typeof value === 'string'
+        ? value.trim()
+        : null
+  if (str === null || !ACCOUNT_NUMBER_RE.test(str)) {
+    throw new Error(`${field} must be an account number string like "1930" (got ${JSON.stringify(value)})`)
+  }
+  return str
+}
+
+/**
+ * Coerce an `accounts` argument to string[]. Accepts an array of
+ * strings/integers, a bare string ("1930" or comma-separated "1930,1940"), or
+ * a bare integer. Returns undefined for null/empty so callers fall through to
+ * account_from/account_to.
+ */
+function normalizeAccountList(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined
+  const raw: unknown[] = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [value]
+  const list = raw
+    .filter((v) => !(typeof v === 'string' && v.trim() === ''))
+    .map((v) => normalizeAccountNumber(v, 'accounts') as string)
+  return list.length > 0 ? list : undefined
+}
+
 function autoExtractDateForPeriodCheck(params: Record<string, unknown>): string | undefined {
   for (const key of AUTO_PERIOD_DATE_KEYS) {
     const value = params[key]
@@ -7856,9 +7898,15 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 100), 500)
       const status = (args.status as string) || 'posted'
-      const accounts = args.accounts as string[] | undefined
-      const accountFrom = args.account_from as string | undefined
-      const accountTo = args.account_to as string | undefined
+      // Hosts don't always enforce inputSchema: `accounts: 1630` (a bare
+      // number) or `accounts: "1630"` both reached us as-is. A number has no
+      // `.length`, so the filter was silently skipped while applied_filters
+      // still echoed it; a bare string was spread into its digits by
+      // postgrest-js `.in()` and matched nothing. Normalize every shape to a
+      // string[] and reject anything that isn't an account number.
+      const accounts = normalizeAccountList(args.accounts)
+      const accountFrom = normalizeAccountNumber(args.account_from, 'account_from')
+      const accountTo = normalizeAccountNumber(args.account_to, 'account_to')
 
       if (accounts && accounts.length > 50) {
         throw new Error('accounts list capped at 50: use account_from/account_to for ranges')
