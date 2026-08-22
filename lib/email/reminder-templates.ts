@@ -1,6 +1,7 @@
 import type { Invoice, Customer, CompanySettings } from '@/types'
 import { formatCurrency, formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
 import { getAmountToPay } from '@/lib/invoices/rounding'
+import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 
 /**
  * What the customer was asked to pay on the original invoice: the öre-rounded
@@ -131,7 +132,6 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
   const {
     invoice,
     customer,
-    company,
     reminderLevel,
     daysOverdue,
     actionUrl,
@@ -140,6 +140,9 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
     interestDays,
     reminderFee,
   } = data
+  // Payment details follow the invoice currency, same as the invoice email
+  // and PDF: a EUR reminder must never print the SEK account's IBAN.
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
   const config = REMINDER_CONFIG[reminderLevel]
   const interestRatePercent = (interestRate * 100).toLocaleString('sv-SE', {
     minimumFractionDigits: 0,
@@ -357,7 +360,6 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
   const {
     invoice,
     customer,
-    company,
     reminderLevel,
     daysOverdue,
     actionUrl,
@@ -366,6 +368,9 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
     interestDays,
     reminderFee,
   } = data
+  // Payment details follow the invoice currency, same as the invoice email
+  // and PDF: a EUR reminder must never print the SEK account's IBAN.
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
   const config = REMINDER_CONFIG[reminderLevel]
   const interestRatePercent = (interestRate * 100).toLocaleString('sv-SE', {
     minimumFractionDigits: 0,

@@ -10,6 +10,7 @@ import {
 } from '../reminder-templates'
 import { formatCurrency } from '@/lib/utils'
 import { makeCustomer, makeInvoice, makeCompanySettings } from '@/tests/helpers'
+import type { CompanySettings } from '@/types'
 
 const company = makeCompanySettings({ company_name: 'Acme AB' })
 const customer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se' })
@@ -292,5 +293,55 @@ describe('reminder email templates: ROT/RUT-avdrag (fakturamodellen)', () => {
       currency: 'SEK',
     })
     expect(amounts.totalDue).toBe(8_822.5)
+  })
+})
+
+describe('payment details follow the invoice currency', () => {
+  const multiCurrencyCompany = makeCompanySettings({
+    company_name: 'Acme AB',
+    bank_name: 'Svenska Banken',
+    iban: 'SE4550000000058398257466',
+    bic: 'ESSESESS',
+    invoice_payment_accounts: {
+      SEK: { bank_name: 'Svenska Banken', iban: 'SE4550000000058398257466', bic: 'ESSESESS' },
+      EUR: { bank_name: 'Deutsche Bank', iban: 'DE89370400440532013000', bic: 'DEUTDEFF' },
+    } as CompanySettings['invoice_payment_accounts'],
+  })
+
+  it('prints the EUR account on a EUR reminder, never the SEK IBAN', () => {
+    const data = { ...baseData, company: multiCurrencyCompany, invoice: eurInvoice }
+    const html = generateReminderEmailHtml(data)
+    const text = generateReminderEmailText(data)
+    for (const out of [html, text]) {
+      expect(out).toContain('DE89370400440532013000')
+      expect(out).toContain('DEUTDEFF')
+      expect(out).toContain('Deutsche Bank')
+      expect(out).not.toContain('SE4550000000058398257466')
+      expect(out).not.toContain('ESSESESS')
+    }
+  })
+
+  it('keeps the SEK account on a SEK reminder', () => {
+    const data = { ...baseData, company: multiCurrencyCompany, invoice }
+    const html = generateReminderEmailHtml(data)
+    const text = generateReminderEmailText(data)
+    for (const out of [html, text]) {
+      expect(out).toContain('SE4550000000058398257466')
+      expect(out).not.toContain('DE89370400440532013000')
+    }
+  })
+
+  it('never falls back to the legacy SEK fields for a EUR reminder when no EUR account exists', () => {
+    const sekOnly = makeCompanySettings({
+      company_name: 'Acme AB',
+      bank_name: 'Svenska Banken',
+      iban: 'SE4550000000058398257466',
+      bic: 'ESSESESS',
+    })
+    const data = { ...baseData, company: sekOnly, invoice: eurInvoice }
+    for (const out of [generateReminderEmailHtml(data), generateReminderEmailText(data)]) {
+      expect(out).not.toContain('SE4550000000058398257466')
+      expect(out).not.toContain('Svenska Banken')
+    }
   })
 })

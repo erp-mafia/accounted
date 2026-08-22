@@ -10,6 +10,10 @@ import {
   type ReminderDaysConfig,
 } from '@/lib/email/reminder-templates'
 import { calculateLatePaymentInterest } from '@/lib/invoices/late-payment-interest'
+import {
+  hasUsableInvoicePaymentAccount,
+  resolveInvoicePaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { createReminderFeeEntry } from '@/lib/bookkeeping/reminder-fee-entries'
 import { createLogger } from '@/lib/logger'
 import type { Invoice, Customer, CompanySettings } from '@/types'
@@ -117,6 +121,21 @@ export async function sendReminder(
 
   if (!customer.email) {
     return { success: false, error: 'Customer has no email' }
+  }
+
+  // Same gate as invoice send: a reminder with no payment account for the
+  // invoice currency would either print nothing to pay to or (before this
+  // gate) the SEK account's IBAN on a EUR invoice, and a customer has paid
+  // to the wrong account that way. Skip and surface it; the user fixes the
+  // currency account under Inställningar and the next run picks it up.
+  const currency = invoice.currency
+  if (!hasUsableInvoicePaymentAccount(resolveInvoicePaymentAccount(company, currency), currency)) {
+    log.warn('Skipping reminder: no payment account configured for invoice currency', {
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoice_number,
+      currency,
+    })
+    return { success: false, error: `INVOICE_PAYMENT_ACCOUNT_MISSING:${currency}` }
   }
 
   const daysOverdue = calculateDaysOverdue(invoice.due_date)
