@@ -54,6 +54,14 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
     const txAmount = typeof data.amount === 'number' && Number.isFinite(data.amount) ? data.amount : null
     return (
       <div className="space-y-1 text-sm">
+        {/* Entry date first: with two open fiscal years the approver could
+            not tell which year a categorization belonged to. */}
+        {typeof data.date === 'string' && data.date && (
+          <div className="flex justify-between gap-4 text-xs mb-1">
+            <span className="text-muted-foreground">Datum</span>
+            <span className="font-mono tabular-nums">{data.date}</span>
+          </div>
+        )}
         <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
         {txCurrency !== 'SEK' && txAmount !== null && (
           <div className="flex justify-between gap-4 text-xs text-muted-foreground mb-1">
@@ -253,13 +261,22 @@ type VoucherLine = {
 }
 
 function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency?: string }) {
+  const accountNames = useContext(AccountNamesContext)
   return (
     <div className="border-t pt-2 space-y-1">
-      {lines.map((line, i) => (
+      {lines.map((line, i) => {
+        // The account's own name first (staged account_name, else the chart
+        // name); the line text only when it adds something.
+        const name = line.account_name || accountNames[line.account_number] || ''
+        const text = line.line_description || ''
+        return (
         <div key={i} className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs items-baseline">
           <span className="font-mono text-muted-foreground">{line.account_number}</span>
           <span className="truncate">
-            {line.account_name || line.line_description || '-'}
+            {name || text || '-'}
+            {name && text && text !== name ? (
+              <span className="text-muted-foreground"> · {text}</span>
+            ) : null}
           </span>
           <span className="font-mono tabular-nums text-right w-24">
             {line.debit_amount > 0 ? formatCurrency(line.debit_amount, currency || 'SEK') : ''}
@@ -268,7 +285,8 @@ function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency
             {line.credit_amount > 0 ? formatCurrency(line.credit_amount, currency || 'SEK') : ''}
           </span>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -466,6 +484,7 @@ function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
 }
 
 function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
+  const accountNames = useContext(AccountNamesContext)
   const amount = (n: number | undefined) =>
     n && n > 0 ? n.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''
   return (
@@ -484,7 +503,9 @@ function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
             <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
               {line.account ?? line.account_number}
             </td>
-            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>{line.description ?? ''}</td>
+            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>
+              {line.description || accountNames[String(line.account ?? line.account_number ?? '')] || ''}
+            </td>
             <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
               {amount(line.debit ?? line.debit_amount)}
             </td>

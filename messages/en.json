@@ -620,6 +620,9 @@
   "pending": {
     "title": "Review",
     "subtitle": "Operations waiting for approval",
+    "sort_oldest_first": "Oldest first",
+    "sort_newest_first": "Newest first",
+    "note_label": "Note",
     "refreshing": "Refreshing…",
     "tab_pending": "Waiting",
     "tab_committed": "Approved",

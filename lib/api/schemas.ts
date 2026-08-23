@@ -2491,6 +2491,9 @@ export const PendingOperationsQuerySchema = z.object({
   status: z.enum(['pending', 'committed', 'rejected', 'failed_partial']).default('pending'),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().nonnegative().default(0),
+  // Newest first by default; a bokslut batch of fifty operations is worked
+  // oldest first, so the queue can be flipped.
+  order: z.enum(['asc', 'desc']).default('desc'),
 })
 
 export const PendingOperationsBulkSchema = z.object({

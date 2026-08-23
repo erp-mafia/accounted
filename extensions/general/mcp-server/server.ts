@@ -4606,6 +4606,10 @@ export const tools: McpTool[] = [
           ...(accountOverride ? { account_override: accountOverride } : {}),
           amount: result.amount,
           currency: result.currency,
+          // Entry date, so the review queue can show which fiscal year a
+          // categorization belongs to (two open years are indistinguishable
+          // from the title alone).
+          date: tx?.date ?? null,
           // Exact journal lines the approval will post (net cost line, VAT
           // line, gross bank line, SEK). The summary fields above pair the
           // GROSS amount with the cost account — read alone they misled

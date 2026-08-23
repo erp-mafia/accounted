@@ -620,6 +620,9 @@
   "pending": {
     "title": "Granskning",
     "subtitle": "Operationer som väntar på godkännande",
+    "sort_oldest_first": "Äldst först",
+    "sort_newest_first": "Nyast först",
+    "note_label": "Anteckning",
     "refreshing": "Uppdaterar…",
     "tab_pending": "Väntar",
     "tab_committed": "Godkända",
