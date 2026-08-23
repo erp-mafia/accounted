@@ -32,6 +32,13 @@ export interface StoredSkattekontoTransaction {
   file_import_id: string | null
   imported_at: string
   updated_at: string
+  /**
+   * Best exact-twin verifikat proposed by the sync (migration 20260823120000).
+   * A proposal, never a link: journal_entry_id is the only link. Optional on
+   * the type because rows fetched with a narrower select omit it.
+   */
+  suggested_journal_entry_id?: string | null
+  suggested_at?: string | null
 }
 
 /** Row shape for the `skattekonto_file_imports` tracking table (DB → app). */
