@@ -4163,13 +4163,14 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_uncategorized_transactions',
     title: 'List Uncategorized Transactions',
-    description: 'List bank transactions with no journal entry yet, newest first. Paginated.',
+    description: 'List bank transactions with no journal entry yet, newest first. Paginated. cash_account_id narrows to one bank account.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         limit: { type: 'number', description: 'Max results to return, 1-100 (default 20)' },
         offset: { type: 'number', description: 'Number of results to skip for pagination (default 0)' },
+        cash_account_id: { type: 'string' },
       },
     },
     outputSchema: paginatedSchema('transactions', {
@@ -4186,6 +4187,8 @@ export const tools: McpTool[] = [
         reference: { type: ['string', 'null'] },
         is_business: { type: ['boolean', 'null'] },
         category: { type: ['string', 'null'] },
+        cash_account_id: { type: ['string', 'null'] },
+        cash_account_ledger: { type: ['string', 'null'] },
       },
     }),
     annotations: {
@@ -4197,29 +4200,61 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 100)
       const offset = Math.max(0, Number(args.offset) || 0)
+      const cashAccountId =
+        typeof args.cash_account_id === 'string' && args.cash_account_id.trim()
+          ? args.cash_account_id.trim()
+          : null
 
       // Get total count
-      const { count: totalCount, error: countError } = await supabase
+      let countQuery = supabase
         .from('transactions')
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId)
         .is('journal_entry_id', null)
+      if (cashAccountId) countQuery = countQuery.eq('cash_account_id', cashAccountId)
+      const { count: totalCount, error: countError } = await countQuery
 
       if (countError) throw new Error(`Database error: ${countError.message}`)
 
-      const { data, error } = await supabase
+      let listQuery = supabase
         .from('transactions')
         .select(
-          'id, date, description, amount, currency, merchant_name, reference, is_business, category'
+          'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id'
         )
         .eq('company_id', companyId)
         .is('journal_entry_id', null)
+      if (cashAccountId) listQuery = listQuery.eq('cash_account_id', cashAccountId)
+      const { data, error } = await listQuery
         .order('date', { ascending: false })
         .range(offset, offset + limit - 1)
 
       if (error) throw new Error(`Database error: ${error.message}`)
 
-      const rows = (data ?? []).map((t: { id: string }) => ({ ...t, transaction_id: t.id }))
+      // Resolve the bank account's BAS ledger for the rows on this page so a
+      // per-account reconciliation can be driven from outside (customer
+      // report: the API never said which bank account a transaction belongs
+      // to). One lookup per page, only when any row carries a cash_account_id.
+      const pageRows = (data ?? []) as Array<{ id: string; cash_account_id?: string | null }>
+      const cashAccountIds = [...new Set(pageRows.map((t) => t.cash_account_id).filter((v): v is string => !!v))]
+      const ledgerByCashAccount = new Map<string, string>()
+      if (cashAccountIds.length > 0) {
+        const { data: cashRows, error: cashError } = await supabase
+          .from('cash_accounts')
+          .select('id, ledger_account')
+          .eq('company_id', companyId)
+          .in('id', cashAccountIds)
+        if (cashError) throw new Error(`Database error: ${cashError.message}`)
+        for (const c of (cashRows ?? []) as Array<{ id: string; ledger_account: string }>) {
+          ledgerByCashAccount.set(c.id, c.ledger_account)
+        }
+      }
+
+      const rows = pageRows.map((t) => ({
+        ...t,
+        transaction_id: t.id,
+        cash_account_id: t.cash_account_id ?? null,
+        cash_account_ledger: t.cash_account_id ? ledgerByCashAccount.get(t.cash_account_id) ?? null : null,
+      }))
       const total = totalCount ?? 0
       const hasMore = total > offset + rows.length
 
@@ -4261,6 +4296,8 @@ export const tools: McpTool[] = [
         is_business: { type: ['boolean', 'null'] },
         category: { type: ['string', 'null'] },
         journal_entry_id: { type: 'string' },
+        cash_account_id: { type: ['string', 'null'] },
+        cash_account_ledger: { type: ['string', 'null'] },
       },
     }),
     annotations: {

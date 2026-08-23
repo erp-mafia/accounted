@@ -183,9 +183,17 @@ describe('tools/list payload size guard', () => {
     //     the contract; its description and the org_number/payment_terms
     //     descriptions were trimmed to one short sentence first; headroom
     //     before the change was ~11 tokens, so even the trimmed form crossed.
+    //   * 59.85K to 59.9K with the bank account on transaction listings
+    //     (customer A4): cash_account_id + cash_account_ledger on
+    //     gnubok_list_uncategorized_transactions and
+    //     gnubok_list_transactions_without_documents, plus a cash_account_id
+    //     filter on the former, so per-account reconciliation can be driven
+    //     from outside. No property descriptions (names are the contract);
+    //     the tool description gained six words; headroom before the change
+    //     was ~50 tokens, so even the bare contract crossed by ~10.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(59_850)
+    expect(approxTokens).toBeLessThan(59_900)
   })
 })
