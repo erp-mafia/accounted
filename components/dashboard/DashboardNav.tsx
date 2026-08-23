@@ -35,6 +35,7 @@ import {
   Sparkles,
   Percent,
   Landmark,
+  Scale,
   CalendarClock,
   CalendarRange,
   FileCheck,
@@ -118,6 +119,7 @@ type NavLabelKey =
   | 'suppliers'
   | 'review'
   | 'transactions'
+  | 'reconciliation'
   | 'bookkeeping'
   | 'chart_of_accounts'
   | 'dimensions'
@@ -208,6 +210,7 @@ const navItems: NavItem[] = [
   { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'arbeta' },
   { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'arbeta', requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'] },
   { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
+  { href: '/reconciliation', labelKey: 'reconciliation', icon: Scale, group: 'arbeta' },
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   // Webshop orders: visible only for companies that actually have a webshop
