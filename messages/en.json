@@ -6549,6 +6549,8 @@
     "bank_expiring_action": "Renew the consent",
     "other_account_hint": "This account is empty, but bookkeeping for the same organisation number exists in another Accounted account. Did you sign in with the wrong login?",
     "other_account_hint_action": "Switch account",
+    "skv_unexplained": "The tax account does not agree with the ledger: {amount} is unexplained after the latest fetch.",
+    "skv_unexplained_action": "Reconcile",
     "more_count": "+{count} more",
     "dismiss": "Hide"
   },

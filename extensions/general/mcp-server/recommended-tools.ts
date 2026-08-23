@@ -76,6 +76,23 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
     ],
   },
   {
+    workflow: 'reconcile_month',
+    description: 'Reconcile every account with an outside truth (bank accounts, skattekonto) for a month and sign it off.',
+    skill: 'reconcile-month',
+    tools: [
+      'gnubok_get_reconciliation_status',
+      'gnubok_list_reconciliation_items',
+      'gnubok_reconcile_match',
+      'gnubok_reconcile_unmatch',
+      // Rows with no counterpart: book them (bank side) or link to the
+      // verifikat that already holds the affärshändelse.
+      'gnubok_categorize_transaction',
+      'gnubok_link_transaction_to_journal_entry',
+      'gnubok_reconcile_signoff',
+      'gnubok_approve_pending_operation',
+    ],
+  },
+  {
     workflow: 'invoice_run',
     description: 'Create and send customer invoices.',
     skill: 'invoicing-rules',

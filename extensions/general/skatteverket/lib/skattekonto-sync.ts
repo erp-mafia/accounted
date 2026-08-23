@@ -8,6 +8,11 @@ import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-serv
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { refreshSkattekontoProposals } from './skattekonto-proposals'
+import { getSkattekontoReconciliationStatus } from '@/lib/reconciliation/skattekonto-reconciliation'
+import {
+  SKATTEKONTO_RECONCILIATION_LATEST_KEY,
+  type SkattekontoReconciliationLatest,
+} from '@/lib/reconciliation/skattekonto-latest'
 import { getSaldo, getTransaktioner } from './skattekonto-client'
 import { SkatteverketAuthError, type SkvAuth } from './api-client'
 import type {
@@ -384,6 +389,33 @@ export async function syncSkattekonto(
   }
   await ctx.settings.set(BALANCE_SNAPSHOT_KEY, snapshot)
   await ctx.settings.set(LAST_SYNCED_AT_KEY, new Date().toISOString())
+
+  // Persist the reconciliation summary so the Hem notice and the attention
+  // resource can read "skattekontot stämmer inte med bokföringen" cheaply
+  // instead of recomputing the bridge on every render. Best effort.
+  try {
+    const status = await getSkattekontoReconciliationStatus(ctx.supabase, ctx.companyId)
+    if (status) {
+      const latest: SkattekontoReconciliationLatest = {
+        as_of: status.as_of,
+        computed_at: new Date().toISOString(),
+        external_balance: status.external_balance,
+        ledger_balance: status.ledger_balance,
+        unexplained_difference: status.unexplained_difference,
+        counts: {
+          proposed: status.counts.proposed,
+          unmatched_external: status.counts.unmatched_external,
+          unmatched_ledger: status.counts.unmatched_ledger,
+        },
+      }
+      await ctx.settings.set(SKATTEKONTO_RECONCILIATION_LATEST_KEY, latest)
+    }
+  } catch (err) {
+    log.warn('reconciliation summary not persisted', {
+      companyId: ctx.companyId,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
 
   // Emit events.
   await ctx.emit({

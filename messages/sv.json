@@ -6549,6 +6549,8 @@
     "bank_expiring_action": "Förnya samtycket",
     "other_account_hint": "Det här kontot är tomt, men bokföring för samma organisationsnummer finns i ett annat Accounted-konto. Loggade du in med fel inloggning?",
     "other_account_hint_action": "Byt konto",
+    "skv_unexplained": "Skattekontot stämmer inte med bokföringen: {amount} är oförklarat efter senaste hämtningen.",
+    "skv_unexplained_action": "Stäm av",
     "more_count": "+{count} till",
     "dismiss": "Dölj"
   },
