@@ -107,15 +107,17 @@ export function formatVoucher(entry: {
 
 /**
  * Parse a formatted voucher label back into its parts. Returns null when the
- * input does not match the expected shape (single uppercase letter followed
- * by a positive integer). Use for filter inputs / search.
+ * input does not match the expected shape: a single letter followed by a
+ * positive integer, optionally separated by one space or hyphen ("A209",
+ * "a 209", "A-209"). Use for filter inputs / search: these are the shapes
+ * users type when they look for a voucher by its number.
  */
 export function parseVoucher(
   formatted: string,
 ): { series: string; number: number } | null {
   if (typeof formatted !== 'string') return null
   const trimmed = formatted.trim().toUpperCase()
-  const match = trimmed.match(/^([A-Z])(\d+)$/)
+  const match = trimmed.match(/^([A-Z])[ -]?(\d+)$/)
   if (!match) return null
   const number = parseInt(match[2], 10)
   if (!Number.isFinite(number) || number <= 0) return null

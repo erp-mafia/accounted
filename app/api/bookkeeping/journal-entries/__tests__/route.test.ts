@@ -156,6 +156,55 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
+  it('matches a voucher label like "A209" on series+number as well as description', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', search: 'A209' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const orCalls = findCalls('journal_entries', 'or')
+    expect(orCalls).toHaveLength(1)
+    expect(orCalls[0][0]).toBe(
+      'description.ilike."%A209%",and(voucher_series.eq.A,voucher_number.eq.209)',
+    )
+    // The plain ilike path must not ALSO run, or the OR would be ANDed away.
+    expect(findCalls('journal_entries', 'ilike')).toHaveLength(0)
+  })
+
+  it('accepts "a 209" and "A-209" as voucher labels', async () => {
+    for (const needle of ['a 209', 'A-209']) {
+      reset()
+      mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+      enqueue({ data: [], error: null, count: 0 })
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { period_id: 'period-1', search: needle },
+      })
+      await GET(request)
+      const orCalls = findCalls('journal_entries', 'or')
+      expect(orCalls, needle).toHaveLength(1)
+      expect(String(orCalls[0][0])).toContain('and(voucher_series.eq.A,voucher_number.eq.209)')
+    }
+  })
+
+  it('keeps the plain description ilike for non-label needles', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', search: 'hyra, kvartal 1 (50%)' },
+    })
+    await GET(request)
+
+    expect(findCalls('journal_entries', 'or')).toHaveLength(0)
+    const ilikeCalls = findCalls('journal_entries', 'ilike')
+    expect(ilikeCalls).toHaveLength(1)
+    expect(ilikeCalls[0][0]).toBe('description')
+    expect(ilikeCalls[0][1]).toBe('%hyra, kvartal 1 (50\\%)%')
+  })
+
   it('orders by the total_amount computed column on amount sort, bypassing the RPC', async () => {
     enqueue({ data: [], error: null, count: 0 })
 

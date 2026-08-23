@@ -1050,8 +1050,16 @@ export default function JournalEntryList({
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             containerClassName="min-w-0 max-w-none"
-            className="pr-7"
+            className={cn('pr-7', loading && search && 'pr-12')}
           />
+          {loading && search && (
+            // Search is server-side and can take a moment on a large ledger;
+            // without this the only signal was the list dimming.
+            <Loader2
+              className="absolute right-7 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-muted-foreground"
+              aria-hidden="true"
+            />
+          )}
           {searchInput && (
             <button
               type="button"

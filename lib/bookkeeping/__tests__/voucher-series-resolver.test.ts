@@ -176,12 +176,19 @@ describe('parseVoucher', () => {
     expect(parseVoucher('  a5 ')).toEqual({ series: 'A', number: 5 })
   })
 
+  it('accepts one space or hyphen between series and number (how users type it in search)', () => {
+    expect(parseVoucher('A 209')).toEqual({ series: 'A', number: 209 })
+    expect(parseVoucher('A-209')).toEqual({ series: 'A', number: 209 })
+    expect(parseVoucher('a-1')).toEqual({ series: 'A', number: 1 })
+  })
+
   it('returns null for malformed input', () => {
     expect(parseVoucher('')).toBeNull()
     expect(parseVoucher('-')).toBeNull()
     expect(parseVoucher('123')).toBeNull()
     expect(parseVoucher('AA1')).toBeNull()
     expect(parseVoucher('A0')).toBeNull()
-    expect(parseVoucher('A-1')).toBeNull()
+    expect(parseVoucher('A--1')).toBeNull()
+    expect(parseVoucher('A  1')).toBeNull()
   })
 })

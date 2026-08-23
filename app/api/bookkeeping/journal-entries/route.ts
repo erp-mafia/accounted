@@ -6,6 +6,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
+import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -207,7 +208,21 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     // The cap bounds DB work against oversized/pathological inputs (compliance
     // A.8.28 / ASVS V1.2.5); escaping prevents silent over-matching on values
     // like "50%". Supabase parameterises the value, so this is not about SQLi.
-    query = query.ilike('description', `%${escapeLikePattern(search)}%`)
+    const needle = `%${escapeLikePattern(search)}%`
+    // The first thing a user searches for is the voucher's own label ("A209").
+    // A description-only match never finds it (only OTHER vouchers that
+    // mention A209 in their text), so a label-shaped needle also matches
+    // voucher_series + voucher_number. The OR is a PostgREST filter list, so
+    // the needle is double-quoted to keep commas/parentheses literal.
+    const voucher = parseVoucher(search)
+    if (voucher) {
+      const quotedNeedle = `"${needle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+      query = query.or(
+        `description.ilike.${quotedNeedle},and(voucher_series.eq.${voucher.series},voucher_number.eq.${voucher.number})`,
+      )
+    } else {
+      query = query.ilike('description', needle)
+    }
   }
 
   // Collapse correction groups (voucher-sort / search path): hide the storno
