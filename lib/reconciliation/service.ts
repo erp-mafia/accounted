@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import { getReconciliationStatus as getBankReconciliationStatus } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import {
@@ -95,7 +96,7 @@ function bankBridge(status: Awaited<ReturnType<typeof getBankReconciliationStatu
       key: 'unmatched_external',
       label_sv: 'Omatchade banktransaktioner',
       label_en: 'Unmatched bank transactions',
-      amount: Math.round(-status.unmatched_transaction_total * 100) / 100,
+      amount: roundOre(-status.unmatched_transaction_total),
       count: status.unmatched_transaction_count,
       items_bucket: 'unmatched_external',
     },

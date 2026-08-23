@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { StoredSkattekontoTransaction } from '../types'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { roundOre } from '@/lib/money'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 
 /**
@@ -373,8 +374,8 @@ export async function findMatchSuggestionsBulk(
   for (const line of lines) {
     const e = line.journal_entries
     if (linkedSet.has(e.id)) continue
-    const debit = Math.round(Number(line.debit_amount) * 100) / 100
-    const credit = Math.round(Number(line.credit_amount) * 100) / 100
+    const debit = roundOre(Number(line.debit_amount))
+    const credit = roundOre(Number(line.credit_amount))
     let view = entryViews.get(e.id)
     if (!view) {
       view = { entry: e, debits: [], credits: [], net: 0, lineCount: 0 }
@@ -382,7 +383,7 @@ export async function findMatchSuggestionsBulk(
     }
     if (debit > 0 && credit === 0) view.debits.push(debit)
     if (credit > 0 && debit === 0) view.credits.push(credit)
-    view.net = Math.round((view.net + debit - credit) * 100) / 100
+    view.net = roundOre(view.net + debit - credit)
     view.lineCount++
   }
 

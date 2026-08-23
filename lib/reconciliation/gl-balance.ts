@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 
 const log = createLogger('reconciliation/gl-balance')
 
@@ -76,5 +77,5 @@ export async function sumAccountBalance(
   for (const row of rows) {
     sum += Number(row.debit_amount || 0) - Number(row.credit_amount || 0)
   }
-  return Math.round(sum * 100) / 100
+  return roundOre(sum)
 }

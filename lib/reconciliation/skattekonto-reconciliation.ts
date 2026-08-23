@@ -3,6 +3,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import { LEDGER_BALANCE_STATUSES, sumAccountBalance } from './gl-balance'
 import {
   AWAITING_EXTERNAL_DAYS,
@@ -95,7 +96,7 @@ export interface SkattekontoReconciliationResult extends ReconciliationStatus {
 }
 
 function round2(n: number): number {
-  return Math.round(n * 100) / 100
+  return roundOre(n)
 }
 
 function addDays(iso: string, days: number): string {

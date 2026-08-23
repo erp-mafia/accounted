@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { roundOre } from '@/lib/money'
 
 const fetchEntryLinesMock = vi.fn()
 const sumAccountBalanceMock = vi.fn()
@@ -190,7 +191,7 @@ describe('getSkattekontoReconciliationStatus', () => {
     // The bridge lines sum to the ledger balance: saldo - unlinked - ignored + unlinked ledger - opening
     const sum = s.bridge
       .filter((b) => b.key !== 'ledger_balance')
-      .reduce((acc, b) => Math.round((acc + b.amount) * 100) / 100, 0)
+      .reduce((acc, b) => roundOre(acc + b.amount), 0)
     expect(sum).toBe(27911)
   })
 
