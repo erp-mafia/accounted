@@ -9,7 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * session id, SKV access token) is hashed; the value never rests here.
  */
 
-export type ConnectorService = 'bank' | 'skatteverket'
+export type ConnectorService = 'bank' | 'skatteverket' | 'peppol'
 
 export function hashHandle(handle: string): string {
   return crypto.createHash('sha256').update(handle).digest('hex')
