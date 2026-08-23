@@ -225,11 +225,14 @@ export async function setSkattekontoRowIgnored(
   if (Boolean(row.is_ignored) === ignored) {
     return { skattekonto_transaction_id: transactionId, is_ignored: ignored }
   }
-  const { error: updateError } = await supabase
-    .from('skattekonto_transactions')
-    .update(ignored ? { is_ignored: true, suggested_journal_entry_id: null, suggested_at: null } : { is_ignored: false })
-    .eq('id', transactionId)
-    .eq('company_id', companyId)
+  // Two literal payloads (not one conditional expression) so the phantom-column
+  // guard can read the column set; ignoring also drops a standing proposal.
+  const update = ignored
+    ? supabase
+        .from('skattekonto_transactions')
+        .update({ is_ignored: true, suggested_journal_entry_id: null, suggested_at: null })
+    : supabase.from('skattekonto_transactions').update({ is_ignored: false })
+  const { error: updateError } = await update.eq('id', transactionId).eq('company_id', companyId)
   if (updateError) {
     throw new SkattekontoLinkError(`Kunde inte uppdatera: ${updateError.message}`, 'LINK_RACE')
   }
