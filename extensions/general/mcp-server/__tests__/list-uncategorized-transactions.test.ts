@@ -81,11 +81,19 @@ describe('gnubok_list_uncategorized_transactions', () => {
     enqueue({ data: null, error: null, count: 0 })
     enqueue({ data: [], error: null })
 
-    await tool.execute({ limit: 20, cash_account_id: 'ca-1940' }, 'company-1', 'user-1', supabase as never)
+    const CA = '550e8400-e29b-41d4-a716-446655441940'
+    await tool.execute({ limit: 20, cash_account_id: CA }, 'company-1', 'user-1', supabase as never)
 
     const eqCalls = findCalls('transactions', 'eq').filter((args) => args[0] === 'cash_account_id')
-    expect(eqCalls).toEqual([['cash_account_id', 'ca-1940'], ['cash_account_id', 'ca-1940']])
+    expect(eqCalls).toEqual([['cash_account_id', CA], ['cash_account_id', CA]])
     // No ledger lookup when the page is empty.
     expect(findCalls('cash_accounts', 'in')).toHaveLength(0)
+  })
+
+  it('rejects a ledger number passed as cash_account_id with a clear message', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      tool.execute({ limit: 20, cash_account_id: '1930' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/cash_account_id must be a cash account UUID/)
   })
 })

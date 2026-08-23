@@ -205,7 +205,7 @@ Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imp
 Response `200`:
 ```ts
 {
-  data: { id: string, date: string, description: string, amount: number, currency: string, reference: string, merchant_name: string, journal_entry_id: string, invoice_id: string, supplier_invoice_id: string, is_business: boolean, category: string, import_source: string, created_at: string }[],
+  data: { id: string, date: string, description: string, amount: number, currency: string, reference: string, merchant_name: string, journal_entry_id: string, invoice_id: string, supplier_invoice_id: string, is_business: boolean, category: string, import_source: string, cash_account_id: string, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -261,6 +261,7 @@ Response `200`:
     external_id: string,
     import_source: string,
     reconciliation_method: string,
+    cash_account_id: string,
     created_at: string,
     updated_at: string
   },

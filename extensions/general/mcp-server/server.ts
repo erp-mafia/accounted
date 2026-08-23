@@ -4204,6 +4204,12 @@ export const tools: McpTool[] = [
         typeof args.cash_account_id === 'string' && args.cash_account_id.trim()
           ? args.cash_account_id.trim()
           : null
+      // The ledger number now sits next to the id in every row, so an agent
+      // may well pass "1930" here: fail with a clear message instead of a
+      // raw Postgres uuid cast error.
+      if (cashAccountId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cashAccountId)) {
+        throw new Error('cash_account_id must be a cash account UUID (cash_accounts.id), not a ledger account number')
+      }
 
       // Get total count
       let countQuery = supabase

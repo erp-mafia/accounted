@@ -4,6 +4,7 @@ import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
 import { getPool } from './setup'
 import {
   seedCompany,
+  insertCashAccount,
   insertDraftJournalEntry,
   insertPostedJournalEntry,
   insertBalancedLines,
