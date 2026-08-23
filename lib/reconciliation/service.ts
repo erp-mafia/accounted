@@ -12,6 +12,7 @@ import {
   type ReconciliationAccount,
   type ReconciliationStatus,
 } from './schemas'
+import { getLatestSignoff, getLatestSignoffs } from './signoff-store'
 
 const log = createLogger('reconciliation/service')
 
@@ -242,6 +243,15 @@ export async function listReconciliationAccounts(
     for (const other of sorted.slice(1)) supersededBy.set(other.id, bankAccountKey(keep.id))
   }
 
+  // Latest active sign-off per account, one query; the rail shows "avstämt
+  // t.o.m." next to the live status. A failed read must not hide the accounts.
+  let signoffs = new Map<string, Awaited<ReturnType<typeof getLatestSignoff>>>()
+  try {
+    signoffs = await getLatestSignoffs(supabase, companyId)
+  } catch (err) {
+    log.warn('sign-off read failed', { companyId, error: err instanceof Error ? err.message : String(err) })
+  }
+
   const bankAccounts = await Promise.all(
     cashAccounts.map(async (a): Promise<ReconciliationAccount> => {
       let status: ReconciliationStatus | null = null
@@ -277,6 +287,7 @@ export async function listReconciliationAccounts(
         },
         status: stateOf(status),
         superseded_by: supersededBy.get(a.id) ?? null,
+        signed_off_through: signoffs.get(bankAccountKey(a.id))?.through_date ?? null,
       }
     }),
   )
@@ -299,6 +310,7 @@ export async function listReconciliationAccounts(
         },
         status: s.skattekonto?.fetched_at ? stateOf(s) : { ...stateOf(s)!, state: 'not_configured' },
         superseded_by: null,
+        signed_off_through: signoffs.get(SKATTEKONTO_ACCOUNT_KEY)?.through_date ?? null,
       }
     }
   } catch (err) {
@@ -331,8 +343,9 @@ export async function getAccountStatus(
   if (!parsed) return null
   const today = options.today ?? isoDate(new Date())
 
+  let status: ReconciliationStatus | null = null
   if (parsed.kind === 'skattekonto') {
-    return getSkattekontoReconciliationStatus(supabase, companyId, {
+    status = await getSkattekontoReconciliationStatus(supabase, companyId, {
       today,
       windowFrom: options.windowFrom ?? null,
       windowTo: options.windowTo ?? null,
@@ -352,9 +365,18 @@ export async function getAccountStatus(
       from: options.windowFrom ?? defaultWindow(today).from,
       to: options.windowTo ?? defaultWindow(today).to,
     }
-    return bankStatus(supabase, companyId, data as CashAccountRow, window, today)
+    status = await bankStatus(supabase, companyId, data as CashAccountRow, window, today)
   }
-
   // manual accounts: later adapter
-  return null
+  if (!status) return null
+
+  // The latest active sign-off rides along on every status read (page, v1,
+  // MCP) so "avstämt t.o.m." never needs a second call.
+  try {
+    status.signoff = await getLatestSignoff(supabase, companyId, accountKey)
+  } catch (err) {
+    log.warn('sign-off read failed', { companyId, accountKey, error: err instanceof Error ? err.message : String(err) })
+    status.signoff = null
+  }
+  return status
 }

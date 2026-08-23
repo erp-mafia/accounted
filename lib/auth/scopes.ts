@@ -142,6 +142,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links': 'reconciliation:write',
   'DELETE /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links/:linkId': 'reconciliation:write',
   'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/items/:itemId/ignore': 'reconciliation:write',
+  'GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff': 'reconciliation:read',
+  'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff': 'reconciliation:signoff',
+  'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff/:signoffId/reopen': 'reconciliation:signoff',
 
   // Phase 5 PR-3: Reports + import async. Reports are read-only over
   // existing lib/reports/* generators; imports are async over the Phase 4

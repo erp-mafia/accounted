@@ -984,6 +984,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // lines and the old description/date, i.e. the preserved side of every
   // in-verifikat rättelse — räkenskapsinformation, not an operation log.
   { name: 'journal_entry_rattelse_log', file: 'journal_entry_rattelse_log.json', orderBy: 'created_at' },
+  // Reconciliation sign-offs ("avstämt t.o.m."): who attested which account
+  // through which date with the numbers as they stood, plus reopen stamps.
+  // Part of the avstämningsdokumentation an auditor asks for; kept.
+  { name: 'account_reconciliations', file: 'account_reconciliations.json', orderBy: 'signed_at' },
   { name: 'journal_entry_no_doc_required', file: 'journal_entry_no_doc_required.json', pageKey: 'journal_entry_id' },
   { name: 'rot_rut_payout_requests', file: 'rot_rut_payout_requests.json', orderBy: 'created_at' },
   // No `denormalize`: rot_rut_payout_requests has no currency column either.

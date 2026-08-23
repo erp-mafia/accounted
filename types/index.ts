@@ -2492,6 +2492,8 @@ export type PendingOperationType =
   // rows to existing verifikat / clear such a link. No ledger writes.
   | 'reconciliation_match'
   | 'reconciliation_unmatch'
+  // Sign-off "avstämt t.o.m. <datum>" on one account (account_reconciliations row).
+  | 'reconciliation_signoff'
   // PR5: Skatteverket filing via MCP. Commit = "send for BankID signing"
   // (returns a signing link); the user's signature in the browser files it.
   | 'submit_vat_declaration'

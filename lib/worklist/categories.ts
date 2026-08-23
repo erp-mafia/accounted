@@ -428,3 +428,67 @@ export async function listSuggestedMatches(
   }
   return matches
 }
+
+/**
+ * Accounts not signed off through the end of the previous month. Cheap by
+ * construction (three small reads, no bridge computation) and zero for
+ * companies that never signed off anything, so the Hem row only appears
+ * once the ritual is adopted. Mirrors lib/reconciliation/service.ts's account
+ * set: enabled cash accounts deduplicated per IBAN + currency, plus the
+ * skattekonto when it has rows.
+ */
+export async function countReconciliationDue(
+  supabase: SupabaseClient,
+  companyId: string,
+  today: Date = new Date(),
+): Promise<number> {
+  // Last day of the previous month, as ISO date (UTC: the day boundary only
+  // needs to be stable, not local).
+  const prevMonthEnd = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0))
+    .toISOString()
+    .slice(0, 10)
+
+  const { data: signoffRows, error: signoffError } = await supabase
+    .from('account_reconciliations')
+    .select('account_key, through_date, reopened_at')
+    .eq('company_id', companyId)
+    .order('through_date', { ascending: false })
+    .limit(500)
+  if (signoffError) return logAndZero('reconciliation_due', companyId, signoffError)
+  const signoffs = (signoffRows ?? []) as Array<{ account_key: string; through_date: string; reopened_at: string | null }>
+  // Adoption gate: no sign-off ever (active or reopened) means no nudge.
+  if (signoffs.length === 0) return 0
+  const coveredKeys = new Set(
+    signoffs.filter((s) => s.reopened_at === null && s.through_date >= prevMonthEnd).map((s) => s.account_key),
+  )
+
+  const { data: cashRows, error: cashError } = await supabase
+    .from('cash_accounts')
+    .select('id, iban, currency, updated_at')
+    .eq('company_id', companyId)
+    .eq('enabled', true)
+  if (cashError) return logAndZero('reconciliation_due', companyId, cashError)
+  const cash = (cashRows ?? []) as Array<{ id: string; iban: string | null; currency: string | null; updated_at: string | null }>
+  // Reconnect duplicates (same IBAN + currency) count once: the newest row.
+  const byIban = new Map<string, typeof cash[number]>()
+  const keys: string[] = []
+  for (const a of cash) {
+    if (!a.iban) {
+      keys.push(`bank:${a.id}`)
+      continue
+    }
+    const k = `${a.iban}|${a.currency ?? 'SEK'}`
+    const prev = byIban.get(k)
+    if (!prev || (a.updated_at ?? '') > (prev.updated_at ?? '')) byIban.set(k, a)
+  }
+  for (const a of byIban.values()) keys.push(`bank:${a.id}`)
+
+  const { count: skvCount, error: skvError } = await supabase
+    .from('skattekonto_transactions')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+  if (skvError) return logAndZero('reconciliation_due', companyId, skvError)
+  if ((skvCount ?? 0) > 0) keys.push('skattekonto')
+
+  return keys.filter((k) => !coveredKeys.has(k)).length
+}

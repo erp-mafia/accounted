@@ -100,7 +100,11 @@ export function ReconciliationRail({ accounts, selectedKey, onSelect }: Reconcil
                   <span className="block truncate text-[11.5px] text-muted-foreground tabular-nums">
                     <span data-ph-mask>{account.account_number}</span>
                     {' · '}
-                    {synced ? t('rail_synced', { date: formatDate(synced) }) : t('rail_never_synced')}
+                    {account.signed_off_through
+                      ? t('rail_signed_off', { date: formatDate(account.signed_off_through) })
+                      : synced
+                        ? t('rail_synced', { date: formatDate(synced) })
+                        : t('rail_never_synced')}
                   </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5">

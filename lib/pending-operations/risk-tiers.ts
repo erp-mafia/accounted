@@ -207,6 +207,9 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // sibling above. Unmatch only clears a pointer: 'low'.
   reconciliation_match: 'medium',
   reconciliation_unmatch: 'low',
+  // Sign-off writes the attestation row others rely on (overview, Hem, auditor)
+  // but nothing in the ledger, and reopen undoes it: 'medium'.
+  reconciliation_signoff: 'medium',
 
   // ── Körjournal (mileage) ───────────────────────────────────────────
   // A trip row is pure travel documentation: no booking impact until a

@@ -86,6 +86,7 @@ describe('listReconciliationAccounts', () => {
         cashAccount(ID_C, { ledger_account: '1931', iban: 'SE2' }),
       ],
     })
+    enqueue({ data: [] }) // latest sign-offs (none)
     // latestBankSyncAt per account (withStatus=false skips bankStatus): three maybeSingle reads
     enqueue({ data: { created_at: '2026-08-19T06:00:00Z' } })
     enqueue({ data: { created_at: '2026-06-01T06:00:00Z' } })
@@ -135,6 +136,7 @@ describe('listReconciliationAccounts', () => {
   it('omits the skattekonto when the company has neither snapshot nor rows', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [cashAccount(ID_A, { is_primary: true })] })
+    enqueue({ data: [] }) // latest sign-offs (none)
     enqueue({ data: null })
     skattekontoStatusMock.mockResolvedValue(null)
 
@@ -148,6 +150,7 @@ describe('listReconciliationAccounts', () => {
   it('computes the bank status through the existing engine with the account scope and maps it to the common shape', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [cashAccount(ID_A, { is_primary: true, currency: 'SEK' })] })
+    enqueue({ data: [] }) // latest sign-offs (none)
     bankStatusMock.mockResolvedValue(bankStatus({ unmatched_transaction_count: 2, unmatched_transaction_total: -1046, is_reconciled: false }))
     enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } }) // latestBankSyncAt inside bankStatus
     enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } }) // latestBankSyncAt for the account row
@@ -199,7 +202,7 @@ describe('getAccountStatus', () => {
       windowFrom: '2026-07-01',
       windowTo: '2026-07-31',
     })
-    expect(s).toEqual({ account_key: 'skattekonto' })
+    expect(s).toEqual({ account_key: 'skattekonto', signoff: null })
     expect(skattekontoStatusMock).toHaveBeenCalledWith(supabase, COMPANY, {
       today: '2026-08-20',
       windowFrom: '2026-07-01',

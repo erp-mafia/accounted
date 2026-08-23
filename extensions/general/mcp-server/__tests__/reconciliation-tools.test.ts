@@ -10,6 +10,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 const statusMock = vi.fn()
 const itemsMock = vi.fn()
 const matchMock = vi.fn()
+const signoffMock = vi.fn()
 
 vi.mock('@/lib/reconciliation/service', () => ({
   getAccountStatus: (...args: unknown[]) => statusMock(...args),
@@ -23,6 +24,9 @@ vi.mock('@/lib/reconciliation/actions', () => ({
   matchPairs: (...args: unknown[]) => matchMock(...args),
   unmatchLink: vi.fn(),
   setItemIgnored: vi.fn(),
+}))
+vi.mock('@/lib/reconciliation/signoff', () => ({
+  signOffAccount: (...args: unknown[]) => signoffMock(...args),
 }))
 
 import { tools, isDefaultCatalogTool, deriveToolMeta } from '../server'
@@ -44,6 +48,7 @@ describe('reconciliation MCP tools', () => {
     statusMock.mockReset()
     itemsMock.mockReset()
     matchMock.mockReset()
+    signoffMock.mockReset()
   })
 
   it('registers the four tools with the intended catalog visibility and staging contract', () => {
@@ -158,5 +163,65 @@ describe('reconciliation MCP tools', () => {
     )) as Record<string, unknown>
     expect(out).toMatchObject({ staged: false, dry_run: true, risk_level: 'low' })
     expect(out.preview).toEqual({ account_key: 'skattekonto', external_id: ROW })
+  })
+})
+
+describe('gnubok_reconcile_signoff', () => {
+  beforeEach(() => {
+    signoffMock.mockReset()
+  })
+
+  it('is search-only, requires approval, and preflights on the status tool', () => {
+    expect(isDefaultCatalogTool(tool('gnubok_reconcile_signoff'))).toBe(false)
+    expect(deriveToolMeta(tool('gnubok_reconcile_signoff'))).toMatchObject({
+      requires_approval: true,
+      preflight: 'gnubok_get_reconciliation_status',
+    })
+  })
+
+  it('dry-runs the policy first and stages reconciliation_signoff with the preview as the operation preview', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    signoffMock.mockResolvedValue({
+      dry_run: true,
+      would_sign: { account_key: 'skattekonto', through_date: '2026-07-31', unexplained_difference: 0, is_reconciled: true, forced: false, previous_through_date: null },
+    })
+    const out = (await tool('gnubok_reconcile_signoff').execute(
+      { account_key: 'skattekonto', through_date: '2026-07-31', dry_run: true },
+      COMPANY,
+      USER,
+      supabase as never,
+    )) as Record<string, unknown>
+    expect(signoffMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      USER,
+      'skattekonto',
+      { through_date: '2026-07-31', note: null, force: false },
+      { dryRun: true },
+    )
+    expect(out).toMatchObject({ staged: false, dry_run: true, risk_level: 'medium' })
+    expect(out.next).toMatchObject({ tool: 'gnubok_get_reconciliation_status' })
+    expect(out.preview).toMatchObject({ through_date: '2026-07-31', is_reconciled: true })
+  })
+
+  it('surfaces a policy refusal instead of staging', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    signoffMock.mockRejectedValue(new Error('Kontot har en oförklarad differens.'))
+    await expect(
+      tool('gnubok_reconcile_signoff').execute(
+        { account_key: 'skattekonto', through_date: '2026-07-31' },
+        COMPANY,
+        USER,
+        supabase as never,
+      ),
+    ).rejects.toThrow(/oförklarad/)
+  })
+
+  it('rejects a malformed account_key before touching anything', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      tool('gnubok_reconcile_signoff').execute({ account_key: '1630', through_date: '2026-07-31' }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/Invalid account_key/)
+    expect(signoffMock).not.toHaveBeenCalled()
   })
 })

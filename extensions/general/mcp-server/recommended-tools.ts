@@ -68,6 +68,7 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       // staged link (bank accounts and skattekonto alike).
       'gnubok_list_reconciliation_items',
       'gnubok_reconcile_match',
+      'gnubok_reconcile_signoff',
       'gnubok_list_voucher_gaps',
       'gnubok_explain_voucher_gap',
       'gnubok_lock_period',

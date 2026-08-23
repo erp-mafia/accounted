@@ -24,6 +24,7 @@ import {
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
 import { matchPairs, unmatchLink } from '@/lib/reconciliation/actions'
+import { signOffAccount } from '@/lib/reconciliation/signoff'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import {
@@ -6046,6 +6047,44 @@ async function commitReconciliationUnmatch(
   }
 }
 
+/** reconciliation_signoff: "avstämt t.o.m." on one account; policy in lib/reconciliation/signoff.ts. */
+async function commitReconciliationSignoff(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const accountKey = params.account_key as string | undefined
+  const throughDate = params.through_date as string | undefined
+  if (!accountKey || !throughDate) {
+    return { error: 'account_key and through_date are required', status: 400 }
+  }
+  try {
+    const result = await signOffAccount(
+      supabase,
+      companyId,
+      userId,
+      accountKey,
+      {
+        through_date: throughDate,
+        note: (params.note as string | null | undefined) ?? null,
+        force: params.force === true,
+      },
+      { dryRun: false },
+    )
+    if (!result) return { error: `Unknown account_key ${accountKey}`, status: 404 }
+    if (result.dry_run) return { error: 'Unexpected dry-run result', status: 500 }
+    return { data: { account_key: accountKey, signoff: result.signoff } }
+  } catch (err) {
+    const code = (err as { code?: string }).code
+    return {
+      error: err instanceof Error ? err.message : String(err),
+      errorCode: code,
+      status: code === 'SIGNOFF_NOT_FOUND' ? 404 : code === 'ALREADY_SIGNED_OFF' || code === 'SIGNOFF_RACE' ? 409 : 400,
+    }
+  }
+}
+
 async function commitLinkTransactionJournalEntry(
   supabase: SupabaseClient,
   userId: string,
@@ -6386,6 +6425,9 @@ async function commitPendingOperationInner(
         break
       case 'reconciliation_unmatch':
         result = await commitReconciliationUnmatch(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'reconciliation_signoff':
+        result = await commitReconciliationSignoff(supabase, userId, companyId, pendingOp.params)
         break
       case 'submit_vat_declaration':
         result = await commitSubmitVatDeclaration(supabase, userId, companyId, pendingOp.params)

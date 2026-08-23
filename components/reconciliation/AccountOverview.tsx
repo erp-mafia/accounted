@@ -20,6 +20,7 @@ import type {
   ReconciliationStatus,
 } from '@/lib/reconciliation/schemas'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
+import { SignoffDialog } from './SignoffDialog'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
@@ -57,13 +58,20 @@ const FOLDED_BY_DEFAULT: ReadonlySet<ReconciliationItemBucket> = new Set(['match
 
 const ITEMS_LIMIT = 200
 
+export interface ReconciliationWindow {
+  from: string
+  to: string
+}
+
 interface AccountOverviewProps {
   account: ReconciliationAccount
+  /** The selected period: scopes the bank bridge and the item windows; its end is the default sign-off date. */
+  window: ReconciliationWindow
   /** Called after any write so the rail can refresh its status dots. */
   onChanged: () => void
 }
 
-export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
+export function AccountOverview({ account, window, onChanged }: AccountOverviewProps) {
   const t = useTranslations('reconciliation')
   const locale = useLocale()
   const { toast } = useToast()
@@ -73,15 +81,17 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const [unfolded, setUnfolded] = useState<Set<ReconciliationItemBucket>>(new Set())
   const [bookRow, setBookRow] = useState<ReconciliationItem | null>(null)
+  const [signoffOpen, setSignoffOpen] = useState(false)
 
   const isSkv = account.kind === 'skattekonto'
   const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
 
   const load = useCallback(async () => {
     try {
+      const qs = new URLSearchParams({ date_from: window.from, date_to: window.to })
       const [statusRes, itemsRes] = await Promise.all([
-        fetch(base),
-        fetch(`${base}/items?limit=${ITEMS_LIMIT}`),
+        fetch(`${base}?${qs.toString()}`),
+        fetch(`${base}/items?limit=${ITEMS_LIMIT}&${qs.toString()}`),
       ])
       setLoadError(false)
       if (!statusRes.ok || !itemsRes.ok) {
@@ -95,7 +105,7 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
     } catch {
       setLoadError(true)
     }
-  }, [base])
+  }, [base, window.from, window.to])
 
   // The workspace keys this component on account_key, so a new account is a
   // fresh mount: no state to reset here.
@@ -230,6 +240,33 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
     }
   }
 
+  async function submitSignoff(input: { through_date: string; note: string | null; force: boolean }) {
+    const res = await fetch(`${base}/signoff`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) return getUserErrorMessage(json, { statusCode: res.status })
+    setSignoffOpen(false)
+    toast({ title: t('toast_signed_off', { date: formatDate(input.through_date) }) })
+    await refresh()
+    return null
+  }
+
+  async function reopen(signoffId: string) {
+    setBusy('reopen')
+    try {
+      const data = await postJson(`${base}/signoff/${signoffId}/reopen`, {})
+      if (data) {
+        toast({ title: t('toast_reopened') })
+        await refresh()
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
   // ---- render -------------------------------------------------------------
 
   if (loadError) {
@@ -320,6 +357,13 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
   const bankRunHref = '/reports/bank-reconciliation?autorun=1'
   const bankViewHref = '/reports/bank-reconciliation'
 
+  // Default sign-off date: the window end, never past today nor past the
+  // skattekonto snapshot. The button hides when that date is already signed.
+  const todayIso = new Date().toISOString().slice(0, 10)
+  const signoffMaxDate = isSkv ? (asOfDate < todayIso ? asOfDate : todayIso) : todayIso
+  const signoffDefaultDate = window.to < signoffMaxDate ? window.to : signoffMaxDate
+  const signoffEnabled = !status.signoff || status.signoff.through_date < signoffDefaultDate
+
   return (
     <div className="space-y-6">
       {/* Tiles: label + number, nothing else. */}
@@ -347,6 +391,23 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
       ) : status.is_reconciled ? (
         <p className="text-[13px] text-muted-foreground">{t('reconciled_line')}</p>
       ) : null}
+
+      {status.signoff && (
+        <p className="group flex items-center gap-2 text-[13px] text-muted-foreground">
+          <span>
+            {t('signed_off_line', { date: formatDate(status.signoff.through_date), when: formatDate(status.signoff.signed_at) })}
+            {status.signoff.note && <span className="ml-1">· {t('signed_off_forced')}</span>}
+          </span>
+          <button
+            type="button"
+            onClick={() => void reopen(status.signoff!.id)}
+            disabled={busy !== null}
+            className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
+          >
+            {t('reopen')}
+          </button>
+        </p>
+      )}
 
       {/* Bridge: how the difference is explained. */}
       {status.bridge.length > 0 && (
@@ -387,6 +448,11 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
         {!isSkv && (
           <Button size="sm" variant="outline" asChild>
             <Link href={bankRunHref}>{t('action_run_bank_matcher')}</Link>
+          </Button>
+        )}
+        {signoffEnabled && (
+          <Button size="sm" variant={status.is_reconciled ? 'default' : 'outline'} onClick={() => setSignoffOpen(true)} disabled={busy !== null}>
+            {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
           </Button>
         )}
         <span className="ml-auto">
@@ -504,6 +570,17 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
           }}
         />
       )}
+
+      <SignoffDialog
+        open={signoffOpen}
+        onOpenChange={setSignoffOpen}
+        accountName={account.name}
+        defaultDate={signoffDefaultDate}
+        maxDate={signoffMaxDate}
+        unexplained={status.unexplained_difference}
+        currency={currency}
+        onSubmit={submitSignoff}
+      />
     </div>
   )
 }
