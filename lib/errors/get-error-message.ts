@@ -99,7 +99,7 @@ const GENERIC_FALLBACK: Bilingual = { sv: 'Något gick fel. Försök igen.', en:
 // Known error patterns → user-friendly Swedish messages
 const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
   [
-    /reason must be \d+ characters or fewer/i,
+    /reason must be 500 characters or fewer/i,
     'Motiveringen får vara högst 500 tecken.',
   ],
   [
