@@ -749,6 +749,29 @@ describe('gnubok_reverse_journal_entry: staging gates', () => {
     ).rejects.toThrow(/entry_id is required/i)
   })
 
+  it('rejects a reason over 500 characters with a VALIDATION_ERROR code and a Swedish message', async () => {
+    // Customer report: the envelope said "Något gick fel. Försök igen." in
+    // Swedish while the cause was only in the English field.
+    const { supabase } = createQueuedMockSupabase()
+    const { getStructuredError } = await import('@/lib/errors/get-structured-error')
+    let thrown: unknown
+    try {
+      await reverseEntry.execute(
+        { entry_id: '11111111-1111-1111-1111-111111111111', reason: 'x'.repeat(501) },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    const envelope = getStructuredError(thrown)
+    expect(envelope.code).toBe('VALIDATION_ERROR')
+    expect(envelope.message_sv).toBe('Motiveringen får vara högst 500 tecken.')
+    expect(envelope.message_en).toMatch(/500 characters or fewer/)
+  })
+
   it('rejects when the original entry is not posted', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

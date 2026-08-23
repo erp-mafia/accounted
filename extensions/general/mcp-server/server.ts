@@ -593,6 +593,18 @@ const AUTO_PERIOD_DATE_KEYS = [
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
 /**
+ * `reason` is capped at 500 characters (inputSchema maxLength). Hosts do not
+ * always enforce inputSchema, so the tools re-check at runtime. The message
+ * text is what the error layer keys on: getStructuredError infers
+ * VALIDATION_ERROR from it and getErrorMessage maps it to a specific Swedish
+ * line (a structured `code` on the error would win over the message and
+ * collapse the Swedish text to the generic validation fallback).
+ */
+function reasonTooLongError(): Error {
+  return new Error('reason must be 500 characters or fewer')
+}
+
+/**
  * Coerce a single account-number argument to a trimmed string (validated
  * against ACCOUNT_NUMBER_RE from lib/invariants/account-number). Accepts a
  * string or a finite integer (hosts that skip inputSchema validation send
@@ -15107,7 +15119,7 @@ export const tools: McpTool[] = [
 
       if (!importId) throw new Error('import_id is required')
       if (reason !== undefined && reason.length > 500) {
-        throw new Error('reason must be 500 characters or fewer')
+        throw reasonTooLongError()
       }
 
       // Pre-flight mirrors undoSIEImport: confirm row exists, belongs to
@@ -15734,7 +15746,7 @@ export const tools: McpTool[] = [
         throw new Error('reversal_date must be ISO yyyy-MM-dd')
       }
       if (reason !== undefined && reason.length > 500) {
-        throw new Error('reason must be 500 characters or fewer')
+        throw reasonTooLongError()
       }
 
       const entryId = await resolveJournalEntryRef(supabase, companyId, entryRef)
