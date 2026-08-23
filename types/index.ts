@@ -2488,6 +2488,10 @@ export type PendingOperationType =
   | 'bulk_book_inbox_items'
   // PR #614: link a single bank tx to an already-posted verifikat (no new JE)
   | 'link_transaction_journal_entry'
+  // Account-keyed reconciliation (bank accounts + skattekonto): link outside
+  // rows to existing verifikat / clear such a link. No ledger writes.
+  | 'reconciliation_match'
+  | 'reconciliation_unmatch'
   // PR5: Skatteverket filing via MCP. Commit = "send for BankID signing"
   // (returns a signing link); the user's signature in the browser files it.
   | 'submit_vat_declaration'

@@ -130,9 +130,18 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Writes: bulk
   'POST /api/v1/companies/:companyId/transactions/ingest': 'transactions:write',
   'POST /api/v1/companies/:companyId/transactions/batch-categorize': 'transactions:write',
-  // Reconciliation
+  // Reconciliation (legacy bank-only routes; kept as aliases of the
+  // account-keyed routes below, with their original scopes)
   'POST /api/v1/companies/:companyId/reconciliation/bank/run': 'transactions:write',
   'GET /api/v1/companies/:companyId/reconciliation/bank/status': 'transactions:read',
+  // Reconciliation, account-keyed (bank:<cash_account_id> | skattekonto):
+  // the account list, the bridge, the item buckets, links and ignore flags.
+  'GET /api/v1/companies/:companyId/reconciliation/accounts': 'reconciliation:read',
+  'GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey': 'reconciliation:read',
+  'GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/items': 'reconciliation:read',
+  'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links': 'reconciliation:write',
+  'DELETE /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links/:linkId': 'reconciliation:write',
+  'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/items/:itemId/ignore': 'reconciliation:write',
 
   // Phase 5 PR-3: Reports + import async. Reports are read-only over
   // existing lib/reports/* generators; imports are async over the Phase 4

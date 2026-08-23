@@ -23,6 +23,7 @@ import {
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
+import { matchPairs, unmatchLink } from '@/lib/reconciliation/actions'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import {
@@ -5978,6 +5979,73 @@ async function commitBulkBookInboxItems(
   }
 }
 
+/**
+ * reconciliation_match: link the staged pairs on one account through the
+ * same service the page and the v1 API use. Every pair is re-validated at
+ * commit time (row still open, entry still posted and unlinked, amounts
+ * close); partial success is reported in data.applied / data.skipped rather
+ * than failing the whole operation, because the pairs are independent.
+ */
+async function commitReconciliationMatch(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const accountKey = params.account_key as string | undefined
+  const pairs = params.pairs as Array<{ external_ids: string[]; journal_entry_ids: string[] }> | undefined
+  if (!accountKey || !Array.isArray(pairs) || pairs.length === 0) {
+    return { error: 'account_key and pairs are required', status: 400 }
+  }
+  const result = await matchPairs(supabase, companyId, userId, accountKey, { pairs }, { dryRun: false })
+  if (!result) {
+    return { error: `Unknown account_key ${accountKey}`, status: 404 }
+  }
+  if (result.applied.length === 0) {
+    return {
+      error: `Ingen koppling kunde göras: ${result.skipped.map((s) => s.code).join(', ')}`,
+      errorCode: result.skipped[0]?.code,
+      status: 409,
+      data: { account_key: accountKey, applied: result.applied, skipped: result.skipped },
+    }
+  }
+  return {
+    data: {
+      account_key: accountKey,
+      applied: result.applied,
+      skipped: result.skipped,
+      applied_count: result.applied.length,
+      skipped_count: result.skipped.length,
+    },
+  }
+}
+
+/** reconciliation_unmatch: clear one link. The verifikat is untouched. */
+async function commitReconciliationUnmatch(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const accountKey = params.account_key as string | undefined
+  const externalId = params.external_id as string | undefined
+  if (!accountKey || !externalId) {
+    return { error: 'account_key and external_id are required', status: 400 }
+  }
+  try {
+    const result = await unmatchLink(supabase, companyId, userId, accountKey, externalId)
+    if (!result) return { error: `Unknown account_key ${accountKey}`, status: 404 }
+    return { data: { account_key: accountKey, ...result } }
+  } catch (err) {
+    const code = (err as { code?: string }).code
+    return {
+      error: err instanceof Error ? err.message : String(err),
+      errorCode: code,
+      status: code === 'TRANSACTION_NOT_FOUND' ? 404 : 400,
+    }
+  }
+}
+
 async function commitLinkTransactionJournalEntry(
   supabase: SupabaseClient,
   userId: string,
@@ -6312,6 +6380,12 @@ async function commitPendingOperationInner(
         break
       case 'link_transaction_journal_entry':
         result = await commitLinkTransactionJournalEntry(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'reconciliation_match':
+        result = await commitReconciliationMatch(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'reconciliation_unmatch':
+        result = await commitReconciliationUnmatch(supabase, userId, companyId, pendingOp.params)
         break
       case 'submit_vat_declaration':
         result = await commitSubmitVatDeclaration(supabase, userId, companyId, pendingOp.params)

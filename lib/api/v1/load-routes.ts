@@ -152,6 +152,15 @@ import '@/app/api/v1/companies/[companyId]/webhooks/[id]/rotate-secret/route'
 // Inbox item stamp.
 import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/stamp/route'
 
+// Reconciliation, account-keyed (bank:<cash_account_id> | skattekonto): the
+// account list, the bridge per account, item buckets, links and ignore flags.
+import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/route'
+import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/route'
+import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/items/route'
+import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/links/route'
+import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/links/[linkId]/route'
+import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/items/[itemId]/ignore/route'
+
 // Dimensions PR2: registry list + value creation (kostnadsställe/projekt).
 import '@/app/api/v1/companies/[companyId]/dimensions/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/route'
