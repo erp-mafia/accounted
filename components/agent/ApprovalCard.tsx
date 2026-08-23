@@ -98,6 +98,8 @@ export default function ApprovalCard({
   // What's paid is feeding a rejection back so the agent generates a *new*
   // proposal (an LLM call): that's suppressed when the company lacks `ai`.
   const hasAi = useCapability(CAPABILITY.ai)
+  // Chart names for the preview lines (same source as /pending).
+  const accountNames = useAccountNamesSource()
   const [state, setState] = useState<State>('pending')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [confirmText, setConfirmText] = useState('')
