@@ -167,6 +167,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_update_company_settings:         'companies:write',
   // Transactions
   gnubok_list_uncategorized_transactions:     'transactions:read',
+  gnubok_list_cash_accounts:                  'transactions:read',
   gnubok_list_transactions_without_documents: 'transactions:read',
   gnubok_create_transactions:                 'transactions:write',
   gnubok_categorize_transaction:              'transactions:write',
