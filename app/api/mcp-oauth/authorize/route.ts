@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { createAuthCode } from '@/lib/auth/oauth-codes'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
-import { requireCompanyId } from '@/lib/company/context'
+import { getActiveCompanyId } from '@/lib/company/context'
 import { getBranding } from '@/lib/branding/service'
 import { isAllowedRedirectUri } from '@/lib/auth/oauth-allowlist'
 import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
@@ -114,7 +114,14 @@ function buildLoginRedirect(request: Request): Response {
  * The middleware MFA gate deliberately exempts /api/mcp-oauth/* (the token
  * endpoint is Bearer-only), which makes this route responsible for its own
  * step-up. Returns null when the session is AAL2 (or MFA isn't required),
- * otherwise a redirect to /mfa/verify that returns to this authorize URL.
+ * otherwise a redirect to /mfa/verify (factor enrolled, session still AAL1)
+ * or /mfa/enroll (no factor at all) that returns to this authorize URL.
+ *
+ * The enrollment leg matters for accounts created inside the OAuth popup
+ * (issue #1814): the middleware only forces enrollment once a company exists,
+ * so a brand-new password account would otherwise consent at AAL1 and mint an
+ * MFA-exempt key for an account with no second factor. BankID-linked accounts
+ * are exempt via shouldEnforceMfa, same as everywhere else.
  */
 async function requireAal2(
   supabase: SupabaseClient,
@@ -122,15 +129,23 @@ async function requireAal2(
   request: Request,
 ): Promise<Response | null> {
   if (!shouldEnforceMfa(user)) return null
+  const url = new URL(request.url)
+  const returnTo = `${url.pathname}${url.search}`
   const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-  if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
-    const url = new URL(request.url)
-    const returnTo = `${url.pathname}${url.search}`
+  if (aal?.nextLevel === 'aal2') {
+    if (aal.currentLevel === 'aal2') return null
     return NextResponse.redirect(
       new URL(`/mfa/verify?returnTo=${encodeURIComponent(returnTo)}`, url.origin),
     )
   }
-  return null
+  // nextLevel below aal2 means no verified factor exists. Mirrors the
+  // middleware's enrollment gate (lib/supabase/middleware.ts), fail-closed.
+  const { data: factors } = await supabase.auth.mfa.listFactors()
+  const hasVerifiedFactor = factors?.totp?.some((f) => f.status === 'verified') ?? false
+  if (hasVerifiedFactor) return null
+  return NextResponse.redirect(
+    new URL(`/mfa/enroll?returnTo=${encodeURIComponent(returnTo)}`, url.origin),
+  )
 }
 
 function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Response {
@@ -209,18 +224,32 @@ export async function GET(request: Request) {
     )
   }
 
-  const companyId = await requireCompanyId(supabase, user.id)
+  // null for an account with no company yet (signed up from the OAuth popup,
+  // issue #1814): consent still goes through, the key is minted unbound and
+  // binds itself once the company exists. The page says so instead of
+  // showing a company name.
+  const companyId = await getActiveCompanyId(supabase, user.id)
 
-  // Get company name for the consent page
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('company_name')
-    .eq('company_id', companyId)
-    .single()
-
-  const companyName = settings?.company_name || user.email
+  let companyName: string | null = null
+  if (companyId) {
+    const { data: settings } = await supabase
+      .from('company_settings')
+      .select('company_name')
+      .eq('company_id', companyId)
+      .single()
+    companyName = settings?.company_name || user.email || null
+  }
 
   const appNameLower = escapeHtml(getBranding().appName.toLowerCase())
+
+  const accountRowHtml = companyName
+    ? `<span class="account-label">Företag</span>
+      <span class="account-name">${escapeHtml(companyName)}</span>`
+    : `<span class="account-label">Konto</span>
+      <span class="account-name">${escapeHtml(user.email ?? '')}</span>`
+  const noCompanyNoteHtml = companyId
+    ? ''
+    : `<p class="note">Du har inget företag i ${appNameLower} ännu. Du kan ansluta ändå: skapa företaget i appen så använder anslutningen det automatiskt, utan att du behöver ansluta på nytt.</p>`
 
   // CSP nonce for the inline consent UI controls. A nonce-bound script-src
   // makes the inline block executable while keeping the rest of the page
@@ -373,6 +402,12 @@ export async function GET(request: Request) {
       color: var(--fg);
       text-align: right;
       word-break: break-word;
+    }
+    .note {
+      font-size: 0.8125rem;
+      color: var(--fg-muted);
+      line-height: 1.55;
+      margin: -1rem 0 1.75rem;
     }
     .scopes-header {
       display: flex;
@@ -557,9 +592,9 @@ export async function GET(request: Request) {
     <p class="lede">En extern applikation begär åtkomst till ditt ${appNameLower}-konto. Välj vilka behörigheter du vill bevilja.</p>
 
     <div class="account">
-      <span class="account-label">Företag</span>
-      <span class="account-name">${escapeHtml(companyName)}</span>
+      ${accountRowHtml}
     </div>
+    ${noCompanyNoteHtml}
 
     <form method="POST" action="${escapeHtml(url.pathname + url.search)}" id="consent-form">
       <input type="hidden" name="scope_binding" value="${escapeHtml(scopeBindingValue)}">
@@ -681,7 +716,9 @@ export async function POST(request: Request) {
     )
   }
 
-  await requireCompanyId(supabase, user.id)
+  // No company check here: the auth code carries only the user id, and the
+  // token endpoint resolves (or leaves unbound) the company when it mints the
+  // key. An account without a company may consent (issue #1814).
 
   // Parse form body
   const formData = await request.formData()

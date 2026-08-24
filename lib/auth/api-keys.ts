@@ -1,5 +1,7 @@
 import crypto from 'crypto'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
+import { getActiveCompanyId } from '@/lib/company/context'
 
 const KEY_PREFIX = 'gnubok_sk_'
 const REFRESH_TOKEN_PREFIX = 'gnubok_rt_'
@@ -473,7 +475,12 @@ export async function validateApiKey(
 ): Promise<
   | {
       userId: string
-      companyId: string
+      /**
+       * The key's default company. null only while the key's user has no
+       * company at all (minted from the OAuth popup before onboarding, issue
+       * #1814): the first validation after a company exists binds the key.
+       */
+      companyId: string | null
       apiKeyId?: string
       apiKeyName?: string
       scopes: ApiKeyScope[]
@@ -509,9 +516,12 @@ export async function validateApiKey(
     return { error: 'Rate limit exceeded', status: 429 }
   }
 
+  const companyId: string | null =
+    row.company_id ?? (await bindUnboundKey(supabase, row.user_id, row.api_key_id))
+
   return {
     userId: row.user_id,
-    companyId: row.company_id,
+    companyId,
     apiKeyId: row.api_key_id,
     apiKeyName: row.api_key_name,
     scopes: validateScopes(row.scopes) ?? DEFAULT_SCOPES,
@@ -520,6 +530,38 @@ export async function validateApiKey(
     // keys behave unchanged.
     mode: (row.mode === 'test' ? 'test' : 'live') as ApiKeyMode,
   }
+}
+
+/**
+ * Late binding for keys minted before the user's first company existed.
+ *
+ * The OAuth token endpoint stores company_id NULL for such keys. Company
+ * creation happens in the web app (a Server Action) which knows nothing about
+ * the user's keys, so the binding is healed here, on the first validation after
+ * a company exists: one place, regardless of how the company was created.
+ * Returns null while the user still has no company. The UPDATE is best-effort:
+ * a failed write only means the next call resolves again.
+ */
+async function bindUnboundKey(
+  supabase: SupabaseClient,
+  userId: string,
+  apiKeyId: string | undefined
+): Promise<string | null> {
+  let companyId: string | null
+  try {
+    companyId = await getActiveCompanyId(supabase, userId)
+  } catch {
+    return null
+  }
+  if (!companyId) return null
+  if (apiKeyId) {
+    await supabase
+      .from('api_keys')
+      .update({ company_id: companyId })
+      .eq('id', apiKeyId)
+      .is('company_id', null)
+  }
+  return companyId
 }
 
 /**
