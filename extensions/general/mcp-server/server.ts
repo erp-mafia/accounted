@@ -8370,7 +8370,8 @@ export const tools: McpTool[] = [
         } else if ((count ?? 0) > 0) {
           statusFilterWarning =
             `${count} entr${count === 1 ? 'y' : 'ies'} with status '${opposite}' in the filtered range ` +
-            `${count === 1 ? 'is' : 'are'} excluded by status='${status}'. Storno bookkeeping keeps both ` +
+            `${count === 1 ? 'is' : 'are'} excluded by status='${status}' (count scoped by date/voucher/` +
+            `source filters only, not by account or dimension filters). Storno bookkeeping keeps both ` +
             `the reversed original and its storno on the account, so one-leg totals can differ from ` +
             `account balances. Re-run with status 'all' (the default) for ledger-accurate sums.`
         }
