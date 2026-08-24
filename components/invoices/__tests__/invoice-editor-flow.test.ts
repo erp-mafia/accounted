@@ -173,11 +173,28 @@ function chipsInput(overrides: Partial<ForvalChipsInput> = {}): ForvalChipsInput
 }
 
 describe('deriveForvalChips', () => {
-  it('shows only currency and due terms for an all-default invoice', () => {
+  it('shows currency, invoice date and due terms for an all-default invoice', () => {
     expect(deriveForvalChips(chipsInput())).toEqual([
       { kind: 'currency', currency: 'SEK' },
+      { kind: 'invoice_date', date: '2026-08-17' },
       { kind: 'due_days', days: 30, date: '2026-09-16' },
     ])
+  })
+
+  // Issue #1820: the invoice date silently defaulted to today inside the
+  // collapsed Förval panel; the chip makes the value visible in every mode.
+  it('surfaces the invoice date as a chip, and skips it while unset', () => {
+    expect(deriveForvalChips(chipsInput())).toContainEqual({
+      kind: 'invoice_date',
+      date: '2026-08-17',
+    })
+    expect(deriveForvalChips(chipsInput({ isSelfBilled: true }))).toContainEqual({
+      kind: 'invoice_date',
+      date: '2026-08-17',
+    })
+    expect(
+      deriveForvalChips(chipsInput({ invoiceDate: '' })).find((c) => c.kind === 'invoice_date'),
+    ).toBeUndefined()
   })
 
   it('surfaces a deviating document type first', () => {
@@ -225,7 +242,7 @@ describe('deriveForvalChips', () => {
     })
   })
 
-  it('reduces to currency, due and received for self-billed mode', () => {
+  it('reduces to currency, invoice date, due and received for self-billed mode', () => {
     const chips = deriveForvalChips(
       chipsInput({
         isSelfBilled: true,
@@ -239,6 +256,7 @@ describe('deriveForvalChips', () => {
     )
     expect(chips).toEqual([
       { kind: 'currency', currency: 'SEK' },
+      { kind: 'invoice_date', date: '2026-08-17' },
       { kind: 'due_days', days: 30, date: '2026-09-16' },
       { kind: 'received', date: '2026-08-15' },
     ])

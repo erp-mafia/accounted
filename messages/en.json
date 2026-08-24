@@ -3655,6 +3655,7 @@
     "remove_row_aria_named": "Remove line: {description}",
     "validation_price_invalid": "Enter a unit price",
     "chip_currency": "Currency {currency}",
+    "chip_invoice_date": "Invoice date {date}",
     "chip_due_days": "Due in {days} days ({date})",
     "chip_due_date": "Due {date}",
     "chip_received": "Received {date}",

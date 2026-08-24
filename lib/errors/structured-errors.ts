@@ -926,6 +926,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Endast skickade, betalda eller förfallna fakturor kan krediteras.',
     message_en: 'Only sent, paid, or overdue invoices can be credited.',
   },
+  INVOICE_CREDIT_NO_NUMBER: {
+    httpStatus: 400,
+    message_sv: 'Ursprungsfakturan saknar fakturanummer och kan inte krediteras.',
+    message_en: 'The original invoice has no invoice number and cannot be credited.',
+  },
   INVOICE_CREDIT_ISSUE_INCOMPLETE: {
     httpStatus: 500,
     message_sv:
