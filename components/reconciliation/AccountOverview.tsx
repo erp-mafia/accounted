@@ -22,6 +22,7 @@ import type {
 } from '@/lib/reconciliation/schemas'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
 import { SignoffDialog, type SignoffSubmitInput } from './SignoffDialog'
+import { ReconciliationUnderlag } from './ReconciliationUnderlag'
 import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 
@@ -556,6 +557,12 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
           </button>
         </p>
       )}
+
+      {/* Underlag for the balansdag in play: the signed date, else the date the next sign-off would cover. */}
+      <ReconciliationUnderlag
+        accountKey={account.account_key}
+        throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
+      />
 
       {/* Bridge: how the difference is explained. */}
       {status.bridge.length > 0 && (
