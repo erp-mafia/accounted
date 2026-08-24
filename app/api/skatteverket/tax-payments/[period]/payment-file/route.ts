@@ -3,18 +3,24 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
+import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'
+import { resolveBatchDebtor } from '@/lib/payments/batch-service'
 import { generateSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { getBranding } from '@/lib/branding/service'
 import { roundOre } from '@/lib/money'
 
 ensureInitialized()
 
 /**
- * Generate Bankgirot LB-fil for paying skatt + arbetsgivaravgifter for a
+ * Generate the payment file for paying skatt + arbetsgivaravgifter for a
  * given AGI period to Skatteverket's Bankgiro 5050-1055 with the company's
  * Skattekontot OCR.
  *
  * Period format: "YYYY-MM" (e.g. "2026-04").
+ * `?format=bg_lb` (default) yields a Bankgirot LB-fil; `?format=pain001`
+ * yields ISO 20022 pain.001 XML through the supplier-payment generator,
+ * whose Swedish giro dialect (BG payee + SCOR OCR) is exactly this payment.
  *
  * Per BFL: Generated payment file is räkenskapsinformation linked to the
  * salary journal entry. Subject to 7-year retention.
@@ -36,6 +42,14 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   }
   const periodYear = parseInt(periodMatch[1], 10)
   const periodMonth = parseInt(periodMatch[2], 10)
+
+  const format = new URL(request.url).searchParams.get('format') ?? 'bg_lb'
+  if (format !== 'bg_lb' && format !== 'pain001') {
+    return NextResponse.json(
+      { error: 'Ogiltigt filformat. Använd bg_lb eller pain001.' },
+      { status: 400 }
+    )
+  }
 
   const { data: agi } = await supabase
     .from('agi_declarations')
@@ -83,28 +97,6 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     )
   }
 
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('bankgiro')
-    .eq('company_id', companyId)
-    .single()
-
-  if (!settings?.bankgiro) {
-    return NextResponse.json(
-      // Same wording as the salary LB route: the settings overview shows a
-      // registry bankgiro that this route does not read.
-      { error: 'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturering för att skapa betalfilen.' },
-      { status: 400 }
-    )
-  }
-
-  if (!validateBankgiroNumber(settings.bankgiro)) {
-    return NextResponse.json(
-      { error: 'Bankgironumret är ogiltigt (felaktig kontrollsiffra).' },
-      { status: 400 }
-    )
-  }
-
   let ocr: string
   try {
     ocr = generateSkattekontoOcr(company.org_number)
@@ -116,37 +108,120 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   // (17th in Jan/Aug for ≤40 MSEK turnover, but we play safe with 12th here).
   const paymentDate = computeTaxPaymentDate(periodYear, periodMonth)
 
-  let result
-  try {
-    result = generateBankgiroPaymentBgLb(
-      { name: company.name, senderBankgiro: settings.bankgiro },
-      {
-        receiverBankgiro: SKATTEKONTO_BANKGIRO,
-        ocr,
-        amount: totalAmount,
-        receiverName: 'Skatteverket',
-      },
-      { paymentDate, periodLabel: period }
-    )
-  } catch (err) {
-    return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
+  let fileContent: Buffer
+  let filename: string
+  let contentType: string
+
+  if (format === 'pain001') {
+    // The paying company resolves exactly like a supplier payment batch:
+    // IBAN + BIC (derived when possible) + org number, with the company
+    // bankgiro riding along so the BG payee is debited BGNR-to-BGNR where
+    // the bank's MIG demands it (Swedbank Validex rule 219).
+    const debtorResolution = await resolveBatchDebtor(supabase, companyId)
+    if (!debtorResolution.ok) {
+      const message = {
+        iban: 'Företagets IBAN saknas i företagsinställningar. Fyll i det under Inställningar → Fakturering för att skapa betalfil (ISO 20022).',
+        bic: 'Företagsbankens BIC saknas och kunde inte härledas. Fyll i BIC under Inställningar → Fakturering för att skapa betalfilen.',
+        org_number: 'Organisationsnummer saknas för företaget.',
+      }[debtorResolution.missing]
+      return NextResponse.json({ error: message }, { status: 400 })
+    }
+    const { debtor } = debtorResolution
+
+    // Deterministic per period, like the salary pain.001 MsgId: re-downloads
+    // reuse the id, so bank-side duplicate detection (keyed on MsgId) still
+    // catches the same period being uploaded twice.
+    const orgDigits = company.org_number.replace(/\D/g, '')
+    const messageId = `${getBranding().appName.toUpperCase()}-SKATT-${orgDigits}-${period}`
+
+    let xml: string
+    try {
+      xml = generateSupplierPain001(
+        {
+          name: debtor.name,
+          orgNumber: debtor.org_number,
+          iban: debtor.iban,
+          bic: debtor.bic,
+          bankgiro: debtor.bankgiro,
+          city: debtor.city,
+        },
+        [
+          {
+            payee: { type: 'bankgiro', bankgiro: SKATTEKONTO_BANKGIRO.replace(/\D/g, '') },
+            payeeName: 'Skatteverket',
+            // Skatteverket's seat; the MIG demands a creditor town (rule 222).
+            payeeCity: 'Solna',
+            amount: totalAmount,
+            paymentDate,
+            reference: { type: 'ocr', value: ocr },
+          },
+        ],
+        { messageId, createdAt: new Date().toISOString() }
+      )
+    } catch (err) {
+      return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
+    }
+
+    fileContent = Buffer.from(xml, 'utf-8')
+    filename = `pain001_skatt_${period}.xml`
+    contentType = 'application/xml; charset=utf-8'
+  } else {
+    const { data: settings } = await supabase
+      .from('company_settings')
+      .select('bankgiro')
+      .eq('company_id', companyId)
+      .single()
+
+    if (!settings?.bankgiro) {
+      return NextResponse.json(
+        // Same wording as the salary LB route: the settings overview shows a
+        // registry bankgiro that this route does not read.
+        { error: 'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturering för att skapa betalfilen.' },
+        { status: 400 }
+      )
+    }
+
+    if (!validateBankgiroNumber(settings.bankgiro)) {
+      return NextResponse.json(
+        { error: 'Bankgironumret är ogiltigt (felaktig kontrollsiffra).' },
+        { status: 400 }
+      )
+    }
+
+    let result
+    try {
+      result = generateBankgiroPaymentBgLb(
+        { name: company.name, senderBankgiro: settings.bankgiro },
+        {
+          receiverBankgiro: SKATTEKONTO_BANKGIRO,
+          ocr,
+          amount: totalAmount,
+          receiverName: 'Skatteverket',
+        },
+        { paymentDate, periodLabel: period }
+      )
+    } catch (err) {
+      return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
+    }
+
+    fileContent = Buffer.from(result.content, 'latin1')
+    filename = result.filename
+    contentType = 'text/plain; charset=iso-8859-1'
   }
 
   await supabase
     .from('agi_declarations')
     .update({
       tax_payment_file_generated_at: new Date().toISOString(),
-      tax_payment_file_format: 'bg_lb',
+      tax_payment_file_format: format,
     })
     .eq('id', agi.id)
     .eq('company_id', companyId)
 
-  const buffer = Buffer.from(result.content, 'latin1')
-
-  return new Response(buffer, {
+  return new Response(fileContent, {
     headers: {
-      'Content-Type': 'text/plain; charset=iso-8859-1',
-      'Content-Disposition': `attachment; filename="${result.filename}"`,
+      'Content-Type': contentType,
+      'Content-Disposition': `attachment; filename="${filename}"`,
     },
   })
   },
