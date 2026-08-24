@@ -95,8 +95,6 @@ interface PeriodRow {
   period_end: string
 }
 
-const ROW_COLUMNS = 'item_key, state, note, done_by, done_at, updated_by, updated_at'
-
 function allSigned(accounts: ReconciliationAccount[], through: string): ChecklistState {
   if (accounts.length === 0) return 'not_applicable'
   return accounts.every((a) => a.signed_off_through != null && a.signed_off_through >= through) ? 'done' : 'open'
@@ -185,7 +183,7 @@ export async function buildBokslutChecklist(
 
   const { data: rowData, error: rowError } = await supabase
     .from('bokslut_checklist_items')
-    .select(ROW_COLUMNS)
+    .select('item_key, state, note, done_by, done_at, updated_by, updated_at')
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)
   if (rowError) throw new Error(`Kunde inte hämta bokslutschecklistan: ${rowError.message}`)
@@ -208,7 +206,7 @@ export async function buildBokslutChecklist(
     if (options.readiness === undefined) {
       try {
         const v = await validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId)
-        readiness = { draftCount: v.draftCount, unexplainedGaps: v.unexplainedGaps, trialBalanceBalanced: v.trialBalanceBalanced }
+        readiness = { draftCount: v.draftCount, unexplainedGaps: v.unexplainedGaps.length, trialBalanceBalanced: v.trialBalanceBalanced }
       } catch (err) {
         log.warn('readiness unavailable for checklist', { companyId, fiscalPeriodId, error: String(err) })
       }
@@ -254,21 +252,23 @@ export async function setChecklistItem(
     throw new BokslutChecklistError('Noteringen är för lång.', 'NOTE_TOO_LONG')
   }
   const now = new Date().toISOString()
-  const row = {
-    company_id: companyId,
-    fiscal_period_id: fiscalPeriodId,
-    item_key: input.item_key,
-    state: input.state,
-    note,
-    done_by: input.state === 'open' ? null : userId,
-    done_at: input.state === 'open' ? null : now,
-    updated_by: userId,
-    updated_at: now,
-  }
   const { data, error } = await supabase
     .from('bokslut_checklist_items')
-    .upsert(row, { onConflict: 'company_id,fiscal_period_id,item_key' })
-    .select(ROW_COLUMNS)
+    .upsert(
+      {
+        company_id: companyId,
+        fiscal_period_id: fiscalPeriodId,
+        item_key: input.item_key,
+        state: input.state,
+        note,
+        done_by: input.state === 'open' ? null : userId,
+        done_at: input.state === 'open' ? null : now,
+        updated_by: userId,
+        updated_at: now,
+      },
+      { onConflict: 'company_id,fiscal_period_id,item_key' },
+    )
+    .select('item_key, state, note, done_by, done_at, updated_by, updated_at')
     .single()
   if (error) throw new Error(`Kunde inte spara checklistan: ${error.message}`)
   return data as ChecklistRow

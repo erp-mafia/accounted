@@ -110,7 +110,7 @@ describe('buildBokslutChecklist', () => {
     enqueue({ data: PERIOD })
     enqueue({ data: [{ item_key: 'inventory_valued', state: 'done', note: null, done_by: USER, done_at: '2027-01-06T08:00:00Z', updated_by: USER, updated_at: '2027-01-06T08:00:00Z' }] })
     listAccountsMock.mockRejectedValue(new Error('down'))
-    readinessMock.mockResolvedValue({ draftCount: 0, unexplainedGaps: 1, trialBalanceBalanced: true })
+    readinessMock.mockResolvedValue({ draftCount: 0, unexplainedGaps: [{ series: 'A', from: 12, to: 12 }], trialBalanceBalanced: true })
 
     const list = await buildBokslutChecklist(supabase as never, COMPANY, USER, 'fy-2026')
     expect(list?.period.id).toBe('fy-2026')
