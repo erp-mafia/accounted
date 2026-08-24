@@ -13,7 +13,16 @@ import {
   createServiceClientNoCookies,
   hasScope,
   TOOL_SCOPE_MAP,
+  type ApiKeyMode,
+  type ApiKeyScope,
 } from '@/lib/auth/api-keys'
+import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import {
+  ANONYMOUS_METHODS,
+  ANONYMOUS_RATE_LIMIT,
+  anonymousRateLimitIdentifier,
+  isPublicTool,
+} from './public-tools'
 import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
 import {
@@ -344,7 +353,9 @@ function resolveInvoiceLineFromArticle(
 }
 
 interface ActorContext {
-  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+  // 'anonymous': a client that has not connected an account yet (lazy
+  // authentication, issue #1814). Only PUBLIC_TOOLS ever run under it.
+  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
   id?: string
   label?: string
   /**
@@ -3205,19 +3216,23 @@ export const tools: McpTool[] = [
 
       // Resolve company context: read once per call. Failures degrade
       // gracefully: an unresolved field means "don't filter on it" so a
-      // misconfigured company still gets the full skill list.
-      const [settings, employeeCount] = await Promise.all([
-        supabase
-          .from('company_settings')
-          .select('entity_type, vat_registered')
-          .eq('company_id', companyId)
-          .maybeSingle(),
-        supabase
-          .from('employees')
-          .select('id', { count: 'exact', head: true })
-          .eq('company_id', companyId)
-          .eq('is_active', true),
-      ])
+      // misconfigured company still gets the full skill list. No company at
+      // all (anonymous or not-yet-onboarded caller, issue #1814) means no
+      // context to filter on: the full list, without the two lookups.
+      const [settings, employeeCount] = companyId
+        ? await Promise.all([
+            supabase
+              .from('company_settings')
+              .select('entity_type, vat_registered')
+              .eq('company_id', companyId)
+              .maybeSingle(),
+            supabase
+              .from('employees')
+              .select('id', { count: 'exact', head: true })
+              .eq('company_id', companyId)
+              .eq('is_active', true),
+          ])
+        : [{ data: null }, { count: 0 }]
       const entityType = (settings.data?.entity_type as string | undefined) ?? null
       const vatRegistered = Boolean(settings.data?.vat_registered)
       const hasEmployees = (employeeCount.count ?? 0) > 0
@@ -18142,44 +18157,88 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   }
   const wwwAuth = `Bearer resource_metadata="${resourceMetadataUrl.toString()}"`
 
-  // ── Pre-auth: handle fire-and-forget notifications before auth check ──
-  // MCP notifications have no id and don't expect error responses.
-  // Checking auth on them would return 401 which confuses clients.
-  const clonedRequest = request.clone()
+  const unauthorized = () =>
+    new Response('Unauthorized', {
+      status: 401,
+      headers: { 'WWW-Authenticate': wwwAuth },
+    })
+
+  // ── Parse JSON-RPC ──
+  // Parsed before auth: with lazy authentication (issue #1814) the method and
+  // tool name decide whether a token is required at all. A body that cannot
+  // be parsed keeps the pre-lazy-auth answer for a tokenless caller (401), so
+  // probing the endpoint without credentials learns nothing new.
+  const token = extractBearerToken(request)
+  let body: JsonRpcRequest
   try {
-    const peek = await clonedRequest.json()
-    if (peek.method === 'notifications/initialized') {
-      return new Response(null, { status: 202 })
-    }
+    body = await request.json()
   } catch {
-    // Not valid JSON: fall through to auth + parse below
+    if (!token) return unauthorized()
+    return NextResponse.json(
+      jsonRpcError(null, -32700, 'Parse error: expected JSON-RPC 2.0 request body'),
+      { status: 400 }
+    )
+  }
+
+  // Fire-and-forget notification: no id, no response expected. Answering
+  // 401 here confuses clients, so it is accepted before any auth check.
+  if (body.method === 'notifications/initialized') {
+    return new Response(null, { status: 202 })
+  }
+
+  if (body.jsonrpc !== '2.0' || !body.method) {
+    if (!token) return unauthorized()
+    return NextResponse.json(
+      jsonRpcError(body.id ?? null, -32600, 'Invalid Request: must include jsonrpc="2.0" and method'),
+      { status: 400 }
+    )
   }
 
   // ── Auth ──
-  const token = extractBearerToken(request)
-  if (!token) {
-    return new Response('Unauthorized', {
-      status: 401,
-      headers: { 'WWW-Authenticate': wwwAuth },
-    })
-  }
+  // Lazy authentication: a client with no token may connect, list the
+  // catalog and call the PUBLIC_TOOLS. Every other request answers 401 +
+  // WWW-Authenticate at the transport level: that challenge is what the
+  // client turns into its Connect prompt (a 200 with isError never would).
+  // The account can be created inside that prompt (app/api/mcp-oauth), so
+  // the first protected tool call is the whole signup trigger.
+  const requestedTool =
+    body.method === 'tools/call'
+      ? toCanonicalToolName(String((body.params as Record<string, unknown> | undefined)?.name ?? ''))
+      : null
+  const anonymousAllowed =
+    ANONYMOUS_METHODS.has(body.method) || (requestedTool !== null && isPublicTool(requestedTool))
+  if (!token && !anonymousAllowed) return unauthorized()
 
-  const authResult = await validateApiKey(token)
-  if ('error' in authResult) {
-    const status = authResult.status
-    if (status === 429) {
-      return new Response(authResult.error, {
-        status: 429,
-        headers: { 'Content-Type': 'text/plain', 'Retry-After': '60' },
-      })
+  const isAnonymous = !token
+  let userId = ''
+  let companyId: string | null = null
+  let keyScopes: ApiKeyScope[] = []
+  let apiKeyId: string | undefined
+  let apiKeyName: string | undefined
+  let keyMode: ApiKeyMode = 'live'
+  if (token) {
+    const authResult = await validateApiKey(token)
+    if ('error' in authResult) {
+      const status = authResult.status
+      if (status === 429) {
+        return new Response(authResult.error, {
+          status: 429,
+          headers: { 'Content-Type': 'text/plain', 'Retry-After': '60' },
+        })
+      }
+      return unauthorized()
     }
-    return new Response('Unauthorized', {
-      status: 401,
-      headers: { 'WWW-Authenticate': wwwAuth },
+    ;({ userId, companyId, scopes: keyScopes, apiKeyId, apiKeyName, mode: keyMode } = authResult)
+  } else {
+    // Anonymous traffic has no key to rate-limit on: per truncated IP instead.
+    // No-op without Upstash (self-hosted), like the OAuth register endpoint.
+    const rl = await checkRateLimit({
+      prefix: 'mcp:anonymous',
+      identifier: anonymousRateLimitIdentifier(request),
+      ...ANONYMOUS_RATE_LIMIT,
     })
+    if (!rl.ok) return rl.response!
   }
-
-  const { userId, companyId, scopes: keyScopes, apiKeyId, apiKeyName, mode: keyMode } = authResult
   const supabase = createServiceClientNoCookies()
   // The Mcp-Session-Id header (introduced in spec 2025-06-18) is the canonical
   // way for an agent to keep a stable identifier across tools/call invocations
@@ -18195,31 +18254,15 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     request.headers.get('x-gnubok-client') ??
     new URL(request.url).searchParams.get('client')
   const client = rawClient && /^[A-Za-z0-9._-]{1,64}$/.test(rawClient) ? rawClient.toLowerCase() : null
-  const actor: ActorContext = {
-    type: 'api_key',
-    id: apiKeyId,
-    label: apiKeyName ?? 'Unnamed API key',
-    sessionId,
-    client,
-  }
-
-  // ── Parse JSON-RPC ──
-  let body: JsonRpcRequest
-  try {
-    body = await request.json()
-  } catch {
-    return NextResponse.json(
-      jsonRpcError(null, -32700, 'Parse error: expected JSON-RPC 2.0 request body'),
-      { status: 400 }
-    )
-  }
-
-  if (body.jsonrpc !== '2.0' || !body.method) {
-    return NextResponse.json(
-      jsonRpcError(body.id ?? null, -32600, 'Invalid Request: must include jsonrpc="2.0" and method'),
-      { status: 400 }
-    )
-  }
+  const actor: ActorContext = isAnonymous
+    ? { type: 'anonymous', label: 'Not connected', sessionId, client }
+    : {
+        type: 'api_key',
+        id: apiKeyId,
+        label: apiKeyName ?? 'Unnamed API key',
+        sessionId,
+        client,
+      }
 
   // ── Stateless core (spec 2026-07-28) ──
   // New-style clients carry their protocol version in _meta on every request
@@ -18328,6 +18371,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       const instructions = projectToolReferencesInText([
             'Accounted: Swedish double-entry bookkeeping via conversation.',
             '',
+            ...(isAnonymous
+              ? [
+                  'NOT CONNECTED YET. Without an account you can call gnubok_search_tools, gnubok_list_skills and gnubok_load_skill. Every other tool needs the user to connect their Accounted account: calling one returns an authentication challenge that your client shows as a Connect prompt. A user who has no account creates one right there (BankID or e-mail, about a minute), and the call is then retried automatically. To start bookkeeping for a company that is not in Accounted yet, call gnubok_list_companies to trigger the connect step, then continue with the setup.',
+                  '',
+                ]
+              : []),
             'Discovery:',
             '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size.',
             '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster.',
@@ -18395,6 +18444,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       const listStartedAt = Date.now()
       const allowedTools = tools.filter((t) => {
         if (!isDefaultCatalogTool(t)) return false
+        // Not connected yet: the whole default catalog is listed so the agent
+        // can pick the right tool; calling a protected one is what produces
+        // the 401 challenge that starts the connect (and signup) flow.
+        if (isAnonymous) return true
         const required = TOOL_SCOPE_MAP[t.name]
         return !required || hasScope(keyScopes, required)
       })
@@ -18444,6 +18497,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       >
 
       const tool = tools.find((t) => t.name === toolName)
+      // The pre-auth gate already refused anonymous calls to anything outside
+      // PUBLIC_TOOLS; re-checked here so the dispatcher never depends on it.
+      if (isAnonymous && !isPublicTool(toolName)) return unauthorized()
       if (!tool) {
         emitToolCallTelemetry({
           tool: toolName ?? '<unknown>',

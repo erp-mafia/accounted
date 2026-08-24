@@ -7,6 +7,7 @@ const UUID_PATTERN =
 
 const COMPANY_INDEPENDENT_TOOLS = new Set([
   'gnubok_search_tools',
+  'gnubok_list_skills',
   'gnubok_load_skill',
   'gnubok_list_companies',
 ])
