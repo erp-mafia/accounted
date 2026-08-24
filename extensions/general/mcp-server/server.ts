@@ -7907,7 +7907,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_query_journal',
     title: 'Query Journal Lines',
-    description: "Flexible journal-line query for ad-hoc questions. Filters: account, date, amount, voucher, source, status, dimensions bag, free-text. group_by/group_by_dimension aggregation; include_dimensions returns each line's bag. Lines + totals over the full match set (totals_scope).",
+    description: 'Flexible journal-line query for ad-hoc questions. Filters: account, date, amount, voucher, source, status, dimensions, free-text. group_by/group_by_dimension aggregation; include_dimensions returns line bags. Lines + totals over the full match set.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -7924,7 +7924,7 @@ export const tools: McpTool[] = [
         voucher_number_from: { type: 'number', description: 'Lowest voucher number (inclusive)' },
         voucher_number_to: { type: 'number', description: 'Highest voucher number (inclusive)' },
         source_type: { type: 'string', description: 'Filter by source: bank_transaction, invoice_created, supplier_invoice, currency_revaluation, year_end, opening_balance, etc.' },
-        status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: 'Default: posted' },
+        status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: "Default 'all' (posted + reversed: totals equal ledger balances). One-leg filters give totals that are NOT balances." },
         project: { type: 'string', description: 'Filter by project code (SIE dim 6)' },
         cost_center: { type: 'string', description: 'Filter by cost center (SIE dim 1)' },
         dimensions: {
@@ -7938,7 +7938,7 @@ export const tools: McpTool[] = [
         },
         group_by: { type: 'string', enum: ['account_number', 'voucher_series', 'source_type', 'cost_center', 'project'], description: 'Aggregate matching lines into groups by this field. Mutually exclusive with group_by_dimension.' },
         group_by_dimension: { type: 'string', description: 'Aggregate by SIE dimension number (e.g. "6" = projekt) from each line\'s dimensions bag; untagged → "(utan dimension)". Mutually exclusive with group_by.' },
-        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1-500 (default 100). Totals/groups always cover the FULL match set even when truncated (free-text search included).' },
+        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1-500 (default 100); totals/groups still cover the full match set.' },
       },
     },
     outputSchema: {
@@ -7947,10 +7947,10 @@ export const tools: McpTool[] = [
       properties: {
         lines: { type: 'array', items: { type: 'object' } },
         truncated: { type: 'boolean', description: 'True if more matching lines exist than were returned' },
-        total_lines: { type: 'number', description: 'Total lines matching ALL filters (incl. amount). When amount_min/amount_max is set this reflects the filtered set, not the wider DB-side match.' },
+        total_lines: { type: 'number', description: 'Total lines matching ALL filters, amount filter included.' },
         returned_lines: { type: 'number' },
         amount_filter_applied_post_fetch: { type: 'boolean', description: 'True if amount_min/amount_max was applied client-side after the DB fetch.' },
-        db_matched_pre_amount_filter: { type: ['number', 'null'], description: 'Pre-amount-filter DB match count when amount_filter_applied_post_fetch is true; null otherwise.' },
+        db_matched_pre_amount_filter: { type: ['number', 'null'], description: 'DB match count before the post-fetch amount filter; null when not applied.' },
         totals: {
           type: 'object',
           properties: {
@@ -7962,7 +7962,11 @@ export const tools: McpTool[] = [
         totals_scope: {
           type: 'string',
           enum: ['full_match'],
-          description: 'Always full_match: totals/groups aggregate ALL matching lines regardless of limit, on free-text searches too. (returned_slice is no longer emitted; the field stays for older clients.)',
+          description: 'Always full_match: totals/groups cover ALL matching lines regardless of limit (field kept for older clients).',
+        },
+        status_filter_warning: {
+          type: 'string',
+          description: 'Set when a one-leg status filter excluded opposite-status entries: totals are not account balances.',
         },
         groups: {
           type: 'array',
@@ -7991,7 +7995,16 @@ export const tools: McpTool[] = [
     },
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 100), 500)
-      const status = (args.status as string) || 'posted'
+      // Default 'all' (posted + reversed): the same inclusion rule every
+      // report uses (trial balance, GL, SIE export). Storno bookkeeping keeps
+      // both the reversed original and its posted storno on the account, so a
+      // one-leg filter produces sums that are not balances; the old 'posted'
+      // default made a real customer's agent find phantom VAT residuals in a
+      // storno-heavy quarter and demand a revert of correct books.
+      const status = (args.status as string) || 'all'
+      if (status !== 'all' && status !== 'posted' && status !== 'reversed') {
+        throw new Error("status must be 'posted', 'reversed' or 'all'")
+      }
       // Hosts don't always enforce inputSchema: `accounts: 1630` (a bare
       // number) or `accounts: "1630"` both reached us as-is. A number has no
       // `.length`, so the filter was silently skipped while applied_filters
@@ -8059,9 +8072,9 @@ export const tools: McpTool[] = [
       // journal_entry_lines. Every pass (plain and both text legs) applies
       // BOTH, so they always describe one match set; the text legs only add
       // their .ilike() on top.
-      const filterEntries = (q: EntryLinesQuery): EntryLinesQuery => {
+      const filterEntriesWithStatus = (q: EntryLinesQuery, st: string): EntryLinesQuery => {
         let e = q.eq('company_id', companyId)
-        e = status === 'all' ? e.in('status', ['posted', 'reversed']) : e.eq('status', status)
+        e = st === 'all' ? e.in('status', ['posted', 'reversed']) : e.eq('status', st)
         if (dateFrom) e = e.gte('entry_date', dateFrom)
         if (dateTo) e = e.lte('entry_date', dateTo)
         if (voucherSeries) e = e.eq('voucher_series', voucherSeries)
@@ -8070,6 +8083,8 @@ export const tools: McpTool[] = [
         if (sourceType) e = e.eq('source_type', sourceType)
         return e
       }
+      const filterEntries = (q: EntryLinesQuery): EntryLinesQuery =>
+        filterEntriesWithStatus(q, status)
 
       const filterLines = (q: EntryLinesQuery): EntryLinesQuery => {
         let l = q
@@ -8334,6 +8349,33 @@ export const tools: McpTool[] = [
           .sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
       }
 
+      // One-leg status filters get a balance-integrity warning when the
+      // opposite leg exists in range. Entry-level head count only: cheap, and
+      // exact for what the warning claims (excluded entries exist), without
+      // re-running the line fetch. A failed count never fails the query; the
+      // warning is advisory.
+      let statusFilterWarning: string | undefined
+      if (status !== 'all') {
+        const opposite = status === 'posted' ? 'reversed' : 'posted'
+        const { count, error: countError } = await filterEntriesWithStatus(
+          supabase.from('journal_entries').select('id', { count: 'exact', head: true }),
+          opposite
+        )
+        if (countError) {
+          log.warn('query_journal opposite-status count failed', {
+            companyId,
+            userId,
+            error: countError.message,
+          })
+        } else if ((count ?? 0) > 0) {
+          statusFilterWarning =
+            `${count} entr${count === 1 ? 'y' : 'ies'} with status '${opposite}' in the filtered range ` +
+            `are excluded by status='${status}'. Storno bookkeeping keeps both the reversed original ` +
+            `and its storno on the account, so these totals are NOT account balances. ` +
+            `Re-run with status 'all' (the default) for ledger-accurate sums.`
+        }
+      }
+
       // The full match set anchors total_lines / truncated / pre-amount count
       // on every path; `lines` is the first `limit` of it in display order.
       return {
@@ -8349,6 +8391,7 @@ export const tools: McpTool[] = [
           net: Math.round((totalDebit - totalCredit) * 100) / 100,
         },
         totals_scope: 'full_match',
+        ...(statusFilterWarning ? { status_filter_warning: statusFilterWarning } : {}),
         ...(groups ? { groups } : {}),
         applied_filters: {
           account_from: accountFrom ?? null,
