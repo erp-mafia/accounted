@@ -63,13 +63,20 @@ export const POST = withRouteContext(
 
     let missing
     try {
-      missing = await resolveMissingUnderlagEntries(supabase, companyId, {
-        periodId: period_id ?? null,
-        series: validation.data.series ?? null,
-        dateFrom: validation.data.date_from ?? null,
-        dateTo: validation.data.date_to ?? null,
-        search: validation.data.search ?? null,
-      })
+      missing = await resolveMissingUnderlagEntries(
+        supabase,
+        companyId,
+        {
+          periodId: period_id ?? null,
+          series: validation.data.series ?? null,
+          dateFrom: validation.data.date_from ?? null,
+          dateTo: validation.data.date_to ?? null,
+          search: validation.data.search ?? null,
+        },
+        // No sorting here, so skip the per-row total_amount computed column
+        // on what can be a full post-import candidate scan.
+        { idOnly: true },
+      )
     } catch (err) {
       if (err instanceof MissingUnderlagQueryError) {
         // userMessage is already mapped through getErrorMessage() in the

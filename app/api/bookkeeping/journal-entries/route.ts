@@ -144,8 +144,11 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       b: MissingUnderlagEntry,
     ) => {
       switch (column) {
-        case 'date':
-          return a.entry_date < b.entry_date ? -1 : a.entry_date > b.entry_date ? 1 : 0
+        case 'date': {
+          const dateA = a.entry_date ?? ''
+          const dateB = b.entry_date ?? ''
+          return dateA < dateB ? -1 : dateA > dateB ? 1 : 0
+        }
         case 'voucher':
           return compareVoucher(a, b)
         case 'total':

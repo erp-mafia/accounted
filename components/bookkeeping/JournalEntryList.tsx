@@ -689,8 +689,33 @@ export default function JournalEntryList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken, sortHydrated, periodHydrated, pageSizeHydrated])
 
+  // Render-time ref mirrors so the stable [] callback below can read current
+  // state and call the current fetchEntries (same pattern as
+  // JournalEntryAttachments' onCountChangeRef).
+  const showMissingOnlyRef = useRef(showMissingOnly)
+  showMissingOnlyRef.current = showMissingOnly
+  const fetchEntriesRef = useRef(fetchEntries)
+  fetchEntriesRef.current = fetchEntries
+  // Entry ids that already triggered a filter refetch after gaining underlag:
+  // if the server still included the row after that refetch (predicate
+  // disagreement), a remount would re-fire the callback and loop forever.
+  const refetchedAfterAttachRef = useRef<Set<string>>(new Set())
+
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))
+    // With the server-side saknade-underlag filter on, a listed row that just
+    // received its first underlag no longer belongs to the filtered set:
+    // refetch in place so it leaves the list, as the old client-side filter
+    // did. Listed rows arrive with zero underlag by definition, so a count
+    // above zero here can only follow a user action.
+    if (
+      count > 0 &&
+      showMissingOnlyRef.current &&
+      !refetchedAfterAttachRef.current.has(entryId)
+    ) {
+      refetchedAfterAttachRef.current.add(entryId)
+      void fetchEntriesRef.current({ preserveSelection: true })
+    }
   }, [])
 
   const toggleExpand = (id: string) => {
@@ -828,6 +853,10 @@ export default function JournalEntryList({
         title: t('batch_no_doc_done_title'),
         description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? ids.length }),
       })
+      // With the server-side saknade-underlag filter on, the exempted rows no
+      // longer belong to the filtered set: refetch so they leave the list and
+      // the count updates (the pre-server-filter behavior).
+      if (showMissingOnly) await fetchEntries()
     } catch {
       toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
     } finally {
@@ -1228,9 +1257,12 @@ export default function JournalEntryList({
 
               {/* Visa saknade underlag */}
               <div className="flex items-center gap-2">
+                {/* Committed view only: the predicate is posted-only, so in the
+                    drafts view the toggle would just mislabel the draft count. */}
                 <Switch
                   id="missing-attachments"
                   checked={showMissingOnly}
+                  disabled={listMode === 'drafts'}
                   onCheckedChange={(on) => {
                     setShowMissingOnly(on)
                     setPage(0)
@@ -1282,7 +1314,15 @@ export default function JournalEntryList({
             authoritatively in the period effect. */}
         {periodHydrated && (
           <div className="sm:ml-auto">
-            <FyPicker value={periodId} onChange={handlePeriodChange} />
+            {/* suppressAutoRestore on deep-link visits: the arrival scope is a
+                deliberate in-memory "Alla räkenskapsår" (matches the all-years
+                dashboard badge); FyPicker's on-load restore of the persisted
+                year would otherwise snap the scope back right after load. */}
+            <FyPicker
+              value={periodId}
+              onChange={handlePeriodChange}
+              suppressAutoRestore={initialShowMissingOnly}
+            />
           </div>
         )}
       </div>
@@ -1722,6 +1762,13 @@ export default function JournalEntryList({
                                       else next.delete(entry.id)
                                       return next
                                     })
+                                    // Server-side saknade-underlag filter on: an
+                                    // exempted row leaves the filtered set, so
+                                    // refetch in place (keeps expansion state
+                                    // semantics of a background refresh).
+                                    if (exempted && showMissingOnly) {
+                                      void fetchEntries({ preserveSelection: true })
+                                    }
                                   }}
                                 />
                               )}

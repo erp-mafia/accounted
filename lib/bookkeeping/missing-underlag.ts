@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
+import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -32,11 +33,12 @@ export interface MissingUnderlagFilters {
  */
 export interface MissingUnderlagEntry {
   id: string
-  entry_date: string
-  voucher_series: string | null
-  voucher_number: number | null
-  description: string | null
-  total_amount: number | null
+  /** Sort columns; absent when the caller asked for ids only. */
+  entry_date?: string
+  voucher_series?: string | null
+  voucher_number?: number | null
+  description?: string | null
+  total_amount?: number | null
 }
 
 /**
@@ -66,12 +68,18 @@ const LOOKUP_CHUNK = 150
  * missing set (bounded by the tenant's ledger size), ordered by id for
  * stability; callers sort/page as needed.
  *
+ * `idOnly` skips the sort columns, notably total_amount, a computed column
+ * evaluated per candidate row. The bulk-exempt route (built for post-import
+ * floods of thousands of entries) doesn't sort, so it must not pay that
+ * per-row aggregate on its full candidate scan.
+ *
  * @throws MissingUnderlagQueryError when a sub-query fails.
  */
 export async function resolveMissingUnderlagEntries(
   supabase: SupabaseClient,
   companyId: string,
   filters: MissingUnderlagFilters = {},
+  { idOnly = false }: { idOnly?: boolean } = {},
 ): Promise<MissingUnderlagEntry[]> {
   const periodId = filters.periodId ?? null
   const series = filters.series ?? null
@@ -81,9 +89,16 @@ export async function resolveMissingUnderlagEntries(
 
   // Candidate entries: posted, document-requiring, matching the active filters.
   const candidates = await fetchAllRows<MissingUnderlagEntry>(({ from, to }) => {
+    // The cast keeps supabase-js's type-level select parser on a single
+    // literal: a union of two select strings fails its template-literal
+    // parsing. Runtime behavior is the actual string; rows are typed by
+    // fetchAllRows<MissingUnderlagEntry> either way.
+    const selectCols = (idOnly
+      ? 'id'
+      : 'id, entry_date, voucher_series, voucher_number, description, total_amount') as 'id'
     let q = supabase
       .from('journal_entries')
-      .select('id, entry_date, voucher_series, voucher_number, description, total_amount')
+      .select(selectCols)
       .eq('company_id', companyId)
       .eq('status', 'posted')
       .in('source_type', [...NEEDS_DOC_SOURCE_TYPES])
@@ -91,7 +106,21 @@ export async function resolveMissingUnderlagEntries(
     if (series) q = q.eq('voucher_series', series)
     if (dateFrom) q = q.gte('entry_date', dateFrom)
     if (dateTo) q = q.lte('entry_date', dateTo)
-    if (search) q = q.ilike('description', `%${escapeLikePattern(search)}%`)
+    if (search) {
+      // Same search semantics as the journal list's direct query: a
+      // voucher-label-shaped needle ("A209") also matches series+number, so
+      // searching for a voucher by its own label works with the filter on.
+      const needle = `%${escapeLikePattern(search)}%`
+      const voucher = parseVoucher(search)
+      if (voucher) {
+        const quotedNeedle = `"${needle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+        q = q.or(
+          `description.ilike.${quotedNeedle},and(voucher_series.eq.${voucher.series},voucher_number.eq.${voucher.number})`,
+        )
+      } else {
+        q = q.ilike('description', needle)
+      }
+    }
     return q.order('id').range(from, to)
   })
 
