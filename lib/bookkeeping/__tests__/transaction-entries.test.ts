@@ -641,6 +641,34 @@ describe('buildTransactionEntryLines', () => {
     expect(() => buildTransactionEntryLines(tx, makeMappingResult({ credit_account: '' })))
       .toThrow('Invalid mapping result')
   })
+
+  it('nets SEK-denominated VAT against the SEK gross for foreign income (Stripe USD)', () => {
+    // MCP feedback seq 254607: vat_lines from the mapping are SEK, the gross
+    // resolves via amount_sek. 79.34 USD at 9.51 = 754.52 kr gross, 150.92 kr
+    // utgående moms; the revenue line takes the SEK net, and the entry
+    // balances in kronor.
+    const tx = makeTransaction({
+      amount: 79.34, currency: 'USD', amount_sek: 754.52, exchange_rate: 9.51,
+      description: 'STRIPE PAYOUT',
+    })
+    const mapping = makeMappingResult({
+      debit_account: '1930',
+      credit_account: '3001',
+      vat_lines: [
+        { account_number: '2611', debit_amount: 0, credit_amount: 150.92, description: 'Utgående moms (enligt underlag)' },
+      ],
+    })
+
+    const lines = buildTransactionEntryLines(tx, mapping)
+
+    expect(lines.find(l => l.account_number === '1930')?.debit_amount).toBe(754.52)
+    expect(lines.find(l => l.account_number === '3001')?.credit_amount).toBe(603.6) // 754.52 - 150.92
+    expect(lines.find(l => l.account_number === '2611')?.credit_amount).toBe(150.92)
+
+    const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBeCloseTo(totalCredit, 2)
+  })
 })
 
 describe('buildDomesticExpenseLines', () => {

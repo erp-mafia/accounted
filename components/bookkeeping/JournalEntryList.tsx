@@ -194,6 +194,7 @@ const ALL_PAGE_SIZE = 100000
 export default function JournalEntryList({
   pristineSlot,
   refreshToken,
+  initialShowMissingOnly = false,
 }: {
   pristineSlot?: ReactNode
   /**
@@ -204,6 +205,14 @@ export default function JournalEntryList({
    * selection, pagination and scroll position.
    */
   refreshToken?: number
+  /**
+   * Deep-link arrival (dashboard "Verifikat utan underlag" card,
+   * push-notification link): start with the "Visa saknade underlag" filter on
+   * and, for this visit only, scope to all fiscal years so the visible set
+   * matches the all-years dashboard count. The saved fiscal-year preference
+   * is not overwritten.
+   */
+  initialShowMissingOnly?: boolean
 } = {}) {
   const router = useRouter()
   const { toast } = useToast()
@@ -241,7 +250,7 @@ export default function JournalEntryList({
   // (BFL 5 kap 5 §), not only on the detail page.
   const [rattelseFlags, setRattelseFlags] = useState<Set<string>>(new Set())
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
-  const [showMissingOnly, setShowMissingOnly] = useState(false)
+  const [showMissingOnly, setShowMissingOnly] = useState(initialShowMissingOnly)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchReason, setBatchReason] = useState('')
   const [batchSubmitting, setBatchSubmitting] = useState(false)
@@ -257,6 +266,9 @@ export default function JournalEntryList({
   const [sortHydrated, setSortHydrated] = useState(false)
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [periodHydrated, setPeriodHydrated] = useState(false)
+  // One-shot: a deep-link arrival scopes the first period resolution to all
+  // years (see the period effect below) without touching the saved preference.
+  const deepLinkAllYearsRef = useRef(initialShowMissingOnly)
   const [filterOpen, setFilterOpen] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -450,6 +462,17 @@ export default function JournalEntryList({
       return
     }
 
+    // Deep-link arrival with the missing-underlag filter: scope this visit to
+    // all fiscal years (in memory only) so the list can show the same set the
+    // all-years dashboard badge counted. Consumed once; picking a year in the
+    // FyPicker afterwards works and persists as usual.
+    if (deepLinkAllYearsRef.current) {
+      deepLinkAllYearsRef.current = false
+      setPeriodId(null)
+      setPeriodHydrated(true)
+      return
+    }
+
     const stored =
       typeof window !== 'undefined'
         ? window.localStorage.getItem(FISCAL_YEAR_STORAGE_KEY_PREFIX + company.id)
@@ -536,6 +559,11 @@ export default function JournalEntryList({
       if (dateFrom) params.set('date_from', dateFrom)
       if (dateTo) params.set('date_to', dateTo)
       if (seriesFilter !== 'all') params.set('series', seriesFilter)
+      // Server-side filter: the missing-underlag predicate spans documents,
+      // supplier-invoice references and exemptions, so the server resolves it
+      // across ALL pages (count included). Filtering the fetched page here
+      // could only ever show this page's missing rows.
+      if (showMissingOnly) params.set('missing_underlag', 'true')
     }
     if (search) params.set('search', search)
 
@@ -572,7 +600,10 @@ export default function JournalEntryList({
       // count BEFORE clearing loading so the toggle doesn't flash out for a frame on
       // a stale count of 0. Every other case refreshes the badge in the background.
       if (loadedEntries.length === 0 && listMode === 'committed') {
-        const unscopedQuery = !periodId && !dateFrom && !dateTo && seriesFilter === 'all' && !search
+        // A missing-underlag-filtered total of 0 says nothing about whether
+        // the ledger has entries, so that mode never short-circuits the probe.
+        const unscopedQuery =
+          !periodId && !dateFrom && !dateTo && seriesFilter === 'all' && !search && !showMissingOnly
         await Promise.all([
           fetchDraftCount(),
           unscopedQuery
@@ -642,7 +673,7 @@ export default function JournalEntryList({
   useEffect(() => {
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
-  }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, sortHydrated, periodHydrated, pageSizeHydrated])
+  }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, showMissingOnly, sortHydrated, periodHydrated, pageSizeHydrated])
 
   // Parent-driven in-place refresh (see the refreshToken prop). Skips the
   // mount value: the main effect above owns the initial fetch, and a token
@@ -658,8 +689,33 @@ export default function JournalEntryList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken, sortHydrated, periodHydrated, pageSizeHydrated])
 
+  // Render-time ref mirrors so the stable [] callback below can read current
+  // state and call the current fetchEntries (same pattern as
+  // JournalEntryAttachments' onCountChangeRef).
+  const showMissingOnlyRef = useRef(showMissingOnly)
+  showMissingOnlyRef.current = showMissingOnly
+  const fetchEntriesRef = useRef(fetchEntries)
+  fetchEntriesRef.current = fetchEntries
+  // Entry ids that already triggered a filter refetch after gaining underlag:
+  // if the server still included the row after that refetch (predicate
+  // disagreement), a remount would re-fire the callback and loop forever.
+  const refetchedAfterAttachRef = useRef<Set<string>>(new Set())
+
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))
+    // With the server-side saknade-underlag filter on, a listed row that just
+    // received its first underlag no longer belongs to the filtered set:
+    // refetch in place so it leaves the list, as the old client-side filter
+    // did. Listed rows arrive with zero underlag by definition, so a count
+    // above zero here can only follow a user action.
+    if (
+      count > 0 &&
+      showMissingOnlyRef.current &&
+      !refetchedAfterAttachRef.current.has(entryId)
+    ) {
+      refetchedAfterAttachRef.current.add(entryId)
+      void fetchEntriesRef.current({ preserveSelection: true })
+    }
   }, [])
 
   const toggleExpand = (id: string) => {
@@ -797,6 +853,10 @@ export default function JournalEntryList({
         title: t('batch_no_doc_done_title'),
         description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? ids.length }),
       })
+      // With the server-side saknade-underlag filter on, the exempted rows no
+      // longer belong to the filtered set: refetch so they leave the list and
+      // the count updates (the pre-server-filter behavior).
+      if (showMissingOnly) await fetchEntries()
     } catch {
       toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
     } finally {
@@ -866,15 +926,13 @@ export default function JournalEntryList({
     }
   }
 
-  const filteredEntries = showMissingOnly
-    ? entries.filter(
-        (e) =>
-          NEEDS_ATTACHMENT.has(e.source_type) &&
-          !attachmentCounts[e.id] &&
-          e.status === 'posted' &&
-          !noDocRequired.has(e.id)
-      )
-    : entries
+  // The missing-underlag filter is applied SERVER-side (missing_underlag=true
+  // in fetchEntries): the server's set spans all pages and includes reference
+  // -aware document checks the client can't see. Re-filtering here against the
+  // late-arriving attachmentCounts could hide rows the server included and
+  // desync the visible rows from the returned count, so the fetched page is
+  // rendered as-is.
+  const filteredEntries = entries
 
   // Detail-pager context: the loaded page as rendered, written when the user
   // opens a verifikat. Server-paginated, so prev/next spans this page only.
@@ -1199,17 +1257,23 @@ export default function JournalEntryList({
 
               {/* Visa saknade underlag */}
               <div className="flex items-center gap-2">
+                {/* Committed view only: the predicate is posted-only, so in the
+                    drafts view the toggle would just mislabel the draft count. */}
                 <Switch
                   id="missing-attachments"
                   checked={showMissingOnly}
-                  onCheckedChange={setShowMissingOnly}
+                  disabled={listMode === 'drafts'}
+                  onCheckedChange={(on) => {
+                    setShowMissingOnly(on)
+                    setPage(0)
+                  }}
                 />
                 <Label htmlFor="missing-attachments" className="text-sm cursor-pointer">
                   {t('show_missing')}
                 </Label>
                 {showMissingOnly && (
                   <Badge variant="secondary" className="text-xs tabular-nums">
-                    {filteredEntries.length}
+                    {count}
                   </Badge>
                 )}
               </div>
@@ -1250,7 +1314,15 @@ export default function JournalEntryList({
             authoritatively in the period effect. */}
         {periodHydrated && (
           <div className="sm:ml-auto">
-            <FyPicker value={periodId} onChange={handlePeriodChange} />
+            {/* suppressAutoRestore on deep-link visits: the arrival scope is a
+                deliberate in-memory "Alla räkenskapsår" (matches the all-years
+                dashboard badge); FyPicker's on-load restore of the persisted
+                year would otherwise snap the scope back right after load. */}
+            <FyPicker
+              value={periodId}
+              onChange={handlePeriodChange}
+              suppressAutoRestore={initialShowMissingOnly}
+            />
           </div>
         )}
       </div>
@@ -1690,6 +1762,13 @@ export default function JournalEntryList({
                                       else next.delete(entry.id)
                                       return next
                                     })
+                                    // Server-side saknade-underlag filter on: an
+                                    // exempted row leaves the filtered set, so
+                                    // refetch in place (keeps expansion state
+                                    // semantics of a background refresh).
+                                    if (exempted && showMissingOnly) {
+                                      void fetchEntries({ preserveSelection: true })
+                                    }
                                   }}
                                 />
                               )}
