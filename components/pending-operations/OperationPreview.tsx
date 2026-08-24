@@ -295,9 +295,19 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
   const lines = (data.lines as VoucherLine[]) || []
   const totalDebit = data.total_debit as number | undefined
   const totalCredit = data.total_credit as number | undefined
+  // Advisory, mirrors the MCP staging warning: a verifikat for a received
+  // handling must carry the handling itself (BFL 5 kap 6 §). Only shown when
+  // the staging explicitly said no document is attached; older ops without
+  // the flag render unchanged.
+  const missingUnderlag = data.document_attached === false
 
   return (
     <div className="space-y-3 text-sm">
+      {missingUnderlag && (
+        <p className="attn text-[12.5px]">
+          Underlag saknas: verifikatet bokförs utan bifogad handling (BFL 5 kap 6 §).
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Datum</span>
         <span className="font-mono">{String(data.entry_date ?? '')}</span>

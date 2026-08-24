@@ -300,12 +300,20 @@ describe('gnubok_create_voucher: staging gates', () => {
       'company-1',
       'user-1',
       supabase as never,
-    )) as { staged: boolean; operation_id?: string; preview: Record<string, unknown> }
+    )) as { staged: boolean; operation_id?: string; message: string; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
     expect(result.operation_id).toBe('op-staged')
     expect(result.preview.total_debit).toBe(250)
     expect(result.preview.total_credit).toBe(250)
+
+    // No document attached: the advisory BFL 5 kap 6§ warning must reach both
+    // the agent (message) and the /pending approval card (preview) without
+    // blocking the staging itself.
+    expect(result.preview.document_attached).toBe(false)
+    expect(result.preview.compliance_warning).toMatch(/BFL 5 kap 6§/)
+    expect(result.preview.compliance_warning).toMatch(/underlag/i)
+    expect(result.message).toMatch(/WARNING:.*underlag/i)
 
     // Critical: the staged pending_operations row must NOT carry source_type.
     // The executor always hardcodes 'manual'. Look at the insert call.
@@ -376,6 +384,8 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(result.preview.inbox_item_id).toBe('inbox-1')
     expect(result.preview.document_attached).toBe(true)
     expect(result.preview.will).toMatch(/link the inbox item/i)
+    // Document attached: the missing-underlag warning must NOT appear.
+    expect(result.preview.compliance_warning).toBeUndefined()
   })
 
   it('rejects when inbox_item_id is already booked as a journal entry', async () => {
