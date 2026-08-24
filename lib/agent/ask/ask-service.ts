@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getAiService, type AiTier, type AiToolDef } from '@/lib/ai'
+import { getAiService, type AiChatTurn, type AiTier, type AiToolDef } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
 import { EmptyModelAnswerError } from './errors'
 import { buildLedgerTools } from './ledger-tools'
@@ -50,8 +50,14 @@ export interface AskRequest {
    * with this user's identity for audit). Omitted → no tools, snapshot-only.
    */
   userId?: string
-  /** Conversation id, used only as the tool actor id for BFL audit. */
+  /** Conversation id, used as the tool actor id for BFL audit. */
   conversationId?: string
+  /**
+   * Earlier turns of the thread (see loadChatHistory), oldest first. Sent to
+   * the model as real message turns before the question, so a follow-up can
+   * refer back to what was said. Omitted for a fresh thread or a one-off ask.
+   */
+  history?: AiChatTurn[]
   /** Max model turns in the tool loop (default 5). */
   maxSteps?: number
 }
@@ -144,6 +150,7 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
     tier: req.tier ?? 'assistant',
     system: systemPrompt(tools.length > 0),
     prompt: promptParts.join('\n'),
+    ...(req.history && req.history.length > 0 ? { history: req.history } : {}),
     maxTokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
     ...(tools.length > 0 ? { tools, maxSteps: req.maxSteps ?? DEFAULT_MAX_STEPS } : {}),
   })

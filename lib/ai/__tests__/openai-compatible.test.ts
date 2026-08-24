@@ -102,6 +102,25 @@ describe('createOpenAICompatibleService', () => {
     })
   })
 
+  it('generateText sends earlier turns as message turns before the prompt', async () => {
+    const svc = createOpenAICompatibleService(readAiConfig())
+    await svc.generateText({
+      tier: 'assistant',
+      system: 'S',
+      prompt: 'Och förra månaden?',
+      maxTokens: 50,
+      history: [
+        { role: 'user', text: 'Vad är min största utgift?' },
+        { role: 'assistant', text: '12 345 kr på 5010.' },
+      ],
+    })
+    const prompt = promptOf()
+    expect(prompt.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user'])
+    expect(prompt[1].content).toEqual([{ type: 'text', text: 'Vad är min största utgift?' }])
+    expect(prompt[2].content).toEqual([{ type: 'text', text: '12 345 kr på 5010.' }])
+    expect(prompt[3].content).toEqual([{ type: 'text', text: 'Och förra månaden?' }])
+  })
+
   it('generateText forwards read-only tools to the model when provided', async () => {
     const svc = createOpenAICompatibleService(readAiConfig())
     const execute = vi.fn().mockResolvedValue({ ok: true })

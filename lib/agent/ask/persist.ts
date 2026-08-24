@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { AiChatTurn } from '@/lib/ai'
 
 /**
  * Thread persistence for the single-call chat console (/chat).
@@ -22,6 +23,16 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 /** The only intent the single-call console persists under. */
 export const CHAT_INTENT_ID = 'general.help'
+
+// How much of a thread the model sees on each turn. Bounded because every
+// resumed turn replays it: a long-lived thread must not grow the prompt
+// without limit, and a local model may have a small context window. The
+// newest turns win; the tail that fits is what the model gets.
+export const HISTORY_MAX_MESSAGES = 16
+export const HISTORY_MAX_CHARS = 10_000
+// One turn is clamped too so a single pasted wall of text cannot eat the
+// whole budget on its own.
+const HISTORY_MAX_TURN_CHARS = 3_000
 
 // The sidebar caches a one-line preview per row; the title is the sidebar
 // label. Both are bounded so a long first question can't bloat the row.
@@ -134,4 +145,83 @@ export async function persistAssistantTurn(
       last_message_preview: clamp(answer, PREVIEW_MAX),
     })
     .eq('id', conversationId)
+}
+
+/** Plain text of a stored Anthropic-shaped content array; empty for tool-only rows. */
+function textOfContent(content: unknown): string {
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter(
+      (b): b is { type: 'text'; text: string } =>
+        !!b && typeof b === 'object' && (b as { type?: unknown }).type === 'text' && typeof (b as { text?: unknown }).text === 'string',
+    )
+    .map((b) => b.text)
+    .join('\n')
+    .trim()
+}
+
+function clampTurn(text: string): string {
+  if (text.length <= HISTORY_MAX_TURN_CHARS) return text
+  return `${text.slice(0, HISTORY_MAX_TURN_CHARS).trimEnd()}…`
+}
+
+/**
+ * The earlier turns of a thread, as the model should see them.
+ *
+ * This is what makes a resumed thread a conversation rather than a series of
+ * unrelated questions: without it every turn was answered blind, so a
+ * follow-up ("och förra månaden?") got "vad syftar du på?". Only the
+ * conversation's own rows are read (the caller has already proven ownership
+ * via resolveChatConversation).
+ *
+ * Shape rules, so both AI adapters can send the result as-is:
+ *   - text only: tool_use / tool_result rows from the old streaming runtime
+ *     carry no prose, and hidden rows are prompt-template scaffolding, never
+ *     something the user said; both are dropped.
+ *   - alternating, starting with a user turn: consecutive same-role turns are
+ *     merged (a question whose answer failed sits next to its retry), and a
+ *     leading assistant turn (its question fell off the window) is dropped.
+ *   - bounded: newest HISTORY_MAX_MESSAGES rows, then trimmed from the oldest
+ *     end until the text fits HISTORY_MAX_CHARS.
+ */
+export async function loadChatHistory(
+  supabase: SupabaseClient,
+  conversationId: string,
+): Promise<AiChatTurn[]> {
+  const { data, error } = await supabase
+    .from('agent_messages')
+    .select('role, content, hidden, created_at')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(HISTORY_MAX_MESSAGES)
+  if (error) throw error
+
+  const rows = (data ?? []) as { role: string; content: unknown; hidden?: boolean | null }[]
+  const turns: AiChatTurn[] = []
+  // Oldest first from here on.
+  for (const row of rows.slice().reverse()) {
+    if (row.hidden) continue
+    if (row.role !== 'user' && row.role !== 'assistant') continue
+    const text = textOfContent(row.content)
+    if (!text) continue
+    const clamped = clampTurn(text)
+    const last = turns[turns.length - 1]
+    if (last && last.role === row.role) {
+      last.text = clampTurn(`${last.text}\n\n${clamped}`)
+    } else {
+      turns.push({ role: row.role, text: clamped })
+    }
+  }
+
+  // Trim from the oldest end until the total fits, then make sure what is
+  // left opens with the user.
+  let total = turns.reduce((n, t) => n + t.text.length, 0)
+  while (turns.length > 0 && total > HISTORY_MAX_CHARS) {
+    total -= turns[0].text.length
+    turns.shift()
+  }
+  while (turns.length > 0 && turns[0].role !== 'user') turns.shift()
+  return turns
 }

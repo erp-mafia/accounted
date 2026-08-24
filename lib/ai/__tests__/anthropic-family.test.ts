@@ -146,6 +146,36 @@ describe('generateText / generateStructured', () => {
     expect(result.text).toBe('{"ok":true}')
   })
 
+  it('generateText sends earlier turns as real message turns before the prompt', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    await svc.generateText({
+      tier: 'assistant',
+      system: 'S',
+      prompt: 'Och förra månaden?',
+      maxTokens: 50,
+      history: [
+        { role: 'user', text: 'Vad är min största utgift?' },
+        { role: 'assistant', text: '12 345 kr på 5010.' },
+      ],
+    })
+    expect(mockCreate.mock.calls[0][0].messages).toEqual([
+      { role: 'user', content: 'Vad är min största utgift?' },
+      { role: 'assistant', content: '12 345 kr på 5010.' },
+      { role: 'user', content: 'Och förra månaden?' },
+    ])
+  })
+
+  it('generateText with an empty history is byte-identical to the single-turn call', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    await svc.generateText({ tier: 'assistant', system: 'S', prompt: 'Hej', maxTokens: 50, history: [] })
+    expect(mockCreate.mock.calls[0][0]).toEqual({
+      model: 'eu.anthropic.claude-sonnet-5',
+      max_tokens: 50,
+      system: 'S',
+      messages: [{ role: 'user', content: 'Hej' }],
+    })
+  })
+
   it('generateStructured forces one named tool and returns its input', async () => {
     mockCreate.mockResolvedValueOnce({
       content: [{ type: 'tool_use', id: 't1', name: 'verdict', input: { paired: true } }],
@@ -235,6 +265,29 @@ describe('generateText read-only tool loop', () => {
     // Usage summed across both turns.
     expect(result.usage.inputTokens).toBe(30)
     expect(result.usage.outputTokens).toBe(13)
+  })
+
+  it('keeps the earlier turns in front of the tool loop', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: 'Svar.' }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    await svc.generateText({
+      tier: 'assistant',
+      prompt: 'Och förra månaden?',
+      maxTokens: 50,
+      history: [
+        { role: 'user', text: 'Vad är min största utgift?' },
+        { role: 'assistant', text: '12 345 kr på 5010.' },
+      ],
+      tools: [{ name: 't', description: 'd', jsonSchema: { type: 'object' }, execute: vi.fn() }],
+    })
+    const messages = mockCreate.mock.calls[0][0].messages
+    expect(messages).toHaveLength(3)
+    expect(messages[0]).toEqual({ role: 'user', content: 'Vad är min största utgift?' })
+    expect(messages[2]).toEqual({ role: 'user', content: 'Och förra månaden?' })
   })
 
   it('surfaces a tool failure as an is_error result rather than throwing', async () => {

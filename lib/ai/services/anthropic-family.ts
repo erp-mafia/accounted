@@ -3,6 +3,7 @@ import { createAiClient, toProviderModelId, type AiClient } from '../provider'
 import type { ResolvedAiConfig } from '../config'
 import { capabilitiesFor } from '../config'
 import type {
+  AiChatTurn,
   AiDocumentInput,
   AiService,
   AiTier,
@@ -37,6 +38,22 @@ const EMPTY_USAGE: AiUsage = {
   outputTokens: 0,
   cacheCreationInputTokens: 0,
   cacheReadInputTokens: 0,
+}
+
+/**
+ * Earlier turns as real message turns, then the prompt as the final user
+ * message. With no history this is exactly the single-message array every
+ * non-chat caller sent before (hosted stays byte-identical for them).
+ */
+function messagesFor(
+  prompt: string,
+  history: AiChatTurn[] | undefined,
+): Anthropic.Messages.MessageParam[] {
+  const prior: Anthropic.Messages.MessageParam[] = (history ?? []).map((t) => ({
+    role: t.role,
+    content: t.text,
+  }))
+  return [...prior, { role: 'user', content: prompt }]
 }
 
 /** Sum usage across the turns of a tool loop so the reported cost is truthful. */
@@ -136,7 +153,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
           model,
           max_tokens: req.maxTokens,
           ...(req.system ? { system: req.system } : {}),
-          messages: [{ role: 'user', content: req.prompt }],
+          messages: messagesFor(req.prompt, req.history),
         }
         const resp = await getClient().messages.create(params)
         return { text: textOf(resp), model, usage: usageOf(resp) }
@@ -151,7 +168,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         input_schema: t.jsonSchema as Anthropic.Messages.Tool['input_schema'],
       }))
       const byName = new Map<string, AiToolDef>(req.tools.map((t) => [t.name, t]))
-      const messages: Anthropic.Messages.MessageParam[] = [{ role: 'user', content: req.prompt }]
+      const messages: Anthropic.Messages.MessageParam[] = messagesFor(req.prompt, req.history)
       const maxSteps = req.maxSteps ?? DEFAULT_MAX_STEPS
       let usage = EMPTY_USAGE
 
