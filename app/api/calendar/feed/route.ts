@@ -20,7 +20,13 @@ const UpdateFeedSchema = z
   )
 
 function feedUrls(feedToken: string) {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+  // Fail closed in production: an http:// fallback would mint a link that
+  // carries the feed's bearer token over an unencrypted channel.
+  const envUrl = process.env.NEXT_PUBLIC_APP_URL
+  if (!envUrl && process.env.NODE_ENV === 'production') {
+    throw new Error('NEXT_PUBLIC_APP_URL must be set in production')
+  }
+  const baseUrl = envUrl || 'http://localhost:3000'
   return {
     webcalUrl: `webcal://${baseUrl.replace(/^https?:\/\//, '')}/api/calendar/feed/${feedToken}`,
     httpsUrl: `${baseUrl}/api/calendar/feed/${feedToken}`,
