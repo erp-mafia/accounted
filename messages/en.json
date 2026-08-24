@@ -7889,7 +7889,13 @@
     "signed_off_forced": "with a note",
     "reopen": "Reopen",
     "toast_signed_off": "Marked as reconciled through {date}",
-    "toast_reopened": "The sign-off is reopened"
+    "toast_reopened": "The sign-off is reopened",
+    "tile_unexplained_help": "The part of the difference not covered by the rows below. 0 means everything is explained, even if rows remain to book. Any other value means something is inconsistent, for example a link to a reversed voucher: do not trust the account until you have looked.",
+    "matcher_title": "{count} match suggestions from the automatic matcher",
+    "matcher_none": "No new matches found.",
+    "matcher_apply_strong": "Link {count} strong",
+    "matcher_strong": "Strong",
+    "matcher_close": "Close"
   },
   "skattekonto": {
     "help_text": "The balance and events are fetched from Skatteverket and synced automatically every night. Completed events are booked against 1630 Skattekonto, usually automatically; anything that cannot be matched is flagged in the list. Pay in via bankgiro 5050-1055 with your OCR number.",
