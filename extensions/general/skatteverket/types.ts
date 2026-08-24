@@ -282,9 +282,14 @@ export interface SkatteverketBookedTransaction {
   ranteberakningsdatum: string | null
   /** Description (e.g. "Inbetalning bokförd 190412") */
   transaktionstext: string
-  /** Amount at Skatteverket (positive = credit, negative = debit) */
+  /**
+   * Amount at Skatteverket (positive = credit, negative = debit).
+   * Optional on the wire (SKV omits it for rows with no SKV-side amount,
+   * e.g. rows whose amount lives at Kronofogden); normalized to 0 in
+   * skattekonto-client.ts, so it is always a number here.
+   */
   beloppSkatteverket: number
-  /** Amount moved to Kronofogden (rare) */
+  /** Amount moved to Kronofogden (rare); normalized to null when absent */
   beloppKronofogden: number | null
 }
 
@@ -298,9 +303,9 @@ export interface SkatteverketUpcomingTransaction {
   ranteberakningsdatum: string | null
   /** Description */
   transaktionstext: string
-  /** Amount at Skatteverket */
+  /** Amount at Skatteverket; optional on the wire, normalized to 0 when absent */
   beloppSkatteverket: number
-  /** Amount at Kronofogden */
+  /** Amount at Kronofogden; normalized to null when absent */
   beloppKronofogden: number | null
   /** Often null on kommande: fall back to dedup_key */
   transaktionsidentitet: number | null

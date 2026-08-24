@@ -1,7 +1,9 @@
 import { skvRequestWithAuth, type SkvAuth } from './api-client'
 import type {
+  SkatteverketBookedTransaction,
   SkatteverketSaldoResponse,
   SkatteverketTransaktionerResponse,
+  SkatteverketUpcomingTransaction,
   SkatteverketFel,
 } from '../types'
 
@@ -120,6 +122,60 @@ export async function getSaldo(
 }
 
 /**
+ * Wire shape of one transaction row in the /transaktioner response.
+ *
+ * Skatteverket's JSON schema only REQUIRES transaktionsidentitet (tidigare
+ * rows), transaktionsdatum, ranteberakningsdatum and transaktionstext. Both
+ * belopp fields are optional and are simply omitted when a row carries no
+ * amount on that side; observed in prod (issue #1821) where such a row made
+ * every sync for the company fail on the NOT NULL belopp_skatteverket
+ * column. The domain types promise numbers, so the gap is closed here at
+ * the API boundary: nothing downstream may ever see undefined.
+ */
+interface RawSkattekontoTransaktion {
+  transaktionsidentitet?: number | null
+  transaktionsdatum: string
+  forfallodatum?: string
+  ranteberakningsdatum?: string | null
+  transaktionstext: string
+  beloppSkatteverket?: number | null
+  beloppKronofogden?: number | null
+}
+
+function toAmount(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function normalizeBooked(tx: RawSkattekontoTransaktion): SkatteverketBookedTransaction {
+  return {
+    // Required by SKV's schema on tidigare rows; the cast documents that a
+    // violation is SKV breaking its own contract, not a case we invent
+    // identities for.
+    transaktionsidentitet: tx.transaktionsidentitet as number,
+    transaktionsdatum: tx.transaktionsdatum,
+    ranteberakningsdatum: tx.ranteberakningsdatum ?? null,
+    transaktionstext: tx.transaktionstext,
+    // No SKV-side amount means the row did not move money on the
+    // Skatteverket side (the amount, if any, lives at Kronofogden): 0 is
+    // the truthful value and satisfies the NOT NULL column.
+    beloppSkatteverket: toAmount(tx.beloppSkatteverket) ?? 0,
+    beloppKronofogden: toAmount(tx.beloppKronofogden),
+  }
+}
+
+function normalizeUpcoming(tx: RawSkattekontoTransaktion): SkatteverketUpcomingTransaction {
+  return {
+    transaktionsidentitet: tx.transaktionsidentitet ?? null,
+    transaktionsdatum: tx.transaktionsdatum,
+    forfallodatum: tx.forfallodatum as string,
+    ranteberakningsdatum: tx.ranteberakningsdatum ?? null,
+    transaktionstext: tx.transaktionstext,
+    beloppSkatteverket: toAmount(tx.beloppSkatteverket) ?? 0,
+    beloppKronofogden: toAmount(tx.beloppKronofogden),
+  }
+}
+
+/**
  * GET /skattekonton/{omfragad}/transaktioner
  *
  * @param omfragad   10/12-digit org/personnummer
@@ -144,9 +200,12 @@ export async function getTransaktioner(
     await handleErrorResponse(response)
   }
 
-  const data = (await response.json()) as Partial<SkatteverketTransaktionerResponse>
+  const data = (await response.json()) as {
+    tidigareTransaktioner?: RawSkattekontoTransaktion[]
+    kommandeTransaktioner?: RawSkattekontoTransaktion[]
+  }
   return {
-    tidigareTransaktioner: data.tidigareTransaktioner ?? [],
-    kommandeTransaktioner: data.kommandeTransaktioner ?? [],
+    tidigareTransaktioner: (data.tidigareTransaktioner ?? []).map(normalizeBooked),
+    kommandeTransaktioner: (data.kommandeTransaktioner ?? []).map(normalizeUpcoming),
   }
 }
