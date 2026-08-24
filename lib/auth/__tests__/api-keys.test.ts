@@ -8,7 +8,7 @@ const contextMocks = vi.hoisted(() => ({
   getActiveCompanyId: vi.fn(),
 }))
 
-vi.mock('@/lib/company/context', () => ({
+vi.mock('@/lib/company/active-company', () => ({
   getActiveCompanyId: (...args: unknown[]) => contextMocks.getActiveCompanyId(...args),
 }))
 

@@ -1,7 +1,10 @@
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
-import { getActiveCompanyId } from '@/lib/company/context'
+// Not lib/company/context: that module imports next/headers for the legacy
+// company cookie, and this file is reachable from bundles where that import
+// is a build error.
+import { getActiveCompanyId } from '@/lib/company/active-company'
 
 const KEY_PREFIX = 'gnubok_sk_'
 const REFRESH_TOKEN_PREFIX = 'gnubok_rt_'
