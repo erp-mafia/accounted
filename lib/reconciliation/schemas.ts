@@ -13,7 +13,9 @@ import { z } from 'zod'
  * Account keys:
  *   bank:<cash_account_id>   one cash_accounts row (PSD2 or file-fed)
  *   skattekonto              the company's Skatteverket tax account (BAS 1630)
- *   manual:<account_number>  later: accounts with a typed external balance
+ *   manual:<account_number>  any other balance account: reconciled against a
+ *                            system specification (reskontra, semesterskuld)
+ *                            or the balance the signer states from underlag
  */
 export const ACCOUNT_KEY_REGEX =
   /^(bank:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|skattekonto|manual:\d{4})$/
@@ -41,6 +43,10 @@ export function bankAccountKey(cashAccountId: string): string {
 }
 
 export const SKATTEKONTO_ACCOUNT_KEY = 'skattekonto' as const
+
+export function manualAccountKey(accountNumber: string): string {
+  return `manual:${accountNumber}`
+}
 
 export const ReconciliationSourceSchema = z.object({
   type: z.enum(['psd2', 'bank_file', 'skatteverket_api', 'skatteverket_file', 'manual']),
@@ -183,6 +189,29 @@ export const SkattekontoStatusBlockSchema = z.object({
   ledger_balance_before_start: z.number().nullable(),
 })
 
+/** A specification the system keeps for a manual account, in ledger sign (debit positive). */
+export const ManualSpecificationSchema = z.object({
+  provider: z.enum(['ar', 'ap', 'vacation']),
+  label_sv: z.string(),
+  label_en: z.string(),
+  amount: z.number(),
+  /** Foreign-currency rows left out for lack of a rate (see lib/reports/ar-reconciliation.ts). */
+  unconverted_fx_count: z.number().int(),
+})
+export type ManualSpecification = z.infer<typeof ManualSpecificationSchema>
+
+export const ManualStatusBlockSchema = z.object({
+  period_id: z.string(),
+  period_start: z.string(),
+  period_end: z.string(),
+  /** IB, movement and UB through the balansdag, debit positive (lib/reconciliation/manual-reconciliation.ts). */
+  opening_balance: z.number(),
+  movement: z.number(),
+  closing_balance: z.number(),
+  /** Null for accounts whose outside balance the signer states at sign-off. */
+  specification: ManualSpecificationSchema.nullable(),
+})
+
 export const ReconciliationStatusSchema = z.object({
   account_key: AccountKeySchema,
   kind: ReconciliationKindSchema,
@@ -209,6 +238,8 @@ export const ReconciliationStatusSchema = z.object({
   skattekonto: SkattekontoStatusBlockSchema.nullable(),
   /** Today's bank status fields, unchanged, for the bank kind (see bank-reconciliation.ts). */
   bank: z.record(z.string(), z.unknown()).nullable(),
+  /** Balances and specification for the manual kind; absent on the other kinds. */
+  manual: ManualStatusBlockSchema.nullable().optional(),
   /** Latest active sign-off on the account (lib/reconciliation/signoff.ts); null when none. */
   signoff: ReconciliationSignoffSchema.nullable().optional(),
 })

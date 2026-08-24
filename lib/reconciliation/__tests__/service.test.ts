@@ -10,6 +10,12 @@ vi.mock('../skattekonto-reconciliation', () => ({
 vi.mock('../bank-reconciliation', () => ({
   getReconciliationStatus: (...args: unknown[]) => bankStatusMock(...args),
 }))
+const listManualMock = vi.fn()
+const manualStatusMock = vi.fn()
+vi.mock('../manual-reconciliation', () => ({
+  listManualAccounts: (...args: unknown[]) => listManualMock(...args),
+  getManualReconciliationStatus: (...args: unknown[]) => manualStatusMock(...args),
+}))
 
 import { bankAccountKey, parseAccountKey } from '../schemas'
 import { getAccountStatus, listReconciliationAccounts } from '../service'
@@ -75,6 +81,66 @@ describe('listReconciliationAccounts', () => {
     vi.clearAllMocks()
     skattekontoStatusMock.mockReset()
     bankStatusMock.mockReset()
+    listManualMock.mockReset()
+    listManualMock.mockResolvedValue([])
+  })
+
+  it('appends the manual accounts after the fed ones, excluding the accounts the feeds own', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [cashAccount(ID_A, { is_primary: true }), cashAccount(ID_C, { ledger_account: '1931', iban: 'SE2' })] })
+    enqueue({ data: [{ id: 's1', account_key: 'manual:2440', through_date: '2026-06-30', reopened_at: null }] }) // latest sign-offs
+    enqueue({ data: [] }) // bank names for logos
+    enqueue({ data: null })
+    enqueue({ data: null })
+    skattekontoStatusMock.mockResolvedValue({
+      account_key: 'skattekonto',
+      kind: 'skattekonto',
+      account_number: '1630',
+      currency: 'SEK',
+      as_of: '2026-08-20T04:00:00.000Z',
+      stale: false,
+      is_reconciled: true,
+      unexplained_difference: 0,
+      counts: { proposed: 0, unmatched_external: 0, unmatched_ledger: 0, matched: 1, ignored: 0 },
+      skattekonto: { fetched_at: '2026-08-20T04:00:00.000Z' },
+    })
+    listManualMock.mockResolvedValue([
+      { account_key: 'manual:1510', kind: 'manual', account_number: '1510', name: 'Kundfordringar' },
+      { account_key: 'manual:2440', kind: 'manual', account_number: '2440', name: 'Leverantörsskulder' },
+    ])
+
+    const accounts = await listReconciliationAccounts(supabase as never, COMPANY, {
+      today: '2026-08-20',
+      windowFrom: '2026-01-01',
+      windowTo: '2026-07-31',
+      withStatus: false,
+    })
+
+    expect(accounts.map((a) => a.account_key)).toEqual([
+      bankAccountKey(ID_A),
+      bankAccountKey(ID_C),
+      'skattekonto',
+      'manual:1510',
+      'manual:2440',
+    ])
+    const [, , opts] = listManualMock.mock.calls[0] as [unknown, unknown, { asOf: string; exclude: Set<string>; withStatus: boolean; signoffs: Map<string, unknown> }]
+    expect(opts.asOf).toBe('2026-07-31')
+    expect([...opts.exclude].sort()).toEqual(['1630', '1930', '1931'])
+    expect(opts.withStatus).toBe(false)
+    expect(opts.signoffs.has('manual:2440')).toBe(true)
+  })
+
+  it('keeps the fed accounts when the manual read fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [cashAccount(ID_A, { is_primary: true })] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: null })
+    skattekontoStatusMock.mockResolvedValue(null)
+    listManualMock.mockRejectedValue(new Error('trial balance down'))
+
+    const accounts = await listReconciliationAccounts(supabase as never, COMPANY, { today: '2026-08-20', withStatus: false })
+    expect(accounts.map((a) => a.account_key)).toEqual([bankAccountKey(ID_A)])
   })
 
   it('lists enabled cash accounts, folds reconnect duplicates by IBAN, and appends the skattekonto when configured', async () => {
@@ -190,6 +256,69 @@ describe('getAccountStatus', () => {
     vi.clearAllMocks()
     skattekontoStatusMock.mockReset()
     bankStatusMock.mockReset()
+    manualStatusMock.mockReset()
+  })
+
+  function manualStatus(overrides: Record<string, unknown> = {}) {
+    return {
+      account_key: 'manual:2350',
+      kind: 'manual',
+      account_number: '2350',
+      currency: 'SEK',
+      as_of: '2026-07-31T00:00:00.000Z',
+      stale: false,
+      external_balance: null,
+      ledger_balance: -250000,
+      difference: null,
+      unexplained_difference: null,
+      is_reconciled: false,
+      bridge: [],
+      counts: { proposed: 0, unmatched_external: 0, unmatched_ledger: 0, matched: 0, ignored: 0 },
+      skattekonto: null,
+      bank: null,
+      manual: { specification: null },
+      ...overrides,
+    }
+  }
+
+  it('dispatches manual keys to the manual adapter with the window end as the balansdag', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    manualStatusMock.mockResolvedValue(manualStatus())
+    enqueue({ data: null }) // latest sign-off
+    const s = await getAccountStatus(supabase as never, COMPANY, 'manual:2350', { today: '2026-08-20', windowTo: '2026-07-31' })
+    expect(manualStatusMock).toHaveBeenCalledWith(supabase, COMPANY, '2350', { today: '2026-08-20', asOf: '2026-07-31' })
+    expect(s).toMatchObject({ account_key: 'manual:2350', external_balance: null, signoff: null })
+  })
+
+  it('shows the stated balance from a sign-off made for the same balansdag as the outside side', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    manualStatusMock.mockResolvedValue(manualStatus())
+    enqueue({
+      data: {
+        id: 's1',
+        account_key: 'manual:2350',
+        through_date: '2026-07-31',
+        external_balance: -250000,
+        ledger_balance: -250000,
+        unexplained_difference: 0,
+        note: 'Enligt engagemangsbesked',
+        signed_by: 'u1',
+        signed_at: '2026-08-01T08:00:00Z',
+        reopened_at: null,
+        reopened_by: null,
+        reopen_reason: null,
+      },
+    })
+    const s = await getAccountStatus(supabase as never, COMPANY, 'manual:2350', { today: '2026-08-20', windowTo: '2026-07-31' })
+    expect(s).toMatchObject({ external_balance: -250000, difference: 0, unexplained_difference: 0, is_reconciled: true })
+  })
+
+  it('leaves the outside side unknown when the sign-off was for another date', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    manualStatusMock.mockResolvedValue(manualStatus())
+    enqueue({ data: { id: 's1', account_key: 'manual:2350', through_date: '2026-06-30', external_balance: -260000, reopened_at: null } })
+    const s = await getAccountStatus(supabase as never, COMPANY, 'manual:2350', { today: '2026-08-20', windowTo: '2026-07-31' })
+    expect(s).toMatchObject({ external_balance: null, unexplained_difference: null, is_reconciled: false })
   })
 
   it('returns null for an invalid key and for an unknown cash account', async () => {

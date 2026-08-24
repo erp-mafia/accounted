@@ -21,7 +21,7 @@ import type {
   ReconciliationStatus,
 } from '@/lib/reconciliation/schemas'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
-import { SignoffDialog } from './SignoffDialog'
+import { SignoffDialog, type SignoffSubmitInput } from './SignoffDialog'
 import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 
@@ -95,6 +95,10 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
   const autorunDone = useRef(false)
 
   const isSkv = account.kind === 'skattekonto'
+  // Manual accounts have no rows to match or book: the body is the balance
+  // bridge (IB, movement, UB against a specification or the signer's
+  // underlag) and the sign-off.
+  const isManual = account.kind === 'manual'
   const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
 
   const load = useCallback(async () => {
@@ -251,7 +255,7 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
     }
   }
 
-  async function submitSignoff(input: { through_date: string; note: string | null; force: boolean }) {
+  async function submitSignoff(input: SignoffSubmitInput) {
     const res = await fetch(`${base}/signoff`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -405,6 +409,8 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
   const asOfDate = status.as_of.slice(0, 10)
   const fetchedAt = isSkv ? status.skattekonto?.fetched_at : account.source.synced_at
   const sourceLabel = isSkv ? t('source_skv') : t('source_bank')
+  const specification = isManual ? (status.manual?.specification ?? null) : null
+  const specificationLabel = specification ? (locale === 'en' ? specification.label_en : specification.label_sv) : null
 
   const bankRaw = status.bank as { bank_transaction_inflow?: number; bank_transaction_outflow?: number; bank_transaction_count?: number } | null
   const bankBreakdown =
@@ -416,21 +422,34 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         })
       : null
 
+  const externalTile = isManual
+    ? {
+        key: 'external',
+        label: specificationLabel ?? t('tile_external_manual'),
+        value: money(status.external_balance),
+        sub: specification
+          ? t('tile_spec_today')
+          : status.external_balance != null && status.signoff
+            ? t('tile_external_signed', { date: formatDate(status.signoff.through_date) })
+            : t('tile_external_manual_sub'),
+      }
+    : {
+        key: 'external',
+        label: isSkv ? t('tile_external_skv') : t('tile_external_bank'),
+        // The bank tile is the period sum (what its label says), which lives on
+        // the bridge; external_balance is the reported bank balance and is often
+        // unknown, which rendered as "okänt" next to a bridge that knows better.
+        value: money(
+          isSkv
+            ? status.external_balance
+            : (status.bridge.find((l) => l.key === 'bank_transactions')?.amount ?? status.external_balance),
+        ),
+        // Bank: the gross split makes the net self-explanatory; skattekonto: when it was fetched.
+        sub: bankBreakdown ?? (fetchedAt ? t('tile_synced', { date: formatDate(fetchedAt) }) : t('rail_never_synced')),
+      }
+
   const tiles: Array<{ key: string; label: string; value: string; sub: string; tone?: 'ok' | 'attn'; help?: string }> = [
-    {
-      key: 'external',
-      label: isSkv ? t('tile_external_skv') : t('tile_external_bank'),
-      // The bank tile is the period sum (what its label says), which lives on
-      // the bridge; external_balance is the reported bank balance and is often
-      // unknown, which rendered as "okänt" next to a bridge that knows better.
-      value: money(
-        isSkv
-          ? status.external_balance
-          : (status.bridge.find((l) => l.key === 'bank_transactions')?.amount ?? status.external_balance),
-      ),
-      // Bank: the gross split makes the net self-explanatory; skattekonto: when it was fetched.
-      sub: bankBreakdown ?? (fetchedAt ? t('tile_synced', { date: formatDate(fetchedAt) }) : t('rail_never_synced')),
-    },
+    externalTile,
     {
       key: 'ledger',
       label: isSkv
@@ -574,7 +593,7 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
             {t('action_book_rows', { count: bookableIds.length })}
           </Button>
         )}
-        {!isSkv && (
+        {!isSkv && !isManual && (
           <Button size="sm" variant="outline" onClick={() => void runMatcher()} disabled={busy !== null} aria-busy={busy === 'matcher'}>
             {t('action_run_bank_matcher')}
           </Button>
@@ -588,6 +607,13 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
           <span className="ml-auto">
             <Link href="/skattekonto" className={QUIET_LINK_CLASS}>
               {t('action_open_skattekonto')}
+            </Link>
+          </span>
+        )}
+        {isManual && (
+          <span className="ml-auto">
+            <Link href={`/reports/huvudbok?account=${encodeURIComponent(status.account_number)}`} className={QUIET_LINK_CLASS}>
+              {t('action_open_ledger')}
             </Link>
           </span>
         )}
@@ -621,7 +647,11 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
       )}
 
       {/* The table: full width, banded by bucket, paired proposal rows. */}
-      {items.items.length === 0 ? (
+      {isManual ? (
+        <p className="max-w-[560px] text-[13px] text-muted-foreground">
+          {specificationLabel ? t('manual_spec_hint', { label: specificationLabel }) : t('manual_hint')}
+        </p>
+      ) : items.items.length === 0 ? (
         <p className="text-[13px] text-muted-foreground">{t('all_clear')}</p>
       ) : (
         <div className="-mx-4 overflow-x-auto sm:mx-0">
@@ -730,6 +760,8 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         maxDate={signoffMaxDate}
         unexplained={status.unexplained_difference}
         currency={currency}
+        askExternalBalance={isManual && !specification}
+        ledgerBalance={status.ledger_balance}
         onSubmit={submitSignoff}
       />
     </div>
