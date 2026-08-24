@@ -97,6 +97,7 @@ export default function JournalEntryAttachments({
   // so the original stays in the version chain.
   const [blockedDoc, setBlockedDoc] = useState<DocumentRecord | null>(null)
   const [replacingDocId, setReplacingDocId] = useState<string | null>(null)
+  const [detachingDocId, setDetachingDocId] = useState<string | null>(null)
   const replaceFileInputRef = useRef<HTMLInputElement | null>(null)
   const replaceTargetIdRef = useRef<string | null>(null)
 
@@ -212,6 +213,33 @@ export default function JournalEntryAttachments({
 
   const handleRequestRemove = (doc: DocumentRecord) => {
     setBlockedDoc(doc)
+  }
+
+  // A duplicate may be detached (not deleted) when the verifikat keeps at
+  // least one other directly anchored underlag. Referenced docs (via a
+  // supplier invoice) don't count: they are not anchored to this entry.
+  const directDocCount = documents.filter((d) => !d.referenced).length
+
+  const handleDetach = async (doc: DocumentRecord) => {
+    setDetachingDocId(doc.id)
+    try {
+      const res = await fetch(`/api/documents/${doc.id}/detach`, { method: 'POST' })
+      if (!res.ok) {
+        const { error } = await res.json().catch(() => ({ error: undefined }))
+        toast({
+          title: t('detach_failed'),
+          description: typeof error === 'string' ? error : undefined,
+          variant: 'destructive',
+        })
+      } else {
+        await fetchDocuments()
+        setBlockedDoc(null)
+      }
+    } catch {
+      toast({ title: t('detach_failed'), variant: 'destructive' })
+    } finally {
+      setDetachingDocId(null)
+    }
   }
 
   const handleOpenReplacePicker = (docId: string) => {
@@ -460,7 +488,9 @@ export default function JournalEntryAttachments({
           <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
             <div className="flex items-start gap-2">
               <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-              <p className="text-muted-foreground">{t('remove_blocked_hint')}</p>
+              <p className="text-muted-foreground">
+                {directDocCount >= 2 ? t('detach_hint') : t('remove_blocked_hint')}
+              </p>
             </div>
           </div>
 
@@ -468,6 +498,24 @@ export default function JournalEntryAttachments({
             <Button variant="outline" onClick={() => setBlockedDoc(null)}>
               {t('remove_blocked_cancel_cta')}
             </Button>
+            {directDocCount >= 2 && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (blockedDoc) handleDetach(blockedDoc)
+                }}
+                disabled={blockedDoc !== null && detachingDocId === blockedDoc.id}
+              >
+                {blockedDoc !== null && detachingDocId === blockedDoc.id ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {t('detaching')}
+                  </>
+                ) : (
+                  t('detach_cta')
+                )}
+              </Button>
+            )}
             <Button
               onClick={() => {
                 if (blockedDoc) handleOpenReplacePicker(blockedDoc.id)
