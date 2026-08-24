@@ -51,6 +51,11 @@ vi.mock('../journal-register', () => ({
   }),
 }))
 
+// The bilagor step reads account_reconciliation_attachments through the
+// store; an empty list keeps the queued-mock order of these tests intact.
+vi.mock('@/lib/reconciliation/attachments-store', () => ({
+  listAttachmentRowsInRange: vi.fn().mockResolvedValue([]),
+}))
 vi.mock('../vat-declaration', () => ({
   calculateVatDeclaration: vi.fn().mockResolvedValue({
     period: { type: 'yearly', year: 2024, period: 1, start: '2024-01-01', end: '2024-12-31' },
