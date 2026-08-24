@@ -218,7 +218,9 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     .eq('id', agi.id)
     .eq('company_id', companyId)
 
-  return new Response(fileContent, {
+  // Buffer is not assignable to BodyInit under the strict build tsconfig
+  // (Buffer<ArrayBufferLike>); the repo convention is a Uint8Array view.
+  return new Response(new Uint8Array(fileContent), {
     headers: {
       'Content-Type': contentType,
       'Content-Disposition': `attachment; filename="${filename}"`,
