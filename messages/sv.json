@@ -7840,6 +7840,7 @@
     "col_event": "Händelse",
     "col_amount": "Belopp",
     "col_voucher": "Verifikat",
+    "col_proposal": "Föreslaget verifikat",
     "bucket_proposed": "Att koppla: föreslagna par",
     "bucket_unmatched_external_skv": "Hos Skatteverket, saknas i bokföringen",
     "bucket_unmatched_external_bank": "På banken, saknas i bokföringen",
@@ -7889,7 +7890,13 @@
     "signed_off_forced": "med notering",
     "reopen": "Öppna igen",
     "toast_signed_off": "Markerat som avstämt t.o.m. {date}",
-    "toast_reopened": "Signeringen är öppnad igen"
+    "toast_reopened": "Signeringen är öppnad igen",
+    "tile_unexplained_help": "Den del av differensen som inte täcks av raderna nedan. 0 betyder att allt är förklarat, även om rader återstår att bokföra. Ett annat värde betyder att något är inkonsekvent, till exempel en koppling till ett makulerat verifikat: lita inte på kontot förrän du har tittat.",
+    "matcher_title": "{count} matchningsförslag från automatiska matchningen",
+    "matcher_none": "Inga nya matchningar hittades.",
+    "matcher_apply_strong": "Koppla {count} starka",
+    "matcher_strong": "Stark",
+    "matcher_close": "Stäng"
   },
   "skattekonto": {
     "help_text": "Saldot och händelserna hämtas från Skatteverket och synkas automatiskt varje natt. Genomförda händelser bokförs mot 1630 Skattekonto, oftast automatiskt; det som inte kan matchas flaggas i listan. Betala in via bankgiro 5050-1055 med ditt OCR-nummer.",

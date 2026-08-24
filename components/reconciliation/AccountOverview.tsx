@@ -21,6 +21,8 @@ import type {
 } from '@/lib/reconciliation/schemas'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
 import { SignoffDialog } from './SignoffDialog'
+import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
@@ -84,6 +86,7 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
   const [unfolded, setUnfolded] = useState<Set<ReconciliationItemBucket>>(new Set())
   const [bookRow, setBookRow] = useState<ReconciliationItem | null>(null)
   const [signoffOpen, setSignoffOpen] = useState(false)
+  const [matcher, setMatcher] = useState<MatcherMatch[] | null>(null)
 
   const isSkv = account.kind === 'skattekonto'
   const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
@@ -269,6 +272,51 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
     }
   }
 
+  async function runMatcher() {
+    if (!status) return
+    setBusy('matcher')
+    try {
+      const data = await postJson('/api/reconciliation/bank/run', {
+        date_from: window.from,
+        date_to: window.to,
+        account_number: status.account_number,
+        dry_run: true,
+      })
+      if (data) setMatcher((data.matches ?? []) as MatcherMatch[])
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function applyMatches(pairs: MatcherMatch[], strongOnly: boolean) {
+    if (!status || pairs.length === 0) return
+    setBusy('matcher')
+    try {
+      const data = await postJson('/api/reconciliation/bank/run', {
+        date_from: window.from,
+        date_to: window.to,
+        account_number: status.account_number,
+        dry_run: false,
+        selected_matches: pairs.map((m) => ({
+          transaction_id: m.transaction_id,
+          journal_entry_id: m.journal_entry_id,
+        })),
+        // Strong-only applies re-enforce the floor server-side, same as the
+        // old bank view; a single hand-picked weaker pair omits it.
+        ...(strongOnly ? { confidence_threshold: 0.85 } : {}),
+      })
+      if (data) {
+        const applied = (data.applied as number) ?? 0
+        toast({ title: t('toast_matched', { applied }) })
+        const appliedKeys = new Set(pairs.map((m) => `${m.transaction_id}:${m.journal_entry_id}`))
+        setMatcher((prev) => (prev ? prev.filter((m) => !appliedKeys.has(`${m.transaction_id}:${m.journal_entry_id}`)) : prev))
+        await refresh()
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
   // ---- render -------------------------------------------------------------
 
   if (loadError) {
@@ -310,7 +358,7 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
   const fetchedAt = isSkv ? status.skattekonto?.fetched_at : account.source.synced_at
   const sourceLabel = isSkv ? t('source_skv') : t('source_bank')
 
-  const tiles: Array<{ key: string; label: string; value: string; sub: string; tone?: 'ok' | 'attn' }> = [
+  const tiles: Array<{ key: string; label: string; value: string; sub: string; tone?: 'ok' | 'attn'; help?: string }> = [
     {
       key: 'external',
       label: isSkv ? t('tile_external_skv') : t('tile_external_bank'),
@@ -336,6 +384,7 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
     {
       key: 'unexplained',
       label: t('tile_unexplained'),
+      help: t('tile_unexplained_help'),
       value: money(status.unexplained_difference),
       sub: '',
       tone: status.unexplained_difference == null ? undefined : status.is_reconciled ? 'ok' : 'attn',
@@ -371,7 +420,6 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
     (byBucket.get('unmatched_external')?.length ?? 0) +
     (byBucket.get('unmatched_ledger')?.length ?? 0)
 
-  const bankRunHref = '/reports/bank-reconciliation?autorun=1'
   const bankViewHref = '/reports/bank-reconciliation'
 
   // Default sign-off date: the window end, never past today nor past the
@@ -390,7 +438,10 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border stagger-enter">
         {tiles.map((tile) => (
           <div key={tile.key} className="bg-background px-4 py-3.5">
-            <div className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">{tile.label}</div>
+            <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+              {tile.label}
+              {tile.help && <InfoTooltip content={tile.help} iconClassName="h-3 w-3" />}
+            </div>
             <div
               className={cn(
                 'mt-1 text-[22px] font-semibold leading-tight tabular-nums',
@@ -466,8 +517,8 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
           </Button>
         )}
         {!isSkv && (
-          <Button size="sm" variant="outline" asChild>
-            <Link href={bankRunHref}>{t('action_run_bank_matcher')}</Link>
+          <Button size="sm" variant="outline" onClick={() => void runMatcher()} disabled={busy !== null} aria-busy={busy === 'matcher'}>
+            {t('action_run_bank_matcher')}
           </Button>
         )}
         {signoffEnabled && (
@@ -494,6 +545,16 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
 
         </div>
       </div>
+
+      {matcher !== null && !isSkv && (
+        <MatcherPreview
+          matches={matcher}
+          currency={currency}
+          busy={busy !== null}
+          onApply={(pairs, strongOnly) => void applyMatches(pairs, strongOnly)}
+          onClose={() => setMatcher(null)}
+        />
+      )}
 
       {/* The table: full width, banded by bucket, paired proposal rows. */}
       {items.items.length === 0 ? (

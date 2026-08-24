@@ -17,9 +17,12 @@
  * reverse-charge VAT, and the propagation step below attaches the underlag to
  * the new verifikation (BFL 7 kap) and stamps the inbox item resolved.
  *
- * Booking is always in SEK off the bank transaction's own amount (BFL 5 kap
- * 2§), so the foreign-currency underlag never needs an FX step here: the bank
- * already settled it.
+ * Journal entry lines are always SEK (BFL 5 kap 2§), but transaction.amount is
+ * denominated in transaction.currency: the SEK resolution happens inside the
+ * mapping builders and buildTransactionEntryLines (amount_sek / exchange_rate,
+ * see lib/bookkeeping/currency-utils.ts), never off the raw amount. The
+ * foreign-currency underlag needs no extra FX step here because those two
+ * resolve it, not because the amount already is kronor.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
