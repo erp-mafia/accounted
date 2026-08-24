@@ -388,6 +388,65 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(result.preview.compliance_warning).toBeUndefined()
   })
 
+  it('inbox item without a stored document: no attach claim, inbox-variant warning', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'fp-1',
+        is_closed: false,
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        name: '2026',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: true },
+        { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: 'inbox-nodoc',
+        document_id: null, // ingested without attachment, or ON DELETE SET NULL
+        created_journal_entry_id: null,
+        created_supplier_invoice_id: null,
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+    enqueue({ data: { id: 'op-nodoc' }, error: null }) // pending_operations insert
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-05-12',
+        description: 'Inbox item utan dokument',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-nodoc',
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.document_attached).toBe(false)
+    // The envelope must not contradict itself: no "attach the OCR document"
+    // claim, and the warning must not tell the agent to restage with the
+    // inbox_item_id it already supplied.
+    expect(result.preview.will).toMatch(/link the inbox item/i)
+    expect(result.preview.will).not.toMatch(/attach the OCR document/i)
+    expect(result.preview.compliance_warning).toMatch(/no stored document/i)
+    expect(result.preview.compliance_warning).not.toMatch(/restage with inbox_item_id/i)
+  })
+
   it('rejects when inbox_item_id is already booked as a journal entry', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

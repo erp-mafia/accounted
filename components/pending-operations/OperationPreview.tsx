@@ -9,6 +9,7 @@
 
 import { Fragment, createContext, useContext } from 'react'
 import { cn, formatCurrency } from '@/lib/utils'
+import { AttnLine } from '@/components/ui/attn-line'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
@@ -298,15 +299,18 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
   // Advisory, mirrors the MCP staging warning: a verifikat for a received
   // handling must carry the handling itself (BFL 5 kap 6 §). Only shown when
   // the staging explicitly said no document is attached; older ops without
-  // the flag render unchanged.
+  // the flag render unchanged. The wording is conditional ("om ... avser en
+  // mottagen handling"): IB and internal entries (accruals, FX) legitimately
+  // lack a kvitto, and flagging them as deficient would be wrong.
   const missingUnderlag = data.document_attached === false
 
   return (
     <div className="space-y-3 text-sm">
       {missingUnderlag && (
-        <p className="attn text-[12.5px]">
-          Underlag saknas: verifikatet bokförs utan bifogad handling (BFL 5 kap 6 §).
-        </p>
+        <AttnLine>
+          Underlag saknas: om verifikatet avser en mottagen handling ska handlingen användas som
+          verifikation (BFL 5 kap 6 §).
+        </AttnLine>
       )}
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Datum</span>
