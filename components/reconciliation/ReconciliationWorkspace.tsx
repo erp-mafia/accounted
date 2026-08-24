@@ -180,19 +180,15 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
   return (
     <div className="space-y-6">
       {header}
-      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-        <ReconciliationRail accounts={accounts} selectedKey={selected?.account_key ?? null} onSelect={select} />
-        <div className="min-w-0">
-          {selected && (
-            <AccountOverview
-              key={selected.account_key}
-              account={selected}
-              window={window}
-              onChanged={() => void load()}
-            />
-          )}
-        </div>
-      </div>
+      {selected && (
+        <AccountOverview
+          key={selected.account_key}
+          account={selected}
+          rail={<ReconciliationRail accounts={accounts} selectedKey={selected.account_key} onSelect={select} />}
+          window={window}
+          onChanged={() => void load()}
+        />
+      )}
     </div>
   )
 }

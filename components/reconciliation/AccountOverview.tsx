@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -65,13 +65,15 @@ export interface ReconciliationWindow {
 
 interface AccountOverviewProps {
   account: ReconciliationAccount
+  /** The account rail. Rendered inside the summary grid so the items table below can span the full page width (the approved layout). */
+  rail: ReactNode
   /** The selected period: scopes the bank bridge and the item windows; its end is the default sign-off date. */
   window: ReconciliationWindow
   /** Called after any write so the rail can refresh its status dots. */
   onChanged: () => void
 }
 
-export function AccountOverview({ account, window, onChanged }: AccountOverviewProps) {
+export function AccountOverview({ account, rail, window, onChanged }: AccountOverviewProps) {
   const t = useTranslations('reconciliation')
   const locale = useLocale()
   const { toast } = useToast()
@@ -271,15 +273,22 @@ export function AccountOverview({ account, window, onChanged }: AccountOverviewP
 
   if (loadError) {
     return (
-      <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>
-        {t('load_failed')}
-      </AttnLine>
+      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
+        {rail}
+        <div className="min-w-0">
+          <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>
+            {t('load_failed')}
+          </AttnLine>
+        </div>
+      </div>
     )
   }
 
   if (!status || !items) {
     return (
-      <div className="space-y-6" aria-busy>
+      <div className="grid gap-8 lg:grid-cols-[220px_1fr]" aria-busy>
+        {rail}
+        <div className="min-w-0 space-y-6">
         <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="bg-background p-4">
@@ -290,6 +299,7 @@ export function AccountOverview({ account, window, onChanged }: AccountOverviewP
         </div>
         <Skeleton className="h-4 w-72" />
         <Skeleton className="h-40 w-full" />
+        </div>
       </div>
     )
   }
@@ -304,7 +314,14 @@ export function AccountOverview({ account, window, onChanged }: AccountOverviewP
     {
       key: 'external',
       label: isSkv ? t('tile_external_skv') : t('tile_external_bank'),
-      value: money(status.external_balance),
+      // The bank tile is the period sum (what its label says), which lives on
+      // the bridge; external_balance is the reported bank balance and is often
+      // unknown, which rendered as "okänt" next to a bridge that knows better.
+      value: money(
+        isSkv
+          ? status.external_balance
+          : (status.bridge.find((l) => l.key === 'bank_transactions')?.amount ?? status.external_balance),
+      ),
       sub: fetchedAt ? t('tile_synced', { date: formatDate(fetchedAt) }) : t('rail_never_synced'),
     },
     {
@@ -366,6 +383,9 @@ export function AccountOverview({ account, window, onChanged }: AccountOverviewP
 
   return (
     <div className="space-y-6">
+      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
+        {rail}
+        <div className="min-w-0 space-y-6">
       {/* Tiles: label + number, nothing else. */}
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border stagger-enter">
         {tiles.map((tile) => (
@@ -471,6 +491,9 @@ export function AccountOverview({ account, window, onChanged }: AccountOverviewP
           </Link>
         </p>
       )}
+
+        </div>
+      </div>
 
       {/* The table: full width, banded by bucket, paired proposal rows. */}
       {items.items.length === 0 ? (
