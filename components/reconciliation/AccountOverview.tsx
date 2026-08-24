@@ -358,6 +358,16 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
   const fetchedAt = isSkv ? status.skattekonto?.fetched_at : account.source.synced_at
   const sourceLabel = isSkv ? t('source_skv') : t('source_bank')
 
+  const bankRaw = status.bank as { bank_transaction_inflow?: number; bank_transaction_outflow?: number; bank_transaction_count?: number } | null
+  const bankBreakdown =
+    !isSkv && bankRaw && typeof bankRaw.bank_transaction_inflow === 'number' && typeof bankRaw.bank_transaction_outflow === 'number'
+      ? t('tile_bank_breakdown', {
+          inflow: formatCurrency(bankRaw.bank_transaction_inflow, currency),
+          outflow: formatCurrency(Math.abs(bankRaw.bank_transaction_outflow), currency),
+          count: bankRaw.bank_transaction_count ?? 0,
+        })
+      : null
+
   const tiles: Array<{ key: string; label: string; value: string; sub: string; tone?: 'ok' | 'attn'; help?: string }> = [
     {
       key: 'external',
@@ -370,7 +380,8 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
           ? status.external_balance
           : (status.bridge.find((l) => l.key === 'bank_transactions')?.amount ?? status.external_balance),
       ),
-      sub: fetchedAt ? t('tile_synced', { date: formatDate(fetchedAt) }) : t('rail_never_synced'),
+      // Bank: the gross split makes the net self-explanatory; skattekonto: when it was fetched.
+      sub: bankBreakdown ?? (fetchedAt ? t('tile_synced', { date: formatDate(fetchedAt) }) : t('rail_never_synced')),
     },
     {
       key: 'ledger',
