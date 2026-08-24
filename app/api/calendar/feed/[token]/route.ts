@@ -80,6 +80,21 @@ export async function GET(
     return new NextResponse('Feed token has expired', { status: 410 })
   }
 
+  // The token authenticates the feed, but the feed's creator must still be a
+  // member of the company: offboarding (removal from company_members) must
+  // stop the feed, or an ex-member's subscribed calendar keeps receiving the
+  // company's deadlines and invoice details indefinitely.
+  const { data: membership } = await supabase
+    .from('company_members')
+    .select('user_id')
+    .eq('company_id', feed.company_id)
+    .eq('user_id', feed.user_id)
+    .maybeSingle()
+
+  if (!membership) {
+    return new NextResponse('Feed not found or inactive', { status: 404 })
+  }
+
   // Update access tracking
   await supabase
     .from('calendar_feeds')
@@ -99,38 +114,51 @@ export async function GET(
   const startStr = startDate.toISOString().split('T')[0]
   const endStr = endDate.toISOString().split('T')[0]
 
-  // Fetch relevant data based on feed options. Deadlines are always
-  // fetched: include_tax_deadlines only hides SYSTEM rows (the generator
-  // filters by source), while user-created deadlines always appear.
-  const [deadlines, invoices] = await Promise.all([
-    fetchAllRows<Deadline>(({ from, to }) =>
-      supabase
-        .from('deadlines')
-        .select('*')
-        .eq('company_id', feed.company_id)
-        .is('dismissed_at', null)
-        .gte('due_date', startStr)
-        .lte('due_date', endStr)
-        .order('due_date')
-        .range(from, to)
-    ),
-
-    // Invoices
-    feed.include_invoices
-      ? fetchAllRows<Invoice>(({ from, to }) =>
+  try {
+    // Fetch relevant data based on feed options. Deadlines are always
+    // fetched: include_tax_deadlines only hides SYSTEM rows (the generator
+    // filters by source), while user-created deadlines always appear.
+    // The secondary .order('id') gives the stable total order paging
+    // requires: due dates cluster hard (invoice batches, tax deadlines), so
+    // ordering by due_date alone leaves the page boundary inside a run of
+    // tied rows, where Postgres may drop or repeat rows between pages.
+    const [deadlines, invoices] = await Promise.all([
+      fetchAllRows<Deadline>(
+        ({ from, to }) =>
           supabase
-            .from('invoices')
-            .select('*, customer:customers(*)')
+            .from('deadlines')
+            .select('*')
             .eq('company_id', feed.company_id)
+            .is('dismissed_at', null)
             .gte('due_date', startStr)
             .lte('due_date', endStr)
             .order('due_date')
-            .range(from, to)
-        )
-      : Promise.resolve([]),
-  ])
+            .order('id')
+            .range(from, to),
+        { dedupeBy: (row) => row.id }
+      ),
 
-  try {
+      // Invoices with a real due date to remind about: drafts, cancelled and
+      // credited invoices have no payable due date and would leak
+      // speculative amounts into the subscriber's calendar.
+      feed.include_invoices
+        ? fetchAllRows<Invoice>(
+            ({ from, to }) =>
+              supabase
+                .from('invoices')
+                .select('*, customer:customers(*)')
+                .eq('company_id', feed.company_id)
+                .in('status', ['sent', 'paid', 'partially_paid', 'overdue'])
+                .gte('due_date', startStr)
+                .lte('due_date', endStr)
+                .order('due_date')
+                .order('id')
+                .range(from, to),
+            { dedupeBy: (row) => row.id }
+          )
+        : Promise.resolve([]),
+    ])
+
     const icsContent = await generateCalendarFeed(
       {
         deadlines,

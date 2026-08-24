@@ -431,7 +431,9 @@ export default function DeadlinesPage() {
         </HelpPopover>
       }
       action={
-        <div className="flex items-center gap-2">
+        // Stacks full-width on mobile: PageHeader's [&>*]:w-full lands on
+        // this wrapper, so the buttons themselves must go w-full below sm
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center [&>*]:w-full sm:[&>*]:w-auto">
           {ENABLED_EXTENSION_IDS.has('calendar') && (
             <Button variant="outline" asChild>
               <Link href="/settings/account">

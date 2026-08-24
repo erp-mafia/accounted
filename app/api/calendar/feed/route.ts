@@ -20,7 +20,7 @@ const UpdateFeedSchema = z
   )
 
 function feedUrls(feedToken: string) {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://app.erp-base.se'
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
   return {
     webcalUrl: `webcal://${baseUrl.replace(/^https?:\/\//, '')}/api/calendar/feed/${feedToken}`,
     httpsUrl: `${baseUrl}/api/calendar/feed/${feedToken}`,
