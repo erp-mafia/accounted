@@ -37,6 +37,68 @@ Response `200`:
 
 ---
 
+### `POST /api/v1/companies`
+
+**Create a company and set it up for bookkeeping.**
+`scope:companies:write · risk:medium · dry-run`
+
+Creates a new company owned by the API key user (or attached to one of their teams) and sets it up in one call: owner membership, BAS chart of accounts for the company form, compliance settings, the first fiscal period and the automatic tax deadlines. A 30-day trial with every paid capability starts immediately. Intended for partner platforms provisioning client companies (byrå/vertical SaaS) and for agents onboarding a user.
+
+**Use when:** A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner; invite the end customer afterwards.
+**Do not use for:** Companies that already exist (list them with GET /api/v1/companies), or changing settings on an existing company (PATCH /api/v1/companies/{companyId}/settings).
+
+**Pitfalls:**
+- A VAT-registered company MUST send moms_period (monthly / quarterly / yearly); the request is refused otherwise, because a missing period silently produces zero VAT deadlines.
+- Bookkeeping duty under BFL starts when the company exists with a fiscal period: do not create companies to try things out. Use a test-mode key (dry run) for that.
+- Enskild firma always runs on the calendar year; fiscal_year_start_month is ignored for it.
+- first_fiscal_year is only for a company in its first year (BFL 3 kap.: up to 18 months). Omit it for an established company.
+- The endpoint is not idempotent: a retry after a network failure creates a second company. Send an Idempotency-Key header.
+
+Request body:
+```ts
+{
+  name: string,
+  entity_type: "enskild_firma" | "aktiebolag",
+  org_number?: string,
+  vat_registered: boolean,
+  moms_period?: "monthly" | "quarterly" | "yearly",
+  accounting_method: "accrual" | "cash",
+  f_skatt?: boolean,
+  fiscal_year_start_month?: number,
+  first_fiscal_year?: { start: string, end: string },
+  address_line1?: string,
+  postal_code?: string,
+  city?: string,
+  team_id?: string
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    name: string,
+    entity_type: "enskild_firma" | "aktiebolag",
+    org_number: string,
+    vat_registered: boolean,
+    moms_period: "monthly" | "quarterly" | "yearly",
+    accounting_method: "accrual" | "cash",
+    fiscal_period: { start_date: string, end_date: string, name: string },
+    team_id: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+---
+
 ### `PATCH /api/v1/companies/{companyId}/settings`
 
 **Partially update company settings.**

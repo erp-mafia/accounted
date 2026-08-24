@@ -143,12 +143,13 @@ call can undo it, e.g. invoice credit).
 API version `2026-05-12`, 135 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
-### Core (4)
+### Core (5)
 
 Full detail: [references/core.md](references/core.md)
 
 ```text
 GET /companies : List companies the API key can access [scope:companies:read risk:low idempotent]
+POST /companies : Create a company and set it up for bookkeeping [scope:companies:write risk:medium dry-run]
 PATCH /companies/{companyId}/settings : Partially update company settings [scope:companies:write risk:medium idempotent dry-run reversible]
 GET /health : Health check [risk:low idempotent]
 GET /operations/{id} : Poll a long-running operation by id [scope:operations:read risk:low idempotent]
