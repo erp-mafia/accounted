@@ -8,9 +8,6 @@ import type { ReconciliationAttachment } from './schemas'
  * without touching the bucket.
  */
 
-const COLUMNS =
-  'id, account_key, through_date, file_name, mime_type, size_bytes, storage_bucket, storage_path, sha256, note, uploaded_by, uploaded_at, removed_at, removed_by, removed_reason'
-
 export interface AttachmentRow extends ReconciliationAttachment {
   storage_bucket: string
   storage_path: string
@@ -58,7 +55,7 @@ export async function listAttachmentRows(
 ): Promise<AttachmentRow[]> {
   let query = supabase
     .from('account_reconciliation_attachments')
-    .select(COLUMNS)
+    .select('id, account_key, through_date, file_name, mime_type, size_bytes, storage_bucket, storage_path, sha256, note, uploaded_by, uploaded_at, removed_at, removed_by, removed_reason')
     .eq('company_id', companyId)
     .eq('account_key', accountKey)
     .eq('through_date', throughDate)
@@ -79,7 +76,7 @@ export async function listAttachmentRowsInRange(
 ): Promise<AttachmentRow[]> {
   let query = supabase
     .from('account_reconciliation_attachments')
-    .select(COLUMNS)
+    .select('id, account_key, through_date, file_name, mime_type, size_bytes, storage_bucket, storage_path, sha256, note, uploaded_by, uploaded_at, removed_at, removed_by, removed_reason')
     .eq('company_id', companyId)
     .gte('through_date', from)
     .lte('through_date', to)
@@ -101,7 +98,7 @@ export async function getAttachmentRow(
 ): Promise<AttachmentRow | null> {
   const { data, error } = await supabase
     .from('account_reconciliation_attachments')
-    .select(COLUMNS)
+    .select('id, account_key, through_date, file_name, mime_type, size_bytes, storage_bucket, storage_path, sha256, note, uploaded_by, uploaded_at, removed_at, removed_by, removed_reason')
     .eq('company_id', companyId)
     .eq('account_key', accountKey)
     .eq('id', attachmentId)
@@ -130,8 +127,20 @@ export async function insertAttachmentRow(
 ): Promise<AttachmentRow> {
   const { data, error } = await supabase
     .from('account_reconciliation_attachments')
-    .insert({ company_id: companyId, ...input })
-    .select(COLUMNS)
+    .insert({
+      company_id: companyId,
+      account_key: input.account_key,
+      through_date: input.through_date,
+      file_name: input.file_name,
+      mime_type: input.mime_type,
+      size_bytes: input.size_bytes,
+      storage_bucket: input.storage_bucket,
+      storage_path: input.storage_path,
+      sha256: input.sha256,
+      note: input.note,
+      uploaded_by: input.uploaded_by,
+    })
+    .select('id, account_key, through_date, file_name, mime_type, size_bytes, storage_bucket, storage_path, sha256, note, uploaded_by, uploaded_at, removed_at, removed_by, removed_reason')
     .single()
   if (error) throw new Error(`Kunde inte spara underlag: ${error.message}`)
   return mapRow(data as Record<string, unknown>)
@@ -150,7 +159,7 @@ export async function stampAttachmentRemoved(
     .eq('company_id', companyId)
     .eq('id', attachmentId)
     .is('removed_at', null)
-    .select(COLUMNS)
+    .select('id, account_key, through_date, file_name, mime_type, size_bytes, storage_bucket, storage_path, sha256, note, uploaded_by, uploaded_at, removed_at, removed_by, removed_reason')
     .maybeSingle()
   if (error) throw new Error(`Kunde inte ta bort underlag: ${error.message}`)
   return data ? mapRow(data as Record<string, unknown>) : null
