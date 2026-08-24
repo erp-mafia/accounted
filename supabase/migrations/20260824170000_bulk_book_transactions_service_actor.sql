@@ -415,7 +415,10 @@ $$;
 COMMENT ON FUNCTION public.bulk_book_transactions(uuid[], uuid, jsonb, uuid, uuid) IS
   'Bulk-book N SEK bank transactions sharing the same date into a single combined verifikat (samlingsverifikation per BFL 5 kap 6§). Mixed-currency selections are refused with BULK_BOOK_MIXED_CURRENCY (one redovisningsvaluta per BFL 4 kap 6§) and homogeneous non-SEK selections with BULK_BOOK_FOREIGN_CURRENCY (the ledger columns are always kronor and this RPC has no exchange rate). Dimensions PR9: lines write the dimensions bag only: cost_center/project are GENERATED columns derived from keys 1/6. p_user_id is honored only for service_role callers (pending-operations commit path).';
 
-REVOKE ALL ON FUNCTION public.bulk_book_transactions(uuid[], uuid, jsonb, uuid, uuid) FROM PUBLIC;
+-- Default privileges hand new functions to anon as well (the Supabase
+-- template grants EXECUTE ON FUNCTIONS to anon/authenticated/service_role),
+-- so PUBLIC and anon are revoked explicitly, as match_batch_allocate does.
+REVOKE ALL ON FUNCTION public.bulk_book_transactions(uuid[], uuid, jsonb, uuid, uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.bulk_book_transactions(uuid[], uuid, jsonb, uuid, uuid) TO authenticated, service_role;
 
 NOTIFY pgrst, 'reload schema';
