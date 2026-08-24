@@ -1078,6 +1078,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // through which date with the numbers as they stood, plus reopen stamps.
   // Part of the avstämningsdokumentation an auditor asks for; kept.
   { name: 'account_reconciliations', file: 'account_reconciliations.json', orderBy: 'signed_at' },
+  // The bokslut checklist per räkenskapsår (which closing steps were done,
+  // by whom, when): the konsult's documented bokslutsarbete (Reko 760); kept.
+  { name: 'bokslut_checklist_items', file: 'bokslut_checklist_items.json', orderBy: 'updated_at', pageKey: 'item_key' },
   { name: 'journal_entry_no_doc_required', file: 'journal_entry_no_doc_required.json', pageKey: 'journal_entry_id' },
   { name: 'rot_rut_payout_requests', file: 'rot_rut_payout_requests.json', orderBy: 'created_at' },
   // No `denormalize`: rot_rut_payout_requests has no currency column either.
