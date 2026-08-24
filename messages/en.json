@@ -7896,7 +7896,17 @@
     "matcher_none": "No new matches found.",
     "matcher_apply_strong": "Link {count} strong",
     "matcher_strong": "Strong",
-    "matcher_close": "Close"
+    "matcher_close": "Close",
+    "mode_overview": "Overview",
+    "mode_match": "Match manually",
+    "match_empty_left": "No events without a voucher in the period.",
+    "match_empty_right": "No vouchers without an event in the period.",
+    "match_selected_external": "{count} events selected: {amount}",
+    "match_selected_entry": "Voucher: {amount}",
+    "match_no_entry": "No voucher selected",
+    "match_difference": "Difference {amount}",
+    "match_hint_residual": "The difference must be 0 to link. Book the remainder first, then link.",
+    "match_apply": "Link {count} events"
   },
   "skattekonto": {
     "help_text": "The balance and events are fetched from Skatteverket and synced automatically every night. Completed events are booked against 1630 Skattekonto, usually automatically; anything that cannot be matched is flagged in the list. Pay in via bankgiro 5050-1055 with your OCR number.",

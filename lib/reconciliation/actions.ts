@@ -3,6 +3,7 @@ import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import {
   linkSkattekontoRow,
+  linkSkattekontoRows,
   setSkattekontoRowIgnored,
   SkattekontoLinkError,
   unlinkSkattekontoRow,
@@ -115,10 +116,11 @@ async function proposalsAsPairs(
 }
 
 /**
- * Link pairs on one account. Today each pair is one outside row and one
- * verifikat (the N:M worksheet selection arrives with the manual-match mode);
- * other shapes are reported as UNSUPPORTED_PAIR_SHAPE, never silently
- * reduced. Dry run validates shapes and resolves proposals without writing.
+ * Link pairs on one account. A pair is one OR MANY outside rows against
+ * exactly one verifikat (bank: independent links per transaction; skattekonto:
+ * all-or-nothing with the sum settling the verifikat). One row against many
+ * verifikat waits for the residual link table and is reported as
+ * UNSUPPORTED_PAIR_SHAPE, never silently reduced. Dry run validates shapes and resolves proposals without writing.
  * Partial success is first-class: `applied` and `skipped` together cover
  * every considered pair.
  */
@@ -144,27 +146,65 @@ export async function matchPairs(
   const applied: AppliedLink[] = []
   const skipped: SkippedPair[] = []
 
+  const emitMatched = async (externalId: string, journalEntryId: string) => {
+    await eventBus.emit({
+      type: 'reconciliation.matched',
+      payload: {
+        accountKey,
+        externalId,
+        journalEntryId,
+        method: input.use_proposals ? 'proposal' : 'manual',
+        userId,
+        companyId,
+      },
+    })
+  }
+
   for (const pair of pairs) {
-    if (pair.external_ids.length !== 1 || pair.journal_entry_ids.length !== 1) {
+    // N outside rows may settle ONE verifikat (the worksheet selection); the
+    // reverse shape (one row over several verifikat) waits for the residual
+    // link table and is refused loudly, never silently reduced.
+    if (pair.journal_entry_ids.length !== 1) {
       skipped.push({
         pair,
         code: 'UNSUPPORTED_PAIR_SHAPE',
-        message: 'Ett par är en händelse och ett verifikat i den här versionen.',
+        message: 'Flera verifikat i samma par stöds inte ännu: ett par är en eller flera händelser mot ett verifikat.',
       })
       continue
     }
-    const [externalId] = pair.external_ids
+    const externalIds = [...new Set(pair.external_ids)]
+    if (externalIds.length === 0 || externalIds.length > 50) {
+      skipped.push({
+        pair,
+        code: 'UNSUPPORTED_PAIR_SHAPE',
+        message: 'Ett par kopplar mellan 1 och 50 händelser mot ett verifikat.',
+      })
+      continue
+    }
     const [journalEntryId] = pair.journal_entry_ids
 
     if (dryRun) {
-      applied.push({ external_id: externalId, journal_entry_id: journalEntryId })
+      for (const externalId of externalIds) {
+        applied.push({ external_id: externalId, journal_entry_id: journalEntryId })
+      }
       continue
     }
 
     try {
       if (parsed.kind === 'skattekonto') {
-        const r = await linkSkattekontoRow(supabase, companyId, externalId, journalEntryId)
-        applied.push({ external_id: externalId, journal_entry_id: journalEntryId, via: r.via })
+        if (externalIds.length === 1) {
+          const r = await linkSkattekontoRow(supabase, companyId, externalIds[0], journalEntryId)
+          applied.push({ external_id: externalIds[0], journal_entry_id: journalEntryId, via: r.via })
+          await emitMatched(externalIds[0], journalEntryId)
+        } else {
+          // All-or-nothing: the group's sum must settle the verifikat, and a
+          // lost race rolls the whole group back inside the link helper.
+          const r = await linkSkattekontoRows(supabase, companyId, externalIds, journalEntryId)
+          for (const externalId of r.skattekonto_transaction_ids) {
+            applied.push({ external_id: externalId, journal_entry_id: journalEntryId, via: r.via })
+            await emitMatched(externalId, journalEntryId)
+          }
+        }
       } else {
         const { data: account } = await supabase
           .from('cash_accounts')
@@ -172,31 +212,30 @@ export async function matchPairs(
           .eq('company_id', companyId)
           .eq('id', parsed.cashAccountId)
           .maybeSingle<{ ledger_account: string }>()
-        const r = await manualLink(
-          supabase,
-          companyId,
-          externalId,
-          journalEntryId,
-          userId,
-          account?.ledger_account ?? '1930',
-        )
-        if (!r.success) {
-          skipped.push({ pair, code: 'PAIR_NOT_CLOSED', message: r.error ?? 'Kunde inte koppla' })
-          continue
+        // Bank N:1 is per-transaction by design (manualLink documents why the
+        // engine allows several transactions on one verifikat): each link is
+        // independent, so partial success is reported per transaction.
+        for (const externalId of externalIds) {
+          const r = await manualLink(
+            supabase,
+            companyId,
+            externalId,
+            journalEntryId,
+            userId,
+            account?.ledger_account ?? '1930',
+          )
+          if (!r.success) {
+            skipped.push({
+              pair: { external_ids: [externalId], journal_entry_ids: [journalEntryId] },
+              code: 'PAIR_NOT_CLOSED',
+              message: r.error ?? 'Kunde inte koppla',
+            })
+            continue
+          }
+          applied.push({ external_id: externalId, journal_entry_id: journalEntryId })
+          await emitMatched(externalId, journalEntryId)
         }
-        applied.push({ external_id: externalId, journal_entry_id: journalEntryId })
       }
-      await eventBus.emit({
-        type: 'reconciliation.matched',
-        payload: {
-          accountKey,
-          externalId,
-          journalEntryId,
-          method: input.use_proposals ? 'proposal' : 'manual',
-          userId,
-          companyId,
-        },
-      })
     } catch (err) {
       const { code, message } = skipCodeFor(err)
       skipped.push({ pair, code, message })

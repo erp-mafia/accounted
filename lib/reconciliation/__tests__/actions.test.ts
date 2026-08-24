@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const linkMock = vi.fn()
+const linkGroupMock = vi.fn()
 const unlinkMock = vi.fn()
 const setIgnoredMock = vi.fn()
 const manualLinkMock = vi.fn()
@@ -14,6 +15,7 @@ vi.mock('@/lib/skatteverket/skattekonto-link', async (importOriginal) => {
   return {
     ...actual,
     linkSkattekontoRow: (...args: unknown[]) => linkMock(...args),
+    linkSkattekontoRows: (...args: unknown[]) => linkGroupMock(...args),
     unlinkSkattekontoRow: (...args: unknown[]) => unlinkMock(...args),
     setSkattekontoRowIgnored: (...args: unknown[]) => setIgnoredMock(...args),
   }
@@ -42,6 +44,7 @@ describe('matchPairs', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     linkMock.mockReset()
+    linkGroupMock.mockReset()
     manualLinkMock.mockReset()
     skvStatusMock.mockReset()
     emitMock.mockResolvedValue(undefined)
@@ -53,28 +56,63 @@ describe('matchPairs', () => {
     expect(await matchPairs(supabase as never, COMPANY, USER, 'manual:1910', { pairs: [] })).toBeNull()
   })
 
-  it('links skattekonto pairs one by one, reports skips with codes, and emits one event per link', async () => {
+  it('links skattekonto pairs one by one, groups N:1 through the sum-checked helper, and emits one event per row', async () => {
     const { supabase } = createQueuedMockSupabase()
     linkMock
       .mockResolvedValueOnce({ skattekonto_transaction_id: R1, journal_entry_id: E1, via: 'line' })
       .mockRejectedValueOnce(new SkattekontoLinkError('redan kopplat', 'ENTRY_ALREADY_LINKED'))
+    linkGroupMock.mockResolvedValueOnce({
+      journal_entry_id: E2,
+      via: 'entry_total',
+      skattekonto_transaction_ids: [R1, R2],
+    })
 
     const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
       pairs: [
         { external_ids: [R1], journal_entry_ids: [E1] },
         { external_ids: [R2], journal_entry_ids: [E1] },
         { external_ids: [R1, R2], journal_entry_ids: [E2] },
+        // 1:M stays refused until the residual link table exists.
+        { external_ids: [R1], journal_entry_ids: [E1, E2] },
       ],
     })
 
-    expect(result).toMatchObject({ dry_run: false, considered: 3 })
-    expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1, via: 'line' }])
+    expect(result).toMatchObject({ dry_run: false, considered: 4 })
+    expect(result?.applied).toEqual([
+      { external_id: R1, journal_entry_id: E1, via: 'line' },
+      { external_id: R1, journal_entry_id: E2, via: 'entry_total' },
+      { external_id: R2, journal_entry_id: E2, via: 'entry_total' },
+    ])
     expect(result?.skipped.map((s) => s.code)).toEqual(['ALREADY_LINKED', 'UNSUPPORTED_PAIR_SHAPE'])
-    expect(emitMock).toHaveBeenCalledTimes(1)
+    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2], E2)
+    expect(emitMock).toHaveBeenCalledTimes(3)
     expect(emitMock.mock.calls[0][0]).toMatchObject({
       type: 'reconciliation.matched',
       payload: { accountKey: 'skattekonto', externalId: R1, journalEntryId: E1, method: 'manual' },
     })
+  })
+
+  it('links a bank N:1 group per transaction and reports partial failures per row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1930' } }) // cash_accounts lookup
+    manualLinkMock
+      .mockResolvedValueOnce({ success: true })
+      .mockResolvedValueOnce({ success: false, error: 'Transaktionen är redan kopplad till en verifikation.' })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      pairs: [{ external_ids: [R1, R2], journal_entry_ids: [E1] }],
+    })
+
+    expect(result).toMatchObject({ dry_run: false, considered: 1 })
+    expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1 }])
+    expect(result?.skipped).toEqual([
+      {
+        pair: { external_ids: [R2], journal_entry_ids: [E1] },
+        code: 'PAIR_NOT_CLOSED',
+        message: 'Transaktionen är redan kopplad till en verifikation.',
+      },
+    ])
+    expect(emitMock).toHaveBeenCalledTimes(1)
   })
 
   it('dry run resolves proposals into pairs without writing', async () => {

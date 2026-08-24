@@ -7896,7 +7896,17 @@
     "matcher_none": "Inga nya matchningar hittades.",
     "matcher_apply_strong": "Koppla {count} starka",
     "matcher_strong": "Stark",
-    "matcher_close": "Stäng"
+    "matcher_close": "Stäng",
+    "mode_overview": "Översikt",
+    "mode_match": "Matcha manuellt",
+    "match_empty_left": "Inga händelser utan verifikat i perioden.",
+    "match_empty_right": "Inga verifikat utan händelse i perioden.",
+    "match_selected_external": "{count} händelser valda: {amount}",
+    "match_selected_entry": "Verifikat: {amount}",
+    "match_no_entry": "Inget verifikat valt",
+    "match_difference": "Differens {amount}",
+    "match_hint_residual": "Differensen måste vara 0 för att koppla. Bokför mellanskillnaden först, sedan kopplar du.",
+    "match_apply": "Koppla {count} händelser"
   },
   "skattekonto": {
     "help_text": "Saldot och händelserna hämtas från Skatteverket och synkas automatiskt varje natt. Genomförda händelser bokförs mot 1630 Skattekonto, oftast automatiskt; det som inte kan matchas flaggas i listan. Betala in via bankgiro 5050-1055 med ditt OCR-nummer.",
