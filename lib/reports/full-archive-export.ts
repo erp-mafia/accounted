@@ -10,6 +10,9 @@ import { calculateVatDeclaration } from './vat-declaration'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { listAttachmentRowsInRange } from '@/lib/reconciliation/attachments-store'
+import { generateBokslutsbilagor } from './bokslutsbilagor'
+import { BokslutsbilagorPDF } from './bokslutsbilagor-pdf-template'
+import { renderToBuffer } from '@react-pdf/renderer'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBranding } from '@/lib/branding/service'
 import {
@@ -153,6 +156,7 @@ export async function generateFullArchive(
           const reports = await generatePeriodReports(supabase, companyId, period)
           const periodFolder = rapporterFolder.folder(periodLabel(period))!
           writeReports(periodFolder, reports)
+          await writeBokslutsbilagor(periodFolder, supabase, companyId, period.id)
         })
       )
     }
@@ -168,6 +172,7 @@ export async function generateFullArchive(
     const reports = await generatePeriodReports(supabase, companyId, period)
     const rapporter = zip.folder('rapporter')!
     writeReports(rapporter, reports)
+    await writeBokslutsbilagor(rapporter, supabase, companyId, period.id)
   }
 
   if (options.include_documents !== false) {
@@ -554,6 +559,29 @@ async function writeDocuments(
   }
 
   dokument.file('manifest.json', JSON.stringify(manifest, null, 2))
+}
+
+/**
+ * The bokslutsbilagor pärm for one period, as JSON and PDF next to the other
+ * reports. Archive runs have no acting user, so the checklist's
+ * readiness-derived items are left as stored. Best-effort like the reports:
+ * a failure is logged into the folder rather than aborting the archive.
+ */
+async function writeBokslutsbilagor(
+  folder: JSZip,
+  supabase: SupabaseClient,
+  companyId: string,
+  periodId: string
+): Promise<void> {
+  try {
+    const report = await generateBokslutsbilagor(supabase, companyId, periodId, { appVersion: currentAppVersion() })
+    if (!report) return
+    folder.file('bokslutsbilagor.json', JSON.stringify(report, null, 2))
+    const pdf = await renderToBuffer(BokslutsbilagorPDF({ report }))
+    folder.file('bokslutsbilagor.pdf', new Uint8Array(pdf))
+  } catch (err) {
+    folder.file('bokslutsbilagor.error.txt', err instanceof Error ? err.message : 'Unknown error')
+  }
 }
 
 interface ReconciliationAttachmentManifestEntry {

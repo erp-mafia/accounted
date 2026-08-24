@@ -1,9 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Scale } from 'lucide-react'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -41,6 +44,7 @@ interface ReconciliationWorkspaceProps {
 
 export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: ReconciliationWorkspaceProps) {
   const t = useTranslations('reconciliation')
+  const tParm = useTranslations('bokslutsbilagor')
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -120,6 +124,9 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
       }
       action={
         <div className="flex flex-wrap items-center justify-end gap-2">
+          <Link href="/reports/bokslutsbilagor" className={cn(QUIET_LINK_CLASS, 'mr-2')}>
+            {tParm('open_parm')}
+          </Link>
           <SegmentedControl
             value={mode}
             onChange={setMode}
