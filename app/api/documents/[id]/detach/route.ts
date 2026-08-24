@@ -31,7 +31,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         return NextResponse.json({ error: getErrorMessage(error) }, { status: 409 })
       }
       if (error.code === '42501') {
-        return NextResponse.json({ error: getErrorMessage(error) }, { status: 403 })
+        // The RPC's tenant-guard message is English (log/diagnostic text);
+        // getErrorMessage would pass it through verbatim, so map it here.
+        return NextResponse.json(
+          { error: 'Du saknar behörighet att ändra underlag i det här företaget.' },
+          { status: 403 },
+        )
       }
       log.error('detach_underlag_duplicate failed', new Error(error.message), { documentId: id })
       return NextResponse.json({ error: 'Underlaget kunde inte kopplas bort' }, { status: 500 })

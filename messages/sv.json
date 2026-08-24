@@ -5040,7 +5040,7 @@
     "remove_blocked_hint": "Behöver underlaget korrigeras: ladda upp en ny version. Den befintliga bevaras då i versionshistoriken.",
     "remove_blocked_replace_cta": "Ladda upp ny version",
     "remove_blocked_cancel_cta": "Stäng",
-    "detach_hint": "Verifikationen har fler underlag. En dubblett kan kopplas bort: filen raderas inte utan hamnar bland dina dokument.",
+    "detach_hint": "Samma fil finns uppladdad flera gånger på verifikationen. Dubbletten kan kopplas bort: filen raderas inte utan hamnar bland dina dokument.",
     "detach_cta": "Koppla bort dubblett",
     "detaching": "Kopplar bort...",
     "detach_failed": "Underlaget kunde inte kopplas bort.",

@@ -40,6 +40,7 @@ interface DocumentRecord {
   mime_type: string | null
   storage_path: string
   created_at: string
+  sha256_hash?: string | null
   download_url?: string
   referenced?: boolean
 }
@@ -215,10 +216,16 @@ export default function JournalEntryAttachments({
     setBlockedDoc(doc)
   }
 
-  // A duplicate may be detached (not deleted) when the verifikat keeps at
-  // least one other directly anchored underlag. Referenced docs (via a
-  // supplier invoice) don't count: they are not anchored to this entry.
-  const directDocCount = documents.filter((d) => !d.referenced).length
+  // A duplicate may be detached (not deleted) only when another directly
+  // anchored doc with the SAME content hash remains on the verifikat: the
+  // detach_underlag_duplicate RPC enforces sha256 equality, so the button is
+  // gated on the same condition. Referenced docs (via a supplier invoice)
+  // don't count: they are not anchored to this entry.
+  const hasDuplicateSibling = (doc: DocumentRecord) =>
+    Boolean(doc.sha256_hash) &&
+    documents.some(
+      (d) => !d.referenced && d.id !== doc.id && d.sha256_hash === doc.sha256_hash,
+    )
 
   const handleDetach = async (doc: DocumentRecord) => {
     setDetachingDocId(doc.id)
@@ -489,7 +496,9 @@ export default function JournalEntryAttachments({
             <div className="flex items-start gap-2">
               <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
               <p className="text-muted-foreground">
-                {directDocCount >= 2 ? t('detach_hint') : t('remove_blocked_hint')}
+                {blockedDoc !== null && hasDuplicateSibling(blockedDoc)
+                  ? t('detach_hint')
+                  : t('remove_blocked_hint')}
               </p>
             </div>
           </div>
@@ -498,7 +507,7 @@ export default function JournalEntryAttachments({
             <Button variant="outline" onClick={() => setBlockedDoc(null)}>
               {t('remove_blocked_cancel_cta')}
             </Button>
-            {directDocCount >= 2 && (
+            {blockedDoc !== null && hasDuplicateSibling(blockedDoc) && (
               <Button
                 variant="outline"
                 onClick={() => {

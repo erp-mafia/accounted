@@ -5040,7 +5040,7 @@
     "remove_blocked_hint": "If the document needs correction, upload a new version. The existing one is preserved in the version history.",
     "remove_blocked_replace_cta": "Upload new version",
     "remove_blocked_cancel_cta": "Close",
-    "detach_hint": "This verifikation has more than one document. A duplicate can be detached: the file is not deleted, it returns to your documents.",
+    "detach_hint": "The same file is uploaded more than once on this verifikation. The duplicate can be detached: the file is not deleted, it returns to your documents.",
     "detach_cta": "Detach duplicate",
     "detaching": "Detaching...",
     "detach_failed": "Could not detach the document.",

@@ -10,25 +10,33 @@
 --
 -- Legal analysis: BFL 5 kap 7 par requires the verifikation to reference its
 -- underlag, and BFL 7 kap 2 par protects rakenskapsinformation for 7 years.
--- Neither requires TWO copies of the same underlag to stay bound to the
--- verifikat. Detaching one copy is lawful IF AND ONLY IF at least one other
--- anchored underlag remains on the verifikat, and the detached file itself is
--- NOT deleted: it returns to the company's unlinked document pool (storage
--- object and version chain untouched), where the ordinary deleteDocument()
--- rules apply. The operation is recorded in the append-only audit_log before
--- the write, mirroring correct_entry_metadata's log-first ordering.
+-- Neither requires TWO copies of the SAME underlag to stay bound to the
+-- verifikat. That identity condition is enforced, not assumed: the detached
+-- document must have a remaining anchored sibling with an identical
+-- sha256_hash (the hash is immutable per 20260506150000), so only a
+-- byte-identical duplicate ever leaves the verifikat. Two DIFFERENT
+-- handlingar on one verifikation (faktura + betalkvitto) are each
+-- rakenskapsinformation and both stay behind the WORM guards. The detached
+-- file itself is NOT deleted: it returns to the company's unlinked document
+-- pool (storage object and version chain untouched), where the ordinary
+-- deleteDocument() rules apply. The operation is recorded in the append-only
+-- audit_log before the write, mirroring correct_entry_metadata's log-first
+-- ordering.
 --
 -- Guards, in order:
 --   1. caller must be an owner/admin/member of the company (JWT paths verify
 --      membership via caller_is_company_member; p_user_id is only honored for
 --      service-role callers, which authenticate the user application-side);
 --   2. the document must belong to the company, be the current version, and
---      be anchored to a posted journal entry of the same company;
+--      be anchored to a POSTED journal entry of the same company (a reversed
+--      or cancelled verifikat is corrected through storno, never edited);
 --   3. the entry's fiscal period must be open and unlocked, and the entry
 --      date must be after the company lock date (same rattelse window as
 --      inline rattelse: past a lock, storno is the only path);
 --   4. at least one OTHER current-version document must remain anchored to
---      the same journal entry (the verifikat never loses its last underlag);
+--      the same journal entry (the verifikat never loses its last underlag),
+--      and at least one of those siblings must carry the SAME sha256_hash
+--      (only true duplicates are detachable);
 --   5. the document must not be pinned as transactions.document_id or
 --      supplier_invoices.document_id: those pins have their own immutability
 --      rules and consumers, so a pinned doc is replaced, never detached.
@@ -57,6 +65,7 @@ DECLARE
   v_locked_at    timestamptz;
   v_lock_date    date;
   v_siblings     integer;
+  v_duplicates   integer;
   v_pinned_tx    uuid;
   v_pinned_si    uuid;
 BEGIN
@@ -78,7 +87,7 @@ BEGIN
     RAISE EXCEPTION 'Endast användare med skrivbehörighet kan koppla bort underlag.';
   END IF;
 
-  SELECT d.id, d.company_id, d.journal_entry_id, d.file_name, d.is_current_version
+  SELECT d.id, d.company_id, d.journal_entry_id, d.file_name, d.is_current_version, d.sha256_hash
     INTO v_doc
     FROM public.document_attachments d
    WHERE d.id = p_document_id
@@ -94,7 +103,7 @@ BEGIN
     RAISE EXCEPTION 'Endast den aktuella versionen av ett underlag kan kopplas bort.';
   END IF;
 
-  SELECT je.id, je.entry_date, je.fiscal_period_id, je.company_id AS entry_company_id
+  SELECT je.id, je.entry_date, je.status, je.fiscal_period_id, je.company_id AS entry_company_id
     INTO v_entry
     FROM public.journal_entries je
    WHERE je.id = v_doc.journal_entry_id
@@ -102,6 +111,10 @@ BEGIN
 
   IF NOT FOUND OR v_entry.entry_company_id <> p_company_id THEN
     RAISE EXCEPTION 'Verifikationen hittades inte.';
+  END IF;
+
+  IF v_entry.status <> 'posted' THEN
+    RAISE EXCEPTION 'Underlag kan bara kopplas bort från bokförda verifikat.';
   END IF;
 
   SELECT fp.is_closed, fp.locked_at
@@ -121,8 +134,13 @@ BEGIN
     RAISE EXCEPTION 'Bokföringen är låst t.o.m. %: underlaget kan inte kopplas bort.', v_lock_date;
   END IF;
 
-  -- The verifikat must keep at least one anchored underlag (BFL 5 kap 7 par).
-  SELECT count(*) INTO v_siblings
+  -- The verifikat must keep at least one anchored underlag (BFL 5 kap 7 par),
+  -- and only a byte-identical duplicate may leave: a remaining sibling must
+  -- carry the same immutable sha256_hash. Two different handlingar on one
+  -- verifikation are each rakenskapsinformation and both stay.
+  SELECT count(*),
+         count(*) FILTER (WHERE d.sha256_hash = v_doc.sha256_hash)
+    INTO v_siblings, v_duplicates
   FROM public.document_attachments d
   WHERE d.journal_entry_id = v_doc.journal_entry_id
     AND d.company_id = p_company_id
@@ -131,6 +149,10 @@ BEGIN
 
   IF v_siblings = 0 THEN
     RAISE EXCEPTION 'Verifikationen skulle stå utan underlag: det sista underlaget kan inte kopplas bort. Ersätt det med en ny version i stället.';
+  END IF;
+
+  IF v_duplicates = 0 THEN
+    RAISE EXCEPTION 'Underlaget är inte en dubblett: ingen identisk kopia finns kvar på verifikationen. Bara dubbletter kan kopplas bort.';
   END IF;
 
   -- A doc pinned to a bank transaction or serving as a supplier invoice's
@@ -153,10 +175,13 @@ BEGIN
 
   -- Append-only audit FIRST: the carve-out below is only ever exercised in a
   -- transaction that has already recorded who detached what from where.
+  -- company_id must be set explicitly: the audit_log SELECT policy filters on
+  -- company_id IN user_company_ids(), so a NULL row is invisible to every
+  -- reader (the exact delete_last_voucher defect 20260528120600 fixed).
   INSERT INTO public.audit_log
-    (user_id, action, table_name, record_id, actor_id, old_state, new_state, description)
+    (user_id, company_id, action, table_name, record_id, actor_id, old_state, new_state, description)
   VALUES
-    (v_actor, 'UPDATE', 'document_attachments', v_doc.id, v_actor,
+    (v_actor, p_company_id, 'UPDATE', 'document_attachments', v_doc.id, v_actor,
      jsonb_build_object('journal_entry_id', v_doc.journal_entry_id, 'company_id', p_company_id, 'file_name', v_doc.file_name),
      jsonb_build_object('journal_entry_id', NULL, 'company_id', p_company_id, 'file_name', v_doc.file_name),
      'Dubblett-underlag frånkopplat från verifikation (annat underlag kvarstår)');
