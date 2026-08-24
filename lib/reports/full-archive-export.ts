@@ -11,8 +11,6 @@ import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { listAttachmentRowsInRange } from '@/lib/reconciliation/attachments-store'
 import { generateBokslutsbilagor } from './bokslutsbilagor'
-import { BokslutsbilagorPDF } from './bokslutsbilagor-pdf-template'
-import { renderToBuffer } from '@react-pdf/renderer'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBranding } from '@/lib/branding/service'
 import {
@@ -577,6 +575,13 @@ async function writeBokslutsbilagor(
     const report = await generateBokslutsbilagor(supabase, companyId, periodId, { appVersion: currentAppVersion() })
     if (!report) return
     folder.file('bokslutsbilagor.json', JSON.stringify(report, null, 2))
+    // The renderer and the template load on demand: the template registers
+    // styles at import time, and this module is imported far more widely
+    // than the pärm is rendered (tests stub @react-pdf/renderer partially).
+    const [{ BokslutsbilagorPDF }, { renderToBuffer }] = await Promise.all([
+      import('./bokslutsbilagor-pdf-template'),
+      import('@react-pdf/renderer'),
+    ])
     const pdf = await renderToBuffer(BokslutsbilagorPDF({ report }))
     folder.file('bokslutsbilagor.pdf', new Uint8Array(pdf))
   } catch (err) {
