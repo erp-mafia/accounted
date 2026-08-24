@@ -60,7 +60,15 @@ export const POST = withRouteContext(
       })
     }
 
-    if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
+    // partially_paid is payable (#1717): an invoice stuck with a sub-krona
+    // remaining (öresavrundning) or an ordinary open partial is completed
+    // here. settleInvoicePayment's plan math and CAS guard already handle
+    // the state; only this route-level gate excluded it.
+    if (
+      invoice.status !== 'sent' &&
+      invoice.status !== 'overdue' &&
+      invoice.status !== 'partially_paid'
+    ) {
       return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
         requestId,
         details: { currentStatus: invoice.status },

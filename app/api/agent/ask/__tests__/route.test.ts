@@ -28,7 +28,8 @@ vi.mock('@/lib/agent/ask/persist', () => ({
   persistAssistantTurn: (...a: unknown[]) => persistAssistant(...a),
 }))
 
-import { POST } from '../route'
+import { POST, maxDuration } from '../route'
+import { EmptyModelAnswerError } from '@/lib/agent/ask/errors'
 
 const membershipChain = { select: () => membershipChain, eq: () => membershipChain, maybeSingle: async () => ({ data: { user_id: 'user-1' } }) }
 const supabase = { from: () => membershipChain }
@@ -48,6 +49,9 @@ beforeEach(() => {
 const body = (o: Record<string, unknown> = {}) => ({ question: 'Hur gick juli?', ...o })
 
 describe('POST /api/agent/ask', () => {
+  it('declares a 300s function budget so a tool-loop answer is not killed mid-turn', () => {
+    expect(maxDuration).toBe(300)
+  })
   it('401 when unauthenticated', async () => {
     requireAuthMock.mockResolvedValue({ user: null, supabase, error: NextResponse.json({ error: 'x' }, { status: 401 }) })
     expect((await POST(createMockRequest('/api/agent/ask', { method: 'POST', body: body() }))).status).toBe(401)
@@ -82,6 +86,15 @@ describe('POST /api/agent/ask', () => {
     expect(status).toBe(503)
     expect(b.code).toBe('ai_unconfigured')
     expect(answer).not.toHaveBeenCalled()
+  })
+
+  it('502s with a Swedish message when the model answers empty (the silent-stop bug)', async () => {
+    answer.mockRejectedValue(new EmptyModelAnswerError('claude-sonnet-5'))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }))
+    const { status, body: b } = await parseJsonResponse<{ error: string; code: string }>(res)
+    expect(status).toBe(502)
+    expect(b.error).toBe('Assistenten gav inget svar. Försök igen.')
+    expect(b.code).toBe('empty_model_answer')
   })
 
   it('stateless (no persist): never touches the conversation tables', async () => {
@@ -151,6 +164,18 @@ describe('POST /api/agent/ask', () => {
       expect(res.status).toBe(404)
       expect(persistUser).not.toHaveBeenCalled()
       expect(answer).not.toHaveBeenCalled()
+      expect(persistAssistant).not.toHaveBeenCalled()
+    })
+
+    it('502s on an empty answer, keeps the question, never persists a blank assistant turn', async () => {
+      answer.mockRejectedValue(new EmptyModelAnswerError('claude-sonnet-5'))
+      const res = await POST(createMockRequest('/x', { method: 'POST', body: body({ persist: true }) }))
+      const { status, body: b } = await parseJsonResponse<{ error: string }>(res)
+      expect(status).toBe(502)
+      expect(b.error).toBe('Assistenten gav inget svar. Försök igen.')
+      // The user turn is written before the model call (retry keeps the
+      // question), but no empty assistant turn may ever land in the thread.
+      expect(persistUser).toHaveBeenCalled()
       expect(persistAssistant).not.toHaveBeenCalled()
     })
 

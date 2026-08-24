@@ -115,6 +115,7 @@ export function deriveNextStep(input: NextStepInput): NextStep {
 export type ForvalChip =
   | { kind: 'doc_type'; documentType: 'proforma' | 'delivery_note' }
   | { kind: 'currency'; currency: string }
+  | { kind: 'invoice_date'; date: string }
   | { kind: 'due_days'; days: number; date: string }
   | { kind: 'due_date'; date: string }
   | { kind: 'received'; date: string }
@@ -152,6 +153,13 @@ export function deriveForvalChips(input: ForvalChipsInput): ForvalChip[] {
     chips.push({ kind: 'doc_type', documentType: input.documentType })
   }
   chips.push({ kind: 'currency', currency: input.currency })
+  // The invoice date always surfaces: it silently defaults to today inside
+  // the collapsed panel, and especially in self-billed mode (where the
+  // counterparty's issue date must be transcribed) an invisible default
+  // registers wrong invoices (issue #1820).
+  if (input.invoiceDate) {
+    chips.push({ kind: 'invoice_date', date: input.invoiceDate })
+  }
   if (input.dueDate) {
     const days = dueDays(input.invoiceDate, input.dueDate)
     if (days !== null && days >= 0) chips.push({ kind: 'due_days', days, date: input.dueDate })

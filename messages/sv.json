@@ -3655,6 +3655,7 @@
     "remove_row_aria_named": "Ta bort rad: {description}",
     "validation_price_invalid": "Ange ett à-pris",
     "chip_currency": "Valuta {currency}",
+    "chip_invoice_date": "Fakturadatum {date}",
     "chip_due_days": "Förfaller {days} dagar ({date})",
     "chip_due_date": "Förfaller {date}",
     "chip_received": "Mottagen {date}",

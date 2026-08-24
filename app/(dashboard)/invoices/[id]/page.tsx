@@ -1540,7 +1540,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('mark_as_sent')}
             </Button>
           )}
-          {(invoice.status === 'sent' || invoice.status === 'overdue') && isRealInvoice && !isCreditNote && (
+          {/* partially_paid included (#1717): completes a stuck partial, e.g.
+              a sub-krona öresavrundning remaining, via the same dialog. */}
+          {(invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'partially_paid') && isRealInvoice && !isCreditNote && (
             <Button
               onClick={() => setShowPaymentDialog(true)}
               disabled={isUpdating || !canWrite}

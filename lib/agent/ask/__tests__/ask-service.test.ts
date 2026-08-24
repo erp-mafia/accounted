@@ -16,6 +16,7 @@ vi.mock('../snapshot', () => ({
 }))
 
 import { answerAssistantQuestion } from '../ask-service'
+import { EmptyModelAnswerError } from '../errors'
 
 function supabaseWith(company: { name?: string; entity_type?: string } | null): SupabaseClient {
   const chain = {
@@ -114,6 +115,22 @@ describe('answerAssistantQuestion', () => {
     // snapshot injected as grounding
     expect(call.prompt).toContain('Företagets nuläge')
     expect(call.prompt).toContain('Status: momsregistrerad (momsperiod: quarterly).')
+  })
+
+  it('defaults maxTokens to 5400 (the streaming chat reply ceiling; 1500 caused empty max_tokens answers)', async () => {
+    await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
+    expect(generateText.mock.calls[0][0].maxTokens).toBe(5400)
+  })
+
+  it('rejects with the typed empty-answer error when the model returns no visible text', async () => {
+    generateText.mockResolvedValue({ text: '  \n', model: 'claude-sonnet-5', usage: {} })
+    const promise = answerAssistantQuestion({
+      supabase: supabaseWith(null),
+      companyId: 'c1',
+      question: 'Hej?',
+    })
+    await expect(promise).rejects.toBeInstanceOf(EmptyModelAnswerError)
+    await expect(promise).rejects.toMatchObject({ code: 'empty_model_answer' })
   })
 
   it('honours a custom maxSteps', async () => {

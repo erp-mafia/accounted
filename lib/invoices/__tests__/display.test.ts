@@ -1,5 +1,24 @@
 import { describe, it, expect } from 'vitest'
-import { isTextLikeLine } from '@/lib/invoices/display'
+import { creditConfirmNumber, isTextLikeLine } from '@/lib/invoices/display'
+
+describe('creditConfirmNumber', () => {
+  it('uses our own invoice number when present', () => {
+    expect(
+      creditConfirmNumber({ invoice_number: 'F-2026010', external_invoice_number: null }),
+    ).toBe('F-2026010')
+  })
+
+  it('falls back to the external number for self-billed invoices (issue #1820)', () => {
+    expect(
+      creditConfirmNumber({ invoice_number: null, external_invoice_number: 'SB-2026-17' }),
+    ).toBe('SB-2026-17')
+  })
+
+  it('returns null when the invoice carries no number at all', () => {
+    expect(creditConfirmNumber({ invoice_number: null, external_invoice_number: null })).toBeNull()
+    expect(creditConfirmNumber({})).toBeNull()
+  })
+})
 
 describe('isTextLikeLine', () => {
   it('is true for explicit text rows regardless of amounts', () => {

@@ -185,6 +185,14 @@ export default function AskConsole({
           conversationIdRef.current = convId
           onConversationCreated?.(convId)
         }
+        if (answer.trim().length === 0) {
+          // Belt and braces with the server's 502 guard: a 200 whose answer is
+          // empty must not append an invisible bubble ("Tänker" collapses and
+          // nothing appears). Same message the server sends on 502; the thread
+          // id (if one was created) is kept above so a retry lands in it.
+          setError('Assistenten gav inget svar. Försök igen.')
+          return
+        }
         setMessages((prev) => [...prev, { role: 'assistant', text: answer }])
       } catch {
         setError('Kunde inte nå assistenten. Kontrollera anslutningen och försök igen.')
