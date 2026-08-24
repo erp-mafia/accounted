@@ -88,8 +88,8 @@ function bankBridge(status: Awaited<ReturnType<typeof getBankReconciliationStatu
   const lines: BridgeLine[] = [
     {
       key: 'bank_transactions',
-      label_sv: 'Banktransaktioner i perioden',
-      label_en: 'Bank transactions in the period',
+      label_sv: 'Banktransaktioner i perioden (netto)',
+      label_en: 'Bank transactions in the period (net)',
       amount: status.bank_transaction_total,
       count: null,
       items_bucket: null,

@@ -7815,7 +7815,7 @@
     "empty_connect_skv": "Connect Skatteverket",
     "load_failed": "Could not load the reconciliation. Try again in a moment.",
     "tile_external_skv": "Balance at Skatteverket",
-    "tile_external_bank": "Bank transactions in the period",
+    "tile_external_bank": "Bank transactions in the period (net)",
     "tile_ledger": "Booked on {account}",
     "tile_ledger_bank": "Booked on {account} in the period",
     "tile_difference": "Difference",

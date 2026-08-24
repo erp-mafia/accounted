@@ -7815,7 +7815,7 @@
     "empty_connect_skv": "Koppla Skatteverket",
     "load_failed": "Kunde inte hämta avstämningen. Försök igen om en stund.",
     "tile_external_skv": "Saldo hos Skatteverket",
-    "tile_external_bank": "Banktransaktioner i perioden",
+    "tile_external_bank": "Banktransaktioner i perioden (netto)",
     "tile_ledger": "Bokfört på {account}",
     "tile_ledger_bank": "Bokfört på {account} i perioden",
     "tile_difference": "Differens",
