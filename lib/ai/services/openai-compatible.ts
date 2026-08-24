@@ -13,6 +13,7 @@ import { capabilitiesFor, type ResolvedAiConfig } from '../config'
 import { extractJsonObject } from '../json'
 import { rasterizePdf } from '../rasterize-pdf'
 import type {
+  AiChatTurn,
   AiDocumentInput,
   AiService,
   AiTier,
@@ -28,6 +29,16 @@ import type {
 } from '../types'
 
 const DEFAULT_MAX_STEPS = 4
+
+/** Earlier turns as message turns, then the prompt as the final user message. */
+function messagesWithHistory(prompt: string, history: AiChatTurn[]): ModelMessage[] {
+  const prior: ModelMessage[] = history.map((t) =>
+    t.role === 'assistant'
+      ? { role: 'assistant', content: t.text }
+      : { role: 'user', content: t.text },
+  )
+  return [...prior, { role: 'user', content: prompt }]
+}
 
 /**
  * Map our provider-agnostic tool defs onto the AI SDK's tool() shape. The SDK
@@ -163,7 +174,12 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
       const result = await generateText({
         model: provider(model),
         ...(req.system ? { system: req.system } : {}),
-        prompt: req.prompt,
+        // The SDK takes either `prompt` or `messages`, never both: a plain
+        // single-turn call keeps `prompt`; a conversation sends the earlier
+        // turns as real messages with the prompt as the final user turn.
+        ...(req.history && req.history.length > 0
+          ? { messages: messagesWithHistory(req.prompt, req.history) }
+          : { prompt: req.prompt }),
         maxOutputTokens: req.maxTokens,
         ...(tools ? { tools, stopWhen: stepCountIs(req.maxSteps ?? DEFAULT_MAX_STEPS) } : {}),
       })

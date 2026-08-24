@@ -20,10 +20,12 @@ vi.mock('@/lib/ai', () => ({ getAiStatus: () => aiStatus() }))
 const answer = vi.fn()
 vi.mock('@/lib/agent/ask/ask-service', () => ({ answerAssistantQuestion: (...a: unknown[]) => answer(...a) }))
 const resolveConv = vi.fn()
+const loadHistory = vi.fn()
 const persistUser = vi.fn()
 const persistAssistant = vi.fn()
 vi.mock('@/lib/agent/ask/persist', () => ({
   resolveChatConversation: (...a: unknown[]) => resolveConv(...a),
+  loadChatHistory: (...a: unknown[]) => loadHistory(...a),
   persistUserTurn: (...a: unknown[]) => persistUser(...a),
   persistAssistantTurn: (...a: unknown[]) => persistAssistant(...a),
 }))
@@ -42,6 +44,7 @@ beforeEach(() => {
   aiStatus.mockReturnValue({ configured: true, assistantAvailable: false, provider: 'openai-compatible' })
   answer.mockResolvedValue({ answer: 'Svar', model: 'qwen3.8' })
   resolveConv.mockResolvedValue({ ok: true, conversationId: 'conv-9', created: true })
+  loadHistory.mockResolvedValue([])
   persistUser.mockResolvedValue(undefined)
   persistAssistant.mockResolvedValue(undefined)
 })
@@ -130,6 +133,37 @@ describe('POST /api/agent/ask', () => {
       expect(persistUser).toHaveBeenCalledWith(supabase, 'conv-9', 'Hur gick juli?')
       expect(answer).toHaveBeenCalled()
       expect(persistAssistant).toHaveBeenCalledWith(supabase, 'conv-9', 'Svar')
+      // A thread created by this very request has no earlier turns to load.
+      expect(loadHistory).not.toHaveBeenCalled()
+      expect(answer.mock.calls[0][0].history).toEqual([])
+    })
+
+    it('a resumed thread answers with its earlier turns, read before the new question is written', async () => {
+      resolveConv.mockResolvedValue({ ok: true, conversationId: 'conv-7', created: false })
+      const history = [
+        { role: 'user', text: 'Vad är min största utgift?' },
+        { role: 'assistant', text: '12 345 kr på 5010.' },
+      ]
+      const order: string[] = []
+      loadHistory.mockImplementation(async () => {
+        order.push('load')
+        return history
+      })
+      persistUser.mockImplementation(async () => {
+        order.push('persist')
+      })
+      const res = await POST(
+        createMockRequest('/x', {
+          method: 'POST',
+          body: body({ persist: true, conversation_id: '11111111-1111-4111-8111-111111111111', question: 'Och förra månaden?' }),
+        }),
+      )
+      expect(res.status).toBe(200)
+      expect(loadHistory).toHaveBeenCalledWith(supabase, 'conv-7')
+      expect(order).toEqual(['load', 'persist'])
+      expect(answer).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: 'conv-7', question: 'Och förra månaden?', history }),
+      )
     })
 
     it('resumes with a supplied conversation_id', async () => {

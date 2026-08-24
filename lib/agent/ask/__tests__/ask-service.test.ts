@@ -133,6 +133,30 @@ describe('answerAssistantQuestion', () => {
     await expect(promise).rejects.toMatchObject({ code: 'empty_model_answer' })
   })
 
+  it('forwards the earlier turns as history so a follow-up can refer back', async () => {
+    const history = [
+      { role: 'user' as const, text: 'Vad är min största utgift?' },
+      { role: 'assistant' as const, text: '12 345 kr på 5010.' },
+    ]
+    await answerAssistantQuestion({
+      supabase: supabaseWith(null),
+      companyId: 'c1',
+      userId: 'u1',
+      conversationId: 'conv-1',
+      question: 'Och förra månaden?',
+      history,
+    })
+    const call = generateText.mock.calls[0][0]
+    expect(call.history).toEqual(history)
+    // The question itself stays the final prompt, not folded into history.
+    expect(call.prompt).toContain('Fråga: Och förra månaden?')
+  })
+
+  it('sends no history key at all for a fresh thread or a one-off ask', async () => {
+    await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?', history: [] })
+    expect('history' in generateText.mock.calls[0][0]).toBe(false)
+  })
+
   it('honours a custom maxSteps', async () => {
     buildLedgerTools.mockReturnValue([
       { name: 'gnubok_get_vat_report', description: 'd', jsonSchema: {}, execute: vi.fn() },
