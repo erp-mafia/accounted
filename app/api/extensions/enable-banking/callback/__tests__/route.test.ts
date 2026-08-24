@@ -65,6 +65,7 @@ vi.mock('@/lib/cash-accounts/service', () => ({
 vi.stubEnv('NEXT_PUBLIC_APP_URL', 'http://localhost:3000')
 
 import { GET } from '../route'
+import { eventBus } from '@/lib/events/bus'
 
 function makeRequest(params: Record<string, string>) {
   const url = new URL('http://localhost:3000/api/extensions/enable-banking/callback')
@@ -122,7 +123,9 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(response.status).toBe(307)
     const location = response.headers.get('location') || ''
     expect(location).toContain('/settings/banking?')
-    expect(location).toContain('bank_error=invalid_state')
+    // The raw 'invalid_state' token used to be shown verbatim: the banner now
+    // carries the Swedish explanation instead (issue #1716).
+    expect(decodeURIComponent(location)).toContain('Starta bankkopplingen på nytt')
   })
 
   it('writes pending_selection and streams a finalizing page that redirects to the picker', async () => {
@@ -1085,7 +1088,9 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(response.status).toBe(307)
     const location = response.headers.get('location') || ''
     expect(location).toContain('/settings/banking?')
-    expect(location).toContain('bank_error=User%20cancelled')
+    // The user-facing message is Swedish; a cancel is an expected outcome, so
+    // the raw provider text is not echoed back.
+    expect(decodeURIComponent(location)).toContain('Anslutningen avbröts hos banken')
     // No state → no DB cleanup attempted
     expect(mockFrom).not.toHaveBeenCalled()
   })
@@ -1104,7 +1109,7 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(response.status).toBe(307)
     const location = response.headers.get('location') || ''
     expect(location).toContain('/settings/banking?')
-    expect(location).toContain('bank_error=Denied%20data%20sharing%20consent')
+    expect(decodeURIComponent(location)).toContain('Anslutningen avbröts hos banken')
     // Should clean up the pending row
     expect(mockFrom).toHaveBeenCalledWith('bank_connections')
   })
@@ -1138,7 +1143,9 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     const location = response.headers.get('location') || ''
     // URLSearchParams encodes spaces as '+', unlike the encodeURIComponent
     // fallback used when no matching row exists.
-    expect(location).toContain('bank_error=User+cancelled')
+    expect(decodeURIComponent(location.replace(/\+/g, ' '))).toContain(
+      'Anslutningen avbröts hos banken'
+    )
     expect(deleteCalls).toHaveLength(1)
     expect(updateCalls).toHaveLength(0)
   })
@@ -1172,6 +1179,10 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(deleteCalls).toHaveLength(0)
     expect(updateCalls).toHaveLength(1)
     expect(updateCalls[0].status).toBe('expired')
+    // The stored error_message is user-facing on the connection card: Swedish
+    // explanation with the raw provider description surfaced in parentheses.
+    expect(updateCalls[0].error_message).toContain('inloggningssession')
+    expect(updateCalls[0].error_message).toContain('Session expired at ASPSP')
   })
 
   it('forwards bank_error_code and psu_type when the denied state matches a pending connection', async () => {
@@ -1190,8 +1201,9 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(response.status).toBe(307)
     const location = response.headers.get('location') || ''
     expect(location).toContain('/settings/banking?')
-    // error_description is null for server_error, so the code doubles as message
-    expect(location).toContain('bank_error=server_error')
+    // A bare server_error used to surface as the literal token; the banner
+    // now gets the Swedish explanation (issue #1716).
+    expect(decodeURIComponent(location.replace(/\+/g, ' '))).toContain('fel på bankens sida')
     expect(location).toContain('bank_name=Handelsbanken')
     // The code is forwarded for every error, not just access_denied, together
     // with the connection's psu_type — the settings page keys the Handelsbanken
@@ -1206,7 +1218,7 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(response.status).toBe(307)
     const location = response.headers.get('location') || ''
     expect(location).toContain('/settings/banking?')
-    expect(location).toContain('bank_error=missing_parameters')
+    expect(decodeURIComponent(location)).toContain('ofullständigt svar')
   })
 
   it('redirects with error when code fails format validation', async () => {
@@ -1215,6 +1227,85 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(response.status).toBe(307)
     const location = response.headers.get('location') || ''
     expect(location).toContain('/settings/banking?')
-    expect(location).toContain('bank_error=invalid_code_format')
+    expect(decodeURIComponent(location)).toContain('ogiltigt svar')
+  })
+
+  it('emits a durable consent_denied audit event when the bank denies with a matching row', async () => {
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+    try {
+      mockFrom.mockImplementation(() =>
+        mockChain({
+          data: {
+            id: 'conn-1',
+            user_id: 'user-1',
+            company_id: 'company-1',
+            bank_name: 'Handelsbanken',
+            psu_type: 'business',
+            status: 'pending',
+          },
+          error: null,
+        })
+      )
+
+      const response = await GET(makeRequest({
+        error: 'server_error',
+        error_description: 'ASPSP authorization failed',
+        state: 'pending-state',
+      }))
+
+      expect(response.status).toBe(307)
+      expect(emitSpy).toHaveBeenCalledWith({
+        type: 'bank_connection.consent_denied',
+        payload: {
+          connectionId: 'conn-1',
+          bankName: 'Handelsbanken',
+          psuType: 'business',
+          errorCode: 'server_error',
+          errorDescription: 'ASPSP authorization failed',
+          priorStatus: 'pending',
+          userId: 'user-1',
+          companyId: 'company-1',
+        },
+      })
+    } finally {
+      emitSpy.mockRestore()
+    }
+  })
+
+  it('emits a durable finalize_failed audit event when the session exchange fails', async () => {
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+    try {
+      mockFrom.mockImplementation(() =>
+        mockChain({
+          data: {
+            id: 'conn-1',
+            user_id: 'user-1',
+            company_id: 'company-1',
+            bank_name: 'TestBank',
+            status: 'pending',
+          },
+          error: null,
+        })
+      )
+      mockCreateSession.mockRejectedValue(new Error('upstream timeout'))
+
+      const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+      expect(response.status).toBe(200)
+      await response.text()
+
+      expect(emitSpy).toHaveBeenCalledWith({
+        type: 'bank_connection.finalize_failed',
+        payload: {
+          connectionId: 'conn-1',
+          bankName: 'TestBank',
+          reason: 'upstream timeout',
+          priorStatus: 'pending',
+          userId: 'user-1',
+          companyId: 'company-1',
+        },
+      })
+    } finally {
+      emitSpy.mockRestore()
+    }
   })
 })
