@@ -9,6 +9,7 @@
 
 import { Fragment, createContext, useContext } from 'react'
 import { cn, formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
@@ -225,6 +226,138 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
         <span className="font-medium">Totalt</span>
         <span className="tabular-nums font-medium text-right">{money(data.total, (data.currency as string) || 'SEK')}</span>
       </div>
+    </div>
+  )
+}
+
+type InvoiceUpdateLine = {
+  line_type?: string
+  description?: string
+  quantity?: number
+  unit?: string
+  unit_price?: number
+  line_total?: number
+  vat_rate?: number
+  revenue_account?: string | null
+}
+
+/**
+ * Per-line rows for the update-invoice preview: konto (revenue_account
+ * override or the VAT-derived default) and momssats are rendered on every
+ * product line, because a full-replace edit that drops them silently rebooks
+ * revenue: exactly what the approver is here to catch (issue #1642).
+ */
+function InvoiceUpdateLineRows({ lines, currency }: { lines: InvoiceUpdateLine[]; currency: string }) {
+  const accountNames = useContext(AccountNamesContext)
+  return (
+    <div className="space-y-1">
+      {lines.map((line, i) => {
+        if (line.line_type === 'text') {
+          return (
+            <div key={i} className="text-xs text-muted-foreground italic truncate">
+              {line.description || ''}
+            </div>
+          )
+        }
+        const account = line.revenue_account || null
+        const lineTotal =
+          typeof line.line_total === 'number'
+            ? line.line_total
+            : typeof line.quantity === 'number' && typeof line.unit_price === 'number'
+              ? roundOre(line.quantity * line.unit_price)
+              : null
+        return (
+          <div key={i} className="flex justify-between gap-4 text-xs">
+            <span className="truncate">
+              {line.description}
+              {typeof line.quantity === 'number' ? ` (${line.quantity} ${line.unit ?? ''})` : ''}
+              <span className="text-muted-foreground">
+                {' '}· {account ? `${account}${accountNames[account] ? ` ${accountNames[account]}` : ''}` : 'standardkonto'}
+                {typeof line.vat_rate === 'number' ? ` · ${line.vat_rate} %` : ''}
+              </span>
+            </span>
+            <span className="font-mono tabular-nums whitespace-nowrap">
+              {lineTotal === null ? '-' : formatCurrency(lineTotal, currency)}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+const UPDATE_INVOICE_HEADER_LABELS: Array<[string, string]> = [
+  ['invoice_date', 'Datum'],
+  ['due_date', 'Förfallodatum'],
+  ['delivery_date', 'Leveransdatum'],
+  ['your_reference', 'Er referens'],
+  ['our_reference', 'Vår referens'],
+  ['notes', 'Anteckningar'],
+]
+
+function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
+  const changes = (data.changes as Record<string, unknown> | undefined) ?? {}
+  const currency = (data.currency as string) || 'SEK'
+  // Enriched preview lines are staged since issue #1642; older staged ops
+  // fall back to the raw changes payload so their lines still render.
+  const newLines =
+    (data.items as InvoiceUpdateLine[] | undefined) ??
+    (changes.items as InvoiceUpdateLine[] | undefined) ??
+    []
+  const currentLines = (data.current_items as InvoiceUpdateLine[] | undefined) ?? []
+  const itemsReplace = Boolean(data.items_replace ?? changes.items)
+  const changedHeader = UPDATE_INVOICE_HEADER_LABELS.filter(([key]) => key in changes)
+
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        <span className="text-muted-foreground">Faktura</span>
+        <span>{String(data.invoice_number ?? 'Utkast')}</span>
+        {data.customer_name != null && (
+          <>
+            <span className="text-muted-foreground">Kund</span>
+            <span className="truncate">{String(data.customer_name)}</span>
+          </>
+        )}
+        {changedHeader.map(([key, label]) => (
+          <Fragment key={key}>
+            <span className="text-muted-foreground">{label}</span>
+            <span className="truncate">{changes[key] === null ? 'Tas bort' : String(changes[key])}</span>
+          </Fragment>
+        ))}
+        {'default_dimensions' in changes && (
+          <>
+            <span className="text-muted-foreground">Dimensioner</span>
+            <span className="font-mono text-xs truncate">{JSON.stringify(changes.default_dimensions)}</span>
+          </>
+        )}
+      </div>
+      {itemsReplace && (
+        <>
+          {currentLines.length > 0 && (
+            <div className="border-t pt-2">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">Nuvarande rader</p>
+              <InvoiceUpdateLineRows lines={currentLines} currency={currency} />
+            </div>
+          )}
+          <div className="border-t pt-2">
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+              Nya rader (ersätter alla rader)
+            </p>
+            <InvoiceUpdateLineRows lines={newLines} currency={currency} />
+          </div>
+          {(typeof data.subtotal === 'number' || typeof data.total === 'number') && (
+            <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
+              <span className="text-muted-foreground">Netto</span>
+              <span className="tabular-nums text-right">{money(data.subtotal, currency)}</span>
+              <span className="text-muted-foreground">Moms</span>
+              <span className="tabular-nums text-right">{money(data.vat_amount, currency)}</span>
+              <span className="font-medium">Totalt</span>
+              <span className="tabular-nums font-medium text-right">{money(data.total, currency)}</span>
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -555,6 +688,8 @@ export function OperationPreview({ op }: { op: OperationPreviewInput }) {
         return <CustomerPreview data={op.preview_data} />
       case 'create_invoice':
         return <InvoicePreview data={op.preview_data} />
+      case 'update_invoice':
+        return <UpdateInvoicePreview data={op.preview_data} />
       case 'create_transaction':
         return <CreateTransactionPreview data={op.preview_data} />
       case 'create_voucher':

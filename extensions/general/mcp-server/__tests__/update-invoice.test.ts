@@ -16,11 +16,20 @@ function draftInvoice(overrides: Record<string, unknown> = {}) {
     journal_entry_id: null,
     is_self_billed: false,
     credited_invoice_id: null,
+    customer_id: 'cust-1',
     total: 12500,
     currency: 'SEK',
     customer: { name: 'Acme AB' },
     ...overrides,
   }
+}
+
+const CUSTOMER = {
+  id: 'cust-1',
+  name: 'Acme AB',
+  customer_type: 'swedish_business',
+  vat_number_validated: false,
+  default_payment_terms: 30,
 }
 
 describe('gnubok_update_invoice: registration', () => {
@@ -189,9 +198,26 @@ describe('gnubok_update_invoice: validation and staging', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(2, 'pending_operations')
   })
 
-  it('stages a full item replace with the replace marker in the preview', async () => {
+  it('stages a full item replace with the replace marker and a rebooking-readable preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: draftInvoice() })
+    enqueue({ data: CUSTOMER })
+    // The lines being replaced, for the old-vs-new approval preview.
+    enqueue({
+      data: [
+        {
+          line_type: 'product',
+          description: 'Konsultation',
+          quantity: 1,
+          unit: 'tim',
+          unit_price: 1000,
+          line_total: 1000,
+          vat_rate: 25,
+          article_id: null,
+          revenue_account: '3041',
+        },
+      ],
+    })
     enqueue({ data: { id: 'op-invoice-2' } })
 
     const result = (await tool().execute(
@@ -211,6 +237,111 @@ describe('gnubok_update_invoice: validation and staging', () => {
       invoice_id: INVOICE_ID,
       items_replace: true,
       item_count: 1,
+      subtotal: 2000,
+      vat_amount: 500,
+      total: 2500,
+      currency: 'SEK',
     })
+    // Per-line revenue_account and vat_rate are in the preview (issue #1642):
+    // the approver must be able to see a rebooking before approving.
+    const items = (result.preview as { items: Array<Record<string, unknown>> }).items
+    expect(items[0]).toMatchObject({
+      description: 'Konsultation',
+      quantity: 2,
+      line_total: 2000,
+      vat_rate: 25,
+      revenue_account: null,
+    })
+    const currentItems = (result.preview as { current_items: Array<Record<string, unknown>> }).current_items
+    expect(currentItems[0]).toMatchObject({
+      description: 'Konsultation',
+      quantity: 1,
+      vat_rate: 25,
+      revenue_account: '3041',
+    })
+  })
+
+  it('keeps an explicit revenue_account on a full-replace line (round trip, no silent drop)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice() })
+    enqueue({ data: CUSTOMER })
+    enqueue({ data: [] }) // current invoice_items
+    enqueue({ data: { id: 'op-invoice-3' } })
+
+    const result = (await tool().execute(
+      {
+        invoice_id: INVOICE_ID,
+        items: [
+          {
+            description: 'Deposition',
+            quantity: 1,
+            unit: 'st',
+            unit_price: 5000,
+            vat_rate: 0,
+            revenue_account: '2421',
+          },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: { changes: { items: Array<Record<string, unknown>> } } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes.items[0]).toMatchObject({ revenue_account: '2421', vat_rate: 0 })
+  })
+
+  it('normalizes a free-text row to the zero shape instead of rejecting it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice() })
+    enqueue({ data: CUSTOMER })
+    enqueue({ data: [] }) // current invoice_items
+    enqueue({ data: { id: 'op-invoice-4' } })
+
+    const result = (await tool().execute(
+      {
+        invoice_id: INVOICE_ID,
+        items: [
+          { line_type: 'text', description: 'Avser projekt Almgren', quantity: 0 },
+          { description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      preview: { subtotal: number; total: number; changes: { items: Array<Record<string, unknown>> } }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes.items[0]).toMatchObject({
+      line_type: 'text',
+      description: 'Avser projekt Almgren',
+      quantity: 0,
+      unit: '',
+      unit_price: 0,
+    })
+    // Text rows are excluded from totals.
+    expect(result.preview.subtotal).toBe(1000)
+    expect(result.preview.total).toBe(1250)
+  })
+
+  it('refuses at staging a VAT rate outside the customer permitted set', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice() })
+    enqueue({ data: CUSTOMER })
+
+    await expect(
+      tool().execute(
+        {
+          invoice_id: INVOICE_ID,
+          items: [{ description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 13 }],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/not allowed/i)
   })
 })

@@ -251,12 +251,14 @@ import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoic
 // ── Actor context ────────────────────────────────────────────
 
 type StagedInvoiceLineInput = {
+  /** 'text' = free-text row: description only, amounts ignored and never booked. */
+  line_type?: 'product' | 'text'
   description?: string
   quantity: number
   unit?: string
   unit_price?: number
   vat_rate?: number
-  article_id?: string
+  article_id?: string | null
   revenue_account?: string | null
   dimensions?: unknown
 }
@@ -5239,7 +5241,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_invoices',
     title: 'List Customer Invoices',
-    description: 'List invoices for the active company, newest first. Optional status filter.',
+    description: 'List invoices for the active company, newest first. Optional status filter. Line items via gnubok_get_invoice.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5306,6 +5308,174 @@ export const tools: McpTool[] = [
         total_count: total,
         has_more: hasMore,
         ...(hasMore ? { next_offset: offset + invoices.length } : {}),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_get_invoice',
+    title: 'Get Invoice With Line Items',
+    description: 'One invoice with its full line items (article_id, revenue_account, vat_rate, ROT/RUT, accrual, dimensions). Call before gnubok_update_invoice: its items input is a FULL REPLACE, so start from these lines to avoid dropping fields.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoice_id: { type: 'string', description: 'UUID of the invoice, from gnubok_list_invoices.' },
+      },
+      required: ['invoice_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoice_id: { type: 'string' },
+        invoice_number: { type: ['string', 'null'], description: 'NULL on drafts: assigned when the invoice is issued.' },
+        status: { type: 'string' },
+        document_type: { type: 'string' },
+        customer_id: { type: 'string' },
+        customer_name: { type: ['string', 'null'] },
+        invoice_date: { type: 'string' },
+        due_date: { type: ['string', 'null'] },
+        delivery_date: { type: ['string', 'null'] },
+        currency: { type: 'string' },
+        subtotal: { type: ['number', 'null'] },
+        vat_amount: { type: ['number', 'null'] },
+        total: { type: ['number', 'null'] },
+        vat_treatment: { type: ['string', 'null'] },
+        your_reference: { type: ['string', 'null'] },
+        our_reference: { type: ['string', 'null'] },
+        notes: { type: ['string', 'null'] },
+        default_dimensions: { type: 'object', additionalProperties: { type: 'string' } },
+        is_editable_draft: {
+          type: 'boolean',
+          description: 'True when gnubok_update_invoice can edit this invoice (draft, no verifikat, not self-billed, not a credit note).',
+        },
+        items: {
+          type: 'array',
+          description: 'Ordered line items. For a full-replace update, feed these back (with your edits) as gnubok_update_invoice items so no field is dropped.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              invoice_item_id: { type: 'string' },
+              line_type: { type: 'string', description: 'product, or text (free-text row without amounts)' },
+              description: { type: 'string' },
+              quantity: { type: 'number' },
+              unit: { type: 'string' },
+              unit_price: { type: 'number' },
+              line_total: { type: 'number' },
+              vat_rate: { type: 'number' },
+              vat_amount: { type: 'number' },
+              article_id: { type: ['string', 'null'] },
+              revenue_account: {
+                type: ['string', 'null'],
+                description: 'Posting-account override this line books to; NULL books the VAT-derived default account.',
+              },
+              deduction_type: { type: ['string', 'null'], description: 'rot or rut' },
+              deduction_amount: { type: 'number' },
+              labor_hours: { type: ['number', 'null'] },
+              work_type: { type: ['string', 'null'] },
+              housing_designation: { type: ['string', 'null'] },
+              apartment_number: { type: ['string', 'null'] },
+              brf_org_number: { type: ['string', 'null'] },
+              accrual_period_start: { type: ['string', 'null'] },
+              accrual_period_end: { type: ['string', 'null'] },
+              accrual_balance_account: { type: ['string', 'null'] },
+              dimensions: { type: 'object', additionalProperties: { type: 'string' } },
+            },
+            required: ['invoice_item_id', 'line_type', 'description', 'quantity', 'unit', 'unit_price', 'vat_rate'],
+          },
+        },
+        item_count: { type: 'number' },
+      },
+      required: ['invoice_id', 'status', 'items', 'item_count'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    // The read half of the update round trip: reachable from the
+    // gnubok_list_invoices / gnubok_update_invoice descriptions and via
+    // gnubok_search_tools; kept out of the default catalog (context budget).
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase) {
+      const invoiceId = args.invoice_id as string
+      if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
+
+      const { data: invoice, error } = await supabase
+        .from('invoices')
+        .select(
+          'id, invoice_number, status, document_type, customer_id, journal_entry_id, is_self_billed, credited_invoice_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, vat_treatment, your_reference, our_reference, notes, default_dimensions, customers(name)',
+        )
+        .eq('id', invoiceId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (error) throw new Error(`Database error: ${error.message}`)
+      if (!invoice) throw new Error('Invoice not found. Use gnubok_list_invoices to find valid IDs.')
+
+      // deduction_personnummer_* is deliberately NOT selected: staged payloads
+      // and tool results never carry personnummer data, only line-level claim
+      // fields (hours, work type, property) needed for a lossless round trip.
+      const { data: itemRows, error: itemsError } = await supabase
+        .from('invoice_items')
+        .select(
+          'id, line_type, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions',
+        )
+        .eq('invoice_id', invoiceId)
+        .order('sort_order', { ascending: true })
+
+      if (itemsError) throw new Error(`Database error: ${itemsError.message}`)
+
+      const items = (itemRows ?? []).map((row: Record<string, unknown>) => ({
+        invoice_item_id: row.id,
+        line_type: row.line_type ?? 'product',
+        description: row.description,
+        quantity: row.quantity,
+        unit: row.unit,
+        unit_price: row.unit_price,
+        line_total: row.line_total,
+        vat_rate: row.vat_rate,
+        vat_amount: row.vat_amount,
+        article_id: row.article_id ?? null,
+        revenue_account: row.revenue_account ?? null,
+        deduction_type: row.deduction_type ?? null,
+        deduction_amount: row.deduction_amount ?? 0,
+        labor_hours: row.labor_hours ?? null,
+        work_type: row.work_type ?? null,
+        housing_designation: row.housing_designation ?? null,
+        apartment_number: row.apartment_number ?? null,
+        brf_org_number: row.brf_org_number ?? null,
+        accrual_period_start: row.accrual_period_start ?? null,
+        accrual_period_end: row.accrual_period_end ?? null,
+        accrual_balance_account: row.accrual_balance_account ?? null,
+        dimensions: row.dimensions ?? {},
+      }))
+
+      return {
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number ?? null,
+        status: invoice.status,
+        document_type: invoice.document_type ?? 'invoice',
+        customer_id: invoice.customer_id,
+        customer_name: (invoice.customers as { name?: string } | null)?.name ?? null,
+        invoice_date: invoice.invoice_date,
+        due_date: invoice.due_date ?? null,
+        delivery_date: invoice.delivery_date ?? null,
+        currency: invoice.currency,
+        subtotal: invoice.subtotal ?? null,
+        vat_amount: invoice.vat_amount ?? null,
+        total: invoice.total ?? null,
+        vat_treatment: invoice.vat_treatment ?? null,
+        your_reference: invoice.your_reference ?? null,
+        our_reference: invoice.our_reference ?? null,
+        notes: invoice.notes ?? null,
+        default_dimensions: invoice.default_dimensions ?? {},
+        is_editable_draft: isEditableInvoiceDraft(invoice),
+        items,
+        item_count: items.length,
       }
     },
   },
@@ -14812,7 +14982,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_update_invoice',
     title: 'Update Draft Invoice',
-    description: 'Stage an edit to a DRAFT invoice: header fields (incl. default_dimensions) and/or items (items = FULL REPLACE). Drafts only: no verifikat, not self-billed, not a credit note. Sent/paid invoices need gnubok_credit_invoice. Find invoice_id with gnubok_list_invoices.',
+    description: 'Stage an edit to a DRAFT invoice: header fields (incl. default_dimensions) and/or items (FULL REPLACE: read current lines with gnubok_get_invoice first). Items accept article_id prefill like gnubok_create_invoice. Sent/paid invoices need gnubok_credit_invoice.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -14830,20 +15000,33 @@ export const tools: McpTool[] = [
           items: {
             type: 'object',
             properties: {
+              line_type: {
+                type: 'string',
+                enum: ['product', 'text'],
+                description: "Default 'product'. 'text' = free-text row: description only, amounts ignored (send quantity 0).",
+              },
               description: { type: 'string' },
               quantity: { type: 'number' },
               unit: { type: 'string', description: 'st, tim, dag, mån' },
               unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
               vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
+              article_id: {
+                type: ['string', 'null'],
+                description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, revenue account and, only when compatible with the customer VAT rules, vat_rate. Values set on the line win.',
+              },
+              revenue_account: {
+                type: ['string', 'null'],
+                description: 'Optional BAS class 1-3 posting-account override the line books to; NULL books the VAT-derived default. Validated against the chart of accounts at approval.',
+              },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
                 description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
               },
             },
-            required: ['description', 'quantity', 'unit', 'unit_price'],
+            required: ['quantity'],
           },
-          description: 'FULL REPLACE: when provided, every existing line is deleted and this array becomes the new line set. Omit to keep the current lines.',
+          description: 'FULL REPLACE: when provided, every existing line is deleted and this array becomes the new line set. Read the current lines with gnubok_get_invoice first and start from them: an omitted field is dropped, not kept.',
         },
         default_dimensions: {
           type: 'object',
@@ -14866,66 +15049,43 @@ export const tools: McpTool[] = [
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
 
-      const rawItems = args.items as
-        | Array<{
-            description: string
-            quantity: number
-            unit: string
-            unit_price: number
-            vat_rate?: number
-            dimensions?: unknown
-          }>
-        | undefined
+      const rawItems = args.items as StagedInvoiceLineInput[] | undefined
 
+      // Cheap shape checks before any query; the article resolver below
+      // re-validates description/unit/unit_price with prefill semantics.
       if (rawItems !== undefined) {
         if (!Array.isArray(rawItems) || rawItems.length === 0) {
-          throw new Error('items must be a non-empty array: it fully REPLACES every existing line on the draft.')
+          throw new Error(
+            'items must be a non-empty array: it fully REPLACES every existing line on the draft. Read the current lines with gnubok_get_invoice first.'
+          )
         }
         for (const [i, item] of rawItems.entries()) {
-          if (!item.description?.trim()) throw new Error(`Item ${i + 1}: description is required`)
-          if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${i + 1}: quantity must be positive`)
-          if (!item.unit?.trim()) throw new Error(`Item ${i + 1}: unit is required (st, tim, dag)`)
-          if (item.unit_price == null) throw new Error(`Item ${i + 1}: unit_price is required`)
+          if (item.line_type === 'text') {
+            if (!item.description?.trim()) throw new Error(`Item ${i + 1}: description is required`)
+          } else if (!item.quantity || item.quantity <= 0) {
+            throw new Error(`Item ${i + 1}: quantity must be positive`)
+          }
         }
       }
 
-      // Resolve-don't-select (same pass as gnubok_create_invoice): parse the
-      // default bag + each item's bag, then resolve codes AND names against
-      // the registry in one go (zero queries when nothing is tagged).
-      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
-      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
-        supabase,
-        companyId,
-        [
-          defaultDimensions,
-          ...(rawItems ?? []).map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`)),
-        ],
-      )
-      const resolvedDefaultDimensions = resolvedDimBags[0]
-      const stagedItems = rawItems?.map((item, i) => {
-        const { dimensions: _rawDimensions, ...rest } = item
-        const bag = resolvedDimBags[i + 1]
-        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
-      })
-
-      const changes: Record<string, unknown> = {}
-      for (const key of ['notes', 'invoice_date', 'due_date', 'delivery_date', 'your_reference', 'our_reference']) {
-        if (args[key] !== undefined) changes[key] = args[key]
-      }
-      if (stagedItems) changes.items = stagedItems
-      // The bag replaces wholesale, never merges: {} clears every tag.
-      if (args.default_dimensions !== undefined) changes.default_dimensions = resolvedDefaultDimensions ?? {}
-
-      const parsed = UpdateInvoiceParamsSchema.safeParse({ invoice_id: invoiceId, changes })
-      if (!parsed.success) {
-        const issue = parsed.error.issues[0]
-        throw new Error(`Invalid invoice update: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'validation failed'}`)
+      // No-change fast fail before any query (the staged Zod schema re-checks
+      // after resolution: defense in depth, not the primary gate).
+      const headerKeys = ['notes', 'invoice_date', 'due_date', 'delivery_date', 'your_reference', 'our_reference'] as const
+      if (
+        rawItems === undefined &&
+        args.default_dimensions === undefined &&
+        !headerKeys.some((key) => args[key] !== undefined)
+      ) {
+        throw new Error('At least one invoice field must be supplied.')
       }
 
+      // Fetch the draft BEFORE resolving items: the article prefill and the
+      // VAT preview need the draft's own customer and currency (both are
+      // structural here: never editable through this tool).
       const { data: invoice, error } = await supabase
         .from('invoices')
-        .select('id, invoice_number, status, document_type, journal_entry_id, is_self_billed, credited_invoice_id, total, currency, customer:customers(name)')
-        .eq('id', parsed.data.invoice_id)
+        .select('id, invoice_number, status, document_type, journal_entry_id, is_self_billed, credited_invoice_id, customer_id, total, currency, customer:customers(name)')
+        .eq('id', invoiceId)
         .eq('company_id', companyId)
         .maybeSingle()
 
@@ -14946,6 +15106,179 @@ export const tools: McpTool[] = [
 
       const customerName = (invoice.customer as { name?: string } | null)?.name
 
+      // Items path (issue #1642): article prefill + VAT gating exactly like
+      // gnubok_create_invoice, plus a preview the approver can read any
+      // rebooking off (old vs new per-line revenue_account and vat_rate).
+      // Header-only edits skip all of it.
+      let resolvedItems: ResolvedInvoiceLine[] | undefined
+      let itemsPreview: Record<string, unknown> = {}
+      if (rawItems !== undefined) {
+        // Full customer row for VAT rules: article-rate adoption is gated on
+        // the customer's DEFAULT rate set (see resolveInvoiceLineFromArticle).
+        const { data: customer, error: custError } = await supabase
+          .from('customers')
+          .select('*')
+          .eq('id', invoice.customer_id)
+          .eq('company_id', companyId)
+          .single()
+
+        if (custError || !customer) {
+          throw new Error('Customer not found: they may have been deleted.')
+        }
+
+        const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
+        const adoptableVatRates = getArticleVatRateAdoptionSet(customer.customer_type, customer.vat_number_validated)
+
+        const articleIds = Array.from(
+          new Set(
+            rawItems
+              .filter((item) => item.line_type !== 'text')
+              .map((item) => item.article_id)
+              .filter((a): a is string => !!a),
+          ),
+        )
+        const articlesById = new Map<string, InvoiceLineArticle>()
+        if (articleIds.length > 0) {
+          const { data: articleRows, error: articleError } = await supabase
+            .from('articles')
+            .select('id, name, unit, price_excl_vat, vat_rate, revenue_account, currency, active')
+            .eq('company_id', companyId)
+            .in('id', articleIds)
+          if (articleError) throw new Error(`Failed to load articles: ${articleError.message}`)
+          for (const row of articleRows ?? []) articlesById.set(row.id, row)
+        }
+
+        resolvedItems = rawItems.map((item, i) => {
+          // Free-text rows carry no amounts and never book: normalize to the
+          // builder's canonical zero shape instead of running the resolver.
+          if (item.line_type === 'text') {
+            return {
+              line_type: 'text' as const,
+              description: (item.description ?? '').trim(),
+              quantity: 0,
+              unit: '',
+              unit_price: 0,
+              ...(item.dimensions !== undefined ? { dimensions: item.dimensions } : {}),
+            }
+          }
+          return resolveInvoiceLineFromArticle(
+            item,
+            item.article_id ? articlesById.get(item.article_id) : undefined,
+            invoice.currency as string,
+            adoptableVatRates,
+            i,
+          )
+        })
+
+        const isDeliveryNote = (invoice.document_type || 'invoice') === 'delivery_note'
+
+        // Same permitted-set gate as gnubok_create_invoice: refuse to stage a
+        // line the commit executor (buildInvoiceWriteData) would reject after
+        // approval anyway. Delivery notes skip VAT there, so they skip it here.
+        if (!isDeliveryNote) {
+          const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+          const allowedRates = new Set(permittedRates.map((r) => r.rate))
+          for (const item of resolvedItems) {
+            if (item.line_type === 'text') continue
+            const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
+            if (!allowedRates.has(itemRate)) {
+              throw new Error(
+                `VAT rate ${itemRate}% is not allowed for customer type "${customer.customer_type}". ` +
+                `Allowed rates: ${permittedRates.map((r) => r.rate + '%').join(', ')}`
+              )
+            }
+          }
+        }
+
+        // The lines being replaced, straight from the DB: the approval preview
+        // shows old vs new per line so a quantity fix that would silently
+        // rebook revenue (e.g. 3041 -> VAT-derived default) is visible BEFORE
+        // approval, not after commit.
+        const { data: currentRows, error: currentError } = await supabase
+          .from('invoice_items')
+          .select('line_type, description, quantity, unit, unit_price, line_total, vat_rate, article_id, revenue_account')
+          .eq('invoice_id', invoiceId)
+          .order('sort_order', { ascending: true })
+        if (currentError) throw new Error(`Database error: ${currentError.message}`)
+
+        let subtotal = 0
+        let vatAmount = 0
+        const newItemsPreview = resolvedItems.map((item) => {
+          if (item.line_type === 'text') {
+            return { line_type: 'text', description: item.description, line_total: 0, vat_rate: 0, revenue_account: null }
+          }
+          const lineTotal = item.quantity * item.unit_price
+          const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
+          subtotal += lineTotal
+          if (!isDeliveryNote) vatAmount += roundOre(lineTotal * itemRate / 100)
+          return {
+            description: item.description,
+            quantity: item.quantity,
+            unit: item.unit,
+            unit_price: item.unit_price,
+            line_total: roundOre(lineTotal),
+            vat_rate: itemRate,
+            article_id: item.article_id ?? null,
+            revenue_account: item.revenue_account ?? null,
+          }
+        })
+
+        itemsPreview = {
+          items_replace: true,
+          item_count: resolvedItems.length,
+          current_items: (currentRows ?? []).map((row: Record<string, unknown>) => ({
+            line_type: row.line_type ?? 'product',
+            description: row.description,
+            quantity: row.quantity,
+            unit: row.unit,
+            unit_price: row.unit_price,
+            line_total: row.line_total,
+            vat_rate: row.vat_rate,
+            article_id: row.article_id ?? null,
+            revenue_account: row.revenue_account ?? null,
+          })),
+          items: newItemsPreview,
+          subtotal: roundOre(subtotal),
+          vat_amount: roundOre(vatAmount),
+          total: roundOre(subtotal + vatAmount),
+          currency: invoice.currency,
+          vat_treatment: vatRules.treatment,
+        }
+      }
+
+      // Resolve-don't-select (same pass as gnubok_create_invoice): parse the
+      // default bag + each RESOLVED item's bag, then resolve codes AND names
+      // against the registry in one go (zero queries when nothing is tagged).
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [
+          defaultDimensions,
+          ...(resolvedItems ?? []).map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`)),
+        ],
+      )
+      const resolvedDefaultDimensions = resolvedDimBags[0]
+      const stagedItems = resolvedItems?.map((item, i) => {
+        const { dimensions: _rawDimensions, ...rest } = item
+        const bag = resolvedDimBags[i + 1]
+        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
+      })
+
+      const changes: Record<string, unknown> = {}
+      for (const key of headerKeys) {
+        if (args[key] !== undefined) changes[key] = args[key]
+      }
+      if (stagedItems) changes.items = stagedItems
+      // The bag replaces wholesale, never merges: {} clears every tag.
+      if (args.default_dimensions !== undefined) changes.default_dimensions = resolvedDefaultDimensions ?? {}
+
+      const parsed = UpdateInvoiceParamsSchema.safeParse({ invoice_id: invoiceId, changes })
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0]
+        throw new Error(`Invalid invoice update: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'validation failed'}`)
+      }
+
       return stagePendingOperation(supabase, companyId, userId, 'update_invoice',
         `Uppdatera fakturautkast: ${customerName ?? invoice.invoice_number ?? invoice.id}`,
         parsed.data,
@@ -14955,9 +15288,7 @@ export const tools: McpTool[] = [
           customer_name: customerName ?? null,
           status: invoice.status,
           changes: parsed.data.changes,
-          ...(parsed.data.changes.items
-            ? { items_replace: true, item_count: parsed.data.changes.items.length }
-            : {}),
+          ...itemsPreview,
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         },
         actor,
