@@ -16843,6 +16843,7 @@ export const tools: McpTool[] = [
         error: { type: 'string' },
         error_code: { type: 'string' },
         auto_rejected: { type: 'boolean' },
+        operation_status: { type: 'string', enum: ['pending', 'committed', 'rejected', 'failed_partial'], description: 'pending = not consumed, re-approvable' },
       },
       required: ['status', 'operation_id'],
     },
@@ -16956,6 +16957,7 @@ export const tools: McpTool[] = [
         ...(result.error ? { error: result.error } : {}),
         ...(result.code ? { error_code: result.code } : {}),
         ...(result.auto_rejected ? { auto_rejected: true } : {}),
+        ...(result.operation_status ? { operation_status: result.operation_status } : {}),
       }
     },
   },
