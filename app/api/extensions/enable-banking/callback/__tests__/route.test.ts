@@ -699,6 +699,247 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(accountsData[0].dedup_scope).toBe('uid-first')
   })
 
+  it('pairs a no-IBAN account across a uid change: carries the scope and reuses the cash account row', async () => {
+    // Issue #1709: an in-place reconnect where the ASPSP minted a NEW uid for
+    // an account WITHOUT an IBAN. Neither the IBAN nor the uid map can match,
+    // so before the pairing fallback the scope regenerated (full history
+    // re-imported unbooked) and the mirror allocated a fresh 19xx slot + a new
+    // cash_accounts row. With exactly one unclaimed prior and one fresh new
+    // account in the currency, the pairing must carry the scope, the enabled
+    // flag, the old ledger, and promote the old row in place.
+    const capturedUpdates: Record<string, unknown>[] = []
+    let callIndex = 0
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) {
+        return mockChain({
+          data: {
+            id: 'conn-1',
+            user_id: 'user-1',
+            company_id: 'company-1',
+            bank_name: 'TestBank',
+            status: 'expired',
+            session_id: null,
+            accounts_data: [
+              { uid: 'uid-old', name: 'Sparkonto', currency: 'SEK', dedup_scope: 'scope-first', enabled: false },
+            ],
+          },
+          error: null,
+        })
+      }
+      if (table === 'cash_accounts') {
+        return mockChain({
+          data: [{ id: 'row-old', external_uid: 'uid-old', ledger_account: '1935' }],
+          error: null,
+        })
+      }
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn((payload: Record<string, unknown>) => {
+        capturedUpdates.push(payload)
+        return chain
+      })
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.in = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: { id: 'conn-1', bank_name: 'TestBank', company_id: 'company-1', user_id: 'user-1' },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [
+        // Same account, no IBAN, freshly minted uid.
+        { uid: 'uid-new', name: 'Sparkonto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2024-12-31T00:00:00Z' },
+      aspsp: { name: 'TestBank', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    expect(response.status).toBe(200)
+    await response.text()
+
+    // The scope pinned at first ingest survives the uid change, so every
+    // historical external_id keeps minting byte-identically and Layer-1 dedup
+    // swallows the re-import. The user's "Synkas ej" choice travels too.
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      dedup_scope?: string
+      enabled?: boolean
+    }>
+    expect(accountsData).toHaveLength(1)
+    expect(accountsData[0].uid).toBe('uid-new')
+    expect(accountsData[0].dedup_scope).toBe('scope-first')
+    expect(accountsData[0].enabled).toBe(false)
+
+    // The mirror reuses the connection's own old row instead of allocating a
+    // new slot: same ledger, promoted in place under the new uid.
+    expect(mockAllocate).not.toHaveBeenCalled()
+    expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
+    const mirrored = mockUpsertFromPsd2.mock.calls[0][2] as {
+      external_uid: string
+      ledger_account: string
+      reuse_cash_account_id: string | null
+      enabled: boolean
+    }
+    expect(mirrored.external_uid).toBe('uid-new')
+    expect(mirrored.ledger_account).toBe('1935')
+    expect(mirrored.reuse_cash_account_id).toBe('row-old')
+    expect(mirrored.enabled).toBe(false)
+  })
+
+  it('keeps fresh scopes when the no-IBAN pairing is ambiguous', async () => {
+    // Two unclaimed no-IBAN prior accounts and two fresh new uids in the same
+    // currency: any pairing would be a guess, so none is made. Both new
+    // accounts keep the pre-fix behavior: scope = own uid, freshly resolved
+    // ledger, no row reuse.
+    const capturedUpdates: Record<string, unknown>[] = []
+    let callIndex = 0
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) {
+        return mockChain({
+          data: {
+            id: 'conn-1',
+            user_id: 'user-1',
+            company_id: 'company-1',
+            bank_name: 'TestBank',
+            status: 'expired',
+            session_id: null,
+            accounts_data: [
+              { uid: 'old-1', name: 'Konto A', currency: 'SEK', dedup_scope: 'scope-a', enabled: true },
+              { uid: 'old-2', name: 'Konto B', currency: 'SEK', dedup_scope: 'scope-b', enabled: true },
+            ],
+          },
+          error: null,
+        })
+      }
+      if (table === 'cash_accounts') {
+        return mockChain({
+          data: [
+            { id: 'row-1', external_uid: 'old-1', ledger_account: '1930' },
+            { id: 'row-2', external_uid: 'old-2', ledger_account: '1940' },
+          ],
+          error: null,
+        })
+      }
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn((payload: Record<string, unknown>) => {
+        capturedUpdates.push(payload)
+        return chain
+      })
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.in = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: { id: 'conn-1', bank_name: 'TestBank', company_id: 'company-1', user_id: 'user-1' },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [
+        { uid: 'new-1', name: 'Konto A', currency: 'SEK' },
+        { uid: 'new-2', name: 'Konto B', currency: 'SEK' },
+      ],
+      access: { valid_until: '2024-12-31T00:00:00Z' },
+      aspsp: { name: 'TestBank', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    expect(response.status).toBe(200)
+    await response.text()
+
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      dedup_scope?: string
+    }>
+    expect(Object.fromEntries(accountsData.map((a) => [a.uid, a.dedup_scope]))).toEqual({
+      'new-1': 'new-1',
+      'new-2': 'new-2',
+    })
+    expect(mockAllocate).toHaveBeenCalledTimes(2)
+    for (const call of mockUpsertFromPsd2.mock.calls) {
+      expect((call[2] as { reuse_cash_account_id: string | null }).reuse_cash_account_id).toBeNull()
+    }
+  })
+
+  it('does not pair when the unclaimed prior account carries an IBAN', async () => {
+    // Exactly one unclaimed prior and one fresh new account, but the prior has
+    // an IBAN: the bank dropping an IBAN it used to report is not the no-IBAN
+    // uid-mint pattern, so the elimination pairing must stand down.
+    const capturedUpdates: Record<string, unknown>[] = []
+    let callIndex = 0
+    mockFrom.mockImplementation((table: string) => {
+      callIndex++
+      if (callIndex === 1) {
+        return mockChain({
+          data: {
+            id: 'conn-1',
+            user_id: 'user-1',
+            company_id: 'company-1',
+            bank_name: 'TestBank',
+            status: 'expired',
+            session_id: null,
+            accounts_data: [
+              { uid: 'old-1', iban: 'SE1111', name: 'Konto A', currency: 'SEK', dedup_scope: 'SE1111', enabled: true },
+            ],
+          },
+          error: null,
+        })
+      }
+      if (table === 'cash_accounts') {
+        return mockChain({
+          data: [{ id: 'row-1', external_uid: 'old-1', ledger_account: '1930' }],
+          error: null,
+        })
+      }
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn((payload: Record<string, unknown>) => {
+        capturedUpdates.push(payload)
+        return chain
+      })
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.in = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: { id: 'conn-1', bank_name: 'TestBank', company_id: 'company-1', user_id: 'user-1' },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [{ uid: 'new-1', name: 'Konto A', currency: 'SEK' }],
+      access: { valid_until: '2024-12-31T00:00:00Z' },
+      aspsp: { name: 'TestBank', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    expect(response.status).toBe(200)
+    await response.text()
+
+    const accountsData = capturedUpdates[0].accounts_data as Array<{
+      uid: string
+      dedup_scope?: string
+    }>
+    expect(accountsData[0].dedup_scope).toBe('new-1')
+    expect(mockAllocate).toHaveBeenCalledTimes(1)
+    expect(
+      (mockUpsertFromPsd2.mock.calls[0][2] as { reuse_cash_account_id: string | null })
+        .reuse_cash_account_id,
+    ).toBeNull()
+  })
+
   it('prefers the survivor account explicit dedup scope over a carried sibling scope', async () => {
     // A superseded sibling shares the IBAN but was ingested under a different
     // scope. The survivor's own row already pinned an explicit scope for this

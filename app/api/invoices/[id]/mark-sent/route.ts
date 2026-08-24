@@ -160,7 +160,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   const { data: original } = await supabase
     .from('invoices')
-    .select('id, invoice_number, status, journal_entry_id, paid_at, paid_amount, total')
+    .select('id, invoice_number, external_invoice_number, status, journal_entry_id, paid_at, paid_amount, total')
     .eq('id', invoice.credited_invoice_id)
     .eq('company_id', companyId)
     .single()
@@ -170,7 +170,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   }
 
   const originalInvoice = original as CreditNoteOriginalInvoice
-  const originalInvoiceNumber = original.invoice_number ?? undefined
+  // Self-billed originals carry their number in external_invoice_number
+  // (invoice_number is null by design); without the fallback the credit-note
+  // PDF loses its ML 17 kap 22 reference to the original (issue #1820).
+  const originalInvoiceNumber =
+    original.invoice_number ?? original.external_invoice_number ?? undefined
 
   const journalEntryRequired = creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
   const isRecovery = invoice.status === 'sent'
