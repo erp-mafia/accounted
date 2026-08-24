@@ -68,10 +68,10 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
   // possible. Redirect to login unless this is an invite-based signup.
   const router = useRouter()
   useEffect(() => {
-    if (!passwordLoginEnabled && !inviteToken) {
+    if ((!passwordLoginEnabled || !registrationEnabled) && !inviteToken) {
       router.replace('/login')
     }
-  }, [inviteToken, router, passwordLoginEnabled])
+  }, [inviteToken, router, passwordLoginEnabled, registrationEnabled])
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -130,7 +130,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
   }
 
   const showBankIdChip = method === 'email' && bankIdEnabled
-  const showEmailChip = method === 'bankid'
+  const showEmailChip = method === 'bankid' && passwordLoginEnabled
   const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + providers.length
 
   // Accept a pending invite, if any, and report a non-definitive failure.

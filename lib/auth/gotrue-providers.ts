@@ -32,7 +32,7 @@ export type ExternalProvider =
   | 'zoom'
   | (string & {})
 
-interface GoTrueSettingsResponse {
+export interface GoTrueSettingsResponse {
   external: Record<string, boolean>
   disable_signup: boolean
   mailer_autoconfirm: boolean
@@ -119,6 +119,7 @@ export async function fetchAuthSettings(): Promise<GoTrueAuthSettings> {
     const res = await fetch(`${supabaseUrl}/auth/v1/settings`, {
       headers: { apikey: anonKey },
       next: { revalidate: 60 }, // cache for 1 minute
+      signal: AbortSignal.timeout(3000),
     })
 
     if (!res.ok) {

@@ -793,7 +793,7 @@ export function LoginClient({
           )}
         </div>
 
-        {passwordLoginEnabled && (
+        {passwordLoginEnabled && registrationEnabled && (
           <p className="mt-6 text-center text-[13px] text-muted-foreground">
             {tAuth('login_new_here')}{' '}
             <Link

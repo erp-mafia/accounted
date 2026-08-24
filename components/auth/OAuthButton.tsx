@@ -101,7 +101,7 @@ export function OAuthButton({
           <ProviderMark provider={provider} />
         </span>
       )}
-      {compact ? provider.label : label}
+      {compact ? (provider.isCustom ? tAuth('sso_chip') : provider.label) : label}
     </Button>
   )
 }
