@@ -108,7 +108,9 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   // (17th in Jan/Aug for ≤40 MSEK turnover, but we play safe with 12th here).
   const paymentDate = computeTaxPaymentDate(periodYear, periodMonth)
 
-  let fileContent: Buffer
+  // Buffer<ArrayBuffer>, not bare Buffer: the bare type widens to
+  // ArrayBufferLike, which Response's BodyInit rejects at type-check.
+  let fileContent: Buffer<ArrayBuffer>
   let filename: string
   let contentType: string
 
