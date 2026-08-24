@@ -6,6 +6,7 @@ import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mappi
 import { getTemplateById, buildMappingResultFromTemplate, validateTemplateForEntity } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
@@ -59,6 +60,17 @@ async function ensureFiscalPeriod(
     .limit(1)
 
   if (existing && existing.length > 0) return true
+
+  // Pre-FY guard (issue #1825): a date before the company's first fiscal
+  // period must NEVER mint a calendar-year rakenskapsar. Depending on overlap
+  // with the real first period, the upsert below would either bounce off the
+  // no_overlapping_fiscal_periods exclusion constraint (log noise) or silently
+  // create a pre-registration year (legally wrong). Return true and let the
+  // pre-FY clamp in createTransactionJournalEntry book the event on the first
+  // fiscal year's first day. Dates AFTER the latest period (next-year
+  // auto-creation) pass through unchanged.
+  const earliestStart = await getEarliestFiscalPeriodStart(supabase, companyId)
+  if (earliestStart && date < earliestStart) return true
 
   const txDate = new Date(date)
   const txMonth = txDate.getMonth() + 1

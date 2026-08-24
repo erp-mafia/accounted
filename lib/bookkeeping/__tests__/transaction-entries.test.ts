@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { makeTransaction } from '@/tests/helpers'
+import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
 import type { CreateJournalEntryInput, MappingResult, VatJournalLine } from '@/types'
 
 // Mock engine
@@ -136,12 +136,14 @@ describe('createTransactionJournalEntry', () => {
 
   // --- Fiscal period ---
 
-  it('returns null when no fiscal period found', async () => {
+  it('returns null when no fiscal period found and the company has no periods at all', async () => {
     mockedFindFiscalPeriod.mockResolvedValue(null)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] }) // earliest-period lookup: nothing
     const tx = makeTransaction()
     const mapping = makeMappingResult()
 
-    const result = await createTransactionJournalEntry(null as never, 'company-1', 'user-1', tx, mapping)
+    const result = await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, mapping)
 
     expect(result).toBeNull()
     expect(mockedCreateEntry).not.toHaveBeenCalled()
@@ -474,6 +476,111 @@ describe('createTransactionJournalEntry', () => {
 
     const input = mockedCreateEntry.mock.calls[0][3]
     expect(input.entry_date).toBe('2024-09-15')
+  })
+})
+
+// Pre-FY clamp (issue #1825): a bank event dated before the company's first
+// rakenskapsar (e.g. the aktiekapital deposit paid in before the Bolagsverket
+// registration date) books into the first OPEN unlocked fiscal period with
+// entry_date = period_start, and the verifikationstext carries the real
+// bank-event date. Everything else keeps the old null return.
+describe('createTransactionJournalEntry: pre-FY clamp', () => {
+  const openFirstPeriod = {
+    id: 'period-first',
+    period_start: '2026-05-12',
+    is_closed: false,
+    locked_at: null,
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue(null)
+  })
+
+  it('books a pre-FY date into the earliest open period on its first day', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [openFirstPeriod] })
+    const tx = makeTransaction({ date: '2026-03-10', amount: 25000, description: 'Insättning aktiekapital' })
+    const mapping = makeMappingResult({ debit_account: '1930', credit_account: '2081' })
+
+    const result = await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, mapping)
+
+    expect(result).not.toBeNull()
+    expect(mockedCreateEntry).toHaveBeenCalledOnce()
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.fiscal_period_id).toBe('period-first')
+    expect(input.entry_date).toBe('2026-05-12')
+    expect(input.description).toBe(
+      'Insättning aktiekapital · Affärshändelse 2026-03-10, bokförd på räkenskapsårets första dag'
+    )
+    // Source linkage to the bank row is untouched by the clamp.
+    expect(input.source_type).toBe('bank_transaction')
+    expect(input.source_id).toBe(tx.id)
+  })
+
+  it('keeps the notes AND the clamp note in the composed description', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [openFirstPeriod] })
+    const tx = makeTransaction({ date: '2026-03-10', amount: 25000, description: 'Insättning' })
+    const mapping = makeMappingResult({ debit_account: '1930', credit_account: '2081' })
+
+    await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, mapping, 'Aktiekapital enligt stiftelseurkund')
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.description).toBe(
+      'Insättning · Aktiekapital enligt stiftelseurkund · Affärshändelse 2026-03-10, bokförd på räkenskapsårets första dag'
+    )
+  })
+
+  it('does NOT clamp when the date is inside or after existing periods (interior gap / future date)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // Earliest period starts BEFORE the transaction date: the missing period is
+    // a gap or a not-yet-created later year, never a pre-FY case.
+    enqueue({ data: [{ ...openFirstPeriod, period_start: '2025-01-01' }] })
+    const tx = makeTransaction({ date: '2026-03-10', amount: -100 })
+    const mapping = makeMappingResult()
+
+    const result = await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, mapping)
+
+    expect(result).toBeNull()
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns null when the earliest period is closed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...openFirstPeriod, is_closed: true }] })
+    const tx = makeTransaction({ date: '2026-03-10', amount: -100 })
+    const mapping = makeMappingResult()
+
+    const result = await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, mapping)
+
+    expect(result).toBeNull()
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns null when the earliest period is locked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...openFirstPeriod, locked_at: '2026-06-01T00:00:00Z' }] })
+    const tx = makeTransaction({ date: '2026-03-10', amount: -100 })
+    const mapping = makeMappingResult()
+
+    const result = await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, mapping)
+
+    expect(result).toBeNull()
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('never queries fiscal_periods when the transaction date has an open period', async () => {
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+    const tx = makeTransaction({ date: '2026-07-01', amount: -100 })
+    const mapping = makeMappingResult()
+
+    // null supabase: any query would throw, proving the clamp path is dormant.
+    await createTransactionJournalEntry(null as never, 'company-1', 'user-1', tx, mapping)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.entry_date).toBe('2026-07-01')
+    expect(input.fiscal_period_id).toBe('period-1')
   })
 })
 

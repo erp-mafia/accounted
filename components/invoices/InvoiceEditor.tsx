@@ -1521,6 +1521,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   function focusSettingsField(
     name: 'invoice_date' | 'due_date' | 'received_date' | 'payment_link_url',
   ) {
+    // In self-billed mode fakturadatum and mottagningsdatum render uncollapsed
+    // next to the external number: focus directly, no panel to expand.
+    if (isSelfBilled && (name === 'invoice_date' || name === 'received_date')) {
+      setFocus(name)
+      return
+    }
     // The field lives in the collapsed Förval panel: expand first, focus once
     // the panel is visible (focus() is a no-op inside visibility: hidden).
     setSettingsOpen(true)
@@ -1884,6 +1890,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         return chip.documentType === 'proforma' ? t('doctype_proforma') : t('doctype_delivery_note')
       case 'currency':
         return t('chip_currency', { currency: chip.currency })
+      case 'invoice_date':
+        return t('chip_invoice_date', { date: chip.date })
       case 'due_days':
         return t('chip_due_days', { days: chip.days, date: chip.date })
       case 'due_date':
@@ -2043,6 +2051,35 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 <div className="space-y-2">
                   <Label>{ts('agreement_ref_label')}</Label>
                   <Input placeholder={ts('agreement_ref_placeholder')} {...register('self_billing_agreement_ref')} />
+                </div>
+                {/* The counterparty's issue date and our received date are
+                    mandatory transcription fields, not defaults: keep them
+                    visible instead of collapsed into Förval, where the
+                    silent today-default registered wrong dates on immutable
+                    self-billed invoices (issue #1820). */}
+                <div className="space-y-2">
+                  <Label>{ts('invoice_date_label')}<RequiredMark /></Label>
+                  <Input
+                    type="date"
+                    {...register('invoice_date')}
+                    aria-required="true"
+                    className="tabular-nums"
+                  />
+                  {errors.invoice_date && (
+                    <p className="text-sm text-destructive">{errors.invoice_date.message}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label>{ts('received_date_label')}<RequiredMark /></Label>
+                  <Input
+                    type="date"
+                    {...register('received_date')}
+                    aria-required="true"
+                    className="tabular-nums"
+                  />
+                  {errors.received_date && (
+                    <p className="text-sm text-destructive">{errors.received_date.message}</p>
+                  )}
                 </div>
               </div>
             )}
@@ -2800,22 +2837,28 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     />
                   </div>
 
-                  <div className={SETTINGS_ROW_CLASS}>
-                    <Label className="text-[13px] font-normal">
-                      {t('invoice_date_label')}<RequiredMark />
-                    </Label>
-                    <div>
-                      <Input
-                        type="date"
-                        {...register('invoice_date')}
-                        aria-required="true"
-                        className="h-8 w-40 text-[13px] tabular-nums"
-                      />
-                      {errors.invoice_date && (
-                        <p className="mt-1 text-xs text-destructive">{errors.invoice_date.message}</p>
-                      )}
+                  {/* Self-billed mode renders fakturadatum and mottagningsdatum
+                      uncollapsed next to the external number instead: they are
+                      transcription fields there, and registering the same RHF
+                      field twice would desync the inputs. */}
+                  {!isSelfBilled && (
+                    <div className={SETTINGS_ROW_CLASS}>
+                      <Label className="text-[13px] font-normal">
+                        {t('invoice_date_label')}<RequiredMark />
+                      </Label>
+                      <div>
+                        <Input
+                          type="date"
+                          {...register('invoice_date')}
+                          aria-required="true"
+                          className="h-8 w-40 text-[13px] tabular-nums"
+                        />
+                        {errors.invoice_date && (
+                          <p className="mt-1 text-xs text-destructive">{errors.invoice_date.message}</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <div className={SETTINGS_ROW_CLASS}>
                     <Label className="text-[13px] font-normal">
@@ -2833,25 +2876,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       )}
                     </div>
                   </div>
-
-                  {isSelfBilled && (
-                    <div className={SETTINGS_ROW_CLASS}>
-                      <Label className="text-[13px] font-normal">
-                        {ts('received_date_label')}<RequiredMark />
-                      </Label>
-                      <div>
-                        <Input
-                          type="date"
-                          {...register('received_date')}
-                          aria-required="true"
-                          className="h-8 w-40 text-[13px] tabular-nums"
-                        />
-                        {errors.received_date && (
-                          <p className="mt-1 text-xs text-destructive">{errors.received_date.message}</p>
-                        )}
-                      </div>
-                    </div>
-                  )}
 
                   {watchDocumentType === 'invoice' && !isSelfBilled && (
                     <div className={SETTINGS_ROW_CLASS}>

@@ -368,6 +368,47 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(eqArgs).toContainEqual(['currency', 'SEK'])
   })
 
+  it('books a transaction dated before the first fiscal year without minting a period (pre-FY, issue #1825)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      date: '2026-03-10',
+      amount: 25000,
+      merchant_name: null,
+      journal_entry_id: null,
+      description: 'Insättning aktiekapital',
+    })
+
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // ensureFiscalPeriod: no covering open period
+    enqueue({ data: [{ period_start: '2026-05-12' }], error: null }) // ensureFiscalPeriod: earliest period
+
+    // The clamp inside createTransactionJournalEntry (unit-tested in
+    // lib/bookkeeping/__tests__/transaction-entries.test.ts) books into the
+    // first open period; here it is mocked to the successful outcome.
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // guarded update matched
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'income_other' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      journal_entry_created: boolean
+      journal_entry_id: string
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.journal_entry_created).toBe(true)
+    expect(body.journal_entry_id).toBe('je-1')
+    // The pre-FY guard must not upsert a calendar-year (pre-registration) period.
+    expect(findCalls('fiscal_periods', 'upsert')).toHaveLength(0)
+  })
   it('atomically unignores an ignored transaction when categorizing it', async () => {
     const tx = makeTransaction({
       id: 'tx-1',

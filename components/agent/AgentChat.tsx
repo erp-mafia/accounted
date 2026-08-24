@@ -458,6 +458,11 @@ export default function AgentChat({
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    // Whether the stream delivered a terminal event (turn_complete or error).
+    // A serverless function killed at its duration cap closes the stream
+    // cleanly (done: true, nothing thrown), which used to look identical to
+    // success: "Tänker" collapsed with no answer and no error.
+    let sawTerminalEvent = false
     try {
       while (true) {
         const { done, value } = await reader.read()
@@ -480,6 +485,9 @@ export default function AgentChat({
           // First user-visible event lazily mounts the bubble. `conversation`
           // is a metadata event with no visible payload so it does not.
           const ev = parsed as { kind?: string } | null
+          if (ev && (ev.kind === 'turn_complete' || ev.kind === 'error')) {
+            sawTerminalEvent = true
+          }
           if (
             ev &&
             typeof ev.kind === 'string' &&
@@ -490,6 +498,12 @@ export default function AgentChat({
           }
           handleEvent(parsed)
         }
+      }
+      // The stream ended without throwing. If no terminal event arrived and
+      // the user did not abort, the function was cut off mid-turn (duration
+      // cap, proxy drop): say so instead of presenting silence as success.
+      if (!sawTerminalEvent && !signal.aborted) {
+        setErrorMessage('Anslutningen bröts innan svaret blev klart. Försök igen.')
       }
     } catch (err) {
       if (!signal.aborted) {

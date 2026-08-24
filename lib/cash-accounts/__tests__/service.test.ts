@@ -684,6 +684,34 @@ describe('upsertFromPsd2', () => {
     expect(stub.upserts).toHaveLength(1)
   })
 
+  it('promotes a SAME-connection holder under a retired uid when explicitly named via reuse_cash_account_id', async () => {
+    // Issue #1709: in-place reconnect of a no-IBAN account whose ASPSP minted
+    // a new uid. The callback pairs the account with the connection's own old
+    // row and names it explicitly; the promote re-keys that row to the new uid
+    // in place, so its id (and the transactions linked to it) survive. Without
+    // the explicit name the plain upsert would INSERT and trip the
+    // (company_id, ledger_account) UNIQUE constraint; the previous test pins
+    // that an UNNAMED same-connection holder still routes through the plain
+    // upsert (the general active-holder rejection is not loosened).
+    const stub = makeUpsertStub({
+      holder: { id: 'row-self', bank_connection_id: 'conn-new' },
+    })
+    await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', {
+      ...UPSERT_INPUT,
+      external_uid: 'uid-2',
+      reuse_cash_account_id: 'row-self',
+    })
+
+    expect(stub.upserts).toHaveLength(0)
+    expect(stub.updates).toHaveLength(1)
+    expect(stub.updates[0].id).toBe('row-self')
+    expect(stub.updates[0].payload).toMatchObject({
+      bank_connection_id: 'conn-new',
+      external_uid: 'uid-2',
+      ledger_account: '1930',
+    })
+  })
+
   it('deletes an empty duplicate row for the same connection+uid before promoting', async () => {
     // Stuck-user recovery: the reconnect callback mirrored uid-1 onto 1939
     // while 1930 was wrongly blocked. On remap to 1930 the empty 1939
