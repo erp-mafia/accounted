@@ -7380,7 +7380,7 @@ export const tools: McpTool[] = [
         filters: {
           type: 'object',
           additionalProperties: false,
-          description: 'Line selection: at least one filter required. Preview the match set with gnubok_query_journal (same filter fields) first.',
+          description: "Line selection: at least one filter required. Preview the match set with gnubok_query_journal (same filter fields plus status:'posted') first.",
           properties: {
             account_from: { type: 'string', description: 'Lowest account number (inclusive), e.g. "4010".' },
             account_to: { type: 'string', description: 'Highest account number (inclusive).' },
@@ -7924,7 +7924,7 @@ export const tools: McpTool[] = [
         voucher_number_from: { type: 'number', description: 'Lowest voucher number (inclusive)' },
         voucher_number_to: { type: 'number', description: 'Highest voucher number (inclusive)' },
         source_type: { type: 'string', description: 'Filter by source: bank_transaction, invoice_created, supplier_invoice, currency_revaluation, year_end, opening_balance, etc.' },
-        status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: "Default 'all' (posted + reversed: totals equal ledger balances). One-leg filters give totals that are NOT balances." },
+        status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: "Default 'all' (posted + reversed: totals equal ledger balances). One-leg totals are NOT balances." },
         project: { type: 'string', description: 'Filter by project code (SIE dim 6)' },
         cost_center: { type: 'string', description: 'Filter by cost center (SIE dim 1)' },
         dimensions: {
@@ -7966,7 +7966,7 @@ export const tools: McpTool[] = [
         },
         status_filter_warning: {
           type: 'string',
-          description: 'Set when a one-leg status filter excluded opposite-status entries: totals are not account balances.',
+          description: 'Set when a one-leg status filter excluded opposite-status entries: totals may not equal account balances.',
         },
         groups: {
           type: 'array',
@@ -7980,7 +7980,7 @@ export const tools: McpTool[] = [
               line_count: { type: 'number' },
             },
           },
-          description: 'Present when group_by/group_by_dimension is set; sorted by |net| desc. Scope follows totals_scope.',
+          description: 'Present when grouping is set; sorted by |net| desc, full-match scope.',
         },
         applied_filters: { type: 'object' },
         ...DIMENSION_FILTER_OUTPUT_PROPS,
@@ -8370,9 +8370,9 @@ export const tools: McpTool[] = [
         } else if ((count ?? 0) > 0) {
           statusFilterWarning =
             `${count} entr${count === 1 ? 'y' : 'ies'} with status '${opposite}' in the filtered range ` +
-            `are excluded by status='${status}'. Storno bookkeeping keeps both the reversed original ` +
-            `and its storno on the account, so these totals are NOT account balances. ` +
-            `Re-run with status 'all' (the default) for ledger-accurate sums.`
+            `${count === 1 ? 'is' : 'are'} excluded by status='${status}'. Storno bookkeeping keeps both ` +
+            `the reversed original and its storno on the account, so one-leg totals can differ from ` +
+            `account balances. Re-run with status 'all' (the default) for ledger-accurate sums.`
         }
       }
 

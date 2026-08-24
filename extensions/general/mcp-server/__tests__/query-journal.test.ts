@@ -1076,8 +1076,10 @@ describe('gnubok_query_journal: status default and balance integrity', () => {
 
     expect(result.lines.map((l) => l.line_id)).toEqual(['l-storno'])
     expect(result.totals.net).toBe(940.27)
-    expect(result.status_filter_warning).toMatch(/NOT account balances/)
+    expect(result.status_filter_warning).toMatch(/can differ from account balances/)
     expect(result.status_filter_warning).toMatch(/status 'all'/)
+    // Singular/plural agreement: one excluded entry reads "1 entry ... is".
+    expect(result.status_filter_warning).toMatch(/1 entry with status 'reversed' in the filtered range is excluded/)
     // The warning is grounded in a real opposite-status count query.
     const oppositeCount = entryQueries().some((q) =>
       q.filters.some((f) => f.op === 'eq' && f.column === 'status' && f.value === 'reversed'),
