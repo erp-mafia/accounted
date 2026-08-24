@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { StoredSkattekontoTransaction } from '../types'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { roundOre } from '@/lib/money'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 
 /**
@@ -59,6 +60,12 @@ export interface SkattekontoMatchCandidate {
    * show a "period-matched" badge.
    */
   matched_via_agi_period?: boolean
+  /**
+   * True when no single 1630 line equals the amount but the entry's 1630
+   * lines NET to it (a manual voucher that split the movement over two
+   * lines). The link still settles the whole entry, so the pair closes.
+   */
+  matched_via_entry_total?: boolean
 }
 
 /** Swedish month names exactly as SKV writes them in prod transaktionstext. */
@@ -353,11 +360,55 @@ export async function findMatchSuggestionsBulk(
   }
   const agiIndex = await loadAgiEntryIndex(supabase, companyId, periods)
 
-  const suggestions = new Map<string, SkattekontoMatchCandidate>()
+  // Per-entry view of the 1630 movement: which single lines exist, and what
+  // the entry nets to. The net is the entry-level fallback for a manual
+  // voucher that split one SKV event over two 1630 lines.
+  type EntryView = {
+    entry: Row['journal_entries']
+    debits: number[]
+    credits: number[]
+    net: number
+    lineCount: number
+  }
+  const entryViews = new Map<string, EntryView>()
+  for (const line of lines) {
+    const e = line.journal_entries
+    if (linkedSet.has(e.id)) continue
+    const debit = roundOre(Number(line.debit_amount))
+    const credit = roundOre(Number(line.credit_amount))
+    let view = entryViews.get(e.id)
+    if (!view) {
+      view = { entry: e, debits: [], credits: [], net: 0, lineCount: 0 }
+      entryViews.set(e.id, view)
+    }
+    if (debit > 0 && credit === 0) view.debits.push(debit)
+    if (credit > 0 && debit === 0) view.credits.push(credit)
+    view.net = roundOre(view.net + debit - credit)
+    view.lineCount++
+  }
 
-  for (const row of unmatched) {
+  // Candidates per row, then a one-to-one assignment across rows: two rows
+  // that each see "exactly one candidate" must not both be proposed the same
+  // verifikat (12 same-day-same-amount groups on prod would have done that).
+  // Rows are assigned in date order; AGI-period matches win inside a row.
+  const ordered = [...unmatched].sort((a, b) =>
+    a.transaktionsdatum < b.transaktionsdatum
+      ? -1
+      : a.transaktionsdatum > b.transaktionsdatum
+        ? 1
+        : a.id < b.id
+          ? -1
+          : a.id > b.id
+            ? 1
+            : 0,
+  )
+  const candidatesByRow = new Map<string, SkattekontoMatchCandidate[]>()
+  const periodIdsByRow = new Map<string, Set<string> | null>()
+
+  for (const row of ordered) {
     const amount = Math.round(Math.abs(Number(row.belopp_skatteverket)) * 100) / 100
     const side = expectedSide(Number(row.belopp_skatteverket))
+    const signedNet = side === 'debit' ? amount : -amount
     const rowFrom = addDays(row.transaktionsdatum, -DATE_WINDOW_DAYS)
     const rowTo = addDays(row.transaktionsdatum, DATE_WINDOW_DAYS)
 
@@ -365,25 +416,16 @@ export async function findMatchSuggestionsBulk(
       const key = periodByRowId.get(row.id)
       return key ? agiIndex.get(key)?.entryIds ?? null : null
     })()
+    periodIdsByRow.set(row.id, periodEntryIds)
 
     const matches: SkattekontoMatchCandidate[] = []
-    const seen = new Set<string>()
-
-    for (const line of lines) {
-      const e = line.journal_entries
-      if (linkedSet.has(e.id)) continue
-      if (seen.has(e.id)) continue
+    for (const view of entryViews.values()) {
+      const e = view.entry
       if (e.entry_date < rowFrom || e.entry_date > rowTo) continue
-
-      const debit = Math.round(Number(line.debit_amount) * 100) / 100
-      const credit = Math.round(Number(line.credit_amount) * 100) / 100
-      const lineMatches =
-        side === 'debit'
-          ? debit === amount && credit === 0
-          : credit === amount && debit === 0
-      if (!lineMatches) continue
-
-      seen.add(e.id)
+      const singleLine =
+        side === 'debit' ? view.debits.includes(amount) : view.credits.includes(amount)
+      const entryTotal = !singleLine && view.lineCount > 1 && view.net === signedNet
+      if (!singleLine && !entryTotal) continue
       matches.push({
         journal_entry_id: e.id,
         voucher_number: e.voucher_number,
@@ -394,28 +436,56 @@ export async function findMatchSuggestionsBulk(
         matched_amount: amount,
         matched_side: side,
         matched_via_agi_period: periodEntryIds?.has(e.id) ?? false,
+        matched_via_entry_total: entryTotal,
       })
-
-      if (matches.length > 1 && !periodEntryIds) break
     }
+    // Nearest date first so the assignment below is deterministic.
+    matches.sort((a, b) => {
+      const da = Math.abs(daysBetweenIso(a.entry_date, row.transaktionsdatum))
+      const db = Math.abs(daysBetweenIso(b.entry_date, row.transaktionsdatum))
+      return da - db || a.journal_entry_id.localeCompare(b.journal_entry_id)
+    })
+    candidatesByRow.set(row.id, matches)
+  }
 
-    // Period-code disambiguation: prefer the AGI-linked candidate even when
-    // multiple amount-matches exist.
+  const suggestions = new Map<string, SkattekontoMatchCandidate>()
+  const usedEntries = new Set<string>()
+
+  const pick = (row: (typeof ordered)[number]): SkattekontoMatchCandidate | null => {
+    const free = (candidatesByRow.get(row.id) ?? []).filter(m => !usedEntries.has(m.journal_entry_id))
+    const periodEntryIds = periodIdsByRow.get(row.id)
     if (periodEntryIds) {
-      const periodMatches = matches.filter(m => m.matched_via_agi_period)
-      if (periodMatches.length === 1) {
-        suggestions.set(row.id, periodMatches[0])
-        continue
-      }
+      const periodMatches = free.filter(m => m.matched_via_agi_period)
+      if (periodMatches.length === 1) return periodMatches[0]
     }
+    // Only an unambiguous amount match is proposed; a split-line match never
+    // outranks a single-line one.
+    const exact = free.filter(m => !m.matched_via_entry_total)
+    if (exact.length === 1) return exact[0]
+    if (exact.length === 0 && free.length === 1) return free[0]
+    return null
+  }
 
-    // Fallback: auto-suggest only when there's a single unambiguous amount match.
-    if (matches.length === 1) {
-      suggestions.set(row.id, matches[0])
+  // Two passes: rows with an AGI period are the best-informed and go first,
+  // then everyone else in date order.
+  for (const pass of [true, false]) {
+    for (const row of ordered) {
+      if (suggestions.has(row.id)) continue
+      const hasPeriod = !!periodIdsByRow.get(row.id)
+      if (hasPeriod !== pass) continue
+      const chosen = pick(row)
+      if (!chosen) continue
+      suggestions.set(row.id, chosen)
+      usedEntries.add(chosen.journal_entry_id)
     }
   }
 
   return suggestions
+}
+
+function daysBetweenIso(a: string, b: string): number {
+  const ms = new Date(a + 'T00:00:00Z').getTime() - new Date(b + 'T00:00:00Z').getTime()
+  return Math.round(ms / 86_400_000)
 }
 
 function addDays(iso: string, days: number): string {

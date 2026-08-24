@@ -7,6 +7,7 @@ import { computeDedupKey, contentSignature } from '@/lib/skatteverket/skattekont
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
+import { refreshSkattekontoProposals } from './skattekonto-proposals'
 import { getSaldo, getTransaktioner } from './skattekonto-client'
 import { SkatteverketAuthError, type SkvAuth } from './api-client'
 import type {
@@ -410,6 +411,14 @@ export async function syncSkattekonto(
     bookedRows,
     saldo.saldoSkatteverket,
   )
+
+  // Exact-twin proposals for the open rows (migration 20260823120000): the
+  // reconciliation page, the worklist and agents read them from the row
+  // instead of recomputing per request. Best-effort inside (never throws).
+  const proposals = await refreshSkattekontoProposals(ctx.supabase, ctx.companyId)
+  if (proposals.proposed > 0 || proposals.cleared > 0) {
+    log.info('proposals refreshed', { companyId: ctx.companyId, ...proposals })
+  }
 
   // Cache balance snapshot.
   const snapshot: SkattekontoBalanceSnapshot = {
