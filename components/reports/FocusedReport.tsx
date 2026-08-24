@@ -55,6 +55,10 @@ const BehandlingshistorikView = dynamic(() =>
   import('./BehandlingshistorikView').then((module) => ({ default: module.BehandlingshistorikView })),
   { loading: ReportViewLoading },
 )
+const BokslutsbilagorView = dynamic(() =>
+  import('./BokslutsbilagorView').then((module) => ({ default: module.BokslutsbilagorView })),
+  { loading: ReportViewLoading },
+)
 
 /**
  * The focused single-report experience at /reports/[slug]. Carries one report:
@@ -240,6 +244,8 @@ function FocusedView({
       return <SupplierLedgerView periodId={periodId} />
     case 'behandlingshistorik':
       return <BehandlingshistorikView periodId={periodId} dateRange={dateRange} />
+    case 'bokslutsbilagor':
+      return <BokslutsbilagorView key={periodId} periodId={periodId} />
     default:
       return null
   }

@@ -6732,6 +6732,8 @@
     "name_grundbok": "Journal register",
     "name_behandlingshistorik": "Processing history",
     "desc_behandlingshistorik": "Who did what and when: posted vouchers, corrections and changes to the system (BFL 5 kap. 11 §)",
+    "name_bokslutsbilagor": "Closing binder",
+    "desc_bokslutsbilagor": "The binder per fiscal year: every balance sheet account as of the balance sheet date with booked balance, supporting documents, sign-off and attached files",
     "bh_summary": "{count, plural, =1 {1 event} other {# events}}",
     "bh_range_to": "to",
     "bh_version": "Software version",
@@ -8091,5 +8093,23 @@
     "gap": "{from} to {to} (between {after} and {before})",
     "hint": "Import the SIE file for that year, or create the fiscal year manually, so balances roll forward.",
     "manage": "Manage fiscal years"
+  },
+  "bokslutsbilagor": {
+    "open_parm": "Closing binder",
+    "load_failed": "Could not load the closing binder.",
+    "empty_title": "No balance sheet accounts yet",
+    "empty_desc": "The binder fills up once the fiscal year has balances or movements on balance sheet accounts. Reconcile and sign them on Reconciliation.",
+    "open_reconciliation": "Open Reconciliation",
+    "summary": "{accounts} balance sheet accounts as of {date}, {signed} signed off on the balance sheet date, {files} attached files",
+    "checklist_summary": "checklist {done} of {total}",
+    "col_account": "Account",
+    "col_booked": "Booked",
+    "col_external": "Per documents",
+    "col_difference": "Difference",
+    "col_signoff": "Sign-off",
+    "col_files": "Files",
+    "signed": "{who}, {when}",
+    "signed_other_date": "through {date} ({who}), not the balance sheet date",
+    "unsigned": "Not signed off"
   }
 }
