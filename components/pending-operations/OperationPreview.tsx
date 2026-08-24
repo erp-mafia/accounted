@@ -297,12 +297,14 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
   const totalDebit = data.total_debit as number | undefined
   const totalCredit = data.total_credit as number | undefined
   // Advisory, mirrors the MCP staging warning: a verifikat for a received
-  // handling must carry the handling itself (BFL 5 kap 6 §). Only shown when
-  // the staging explicitly said no document is attached; older ops without
-  // the flag render unchanged. The wording is conditional ("om ... avser en
-  // mottagen handling"): IB and internal entries (accruals, FX) legitimately
-  // lack a kvitto, and flagging them as deficient would be wrong.
-  const missingUnderlag = data.document_attached === false
+  // handling must carry the handling itself (BFL 5 kap 6 §). Gated on the
+  // staged compliance_warning, not on document_attached: the server decides
+  // when the warning applies (IB entries are exempt there), so this stays a
+  // mirror instead of a second, looser policy. Older ops without the field
+  // render unchanged. The wording stays conditional ("om ... avser en
+  // mottagen handling"): internal entries (accruals, FX) legitimately lack
+  // a kvitto, and flagging them as deficient would be wrong.
+  const missingUnderlag = typeof data.compliance_warning === 'string'
 
   return (
     <div className="space-y-3 text-sm">

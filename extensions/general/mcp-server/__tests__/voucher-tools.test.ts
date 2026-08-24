@@ -447,6 +447,51 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(result.preview.compliance_warning).not.toMatch(/restage with inbox_item_id/i)
   })
 
+  it('is_opening_balance: no underlag warning (IB legitimately lacks a kvitto)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'fp-1',
+        is_closed: false,
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        name: '2026',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+        { account_number: '2081', account_name: 'Aktiekapital', is_active: true },
+      ],
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+    enqueue({ data: { id: 'op-ib' }, error: null }) // pending_operations insert
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-01-01',
+        description: 'Ingående balans',
+        fiscal_period_id: 'fp-1',
+        is_opening_balance: true,
+        lines: [
+          { account_number: '1930', debit_amount: 25000, credit_amount: 0 },
+          { account_number: '2081', debit_amount: 0, credit_amount: 25000 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; message: string; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.document_attached).toBe(false)
+    expect(result.preview.compliance_warning).toBeUndefined()
+    expect(result.message).not.toMatch(/WARNING/)
+  })
+
   it('rejects when inbox_item_id is already booked as a journal entry', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

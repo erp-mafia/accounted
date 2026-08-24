@@ -15816,8 +15816,10 @@ export const tools: McpTool[] = [
           // repair after posting is storno + a consumed voucher number. The
           // inbox-item variant avoids a dead-end "restage with inbox_item_id"
           // instruction when inbox_item_id WAS supplied but the item carries
-          // no stored document.
-          ...(inboxDocumentId
+          // no stored document. IB entries are exempt: a migrated ingående
+          // balans has no kvitto to attach and warning on it would be a false
+          // positive that trains approvers to ignore the warning.
+          ...(inboxDocumentId || isOpeningBalance
             ? {}
             : {
                 complianceNote: inboxItemId
