@@ -120,6 +120,7 @@ describe('gnubok_categorize_transaction: category presence guard (#1662)', () =>
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow() }) // core: transactions
     enqueue({ data: settingsRow }) // core: company_settings
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: guardTxRow() }) // tool: transactions re-fetch
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
     enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods

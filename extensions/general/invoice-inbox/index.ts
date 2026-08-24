@@ -2651,6 +2651,7 @@ export const invoiceInboxExtension: Extension = {
             ctx.companyId,
             (tx as Transaction).cash_account_id,
             createLogger('invoice-inbox.suggest-booking'),
+            (tx as Transaction).currency,
           )
           // evaluateMappingRules applies the settlement account itself on every
           // return path. Applying it again rewrote a legitimate 1930 leg, which

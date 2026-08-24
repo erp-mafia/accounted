@@ -1141,6 +1141,7 @@ async function categorizeTransactionCore(
     companyId,
     transaction.cash_account_id,
     log,
+    transaction.currency,
   )
   mappingResult = applySettlementAccount(mappingResult, settlementAccount)
 

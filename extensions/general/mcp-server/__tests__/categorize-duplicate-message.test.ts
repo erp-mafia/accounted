@@ -102,6 +102,7 @@ describe('gnubok_categorize_transaction duplicate-guard message', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow(), error: null }) // core: transactions
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // core: settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: guardTxRow(), error: null }) // tool: transactions re-fetch
 
     mockDetectDup.mockResolvedValue(
@@ -127,6 +128,7 @@ describe('gnubok_categorize_transaction duplicate-guard message', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow({ amount: -1616, currency: 'SEK' }), error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: guardTxRow({ amount: -1616, currency: 'SEK' }), error: null })
 
     mockDetectDup.mockResolvedValue(candidate({ amount: -1616 }))
@@ -143,6 +145,7 @@ describe('gnubok_categorize_transaction duplicate-guard message', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: coreTxRow({ amount: -8570.87 }), error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: guardTxRow({ amount: -8570.87 }), error: null })
 
     mockDetectDup.mockResolvedValue(

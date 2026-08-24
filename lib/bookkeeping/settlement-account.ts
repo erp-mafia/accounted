@@ -13,14 +13,59 @@ const FALLBACK_ACCOUNT = '1930'
  * to which bank account a specific transaction is linked to.
  * cash_account_id -> cash_accounts.ledger_account is the only source of
  * truth for a real transaction's settlement account.
+ *
+ * When the transaction has NO cash_account_id (legacy/unresolved rows),
+ * mirror the client-side resolveAccount (lib/cash-accounts/resolve-account.ts):
+ * if the company has EXACTLY ONE enabled cash account in the transaction's
+ * currency, that account is unambiguous and the bank leg belongs there.
+ * Without this, a company whose only bank account is e.g. 1920 got its
+ * booking dialogs previewing 1920 while the posted verifikat silently hit
+ * the hardcoded 1930 template leg (issue #1722). Zero or several candidate
+ * accounts keeps the historical 1930 fallback: guessing between real
+ * accounts is worse than the known-neutral default.
  */
 export async function resolveSettlementAccount(
   supabase: SupabaseClient,
   companyId: string,
   cashAccountId: string | null,
   log: Logger,
+  currency: string = 'SEK',
 ): Promise<string> {
-  if (!cashAccountId) return FALLBACK_ACCOUNT
+  if (!cashAccountId) {
+    const { data: candidates, error: listError } = await supabase
+      .from('cash_accounts')
+      .select('ledger_account')
+      .eq('company_id', companyId)
+      .eq('enabled', true)
+      .eq('currency', currency)
+      .limit(2)
+
+    if (listError) {
+      // Unlike the explicit-cashAccountId branch below (which throws, #842),
+      // this path historically never queried at all and always returned 1930,
+      // so failing the whole request on a lookup error here would regress
+      // every unbound transaction, including ambiguous companies whose answer
+      // is 1930 anyway. Degrade to the historical fallback and warn.
+      log.warn('settlement-account currency fallback lookup failed; defaulting to 1930', {
+        companyId,
+        currency,
+        error: listError.message,
+      })
+      return FALLBACK_ACCOUNT
+    }
+
+    if (candidates?.length === 1) {
+      const ledgerAccount = candidates[0]?.ledger_account as string | null
+      if (ledgerAccount) return ledgerAccount
+      // ledger_account is NOT NULL in the schema; a hole here is a
+      // data-integrity gap that must not hide behind a plausible 1930 leg.
+      log.warn('settlement-account currency fallback row has no ledger_account; defaulting to 1930', {
+        companyId,
+        currency,
+      })
+    }
+    return FALLBACK_ACCOUNT
+  }
 
   const { data, error } = await supabase
     .from('cash_accounts')

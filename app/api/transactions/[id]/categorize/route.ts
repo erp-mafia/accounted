@@ -346,6 +346,7 @@ export const POST = withRouteContext(
       companyId!,
       transaction.cash_account_id,
       txLog,
+      transaction.currency,
     )
     mappingResult = applySettlementAccount(mappingResult, settlementAccount)
 

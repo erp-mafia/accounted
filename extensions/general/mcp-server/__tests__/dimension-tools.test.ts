@@ -731,7 +731,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     })
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
-    enqueue({ data: { ledger_account: '1931' }, error: null })
+    enqueue({ data: { ledger_account: '1931' }, error: null }) // resolveSettlementAccount: explicit cash_account_id lookup
     enqueue({ data: tx, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
@@ -764,6 +764,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     // categorizeTransactionCore: transaction fetch + company_settings
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // transaction fetch for the title
     enqueue({ data: tx, error: null })
     // resolveDimensionBags: settings → ensure rpc → dimensions → dimension_values
@@ -820,6 +821,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: -500 })
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: tx, error: null })
     enqueue({ data: null, error: null }) // period status layer 1
     enqueue({ data: null, error: null }) // period status layer 2

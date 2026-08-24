@@ -71,6 +71,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     eventBus.on('transaction.categorized', categorizedHandler)
     enqueue({ data: txRow({ is_ignored: true }) })
     enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
     enqueue({
       data: [txRow({
@@ -109,6 +110,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
     enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
     enqueue({ data: [] })
     mockCreateJE.mockResolvedValueOnce(null)
@@ -129,6 +131,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() }) // transactions select
     enqueue({ data: settingsRow }) // company_settings
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } }) // override chart hit
     enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod: open period exists
     enqueue({ data: [{ id: TX_ID }] }) // transactions update
@@ -153,6 +156,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
     enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } })
     enqueue({ data: [{ id: 'fp-1' }] }) // ensureFiscalPeriod
     enqueue({ data: [{ id: TX_ID }] }) // transactions update
@@ -177,6 +181,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
     enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: false } })
 
     const result = await categorizeMatchedTransaction(
@@ -193,6 +198,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
     enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     const result = await categorizeMatchedTransaction(
       supabase as never, 'user-1', 'company-1', TX_ID,
@@ -208,6 +214,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: txRow({ is_ignored: true }) })
     enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
     enqueue({
       data: null,
@@ -240,6 +247,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     const { supabase, enqueue, calls } = createQueuedMockSupabase()
     enqueue({ data: txRow() })
     enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
     enqueue({ data: [] })
 

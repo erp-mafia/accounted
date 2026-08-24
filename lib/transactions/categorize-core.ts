@@ -351,6 +351,7 @@ export async function categorizeMatchedTransaction(
     companyId,
     transaction.cash_account_id,
     log,
+    transaction.currency,
   )
   mappingResult = applySettlementAccount(mappingResult, settlementAccount)
   // Re-validated here (not only at staging): the account can be deactivated
