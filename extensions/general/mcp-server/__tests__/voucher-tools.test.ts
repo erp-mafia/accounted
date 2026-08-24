@@ -300,12 +300,20 @@ describe('gnubok_create_voucher: staging gates', () => {
       'company-1',
       'user-1',
       supabase as never,
-    )) as { staged: boolean; operation_id?: string; preview: Record<string, unknown> }
+    )) as { staged: boolean; operation_id?: string; message: string; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
     expect(result.operation_id).toBe('op-staged')
     expect(result.preview.total_debit).toBe(250)
     expect(result.preview.total_credit).toBe(250)
+
+    // No document attached: the advisory BFL 5 kap 6§ warning must reach both
+    // the agent (message) and the /pending approval card (preview) without
+    // blocking the staging itself.
+    expect(result.preview.document_attached).toBe(false)
+    expect(result.preview.compliance_warning).toMatch(/BFL 5 kap 6§/)
+    expect(result.preview.compliance_warning).toMatch(/underlag/i)
+    expect(result.message).toMatch(/WARNING:.*underlag/i)
 
     // Critical: the staged pending_operations row must NOT carry source_type.
     // The executor always hardcodes 'manual'. Look at the insert call.
@@ -376,6 +384,112 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(result.preview.inbox_item_id).toBe('inbox-1')
     expect(result.preview.document_attached).toBe(true)
     expect(result.preview.will).toMatch(/link the inbox item/i)
+    // Document attached: the missing-underlag warning must NOT appear.
+    expect(result.preview.compliance_warning).toBeUndefined()
+  })
+
+  it('inbox item without a stored document: no attach claim, inbox-variant warning', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'fp-1',
+        is_closed: false,
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        name: '2026',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: true },
+        { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: 'inbox-nodoc',
+        document_id: null, // ingested without attachment, or ON DELETE SET NULL
+        created_journal_entry_id: null,
+        created_supplier_invoice_id: null,
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+    enqueue({ data: { id: 'op-nodoc' }, error: null }) // pending_operations insert
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-05-12',
+        description: 'Inbox item utan dokument',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-nodoc',
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.document_attached).toBe(false)
+    // The envelope must not contradict itself: no "attach the OCR document"
+    // claim, and the warning must not tell the agent to restage with the
+    // inbox_item_id it already supplied.
+    expect(result.preview.will).toMatch(/link the inbox item/i)
+    expect(result.preview.will).not.toMatch(/attach the OCR document/i)
+    expect(result.preview.compliance_warning).toMatch(/no stored document/i)
+    expect(result.preview.compliance_warning).not.toMatch(/restage with inbox_item_id/i)
+  })
+
+  it('is_opening_balance: no underlag warning (IB legitimately lacks a kvitto)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'fp-1',
+        is_closed: false,
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        name: '2026',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+        { account_number: '2081', account_name: 'Aktiekapital', is_active: true },
+      ],
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+    enqueue({ data: { id: 'op-ib' }, error: null }) // pending_operations insert
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-01-01',
+        description: 'Ingående balans',
+        fiscal_period_id: 'fp-1',
+        is_opening_balance: true,
+        lines: [
+          { account_number: '1930', debit_amount: 25000, credit_amount: 0 },
+          { account_number: '2081', debit_amount: 0, credit_amount: 25000 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; message: string; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.document_attached).toBe(false)
+    expect(result.preview.compliance_warning).toBeUndefined()
+    expect(result.message).not.toMatch(/WARNING/)
   })
 
   it('rejects when inbox_item_id is already booked as a journal entry', async () => {
