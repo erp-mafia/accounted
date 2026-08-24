@@ -54,6 +54,13 @@ export default function BookkeepingPage() {
     const raw = searchParams.get('copy_from')
     return raw && UUID_RE.test(raw) ? raw : null
   }, [searchParams])
+  // Deep link from the dashboard "Verifikat utan underlag" card (and the
+  // push-notification link): open the list with the saknade-underlag filter
+  // already on. Read once on mount: the param stays in the URL (shareable),
+  // and later in-page filter changes must not be fought by the URL.
+  const [initialShowMissingOnly] = useState(
+    () => searchParams.get('missingUnderlag') === 'true',
+  )
 
   const [refreshKey, setRefreshKey] = useState(0)
   const [showNewEntry, setShowNewEntry] = useState(false)
@@ -270,6 +277,7 @@ export default function BookkeepingPage() {
           losing expansion/selection/scroll. */}
       <JournalEntryList
         refreshToken={refreshKey}
+        initialShowMissingOnly={initialShowMissingOnly}
         pristineSlot={
           <div className="animate-fade-in space-y-4">
             <StartCard

@@ -8,6 +8,11 @@ import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
 import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  MissingUnderlagQueryError,
+  resolveMissingUnderlagEntries,
+  type MissingUnderlagEntry,
+} from '@/lib/bookkeeping/missing-underlag'
 
 ensureInitialized()
 
@@ -75,9 +80,131 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // is dated inside the selected period. Pass include_related=false to
   // restore strict fiscal_period_id filtering.
   const includeRelated = searchParams.get('include_related') !== 'false'
+  // Server-side "saknar underlag" filter (dashboard deep link + the list
+  // dialog's "Visa saknade underlag" toggle). Committed view only: the
+  // predicate is posted-only, so it is meaningless for the drafts view.
+  const missingUnderlag = searchParams.get('missing_underlag') === 'true' && status !== 'draft'
 
   const dateAscending = sortDate === 'asc'
   const sortDateParam = soloDateKey ? (soloDateKey.ascending ? 'asc' : 'desc') : sortDate === 'asc' ? 'asc' : 'desc'
+
+  if (missingUnderlag) {
+    // The missing-underlag predicate spans three tables (current-version
+    // documents, anchored supplier-invoice references per BFL 5 kap 7 §, and
+    // journal_entry_no_doc_required exemptions), which PostgREST cannot
+    // express as a row filter. So this path resolves the FULL missing set via
+    // the shared helper (the same code the bulk "Inget underlag krävs" route
+    // uses, mirroring the verifikat_without_documents RPC that feeds the
+    // dashboard badge), sorts it with the active sort stack, pages it, and
+    // fetches only the page's rows. count is the full filtered total, so
+    // pagination and the dialog badge stay honest.
+    //
+    // collapse_corrections is deliberately NOT applied here: the dashboard
+    // badge has no collapse notion, and hiding corrected originals would make
+    // the filtered list disagree with the count that led the user here.
+    let missing
+    try {
+      missing = await resolveMissingUnderlagEntries(supabase, companyId, {
+        periodId,
+        series: seriesFilter,
+        dateFrom,
+        dateTo,
+        search,
+      })
+    } catch (err) {
+      if (err instanceof MissingUnderlagQueryError) {
+        log.error('failed to resolve missing-underlag entries', err)
+        return NextResponse.json(
+          { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
+          { status: 500 }
+        )
+      }
+      throw err
+    }
+
+    // Sort the full set with the same key semantics as the direct query
+    // below: the sort stack in priority order, a voucher tiebreak in the last
+    // key's direction unless voucher is already a key, and a final id
+    // tiebreak for a stable total order across page requests.
+    const keys =
+      sortKeys.length > 0
+        ? sortKeys
+        : sortDate === 'asc' || sortDate === 'desc'
+          ? [{ column: 'date' as const, ascending: dateAscending }]
+          : []
+    const compareVoucher = (a: MissingUnderlagEntry, b: MissingUnderlagEntry) => {
+      const seriesA = a.voucher_series ?? ''
+      const seriesB = b.voucher_series ?? ''
+      if (seriesA !== seriesB) return seriesA < seriesB ? -1 : 1
+      return (a.voucher_number ?? 0) - (b.voucher_number ?? 0)
+    }
+    const compareBy = (
+      column: 'date' | 'voucher' | 'total' | 'description',
+      a: MissingUnderlagEntry,
+      b: MissingUnderlagEntry,
+    ) => {
+      switch (column) {
+        case 'date':
+          return a.entry_date < b.entry_date ? -1 : a.entry_date > b.entry_date ? 1 : 0
+        case 'voucher':
+          return compareVoucher(a, b)
+        case 'total':
+          return (a.total_amount ?? 0) - (b.total_amount ?? 0)
+        case 'description': {
+          const descA = a.description ?? ''
+          const descB = b.description ?? ''
+          return descA < descB ? -1 : descA > descB ? 1 : 0
+        }
+      }
+    }
+    const lastAscending = keys.length > 0 ? keys[keys.length - 1].ascending : true
+    const sorted = [...missing].sort((a, b) => {
+      for (const key of keys) {
+        const cmp = compareBy(key.column, a, b)
+        if (cmp !== 0) return key.ascending ? cmp : -cmp
+      }
+      if (!keys.some((k) => k.column === 'voucher')) {
+        const cmp = compareVoucher(a, b)
+        if (cmp !== 0) return lastAscending ? cmp : -cmp
+      }
+      const cmp = a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+      return lastAscending ? cmp : -cmp
+    })
+
+    const total = sorted.length
+    const pageIds = sorted.slice(offset, offset + limit).map((e) => e.id)
+    if (pageIds.length === 0) {
+      return NextResponse.json({ data: [], count: total })
+    }
+
+    // Fetch the page's full rows in id chunks: "Alla" as page size can put
+    // thousands of ids on this page, and a single .in() with that many ids
+    // would blow PostgREST's URL length limit.
+    const ROW_CHUNK = 100
+    const rowsById = new Map<string, unknown>()
+    for (let i = 0; i < pageIds.length; i += ROW_CHUNK) {
+      const chunk = pageIds.slice(i, i + ROW_CHUNK)
+      const { data: chunkRows, error } = await supabase
+        .from('journal_entries')
+        .select('*, lines:journal_entry_lines(*)')
+        .eq('company_id', companyId)
+        .in('id', chunk)
+      if (error) {
+        log.error('failed to fetch missing-underlag page rows', error)
+        return NextResponse.json(
+          { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
+          { status: 500 }
+        )
+      }
+      for (const row of (chunkRows ?? []) as { id: string }[]) {
+        rowsById.set(row.id, row)
+      }
+    }
+    // Reassemble in the sorted page order (the .in() fetch has no order).
+    const data = pageIds.map((id) => rowsById.get(id)).filter(Boolean)
+
+    return NextResponse.json({ data, count: total })
+  }
 
   // Non-date sorts (and stacked sorts): the include_related RPC only orders
   // by date, so fall through to the direct query below. This means these

@@ -2,11 +2,11 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
-import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
-import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  MissingUnderlagQueryError,
+  resolveMissingUnderlagEntries,
+} from '@/lib/bookkeeping/missing-underlag'
 
 // A real calendar date in YYYY-MM-DD form. Rejects shaped-but-invalid values
 // (e.g. 9999-99-99 or 2026-02-30) that a bare /^\d{4}-\d{2}-\d{2}$/ regex would
@@ -24,12 +24,6 @@ const isoDate = z.string().refine(
   },
   { message: 'Ogiltigt datum (förväntat YYYY-MM-DD)' },
 )
-
-// Journal-entry ids are interpolated into the supplier-invoice .or() filter
-// string below, so they must be UUIDs. They originate from journal_entries.id
-// (DB-sourced, never request input), but this guard keeps the injection-safety
-// contract identical to /api/documents/counts.
-const uuidSchema = z.string().uuid()
 
 const BulkMissingSchema = z.object({
   period_id: z.string().uuid().nullable().optional(),
@@ -51,9 +45,11 @@ const BulkMissingSchema = z.object({
  * scalable remedy for the "thousands of saknade underlag after a migration"
  * problem; the per-entry batch route handles selective marking.
  *
- * The missing-doc predicate mirrors countVerifikatMissingDocument: posted +
- * NEEDS_DOC source type, no current-version document_attachment, not already
- * exempt.
+ * The missing-doc predicate lives in resolveMissingUnderlagEntries (shared
+ * with the journal list's missing_underlag filter) and mirrors
+ * countVerifikatMissingDocument: posted + NEEDS_DOC source type, no
+ * current-version document_attachment, no anchored supplier-invoice reference,
+ * not already exempt.
  */
 export const POST = withRouteContext(
   'journal_entry.bulk_missing_no_document_required',
@@ -64,124 +60,25 @@ export const POST = withRouteContext(
     // All formats are enforced by the schema above, so these are already valid
     // (or null). No re-validation needed before they reach the query layer.
     const { period_id, reason, dry_run } = validation.data
-    const series = validation.data.series ?? null
-    const dateFrom = validation.data.date_from ?? null
-    const dateTo = validation.data.date_to ?? null
-    const search = validation.data.search?.trim() || null
 
-    // Candidate entries: posted, document-requiring, matching the active filters.
-    const candidates = await fetchAllRows<{ id: string }>(({ from, to }) => {
-      let q = supabase
-        .from('journal_entries')
-        .select('id')
-        .eq('company_id', companyId)
-        .eq('status', 'posted')
-        .in('source_type', [...NEEDS_DOC_SOURCE_TYPES])
-      if (period_id) q = q.eq('fiscal_period_id', period_id)
-      if (series) q = q.eq('voucher_series', series)
-      if (dateFrom) q = q.gte('entry_date', dateFrom)
-      if (dateTo) q = q.lte('entry_date', dateTo)
-      if (search) q = q.ilike('description', `%${escapeLikePattern(search)}%`)
-      return q.order('id').range(from, to)
-    })
-
-    if (candidates.length === 0) {
-      return NextResponse.json({ data: dry_run ? { count: 0 } : { exempted: 0 } })
+    let missing
+    try {
+      missing = await resolveMissingUnderlagEntries(supabase, companyId, {
+        periodId: period_id ?? null,
+        series: validation.data.series ?? null,
+        dateFrom: validation.data.date_from ?? null,
+        dateTo: validation.data.date_to ?? null,
+        search: validation.data.search ?? null,
+      })
+    } catch (err) {
+      if (err instanceof MissingUnderlagQueryError) {
+        // userMessage is already mapped through getErrorMessage() in the
+        // resolver: user-facing Swedish, never a raw driver message.
+        return NextResponse.json({ error: err.userMessage }, { status: 400 })
+      }
+      throw err
     }
-
-    // Resolve which candidates already have a document or an exemption by
-    // querying ONLY for the candidate ids (chunked), rather than loading the
-    // company's full document_attachments + journal_entry_no_doc_required tables
-    // into memory. Data minimisation + bounded memory for large migrations.
-    const candidateIds = candidates.map((e) => e.id)
-    const withDoc = new Set<string>()
-    const exempt = new Set<string>()
-    // 150 keeps the embedded id lists well under PostgREST's URL-length limit:
-    // the supplier-invoice .or() below repeats the chunk twice (registration +
-    // payment FK), so a larger chunk would risk truncating the GET filter.
-    const LOOKUP_CHUNK = 150
-    for (let i = 0; i < candidateIds.length; i += LOOKUP_CHUNK) {
-      const chunk = candidateIds.slice(i, i + LOOKUP_CHUNK)
-      // Only UUIDs reach the interpolated .or() string (the .in() array filters
-      // are already injection-safe); mirrors the guard in documents/counts.
-      const chunkInList = `(${chunk.filter((id) => uuidSchema.safeParse(id).success).join(',')})`
-      const [docRes, siRefRes, sipRefRes, exemptRes] = await Promise.all([
-        supabase
-          .from('document_attachments')
-          .select('journal_entry_id')
-          .eq('company_id', companyId)
-          .eq('is_current_version', true)
-          .in('journal_entry_id', chunk),
-        // BFL 5 kap 7 § hänvisning: an entry referenced by a supplier invoice
-        // whose source document is retained AND anchored to a journal entry
-        // is NOT missing underlag (only anchored docs sit behind the WORM
-        // deletion guards). Mirrors the verifikat_without_documents RPC;
-        // without this the bulk action would waive entries the warning no
-        // longer counts.
-        supabase
-          .from('supplier_invoices')
-          .select(
-            'registration_journal_entry_id, payment_journal_entry_id, document:document_attachments(journal_entry_id)',
-          )
-          .eq('company_id', companyId)
-          .not('document_id', 'is', null)
-          .or(
-            `registration_journal_entry_id.in.${chunkInList},payment_journal_entry_id.in.${chunkInList}`,
-          ),
-        supabase
-          .from('supplier_invoice_payments')
-          .select(
-            'journal_entry_id, supplier_invoice:supplier_invoices(document_id, document:document_attachments(journal_entry_id))',
-          )
-          .eq('company_id', companyId)
-          .in('journal_entry_id', chunk),
-        supabase
-          .from('journal_entry_no_doc_required')
-          .select('journal_entry_id')
-          .eq('company_id', companyId)
-          .in('journal_entry_id', chunk),
-      ])
-      if (docRes.error) {
-        return NextResponse.json({ error: getUserErrorMessage(docRes.error) }, { status: 400 })
-      }
-      if (siRefRes.error) {
-        return NextResponse.json({ error: getUserErrorMessage(siRefRes.error) }, { status: 400 })
-      }
-      if (sipRefRes.error) {
-        return NextResponse.json({ error: getUserErrorMessage(sipRefRes.error) }, { status: 400 })
-      }
-      if (exemptRes.error) {
-        return NextResponse.json({ error: getUserErrorMessage(exemptRes.error) }, { status: 400 })
-      }
-      for (const r of (docRes.data ?? []) as { journal_entry_id: string }[]) {
-        withDoc.add(r.journal_entry_id)
-      }
-      for (const r of (siRefRes.data ?? []) as unknown as {
-        registration_journal_entry_id: string | null
-        payment_journal_entry_id: string | null
-        document: { journal_entry_id: string | null } | null
-      }[]) {
-        if (!r.document?.journal_entry_id) continue // unanchored: not underlag
-        if (r.registration_journal_entry_id) withDoc.add(r.registration_journal_entry_id)
-        if (r.payment_journal_entry_id) withDoc.add(r.payment_journal_entry_id)
-      }
-      for (const r of (sipRefRes.data ?? []) as unknown as {
-        journal_entry_id: string | null
-        supplier_invoice: {
-          document_id: string | null
-          document: { journal_entry_id: string | null } | null
-        } | null
-      }[]) {
-        if (r.journal_entry_id && r.supplier_invoice?.document?.journal_entry_id) {
-          withDoc.add(r.journal_entry_id)
-        }
-      }
-      for (const r of (exemptRes.data ?? []) as { journal_entry_id: string }[]) {
-        exempt.add(r.journal_entry_id)
-      }
-    }
-
-    const missingIds = candidateIds.filter((id) => !withDoc.has(id) && !exempt.has(id))
+    const missingIds = missing.map((e) => e.id)
 
     if (dry_run) {
       return NextResponse.json({ data: { count: missingIds.length } })

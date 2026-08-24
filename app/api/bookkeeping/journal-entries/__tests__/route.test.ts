@@ -355,6 +355,131 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     // Raw Supabase messages never reach the response field (issue #337).
     expect(body.error).toBe('Verifikationerna kunde inte hämtas. Försök igen.')
   })
+
+  describe('missing_underlag=true (the dashboard deep-link filter)', () => {
+    // Candidate ids must be UUID-shaped: the resolver interpolates them into
+    // the supplier-invoice .or() filter behind a UUID guard.
+    const E1 = '11111111-1111-4111-8111-111111111111'
+    const E2 = '22222222-2222-4222-8222-222222222222'
+    const E3 = '33333333-3333-4333-8333-333333333333'
+    const candidate = (id: string, voucherNumber: number) => ({
+      id,
+      entry_date: '2026-06-08',
+      voucher_series: 'A',
+      voucher_number: voucherNumber,
+      description: 'test',
+      total_amount: 100,
+    })
+
+    it('returns only entries without documents, exemption-aware, with the full-set count', async () => {
+      enqueue({ data: [candidate(E1, 1), candidate(E2, 2), candidate(E3, 3)], error: null }) // candidates
+      enqueue({ data: [{ journal_entry_id: E1 }], error: null }) // E1 has a document
+      enqueue({ data: [], error: null }) // no SI references
+      enqueue({ data: [], error: null }) // no SI payment-row references
+      enqueue({ data: [{ journal_entry_id: E3 }], error: null }) // E3 exempt
+      const fullRow = makeJournalEntry({ id: E2 })
+      enqueue({ data: [fullRow], error: null }) // page rows
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { missing_underlag: 'true', exclude_draft: 'true' },
+      })
+      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
+        await GET(request)
+      )
+
+      expect(status).toBe(200)
+      expect(body.data.map((e) => e.id)).toEqual([E2])
+      expect(body.count).toBe(1)
+    })
+
+    it('takes this path instead of the include_related RPC when a period is selected', async () => {
+      enqueue({ data: [], error: null }) // candidates: none
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { missing_underlag: 'true', period_id: 'period-1', exclude_draft: 'true' },
+      })
+      const { status, body } = await parseJsonResponse<{ data: unknown[]; count: number }>(
+        await GET(request)
+      )
+
+      expect(status).toBe(200)
+      expect(body.data).toEqual([])
+      expect(body.count).toBe(0)
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    })
+
+    it('paginates over the missing set with count spanning all pages', async () => {
+      // Out of voucher order on purpose: default sort is series+number asc.
+      enqueue({ data: [candidate(E3, 3), candidate(E1, 1), candidate(E2, 2)], error: null })
+      enqueue({ data: [], error: null }) // no documents
+      enqueue({ data: [], error: null }) // no SI references
+      enqueue({ data: [], error: null }) // no SI payment-row references
+      enqueue({ data: [], error: null }) // no exemptions
+      enqueue({ data: [makeJournalEntry({ id: E2 })], error: null }) // page rows
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: {
+          missing_underlag: 'true',
+          exclude_draft: 'true',
+          limit: '1',
+          offset: '1',
+        },
+      })
+      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
+        await GET(request)
+      )
+
+      expect(status).toBe(200)
+      // Page 2 of size 1 under voucher-asc = A2.
+      expect(body.data.map((e) => e.id)).toEqual([E2])
+      expect(body.count).toBe(3)
+    })
+
+    it('treats an anchored supplier-invoice reference as underlag (BFL 5 kap 7 §)', async () => {
+      enqueue({ data: [candidate(E1, 1), candidate(E2, 2)], error: null })
+      enqueue({ data: [], error: null }) // no direct documents
+      enqueue({
+        data: [
+          {
+            registration_journal_entry_id: E1,
+            payment_journal_entry_id: null,
+            document: { journal_entry_id: E1 }, // anchored → counts as underlag
+          },
+        ],
+        error: null,
+      })
+      enqueue({ data: [], error: null }) // no SI payment-row references
+      enqueue({ data: [], error: null }) // no exemptions
+      enqueue({ data: [makeJournalEntry({ id: E2 })], error: null }) // page rows
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { missing_underlag: 'true', exclude_draft: 'true' },
+      })
+      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
+        await GET(request)
+      )
+
+      expect(status).toBe(200)
+      expect(body.data.map((e) => e.id)).toEqual([E2])
+      expect(body.count).toBe(1)
+    })
+
+    it('is ignored for the drafts view', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { missing_underlag: 'true', status: 'draft' },
+      })
+      const { status } = await parseJsonResponse(await GET(request))
+
+      expect(status).toBe(200)
+      // The drafts view goes through the normal direct query, not the
+      // resolver: no lookup-table queries.
+      expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
+      expect(mockSupabase.from).not.toHaveBeenCalledWith('document_attachments')
+      expect(mockSupabase.from).not.toHaveBeenCalledWith('journal_entry_no_doc_required')
+    })
+  })
 })
 
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
