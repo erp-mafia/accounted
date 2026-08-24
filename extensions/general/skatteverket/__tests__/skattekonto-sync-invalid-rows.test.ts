@@ -162,6 +162,7 @@ describe('syncSkattekonto: rows missing NOT NULL fields', () => {
       {
         companyId: 'company-1',
         skipped: 2,
+        traceTruncated: false,
         rows: [
           {
             status: 'booked',
@@ -187,10 +188,108 @@ describe('syncSkattekonto: rows missing NOT NULL fields', () => {
     expect(writes[0][1]).toEqual(
       expect.objectContaining({
         rows: [
-          { status: 'booked', missing: ['beloppSkatteverket'], row: BOOKED_NO_BELOPP },
-          { status: 'upcoming', missing: ['beloppSkatteverket'], row: UPCOMING_NULL_BELOPP },
+          expect.objectContaining({
+            status: 'booked',
+            missing: ['beloppSkatteverket'],
+            row: BOOKED_NO_BELOPP,
+          }),
+          expect.objectContaining({
+            status: 'upcoming',
+            missing: ['beloppSkatteverket'],
+            row: UPCOMING_NULL_BELOPP,
+          }),
         ],
       }),
+    )
+  })
+
+  it('keeps aged-out trace entries and drops entries whose id resolved', async () => {
+    // Previous sync traced two rows; the current payload contains neither as
+    // skipped: 9003 now arrives complete (resolved: the table has it), while
+    // the id-less upcoming row has aged out of SKV's window entirely.
+    const previousTrace = {
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      rows: [
+        {
+          status: 'booked',
+          missing: ['beloppSkatteverket'],
+          row: BOOKED_NO_BELOPP,
+          firstSeenAt: '2026-08-01T00:00:00.000Z',
+          lastSeenAt: '2026-08-01T00:00:00.000Z',
+        },
+        {
+          status: 'upcoming',
+          missing: ['beloppSkatteverket'],
+          row: UPCOMING_NULL_BELOPP,
+          firstSeenAt: '2026-08-01T00:00:00.000Z',
+          lastSeenAt: '2026-08-01T00:00:00.000Z',
+        },
+      ],
+    }
+    const completed9003 = {
+      ...BOOKED_NO_BELOPP,
+      beloppSkatteverket: -500,
+    }
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: [completed9003],
+      kommandeTransaktioner: [],
+    })
+    const ctx = makeCtx()
+    ;(ctx.settings.get as ReturnType<typeof vi.fn>).mockImplementation(
+      (key: string) =>
+        Promise.resolve(key === SKATTEKONTO_SKIPPED_ROWS_KEY ? previousTrace : null),
+    )
+
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods
+    enqueue({ data: [] }) // existing dedup_key lookup
+    enqueue({ data: [] }) // takeover candidate scan
+    enqueue({ data: null }) // upsert
+
+    const result = await syncSkattekonto(ctx)
+
+    expect(result.skipped).toBe(0)
+    const writes = skippedRowsWrites()
+    expect(writes).toHaveLength(1)
+    const record = writes[0][1] as { rows: Array<{ row: { transaktionstext: string } }> }
+    // 9003 resolved into the table and left the trace; the aged-out id-less
+    // row survives with its original firstSeenAt.
+    expect(record.rows).toHaveLength(1)
+    expect(record.rows[0]).toEqual(
+      expect.objectContaining({
+        status: 'upcoming',
+        firstSeenAt: '2026-08-01T00:00:00.000Z',
+        row: UPCOMING_NULL_BELOPP,
+      }),
+    )
+  })
+
+  it('reports the full skipped count and flags truncation past the trace cap', async () => {
+    const manyInvalid = Array.from({ length: 60 }, (_, i) => ({
+      transaktionsidentitet: 20000 + i,
+      transaktionsdatum: '2026-07-01',
+      ranteberakningsdatum: null,
+      transaktionstext: `Rad ${i}`,
+      beloppSkatteverket: undefined as unknown as number,
+      beloppKronofogden: 0,
+    }))
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: manyInvalid,
+      kommandeTransaktioner: [],
+    })
+
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods
+
+    const result = await syncSkattekonto(makeCtx())
+
+    expect(result.skipped).toBe(60)
+    const record = skippedRowsWrites()[0][1] as { truncated?: boolean; rows: unknown[] }
+    expect(record.rows).toHaveLength(50)
+    expect(record.truncated).toBe(true)
+    expect(warnMock).toHaveBeenCalledWith(
+      'skipped transaktioner rows missing required fields',
+      expect.objectContaining({ skipped: 60, traceTruncated: true }),
     )
   })
 

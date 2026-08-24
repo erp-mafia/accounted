@@ -116,13 +116,36 @@ function isUsableTransaction(tx: IncomingTransaction): boolean {
  * amounts (GDPR data minimization: an enskild firma's skattekonto is the
  * owner's personal tax account).
  */
+export interface SkattekontoSkippedRowEntry {
+  status: 'booked' | 'upcoming'
+  missing: string[]
+  row: IncomingTransaction
+  firstSeenAt: string
+  lastSeenAt: string
+}
+
 export interface SkattekontoSkippedRowsRecord {
   updatedAt: string
-  rows: Array<{
-    status: 'booked' | 'upcoming'
-    missing: string[]
-    row: IncomingTransaction
-  }>
+  /**
+   * True when a pathological payload exceeded MAX_SKIPPED_ROWS_RETAINED and
+   * entries had to be dropped from this trace (never from the skipped count).
+   */
+  truncated?: boolean
+  rows: SkattekontoSkippedRowEntry[]
+}
+
+/**
+ * Identity for a skipped row inside the trace: SKV's stable id when present,
+ * otherwise the raw material an id-less row can offer. Only used to merge
+ * trace entries across syncs; never fed to the table's dedup_key.
+ */
+function skippedRowKey(status: 'booked' | 'upcoming', row: IncomingTransaction): string {
+  if (row.transaktionsidentitet != null) return `id:${row.transaktionsidentitet}`
+  return `raw:${status}:${JSON.stringify([
+    row.transaktionsdatum ?? null,
+    row.transaktionstext ?? null,
+    'forfallodatum' in row ? (row.forfallodatum ?? null) : null,
+  ])}`
 }
 
 // Dedup key computation moved to core (lib/skatteverket/skattekonto-dedup):
@@ -274,24 +297,59 @@ export async function syncSkattekonto(
 
   const tidigare = transaktioner.tidigareTransaktioner.filter(isUsableTransaction)
   const kommande = transaktioner.kommandeTransaktioner.filter(isUsableTransaction)
-  const skippedRecord: SkattekontoSkippedRowsRecord = {
-    updatedAt: new Date().toISOString(),
-    rows: [
-      ...transaktioner.tidigareTransaktioner
-        .filter(tx => !isUsableTransaction(tx))
-        .map(row => ({ status: 'booked' as const, missing: missingRequiredFields(row), row })),
-      ...transaktioner.kommandeTransaktioner
-        .filter(tx => !isUsableTransaction(tx))
-        .map(row => ({ status: 'upcoming' as const, missing: missingRequiredFields(row), row })),
-    ].slice(0, MAX_SKIPPED_ROWS_RETAINED),
+  const currentSkipped = [
+    ...transaktioner.tidigareTransaktioner
+      .filter(tx => !isUsableTransaction(tx))
+      .map(row => ({ status: 'booked' as const, missing: missingRequiredFields(row), row })),
+    ...transaktioner.kommandeTransaktioner
+      .filter(tx => !isUsableTransaction(tx))
+      .map(row => ({ status: 'upcoming' as const, missing: missingRequiredFields(row), row })),
+  ]
+  // The count reflects THIS sync's payload in full, independent of the
+  // trace cap below.
+  const skipped = currentSkipped.length
+
+  // Merge with the previously retained trace instead of overwriting it: a
+  // skipped row that ages out of SKV's ~555-day window would otherwise
+  // vanish from every later payload and take its only record with it
+  // (BFNAR 2013:2 kap 8 behandlingshistorik). An entry leaves the trace only
+  // when its transaktionsidentitet shows up among the valid rows: the data
+  // then lives in skattekonto_transactions itself, which is the better
+  // record.
+  const previousTrace = await ctx.settings.get<SkattekontoSkippedRowsRecord>(SKIPPED_ROWS_KEY)
+  const now = new Date().toISOString()
+  const byKey = new Map<string, SkattekontoSkippedRowEntry>()
+  for (const entry of previousTrace?.rows ?? []) {
+    byKey.set(skippedRowKey(entry.status, entry.row), entry)
   }
-  const skipped = skippedRecord.rows.length
-  // Written unconditionally so a completed row self-clears the trace.
+  for (const cur of currentSkipped) {
+    const key = skippedRowKey(cur.status, cur.row)
+    const prior = byKey.get(key)
+    byKey.set(key, {
+      ...cur,
+      firstSeenAt: prior?.firstSeenAt ?? now,
+      lastSeenAt: now,
+    })
+  }
+  const resolvedIds = new Set(
+    [...tidigare, ...kommande]
+      .map(tx => tx.transaktionsidentitet)
+      .filter((id): id is number => id != null),
+  )
+  const mergedEntries = [...byKey.values()].filter(
+    e => e.row.transaktionsidentitet == null || !resolvedIds.has(e.row.transaktionsidentitet),
+  )
+  const skippedRecord: SkattekontoSkippedRowsRecord = {
+    updatedAt: now,
+    truncated: mergedEntries.length > MAX_SKIPPED_ROWS_RETAINED || undefined,
+    rows: mergedEntries.slice(0, MAX_SKIPPED_ROWS_RETAINED),
+  }
   await ctx.settings.set(SKIPPED_ROWS_KEY, skippedRecord)
   if (skipped > 0) {
     log.warn('skipped transaktioner rows missing required fields', {
       companyId: ctx.companyId,
       skipped,
+      traceTruncated: skippedRecord.truncated === true,
       rows: skippedRecord.rows.map(r => ({
         status: r.status,
         missing: r.missing,
