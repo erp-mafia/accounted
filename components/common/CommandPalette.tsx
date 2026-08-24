@@ -22,6 +22,7 @@ import {
   Settings,
   HelpCircle,
   ArrowRight,
+  Scale,
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -68,6 +69,7 @@ const PAGE_ENTRIES: Entry[] = [
   // ReportDescriptor.searchTerms instead, where the library shows a list.
   { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpen, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto verifikat verifikationer verifikationer per konto kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions vouchers' },
   { id: 'rapport-kundreskontra', label: 'Visa rapport: Kundreskontra', icon: Users, href: '/reports/kundreskontra', keywords: 'rapport kundreskontra ar kundfordringar' },
+  { id: 'avstamning', label: 'Avstämning', hint: 'Stäm av bank och skattekonto', icon: Scale, href: '/reconciliation', keywords: 'avstämning stäm av bank skattekonto matcha reconcile reconciliation 1630 1930' },
   { id: 'rapport-bankavstamning', label: 'Bankavstämning', hint: 'Stäm av bank mot bokföring', icon: ArrowLeftRight, href: '/reports/bank-reconciliation', keywords: 'avstämning stäm av bank matcha banktransaktioner reconcile reconciliation 1930' },
   { id: 'importera', label: 'Importera', icon: Upload, href: '/import' },
   { id: 'granskning', label: 'Granskning', icon: ClipboardCheck, href: '/pending', keywords: 'pending review' },

@@ -35,6 +35,11 @@ export const API_KEY_SCOPES = {
   'agent:write':        { label: 'Agent: skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact)' },
   'pending_operations:read':    { label: 'Stagade operationer: läs',     description: 'Lista pending_operations (staged writes awaiting approval)' },
   'pending_operations:approve': { label: 'Stagade operationer: godkänn', description: 'Godkänn eller avvisa stagade operationer via API/MCP: agenten ersätter web-UI:s granskning' },
+  // Reconciliation (account-keyed: bank accounts + skattekonto). Reads cover
+  // the account list, the bridge and the item buckets; writes cover links
+  // (match/unmatch) and ignore flags. Links never touch the ledger.
+  'reconciliation:read':  { label: 'Avstämning: läs',   description: 'Konton att stämma av, bryggan per konto och raderna bakom den (bank + skattekonto)' },
+  'reconciliation:write': { label: 'Avstämning: skriv', description: 'Koppla och koppla bort händelser mot verifikat, ignorera rader (MCP stagar; REST skriver direkt)' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -125,6 +130,9 @@ export const STAGING_SCOPES: ApiKeyScope[] = [
   // key holding both this and pending_operations:approve is a SoD conflict:
   // findStageApproveConflict picks it up automatically from this list.
   'skatteverket:write',
+  // gnubok_reconcile_match / gnubok_reconcile_unmatch stage reconciliation_*
+  // operations; same SoD reasoning.
+  'reconciliation:write',
 ]
 
 /**
@@ -177,6 +185,11 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_match_transaction_to_invoice:        'transactions:write',
   gnubok_link_transaction_to_journal_entry:   'transactions:write',
   gnubok_match_batch_allocate:                'transactions:write',
+  // Reconciliation (account-keyed). gnubok_get_reconciliation_status keeps its
+  // historical reports:read so existing keys are not cut off.
+  gnubok_list_reconciliation_items:           'reconciliation:read',
+  gnubok_reconcile_match:                     'reconciliation:write',
+  gnubok_reconcile_unmatch:                   'reconciliation:write',
   gnubok_bulk_book_transactions:              'transactions:write',
   gnubok_bulk_book_inbox_items:               'transactions:write',
   gnubok_auto_match_period:                   'transactions:write',

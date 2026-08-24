@@ -64,6 +64,10 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       'gnubok_list_fiscal_periods',
       'gnubok_list_uncategorized_transactions',
       'gnubok_get_reconciliation_status',
+      // Account-keyed reconciliation: the rows behind the bridge and the
+      // staged link (bank accounts and skattekonto alike).
+      'gnubok_list_reconciliation_items',
+      'gnubok_reconcile_match',
       'gnubok_list_voucher_gaps',
       'gnubok_explain_voucher_gap',
       'gnubok_lock_period',
