@@ -5,6 +5,7 @@ import type { AiService } from './types'
 
 export type {
   AiCapabilities,
+  AiChatTurn,
   AiDocumentInput,
   AiImageMediaType,
   AiPdfMode,

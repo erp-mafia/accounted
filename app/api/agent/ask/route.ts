@@ -13,6 +13,7 @@ import { answerAssistantQuestion } from '@/lib/agent/ask/ask-service'
 import { EmptyModelAnswerError } from '@/lib/agent/ask/errors'
 import {
   resolveChatConversation,
+  loadChatHistory,
   persistUserTurn,
   persistAssistantTurn,
 } from '@/lib/agent/ask/persist'
@@ -152,6 +153,11 @@ export async function POST(request: Request): Promise<Response> {
     }
     const { conversationId } = resolved
 
+    // A resumed thread carries its earlier turns into the model call; read
+    // them BEFORE the new question is written so it is not sent twice. A
+    // thread created just now has nothing to load.
+    const history = resolved.created ? [] : await loadChatHistory(supabase, conversationId)
+
     await persistUserTurn(supabase, conversationId, parsed.data.question)
 
     const result = await answerAssistantQuestion({
@@ -162,6 +168,7 @@ export async function POST(request: Request): Promise<Response> {
       question: parsed.data.question,
       pageContext: parsed.data.context,
       tier: parsed.data.tier,
+      history,
     })
 
     // answerAssistantQuestion throws EmptyModelAnswerError on an empty answer,

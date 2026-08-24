@@ -66,11 +66,29 @@ export interface AiToolDef {
   execute: (args: Record<string, unknown>) => Promise<unknown>
 }
 
+/**
+ * One earlier turn of a conversation, text only. Sent to the model as a real
+ * message turn (not inlined into the prompt), so the answer can refer back
+ * to what was said without the caller re-describing it.
+ */
+export interface AiChatTurn {
+  role: 'user' | 'assistant'
+  text: string
+}
+
 export interface GenerateTextRequest {
   tier: AiTier
   system?: string
   prompt: string
   maxTokens: number
+  /**
+   * Earlier turns of the same conversation, oldest first, placed before
+   * `prompt` (which stays the final user message). Callers must hand over a
+   * clean alternation that starts with a user turn (see
+   * lib/agent/ask/persist.ts loadChatHistory); the services do not repair it.
+   * Absent or empty leaves the request exactly as a single-turn call.
+   */
+  history?: AiChatTurn[]
   /**
    * Read-only tools the model may call to gather data before answering. When
    * present AND the backend supports tool use (capabilities.toolUse), the
