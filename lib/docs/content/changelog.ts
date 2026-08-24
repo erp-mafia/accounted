@@ -35,6 +35,14 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Reconciliation, account-keyed (2026-08)
+
+- **Accounts**: \`GET /reconciliation/accounts\` lists every account with an outside truth (bank accounts as \`bank:<cash_account_id>\`, the skattekonto as \`skattekonto\`) with status; \`GET .../accounts/{accountKey}\` is the bridge (outside balance, ledger, difference, unexplained, explanatory lines, counts, latest sign-off); \`GET .../accounts/{accountKey}/items\` the rows behind it, bucketed (proposed, unmatched_external, unmatched_ledger, matched, ignored, upcoming).
+- **Links**: \`POST .../accounts/{accountKey}/links\` (pairs or \`use_proposals\`), \`DELETE .../links/{linkId}\`, \`POST .../items/{itemId}/ignore\`. Links never touch the ledger.
+- **Sign-off**: \`POST .../accounts/{accountKey}/signoff\` ("avstämt t.o.m." a date; refused with an unexplained difference unless forced with a note), \`GET .../signoff\` history, \`POST .../signoff/{signoffId}/reopen\`.
+- New scopes \`reconciliation:read\`, \`reconciliation:write\`, \`reconciliation:signoff\`. The legacy \`/reconciliation/bank/*\` endpoints and their \`transactions:*\` scopes are unchanged.
+- **Webhooks**: new event types \`reconciliation.matched\`, \`reconciliation.unmatched\`, \`reconciliation.signed_off\`, \`reconciliation.reopened\`. Additive: existing subscriptions are unaffected and the API version date is unchanged.
+
 ### Bookkeeping primitives + AP + compliance (Phase 4)
 
 - **Suppliers + supplier-invoices** vertical (mirror of Phase 2 invoices on the AP side).

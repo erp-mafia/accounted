@@ -12,6 +12,8 @@ import {
   type ReconciliationAccount,
   type ReconciliationStatus,
 } from './schemas'
+import { getLatestSignoff, getLatestSignoffs } from './signoff-store'
+import { bankLogoUrl } from './bank-logos'
 
 const log = createLogger('reconciliation/service')
 
@@ -86,8 +88,8 @@ function bankBridge(status: Awaited<ReturnType<typeof getBankReconciliationStatu
   const lines: BridgeLine[] = [
     {
       key: 'bank_transactions',
-      label_sv: 'Banktransaktioner i perioden',
-      label_en: 'Bank transactions in the period',
+      label_sv: 'Banktransaktioner i perioden (netto)',
+      label_en: 'Bank transactions in the period (net)',
       amount: status.bank_transaction_total,
       count: null,
       items_bucket: null,
@@ -242,6 +244,32 @@ export async function listReconciliationAccounts(
     for (const other of sorted.slice(1)) supersededBy.set(other.id, bankAccountKey(keep.id))
   }
 
+  // Latest active sign-off per account, one query; the rail shows "avstämt
+  // t.o.m." next to the live status. A failed read must not hide the accounts.
+  let signoffs = new Map<string, Awaited<ReturnType<typeof getLatestSignoff>>>()
+  try {
+    signoffs = await getLatestSignoffs(supabase, companyId)
+  } catch (err) {
+    log.warn('sign-off read failed', { companyId, error: err instanceof Error ? err.message : String(err) })
+  }
+
+  // Bank logos resolve from the connection's bank_name (the same name the
+  // connect flow shows). A failed read only costs the logos.
+  const bankNameByConnection = new Map<string, string>()
+  const connectionIds = [...new Set(cashAccounts.map((a) => a.bank_connection_id).filter((x): x is string => !!x))]
+  if (connectionIds.length > 0) {
+    const { data: connRows, error: connError } = await supabase
+      .from('bank_connections')
+      .select('id, bank_name')
+      .in('id', connectionIds)
+    if (connError) {
+      log.warn('bank_name read failed; monograms instead of logos', { companyId, error: connError.message })
+    }
+    for (const r of (connRows ?? []) as Array<{ id: string; bank_name: string | null }>) {
+      if (r.bank_name) bankNameByConnection.set(r.id, r.bank_name)
+    }
+  }
+
   const bankAccounts = await Promise.all(
     cashAccounts.map(async (a): Promise<ReconciliationAccount> => {
       let status: ReconciliationStatus | null = null
@@ -269,7 +297,7 @@ export async function listReconciliationAccounts(
         account_number: a.ledger_account,
         name: a.name ?? `Bankkonto ${a.ledger_account}`,
         currency: a.currency ?? 'SEK',
-        logo_url: null,
+        logo_url: bankLogoUrl(a.bank_connection_id ? bankNameByConnection.get(a.bank_connection_id) : null, a.name),
         source: {
           type: a.bank_connection_id ? 'psd2' : a.source === 'file' ? 'bank_file' : 'manual',
           synced_at: syncedAt,
@@ -277,6 +305,7 @@ export async function listReconciliationAccounts(
         },
         status: stateOf(status),
         superseded_by: supersededBy.get(a.id) ?? null,
+        signed_off_through: signoffs.get(bankAccountKey(a.id))?.through_date ?? null,
       }
     }),
   )
@@ -299,6 +328,7 @@ export async function listReconciliationAccounts(
         },
         status: s.skattekonto?.fetched_at ? stateOf(s) : { ...stateOf(s)!, state: 'not_configured' },
         superseded_by: null,
+        signed_off_through: signoffs.get(SKATTEKONTO_ACCOUNT_KEY)?.through_date ?? null,
       }
     }
   } catch (err) {
@@ -331,8 +361,9 @@ export async function getAccountStatus(
   if (!parsed) return null
   const today = options.today ?? isoDate(new Date())
 
+  let status: ReconciliationStatus | null = null
   if (parsed.kind === 'skattekonto') {
-    return getSkattekontoReconciliationStatus(supabase, companyId, {
+    status = await getSkattekontoReconciliationStatus(supabase, companyId, {
       today,
       windowFrom: options.windowFrom ?? null,
       windowTo: options.windowTo ?? null,
@@ -352,9 +383,18 @@ export async function getAccountStatus(
       from: options.windowFrom ?? defaultWindow(today).from,
       to: options.windowTo ?? defaultWindow(today).to,
     }
-    return bankStatus(supabase, companyId, data as CashAccountRow, window, today)
+    status = await bankStatus(supabase, companyId, data as CashAccountRow, window, today)
   }
-
   // manual accounts: later adapter
-  return null
+  if (!status) return null
+
+  // The latest active sign-off rides along on every status read (page, v1,
+  // MCP) so "avstämt t.o.m." never needs a second call.
+  try {
+    status.signoff = await getLatestSignoff(supabase, companyId, accountKey)
+  } catch (err) {
+    log.warn('sign-off read failed', { companyId, accountKey, error: err instanceof Error ? err.message : String(err) })
+    status.signoff = null
+  }
+  return status
 }

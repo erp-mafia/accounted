@@ -47,7 +47,11 @@ export function isTenantWriteScope(scope: ApiKeyScope | undefined): boolean {
   return (
     scope?.endsWith(':write') === true ||
     scope?.endsWith(':approve') === true ||
-    scope?.endsWith(':manage') === true
+    scope?.endsWith(':manage') === true ||
+    // Sign-off attests on the company's behalf: a write for the role guard
+    // even though the scope is deliberately not `:write` (linking rows must
+    // not imply the right to attest).
+    scope?.endsWith(':signoff') === true
   )
 }
 

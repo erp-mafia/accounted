@@ -167,6 +167,13 @@ import {
 import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
+// Account-keyed reconciliation (one engine, three doors): the same service
+// the dashboard routes and the v1 API call.
+import { getAccountStatus } from '@/lib/reconciliation/service'
+import { listAccountItems } from '@/lib/reconciliation/items'
+import { matchPairs } from '@/lib/reconciliation/actions'
+import { signOffAccount } from '@/lib/reconciliation/signoff'
+import { parseAccountKey, type ReconciliationItemBucket } from '@/lib/reconciliation/schemas'
 import { decryptPersonnummer, maskEmployeeForResponse, maskPersonnummer } from '@/lib/salary/personnummer'
 import {
   deriveAgiFilingState,
@@ -1358,6 +1365,8 @@ const TOOL_PREFLIGHT_MAP: Record<string, string> = {
   gnubok_vat_declaration_submit: 'gnubok_vat_declaration_validate',
   gnubok_post_annual_depreciation: 'gnubok_propose_annual_depreciation',
   gnubok_book_salary_run: 'gnubok_get_salary_run',
+  gnubok_reconcile_match: 'gnubok_get_reconciliation_status',
+  gnubok_reconcile_signoff: 'gnubok_get_reconciliation_status',
 }
 
 /**
@@ -8665,6 +8674,10 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_link_transaction_to_journal_entry',
     title: 'Link Transaction to Verifikat',
+    // Search-only since the account-keyed gnubok_reconcile_match covers the
+    // same link (one pair) for bank AND skattekonto; kept callable for clients
+    // that already use it, and reachable via gnubok_search_tools.
+    catalogVisibility: 'search',
     description: 'Link 1 bank tx to an already-posted verifikat (no new bokföring). Use when the user booked the affärshändelse manually. Pass invoice_id to also settle a kundfaktura. Stages.',
     inputSchema: {
       type: 'object',
@@ -9794,17 +9807,21 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_reconciliation_status',
-    title: 'Bank Reconciliation Status',
-    description: 'Bank reconciliation for one cash account: matched/unmatched counts and totals. Judge health on unexplained_difference, not difference (large mid-year by design). Defaults to 1930, else the primary cash account; pass account_number for 1940/1932. Optional date range.',
+    title: 'Reconciliation Status',
+    description: 'Reconciliation bridge for one account. Pass account_key ("skattekonto" or "bank:<cash_account_id>") for bridge lines + counts; without it, the legacy bank status for account_number (default 1930). Judge health on unexplained_difference, not difference.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
+        account_key: {
+          type: 'string',
+          description: '"skattekonto" or "bank:<cash_account_id>". When set, returns the account-keyed status (bridge[], counts, kind block).',
+        },
         date_from: { type: 'string', description: 'Start date YYYY-MM-DD' },
         date_to: { type: 'string', description: 'End date YYYY-MM-DD' },
         account_number: {
           type: 'string',
-          description: 'Cash-account BAS code to reconcile, e.g. "1940". Defaults to "1930".',
+          description: 'Legacy: cash-account BAS code to reconcile, e.g. "1940". Defaults to "1930". Ignored when account_key is set.',
         },
       },
     },
@@ -9818,6 +9835,21 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const dateFrom = args.date_from as string | undefined
       const dateTo = args.date_to as string | undefined
+      const accountKey = args.account_key as string | undefined
+
+      if (accountKey) {
+        const status = await getAccountStatus(supabase, companyId, accountKey, {
+          windowFrom: dateFrom ?? null,
+          windowTo: dateTo ?? null,
+        })
+        if (!status) throw new Error(`Unknown account_key "${accountKey}" for this company`)
+        // The skattekonto engine also returns its item lists; this tool is the
+        // bridge. Items live in gnubok_list_reconciliation_items.
+        const { items: _items, ...rest } = status as typeof status & { items?: unknown }
+        void _items
+        return rest
+      }
+
       // Passed through as-is, undefined included: an omitted account_number is
       // "the company's bank account", which resolves to 1930 and, for a company
       // with no 1930 row, to its primary cash account. Substituting a literal
@@ -9835,6 +9867,274 @@ export const tools: McpTool[] = [
     },
   },
 
+  {
+    name: 'gnubok_list_reconciliation_items',
+    title: 'Reconciliation Items',
+    description: 'Rows behind one account\'s reconciliation bridge, bucketed (proposed, unmatched_external, unmatched_ledger, matched, ignored, upcoming): side, qualified id, amount, proposal with confidence + reasons, allowed actions. Link via gnubok_reconcile_match (search).',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>".' },
+        bucket: {
+          type: 'string',
+          enum: ['proposed', 'unmatched_external', 'unmatched_ledger', 'matched', 'ignored', 'upcoming'],
+        },
+        date_from: { type: 'string', description: 'YYYY-MM-DD; scopes lists, never counts' },
+        date_to: { type: 'string', description: 'YYYY-MM-DD' },
+        limit: { type: 'number', description: 'Default 50, max 200' },
+        offset: { type: 'number' },
+      },
+      required: ['account_key'],
+    },
+    outputSchema: paginatedSchema('items', {
+      type: 'object',
+      properties: {
+        item_id: { type: 'string' },
+        item_type: { type: 'string' },
+        side: { type: 'string' },
+        bucket: { type: 'string' },
+        amount: { type: 'number' },
+        proposal: { type: ['object', 'null'] },
+        actions: { type: 'array', items: { type: 'string' } },
+      },
+    }),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const accountKey = args.account_key as string
+      const result = await listAccountItems(supabase, companyId, accountKey, {
+        bucket: args.bucket as ReconciliationItemBucket | undefined,
+        windowFrom: (args.date_from as string | undefined) ?? null,
+        windowTo: (args.date_to as string | undefined) ?? null,
+        limit: args.limit as number | undefined,
+        offset: args.offset as number | undefined,
+      })
+      if (!result) throw new Error(`Unknown account_key "${accountKey}" for this company`)
+      return result
+    },
+  },
+
+  {
+    name: 'gnubok_reconcile_match',
+    title: 'Reconcile: Link Pairs',
+    description: 'Link outside rows (bank or skattekonto) to existing verifikat on one account; no new bokföring. Pass pairs, or use_proposals to apply the persisted proposals. Stages. dry_run previews.',
+    // Search-only to stay under the tools/list payload ceiling: the default
+    // catalog carries the reads (status + items); this write is reached via
+    // gnubok_search_tools, the close_period loadout and the items tool's hint.
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>"' },
+        pairs: {
+          type: 'array',
+          description: 'One outside row id + one journal_entry_id per pair',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              external_ids: { type: 'array', items: { type: 'string' } },
+              journal_entry_ids: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['external_ids', 'journal_entry_ids'],
+          },
+        },
+        use_proposals: { type: 'boolean' },
+        confidence_threshold: { type: 'number', description: 'Default 0.9' },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['account_key'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const accountKey = args.account_key as string
+      const pairs = (args.pairs as Array<{ external_ids: string[]; journal_entry_ids: string[] }> | undefined) ?? []
+      const useProposals = args.use_proposals === true
+      if (pairs.length === 0 && !useProposals) {
+        throw new Error('Pass pairs, or use_proposals: true')
+      }
+      const confidenceThreshold =
+        typeof args.confidence_threshold === 'number' ? (args.confidence_threshold as number) : 0.9
+
+      // Resolve and validate at stage time so the reviewer sees exactly which
+      // pairs will be linked; the commit executor re-validates every pair.
+      const preview = await matchPairs(
+        supabase,
+        companyId,
+        userId,
+        accountKey,
+        { pairs, use_proposals: useProposals, confidence_threshold: confidenceThreshold },
+        { dryRun: true },
+      )
+      if (!preview) throw new Error(`Unknown account_key "${accountKey}" for this company`)
+      const resolvedPairs = preview.applied.map((a) => ({
+        external_ids: [a.external_id],
+        journal_entry_ids: [a.journal_entry_id],
+      }))
+      if (resolvedPairs.length === 0) {
+        throw new Error('No linkable pairs: nothing to stage')
+      }
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'reconciliation_match',
+        `Koppla ${resolvedPairs.length} rad(er) på ${accountKey}`,
+        { account_key: accountKey, pairs: resolvedPairs },
+        {
+          account_key: accountKey,
+          pair_count: resolvedPairs.length,
+          pairs: resolvedPairs,
+          skipped_at_stage: preview.skipped,
+          source: useProposals ? 'proposals' : 'explicit',
+        },
+        actor,
+        {
+          description: 'After approval, re-read the bridge to confirm the residual.',
+          tool: 'gnubok_get_reconciliation_status',
+          args: { account_key: accountKey },
+        },
+        {
+          dryRun: args.dry_run === true,
+          idempotencyKey: args.idempotency_key as string | undefined,
+        },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_reconcile_unmatch',
+    title: 'Reconcile: Unlink',
+    description: 'Remove the link between one outside row (bank transaction or skattekonto row) and its verifikat on an account. The verifikat is untouched. Stages (low risk).',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>".' },
+        external_id: { type: 'string', description: 'The linked outside row id (transaction_id or skattekonto_transaction_id).' },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['account_key', 'external_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const accountKey = args.account_key as string
+      const externalId = args.external_id as string
+      if (!parseAccountKey(accountKey)) throw new Error(`Invalid account_key "${accountKey}"`)
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'reconciliation_unmatch',
+        `Koppla bort rad ${externalId} på ${accountKey}`,
+        { account_key: accountKey, external_id: externalId },
+        { account_key: accountKey, external_id: externalId },
+        actor,
+        {
+          description: 'After approval, the row is back in the open buckets.',
+          tool: 'gnubok_list_reconciliation_items',
+          args: { account_key: accountKey, bucket: 'unmatched_external' },
+        },
+        {
+          dryRun: args.dry_run === true,
+          idempotencyKey: args.idempotency_key as string | undefined,
+        },
+      )
+    },
+  },
+
+
+  {
+    name: 'gnubok_reconcile_signoff',
+    title: 'Reconcile: Sign off',
+    description: 'Mark one account (skattekonto or bank:<cash_account_id>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0 through that date, or force + note. Writes nothing to the ledger. Stages (medium risk); dry_run previews.',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>".' },
+        through_date: { type: 'string', description: 'Inclusive YYYY-MM-DD the account is reconciled through (not in the future; not past the skattekonto snapshot).' },
+        note: { type: 'string', description: 'Free text. Required with force.' },
+        force: { type: 'boolean', description: 'Sign despite an unexplained difference or an unknown outside balance. Needs note.' },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['account_key', 'through_date'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const accountKey = args.account_key as string
+      const throughDate = args.through_date as string
+      if (!parseAccountKey(accountKey)) throw new Error(`Invalid account_key "${accountKey}"`)
+      // Policy runs now (dry run of the sign-off) so a refusal surfaces here,
+      // not at approval time; the executor re-runs it when the user approves.
+      const preview = await signOffAccount(
+        supabase,
+        companyId,
+        userId,
+        accountKey,
+        { through_date: throughDate, note: (args.note as string | undefined) ?? null, force: args.force === true },
+        { dryRun: true },
+      )
+      if (!preview) throw new Error(`Unknown account_key "${accountKey}" for this company`)
+      const previewData: Record<string, unknown> = preview.dry_run
+        ? { ...preview.would_sign }
+        : { account_key: accountKey, through_date: throughDate }
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'reconciliation_signoff',
+        `Markera ${accountKey} som avstämt t.o.m. ${throughDate}`,
+        {
+          account_key: accountKey,
+          through_date: throughDate,
+          note: (args.note as string | undefined) ?? null,
+          force: args.force === true,
+        },
+        previewData,
+        actor,
+        {
+          description: 'After approval, the account shows "avstämt t.o.m." in the Avstämning page and on its status.',
+          tool: 'gnubok_get_reconciliation_status',
+          args: { account_key: accountKey },
+        },
+        {
+          dryRun: args.dry_run === true,
+          idempotencyKey: args.idempotency_key as string | undefined,
+        },
+      )
+    },
+  },
 
   {
     name: 'gnubok_list_cash_accounts',

@@ -69,6 +69,17 @@ export type CoreEvent =
   | { type: 'transaction.synced'; payload: { transactions: Transaction[]; userId: string; companyId: string } }
   | { type: 'transaction.categorized'; payload: { transaction: Transaction; account: string; taxCode: string; userId: string; companyId: string } }
   | { type: 'transaction.reconciled'; payload: { transaction: Transaction; journalEntryId: string; method: ReconciliationMethod; userId: string; companyId: string } }
+  // Account-keyed reconciliation (lib/reconciliation/actions.ts): one event per
+  // link made or removed on any reconcilable account (bank:<cash_account_id>,
+  // skattekonto, later manual:NNNN). `transaction.reconciled` keeps firing for
+  // bank links made through the bank engine; these are the kind-agnostic
+  // signals the flows builder triggers on.
+  | { type: 'reconciliation.matched'; payload: { accountKey: string; externalId: string; journalEntryId: string; method: 'manual' | 'proposal'; userId: string; companyId: string } }
+  | { type: 'reconciliation.unmatched'; payload: { accountKey: string; externalId: string; previousJournalEntryId: string | null; userId: string; companyId: string } }
+  // Sign-off: the human (or agent-staged, user-approved) assertion "reconciled
+  // through this date" on one account (lib/reconciliation/signoff.ts), and its undo.
+  | { type: 'reconciliation.signed_off'; payload: { accountKey: string; signoffId: string; throughDate: string; unexplainedDifference: number | null; userId: string; companyId: string } }
+  | { type: 'reconciliation.reopened'; payload: { accountKey: string; signoffId: string; throughDate: string; reason: string | null; userId: string; companyId: string } }
   // Bank connection lifecycle: consent + account selection are the
   // GDPR/PSD2 audit points; emitted to event_log for compliance trail.
   | { type: 'bank_connection.consent_granted'; payload: { connectionId: string; bankName: string | null; accountCount: number; consentExpiresAt: string | null; userId: string; companyId: string } }

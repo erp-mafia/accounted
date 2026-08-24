@@ -5,6 +5,7 @@ import {
   countInboxDocuments,
   countOverdueInvoices,
   countPendingOperations,
+  countReconciliationDue,
   countSuggestedMatches,
   countSupplierInvoicesAwaitingApproval,
   countUnbookedTransactions,
@@ -34,6 +35,7 @@ export async function getWorklistCounts(
     overdueInvoice,
     deadlineAction,
     pendingOperations,
+    reconciliationDue,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countInboxDocuments(supabase, companyId),
@@ -43,6 +45,7 @@ export async function getWorklistCounts(
     countOverdueInvoices(supabase, companyId),
     countDeadlinesNeedingAction(supabase, companyId),
     countPendingOperations(supabase, companyId),
+    countReconciliationDue(supabase, companyId),
   ])
 
   return {
@@ -55,6 +58,7 @@ export async function getWorklistCounts(
       overdue_invoice: overdueInvoice,
       deadline_action: deadlineAction,
       pending_operations: pendingOperations,
+      reconciliation_due: reconciliationDue,
     },
     total:
       bookTransaction +
@@ -63,6 +67,7 @@ export async function getWorklistCounts(
       verifikatMissingDocument +
       overdueInvoice +
       deadlineAction +
-      pendingOperations,
+      pendingOperations +
+      reconciliationDue,
   }
 }

@@ -77,6 +77,19 @@ export const WORKLIST_CATEGORIES = [
    * Done:     committed or rejected.
    */
   'pending_operations',
+  /**
+   * Accounts not signed off through the end of the previous month
+   * ("N konton att stämma av"), only for companies that have adopted the
+   * sign-off ritual (at least one account_reconciliations row ever).
+   * Pending:  an enabled cash account (deduplicated per IBAN + currency) or a
+   *           configured skattekonto whose latest ACTIVE sign-off has
+   *           through_date before the last day of the previous month.
+   * Done:     a sign-off through that date or later (POST .../signoff), or
+   *           the account stops being reconcilable (disabled cash account).
+   * Zero for companies with no sign-off at all: the nudge is for those who
+   * reconcile monthly, not a new chore for everyone.
+   */
+  'reconciliation_due',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]

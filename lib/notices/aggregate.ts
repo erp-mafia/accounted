@@ -7,6 +7,7 @@ import {
   detectExpiringBankConnections,
   detectOtherAccountHint,
   detectSkvDisconnected,
+  detectSkvUnexplained,
 } from './categories'
 
 const log = createLogger('notices')
@@ -44,6 +45,7 @@ export async function getCompanyNotices(
       detectSkvDisconnected(supabase, userId, companyId, now),
       detectBackupFailing(supabase, companyId),
       detectExpiringBankConnections(supabase, companyId, now),
+      detectSkvUnexplained(supabase, companyId),
       detectOtherAccountHint(supabase, companyId),
     ]),
     fetchDismissedIds(supabase, companyId, userId),

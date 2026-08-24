@@ -13,6 +13,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { shouldShowOtherAccountHint } from '@/lib/company/other-account-hint'
+import { formatCurrency } from '@/lib/utils'
+import {
+  DEFAULT_SKATTEKONTO_TOLERANCE_SEK,
+  SKATTEKONTO_DRIFT_TOLERANCE_KEY,
+  SKATTEKONTO_EXTENSION_ID,
+  SKATTEKONTO_RECONCILIATION_LATEST_KEY,
+  skattekontoUnexplainedFrom,
+  type SkattekontoReconciliationLatest,
+} from '@/lib/reconciliation/skattekonto-latest'
 import { expiringBankConnectionsFrom, skvStatusNeedsReconnect } from './predicates'
 import type { Notice } from './types'
 
@@ -328,6 +337,54 @@ export async function detectOtherAccountHint(
   } catch (err) {
     return logAndNull(
       'other_account_hint',
+      companyId,
+      err instanceof Error ? { message: err.message } : null,
+    )
+  }
+}
+
+/**
+ * skv_unexplained: the skattekonto's latest reconciliation summary (written
+ * by the skatteverket extension on every sync) shows an unexplained
+ * difference above the drift tolerance. Reads extension_data directly (core
+ * must not import from @/extensions/; the key and value shape live in
+ * lib/reconciliation/skattekonto-latest.ts, which the extension imports).
+ * The id carries the signed whole-krona amount, so öre-level movement does
+ * not resurface a dismissed notice while a materially different difference
+ * does.
+ */
+export async function detectSkvUnexplained(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Notice | null> {
+  try {
+    if (!ENABLED_EXTENSION_IDS.has(SKATTEKONTO_EXTENSION_ID)) return null
+    const { data, error } = await supabase
+      .from('extension_data')
+      .select('key, value')
+      .eq('company_id', companyId)
+      .eq('extension_id', SKATTEKONTO_EXTENSION_ID)
+      .in('key', [SKATTEKONTO_RECONCILIATION_LATEST_KEY, SKATTEKONTO_DRIFT_TOLERANCE_KEY])
+    if (error) return logAndNull('skv_unexplained', companyId, error)
+    const byKey = new Map((data ?? []).map((r) => [r.key as string, r.value]))
+    const latest = byKey.get(SKATTEKONTO_RECONCILIATION_LATEST_KEY) as SkattekontoReconciliationLatest | undefined
+    const toleranceRaw = byKey.get(SKATTEKONTO_DRIFT_TOLERANCE_KEY)
+    const tolerance = typeof toleranceRaw === 'number' ? toleranceRaw : DEFAULT_SKATTEKONTO_TOLERANCE_SEK
+    const unexplained = skattekontoUnexplainedFrom(latest, tolerance)
+    if (unexplained == null) return null
+    const whole = Math.round(unexplained)
+    return {
+      id: `skv_unexplained:${whole >= 0 ? '+' : '-'}${Math.abs(whole)}`,
+      category: 'skv_unexplained',
+      severity: 'warning',
+      messageKey: 'skv_unexplained',
+      messageParams: { amount: formatCurrency(unexplained, 'SEK') },
+      actionKey: 'skv_unexplained_action',
+      actionHref: '/reconciliation?account=skattekonto',
+    }
+  } catch (err) {
+    return logAndNull(
+      'skv_unexplained',
       companyId,
       err instanceof Error ? { message: err.message } : null,
     )
