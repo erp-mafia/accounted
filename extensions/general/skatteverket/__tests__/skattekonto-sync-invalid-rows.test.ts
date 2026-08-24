@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { eventBus } from '@/lib/events/bus'
 
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
@@ -34,8 +35,10 @@ vi.mock('@/lib/logger', () => ({
   }),
 }))
 
-import { syncSkattekonto } from '../lib/skattekonto-sync'
+import { syncSkattekonto, SKATTEKONTO_SKIPPED_ROWS_KEY } from '../lib/skattekonto-sync'
 import type { ExtensionContext } from '@/lib/extensions/types'
+
+const settingsSetMock = vi.fn().mockResolvedValue(undefined)
 
 function makeCtx(): ExtensionContext {
   return {
@@ -44,10 +47,16 @@ function makeCtx(): ExtensionContext {
     userId: 'user-1',
     settings: {
       get: vi.fn().mockResolvedValue(null),
-      set: vi.fn().mockResolvedValue(undefined),
+      set: settingsSetMock,
     },
     emit: vi.fn().mockResolvedValue(undefined),
   } as unknown as ExtensionContext
+}
+
+function skippedRowsWrites() {
+  return settingsSetMock.mock.calls.filter(
+    ([key]) => key === SKATTEKONTO_SKIPPED_ROWS_KEY,
+  )
 }
 
 function makeSaldo() {
@@ -114,8 +123,10 @@ const UPCOMING_NULL_BELOPP = {
 describe('syncSkattekonto: rows missing NOT NULL fields', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
     reset()
     getSaldoMock.mockResolvedValue(makeSaldo())
+    settingsSetMock.mockResolvedValue(undefined)
   })
 
   it('skips unusable rows, upserts the rest, and reports the count', async () => {
@@ -144,12 +155,81 @@ describe('syncSkattekonto: rows missing NOT NULL fields', () => {
       expect(typeof row.belopp_skatteverket).toBe('number')
     }
 
+    // The log is minimized (no transaktionstext, no amounts); the raw rows
+    // are retained in the company-scoped extension_data trace instead.
     expect(warnMock).toHaveBeenCalledWith(
       'skipped transaktioner rows missing required fields',
-      expect.objectContaining({
+      {
         companyId: 'company-1',
         skipped: 2,
-        sample: BOOKED_NO_BELOPP,
+        rows: [
+          {
+            status: 'booked',
+            missing: ['beloppSkatteverket'],
+            transaktionsidentitet: 9003,
+            transaktionsdatum: '2026-07-15',
+          },
+          {
+            status: 'upcoming',
+            missing: ['beloppSkatteverket'],
+            transaktionsidentitet: null,
+            transaktionsdatum: '2026-09-12',
+          },
+        ],
+      },
+    )
+    const logged = JSON.stringify(warnMock.mock.calls)
+    expect(logged).not.toContain('Överföring till Kronofogden')
+    expect(logged).not.toContain('Preliminär debitering')
+
+    const writes = skippedRowsWrites()
+    expect(writes).toHaveLength(1)
+    expect(writes[0][1]).toEqual(
+      expect.objectContaining({
+        rows: [
+          { status: 'booked', missing: ['beloppSkatteverket'], row: BOOKED_NO_BELOPP },
+          { status: 'upcoming', missing: ['beloppSkatteverket'], row: UPCOMING_NULL_BELOPP },
+        ],
+      }),
+    )
+  })
+
+  it('skips rows missing transaktionsdatum or transaktionstext', async () => {
+    const bookedNoDatum = {
+      ...VALID_BOOKED_A,
+      transaktionsidentitet: 9010,
+      transaktionsdatum: undefined as unknown as string,
+    }
+    const bookedEmptyText = {
+      ...VALID_BOOKED_B,
+      transaktionsidentitet: 9011,
+      transaktionstext: '' as string,
+    }
+    getTransaktionerMock.mockResolvedValue({
+      tidigareTransaktioner: [bookedNoDatum, bookedEmptyText, VALID_BOOKED_A],
+      kommandeTransaktioner: [],
+    })
+
+    enqueue({ data: { org_number: '556677-8899', entity_type: 'aktiebolag' } }) // company_settings
+    enqueue({ data: [] }) // fiscal_periods
+    enqueue({ data: [] }) // existing dedup_key lookup
+    enqueue({ data: [] }) // takeover candidate scan
+    enqueue({ data: null }) // upsert
+
+    const result = await syncSkattekonto(makeCtx())
+
+    expect(result.booked).toBe(1)
+    expect(result.skipped).toBe(2)
+    const upserts = findCalls('skattekonto_transactions', 'upsert')
+    expect((upserts[0][0] as unknown[]).length).toBe(1)
+
+    const writes = skippedRowsWrites()
+    expect(writes[0][1]).toEqual(
+      expect.objectContaining({
+        rows: [
+          expect.objectContaining({ missing: ['transaktionsdatum'] }),
+          expect.objectContaining({ missing: ['transaktionstext'] }),
+        ],
       }),
     )
   })
@@ -190,5 +270,10 @@ describe('syncSkattekonto: rows missing NOT NULL fields', () => {
     const upserts = findCalls('skattekonto_transactions', 'upsert')
     expect(upserts).toHaveLength(1)
     expect((upserts[0][0] as unknown[]).length).toBe(2)
+
+    // The trace self-clears: a clean payload overwrites any previous rows.
+    const writes = skippedRowsWrites()
+    expect(writes).toHaveLength(1)
+    expect(writes[0][1]).toEqual(expect.objectContaining({ rows: [] }))
   })
 })

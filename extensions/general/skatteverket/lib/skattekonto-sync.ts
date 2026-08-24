@@ -22,6 +22,14 @@ const log = createLogger('skattekonto-sync')
 
 const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
 const LAST_SYNCED_AT_KEY = 'skattekonto_last_synced_at'
+const SKIPPED_ROWS_KEY = 'skattekonto_skipped_rows'
+
+/**
+ * Cap the retained skipped-row trace: it mirrors the CURRENT sync response
+ * (overwritten every run), so the cap only guards against a pathological
+ * payload, not against growth over time.
+ */
+const MAX_SKIPPED_ROWS_RETAINED = 50
 
 /** SKV's default lookback for tidigare transaktioner when no datumFrom is sent. */
 const SKV_DEFAULT_WINDOW_DAYS = 555
@@ -71,19 +79,45 @@ export interface SkattekontoSyncResult {
  * matchable and bookable with an invented amount. A skipped row returns on a
  * later sync if SKV completes it.
  */
-function isUsableTransaction(tx: {
-  transaktionsdatum: string
-  transaktionstext: string
-  beloppSkatteverket: number
-}): boolean {
-  return (
-    typeof tx.transaktionsdatum === 'string' &&
-    tx.transaktionsdatum.length > 0 &&
-    typeof tx.transaktionstext === 'string' &&
-    tx.transaktionstext.length > 0 &&
-    typeof tx.beloppSkatteverket === 'number' &&
-    Number.isFinite(tx.beloppSkatteverket)
-  )
+type IncomingTransaction =
+  | SkatteverketBookedTransaction
+  | SkatteverketUpcomingTransaction
+
+function missingRequiredFields(tx: IncomingTransaction): string[] {
+  const missing: string[] = []
+  if (!(typeof tx.transaktionsdatum === 'string' && tx.transaktionsdatum.length > 0)) {
+    missing.push('transaktionsdatum')
+  }
+  if (!(typeof tx.transaktionstext === 'string' && tx.transaktionstext.length > 0)) {
+    missing.push('transaktionstext')
+  }
+  if (!(typeof tx.beloppSkatteverket === 'number' && Number.isFinite(tx.beloppSkatteverket))) {
+    missing.push('beloppSkatteverket')
+  }
+  return missing
+}
+
+function isUsableTransaction(tx: IncomingTransaction): boolean {
+  return missingRequiredFields(tx).length === 0
+}
+
+/**
+ * Durable, company-scoped trace of the rows the sync could not store, kept in
+ * extension_data and overwritten on every sync (an empty rows list means the
+ * latest response had none). The raw payload lives HERE, in the tenant's own
+ * storage, so the omission stays reconcilable and re-processable (BFL 5 kap
+ * fullständighet, BFNAR 2013:2 kap 8 behandlingshistorik); the application
+ * log deliberately carries only minimized descriptors without free text or
+ * amounts (GDPR data minimization: an enskild firma's skattekonto is the
+ * owner's personal tax account).
+ */
+export interface SkattekontoSkippedRowsRecord {
+  updatedAt: string
+  rows: Array<{
+    status: 'booked' | 'upcoming'
+    missing: string[]
+    row: IncomingTransaction
+  }>
 }
 
 // Dedup key computation moved to core (lib/skatteverket/skattekonto-dedup):
@@ -235,21 +269,31 @@ export async function syncSkattekonto(
 
   const tidigare = transaktioner.tidigareTransaktioner.filter(isUsableTransaction)
   const kommande = transaktioner.kommandeTransaktioner.filter(isUsableTransaction)
-  const skipped =
-    transaktioner.tidigareTransaktioner.length -
-    tidigare.length +
-    transaktioner.kommandeTransaktioner.length -
-    kommande.length
+  const skippedRecord: SkattekontoSkippedRowsRecord = {
+    updatedAt: new Date().toISOString(),
+    rows: [
+      ...transaktioner.tidigareTransaktioner
+        .filter(tx => !isUsableTransaction(tx))
+        .map(row => ({ status: 'booked' as const, missing: missingRequiredFields(row), row })),
+      ...transaktioner.kommandeTransaktioner
+        .filter(tx => !isUsableTransaction(tx))
+        .map(row => ({ status: 'upcoming' as const, missing: missingRequiredFields(row), row })),
+    ].slice(0, MAX_SKIPPED_ROWS_RETAINED),
+  }
+  const skipped = skippedRecord.rows.length
+  // Written unconditionally so a completed row self-clears the trace.
+  await ctx.settings.set(SKIPPED_ROWS_KEY, skippedRecord)
   if (skipped > 0) {
-    const sample =
-      transaktioner.tidigareTransaktioner.find(tx => !isUsableTransaction(tx)) ??
-      transaktioner.kommandeTransaktioner.find(tx => !isUsableTransaction(tx))
-    // The full sample row is the diagnostic: we still don't know which SKV
-    // row type arrives without belopp, and the payload is never persisted.
     log.warn('skipped transaktioner rows missing required fields', {
       companyId: ctx.companyId,
       skipped,
-      sample,
+      rows: skippedRecord.rows.map(r => ({
+        status: r.status,
+        missing: r.missing,
+        transaktionsidentitet: r.row.transaktionsidentitet ?? null,
+        transaktionsdatum:
+          typeof r.row.transaktionsdatum === 'string' ? r.row.transaktionsdatum : null,
+      })),
     })
   }
 
@@ -486,3 +530,4 @@ export async function syncSkattekonto(
 
 export const SKATTEKONTO_BALANCE_SNAPSHOT_KEY = BALANCE_SNAPSHOT_KEY
 export const SKATTEKONTO_LAST_SYNCED_AT_KEY = LAST_SYNCED_AT_KEY
+export const SKATTEKONTO_SKIPPED_ROWS_KEY = SKIPPED_ROWS_KEY
