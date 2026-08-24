@@ -1238,7 +1238,8 @@
     "confirm_email_hint": "Click the link in the email to activate your account. The link is valid for 24 hours.",
     "open_webmail_search": "Find the email in {provider}",
     "open_webmail_inbox": "Open {provider}",
-    "back_to_login": "Back to sign in"
+    "back_to_login": "Back to sign in",
+    "password_signup_unavailable": "Password sign-up is not available on this installation."
   },
   "mfa": {
     "enroll_title": "Set up two-step verification",

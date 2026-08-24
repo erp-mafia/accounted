@@ -737,6 +737,8 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
           <div key={method} className="animate-fade-in">
           {method === 'bankid' && bankIdEnabled ? (
             <BankIdAuth mode="signup" hero onComplete={handleBankIdComplete} />
+          ) : !passwordLoginEnabled ? (
+            <p className="text-[13px] leading-5 text-muted-foreground">{t('password_signup_unavailable')}</p>
           ) : (
           <form onSubmit={handleRegister} className="space-y-4">
             <div className="space-y-2">

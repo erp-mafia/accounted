@@ -1238,7 +1238,8 @@
     "confirm_email_hint": "Klicka på länken i e-posten för att aktivera ditt konto. Länken är giltig i 24 timmar.",
     "open_webmail_search": "Hitta e-posten i {provider}",
     "open_webmail_inbox": "Öppna {provider}",
-    "back_to_login": "Tillbaka till inloggning"
+    "back_to_login": "Tillbaka till inloggning",
+    "password_signup_unavailable": "Lösenordsregistrering är inte tillgänglig på den här installationen."
   },
   "mfa": {
     "enroll_title": "Aktivera tvåstegsverifiering",
