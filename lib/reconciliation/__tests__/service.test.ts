@@ -87,6 +87,7 @@ describe('listReconciliationAccounts', () => {
       ],
     })
     enqueue({ data: [] }) // latest sign-offs (none)
+    enqueue({ data: [{ id: 'conn-1', bank_name: 'Swedbank' }] }) // bank names for logos
     // latestBankSyncAt per account (withStatus=false skips bankStatus): three maybeSingle reads
     enqueue({ data: { created_at: '2026-08-19T06:00:00Z' } })
     enqueue({ data: { created_at: '2026-06-01T06:00:00Z' } })
@@ -120,6 +121,8 @@ describe('listReconciliationAccounts', () => {
     expect(byKey[bankAccountKey(ID_B)].superseded_by).toBe(bankAccountKey(ID_A))
     expect(byKey[bankAccountKey(ID_A)].superseded_by).toBeNull()
     expect(byKey[bankAccountKey(ID_C)].superseded_by).toBeNull()
+    // The connection's bank name resolves to the committed brand icon.
+    expect(byKey[bankAccountKey(ID_A)].logo_url).toBe('/logos/banks/swedbank.png')
     // Sync age drives staleness (7 days).
     expect(byKey[bankAccountKey(ID_A)].source).toMatchObject({ type: 'psd2', stale: false })
     expect(byKey[bankAccountKey(ID_B)].source.stale).toBe(true)
@@ -137,6 +140,7 @@ describe('listReconciliationAccounts', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [cashAccount(ID_A, { is_primary: true })] })
     enqueue({ data: [] }) // latest sign-offs (none)
+    enqueue({ data: [] }) // bank names for logos
     enqueue({ data: null })
     skattekontoStatusMock.mockResolvedValue(null)
 
@@ -151,6 +155,7 @@ describe('listReconciliationAccounts', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [cashAccount(ID_A, { is_primary: true, currency: 'SEK' })] })
     enqueue({ data: [] }) // latest sign-offs (none)
+    enqueue({ data: [] }) // bank names for logos
     bankStatusMock.mockResolvedValue(bankStatus({ unmatched_transaction_count: 2, unmatched_transaction_total: -1046, is_reconciled: false }))
     enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } }) // latestBankSyncAt inside bankStatus
     enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } }) // latestBankSyncAt for the account row

@@ -13,6 +13,7 @@ import {
   type ReconciliationStatus,
 } from './schemas'
 import { getLatestSignoff, getLatestSignoffs } from './signoff-store'
+import { bankLogoUrl } from './bank-logos'
 
 const log = createLogger('reconciliation/service')
 
@@ -252,6 +253,23 @@ export async function listReconciliationAccounts(
     log.warn('sign-off read failed', { companyId, error: err instanceof Error ? err.message : String(err) })
   }
 
+  // Bank logos resolve from the connection's bank_name (the same name the
+  // connect flow shows). A failed read only costs the logos.
+  const bankNameByConnection = new Map<string, string>()
+  const connectionIds = [...new Set(cashAccounts.map((a) => a.bank_connection_id).filter((x): x is string => !!x))]
+  if (connectionIds.length > 0) {
+    const { data: connRows, error: connError } = await supabase
+      .from('bank_connections')
+      .select('id, bank_name')
+      .in('id', connectionIds)
+    if (connError) {
+      log.warn('bank_name read failed; monograms instead of logos', { companyId, error: connError.message })
+    }
+    for (const r of (connRows ?? []) as Array<{ id: string; bank_name: string | null }>) {
+      if (r.bank_name) bankNameByConnection.set(r.id, r.bank_name)
+    }
+  }
+
   const bankAccounts = await Promise.all(
     cashAccounts.map(async (a): Promise<ReconciliationAccount> => {
       let status: ReconciliationStatus | null = null
@@ -279,7 +297,7 @@ export async function listReconciliationAccounts(
         account_number: a.ledger_account,
         name: a.name ?? `Bankkonto ${a.ledger_account}`,
         currency: a.currency ?? 'SEK',
-        logo_url: null,
+        logo_url: bankLogoUrl(a.bank_connection_id ? bankNameByConnection.get(a.bank_connection_id) : null, a.name),
         source: {
           type: a.bank_connection_id ? 'psd2' : a.source === 'file' ? 'bank_file' : 'manual',
           synced_at: syncedAt,
