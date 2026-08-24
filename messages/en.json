@@ -7840,6 +7840,7 @@
     "col_event": "Event",
     "col_amount": "Amount",
     "col_voucher": "Voucher",
+    "col_proposal": "Proposed voucher",
     "bucket_proposed": "To link: proposed pairs",
     "bucket_unmatched_external_skv": "At Skatteverket, missing in the ledger",
     "bucket_unmatched_external_bank": "At the bank, missing in the ledger",

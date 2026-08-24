@@ -7840,6 +7840,7 @@
     "col_event": "Händelse",
     "col_amount": "Belopp",
     "col_voucher": "Verifikat",
+    "col_proposal": "Föreslaget verifikat",
     "bucket_proposed": "Att koppla: föreslagna par",
     "bucket_unmatched_external_skv": "Hos Skatteverket, saknas i bokföringen",
     "bucket_unmatched_external_bank": "På banken, saknas i bokföringen",
