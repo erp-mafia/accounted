@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
-import { fetchUnlinkedGLLines, scopeTransactionsToAccount } from './bank-reconciliation'
+import { fetchJunctionLinkedTxIds, fetchUnlinkedGLLines, scopeTransactionsToAccount } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import {
   parseAccountKey,
@@ -147,11 +147,18 @@ export async function listAccountItems(
       const { data, error: txError } = await query.order('date', { ascending: false }).order('id', { ascending: true })
       if (txError) throw new Error(`Kunde inte hämta transaktioner: ${txError.message}`)
       const rows = (data ?? []) as BankTxRow[]
+      // Rows anchored only through transaction_voucher_links (bulk-book,
+      // residual bookings) are matched too; their pointer column is NULL.
+      const junctionLinked = await fetchJunctionLinkedTxIds(
+        supabase,
+        companyId,
+        rows.filter((tx) => !tx.journal_entry_id && !tx.is_ignored).map((tx) => tx.id),
+      )
       {
         for (const tx of rows) {
           const bucket: ReconciliationItemBucket = tx.is_ignored
             ? 'ignored'
-            : tx.journal_entry_id
+            : tx.journal_entry_id || junctionLinked.has(tx.id)
               ? 'matched'
               : tx.potential_journal_entry_id
                 ? 'proposed'

@@ -3,12 +3,14 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const skvStatusMock = vi.fn()
 const fetchUnlinkedMock = vi.fn()
+const junctionMock = vi.fn()
 
 vi.mock('../skattekonto-reconciliation', () => ({
   getSkattekontoReconciliationStatus: (...args: unknown[]) => skvStatusMock(...args),
 }))
 vi.mock('../bank-reconciliation', () => ({
   fetchUnlinkedGLLines: (...args: unknown[]) => fetchUnlinkedMock(...args),
+  fetchJunctionLinkedTxIds: (...args: unknown[]) => junctionMock(...args),
   scopeTransactionsToAccount: (q: unknown) => q,
 }))
 
@@ -26,6 +28,8 @@ describe('listAccountItems', () => {
     vi.clearAllMocks()
     skvStatusMock.mockReset()
     fetchUnlinkedMock.mockReset()
+    junctionMock.mockReset()
+    junctionMock.mockResolvedValue(new Set())
   })
 
   it('returns null for an invalid key', async () => {
@@ -69,8 +73,11 @@ describe('listAccountItems', () => {
         { id: 't-link', date: '2026-08-03', description: 'Lön', merchant_name: null, amount: -31200, currency: 'SEK', journal_entry_id: 'e-1', potential_journal_entry_id: null, potential_match_method: 'manual', potential_match_confidence: null, is_ignored: false, reconciliation_method: 'manual' },
         { id: 't-prop', date: '2026-08-02', description: 'Swish', merchant_name: 'Swish 123', amount: 2400, currency: 'SEK', journal_entry_id: null, potential_journal_entry_id: 'e-2', potential_match_method: 'auto_fuzzy', potential_match_confidence: '0.82', is_ignored: false, reconciliation_method: null },
         { id: 't-open', date: '2026-08-01', description: 'Elgiganten', merchant_name: null, amount: -1046, currency: 'SEK', journal_entry_id: null, potential_journal_entry_id: null, potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: null },
+        // Anchored only through transaction_voucher_links (bulk-book / residual): matched, pointer NULL.
+        { id: 't-junc', date: '2026-07-31', description: 'Samlingsverifikat', merchant_name: null, amount: -500, currency: 'SEK', journal_entry_id: null, potential_journal_entry_id: null, potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: null },
       ],
     })
+    junctionMock.mockResolvedValue(new Set(['t-junc']))
     fetchUnlinkedMock.mockResolvedValue([
       { line_id: 'l1', journal_entry_id: 'e-3', debit_amount: 0, credit_amount: 600, line_description: null, entry_date: '2026-08-18', voucher_number: 231, voucher_series: 'A', entry_description: 'Elgiganten', source_type: 'manual' },
       { line_id: 'l2', journal_entry_id: 'e-3', debit_amount: 0, credit_amount: 400, line_description: null, entry_date: '2026-08-18', voucher_number: 231, voucher_series: 'A', entry_description: 'Elgiganten', source_type: 'manual' },
@@ -83,10 +90,11 @@ describe('listAccountItems', () => {
     expect(byId['t-open']).toMatchObject({ bucket: 'unmatched_external', actions: ['book', 'match', 'ignore'] })
     expect(byId['t-link']).toMatchObject({ bucket: 'matched', linked_journal_entry_id: 'e-1', actions: ['unmatch'] })
     expect(byId['t-ign']).toMatchObject({ bucket: 'ignored', actions: ['unignore'] })
+    expect(byId['t-junc']).toMatchObject({ bucket: 'matched', actions: ['unmatch'] })
     expect(byId['e-3']).toMatchObject({ bucket: 'unmatched_ledger', side: 'ledger', amount: -1000, voucher_number: 231 })
     // Work order: proposed, unmatched external, unmatched ledger, ignored, upcoming, matched
-    expect(result?.items.map((i) => i.bucket)).toEqual(['proposed', 'unmatched_external', 'unmatched_ledger', 'ignored', 'matched'])
-    expect(result?.total_count).toBe(5)
+    expect(result?.items.map((i) => i.bucket)).toEqual(['proposed', 'unmatched_external', 'unmatched_ledger', 'ignored', 'matched', 'matched'])
+    expect(result?.total_count).toBe(6)
   })
 
   it('returns null for an unknown cash account', async () => {

@@ -7909,7 +7909,16 @@
     "match_no_entry": "Inget verifikat valt",
     "match_difference": "Differens {amount}",
     "match_hint_residual": "Differensen måste vara 0 för att koppla. Bokför mellanskillnaden först, sedan kopplar du.",
-    "match_apply": "Koppla {count} händelser"
+    "match_apply": "Koppla {count} händelser",
+    "match_hint_residual_skv": "Differensen måste vara 0 för att koppla. På skattekontot är ränta och avgifter egna händelser: koppla dem i stället.",
+    "match_residual_label": "Bokför mellanskillnaden som",
+    "match_residual_pick": "Välj typ",
+    "match_residual_apply": "Bokför {amount} och koppla",
+    "residual_bank_fee": "Bankavgift (6570)",
+    "residual_interest_expense": "Räntekostnad (8410)",
+    "residual_interest_income": "Ränteintäkt (8310)",
+    "residual_rounding": "Öresavrundning (3740)",
+    "toast_residual_booked": "{amount} bokfört och kopplat"
   },
   "skattekonto": {
     "help_text": "Saldot och händelserna hämtas från Skatteverket och synkas automatiskt varje natt. Genomförda händelser bokförs mot 1630 Skattekonto, oftast automatiskt; det som inte kan matchas flaggas i listan. Betala in via bankgiro 5050-1055 med ditt OCR-nummer.",
