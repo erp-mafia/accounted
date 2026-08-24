@@ -23,6 +23,16 @@ export async function GET(request: Request) {
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
+    // Client ID Metadata Documents (MCP auth spec 2025-11-25, the recommended
+    // registration mechanism since 2026-07-28 deprecated RFC 7591 dynamic
+    // registration). Claude.ai, Claude Code and Codex send an HTTPS URL as
+    // client_id when this flag AND `none` are advertised, and stop
+    // registering a fresh DCR client per connection. Our authorize/token
+    // endpoints never keyed anything on client_id: the redirect_uri allowlist
+    // (lib/auth/oauth-allowlist.ts) is and stays the trust boundary, so a
+    // URL-shaped client_id needs no new validation path here. The register
+    // endpoint remains for clients that still use DCR (ChatGPT).
+    client_id_metadata_document_supported: true,
     // RFC 9207: the authorize endpoint includes `iss` in every authorization
     // response (success and error) so clients can detect mix-up attacks.
     authorization_response_iss_parameter_supported: true,
