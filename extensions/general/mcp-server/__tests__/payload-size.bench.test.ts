@@ -191,9 +191,16 @@ describe('tools/list payload size guard', () => {
     //     from outside. No property descriptions (names are the contract);
     //     the tool description gained six words; headroom before the change
     //     was ~50 tokens, so even the bare contract crossed by ~10.
+    //   * 59.9K to 59.95K with the vat_amount currency contract (MCP feedback
+    //     seq 254607): vat_amount on categorize + bulk_book now states its
+    //     denomination (transaction currency, booked in SEK), and
+    //     matched_supplier_id on the two upload tools became ['string','null']
+    //     so strict clients stop failing successful unmatched uploads (seq
+    //     261972). Prose trimmed to the floor first; headroom before the
+    //     change was ~19 tokens, so even the trimmed contract crossed.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(59_900)
+    expect(approxTokens).toBeLessThan(59_950)
   })
 })
