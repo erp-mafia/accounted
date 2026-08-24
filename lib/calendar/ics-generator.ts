@@ -20,7 +20,7 @@ export interface CalendarData {
  * Generate a stable UID for calendar events
  * This ensures updates to events are recognized by calendar apps
  */
-function getEventUID(type: string, id: string, domain: string = 'erp-base.se'): string {
+function getEventUID(type: string, id: string, domain: string = 'accounted.se'): string {
   return `${type}-${id}@${domain}`
 }
 

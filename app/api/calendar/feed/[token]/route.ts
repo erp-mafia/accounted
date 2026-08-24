@@ -1,7 +1,9 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { generateCalendarFeed } from '@/lib/calendar/ics-generator'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
+import type { Deadline, Invoice } from '@/types'
 
 const log = createLogger('api/calendar/feed-token')
 
@@ -100,33 +102,39 @@ export async function GET(
   // Fetch relevant data based on feed options. Deadlines are always
   // fetched: include_tax_deadlines only hides SYSTEM rows (the generator
   // filters by source), while user-created deadlines always appear.
-  const [deadlinesResult, invoicesResult] = await Promise.all([
-    supabase
-      .from('deadlines')
-      .select('*')
-      .eq('company_id', feed.company_id)
-      .is('dismissed_at', null)
-      .gte('due_date', startStr)
-      .lte('due_date', endStr)
-      .order('due_date'),
+  const [deadlines, invoices] = await Promise.all([
+    fetchAllRows<Deadline>(({ from, to }) =>
+      supabase
+        .from('deadlines')
+        .select('*')
+        .eq('company_id', feed.company_id)
+        .is('dismissed_at', null)
+        .gte('due_date', startStr)
+        .lte('due_date', endStr)
+        .order('due_date')
+        .range(from, to)
+    ),
 
     // Invoices
     feed.include_invoices
-      ? supabase
-          .from('invoices')
-          .select('*, customer:customers(*)')
-          .eq('company_id', feed.company_id)
-          .gte('due_date', startStr)
-          .lte('due_date', endStr)
-          .order('due_date')
-      : { data: [] },
+      ? fetchAllRows<Invoice>(({ from, to }) =>
+          supabase
+            .from('invoices')
+            .select('*, customer:customers(*)')
+            .eq('company_id', feed.company_id)
+            .gte('due_date', startStr)
+            .lte('due_date', endStr)
+            .order('due_date')
+            .range(from, to)
+        )
+      : Promise.resolve([]),
   ])
 
   try {
     const icsContent = await generateCalendarFeed(
       {
-        deadlines: deadlinesResult.data || [],
-        invoices: invoicesResult.data || [],
+        deadlines,
+        invoices,
       },
       {
         includeTaxDeadlines: feed.include_tax_deadlines,
@@ -137,7 +145,7 @@ export async function GET(
     return new NextResponse(icsContent, {
       headers: {
         'Content-Type': 'text/calendar; charset=utf-8',
-        'Content-Disposition': 'attachment; filename="erp-base.ics"',
+        'Content-Disposition': 'attachment; filename="accounted.ics"',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',
         'Expires': '0',

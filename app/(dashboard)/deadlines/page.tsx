@@ -14,7 +14,8 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Lock, Plus } from 'lucide-react'
+import { CalendarPlus, Lock, Plus } from 'lucide-react'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
@@ -430,14 +431,24 @@ export default function DeadlinesPage() {
         </HelpPopover>
       }
       action={
-        <Button
-          onClick={() => setShowForm(true)}
-          disabled={!canWrite}
-          title={!canWrite ? t('read_only_tooltip') : undefined}
-        >
-          {canWrite ? <Plus className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-          {t('new_deadline')}
-        </Button>
+        <div className="flex items-center gap-2">
+          {ENABLED_EXTENSION_IDS.has('calendar') && (
+            <Button variant="outline" asChild>
+              <Link href="/settings/account">
+                <CalendarPlus className="mr-2 h-4 w-4" />
+                {t('subscribe_calendar')}
+              </Link>
+            </Button>
+          )}
+          <Button
+            onClick={() => setShowForm(true)}
+            disabled={!canWrite}
+            title={!canWrite ? t('read_only_tooltip') : undefined}
+          >
+            {canWrite ? <Plus className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+            {t('new_deadline')}
+          </Button>
+        </div>
       }
     />
   )
