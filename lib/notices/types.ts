@@ -49,6 +49,17 @@ export const NOTICE_CATEGORIES = [
    */
   'bank_connection_expiring',
   /**
+   * The skattekonto does not agree with the ledger after the latest sync.
+   * Pending:  the skatteverket extension's persisted reconciliation summary
+   *           (extension_data key skattekonto_reconciliation_latest, written
+   *           on every sync) has |unexplained_difference| above the drift
+   *           tolerance (skattekonto_drift_tolerance, default 1 SEK).
+   * Done:     the next sync computes an unexplained difference within
+   *           tolerance (rows linked, booked or ignored), or the summary is
+   *           gone (extension disconnected).
+   */
+  'skv_unexplained',
+  /**
    * The signed-in account looks bookkeeping-empty while a same-orgnr company
    * with real bookkeeping exists in another account (#1231).
    * Pending:  lib/company/other-account-hint shouldShowOtherAccountHint().
@@ -70,6 +81,7 @@ export const NOTICE_PRIORITY: readonly NoticeCategory[] = [
   'skv_disconnected',
   'backup_failing',
   'bank_connection_expiring',
+  'skv_unexplained',
   'other_account_hint',
 ]
 

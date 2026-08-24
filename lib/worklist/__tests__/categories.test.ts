@@ -6,6 +6,7 @@ import {
   countInboxDocuments,
   countOverdueInvoices,
   countPendingOperations,
+  countReconciliationDue,
   countSuggestedMatches,
   countSupplierInvoicesAwaitingApproval,
   countUnbookedTransactions,
@@ -411,5 +412,58 @@ describe('listSuggestedMatches', () => {
     await expect(listSuggestedMatches(supabase, COMPANY)).resolves.toEqual([])
     expect(String(consoleError.mock.calls[0]?.[0])).toContain(COMPANY)
     consoleError.mockRestore()
+  })
+})
+
+describe('countReconciliationDue', () => {
+  const CASH_A = '11111111-1111-4111-8111-111111111111'
+  const CASH_B = '22222222-2222-4222-8222-222222222222'
+  const CASH_B_DUP = '33333333-3333-4333-8333-333333333333'
+  // Today 2026-08-23 → previous month end 2026-07-31.
+  const TODAY = new Date('2026-08-23T10:00:00Z')
+
+  it('is zero for a company that never signed anything off (adoption gate)', async () => {
+    enqueue({ data: [] })
+    await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(0)
+    expect(mockSupabase.from).toHaveBeenCalledTimes(1)
+    expect(mockSupabase.from).toHaveBeenCalledWith('account_reconciliations')
+  })
+
+  it('counts reconcilable accounts without an active sign-off through the previous month end', async () => {
+    enqueue({
+      data: [
+        // bank A signed through July: covered.
+        { account_key: `bank:${CASH_A}`, through_date: '2026-07-31', reopened_at: null },
+        // skattekonto signed through June only: due.
+        { account_key: 'skattekonto', through_date: '2026-06-30', reopened_at: null },
+        // bank B signed through July but reopened: due.
+        { account_key: `bank:${CASH_B}`, through_date: '2026-07-31', reopened_at: '2026-08-02T08:00:00Z' },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: CASH_A, iban: 'SE1', currency: 'SEK', updated_at: '2026-08-01' },
+        { id: CASH_B, iban: 'SE2', currency: 'SEK', updated_at: '2026-08-01' },
+        // Reconnect duplicate of B (same IBAN + currency): counts once.
+        { id: CASH_B_DUP, iban: 'SE2', currency: 'SEK', updated_at: '2026-07-01' },
+      ],
+    })
+    enqueue({ count: 12 })
+    // Due: skattekonto + bank B (deduplicated) = 2.
+    await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(2)
+    expect(mockSupabase.from).toHaveBeenCalledWith('cash_accounts')
+    expect(mockSupabase.from).toHaveBeenCalledWith('skattekonto_transactions')
+  })
+
+  it('ignores the skattekonto when it has no rows', async () => {
+    enqueue({ data: [{ account_key: `bank:${CASH_A}`, through_date: '2026-05-31', reopened_at: null }] })
+    enqueue({ data: [{ id: CASH_A, iban: null, currency: 'SEK', updated_at: null }] })
+    enqueue({ count: 0 })
+    await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(1)
+  })
+
+  it('soft-fails to 0 on a query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(countReconciliationDue(supabase, COMPANY, TODAY)).resolves.toBe(0)
   })
 })

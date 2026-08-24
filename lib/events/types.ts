@@ -76,6 +76,10 @@ export type CoreEvent =
   // signals the flows builder triggers on.
   | { type: 'reconciliation.matched'; payload: { accountKey: string; externalId: string; journalEntryId: string; method: 'manual' | 'proposal'; userId: string; companyId: string } }
   | { type: 'reconciliation.unmatched'; payload: { accountKey: string; externalId: string; previousJournalEntryId: string | null; userId: string; companyId: string } }
+  // Sign-off: the human (or agent-staged, user-approved) assertion "reconciled
+  // through this date" on one account (lib/reconciliation/signoff.ts), and its undo.
+  | { type: 'reconciliation.signed_off'; payload: { accountKey: string; signoffId: string; throughDate: string; unexplainedDifference: number | null; userId: string; companyId: string } }
+  | { type: 'reconciliation.reopened'; payload: { accountKey: string; signoffId: string; throughDate: string; reason: string | null; userId: string; companyId: string } }
   // Bank connection lifecycle: consent + account selection are the
   // GDPR/PSD2 audit points; emitted to event_log for compliance trail.
   | { type: 'bank_connection.consent_granted'; payload: { connectionId: string; bankName: string | null; accountCount: number; consentExpiresAt: string | null; userId: string; companyId: string } }

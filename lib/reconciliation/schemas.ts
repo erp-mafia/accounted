@@ -57,6 +57,23 @@ export const ReconciliationStateSchema = z.enum([
   'not_configured',
 ])
 
+/** The latest active sign-off on an account: "avstämt t.o.m. through_date" with the numbers as they stood. */
+export const ReconciliationSignoffSchema = z.object({
+  id: z.string(),
+  account_key: AccountKeySchema,
+  through_date: z.string(),
+  external_balance: z.number().nullable(),
+  ledger_balance: z.number().nullable(),
+  unexplained_difference: z.number().nullable(),
+  note: z.string().nullable(),
+  signed_by: z.string(),
+  signed_at: z.string(),
+  reopened_at: z.string().nullable(),
+  reopened_by: z.string().nullable(),
+  reopen_reason: z.string().nullable(),
+})
+export type ReconciliationSignoff = z.infer<typeof ReconciliationSignoffSchema>
+
 export const ReconciliationAccountSchema = z.object({
   account_key: AccountKeySchema,
   kind: ReconciliationKindSchema,
@@ -80,6 +97,8 @@ export const ReconciliationAccountSchema = z.object({
     .nullable(),
   /** Another enabled cash account shares this IBAN and currency (reconnect duplicate). */
   superseded_by: AccountKeySchema.nullable(),
+  /** through_date of the latest active sign-off, null when the account was never signed off. */
+  signed_off_through: z.string().nullable().optional(),
 })
 export type ReconciliationAccount = z.infer<typeof ReconciliationAccountSchema>
 
@@ -190,6 +209,8 @@ export const ReconciliationStatusSchema = z.object({
   skattekonto: SkattekontoStatusBlockSchema.nullable(),
   /** Today's bank status fields, unchanged, for the bank kind (see bank-reconciliation.ts). */
   bank: z.record(z.string(), z.unknown()).nullable(),
+  /** Latest active sign-off on the account (lib/reconciliation/signoff.ts); null when none. */
+  signoff: ReconciliationSignoffSchema.nullable().optional(),
 })
 export type ReconciliationStatus = z.infer<typeof ReconciliationStatusSchema>
 

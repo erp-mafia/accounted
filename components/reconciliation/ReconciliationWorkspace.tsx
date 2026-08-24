@@ -9,9 +9,12 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton } from '@/components/ui/skeleton'
+import { FyPicker } from '@/components/common/FyPicker'
+import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
+import type { FiscalPeriod } from '@/types'
 import { ReconciliationRail } from './ReconciliationRail'
-import { AccountOverview } from './AccountOverview'
+import { AccountOverview, type ReconciliationWindow } from './AccountOverview'
 
 /**
  * /reconciliation: one page for every account with an outside truth. The
@@ -19,18 +22,47 @@ import { AccountOverview } from './AccountOverview'
  * their status; the body shows the selected account's bridge and the rows
  * behind it. Selection lives in the URL (?account=) so a link lands on the
  * right account and a reload keeps it.
+ *
+ * The period (räkenskapsår + range within it) scopes the bank bridge and the
+ * item windows and sets the default sign-off date. It keeps its own preset
+ * memory, separate from the reports: reconciling is a monthly ritual, so it
+ * opens on this month rather than on whatever range a report left behind.
  */
-export function ReconciliationWorkspace() {
+
+const FY_STORAGE_KEY_PREFIX = 'Accounted:recon-fy:'
+const RANGE_STORAGE_KEY_PREFIX = 'Accounted:recon-page-range-preset:'
+
+interface ReconciliationWorkspaceProps {
+  initialPeriods: FiscalPeriod[]
+  initialCompanyId: string | null
+}
+
+export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: ReconciliationWorkspaceProps) {
   const t = useTranslations('reconciliation')
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [accounts, setAccounts] = useState<ReconciliationAccount[] | null>(null)
   const [loadError, setLoadError] = useState(false)
+  const [periodId, setPeriodId] = useState<string | null>(null)
+  const [periodBounds, setPeriodBounds] = useState<{ start: string; end: string } | null>(null)
+  const [dateRange, setDateRange] = useState<DateRangeValue>({})
+
+  // The effective window: the range within the period, defaulting to the
+  // period bounds. Null until the period picker has resolved.
+  const window = useMemo<ReconciliationWindow | null>(() => {
+    if (!periodBounds) return null
+    return {
+      from: dateRange.fromDate ?? periodBounds.start,
+      to: dateRange.toDate ?? periodBounds.end,
+    }
+  }, [periodBounds, dateRange])
 
   const load = useCallback(async () => {
+    if (!window) return
     try {
-      const res = await fetch('/api/reconciliation/accounts')
+      const qs = new URLSearchParams({ date_from: window.from, date_to: window.to })
+      const res = await fetch(`/api/reconciliation/accounts?${qs.toString()}`)
       setLoadError(false)
       if (!res.ok) {
         setLoadError(true)
@@ -41,7 +73,7 @@ export function ReconciliationWorkspace() {
     } catch {
       setLoadError(true)
     }
-  }, [])
+  }, [window])
 
   useEffect(() => {
     void load()
@@ -74,6 +106,33 @@ export function ReconciliationWorkspace() {
           <p>{t('help_text')}</p>
         </HelpPopover>
       }
+      action={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <FyPicker
+            value={periodId}
+            onChange={(id, period) => {
+              setPeriodId(id)
+              setPeriodBounds(period ? { start: period.period_start, end: period.period_end } : null)
+              setDateRange({})
+            }}
+            includeAllOption={false}
+            hideFuturePeriods
+            initialPeriods={initialPeriods}
+            initialCompanyId={initialCompanyId}
+            storageKeyPrefix={FY_STORAGE_KEY_PREFIX}
+          />
+          {periodBounds && (
+            <ReportDateRange
+              periodStart={periodBounds.start}
+              periodEnd={periodBounds.end}
+              value={dateRange}
+              onChange={setDateRange}
+              defaultPreset="this_month"
+              storageKeyPrefix={RANGE_STORAGE_KEY_PREFIX}
+            />
+          )}
+        </div>
+      }
     />
   )
 
@@ -86,7 +145,7 @@ export function ReconciliationWorkspace() {
     )
   }
 
-  if (accounts === null) {
+  if (accounts === null || !window) {
     return (
       <div className="space-y-6" aria-busy>
         {header}
@@ -121,12 +180,15 @@ export function ReconciliationWorkspace() {
   return (
     <div className="space-y-6">
       {header}
-      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-        <ReconciliationRail accounts={accounts} selectedKey={selected?.account_key ?? null} onSelect={select} />
-        <div className="min-w-0">
-          {selected && <AccountOverview key={selected.account_key} account={selected} onChanged={() => void load()} />}
-        </div>
-      </div>
+      {selected && (
+        <AccountOverview
+          key={selected.account_key}
+          account={selected}
+          rail={<ReconciliationRail accounts={accounts} selectedKey={selected.account_key} onSelect={select} />}
+          window={window}
+          onChanged={() => void load()}
+        />
+      )}
     </div>
   )
 }

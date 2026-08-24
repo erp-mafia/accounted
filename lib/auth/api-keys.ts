@@ -40,6 +40,7 @@ export const API_KEY_SCOPES = {
   // (match/unmatch) and ignore flags. Links never touch the ledger.
   'reconciliation:read':  { label: 'Avstämning: läs',   description: 'Konton att stämma av, bryggan per konto och raderna bakom den (bank + skattekonto)' },
   'reconciliation:write': { label: 'Avstämning: skriv', description: 'Koppla och koppla bort händelser mot verifikat, ignorera rader (MCP stagar; REST skriver direkt)' },
+  'reconciliation:signoff': { label: 'Avstämning: signera', description: 'Markera ett konto som avstämt t.o.m. ett datum och öppna en signering igen (MCP stagar; REST skriver direkt)' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -133,6 +134,8 @@ export const STAGING_SCOPES: ApiKeyScope[] = [
   // gnubok_reconcile_match / gnubok_reconcile_unmatch stage reconciliation_*
   // operations; same SoD reasoning.
   'reconciliation:write',
+  // gnubok_reconcile_signoff stages reconciliation_signoff.
+  'reconciliation:signoff',
 ]
 
 /**
@@ -190,6 +193,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_reconciliation_items:           'reconciliation:read',
   gnubok_reconcile_match:                     'reconciliation:write',
   gnubok_reconcile_unmatch:                   'reconciliation:write',
+  gnubok_reconcile_signoff:                   'reconciliation:signoff',
   gnubok_bulk_book_transactions:              'transactions:write',
   gnubok_bulk_book_inbox_items:               'transactions:write',
   gnubok_auto_match_period:                   'transactions:write',

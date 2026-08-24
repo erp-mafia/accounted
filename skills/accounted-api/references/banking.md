@@ -107,7 +107,7 @@ Response `200`:
 ```ts
 {
   data: {
-    accounts: { account_key: string, kind: "bank" | "skattekonto" | "manual", account_number: string, name: string, currency: string, logo_url: string, source: { type: "psd2" | "bank_file" | "skatteverket_api" | "skatteverket_file" | "manual", synced_at: string, stale: boolean }, status: { state: "reconciled" | "open" | "stale" | "not_configured", as_of: string, unexplained_difference: number, open_counts: { proposed: number, unmatched_external: number, unmatched_ledger: number } }, superseded_by: string }[]
+    accounts: { account_key: string, kind: "bank" | "skattekonto" | "manual", account_number: string, name: string, currency: string, logo_url: string, source: { type: "psd2" | "bank_file" | "skatteverket_api" | "skatteverket_file" | "manual", synced_at: string, stale: boolean }, status: { state: "reconciled" | "open" | "stale" | "not_configured", as_of: string, unexplained_difference: number, open_counts: { proposed: number, unmatched_external: number, unmatched_ledger: number } }, superseded_by: string, signed_off_through?: string }[]
   },
   meta: {
     request_id: string,
@@ -161,7 +161,8 @@ Response `200`:
     bridge: { key: string, label_sv: string, label_en: string, amount: number, count: number, items_bucket: string }[],
     counts: { proposed: number, unmatched_external: number, unmatched_ledger: number, matched: number, ignored: number },
     skattekonto: { saldo_skatteverket: number, fetched_at: string, history_start: string, opening_difference: number, upcoming_count: number, upcoming_total: number, ledger_balance_before_start: number },
-    bank: Record<string, unknown>
+    bank: Record<string, unknown>,
+    signoff?: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string }
   },
   meta: {
     request_id: string,
@@ -335,6 +336,130 @@ Response `200`:
 ```ts
 {
   data: { external_id: string, previous_journal_entry_id: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/signoff`
+
+**Sign-off history for one reconcilable account.**
+`scope:reconciliation:read · risk:low · idempotent · reversible`
+
+Every "avstämt t.o.m." sign-off on the account, newest first. Active ones by default; ?include_reopened=true adds the reopened (undone) ones with their reopen stamp. The latest active sign-off also rides along on GET .../accounts/{accountKey} as `signoff`.
+
+**Use when:** You need the attestation trail (who signed what through which date) for an account, e.g. for a close checklist or an audit question.
+**Do not use for:** Deciding whether the account is reconciled today: read unexplained_difference on the account status for that.
+
+**Pitfalls:**
+- A sign-off is an assertion made at a point in time; rows or links added later can make the live bridge differ from the signed numbers. Compare signoff.unexplained_difference with the current status when that matters.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    signoffs: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/signoff`
+
+**Mark an account reconciled through a date (sign-off).**
+`scope:reconciliation:signoff · risk:medium · dry-run · reversible`
+
+Body: { through_date: "YYYY-MM-DD", note?, force? }. Recomputes the bridge through the date and refuses unless unexplained_difference is zero; with force: true and a note it signs anyway and records the difference. Refuses dates in the future, dates past the skattekonto snapshot (NOT_FETCHED_THROUGH), and dates at or before an existing active sign-off (ALREADY_SIGNED_OFF: reopen that one first). ?dry_run=true returns would_sign without writing. Undo with POST .../signoff/{signoffId}/reopen.
+
+**Use when:** The month (or period) is explained and you want the account marked as reconciled through its last day, as a human would in the Avstämning page.
+**Do not use for:** Linking rows or booking anything: a sign-off changes no data in the ledger. Use .../links and the booking endpoints first.
+
+**Pitfalls:**
+- Refusal codes come back as VALIDATION_ERROR with details.code: INVALID_DATE, DATE_IN_FUTURE, NOT_FETCHED_THROUGH, OUTSIDE_UNKNOWN, NOT_RECONCILED, NOTE_REQUIRED; ALREADY_SIGNED_OFF and SIGNOFF_RACE come back as CONFLICT.
+- force: true without a note is NOTE_REQUIRED: the note is what the next reader sees next to the non-zero difference.
+- Idempotency-Key is required; repeating the same key replays the first response.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ through_date: string, note?: string, force?: boolean }
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    dry_run: boolean,
+    signoff?: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string },
+    would_sign?: { account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, is_reconciled: boolean, forced: boolean, previous_through_date: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/signoff/{signoffId}/reopen`
+
+**Reopen (undo) a reconciliation sign-off.**
+`scope:reconciliation:signoff · risk:low · idempotent · dry-run · reversible`
+
+Body: { reason? }. Stamps the sign-off reopened_at/by/reason; nothing is deleted and the ledger is untouched. After this the account can be signed off again for the same or an earlier date. A sign-off that is already reopened is ALREADY_REOPENED (CONFLICT).
+
+**Use when:** A signed-off period turns out to need more work (a late bank row, a corrected verifikat) and the attestation must be withdrawn before it is redone.
+**Do not use for:** Removing a link or un-booking anything: those are separate operations; reopening only withdraws the attestation.
+
+**Pitfalls:**
+- Reopening is recorded, not erased: the history endpoint (?include_reopened=true) keeps showing the row with its reopen stamp.
+- Idempotency-Key is required; repeating the same key replays the first response.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+| `signoffId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ reason?: string }
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    signoff: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string }
+  },
   meta: {
     request_id: string,
     api_version: string,

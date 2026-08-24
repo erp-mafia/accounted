@@ -8,6 +8,7 @@ import { payrollMonthlySkill } from './payroll-monthly'
 import { bankReconciliationSkill } from './bank-reconciliation'
 import { kreditfakturaProcessSkill } from './kreditfaktura-process'
 import { customerOnboardingSkill } from './customer-onboarding'
+import { reconcileMonthSkill } from './reconcile-month'
 import { loadAtomsAsSkills, loadReferenceById } from './atoms'
 
 /** Static workflow skills the server ships with. Tier: 'workflow'. */
@@ -20,6 +21,7 @@ export const workflowSkills: Skill[] = [
   bankReconciliationSkill,
   kreditfakturaProcessSkill,
   customerOnboardingSkill,
+  reconcileMonthSkill,
 ]
 
 /** @deprecated Use `workflowSkills` for the static set, or `loadAllSkills(supabase)`

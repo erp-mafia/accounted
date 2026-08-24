@@ -25,6 +25,7 @@ import {
   Landmark,
   Loader2,
   ReceiptText,
+  Scale,
   ShieldCheck,
   Stamp,
 } from 'lucide-react'
@@ -198,6 +199,7 @@ export default function AttGoraSection({
   const bevakaRows =
     counts.overdue_invoice > 0 ||
     counts.deadline_action > 0 ||
+    counts.reconciliation_due > 0 ||
     expiringBankConnections.length > 0
   const allClear = !bokforRows && !granskaRows && !bevakaRows
 
@@ -392,6 +394,15 @@ export default function AttGoraSection({
                         icon={CalendarClock}
                         label={t('row_deadlines')}
                         count={counts.deadline_action}
+                      />
+                    )}
+                    {counts.reconciliation_due > 0 && (
+                      <WorklistRow
+                        href="/reconciliation"
+                        icon={Scale}
+                        label={t('row_reconciliation_due')}
+                        detail={t('row_reconciliation_due_detail')}
+                        count={counts.reconciliation_due}
                       />
                     )}
                     {expiringBankConnections.length > 0 && (

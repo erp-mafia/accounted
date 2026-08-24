@@ -172,6 +172,7 @@ import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { getAccountStatus } from '@/lib/reconciliation/service'
 import { listAccountItems } from '@/lib/reconciliation/items'
 import { matchPairs } from '@/lib/reconciliation/actions'
+import { signOffAccount } from '@/lib/reconciliation/signoff'
 import { parseAccountKey, type ReconciliationItemBucket } from '@/lib/reconciliation/schemas'
 import { decryptPersonnummer, maskEmployeeForResponse, maskPersonnummer } from '@/lib/salary/personnummer'
 import {
@@ -1365,6 +1366,7 @@ const TOOL_PREFLIGHT_MAP: Record<string, string> = {
   gnubok_post_annual_depreciation: 'gnubok_propose_annual_depreciation',
   gnubok_book_salary_run: 'gnubok_get_salary_run',
   gnubok_reconcile_match: 'gnubok_get_reconciliation_status',
+  gnubok_reconcile_signoff: 'gnubok_get_reconciliation_status',
 }
 
 /**
@@ -10063,6 +10065,76 @@ export const tools: McpTool[] = [
     },
   },
 
+
+  {
+    name: 'gnubok_reconcile_signoff',
+    title: 'Reconcile: Sign off',
+    description: 'Mark one account (skattekonto or bank:<cash_account_id>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0 through that date, or force + note. Writes nothing to the ledger. Stages (medium risk); dry_run previews.',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>".' },
+        through_date: { type: 'string', description: 'Inclusive YYYY-MM-DD the account is reconciled through (not in the future; not past the skattekonto snapshot).' },
+        note: { type: 'string', description: 'Free text. Required with force.' },
+        force: { type: 'boolean', description: 'Sign despite an unexplained difference or an unknown outside balance. Needs note.' },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['account_key', 'through_date'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const accountKey = args.account_key as string
+      const throughDate = args.through_date as string
+      if (!parseAccountKey(accountKey)) throw new Error(`Invalid account_key "${accountKey}"`)
+      // Policy runs now (dry run of the sign-off) so a refusal surfaces here,
+      // not at approval time; the executor re-runs it when the user approves.
+      const preview = await signOffAccount(
+        supabase,
+        companyId,
+        userId,
+        accountKey,
+        { through_date: throughDate, note: (args.note as string | undefined) ?? null, force: args.force === true },
+        { dryRun: true },
+      )
+      if (!preview) throw new Error(`Unknown account_key "${accountKey}" for this company`)
+      const previewData: Record<string, unknown> = preview.dry_run
+        ? { ...preview.would_sign }
+        : { account_key: accountKey, through_date: throughDate }
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'reconciliation_signoff',
+        `Markera ${accountKey} som avstämt t.o.m. ${throughDate}`,
+        {
+          account_key: accountKey,
+          through_date: throughDate,
+          note: (args.note as string | undefined) ?? null,
+          force: args.force === true,
+        },
+        previewData,
+        actor,
+        {
+          description: 'After approval, the account shows "avstämt t.o.m." in the Avstämning page and on its status.',
+          tool: 'gnubok_get_reconciliation_status',
+          args: { account_key: accountKey },
+        },
+        {
+          dryRun: args.dry_run === true,
+          idempotencyKey: args.idempotency_key as string | undefined,
+        },
+      )
+    },
+  },
 
   {
     name: 'gnubok_list_cash_accounts',

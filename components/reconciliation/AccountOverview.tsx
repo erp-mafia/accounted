@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -20,6 +20,7 @@ import type {
   ReconciliationStatus,
 } from '@/lib/reconciliation/schemas'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
+import { SignoffDialog } from './SignoffDialog'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
@@ -57,13 +58,22 @@ const FOLDED_BY_DEFAULT: ReadonlySet<ReconciliationItemBucket> = new Set(['match
 
 const ITEMS_LIMIT = 200
 
+export interface ReconciliationWindow {
+  from: string
+  to: string
+}
+
 interface AccountOverviewProps {
   account: ReconciliationAccount
+  /** The account rail. Rendered inside the summary grid so the items table below can span the full page width (the approved layout). */
+  rail: ReactNode
+  /** The selected period: scopes the bank bridge and the item windows; its end is the default sign-off date. */
+  window: ReconciliationWindow
   /** Called after any write so the rail can refresh its status dots. */
   onChanged: () => void
 }
 
-export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
+export function AccountOverview({ account, rail, window, onChanged }: AccountOverviewProps) {
   const t = useTranslations('reconciliation')
   const locale = useLocale()
   const { toast } = useToast()
@@ -73,15 +83,17 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const [unfolded, setUnfolded] = useState<Set<ReconciliationItemBucket>>(new Set())
   const [bookRow, setBookRow] = useState<ReconciliationItem | null>(null)
+  const [signoffOpen, setSignoffOpen] = useState(false)
 
   const isSkv = account.kind === 'skattekonto'
   const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
 
   const load = useCallback(async () => {
     try {
+      const qs = new URLSearchParams({ date_from: window.from, date_to: window.to })
       const [statusRes, itemsRes] = await Promise.all([
-        fetch(base),
-        fetch(`${base}/items?limit=${ITEMS_LIMIT}`),
+        fetch(`${base}?${qs.toString()}`),
+        fetch(`${base}/items?limit=${ITEMS_LIMIT}&${qs.toString()}`),
       ])
       setLoadError(false)
       if (!statusRes.ok || !itemsRes.ok) {
@@ -95,7 +107,7 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
     } catch {
       setLoadError(true)
     }
-  }, [base])
+  }, [base, window.from, window.to])
 
   // The workspace keys this component on account_key, so a new account is a
   // fresh mount: no state to reset here.
@@ -230,19 +242,53 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
     }
   }
 
+  async function submitSignoff(input: { through_date: string; note: string | null; force: boolean }) {
+    const res = await fetch(`${base}/signoff`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) return getUserErrorMessage(json, { statusCode: res.status })
+    setSignoffOpen(false)
+    toast({ title: t('toast_signed_off', { date: formatDate(input.through_date) }) })
+    await refresh()
+    return null
+  }
+
+  async function reopen(signoffId: string) {
+    setBusy('reopen')
+    try {
+      const data = await postJson(`${base}/signoff/${signoffId}/reopen`, {})
+      if (data) {
+        toast({ title: t('toast_reopened') })
+        await refresh()
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
   // ---- render -------------------------------------------------------------
 
   if (loadError) {
     return (
-      <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>
-        {t('load_failed')}
-      </AttnLine>
+      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
+        {rail}
+        <div className="min-w-0">
+          <AttnLine action={{ label: t('older_show'), onClick: () => void load() }}>
+            {t('load_failed')}
+          </AttnLine>
+        </div>
+      </div>
     )
   }
 
   if (!status || !items) {
     return (
-      <div className="space-y-6" aria-busy>
+      <div className="grid gap-8 lg:grid-cols-[220px_1fr]" aria-busy>
+        {rail}
+        <div className="min-w-0 space-y-6">
         <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="bg-background p-4">
@@ -253,6 +299,7 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
         </div>
         <Skeleton className="h-4 w-72" />
         <Skeleton className="h-40 w-full" />
+        </div>
       </div>
     )
   }
@@ -267,7 +314,14 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
     {
       key: 'external',
       label: isSkv ? t('tile_external_skv') : t('tile_external_bank'),
-      value: money(status.external_balance),
+      // The bank tile is the period sum (what its label says), which lives on
+      // the bridge; external_balance is the reported bank balance and is often
+      // unknown, which rendered as "okänt" next to a bridge that knows better.
+      value: money(
+        isSkv
+          ? status.external_balance
+          : (status.bridge.find((l) => l.key === 'bank_transactions')?.amount ?? status.external_balance),
+      ),
       sub: fetchedAt ? t('tile_synced', { date: formatDate(fetchedAt) }) : t('rail_never_synced'),
     },
     {
@@ -320,8 +374,18 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
   const bankRunHref = '/reports/bank-reconciliation?autorun=1'
   const bankViewHref = '/reports/bank-reconciliation'
 
+  // Default sign-off date: the window end, never past today nor past the
+  // skattekonto snapshot. The button hides when that date is already signed.
+  const todayIso = new Date().toISOString().slice(0, 10)
+  const signoffMaxDate = isSkv ? (asOfDate < todayIso ? asOfDate : todayIso) : todayIso
+  const signoffDefaultDate = window.to < signoffMaxDate ? window.to : signoffMaxDate
+  const signoffEnabled = !status.signoff || status.signoff.through_date < signoffDefaultDate
+
   return (
     <div className="space-y-6">
+      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
+        {rail}
+        <div className="min-w-0 space-y-6">
       {/* Tiles: label + number, nothing else. */}
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border stagger-enter">
         {tiles.map((tile) => (
@@ -347,6 +411,23 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
       ) : status.is_reconciled ? (
         <p className="text-[13px] text-muted-foreground">{t('reconciled_line')}</p>
       ) : null}
+
+      {status.signoff && (
+        <p className="group flex items-center gap-2 text-[13px] text-muted-foreground">
+          <span>
+            {t('signed_off_line', { date: formatDate(status.signoff.through_date), when: formatDate(status.signoff.signed_at) })}
+            {status.signoff.note && <span className="ml-1">· {t('signed_off_forced')}</span>}
+          </span>
+          <button
+            type="button"
+            onClick={() => void reopen(status.signoff!.id)}
+            disabled={busy !== null}
+            className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
+          >
+            {t('reopen')}
+          </button>
+        </p>
+      )}
 
       {/* Bridge: how the difference is explained. */}
       {status.bridge.length > 0 && (
@@ -389,6 +470,11 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
             <Link href={bankRunHref}>{t('action_run_bank_matcher')}</Link>
           </Button>
         )}
+        {signoffEnabled && (
+          <Button size="sm" variant={status.is_reconciled ? 'default' : 'outline'} onClick={() => setSignoffOpen(true)} disabled={busy !== null}>
+            {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
+          </Button>
+        )}
         <span className="ml-auto">
           <Link href={isSkv ? '/skattekonto' : bankViewHref} className={QUIET_LINK_CLASS}>
             {isSkv ? t('action_open_skattekonto') : t('action_open_bank_view')}
@@ -405,6 +491,9 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
           </Link>
         </p>
       )}
+
+        </div>
+      </div>
 
       {/* The table: full width, banded by bucket, paired proposal rows. */}
       {items.items.length === 0 ? (
@@ -504,6 +593,17 @@ export function AccountOverview({ account, onChanged }: AccountOverviewProps) {
           }}
         />
       )}
+
+      <SignoffDialog
+        open={signoffOpen}
+        onOpenChange={setSignoffOpen}
+        accountName={account.name}
+        defaultDate={signoffDefaultDate}
+        maxDate={signoffMaxDate}
+        unexplained={status.unexplained_difference}
+        currency={currency}
+        onSubmit={submitSignoff}
+      />
     </div>
   )
 }

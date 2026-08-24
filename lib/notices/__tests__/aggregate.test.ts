@@ -8,6 +8,7 @@ const detectMocks = vi.hoisted(() => ({
   skv: vi.fn(),
   backup: vi.fn(),
   expiring: vi.fn(),
+  unexplained: vi.fn(),
   other: vi.fn(),
 }))
 
@@ -16,6 +17,7 @@ vi.mock('../categories', () => ({
   detectSkvDisconnected: detectMocks.skv,
   detectBackupFailing: detectMocks.backup,
   detectExpiringBankConnections: detectMocks.expiring,
+  detectSkvUnexplained: detectMocks.unexplained,
   detectOtherAccountHint: detectMocks.other,
 }))
 
@@ -39,6 +41,7 @@ beforeEach(() => {
   detectMocks.skv.mockResolvedValue(null)
   detectMocks.backup.mockResolvedValue(null)
   detectMocks.expiring.mockResolvedValue(null)
+  detectMocks.unexplained.mockResolvedValue(null)
   detectMocks.other.mockResolvedValue(null)
   mockResult({ data: [] }) // notice_dismissals: none
 })
