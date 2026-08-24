@@ -124,6 +124,7 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
       { data: [] }, // pre-FY guard: earliest-period lookup (none yet)
       { data: null }, // fiscal-period upsert
       { data: null }, // journal-entry period lookup: partial categorization path
+      { data: [] }, // resolveSettlementAccount: no enabled cash accounts -> 1930
       { data: [] }, // pre-FY clamp: earliest-period lookup (none yet)
       {
         data: [{
