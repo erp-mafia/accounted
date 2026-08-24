@@ -87,18 +87,29 @@ export async function resolveMissingUnderlagEntries(
   const dateTo = filters.dateTo ?? null
   const search = filters.search?.trim() || null
 
-  // Candidate entries: posted, document-requiring, matching the active filters.
-  const candidates = await fetchAllRows<MissingUnderlagEntry>(({ from, to }) => {
-    // The cast keeps supabase-js's type-level select parser on a single
-    // literal: a union of two select strings fails its template-literal
-    // parsing. Runtime behavior is the actual string; rows are typed by
+  // Candidate entries: posted, document-requiring, matching the active
+  // filters. Built from LITERAL select strings and literal column filters
+  // only: tests/schema/no-phantom-columns.test.ts statically resolves every
+  // query expression against the schema, and a runtime-built select() or
+  // .or() string counts against its unresolvable ceiling. That is also why a
+  // voucher-label search runs as two separate queries below instead of one
+  // .or().
+  // Named only for its return TYPE below; called solely in the idOnly branch
+  // so exactly one query is ever built per invocation.
+  const idSelect = () => supabase.from('journal_entries').select('id')
+  const buildCandidateQuery = () => {
+    // Two separate literal select() calls (never one call with a computed
+    // string). The cast unifies the two builder generics: supabase-js types
+    // the select string at the type level, and rows are typed by
     // fetchAllRows<MissingUnderlagEntry> either way.
-    const selectCols = (idOnly
-      ? 'id'
-      : 'id, entry_date, voucher_series, voucher_number, description, total_amount') as 'id'
-    let q = supabase
-      .from('journal_entries')
-      .select(selectCols)
+    let q = idOnly
+      ? idSelect()
+      : (supabase
+          .from('journal_entries')
+          .select(
+            'id, entry_date, voucher_series, voucher_number, description, total_amount',
+          ) as unknown as ReturnType<typeof idSelect>)
+    q = q
       .eq('company_id', companyId)
       .eq('status', 'posted')
       .in('source_type', [...NEEDS_DOC_SOURCE_TYPES])
@@ -106,23 +117,44 @@ export async function resolveMissingUnderlagEntries(
     if (series) q = q.eq('voucher_series', series)
     if (dateFrom) q = q.gte('entry_date', dateFrom)
     if (dateTo) q = q.lte('entry_date', dateTo)
-    if (search) {
-      // Same search semantics as the journal list's direct query: a
-      // voucher-label-shaped needle ("A209") also matches series+number, so
-      // searching for a voucher by its own label works with the filter on.
-      const needle = `%${escapeLikePattern(search)}%`
-      const voucher = parseVoucher(search)
-      if (voucher) {
-        const quotedNeedle = `"${needle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
-        q = q.or(
-          `description.ilike.${quotedNeedle},and(voucher_series.eq.${voucher.series},voucher_number.eq.${voucher.number})`,
-        )
-      } else {
-        q = q.ilike('description', needle)
+    return q
+  }
+  type CandidateQuery = ReturnType<typeof buildCandidateQuery>
+  const fetchCandidates = (refine: (q: CandidateQuery) => CandidateQuery) =>
+    fetchAllRows<MissingUnderlagEntry>(({ from, to }) =>
+      refine(buildCandidateQuery()).order('id').range(from, to),
+    )
+
+  let candidates: MissingUnderlagEntry[]
+  if (search) {
+    // Same search semantics as the journal list's direct query: a
+    // voucher-label-shaped needle ("A209") also matches series+number, so
+    // searching for a voucher by its own label works with the filter on.
+    const needle = `%${escapeLikePattern(search)}%`
+    const voucher = parseVoucher(search)
+    if (voucher) {
+      const [byDescription, byLabel] = await Promise.all([
+        fetchCandidates((q) => q.ilike('description', needle)),
+        fetchCandidates((q) =>
+          q.eq('voucher_series', voucher.series).eq('voucher_number', voucher.number),
+        ),
+      ])
+      // Union, deduped by id, restored to the id order fetchAllRows pages by.
+      const seen = new Set<string>()
+      const merged: MissingUnderlagEntry[] = []
+      for (const entry of [...byDescription, ...byLabel]) {
+        if (seen.has(entry.id)) continue
+        seen.add(entry.id)
+        merged.push(entry)
       }
+      merged.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      candidates = merged
+    } else {
+      candidates = await fetchCandidates((q) => q.ilike('description', needle))
     }
-    return q.order('id').range(from, to)
-  })
+  } else {
+    candidates = await fetchCandidates((q) => q)
+  }
 
   if (candidates.length === 0) return []
 

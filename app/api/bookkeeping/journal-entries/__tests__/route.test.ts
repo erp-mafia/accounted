@@ -465,7 +465,11 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     })
 
     it('matches a voucher-label search against series+number, like the direct path', async () => {
-      enqueue({ data: [candidate(E1, 209)], error: null }) // candidates
+      // A voucher-shaped needle fans out to TWO candidate queries (description
+      // ilike, then series+number), unioned by id: a runtime-built .or()
+      // would count against the phantom-column scanner's ceiling.
+      enqueue({ data: [], error: null }) // candidates by description: none
+      enqueue({ data: [candidate(E1, 209)], error: null }) // candidates by voucher label
       enqueue({ data: [], error: null }) // no documents
       enqueue({ data: [], error: null }) // no SI references
       enqueue({ data: [], error: null }) // no SI payment-row references
@@ -480,18 +484,13 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       )
 
       expect(status).toBe(200)
+      // Searching "A209" with the filter on must find verifikat A209 even
+      // when its description never mentions it.
       expect(body.data.map((e) => e.id)).toEqual([E1])
-      // The candidate query must carry the voucher-label OR branch, not a
-      // description-only ilike: searching "A209" with the filter on has to
-      // find verifikat A209 even when its description never mentions it.
-      const orCalls = findCalls('journal_entries', 'or')
-      expect(
-        orCalls.some(
-          (args) =>
-            String(args[0]).includes('voucher_series.eq.A') &&
-            String(args[0]).includes('voucher_number.eq.209'),
-        ),
-      ).toBe(true)
+      expect(body.count).toBe(1)
+      const eqCalls = findCalls('journal_entries', 'eq')
+      expect(eqCalls).toContainEqual(['voucher_series', 'A'])
+      expect(eqCalls).toContainEqual(['voucher_number', 209])
     })
 
     it('is ignored for the drafts view', async () => {
