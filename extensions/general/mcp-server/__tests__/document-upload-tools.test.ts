@@ -208,4 +208,19 @@ describe('MCP model-free document upload tools', () => {
       expect(MCP_TOOL_CAPABILITY_MAP[name]).toBe('ai')
     }
   })
+
+  it('declares matched_supplier_id nullable: unmatched suppliers return null (MCP feedback seq 261972)', () => {
+    // Strict clients validate structuredContent against outputSchema; a bare
+    // { type: 'string' } turned every unmatched upload into a client-side
+    // validation error (and tripped the caller's circuit breaker) even though
+    // the upload itself succeeded.
+    for (const name of ['gnubok_complete_document_upload', 'gnubok_upload_document']) {
+      const schema = findTool(name).outputSchema as {
+        properties: Record<string, { type: unknown }>
+        required: string[]
+      }
+      expect(schema.properties.matched_supplier_id.type).toEqual(['string', 'null'])
+      expect(schema.required).not.toContain('matched_supplier_id')
+    }
+  })
 })
