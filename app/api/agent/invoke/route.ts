@@ -17,6 +17,13 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 // agent tool registry which is populated by the mcp-server extension at load.
 ensureInitialized()
 
+// Deep turns (thinking at high/xhigh effort, up to 12 tool iterations, a
+// 15-27k-token prompt prefix) can outlive the plan default duration cap; a
+// function killed mid-stream closes the NDJSON stream cleanly, which the chat
+// used to render as silent success. 300 s matches the other long-running model
+// surfaces (app/api/receipt-hunt/run, app/api/agent/ask).
+export const maxDuration = 300
+
 // Hard cap on the per-turn user input. Generous for a chat composer (about
 // 5k words / 20 pages) but bounds Bedrock token cost if the rate limiter is
 // ever fail-open and a client floods large payloads.

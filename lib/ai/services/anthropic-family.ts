@@ -18,6 +18,20 @@ import type {
 
 const DEFAULT_MAX_STEPS = 4
 
+// Bound a serialized tool result before it enters the model context. Mirrors
+// boundToolResultText in lib/agent/chat/run-turn.ts: same 40k-char ceiling
+// (~10k tokens, well under the ~25k-token practical ceiling for a single tool
+// return). Unbounded, one large read (full OCR text, a big ledger report) is
+// re-sent on every later loop turn and can eat the whole max_tokens budget
+// before the model produces any visible text.
+const MAX_TOOL_RESULT_CHARS = 40_000
+
+function boundToolResult(raw: string): string {
+  if (raw.length <= MAX_TOOL_RESULT_CHARS) return raw
+  const head = raw.slice(0, MAX_TOOL_RESULT_CHARS)
+  return `${head}\n\n[avkortat: resultatet var ${raw.length} tecken, visar de första ${MAX_TOOL_RESULT_CHARS}. Be om en smalare sökning (limit, datumintervall, specifikt id eller fält) för att se mer.]`
+}
+
 const EMPTY_USAGE: AiUsage = {
   inputTokens: 0,
   outputTokens: 0,
@@ -173,16 +187,27 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
             isError = true
             content = JSON.stringify({ error: err instanceof Error ? err.message : 'Tool failed' })
           }
-          results.push({ type: 'tool_result', tool_use_id: block.id, content, is_error: isError })
+          results.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: boundToolResult(content),
+            is_error: isError,
+          })
         }
         messages.push({ role: 'user', content: results })
       }
 
-      // Spent the step budget without a final answer: force one with tools off.
+      // Spent the step budget without a final answer: force one more turn that
+      // cannot call tools. The tools param MUST stay in the request: the
+      // transcript above holds tool_use/tool_result blocks, and the Messages
+      // API rejects a request that replays those without declaring the tools
+      // they refer to. tool_choice none is the sanctioned "answer in text" knob.
       const final = await getClient().messages.create({
         model,
         max_tokens: req.maxTokens,
         ...(req.system ? { system: req.system } : {}),
+        tools,
+        tool_choice: { type: 'none' },
         messages,
       })
       return { text: textOf(final), model, usage: addUsage(usage, usageOf(final)) }
