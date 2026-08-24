@@ -73,6 +73,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const [taxPayment, setTaxPayment] = useState<{
     total_tax: number
     total_avgifter: number
+    tax_payment_file_format: string | null
     tax_payment_file_generated_at: string | null
     tax_paid_at: string | null
   } | null>(null)
@@ -868,8 +869,12 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             // the pre-AGI fallback and get truncated inside the panel.
             totalTax={taxPayment?.total_tax ?? run.total_tax}
             totalAvgifter={taxPayment?.total_avgifter ?? run.total_avgifter}
+            paymentFileFormat={taxPayment?.tax_payment_file_format ?? null}
             paymentFileGeneratedAt={taxPayment?.tax_payment_file_generated_at ?? null}
             taxPaidAt={taxPayment?.tax_paid_at ?? null}
+            defaultFormat={preferredPaymentFormat}
+            senderBankgiro={senderBankgiro}
+            senderIban={senderIban}
             readOnly={!canWrite}
             onChange={loadRun}
           />
