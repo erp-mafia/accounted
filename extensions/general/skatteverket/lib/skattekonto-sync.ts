@@ -51,11 +51,38 @@ export interface SkattekontoSyncResult {
   booked: number
   /** Number of new or updated upcoming rows */
   upcoming: number
+  /** Rows dropped because SKV omitted a field the table requires */
+  skipped: number
   /** Saldo at end of sync (mirrors snapshot) */
   saldoSkatteverket: number
   saldoKronofogden: number
   /** Sync timestamp */
   syncedAt: string
+}
+
+/**
+ * A transaktioner row is usable only when it can satisfy the table's NOT NULL
+ * columns (transaktionsdatum, transaktionstext, belopp_skatteverket). SKV has
+ * been observed returning rows without beloppSkatteverket despite the spec
+ * typing it as required; a single such row used to fail the whole batch
+ * upsert (23502) and with it every sync for the company, permanently.
+ * Skipping is deliberate: coalescing to 0 kr would make the row renderable,
+ * matchable and bookable with an invented amount. A skipped row returns on a
+ * later sync if SKV completes it.
+ */
+function isUsableTransaction(tx: {
+  transaktionsdatum: string
+  transaktionstext: string
+  beloppSkatteverket: number
+}): boolean {
+  return (
+    typeof tx.transaktionsdatum === 'string' &&
+    tx.transaktionsdatum.length > 0 &&
+    typeof tx.transaktionstext === 'string' &&
+    tx.transaktionstext.length > 0 &&
+    typeof tx.beloppSkatteverket === 'number' &&
+    Number.isFinite(tx.beloppSkatteverket)
+  )
 }
 
 // Dedup key computation moved to core (lib/skatteverket/skattekonto-dedup):
@@ -205,12 +232,28 @@ export async function syncSkattekonto(
   )
   const previousBalance = previousSnapshot?.saldo.saldoSkatteverket ?? null
 
-  const bookedRows = transaktioner.tidigareTransaktioner.map(tx =>
-    bookedToRow(ctx.companyId, tx),
-  )
-  const upcomingRows = transaktioner.kommandeTransaktioner.map(tx =>
-    upcomingToRow(ctx.companyId, tx),
-  )
+  const tidigare = transaktioner.tidigareTransaktioner.filter(isUsableTransaction)
+  const kommande = transaktioner.kommandeTransaktioner.filter(isUsableTransaction)
+  const skipped =
+    transaktioner.tidigareTransaktioner.length -
+    tidigare.length +
+    transaktioner.kommandeTransaktioner.length -
+    kommande.length
+  if (skipped > 0) {
+    const sample =
+      transaktioner.tidigareTransaktioner.find(tx => !isUsableTransaction(tx)) ??
+      transaktioner.kommandeTransaktioner.find(tx => !isUsableTransaction(tx))
+    // The full sample row is the diagnostic: we still don't know which SKV
+    // row type arrives without belopp, and the payload is never persisted.
+    log.warn('skipped transaktioner rows missing required fields', {
+      companyId: ctx.companyId,
+      skipped,
+      sample,
+    })
+  }
+
+  const bookedRows = tidigare.map(tx => bookedToRow(ctx.companyId, tx))
+  const upcomingRows = kommande.map(tx => upcomingToRow(ctx.companyId, tx))
 
   // Upsert in two steps to keep the conflict target consistent. We rely on
   // the (company_id, dedup_key) unique constraint defined in the migration.
@@ -406,7 +449,7 @@ export async function syncSkattekonto(
   }
 
   // First-appearance upcoming transactions.
-  for (const tx of transaktioner.kommandeTransaktioner) {
+  for (const tx of kommande) {
     const key = computeDedupKey(tx)
     if (existingMap.has(key)) continue
     await ctx.emit({
@@ -425,6 +468,7 @@ export async function syncSkattekonto(
   return {
     booked: bookedRows.length,
     upcoming: upcomingRows.length,
+    skipped,
     saldoSkatteverket: saldo.saldoSkatteverket,
     saldoKronofogden: saldo.saldoKronofogden,
     syncedAt: new Date().toISOString(),
