@@ -262,7 +262,7 @@ describe('generateText read-only tool loop', () => {
     expect(result.text).toBe('Kunde inte hämta momsrapporten just nu.')
   })
 
-  it('forces a final tools-off answer when the step budget is exhausted', async () => {
+  it('forces a final no-more-tools answer when the step budget is exhausted', async () => {
     const execute = vi.fn().mockResolvedValue({ ok: true })
     const svc = createAnthropicFamilyService(readAiConfig())
     // Every turn keeps asking for the tool → never terminates on its own.
@@ -294,9 +294,60 @@ describe('generateText read-only tool loop', () => {
       tools: [{ name: 't', description: 'd', jsonSchema: {}, execute }],
       maxSteps: 2,
     })
-    // 2 loop turns + 1 forced final = 3 calls; the final call omits tools.
+    // 2 loop turns + 1 forced final = 3 calls. Deliberate request-shape change
+    // (2026-08-24): the final call KEEPS the tools declared, because the
+    // transcript it replays holds tool_use/tool_result blocks the API must be
+    // able to resolve (omitting tools made every step-exhausted answer a 400),
+    // and forbids further calls via tool_choice none.
     expect(mockCreate).toHaveBeenCalledTimes(3)
-    expect(mockCreate.mock.calls[2][0].tools).toBeUndefined()
+    expect(mockCreate.mock.calls[2][0].tools).toHaveLength(1)
+    expect(mockCreate.mock.calls[2][0].tools[0].name).toBe('t')
+    expect(mockCreate.mock.calls[2][0].tool_choice).toEqual({ type: 'none' })
     expect(result.text).toBe('Sammanfattning utan fler verktygsanrop.')
+  })
+
+  it('bounds an oversized tool result before feeding it back to the model', async () => {
+    const big = 'x'.repeat(120_000)
+    const execute = vi.fn().mockResolvedValue({ text: big })
+    const svc = createAnthropicFamilyService(readAiConfig())
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'tool_use',
+      content: [{ type: 'tool_use', id: 'tu', name: 'gnubok_get_document_content', input: {} }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: 'Sammanfattat.' }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    await svc.generateText({
+      tier: 'assistant',
+      prompt: 'x',
+      maxTokens: 100,
+      tools: [{ name: 'gnubok_get_document_content', description: 'd', jsonSchema: {}, execute }],
+    })
+    const toolResult = mockCreate.mock.calls[1][0].messages[2].content[0]
+    // 40k cap plus the short truncation notice; nowhere near the raw 120k.
+    expect(toolResult.content.length).toBeLessThan(40_400)
+    expect(toolResult.content).toContain('[avkortat: resultatet var')
+  })
+
+  it('returns empty text (for the caller to guard on) when the loop ends on max_tokens with no text block', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    mockCreate.mockResolvedValueOnce({
+      stop_reason: 'max_tokens',
+      content: [],
+      usage: { input_tokens: 5, output_tokens: 100 },
+    })
+    const result = await svc.generateText({
+      tier: 'assistant',
+      prompt: 'x',
+      maxTokens: 100,
+      tools: [{ name: 't', description: 'd', jsonSchema: {}, execute: vi.fn() }],
+    })
+    // The service stays a transport: it does not invent text. Callers
+    // (ask-service) treat '' as a typed failure instead of a silent answer.
+    expect(result.text).toBe('')
+    expect(mockCreate).toHaveBeenCalledTimes(1)
   })
 })

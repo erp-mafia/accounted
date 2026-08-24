@@ -18,6 +18,21 @@ export function invoiceDisplayNumber(invoice: {
 }
 
 /**
+ * The number a user must type to confirm crediting an invoice. Regular
+ * invoices confirm with their own `invoice_number`; self-billed invoices have
+ * `invoice_number` null by design, so the counterparty's
+ * `external_invoice_number` (the number shown everywhere in the UI) is the
+ * one to type. Null when the invoice carries no number at all: the credit
+ * flow must stay disabled then.
+ */
+export function creditConfirmNumber(invoice: {
+  invoice_number?: string | null
+  external_invoice_number?: string | null
+}): string | null {
+  return invoice.invoice_number ?? invoice.external_invoice_number ?? null
+}
+
+/**
  * True when an invoice line should render as a pure text row: description
  * only, no quantity/unit/price/amount columns. Explicit text rows
  * (line_type 'text') always qualify; so do product rows carrying no amounts

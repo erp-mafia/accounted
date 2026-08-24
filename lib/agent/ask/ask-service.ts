@@ -1,7 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAiService, type AiTier, type AiToolDef } from '@/lib/ai'
+import { createLogger } from '@/lib/logger'
+import { EmptyModelAnswerError } from './errors'
 import { buildLedgerTools } from './ledger-tools'
 import { buildAssistantSnapshot } from './snapshot'
+
+const log = createLogger('agent.ask')
 
 /**
  * Provider-agnostic assistant answer over a bounded, read-only tool loop.
@@ -57,7 +61,13 @@ export interface AskResult {
   model: string
 }
 
-const DEFAULT_MAX_TOKENS = 1500
+// Matches MAX_TOKENS_NO_THINKING in lib/agent/composer/client.ts, the
+// streaming chat's reply-sized ceiling on the same model. The original 1500
+// cap was tighter than every other assistant surface and made stop_reason
+// max_tokens routine on tool-loop turns: the whole budget could be spent
+// before the first visible text block, so the model came back with no text at
+// all ("Tänker", then silence).
+const DEFAULT_MAX_TOKENS = 5400
 const DEFAULT_MAX_STEPS = 5
 const MAX_QUESTION_CHARS = 4000
 const MAX_CONTEXT_CHARS = 24_000
@@ -137,5 +147,21 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
     maxTokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
     ...(tools.length > 0 ? { tools, maxSteps: req.maxSteps ?? DEFAULT_MAX_STEPS } : {}),
   })
+
+  // An empty answer is a failure, not a result. Passing it through is exactly
+  // the silent-stop bug: the route would 200 and the console would append an
+  // invisible bubble. Log loudly (model + usage tell us whether the budget was
+  // spent on tool churn) and fail typed so the route can answer 502.
+  if (result.text.trim().length === 0) {
+    log.error('model returned an empty answer', {
+      companyId: req.companyId,
+      model: result.model,
+      tier: req.tier ?? 'assistant',
+      usage: result.usage,
+      toolCount: tools.length,
+    })
+    throw new EmptyModelAnswerError(result.model)
+  }
+
   return { answer: result.text, model: result.model }
 }

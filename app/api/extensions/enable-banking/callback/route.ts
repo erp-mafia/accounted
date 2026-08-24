@@ -374,6 +374,67 @@ async function finalizeConnection(
     }
   })
 
+  // The maps above leave one corner open (issue #1709): a NO-IBAN account
+  // whose uid changed on an in-place reconnect matches neither by IBAN nor by
+  // uid, so its scope regenerates, every historical external_id changes, and
+  // the whole history re-imports as fresh unbooked rows. Pair such accounts by
+  // elimination, but only when the pairing is unambiguous: per currency,
+  // EXACTLY ONE prior account left unclaimed (no new account matched it via
+  // IBAN or uid) and EXACTLY ONE new account with a fresh scope, and neither
+  // side carries an IBAN. Anything else keeps the fresh-scope behavior. The
+  // asymmetry is deliberate: a wrong pairing can at worst skip a new
+  // transaction whose account+date+amount+occurrence all collide with an old
+  // row, while a missed pairing re-imports the full history unbooked.
+  const pairedPriorUidByNewUid = new Map<string, string>()
+  if (priorAccounts.length > 0) {
+    const newIbans = new Set<string>()
+    const newUids = new Set<string>()
+    for (const account of accountsMetadata) {
+      const normalizedIban = normalizeIban(account.iban)
+      if (normalizedIban) newIbans.add(normalizedIban)
+      newUids.add(account.uid)
+    }
+    const unclaimedPriorsByCurrency = new Map<string, StoredAccount[]>()
+    for (const prior of priorAccounts) {
+      const priorIban = normalizeIban(prior.iban)
+      if ((priorIban && newIbans.has(priorIban)) || newUids.has(prior.uid)) continue
+      const currency = (prior.currency || '').toUpperCase()
+      const bucket = unclaimedPriorsByCurrency.get(currency)
+      if (bucket) bucket.push(prior)
+      else unclaimedPriorsByCurrency.set(currency, [prior])
+    }
+    const freshScopeByCurrency = new Map<string, StoredAccount[]>()
+    for (const account of accountsMetadata) {
+      const normalizedIban = normalizeIban(account.iban)
+      const matchedPrior =
+        (normalizedIban ? priorScopeByIban.has(normalizedIban) : false) ||
+        priorScopeByUid.has(account.uid)
+      if (matchedPrior) continue
+      const currency = (account.currency || '').toUpperCase()
+      const bucket = freshScopeByCurrency.get(currency)
+      if (bucket) bucket.push(account)
+      else freshScopeByCurrency.set(currency, [account])
+    }
+    for (const [currency, unclaimed] of unclaimedPriorsByCurrency) {
+      const fresh = freshScopeByCurrency.get(currency) ?? []
+      if (unclaimed.length !== 1 || fresh.length !== 1) continue
+      const prior = unclaimed[0]
+      const survivor = fresh[0]
+      if (normalizeIban(prior.iban) || normalizeIban(survivor.iban)) continue
+      survivor.dedup_scope = prior.dedup_scope || prior.uid
+      // The pairing is an identity claim, so the user's earlier sync choice
+      // travels with it: a deselected account must not come back pre-checked.
+      survivor.enabled = prior.enabled !== false
+      pairedPriorUidByNewUid.set(survivor.uid, prior.uid)
+      console.log('[enable-banking] Paired no-IBAN account across a uid change', {
+        connectionId: pendingConnection.id,
+        currency,
+        priorUid: prior.uid,
+        newUid: survivor.uid,
+      })
+    }
+  }
+
   // Stay in 'pending_selection' until the user confirms which accounts to sync.
   // The cron and manual sync routes both skip this status, so no transactions
   // can be pulled before the user has had a chance to deselect accounts.
@@ -486,12 +547,12 @@ async function finalizeConnection(
   // the user already chose instead of overflowing into the next free slots.
   const { data: mirroredRows } = await supabase
     .from('cash_accounts')
-    .select('external_uid, ledger_account')
+    .select('id, external_uid, ledger_account')
     .eq('company_id', updatedConnection.company_id)
     .eq('bank_connection_id', updatedConnection.id)
-  const existingLedgerByUid = new Map(
-    ((mirroredRows ?? []) as Array<{ external_uid: string; ledger_account: string }>).map(
-      (r) => [r.external_uid, r.ledger_account],
+  const mirroredByUid = new Map(
+    ((mirroredRows ?? []) as Array<{ id: string; external_uid: string; ledger_account: string }>).map(
+      (r) => [r.external_uid, r],
     ),
   )
   // Only ledgers still claimed by a uid the bank returned in THIS session
@@ -504,15 +565,31 @@ async function finalizeConnection(
   // holds, whatever its uid.
   const sessionUids = new Set(accountsMetadata.map((a) => a.uid))
   const assignedLedgers = new Set<string>(
-    [...existingLedgerByUid.entries()]
-      .filter(([uid]) => sessionUids.has(uid))
-      .map(([, ledger]) => ledger),
+    [...mirroredByUid.values()]
+      .filter((row) => sessionUids.has(row.external_uid))
+      .map((row) => row.ledger_account),
   )
   let accountsDataDirty = carriedScopeDirty
 
   for (const account of accountsMetadata) {
-    let targetLedger = existingLedgerByUid.get(account.uid)
+    let targetLedger = mirroredByUid.get(account.uid)?.ledger_account
     let reuseCashAccountId: string | null = null
+    if (!targetLedger) {
+      // A paired no-IBAN account (uid change on an in-place reconnect) reuses
+      // this connection's own row for the retired uid: same ledger, same row
+      // id. upsertFromPsd2 promotes the named row in place, re-keying it to
+      // the new uid, so transactions.cash_account_id links survive and the
+      // content-dedup account guard in lib/transactions/ingest.ts keeps
+      // matching. Without this the resolver would see the old row as a live
+      // claim and allocate an overflow 19xx slot plus a NEW cash_accounts row,
+      // which is the second half of issue #1709.
+      const pairedPriorUid = pairedPriorUidByNewUid.get(account.uid)
+      const pairedRow = pairedPriorUid ? mirroredByUid.get(pairedPriorUid) : undefined
+      if (pairedRow && !assignedLedgers.has(pairedRow.ledger_account)) {
+        targetLedger = pairedRow.ledger_account
+        reuseCashAccountId = pairedRow.id
+      }
+    }
     if (!targetLedger) {
       const resolved = await resolvePsd2LedgerAccount(
         supabase,

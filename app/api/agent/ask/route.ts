@@ -8,7 +8,9 @@ import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getAiStatus } from '@/lib/ai'
+import { createLogger } from '@/lib/logger'
 import { answerAssistantQuestion } from '@/lib/agent/ask/ask-service'
+import { EmptyModelAnswerError } from '@/lib/agent/ask/errors'
 import {
   resolveChatConversation,
   persistUserTurn,
@@ -21,6 +23,17 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 // this the registry is empty and the assistant falls back to snapshot-only,
 // so a hosted deploy would silently lose its ledger tools.
 ensureInitialized()
+
+const log = createLogger('api.agent.ask')
+
+// A tool-loop answer can take minutes (several model turns, each preceded by
+// real report reads). The plan default cap would kill the function mid-answer
+// and the client would see a silent empty stop; 300 s matches the other
+// long-running model surfaces (app/api/receipt-hunt/run).
+export const maxDuration = 300
+
+// The Swedish body AskConsole's !res.ok branch renders verbatim.
+const EMPTY_ANSWER_MESSAGE = 'Assistenten gav inget svar. Försök igen.'
 
 /**
  * POST /api/agent/ask: a single-call, provider-agnostic assistant answer over a
@@ -108,6 +121,14 @@ export async function POST(request: Request): Promise<Response> {
       })
       return NextResponse.json({ data: result })
     } catch (err) {
+      if (err instanceof EmptyModelAnswerError) {
+        // Already logged with model + usage by ask-service.
+        return NextResponse.json(
+          { error: EMPTY_ANSWER_MESSAGE, code: 'empty_model_answer' },
+          { status: 502 },
+        )
+      }
+      log.error('assistant ask failed', err, { companyId, persist: false })
       return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
     }
   }
@@ -143,10 +164,21 @@ export async function POST(request: Request): Promise<Response> {
       tier: parsed.data.tier,
     })
 
+    // answerAssistantQuestion throws EmptyModelAnswerError on an empty answer,
+    // so an empty assistant turn is never persisted: the thread keeps the
+    // question (retryable) but records no blank reply.
     await persistAssistantTurn(supabase, conversationId, result.answer)
 
     return NextResponse.json({ data: { ...result, conversation_id: conversationId } })
   } catch (err) {
+    if (err instanceof EmptyModelAnswerError) {
+      // Already logged with model + usage by ask-service.
+      return NextResponse.json(
+        { error: EMPTY_ANSWER_MESSAGE, code: 'empty_model_answer' },
+        { status: 502 },
+      )
+    }
+    log.error('assistant ask failed', err, { companyId, persist: true })
     return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
   }
 }
