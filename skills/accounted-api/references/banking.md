@@ -272,7 +272,7 @@ Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id] }] } and/or { use_
 **Do not use for:** Booking new verifikat for rows that have no counterpart (use the transactions or skattekonto booking endpoints); reconciling across accounts.
 
 **Pitfalls:**
-- This version links one outside row to one verifikat per pair; other shapes come back as UNSUPPORTED_PAIR_SHAPE, never silently reduced.
+- A pair is one OR MANY outside rows against exactly one verifikat (bank: independent links per transaction; skattekonto: all-or-nothing, the rows must sum to what the verifikat settles). One row against several verifikat is UNSUPPORTED_PAIR_SHAPE until residual booking lands, never silently reduced.
 - A pair must close to the row's amount on the expected side (a single matching line, or the entry's lines on the account netting to it); a fee or rounding difference is PAIR_NOT_CLOSED here and needs a residual booking first.
 - Links never touch the ledger, so they succeed in locked periods; unlink with DELETE .../links/{linkId} (linkId = the outside row id).
 - Idempotency-Key is required; repeating the same key replays the first response.

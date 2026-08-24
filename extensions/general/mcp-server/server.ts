@@ -688,13 +688,27 @@ interface StageOptions {
    * the DB triggers remain the authoritative gate.
    */
   dateForPeriodCheck?: string
+  /**
+   * Advisory compliance warning. Appended to the staged message and echoed as
+   * preview.compliance_warning, which persists into preview_data so the
+   * /pending approval card carries the same warning. Never blocks: the DB
+   * triggers and the approver stay authoritative.
+   */
+  complianceNote?: string
 }
+
+// Keys that can stage typically lack pending_operations:approve (segregation
+// of duties, see STAGING_SCOPES in lib/auth/api-keys.ts), so the approve tool
+// is filtered out of their tools/list. Every staging response names the web
+// fallback so agents on such keys don't hunt for a tool they cannot see.
+const APPROVE_SCOPE_FALLBACK =
+  'If that tool is missing from your catalog, this API key lacks the pending_operations:approve scope: the user approves at /pending instead.'
 
 function buildApprovalGuidance(operationId: string, riskLevel: 'low' | 'medium' | 'high'): string {
   if (riskLevel === 'high') {
-    return `This is an irreversible posting under BFL 5 kap 5§: surface the irreversibility implications to the user and obtain an explicit acknowledgment before committing. Once the user has acknowledged, call gnubok_approve_pending_operation with operation_id="${operationId}" and confirmed=true.`
+    return `This is an irreversible posting under BFL 5 kap 5§: surface the irreversibility implications, and any compliance_warning in the preview, to the user and obtain an explicit acknowledgment before committing. Once the user has acknowledged, call gnubok_approve_pending_operation with operation_id="${operationId}" and confirmed=true. ${APPROVE_SCOPE_FALLBACK}`
   }
-  return `When the user authorises, call gnubok_approve_pending_operation with operation_id="${operationId}".`
+  return `When the user authorises, call gnubok_approve_pending_operation with operation_id="${operationId}". ${APPROVE_SCOPE_FALLBACK}`
 }
 
 async function stagePendingOperation(
@@ -726,6 +740,13 @@ async function stagePendingOperation(
   // staging tool inherits the rule, not just the ones that remembered it.
   assertNoPlaintextPersonnummer(params, 'params')
   assertNoPlaintextPersonnummer(previewData, 'preview_data')
+
+  // Fold the advisory compliance note into the preview so the agent response
+  // and the persisted preview_data (rendered by the /pending approval card)
+  // carry the same warning.
+  if (options.complianceNote) {
+    previewData = { ...previewData, compliance_warning: options.complianceNote }
+  }
 
   // params-aware: create/update_recurring_schedule escalate to 'high' when
   // params.auto_send === true (standing outbound email with no per-send
@@ -771,7 +792,7 @@ async function stagePendingOperation(
       dry_run: true,
       risk_level: riskLevel,
       actor,
-      message: `Dry run: would stage "${operationType}" (risk: ${riskLevel}). No changes made.`,
+      message: `Dry run: would stage "${operationType}" (risk: ${riskLevel}). No changes made.${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
       preview: previewData,
       ...(periodStatus ? { period_status: periodStatus } : {}),
       ...(next ? { next: addCompanyToNextHint(next, companyId) as NextActionHint } : {}),
@@ -842,7 +863,7 @@ async function stagePendingOperation(
     operation_id: data.id,
     risk_level: riskLevel,
     actor,
-    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}). ${buildApprovalGuidance(data.id, riskLevel)} The user can also approve at /pending in the ${branding} web app.`,
+    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}). ${buildApprovalGuidance(data.id, riskLevel)} The user can also approve at /pending in the ${branding} web app.${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
     approve: {
       tool: 'gnubok_approve_pending_operation',
       args: { operation_id: data.id, company_id: companyId } as Record<string, unknown>,
@@ -4065,7 +4086,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_transactions',
     title: 'Create Bank Transactions',
-    description: 'Stage one or more transactions for the user to approve. Each creates a separate pending operation; commit each via gnubok_approve_pending_operation. Use for ingesting external rows (Airtable, CSV). Max 10.',
+    description: 'Stage bank/cash-account transactions; each becomes a pending operation. For external rows (Airtable, CSV); max 10. A transaction models a cash-account movement: for cashless events (privat utlägg) use gnubok_create_voucher.',
     outputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4458,7 +4479,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_categorize_transaction',
     title: 'Categorize Bank Transaction',
-    description: 'Categorize a bank transaction. Stages the verifikat: cost line NET of moms, bank line gross; dimensions bag tags the cost line. account_override books the business side on any active kontoplan account (custom incl.). Commit via gnubok_approve_pending_operation.',
+    description: 'Categorize a bank transaction. Stages the verifikat: cost line NET of moms, bank line gross (always the tx\'s cash account). account_override books the business side on any active account. Cashless events (privat utlägg): gnubok_create_voucher.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -8835,7 +8856,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_bulk_book_transactions',
     title: 'Bulk-Book Transactions',
-    description: 'Bulk-book N bank txs on the same date into 1 samlingsverifikat (BFL 5 kap 6§). Either link N txs to an existing posted verifikat, or create a new verifikat from caller lines (accept dims bags). All txs share date + direction. Stages.',
+    description: 'Bulk-book N bank txs (same date, same direction) into 1 samlingsverifikat (BFL 5 kap 6§). Link txs to an existing posted verifikat, or create one from caller lines. Each tx posts its cash-account line. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -11342,7 +11363,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_link_document_to_voucher',
     title: 'Link Document to Voucher',
-    description: 'Stage linking a document to a posted verifikation. Use for imported/manual vouchers with no bank-tx row. Call gnubok_list_verifikat_without_documents first to find targets. Stages for approval.',
+    description: 'Stage linking a document to an already-POSTED verifikation (no bank-tx row). For an unbooked handling prefer gnubok_create_voucher with inbox_item_id (BFL 5 kap 6§). Call gnubok_list_verifikat_without_documents for targets.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -15508,7 +15529,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_voucher',
     title: 'Create Manual Voucher (Verifikation)',
-    description: 'Stage a manual verifikation with arbitrary balanced lines: capitalization (1010), accruals, FX adjustments, rättelser outside categorize_transaction. Lines accept dimensions bags {sie_dim_no: code or name}. Pass inbox_item_id to book a kvitto direct. HIGH risk.',
+    description: 'Stage a manual verifikation with balanced lines: capitalization, accruals, FX, rättelser, IB. For a received handling pass inbox_item_id: the document becomes the verifikation (BFL 5 kap 6§); a filename in notes is not underlag. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -15524,7 +15545,7 @@ export const tools: McpTool[] = [
           description: 'Dimension tags {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}, applied to every line not setting the key itself. Unknown values are rejected: never auto-created.',
         },
         is_opening_balance: { type: 'boolean', description: 'Set true ONLY for a migrated ingående balans (IB). Marks the entry source_type=opening_balance so bank reconciliation excludes it from period movement. Requires every line to be a balance-sheet account (class 1/2) and entry_date = fiscal period start, else rejected. Defaults false.' },
-        inbox_item_id: { type: 'string', description: 'Optional inbox item UUID to book directly. On confirm, the inbox item is linked to the new verifikat and its OCR document is attached to the journal entry. Fails if the inbox item is already booked (as voucher) or converted (to supplier invoice).' },
+        inbox_item_id: { type: 'string', description: 'Inbox item UUID to book directly. For a received handling this is the BFL 5 kap 6§ path: the document becomes the verifikation. On confirm the item and its document link to the new verifikat. Not in inbox? gnubok_upload_document first. Fails if already booked/converted.' },
         lines: {
           type: 'array',
           description: 'At least 2 balanced lines. sum(debit_amount) === sum(credit_amount), both > 0.',
@@ -15775,16 +15796,38 @@ export const tools: McpTool[] = [
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
           inbox_item_id: inboxItemId,
           document_attached: Boolean(inboxDocumentId),
-          will: inboxItemId
+          // The document-attach claim keys off inboxDocumentId, not
+          // inboxItemId: an inbox item whose document was never stored (or
+          // was deleted, ON DELETE SET NULL) links but attaches nothing.
+          will: inboxDocumentId
             ? 'create a posted journal entry with a fresh sequential voucher number, link the inbox item to it, and attach the OCR document to the verifikat'
-            : 'create a posted journal entry with a fresh sequential voucher number',
+            : inboxItemId
+              ? 'create a posted journal entry with a fresh sequential voucher number and link the inbox item to it (the item has no stored document, so nothing is attached)'
+              : 'create a posted journal entry with a fresh sequential voucher number',
         },
         actor,
         {
           description: 'After commit, confirm the new verifikation lands on the right accounts with gnubok_get_general_ledger or gnubok_query_journal.',
           tool: 'gnubok_query_journal',
         },
-        { dateForPeriodCheck: entryDate },
+        {
+          dateForPeriodCheck: entryDate,
+          // Advisory only (the approver decides): a verifikat for a received
+          // handling posted without its document fails BFL 5 kap 6§, and the
+          // repair after posting is storno + a consumed voucher number. The
+          // inbox-item variant avoids a dead-end "restage with inbox_item_id"
+          // instruction when inbox_item_id WAS supplied but the item carries
+          // no stored document. IB entries are exempt: a migrated ingående
+          // balans has no kvitto to attach and warning on it would be a false
+          // positive that trains approvers to ignore the warning.
+          ...(inboxDocumentId || isOpeningBalance
+            ? {}
+            : {
+                complianceNote: inboxItemId
+                  ? 'No underlag attached (document_attached: false): the inbox item has no stored document, so nothing will be attached. Upload the handling via gnubok_upload_document and restage, or link it to the posted verifikat with gnubok_link_document_to_voucher.'
+                  : 'No underlag attached (document_attached: false). For a received handling, BFL 5 kap 6§ requires the document itself to serve as the verifikation: restage with inbox_item_id (upload via gnubok_upload_document first if needed), or link the document to the posted verifikat with gnubok_link_document_to_voucher. A filename in description or notes is not underlag.',
+              }),
+        },
       )
     },
   },
@@ -16586,7 +16629,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_pending_operations',
     title: 'List Pending Operations',
-    description: 'List staged pending_operations. Filter by status (default pending), risk_level, or operation_type. Approve via gnubok_approve_pending_operation, discard via gnubok_reject_pending_operation. render_ui=true opens the approval widget.',
+    description: 'List staged pending_operations. Approve via gnubok_approve_pending_operation, reject via gnubok_reject_pending_operation; without pending_operations:approve use /pending. render_ui=true opens the approval widget.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16652,7 +16695,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_approve_pending_operation',
     title: 'Approve Pending Operation',
-    description: "Commit a staged pending_operation the user has explicitly authorised. risk_level=high requires confirmed=true: surface the BFL 5 kap 5§ irreversibility first. The /pending web UI offers an equivalent commit path.",
+    description: "Commit a staged pending_operation the user has explicitly authorised. risk_level=high requires confirmed=true: surface the BFL 5 kap 5§ irreversibility and any preview compliance_warning first. The /pending web UI is an equivalent commit path.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,

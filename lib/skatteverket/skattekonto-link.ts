@@ -238,3 +238,117 @@ export async function setSkattekontoRowIgnored(
   }
   return { skattekonto_transaction_id: transactionId, is_ignored: ignored }
 }
+
+export interface LinkSkattekontoRowsResult {
+  journal_entry_id: string
+  via: 'line' | 'entry_total'
+  skattekonto_transaction_ids: string[]
+}
+
+/**
+ * Link SEVERAL open SKV rows to ONE verifikat: the N:1 worksheet selection
+ * (one AGI verifikat settling the avdragen skatt + arbetsgivaravgift rows,
+ * one payment verifikat covering a row pair). The verifikat's 1630 side must
+ * settle the SUM of the rows; each row then gets the same guarded pointer as
+ * the single link. The write is ONE guarded UPDATE over the whole group: a
+ * concurrent link shrinks the hit set, and a partial hit is rolled back and
+ * reported as LINK_RACE, so a group is never left half-linked.
+ */
+export async function linkSkattekontoRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionIds: string[],
+  journalEntryId: string,
+): Promise<LinkSkattekontoRowsResult> {
+  const ids = [...new Set(transactionIds)]
+  if (ids.length === 0 || ids.length > 50) {
+    throw new SkattekontoLinkError('Välj mellan 1 och 50 händelser.', 'INVALID_CANDIDATE')
+  }
+
+  const { data: rows, error: rowsError } = await supabase
+    .from('skattekonto_transactions')
+    .select('id, belopp_skatteverket, journal_entry_id, is_ignored, status')
+    .eq('company_id', companyId)
+    .in('id', ids)
+  if (rowsError || !rows || rows.length !== ids.length) {
+    throw new SkattekontoLinkError('Någon av skattekonto-transaktionerna hittades inte.', 'TRANSACTION_NOT_FOUND')
+  }
+  const typed = rows as RowForLink[]
+  if (typed.some((r) => r.journal_entry_id)) {
+    throw new SkattekontoLinkError('En av transaktionerna är redan kopplad till ett verifikat.', 'ALREADY_BOOKED')
+  }
+  if (typed.some((r) => r.is_ignored)) {
+    throw new SkattekontoLinkError('En av transaktionerna är ignorerad. Återställ den innan du kopplar.', 'ROW_IGNORED')
+  }
+  if (typed.some((r) => r.status !== 'booked')) {
+    throw new SkattekontoLinkError('En kommande händelse kan inte kopplas ännu.', 'INVALID_CANDIDATE')
+  }
+
+  const sum = roundOre(typed.reduce((s, r) => s + Number(r.belopp_skatteverket), 0))
+  if (sum === 0) {
+    throw new SkattekontoLinkError(
+      'De valda händelserna nettar till 0 och kan inte kopplas mot ett verifikat.',
+      'INVALID_CANDIDATE',
+    )
+  }
+
+  const { data: entry, error: entryError } = await supabase
+    .from('journal_entries')
+    .select('id, status, lines:journal_entry_lines ( account_number, debit_amount, credit_amount )')
+    .eq('id', journalEntryId)
+    .eq('company_id', companyId)
+    .maybeSingle<EntryForLink>()
+  if (entryError || !entry) {
+    throw new SkattekontoLinkError('Verifikatet hittades inte.', 'ENTRY_NOT_FOUND')
+  }
+  if (entry.status === 'reversed') {
+    throw new SkattekontoLinkError('Verifikatet är makulerat och kan inte kopplas.', 'INVALID_CANDIDATE')
+  }
+  const settles = entrySettlesAmount(entry.lines, sum)
+  if (!settles.ok || !settles.via) {
+    throw new SkattekontoLinkError(
+      'Verifikatets rader på 1630 motsvarar inte summan av de valda händelserna.',
+      'INVALID_CANDIDATE',
+    )
+  }
+
+  const groupSet = new Set(ids)
+  const { data: linkedRows } = await supabase
+    .from('skattekonto_transactions')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', journalEntryId)
+  if ((linkedRows ?? []).some((r) => !groupSet.has((r as { id: string }).id))) {
+    throw new SkattekontoLinkError(
+      'Verifikatet är redan kopplat till en annan skattekonto-transaktion.',
+      'ENTRY_ALREADY_LINKED',
+    )
+  }
+
+  const { data: updated, error: updateError } = await supabase
+    .from('skattekonto_transactions')
+    .update({ journal_entry_id: journalEntryId, suggested_journal_entry_id: null, suggested_at: null })
+    .eq('company_id', companyId)
+    .in('id', ids)
+    .is('journal_entry_id', null)
+    .eq('is_ignored', false)
+    .select('id')
+  if (updateError) {
+    throw new SkattekontoLinkError(`Kunde inte koppla: ${updateError.message}`, 'LINK_RACE')
+  }
+  const updatedIds = ((updated ?? []) as Array<{ id: string }>).map((r) => r.id)
+  if (updatedIds.length !== ids.length) {
+    // Roll the partial hit back: the group's sum no longer settles the entry.
+    if (updatedIds.length > 0) {
+      await supabase
+        .from('skattekonto_transactions')
+        .update({ journal_entry_id: null })
+        .eq('company_id', companyId)
+        .in('id', updatedIds)
+        .eq('journal_entry_id', journalEntryId)
+    }
+    throw new SkattekontoLinkError('En av transaktionerna kopplades av någon annan samtidigt.', 'LINK_RACE')
+  }
+
+  return { journal_entry_id: journalEntryId, via: settles.via, skattekonto_transaction_ids: ids }
+}

@@ -110,6 +110,12 @@ export interface ReconciliationStatus {
    * excluded-but-shown.
    */
   bank_transaction_total: number
+  /** Gross inflow (sum of positive amounts) behind bank_transaction_total; informational, for the page's "in · ut · antal" line. */
+  bank_transaction_inflow: number
+  /** Gross outflow (sum of negative amounts, itself negative) behind bank_transaction_total. */
+  bank_transaction_outflow: number
+  /** Number of non-ignored bank transactions in the window. */
+  bank_transaction_count: number
   /** Sum of ignored bank transactions in the window. NOT part of
    *  bank_transaction_total or difference; informational, like the IB. */
   ignored_transaction_total: number
@@ -921,6 +927,10 @@ export async function getReconciliationStatus(
   // matched_count + unmatched_transaction_count always equals the number of
   // rows behind bank_transaction_total.
   const matchedCount = reconcilableTx.filter((tx) => tx.journal_entry_id !== null).length
+  // The gross split behind the net: what the user actually recognises as
+  // "what moved on the bank", so the page never has to explain "netto".
+  const bankInflow = reconcilableTx.reduce((sum, tx) => sum + Math.max(Number(tx.amount) || 0, 0), 0)
+  const bankOutflow = reconcilableTx.reduce((sum, tx) => sum + Math.min(Number(tx.amount) || 0, 0), 0)
 
   const unmatchedTx = reconcilableTx.filter((tx) => tx.journal_entry_id === null)
   const unmatchedTransactionCount = unmatchedTx.length
@@ -976,6 +986,9 @@ export async function getReconciliationStatus(
   return {
     currency,
     bank_transaction_total: Math.round(bankTotal * 100) / 100,
+    bank_transaction_inflow: roundOre(bankInflow),
+    bank_transaction_outflow: roundOre(bankOutflow),
+    bank_transaction_count: reconcilableTx.length,
     ignored_transaction_total: roundOre(ignoredTotal),
     ignored_transaction_count: ignoredTx.length,
     gl_1930_balance: Math.round(glBalance * 100) / 100,

@@ -11,10 +11,12 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton } from '@/components/ui/skeleton'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
 import type { FiscalPeriod } from '@/types'
 import { ReconciliationRail } from './ReconciliationRail'
 import { AccountOverview, type ReconciliationWindow } from './AccountOverview'
+import { ManualMatchMode } from './ManualMatchMode'
 
 /**
  * /reconciliation: one page for every account with an outside truth. The
@@ -80,6 +82,16 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
   }, [load])
 
   const requestedKey = searchParams.get('account')
+  const mode: 'overview' | 'match' = searchParams.get('mode') === 'match' ? 'match' : 'overview'
+  const setMode = useCallback(
+    (next: 'overview' | 'match') => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (next === 'match') params.set('mode', 'match')
+      else params.delete('mode')
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+    },
+    [pathname, router, searchParams],
+  )
   const selected = useMemo(() => {
     if (!accounts || accounts.length === 0) return null
     return (
@@ -108,6 +120,15 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
       }
       action={
         <div className="flex flex-wrap items-center justify-end gap-2">
+          <SegmentedControl
+            value={mode}
+            onChange={setMode}
+            aria-label={t('title')}
+            options={[
+              { value: 'overview', label: t('mode_overview') },
+              { value: 'match', label: t('mode_match') },
+            ]}
+          />
           <FyPicker
             value={periodId}
             onChange={(id, period) => {
@@ -180,7 +201,15 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
   return (
     <div className="space-y-6">
       {header}
-      {selected && (
+      {selected && mode === 'match' && (
+        <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
+          <ReconciliationRail accounts={accounts} selectedKey={selected.account_key} onSelect={select} />
+          <div className="min-w-0">
+            <ManualMatchMode key={selected.account_key} account={selected} window={window} onChanged={() => void load()} />
+          </div>
+        </div>
+      )}
+      {selected && mode === 'overview' && (
         <AccountOverview
           key={selected.account_key}
           account={selected}

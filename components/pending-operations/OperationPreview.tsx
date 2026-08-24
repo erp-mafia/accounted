@@ -9,6 +9,7 @@
 
 import { Fragment, createContext, useContext } from 'react'
 import { cn, formatCurrency } from '@/lib/utils'
+import { AttnLine } from '@/components/ui/attn-line'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
@@ -295,9 +296,24 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
   const lines = (data.lines as VoucherLine[]) || []
   const totalDebit = data.total_debit as number | undefined
   const totalCredit = data.total_credit as number | undefined
+  // Advisory, mirrors the MCP staging warning: a verifikat for a received
+  // handling must carry the handling itself (BFL 5 kap 6 §). Gated on the
+  // staged compliance_warning, not on document_attached: the server decides
+  // when the warning applies (IB entries are exempt there), so this stays a
+  // mirror instead of a second, looser policy. Older ops without the field
+  // render unchanged. The wording stays conditional ("om ... avser en
+  // mottagen handling"): internal entries (accruals, FX) legitimately lack
+  // a kvitto, and flagging them as deficient would be wrong.
+  const missingUnderlag = typeof data.compliance_warning === 'string'
 
   return (
     <div className="space-y-3 text-sm">
+      {missingUnderlag && (
+        <AttnLine>
+          Underlag saknas: om verifikatet avser en mottagen handling ska handlingen användas som
+          verifikation (BFL 5 kap 6 §).
+        </AttnLine>
+      )}
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Datum</span>
         <span className="font-mono">{String(data.entry_date ?? '')}</span>

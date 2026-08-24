@@ -3,6 +3,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   entrySettlesAmount,
   linkSkattekontoRow,
+  linkSkattekontoRows,
   setSkattekontoRowIgnored,
   SkattekontoLinkError,
   unlinkSkattekontoRow,
@@ -132,5 +133,72 @@ describe('unlinkSkattekontoRow / setSkattekontoRowIgnored', () => {
       suggested_journal_entry_id: null,
       suggested_at: null,
     })
+  })
+})
+
+describe('linkSkattekontoRows (N:1)', () => {
+  const ROW2 = 'row-2'
+  const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+  })
+
+  it('links a group whose sum the verifikat settles, with one guarded update over all rows', async () => {
+    enqueue({ data: [row({ belopp_skatteverket: 3000 }), row({ id: ROW2, belopp_skatteverket: 2000 })] })
+    enqueue({ data: entry([{ account_number: '1630', debit_amount: 5000, credit_amount: 0 }]) })
+    enqueue({ data: [] }) // nothing outside the group linked to the entry
+    enqueue({ data: [{ id: ROW }, { id: ROW2 }] })
+    const result = await linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2, ROW], ENTRY)
+    expect(result).toEqual({ journal_entry_id: ENTRY, via: 'line', skattekonto_transaction_ids: [ROW, ROW2] })
+    const updates = findCalls('skattekonto_transactions', 'update')
+    expect(updates).toHaveLength(1)
+    expect(updates[0][0]).toMatchObject({ journal_entry_id: ENTRY, suggested_journal_entry_id: null })
+  })
+
+  it('refuses a group where a row is already linked, ignored or upcoming', async () => {
+    enqueue({ data: [row(), row({ id: ROW2, journal_entry_id: 'other' })] })
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'ALREADY_BOOKED' })
+    reset()
+    enqueue({ data: [row(), row({ id: ROW2, is_ignored: true })] })
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'ROW_IGNORED' })
+    reset()
+    enqueue({ data: [row(), row({ id: ROW2, status: 'upcoming' })] })
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'INVALID_CANDIDATE' })
+  })
+
+  it('refuses when the sum does not settle the verifikat or nets to zero', async () => {
+    enqueue({ data: [row({ belopp_skatteverket: 3000 }), row({ id: ROW2, belopp_skatteverket: 2000 })] })
+    enqueue({ data: entry([{ account_number: '1630', debit_amount: 4999, credit_amount: 0 }]) })
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'INVALID_CANDIDATE' })
+    reset()
+    enqueue({ data: [row({ belopp_skatteverket: 3000 }), row({ id: ROW2, belopp_skatteverket: -3000 })] })
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'INVALID_CANDIDATE' })
+  })
+
+  it('refuses a verifikat already linked to a row outside the group', async () => {
+    enqueue({ data: [row({ belopp_skatteverket: 3000 }), row({ id: ROW2, belopp_skatteverket: 2000 })] })
+    enqueue({ data: entry([{ account_number: '1630', debit_amount: 5000, credit_amount: 0 }]) })
+    enqueue({ data: [{ id: 'row-elsewhere' }] })
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'ENTRY_ALREADY_LINKED' })
+  })
+
+  it('rolls a partial hit back and reports LINK_RACE', async () => {
+    enqueue({ data: [row({ belopp_skatteverket: 3000 }), row({ id: ROW2, belopp_skatteverket: 2000 })] })
+    enqueue({ data: entry([{ account_number: '1630', debit_amount: 5000, credit_amount: 0 }]) })
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: ROW }] }) // only one of two rows was still free
+    enqueue({ data: null }) // the revert
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'LINK_RACE' })
+    const updates = findCalls('skattekonto_transactions', 'update')
+    expect(updates).toHaveLength(2)
+    expect(updates[1][0]).toEqual({ journal_entry_id: null })
+  })
+
+  it('refuses a missing row and an empty selection', async () => {
+    enqueue({ data: [row()] })
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'TRANSACTION_NOT_FOUND' })
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [], ENTRY)).rejects.toBeInstanceOf(SkattekontoLinkError)
   })
 })
