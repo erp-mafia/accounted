@@ -1,6 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { usesForbiddenWhiteLabelBackend } from '@/lib/domains/production-white-label-backend'
+import { createLogger } from '@/lib/logger'
 import { updateSession } from '@/lib/supabase/middleware'
+
+const log = createLogger('proxy')
 
 export async function proxy(request: NextRequest) {
   if (
@@ -9,6 +12,13 @@ export async function proxy(request: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_URL,
     )
   ) {
+    log.error('Blocked production white-label host from staging backend', {
+      alert: true,
+      operation: 'white_label_backend_guard',
+      requestHostname: request.nextUrl.hostname,
+      backendClassification: 'staging',
+    })
+
     return new NextResponse(null, {
       status: 503,
       headers: {

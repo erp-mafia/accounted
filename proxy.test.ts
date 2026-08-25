@@ -5,9 +5,13 @@ import { NextRequest, NextResponse } from 'next/server'
 const updateSessionMock = vi.hoisted(() =>
   vi.fn(async () => new NextResponse(null, { status: 204 })),
 )
+const loggerErrorMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/supabase/middleware', () => ({
   updateSession: updateSessionMock,
+}))
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({ error: loggerErrorMock }),
 }))
 
 import { config, proxy } from './proxy'
@@ -47,6 +51,16 @@ describe('production white-label proxy guard', () => {
     expect(response.headers.get('cache-control')).toBe('no-store')
     expect(await response.text()).toBe('')
     expect(updateSessionMock).not.toHaveBeenCalled()
+    expect(loggerErrorMock).toHaveBeenCalledOnce()
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      'Blocked production white-label host from staging backend',
+      {
+        alert: true,
+        operation: 'white_label_backend_guard',
+        requestHostname: 'acount.accounted.se',
+        backendClassification: 'staging',
+      },
+    )
   })
 
   it('preserves canonical app behavior with the same backend', async () => {
