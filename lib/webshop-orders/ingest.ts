@@ -53,6 +53,7 @@ type ExistingRow = Pick<
   | 'external_id'
   | 'journal_entry_id'
   | 'invoice_id'
+  | 'manually_booked_at'
   | 'legacy_transaction_id'
   | 'remote_changed_after_freeze'
   | 'total'
@@ -86,8 +87,22 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out
 }
 
-function isFrozen(row: Pick<ExistingRow, 'journal_entry_id' | 'invoice_id'>): boolean {
-  return row.journal_entry_id !== null || row.invoice_id !== null
+/**
+ * Rows whose financials must not be silently refreshed. Booked/invoiced rows
+ * are frozen by the DB trigger; manually marked rows (#1879) are treated the
+ * same APPLICATION-side: the user asserted "this row is covered by verifikat
+ * X", so a remote financial delta must surface as remote_changed_after_freeze
+ * (the same badge booked rows get) instead of mutating the row under that
+ * assertion and hiding the incremental business event forever.
+ */
+function isFrozen(
+  row: Pick<ExistingRow, 'journal_entry_id' | 'invoice_id' | 'manually_booked_at'>,
+): boolean {
+  return (
+    row.journal_entry_id !== null ||
+    row.invoice_id !== null ||
+    row.manually_booked_at !== null
+  )
 }
 
 /**
@@ -231,7 +246,7 @@ export async function upsertWebshopOrders(
     const { data: existingData, error: existingError } = await supabase
       .from('webshop_orders')
       .select(
-        'id, external_id, journal_entry_id, invoice_id, legacy_transaction_id, remote_changed_after_freeze, total, total_tax, total_sek, exchange_rate, currency, order_date, paid_date, is_paid, payment_method, payment_method_title, gateway_reference, order_number, status, refunded_total, store_label, connection_id, customer_name, customer_company, customer_email, customer_orgnr, customer_country, vat_breakdown, line_items',
+        'id, external_id, journal_entry_id, invoice_id, manually_booked_at, legacy_transaction_id, remote_changed_after_freeze, total, total_tax, total_sek, exchange_rate, currency, order_date, paid_date, is_paid, payment_method, payment_method_title, gateway_reference, order_number, status, refunded_total, store_label, connection_id, customer_name, customer_company, customer_email, customer_orgnr, customer_country, vat_breakdown, line_items',
       )
       .eq('company_id', companyId)
       .in('external_id', lookupIds)

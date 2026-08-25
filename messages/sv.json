@@ -6228,6 +6228,7 @@
     "mark_link_loading": "Söker verifikationer",
     "mark_link_empty": "Inga bokförda verifikationer hittades nära orderdatumet. Sök för att leta bredare.",
     "mark_link_optional_hint": "Klicka på ett verifikat för att koppla det; klicka igen för att ta bort valet.",
+    "mark_link_capped": "Visar de {count} senaste. Sök för att hitta fler.",
     "mark_confirm": "Markera som bokförd",
     "mark_submitting": "Markerar",
     "mark_failed": "Kunde inte markera ordern",

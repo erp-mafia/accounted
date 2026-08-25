@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { WebshopOrder } from '@/types'
@@ -32,7 +33,16 @@ interface EntryCandidate {
   description: string | null
   voucher_series?: string | null
   voucher_number?: number | null
-  total_amount?: number | null
+  /** The list API returns full rows with nested lines; the gross is their debit sum. */
+  lines?: Array<{ debit_amount: number | string | null }>
+}
+
+/** Gross amount of a candidate = sum of its debit legs (total_amount is a DB
+ * computed column and not part of the select the list route returns). */
+function candidateGross(entry: EntryCandidate): number | null {
+  if (!entry.lines || entry.lines.length === 0) return null
+  const sum = entry.lines.reduce((acc, l) => acc + (Number(l.debit_amount) || 0), 0)
+  return roundOre(sum)
 }
 
 // ±45 days around the order date: wide enough for a manual booking done in
@@ -76,6 +86,10 @@ export default function MarkOrderBookedDialog({
         params.set('status', 'posted')
         params.set('exclude_draft', 'true')
         params.set('limit', String(CANDIDATE_LIMIT))
+        // Newest first: the manual booking is usually recent relative to the
+        // window; default voucher order would surface the year's first
+        // vouchers and hide the relevant ones behind the cap.
+        params.set('sort_by', 'date_desc')
         if (query) {
           params.set('search', query)
         } else {
@@ -186,6 +200,7 @@ export default function MarkOrderBookedDialog({
             >
               {candidates.map((entry) => {
                 const active = selected === entry.id
+                const gross = candidateGross(entry)
                 return (
                   <button
                     key={entry.id}
@@ -206,14 +221,18 @@ export default function MarkOrderBookedDialog({
                     </span>
                     <span className="min-w-0 flex-1 truncate">{entry.description}</span>
                     <span className="shrink-0 text-right tabular-nums">
-                      {entry.total_amount != null ? formatCurrency(entry.total_amount) : ''}
+                      {gross != null ? formatCurrency(gross) : ''}
                     </span>
                   </button>
                 )
               })}
             </div>
           )}
-          <p className="text-xs text-muted-foreground">{t('mark_link_optional_hint')}</p>
+          <p className="text-xs text-muted-foreground">
+            {candidates.length >= CANDIDATE_LIMIT
+              ? t('mark_link_capped', { count: CANDIDATE_LIMIT })
+              : t('mark_link_optional_hint')}
+          </p>
         </div>
 
         <DialogFooter>

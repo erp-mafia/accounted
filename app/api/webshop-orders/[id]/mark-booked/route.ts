@@ -33,7 +33,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data: order, error: fetchError } = await supabase
       .from('webshop_orders')
-      .select('id, journal_entry_id, invoice_id, manually_booked_at')
+      .select('id, journal_entry_id, invoice_id, manually_booked_at, legacy_transaction_id')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -53,10 +53,26 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         details: { invoice_id: order.invoice_id },
       })
     }
-    if (order.manually_booked_at) {
-      // Idempotent: re-marking an already-marked row is a no-op success
-      // (mirrors the transactions ignore route).
-      return NextResponse.json({ success: true, already_marked: true })
+
+    // Same open-twin gate as the book/create-invoice routes (skeptic
+    // finding): when the money event also sits as an OPEN row in the legacy
+    // transactions inbox, marking the order would hide the twin while it is
+    // still bookable there, so the sale could reach the ledger twice. The
+    // user must book or ignore the feed row first; an ignored or booked feed
+    // row unlocks the mark (no open path to a duplicate remains).
+    if (order.legacy_transaction_id) {
+      const { data: legacyTxn } = await supabase
+        .from('transactions')
+        .select('id, journal_entry_id, is_ignored')
+        .eq('id', order.legacy_transaction_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (legacyTxn && !legacyTxn.journal_entry_id && !legacyTxn.is_ignored) {
+        return errorResponseFromCode('WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN', log, {
+          requestId,
+          details: { transaction_id: legacyTxn.id },
+        })
+      }
     }
 
     // The optional verifikat reference must be a real, posted entry in this
@@ -81,6 +97,28 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           details: { journal_entry_id, status: entry.status },
         })
       }
+    }
+
+    if (order.manually_booked_at) {
+      // Idempotent for a bare re-mark (mirrors the transactions ignore
+      // route). A re-mark WITH a verifikat reference updates the link
+      // instead of silently dropping it (skeptic finding): the row is only
+      // marked, not booked, so refining the informational link is safe.
+      if (!journal_entry_id) {
+        return NextResponse.json({ success: true, already_marked: true })
+      }
+      const { error: linkError } = await supabase
+        .from('webshop_orders')
+        .update({ manually_booked_journal_entry_id: journal_entry_id })
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .is('invoice_id', null)
+      if (linkError) {
+        log.error('failed to update manual booking link', linkError, { orderId: id })
+        return errorResponse(linkError, log, { requestId })
+      }
+      return NextResponse.json({ success: true, already_marked: true, link_updated: true })
     }
 
     // Conditional claim: a concurrent book/create-invoice between our read

@@ -6228,6 +6228,7 @@
     "mark_link_loading": "Searching entries",
     "mark_link_empty": "No posted entries found near the order date. Search to look wider.",
     "mark_link_optional_hint": "Click an entry to link it; click again to clear the choice.",
+    "mark_link_capped": "Showing the {count} most recent. Search to find more.",
     "mark_confirm": "Mark as booked",
     "mark_submitting": "Marking",
     "mark_failed": "Could not mark the order",

@@ -40,6 +40,7 @@ function makeOrderRow(overrides: Record<string, unknown> = {}) {
     journal_entry_id: null,
     invoice_id: null,
     manually_booked_at: null,
+    legacy_transaction_id: null,
     ...overrides,
   }
 }
@@ -123,7 +124,7 @@ describe('POST /api/webshop-orders/[id]/mark-booked', () => {
     expect(body.error.code).toBe('WEBSHOP_ORDER_ALREADY_INVOICED')
   })
 
-  it('is idempotent for an already-marked row', async () => {
+  it('is idempotent for a bare re-mark of an already-marked row', async () => {
     enqueue({ data: makeOrderRow({ manually_booked_at: '2026-08-01T00:00:00Z' }) })
     const { status, body } = await parseJsonResponse<{ already_marked: boolean }>(
       await postMark(),
@@ -131,6 +132,48 @@ describe('POST /api/webshop-orders/[id]/mark-booked', () => {
     expect(status).toBe(200)
     expect(body.already_marked).toBe(true)
     expect(findCall('webshop_orders', 'update')).toBeUndefined()
+  })
+
+  it('updates the verifikat link when re-marking with a journal_entry_id', async () => {
+    enqueue({ data: makeOrderRow({ manually_booked_at: '2026-08-01T00:00:00Z' }) })
+    enqueue({ data: { id: ENTRY_UUID, status: 'posted' } }) // entry lookup
+    enqueue({ data: null }) // link update
+    const { status, body } = await parseJsonResponse<{
+      already_marked: boolean
+      link_updated: boolean
+    }>(await postMark({ journal_entry_id: ENTRY_UUID }))
+    expect(status).toBe(200)
+    expect(body.already_marked).toBe(true)
+    expect(body.link_updated).toBe(true)
+    const update = findCall('webshop_orders', 'update')
+    expect(update![0]).toEqual({ manually_booked_journal_entry_id: ENTRY_UUID })
+  })
+
+  it('refuses to mark while the legacy feed transaction is still OPEN (double-booking gate)', async () => {
+    enqueue({ data: makeOrderRow({ legacy_transaction_id: 'txn-1' }) })
+    enqueue({ data: { id: 'txn-1', journal_entry_id: null, is_ignored: false } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await postMark(),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN')
+    expect(findCall('webshop_orders', 'update')).toBeUndefined()
+  })
+
+  it('marks when the legacy feed transaction was ignored', async () => {
+    enqueue({ data: makeOrderRow({ legacy_transaction_id: 'txn-1' }) })
+    enqueue({ data: { id: 'txn-1', journal_entry_id: null, is_ignored: true } })
+    enqueue({ data: [{ id: 'order-1' }] }) // claim
+    const { status } = await parseJsonResponse(await postMark())
+    expect(status).toBe(200)
+  })
+
+  it('marks when the legacy feed transaction is already booked (no open twin remains)', async () => {
+    enqueue({ data: makeOrderRow({ legacy_transaction_id: 'txn-1' }) })
+    enqueue({ data: { id: 'txn-1', journal_entry_id: 'je-77', is_ignored: false } })
+    enqueue({ data: [{ id: 'order-1' }] }) // claim
+    const { status } = await parseJsonResponse(await postMark())
+    expect(status).toBe(200)
   })
 
   it('marks the row with who/when via a conditional claim', async () => {
