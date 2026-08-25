@@ -42,6 +42,9 @@ ENV NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS=__NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS__
 ENV NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS=__NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS__
 ENV NEXT_PUBLIC_SESSION_WARNING_MS=__NEXT_PUBLIC_SESSION_WARNING_MS__
 ENV NEXT_PUBLIC_SESSION_TIMEOUT_FORCE_ALL=__NEXT_PUBLIC_SESSION_TIMEOUT_FORCE_ALL__
+# Optional Supabase Auth bot protection. The site key is public; the matching
+# secret belongs in GoTrue/Supabase Auth and must never be baked into this image.
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=__NEXT_PUBLIC_TURNSTILE_SITE_KEY__
 # Keep the branding placeholder intact through prebuild's inject script so
 # docker-entrypoint.sh can substitute the runtime value into public/sw.js.
 ENV NEXT_PUBLIC_BRANDING_APP_NAME=__NEXT_PUBLIC_BRANDING_APP_NAME__
