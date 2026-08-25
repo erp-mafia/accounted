@@ -194,6 +194,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_reconcile_match:                     'reconciliation:write',
   gnubok_reconcile_unmatch:                   'reconciliation:write',
   gnubok_reconcile_signoff:                   'reconciliation:signoff',
+  // Residual booking writes a verifikat: the same scope that books a bank row.
+  gnubok_reconcile_residual:                  'transactions:write',
   gnubok_bulk_book_transactions:              'transactions:write',
   gnubok_bulk_book_inbox_items:               'transactions:write',
   gnubok_auto_match_period:                   'transactions:write',

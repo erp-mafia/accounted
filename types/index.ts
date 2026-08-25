@@ -2494,6 +2494,8 @@ export type PendingOperationType =
   | 'reconciliation_unmatch'
   // Sign-off "avstämt t.o.m. <datum>" on one account (account_reconciliations row).
   | 'reconciliation_signoff'
+  // Book the remainder of a bank selection as a fee/interest/rounding verifikat and link it.
+  | 'reconciliation_residual'
   // PR5: Skatteverket filing via MCP. Commit = "send for BankID signing"
   // (returns a signing link); the user's signature in the browser files it.
   | 'submit_vat_declaration'

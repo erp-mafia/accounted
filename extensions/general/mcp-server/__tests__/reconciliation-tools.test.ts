@@ -11,6 +11,7 @@ const statusMock = vi.fn()
 const itemsMock = vi.fn()
 const matchMock = vi.fn()
 const signoffMock = vi.fn()
+const residualMock = vi.fn()
 
 vi.mock('@/lib/reconciliation/service', () => ({
   getAccountStatus: (...args: unknown[]) => statusMock(...args),
@@ -28,6 +29,10 @@ vi.mock('@/lib/reconciliation/actions', () => ({
 vi.mock('@/lib/reconciliation/signoff', () => ({
   signOffAccount: (...args: unknown[]) => signoffMock(...args),
 }))
+vi.mock('@/lib/reconciliation/residual', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/reconciliation/residual')>('@/lib/reconciliation/residual')
+  return { ...actual, bookResidualAndLink: (...args: unknown[]) => residualMock(...args) }
+})
 
 import { tools, isDefaultCatalogTool, deriveToolMeta } from '../server'
 
@@ -223,5 +228,85 @@ describe('gnubok_reconcile_signoff', () => {
       tool('gnubok_reconcile_signoff').execute({ account_key: '1630', through_date: '2026-07-31' }, COMPANY, USER, supabase as never),
     ).rejects.toThrow(/Invalid account_key/)
     expect(signoffMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('gnubok_reconcile_residual', () => {
+  const CASH = '11111111-1111-4111-8111-111111111111'
+  const KEY = `bank:${CASH}`
+  const T1 = '22222222-2222-4222-8222-222222222222'
+  const E1 = '44444444-4444-4444-8444-444444444444'
+  const wouldBook = {
+    kind: 'bank_fee',
+    counter_account: '6570',
+    ledger_account: '1930',
+    currency: 'SEK',
+    transactions_total: -1010,
+    entry_net: -1000,
+    residual_amount: -10,
+    entry_date: '2026-07-31',
+    description: 'Bankavgift',
+    lines: [
+      { account_number: '6570', debit_amount: 10, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 10 },
+    ],
+  }
+
+  beforeEach(() => {
+    residualMock.mockReset()
+  })
+
+  it('is search-only, requires approval, and preflights on the status tool', () => {
+    expect(isDefaultCatalogTool(tool('gnubok_reconcile_residual'))).toBe(false)
+    expect(deriveToolMeta(tool('gnubok_reconcile_residual'))).toMatchObject({
+      requires_approval: true,
+      preflight: 'gnubok_get_reconciliation_status',
+    })
+  })
+
+  it('dry-runs the booking first and stages reconciliation_residual with the verifikat preview', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    residualMock.mockResolvedValue({ dry_run: true, would_book: wouldBook })
+    const out = (await tool('gnubok_reconcile_residual').execute(
+      { account_key: KEY, external_ids: [T1], journal_entry_id: E1, kind: 'bank_fee', dry_run: true },
+      COMPANY,
+      USER,
+      supabase as never,
+    )) as Record<string, unknown>
+    expect(residualMock).toHaveBeenCalledWith(
+      supabase,
+      COMPANY,
+      USER,
+      KEY,
+      { external_ids: [T1], journal_entry_id: E1, kind: 'bank_fee', entry_date: undefined, description: undefined },
+      { dryRun: true },
+    )
+    expect(out).toMatchObject({ staged: false, dry_run: true, risk_level: 'medium' })
+    expect(out.next).toMatchObject({ tool: 'gnubok_get_reconciliation_status' })
+    expect(out.preview).toMatchObject({ account_key: KEY, residual_amount: -10, counter_account: '6570', transaction_count: 1 })
+  })
+
+  it('surfaces a policy refusal (zero, cap, direction, skattekonto) instead of staging', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    residualMock.mockRejectedValue(new Error('Restposten pekar åt fel håll för bank_fee.'))
+    await expect(
+      tool('gnubok_reconcile_residual').execute(
+        { account_key: KEY, external_ids: [T1], journal_entry_id: E1, kind: 'bank_fee' },
+        COMPANY,
+        USER,
+        supabase as never,
+      ),
+    ).rejects.toThrow(/fel håll/)
+  })
+
+  it('rejects a malformed account_key and an empty selection before touching anything', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      tool('gnubok_reconcile_residual').execute({ account_key: '1930', external_ids: [T1], journal_entry_id: E1, kind: 'bank_fee' }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/Invalid account_key/)
+    await expect(
+      tool('gnubok_reconcile_residual').execute({ account_key: KEY, external_ids: [], journal_entry_id: E1, kind: 'bank_fee' }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/1\.\.50/)
+    expect(residualMock).not.toHaveBeenCalled()
   })
 })
