@@ -13,6 +13,7 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   return {
     ...actual,
     sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendReaction: vi.fn().mockResolvedValue(undefined),
     markReadWithTyping: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn(),
     getDisplayPhoneNumber: vi.fn().mockResolvedValue(null),
@@ -25,7 +26,11 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/process-inbound', () => ({
 
 import { createClient } from '@supabase/supabase-js'
 import { whatsappInboxExtension } from '@/extensions/general/whatsapp-inbox'
-import { sendText, downloadMedia } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
+import {
+  sendText,
+  sendReaction,
+  downloadMedia,
+} from '@/extensions/general/whatsapp-inbox/lib/graph-api'
 import { kickInboundProcessing } from '@/extensions/general/whatsapp-inbox/lib/process-inbound'
 import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 import { hashLinkCode } from '@/extensions/general/whatsapp-inbox/lib/linking'
@@ -33,6 +38,7 @@ import { hashLinkCode } from '@/extensions/general/whatsapp-inbox/lib/linking'
 const SECRET = 'meta-app-secret'
 const createClientMock = vi.mocked(createClient)
 const sendTextMock = vi.mocked(sendText)
+const sendReactionMock = vi.mocked(sendReaction)
 const kickMock = vi.mocked(kickInboundProcessing)
 
 function findRoute(method: string, path: string) {
@@ -210,6 +216,65 @@ describe('POST /webhook', () => {
 
     expect(kickMock).toHaveBeenCalledWith(['msg-row-1'])
     expect(sendTextMock).not.toHaveBeenCalled() // the combined ack comes from the worker
+    // The instant "received" signal: a checkmark reaction on the sender's own
+    // message, sent before the webhook 200s (the detailed ack waits on
+    // extraction, which is exactly the latency users complained about).
+    expect(sendReactionMock).toHaveBeenCalledWith('46701234567', 'wamid.IN1')
+  })
+
+  it('reacts to a supported document (PDF) as well', async () => {
+    const { enqueue } = mockSupabase()
+    enqueue({ data: makeLink() })
+    enqueue({ data: { id: 'conv-1' } })
+    enqueue({ data: { id: 'msg-row-1' } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+
+    await route.handler(
+      signedRequest(
+        envelope({
+          messages: [
+            {
+              from: '46701234567',
+              id: 'wamid.IN1',
+              timestamp: '1754000000',
+              type: 'document',
+              document: { id: 'media-1', mime_type: 'application/pdf', filename: 'kvitto.pdf' },
+            },
+          ],
+        }),
+      ),
+    )
+    expect(sendReactionMock).toHaveBeenCalledWith('46701234567', 'wamid.IN1')
+  })
+
+  it('does not react to media the pipeline will reject (unsupported mime)', async () => {
+    const { enqueue } = mockSupabase()
+    enqueue({ data: makeLink() })
+    enqueue({ data: { id: 'conv-1' } })
+    enqueue({ data: { id: 'msg-row-1' } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+
+    await route.handler(
+      signedRequest(
+        envelope({
+          messages: [
+            {
+              from: '46701234567',
+              id: 'wamid.IN1',
+              timestamp: '1754000000',
+              type: 'document',
+              document: { id: 'media-1', mime_type: 'application/zip', filename: 'arkiv.zip' },
+            },
+          ],
+        }),
+      ),
+    )
+    // The row still becomes a job (the worker owns the M15 rejection reply),
+    // but junk never earns the checkmark.
+    expect(kickMock).toHaveBeenCalledWith(['msg-row-1'])
+    expect(sendReactionMock).not.toHaveBeenCalled()
   })
 
   it('dedupes a redelivered wamid via the unique index (23505): no reply, no processing', async () => {
@@ -224,6 +289,8 @@ describe('POST /webhook', () => {
     expect(response.status).toBe(200)
     expect(kickMock).toHaveBeenCalledWith([])
     expect(sendTextMock).not.toHaveBeenCalled()
+    // A Meta redelivery of an already-handled message must not re-react.
+    expect(sendReactionMock).not.toHaveBeenCalled()
   })
 
   describe('unknown senders', () => {
@@ -241,6 +308,8 @@ describe('POST /webhook', () => {
       expect(sendTextMock).toHaveBeenCalledTimes(1)
       expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m1Unlinked)
       expect(vi.mocked(downloadMedia)).not.toHaveBeenCalled()
+      // No checkmark for unlinked senders: nothing was received into any inbox.
+      expect(sendReactionMock).not.toHaveBeenCalled()
       // #1552: a metadata-only trace row IS persisted, but it must carry no
       // content: no body, no media reference, no raw payload, no link.
       const inserts = findCalls('whatsapp_messages', 'insert')
@@ -549,6 +618,8 @@ describe('POST /webhook', () => {
 
       expect(sendTextMock).not.toHaveBeenCalled()
       expect(kickMock).toHaveBeenCalledWith([])
+      // Muted means the channel is paused: no checkmark either.
+      expect(sendReactionMock).not.toHaveBeenCalled()
     })
 
     it('start unmutes and welcomes back with M12', async () => {
