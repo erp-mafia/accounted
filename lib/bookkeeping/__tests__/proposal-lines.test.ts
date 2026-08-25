@@ -327,6 +327,54 @@ describe('computeProposalLines', () => {
       expect(lines[0]).toEqual({ side: 'kredit', account: '1932', amount: 1000, settlement: true })
     })
 
+    it("books an expense settlement on the template's learned credit account (engine parity)", () => {
+      // SIE-learned pattern settling on leverantorsskulder: the engine books
+      // the money leg on tmpl.credit_account (buildTransactionEntryLines),
+      // and applySettlementAccount never rewrites a non-1930 leg. The prefill
+      // must show 2440, not a default 1930.
+      const lines = computeProposalLines({
+        amount: -1250,
+        linePattern: pattern,
+        templateDebitAccount: '4010',
+        templateCreditAccount: '2440',
+      })
+      expect(lines[0]).toEqual({ side: 'kredit', account: '2440', amount: 1250, settlement: true })
+      expect(sumSide(lines, 'debet')).toBe(sumSide(lines, 'kredit'))
+    })
+
+    it("books an income settlement on the template's learned debit account (engine parity)", () => {
+      const incomePattern: LinePatternEntry[] = [
+        { account: '2611', type: 'vat', side: 'credit', vat_rate: 0.25 },
+        { account: '3001', type: 'business', side: 'credit', ratio: 1 },
+      ]
+      const lines = computeProposalLines({
+        amount: 1250,
+        linePattern: incomePattern,
+        templateDebitAccount: '1510',
+        templateCreditAccount: '3001',
+      })
+      expect(lines[0]).toEqual({ side: 'debet', account: '1510', amount: 1250, settlement: true })
+    })
+
+    it('mirror-swaps the learned pair for a refund settlement (engine parity)', () => {
+      // Refund (amount > 0) of an expense-learned pattern: the engine's
+      // mirror swaps the legacy pair, so result.debit_account is
+      // tmpl.credit_account and the money leg lands there.
+      const lines = computeProposalLines({
+        amount: 1000,
+        linePattern: pattern,
+        templateDebitAccount: '4010',
+        templateCreditAccount: '2440',
+      })
+      expect(lines[0]).toEqual({ side: 'debet', account: '2440', amount: 1000, settlement: true })
+      expect(sumSide(lines, 'debet')).toBe(sumSide(lines, 'kredit'))
+    })
+
+    it('falls back to the swappable 1930 default when the learned pair is absent', () => {
+      const lines = computeProposalLines({ amount: -1000, linePattern: pattern })
+      expect(lines[0]).toEqual({ side: 'kredit', account: '1930', amount: 1000, settlement: true })
+    })
+
     it('books the ore rounding difference on 3740', () => {
       const multi: LinePatternEntry[] = [
         { account: '6110', type: 'business', side: 'debit', ratio: 0.333 },

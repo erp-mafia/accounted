@@ -87,6 +87,11 @@ export interface ProposalLinesInput {
    * For template-based bookings: overrides category mapping. Callers must
    * pass the entity-resolved accounts (debit_account_ab/credit_account_ab
    * for aktiebolag), mirroring buildMappingResultFromTemplate.
+   *
+   * For linePattern bookings these carry the counterparty template's learned
+   * legacy pair AS STORED (no entity resolution): the engine takes the
+   * settlement leg's account from that pair (credit for an expense, debit
+   * for an income, mirror-swapped), so the prefill must too.
    */
   templateDebitAccount?: string
   templateCreditAccount?: string
@@ -203,9 +208,20 @@ export function computeProposalLines(input: ProposalLinesInput): ProposalLine[] 
     }
 
     // Settlement line: gross on the bank side of the transaction's sign.
+    // ENGINE PARITY for the money leg's ACCOUNT: buildTransactionEntryLines
+    // books it on mappingResult.credit_account for an expense and
+    // debit_account for an income, and buildMultiLineMappingResult fills that
+    // pair from the template's learned legacy accounts, swapped under mirror
+    // (a pattern learned from vouchers settling on 2440/1510/19xx keeps that
+    // account; applySettlementAccount only ever rewrites a literal 1930).
+    // The caller passes the learned pair via templateDebitAccount /
+    // templateCreditAccount; without it we fall back to the swappable 1930
+    // default exactly like the engine's `|| '1930'`.
+    const patternSettlementAccount =
+      (isIncome !== mirror ? templateDebitAccount : templateCreditAccount) || settlementAccount
     result.push({
       side: isIncome ? 'debet' : 'kredit',
-      account: settlementAccount,
+      account: patternSettlementAccount,
       amount: absAmount,
       settlement: true,
     })

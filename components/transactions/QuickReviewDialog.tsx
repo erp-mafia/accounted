@@ -287,7 +287,17 @@ export default function QuickReviewDialog({
     amount: tx.amount,
     amountSek: sekAmount,
     ...(hasCounterpartyPattern
-      ? { linePattern: counterpartyLinePattern ?? undefined }
+      ? {
+          linePattern: counterpartyLinePattern ?? undefined,
+          // Engine parity for the money leg: buildTransactionEntryLines books
+          // the settlement on the learned template's legacy pair (credit
+          // account for an expense, debit for an income, mirror-swapped), not
+          // on a default 1930. Raw accounts, not entity-resolved: learned
+          // counterparty templates carry no _ab variants and the engine uses
+          // them as stored.
+          templateDebitAccount: template?.debit_account,
+          templateCreditAccount: template?.credit_account,
+        }
       : isTemplateBooking && template?.debit_account && template?.credit_account
         ? isCounterpartyTemplate
           ? {
