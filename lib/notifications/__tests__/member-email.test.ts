@@ -69,6 +69,8 @@ function makeSupabase(opts: {
         record.filters[key] = value
         return builder
       },
+      order: () => builder,
+      range: () => builder,
       maybeSingle: async () => {
         const r = result()
         const rows = r.data as Array<Record<string, unknown>> | null

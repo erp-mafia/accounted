@@ -3807,7 +3807,7 @@ export const tools: McpTool[] = [
             source: { type: 'string', enum: ['user', 'system'] },
             connected_at: {
               type: ['string', 'null'],
-              description: 'Personal sessions last ~65 min from this time; system connections do not expire.',
+              description: 'Personal sessions last ~65 min from this time; absent for system (ombud) connections.',
             },
             message: { type: 'string' },
           },
@@ -3881,6 +3881,10 @@ export const tools: McpTool[] = [
       // session start instead of discovering a dead session mid-task.
       // Best-effort and emitted only when a connection (or verified system
       // grant) exists: never-connected companies pay no payload for it.
+      // The system-before-user priority mirrors resolveReadAuth
+      // (skatteverket/lib/resolve-auth.ts); not reused directly because the
+      // briefing needs token metadata (createdAt, reconsent status) that
+      // resolveReadAuth deliberately collapses into an auth result.
       const safeSkvConnection = (async (): Promise<
         | {
             status: 'active' | 'needs_reconsent'

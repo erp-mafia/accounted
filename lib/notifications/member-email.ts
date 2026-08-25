@@ -20,9 +20,17 @@
  * the sync/cron/reconciliation that triggered it. Logging alone is not the
  * safety net (the embed bug WAS logged by one caller and nobody read it):
  * callers verify delivery end to end after deploy.
+ *
+ * SERVICE-ROLE CLIENT REQUIRED. Under an RLS user client these lookups
+ * silently degrade: company_members is readable company-wide, but the
+ * profiles SELECT policy is own-row-only, so resolveMemberEmails would
+ * return at most the caller's own email and resolveMemberEmail(other user)
+ * always null. Every current caller is a service-role cron path; keep it
+ * that way or widen the profiles policy first.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 const log = createLogger('member-email')
 
@@ -81,36 +89,50 @@ export async function resolveMemberEmails(
 ): Promise<Map<string, string>> {
   const emails = new Map<string, string>()
 
-  const { data: members, error: membersError } = await supabase
-    .from('company_members')
-    .select('user_id')
-    .eq('company_id', companyId)
-  if (membersError) {
+  // fetchAllRows with stable ordering: PostgREST silently caps unpaged
+  // reads at 1000 rows, which would drop members from the allowlist.
+  let members: Array<{ user_id: string | null }>
+  try {
+    members = await fetchAllRows(({ from, to }) =>
+      supabase
+        .from('company_members')
+        .select('user_id')
+        .eq('company_id', companyId)
+        .order('user_id', { ascending: true })
+        .range(from, to)
+    )
+  } catch (err) {
     log.warn('could not read company members for notification allowlist', {
       companyId,
-      error: membersError.message,
+      error: err instanceof Error ? err.message : String(err),
     })
     return emails
   }
 
-  const userIds = ((members ?? []) as Array<{ user_id: string | null }>)
+  const userIds = members
     .map((m) => m.user_id)
     .filter((id): id is string => typeof id === 'string')
   if (userIds.length === 0) return emails
 
-  const { data: profiles, error: profilesError } = await supabase
-    .from('profiles')
-    .select('id, email')
-    .in('id', userIds)
-  if (profilesError) {
+  let profiles: Array<{ id: string; email: string | null }>
+  try {
+    profiles = await fetchAllRows(({ from, to }) =>
+      supabase
+        .from('profiles')
+        .select('id, email')
+        .in('id', userIds)
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+  } catch (err) {
     log.warn('could not read member emails for notification allowlist', {
       companyId,
-      error: profilesError.message,
+      error: err instanceof Error ? err.message : String(err),
     })
     return emails
   }
 
-  for (const row of (profiles ?? []) as Array<{ id: string; email: string | null }>) {
+  for (const row of profiles) {
     if (row.email) emails.set(row.id, row.email)
   }
   return emails

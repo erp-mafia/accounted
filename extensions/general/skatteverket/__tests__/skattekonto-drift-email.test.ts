@@ -9,7 +9,6 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ExtensionContext } from '@/lib/extensions/types'
 import type { EventPayload } from '@/lib/events/types'
 
 const { warnRecorder } = vi.hoisted(() => ({ warnRecorder: vi.fn() }))
@@ -31,6 +30,17 @@ const mockIsConfigured = vi.fn()
 const mockSendEmail = vi.fn()
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({ isConfigured: mockIsConfigured, sendEmail: mockSendEmail }),
+}))
+
+// The handler builds its own SERVICE-ROLE client: the only emitter is the
+// nightly cron, where the registry-built ctx is an anonymous (or absent)
+// client that RLS would turn into "no members, no recipient".
+const { serviceClientHolder } = vi.hoisted(() => ({
+  serviceClientHolder: { current: null as unknown },
+}))
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: vi.fn(),
+  createServiceClient: vi.fn(() => serviceClientHolder.current),
 }))
 
 import { handleSkattekontoDriftDetected } from '../lib/skattekonto-drift-email'
@@ -112,6 +122,8 @@ function makeSupabase(
         record.filters[key] = value
         return builder
       },
+      order: () => builder,
+      range: () => builder,
       maybeSingle: async () => {
         const r = result()
         const rows = r.data as Array<Record<string, unknown>> | null
@@ -124,13 +136,9 @@ function makeSupabase(
   return { supabase: { from } as unknown as SupabaseClient, queries }
 }
 
-function makeCtx(supabase: SupabaseClient): ExtensionContext {
-  return {
-    userId: 'user-1',
-    companyId: 'company-1',
-    extensionId: 'skatteverket',
-    supabase,
-  } as unknown as ExtensionContext
+/** Point the mocked createServiceClient at this test's supabase stub. */
+function useServiceClient(supabase: SupabaseClient): void {
+  serviceClientHolder.current = supabase
 }
 
 const payload: EventPayload<'skattekonto.drift_detected'> = {
@@ -166,7 +174,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
       settings: { tax_contact_email: ACCOUNTANT.email },
     })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
     expect(sentTo()).toBe(ACCOUNTANT.email)
@@ -178,7 +187,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
       settings: { tax_contact_email: ACCOUNTANT.email },
     })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     const settingsQuery = queries.find((q) => q.table === 'company_settings')
     // Exact match, not `toContain`: 'tax_contact_email' contains the phantom
@@ -193,7 +203,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
       settings: { tax_contact_email: 'Revisor@Byra.se' },
     })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     expect(sentTo()).toBe('Revisor@Byra.se')
   })
@@ -201,7 +212,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
   it('falls back to the syncing user when no tax contact is configured', async () => {
     const { supabase } = makeSupabase({ members: [OWNER], settings: null })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     expect(sentTo()).toBe(OWNER.email)
   })
@@ -212,7 +224,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
       settings: { tax_contact_email: 'ex-admin@example.com' },
     })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     expect(sentTo()).toBe(OWNER.email)
     expect(warnedWith('not an active member')).toBe(true)
@@ -225,7 +238,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
       settingsError: { message: 'column company_settings.tax_contact_email does not exist' },
     })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     expect(warnedWith('could not read tax contact email')).toBe(true)
     // Still delivers to the documented fallback rather than dropping the alert.
@@ -238,7 +252,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
       membersError: { message: 'permission denied for table company_members' },
     })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     expect(warnedWith('could not read company members')).toBe(true)
     expect(mockSendEmail).not.toHaveBeenCalled()
@@ -251,7 +266,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
       profilesError: { message: 'timeout' },
     })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     expect(warnedWith('could not read member emails')).toBe(true)
     expect(mockSendEmail).not.toHaveBeenCalled()
@@ -260,7 +276,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
   it('sends nothing when the company has no members at all', async () => {
     const { supabase } = makeSupabase({ members: [] })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     expect(mockSendEmail).not.toHaveBeenCalled()
     expect(warnedWith('no authorised recipient')).toBe(true)
@@ -270,7 +287,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
     mockIsConfigured.mockReturnValue(false)
     const { supabase, queries } = makeSupabase({ members: [OWNER, ACCOUNTANT] })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     expect(mockSendEmail).not.toHaveBeenCalled()
     expect(queries).toHaveLength(0)
@@ -282,7 +300,8 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
       settings: { tax_contact_email: ACCOUNTANT.email },
     })
 
-    await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
+    useServiceClient(supabase)
+    await handleSkattekontoDriftDetected(payload)
 
     const body = `${mockSendEmail.mock.calls[0][0].text}${mockSendEmail.mock.calls[0][0].html}`
     expect(body).not.toContain('1250')

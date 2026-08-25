@@ -1,6 +1,8 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { getEmailService } from '@/lib/email/service'
 import { createLogger } from '@/lib/logger'
 import { resolveMemberEmails } from '@/lib/notifications/member-email'
+import { createServiceClient } from '@/lib/supabase/server'
 import { formatDate } from '@/lib/utils'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { EventPayload } from '@/lib/events/types'
@@ -15,6 +17,12 @@ const log = createLogger('skattekonto-drift-email')
  * (the dashboard SkattekontoDriftTile) so a misdelivered mail doesn't leak
  * financial figures.
  *
+ * Service-role client, NOT the registry-built ctx: the only emitter is the
+ * nightly cron, whose request carries no user cookies, so the ctx the
+ * registry lazily builds there is an anonymous client (or undefined) that
+ * RLS turns into "no members, no recipient, no mail". Same rationale as the
+ * document-extraction handler and the retired connection-expired handler.
+ *
  * Recipient resolution is restricted to active members of the company. A
  * stale company_settings.tax_contact_email that no longer corresponds to a
  * member is never used. Falls back to the syncing user only if they're
@@ -25,15 +33,8 @@ const log = createLogger('skattekonto-drift-email')
  */
 export async function handleSkattekontoDriftDetected(
   payload: EventPayload<'skattekonto.drift_detected'>,
-  ctx?: ExtensionContext,
+  _ctx?: ExtensionContext,
 ): Promise<void> {
-  if (!ctx) {
-    log.warn('drift event fired without ctx: cannot resolve recipient', {
-      companyId: payload.companyId,
-    })
-    return
-  }
-
   const email = getEmailService()
   if (!email.isConfigured()) {
     log.info('email service not configured: skipping drift alert', {
@@ -42,7 +43,8 @@ export async function handleSkattekontoDriftDetected(
     return
   }
 
-  const recipient = await resolveAuthorisedRecipient(ctx, payload.userId)
+  const supabase = createServiceClient()
+  const recipient = await resolveAuthorisedRecipient(supabase, payload.companyId, payload.userId)
   if (!recipient) {
     log.warn('no authorised recipient resolved for drift alert', {
       companyId: payload.companyId,
@@ -121,23 +123,24 @@ export async function handleSkattekontoDriftDetected(
  * whoever happened to trigger the sync.
  */
 async function resolveAuthorisedRecipient(
-  ctx: ExtensionContext,
+  supabase: SupabaseClient,
+  companyId: string,
   userId: string,
 ): Promise<string | null> {
   // 1. Build the set of active member emails for this company. We accept
   //    only addresses that appear here. A failed lookup resolves to an empty
   //    map, cancelling the alert: the helper logs it out loud.
-  const memberEmails = await resolveMemberEmails(ctx.supabase, ctx.companyId)
+  const memberEmails = await resolveMemberEmails(supabase, companyId)
   const allowedEmails = new Set<string>()
   for (const email of memberEmails.values()) allowedEmails.add(email.toLowerCase())
 
   if (allowedEmails.size === 0) return null
 
   // 2. Prefer the configured tax contact email IF it matches an active member.
-  const { data: settings, error: settingsError } = await ctx.supabase
+  const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
     .select('tax_contact_email')
-    .eq('company_id', ctx.companyId)
+    .eq('company_id', companyId)
     .maybeSingle()
 
   if (settingsError) {
@@ -145,7 +148,7 @@ async function resolveAuthorisedRecipient(
     // trace is how a company silently stops getting alerts where it asked
     // for them.
     log.warn('could not read tax contact email: falling back to syncing user', {
-      companyId: ctx.companyId,
+      companyId,
       error: settingsError.message,
     })
   }
@@ -156,7 +159,7 @@ async function resolveAuthorisedRecipient(
       return contactEmail
     }
     log.warn('configured tax contact is not an active member: falling back to syncing user', {
-      companyId: ctx.companyId,
+      companyId,
     })
   }
 
