@@ -16,16 +16,7 @@ import type { ResolvedProvider } from '@/lib/auth/gotrue-providers'
 function ProviderMark({ provider }: { provider: ResolvedProvider }) {
   if (provider.id === 'google') return <GoogleMark />
   else if (provider.id === 'azure') return <MicrosoftMark />
-  // Known providers without a dedicated mark show the first letter
-  if (!provider.isCustom) {
-    return (
-      <span className="flex h-4 w-4 items-center justify-center text-[11px] font-bold text-muted-foreground">
-        {provider.label.charAt(0)}
-      </span>
-    )
-  }
-  // Custom OIDC providers get a generic key icon
-  return <KeyRound className="h-4 w-4 text-muted-foreground" />
+  else return <KeyRound className="h-4 w-4 text-muted-foreground" />
 }
 
 /**
