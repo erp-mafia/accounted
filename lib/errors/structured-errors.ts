@@ -1526,6 +1526,38 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ett stängt räkenskapsår kan inte låsas upp.',
     message_en: 'A closed fiscal year cannot be unlocked.',
   },
+  FISCAL_YEAR_RESET_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret kunde inte hittas.',
+    message_en: 'Fiscal year not found.',
+  },
+  FISCAL_YEAR_RESET_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Endast företagets ägare eller administratörer kan nollställa ett räkenskapsår.',
+    message_en: 'Only company owners and admins can reset a fiscal year.',
+  },
+  FISCAL_YEAR_RESET_INELIGIBLE: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret kan inte nollställas i sitt nuvarande läge.',
+    message_en: 'The fiscal year cannot be reset in its current state.',
+  },
+  FISCAL_YEAR_RESET_CONFIRMATION_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Räkenskapsårets namn stämmer inte överens.',
+    message_en: 'The fiscal year name does not match.',
+  },
+  FISCAL_YEAR_RESET_LINKED_ENTRIES: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsåret innehåller verifikat som är kopplade till andra poster (t.ex. anläggningstillgångar, periodiseringar eller lönekörningar). Ta bort eller ångra de kopplade flödena först. Inga ändringar har sparats.',
+    message_en:
+      'The fiscal year contains vouchers linked to other records (e.g. assets, accrual schedules or salary runs). Undo those flows first. No changes were saved.',
+  },
+  FISCAL_YEAR_RESET_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Räkenskapsåret kunde inte nollställas. Inga ändringar har sparats.',
+    message_en: 'Failed to reset the fiscal year. No changes were saved.',
+  },
   // Retired 2026-07-26: PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS. Creating the
   // next räkenskapsår while a prior one is still fully open is no longer an
   // error at all: BFL 5 kap 2 § forces the new year's affärshändelser to be

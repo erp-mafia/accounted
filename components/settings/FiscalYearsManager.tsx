@@ -12,10 +12,11 @@ import {
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
-import { Plus, Lock, Unlock, Loader2 } from 'lucide-react'
+import { Plus, Lock, Unlock, Loader2, Eraser } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
+import { FiscalYearResetDialog } from '@/components/settings/FiscalYearResetDialog'
 import { suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -43,6 +44,7 @@ export function FiscalYearsManager() {
   const [hasError, setHasError] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [mutatingId, setMutatingId] = useState<string | null>(null)
+  const [resetTarget, setResetTarget] = useState<FiscalPeriod | null>(null)
 
   // Only owners/admins may change a period's lock state. The API enforces this
   // too (requireWrite); this just hides controls a viewer/member can't use.
@@ -162,6 +164,18 @@ export function FiscalYearsManager() {
                     )}
                   </Button>
                 )}
+                {canManage && status === 'open' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive hover:text-destructive"
+                    disabled={isMutating}
+                    onClick={() => setResetTarget(p)}
+                  >
+                    <Eraser className="mr-1.5 h-4 w-4" />
+                    {t('fy_action_reset')}
+                  </Button>
+                )}
                 {canManage && status === 'locked' && (
                   <Button
                     variant="outline"
@@ -207,6 +221,18 @@ export function FiscalYearsManager() {
         periods={periods}
         onCreated={fetchPeriods}
       />
+
+      {resetTarget && (
+        <FiscalYearResetDialog
+          periodId={resetTarget.id}
+          periodName={resetTarget.name}
+          open={resetTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setResetTarget(null)
+          }}
+          onReset={fetchPeriods}
+        />
+      )}
 
       <DestructiveConfirmDialog {...dialogProps} />
     </SettingsGroup>

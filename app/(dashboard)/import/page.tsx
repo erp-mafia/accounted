@@ -2370,6 +2370,13 @@ export default function ImportPage() {
     if (viewParam === 'export' || viewParam === 'import') {
       setView(viewParam)
     }
+    // Deep link from surfaces where a bad import is discovered (e.g. the
+    // voucher list): /import?history=sie lands directly on the fold-open
+    // SIE import history so "Ångra import" is one click away.
+    if (searchParams.get('history') === 'sie') {
+      setView('import')
+      setSieHistoryOpen(true)
+    }
   }, [isSandbox, searchParams])
 
   // Hash-based deep links: all live on the export tab; #sie-export opens

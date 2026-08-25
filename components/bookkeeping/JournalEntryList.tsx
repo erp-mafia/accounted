@@ -31,6 +31,7 @@ import {
   ALL_YEARS_VALUE as FISCAL_YEAR_ALL_VALUE,
 } from '@/components/common/FiscalYearSelector'
 import { FyPicker } from '@/components/common/FyPicker'
+import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
 import {
@@ -1439,6 +1440,21 @@ export default function JournalEntryList({
               {t('batch_clear_selection')}
             </button>
           </div>
+        )}
+
+        {/* Discoverability for "Ångra import" (issue #1883): when the page
+            shows import-sourced vouchers, point at the SIE import history
+            where a bad import can be undone in one step. One page-domain
+            attn line (design convention 6). */}
+        {entries.some(
+          (e) => e.source_type === 'import' || e.source_type === 'opening_balance',
+        ) && (
+          <AttnLine
+            className="px-1 pb-2"
+            action={{ label: t('import_attn_action'), href: '/import?history=sie' }}
+          >
+            {t('import_attn')}
+          </AttnLine>
         )}
 
         <div className="overflow-x-auto">

@@ -117,6 +117,51 @@ export interface CompanyMigrationResetRpcResult {
   counts?: CompanyMigrationResetEligibility['counts']
 }
 
+// Fiscal-year reset (issue #1883): guarded hard-delete of one OPEN fiscal
+// year's vouchers. Mirrors the migration-reset envelope shapes above.
+export type FiscalYearResetBlockerCode =
+  | 'period_closed'
+  | 'period_locked'
+  | 'company_lock_date'
+  | 'year_end_state'
+  | 'arsredovisning_state'
+  | 'next_year_dependency'
+  | 'vat_declared'
+  | 'agi_declared'
+
+export interface FiscalYearResetBlocker {
+  code: FiscalYearResetBlockerCode
+  count?: number
+  date?: string
+}
+
+export interface FiscalYearResetEligibility {
+  eligible: boolean
+  blockers: FiscalYearResetBlocker[]
+  period: {
+    id: string
+    name: string
+    period_start: string
+    period_end: string
+  }
+  counts: {
+    vouchers: number
+    documents_to_detach: number
+  }
+}
+
+export interface FiscalYearResetRpcResult {
+  ok: boolean
+  code?: string
+  eligible?: boolean
+  blockers?: FiscalYearResetBlocker[]
+  period?: FiscalYearResetEligibility['period']
+  counts?: FiscalYearResetEligibility['counts']
+  deleted?: number
+  detached_documents?: number
+  period_name?: string
+}
+
 // User preferences (cross-company)
 export interface UserPreferences {
   id: string
