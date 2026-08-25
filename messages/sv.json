@@ -7931,6 +7931,7 @@
     "toast_marked_ib": "Verifikatet markerades som ingående balans",
     "toast_moved": "Transaktionen flyttades till {account}",
     "rail_group_manual": "Övriga balanskonton",
+    "rail_group_manual_unsigned": "{count} av {total} ej avstämda",
     "rail_never_signed": "inte avstämt",
     "state_unsigned": "Inte avstämt",
     "tile_external_manual": "Saldo enligt underlag",
