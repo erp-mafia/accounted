@@ -101,6 +101,13 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   // digit (13 digits), not the ten-digit form: Skatteverket rejects the short
   // one. Skatteverket's own reported OCR wins when the skattekonto has been
   // synced; the derived value is the fallback.
+  //
+  // The entity_type collapse below is total, not a guess at a default:
+  // companies.entity_type is NOT NULL with CHECK IN ('enskild_firma',
+  // 'aktiebolag'), so there is no third value and no null to mis-tag. It
+  // matters because it picks the prefix: a personnummer must keep its century
+  // where an organisationsnummer takes "16", and getting that wrong yields a
+  // Luhn-valid OCR for the wrong taxpayer.
   let ocr: string
   try {
     ocr = await resolveSkattekontoOcr(
