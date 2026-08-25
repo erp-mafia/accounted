@@ -12,7 +12,11 @@ import type { CreateCompanyInput } from '@/lib/company/create-company'
  * hands to createCompanyCore. One schema, one builder, so the two
  * programmatic paths cannot drift from each other or from the wizard.
  *
- * The compliance rule that must never be skipped: a VAT-registered company
+ * Compliance rules that must never be skipped: a VAT-registered company
+ * needs a moms_period and an org_number (the invoice momsregistreringsnummer
+ * derives from it), F-skatt is stated explicitly rather than assumed, and an
+ * enskild firma stays on the calendar year even in its first year. Chief
+ * among them, the moms_period: a VAT-registered company
  * needs a moms_period. Without it the deadline engine silently generates
  * ZERO VAT deadlines (lib/tax/deadline-config.ts conditions all require a
  * concrete period), which reads as "no VAT duty" to everyone downstream.
@@ -26,7 +30,8 @@ export const CompanySetupSchema = z
     vat_registered: z.boolean(),
     moms_period: z.enum(['monthly', 'quarterly', 'yearly']).nullable().optional(),
     accounting_method: z.enum(['accrual', 'cash']),
-    f_skatt: z.boolean().optional(),
+    /** Godkänd för F-skatt. Explicit on purpose: never assumed (SE-R-005 risk). */
+    f_skatt: z.boolean(),
     /** 1-12. Ignored for enskild firma (always calendar year). */
     fiscal_year_start_month: z.number().int().min(1).max(12).optional(),
     /**
@@ -59,6 +64,26 @@ export const CompanySetupSchema = z
         code: 'custom',
         path: ['moms_period'],
         message: 'moms_period must be omitted when the company is not VAT-registered.',
+      })
+    }
+    if (value.vat_registered && !value.org_number) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['org_number'],
+        message:
+          'org_number is required for a VAT-registered company: the momsregistreringsnummer on every invoice is derived from it (ML 17 kap 24 §).',
+      })
+    }
+    if (
+      value.entity_type === 'enskild_firma' &&
+      value.first_fiscal_year &&
+      !value.first_fiscal_year.end.endsWith('-12-31')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['first_fiscal_year', 'end'],
+        message:
+          'An enskild firma always closes its fiscal year on 31 December (BFL 3 kap. 1 §): the first year may be shorter or up to 18 months, but must end on 12-31.',
       })
     }
     if (value.org_number && normalizeOrgNumber(value.org_number) === null) {
@@ -98,10 +123,9 @@ export function planCompanySetup(setup: CompanySetup): CompanySetupPlan {
     vat_number: setup.vat_registered ? deriveSwedishVatNumber(setup.org_number ?? null) : null,
     moms_period: setup.vat_registered ? setup.moms_period ?? null : null,
     accounting_method: setup.accounting_method,
-    f_skatt: setup.f_skatt ?? true,
-    fiscal_year_start_month: firstYear
-      ? nextMonthAfter(firstYear.end)
-      : startMonth,
+    f_skatt: setup.f_skatt,
+    // Enskild firma is calendar-year by law, with or without a first year.
+    fiscal_year_start_month: isEf ? 1 : firstYear ? nextMonthAfter(firstYear.end) : startMonth,
     ...(setup.address_line1 ? { address_line1: setup.address_line1 } : {}),
     ...(setup.postal_code ? { postal_code: setup.postal_code } : {}),
     ...(setup.city ? { city: setup.city } : {}),

@@ -8,6 +8,7 @@ const base = {
   vat_registered: true,
   moms_period: 'quarterly' as const,
   accounting_method: 'accrual' as const,
+  f_skatt: true,
 }
 
 describe('CompanySetupSchema', () => {
@@ -31,6 +32,41 @@ describe('CompanySetupSchema', () => {
   it('accepts a non-VAT company with no moms_period', () => {
     const result = CompanySetupSchema.safeParse({ ...base, vat_registered: false, moms_period: undefined })
     expect(result.success).toBe(true)
+  })
+
+  it('refuses a VAT-registered company without an org number (invoice momsregistreringsnummer)', () => {
+    const result = CompanySetupSchema.safeParse({ ...base, org_number: undefined })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.join('.') === 'org_number')).toBe(true)
+    }
+  })
+
+  it('accepts a non-VAT company without an org number', () => {
+    const result = CompanySetupSchema.safeParse({
+      ...base,
+      org_number: undefined,
+      vat_registered: false,
+      moms_period: undefined,
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('refuses an omitted f_skatt: F-skatt approval is never assumed', () => {
+    const result = CompanySetupSchema.safeParse({ ...base, f_skatt: undefined })
+    expect(result.success).toBe(false)
+  })
+
+  it('refuses an enskild firma first fiscal year that does not end on 31 December', () => {
+    const result = CompanySetupSchema.safeParse({
+      ...base,
+      entity_type: 'enskild_firma',
+      first_fiscal_year: { start: '2026-03-15', end: '2027-06-30' },
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.join('.') === 'first_fiscal_year.end')).toBe(true)
+    }
   })
 
   it('refuses a malformed organisationsnummer', () => {
@@ -84,6 +120,27 @@ describe('planCompanySetup', () => {
     expect(plan.fiscalPeriod.name).toContain('Första räkenskapsåret')
     expect(plan.input.settings.fiscal_year_start_month).toBe(7)
     expect(plan.input.settings.is_first_fiscal_year).toBe(true)
+  })
+
+  it('keeps an enskild firma on the calendar year through a first fiscal year ending 31 December', () => {
+    const plan = planCompanySetup(
+      CompanySetupSchema.parse({
+        ...base,
+        entity_type: 'enskild_firma',
+        first_fiscal_year: { start: '2026-03-15', end: '2026-12-31' },
+      })
+    )
+    expect(plan.ok).toBe(true)
+    if (!plan.ok) return
+    expect(plan.fiscalPeriod).toMatchObject({ startDate: '2026-03-15', endDate: '2026-12-31' })
+    expect(plan.input.settings.fiscal_year_start_month).toBe(1)
+  })
+
+  it('carries f_skatt=false through instead of defaulting to approved', () => {
+    const plan = planCompanySetup(CompanySetupSchema.parse({ ...base, f_skatt: false }))
+    expect(plan.ok).toBe(true)
+    if (!plan.ok) return
+    expect(plan.input.settings.f_skatt).toBe(false)
   })
 
   it('rejects a first fiscal year longer than 18 months', () => {

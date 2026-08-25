@@ -28,15 +28,18 @@ app to sign up first.
 
 Collect these before creating anything. The order mirrors the in-app wizard.
 
-1. **Organisationsnummer** (10 digits). Optional but strongly recommended: it
-   drives the VAT number and later Skatteverket/SIE exports. An enskild firma's
+1. **Organisationsnummer** (10 digits). Required when the company is
+   VAT-registered (the momsregistreringsnummer on every invoice derives from
+   it) and strongly recommended otherwise: it drives Skatteverket/SIE exports. An enskild firma's
    org number is the owner's personnummer; that is fine to store here.
 2. **Company form**: \`aktiebolag\` or \`enskild_firma\`. Only these two are
    supported today; HB/KB/förening are not.
 3. **Company name** as registered.
-4. **F-skatt**: godkänd för F-skatt? Default true; a brand-new company may be
-   waiting for approval (then false).
-5. **Fiscal year**: for enskild firma always the calendar year (do not ask).
+4. **F-skatt**: godkänd för F-skatt? Always ask; the tool refuses to assume it.
+   A brand-new company may still be waiting for Skatteverket's approval (then
+   false).
+5. **Fiscal year**: for enskild firma always the calendar year (do not ask);
+   its first year may be shorter or up to 18 months but always ends 31 December.
    For an AB ask whether it is the calendar year or another 12-month period
    (\`fiscal_year_start_month\`). For a company in its FIRST year ask for the
    exact first fiscal year start and end (BFL 3 kap.: it may be shorter than

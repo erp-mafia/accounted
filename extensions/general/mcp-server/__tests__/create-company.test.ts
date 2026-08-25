@@ -37,6 +37,7 @@ const setup = {
   vat_registered: true,
   moms_period: 'quarterly',
   accounting_method: 'accrual',
+  f_skatt: true,
 }
 
 describe('gnubok_create_company', () => {

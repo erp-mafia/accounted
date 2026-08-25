@@ -2937,7 +2937,7 @@ export const tools: McpTool[] = [
       properties: {
         name: { type: 'string', minLength: 1, maxLength: 200 },
         entity_type: { type: 'string', enum: ['enskild_firma', 'aktiebolag'] },
-        org_number: { type: 'string', description: '10 digits, optional' },
+        org_number: { type: 'string', description: '10 digits; required when VAT-registered' },
         vat_registered: { type: 'boolean' },
         moms_period: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'Required when vat_registered' },
         accounting_method: { type: 'string', enum: ['accrual', 'cash'] },
@@ -2956,7 +2956,7 @@ export const tools: McpTool[] = [
         team_id: { type: 'string', format: 'uuid' },
         confirm: { type: 'boolean', description: 'true creates; omitted = preview' },
       },
-      required: ['name', 'entity_type', 'vat_registered', 'accounting_method'],
+      required: ['name', 'entity_type', 'vat_registered', 'accounting_method', 'f_skatt'],
     },
     outputSchema: {
       type: 'object',
@@ -2999,7 +2999,7 @@ export const tools: McpTool[] = [
         vat_number: (plan.input.settings.vat_number as string | null) ?? null,
         moms_period: parsed.data.vat_registered ? parsed.data.moms_period ?? null : null,
         accounting_method: parsed.data.accounting_method,
-        f_skatt: parsed.data.f_skatt ?? true,
+        f_skatt: parsed.data.f_skatt,
         fiscal_period: plan.fiscalPeriod,
         team_id: teamId,
       }

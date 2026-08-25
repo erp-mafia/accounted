@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
-import { getClient, getPool } from './setup'
+import { getClient, getPool, runAsServiceRole } from './setup'
 import { insertAuthUser } from './fixtures'
 
 /**
@@ -85,6 +85,25 @@ describe('create_company_for_user.pg', () => {
       [companyId],
     )
     expect(grants.rows[0]!.n).toBeGreaterThan(0)
+  })
+
+  it('runs the whole creation core under the real service_role, including the BAS chart seed', async () => {
+    // The MCP tool and POST /api/v1/companies run createCompanyCore with a
+    // service-role client. seed_chart_of_accounts is SECURITY DEFINER with a
+    // grant to `authenticated` only; this pins that service_role (PUBLIC
+    // execute, no REVOKE) can still call it, which unit tests cannot see.
+    const userId = await insertAuthUser()
+    const companyId = await runAsServiceRole(async (client) => {
+      const created = await client.query<{ id: string }>(CREATE, [userId, 'Service AB', 'aktiebolag', null])
+      const id = created.rows[0]!.id
+      await client.query(`SELECT public.seed_chart_of_accounts($1::uuid, 'aktiebolag')`, [id])
+      return id
+    })
+    const chart = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM public.chart_of_accounts WHERE company_id = $1`,
+      [companyId],
+    )
+    expect(chart.rows[0]!.n).toBeGreaterThan(100)
   })
 
   it('refuses an authenticated caller even for their own user id', async () => {

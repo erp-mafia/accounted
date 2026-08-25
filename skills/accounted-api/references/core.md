@@ -52,7 +52,8 @@ Creates a new company owned by the API key user (or attached to one of their tea
 - Bookkeeping duty under BFL starts when the company exists with a fiscal period: do not create companies to try things out. Use a test-mode key (dry run) for that.
 - Enskild firma always runs on the calendar year; fiscal_year_start_month is ignored for it.
 - first_fiscal_year is only for a company in its first year (BFL 3 kap.: up to 18 months). Omit it for an established company.
-- The endpoint is not idempotent: a retry after a network failure creates a second company. Send an Idempotency-Key header.
+- Not idempotent, and Idempotency-Key is not honoured on this company-less route: a retry after a network failure creates a second company. List GET /api/v1/companies before retrying.
+- org_number is required for a VAT-registered company (the invoice momsregistreringsnummer derives from it), and f_skatt must be stated explicitly: F-skatt approval is never assumed.
 
 Request body:
 ```ts
@@ -63,7 +64,7 @@ Request body:
   vat_registered: boolean,
   moms_period?: "monthly" | "quarterly" | "yearly",
   accounting_method: "accrual" | "cash",
-  f_skatt?: boolean,
+  f_skatt: boolean,
   fiscal_year_start_month?: number,
   first_fiscal_year?: { start: string, end: string },
   address_line1?: string,

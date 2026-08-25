@@ -79,6 +79,7 @@ const validBody = {
   vat_registered: true,
   moms_period: 'quarterly',
   accounting_method: 'accrual',
+  f_skatt: true,
 }
 
 beforeEach(() => {
