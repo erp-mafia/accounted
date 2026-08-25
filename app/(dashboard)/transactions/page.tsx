@@ -326,6 +326,9 @@ export default function TransactionsPage() {
   const [bookingDialogOpen, setBookingDialogOpen] = useState(false)
   const [bookingDialogTransaction, setBookingDialogTransaction] = useState<TransactionWithInvoice | null>(null)
   const [bookingDialogTemplate, setBookingDialogTemplate] = useState<BookingTemplateLibrary | null>(null)
+  // Account picked from the template picker's "Konton" search results:
+  // prefills the counter line when the manual booking dialog opens.
+  const [bookingDialogAccount, setBookingDialogAccount] = useState<string | null>(null)
 
   // Attach-underlag dialog (tx→doc mirror of the Documents view's matcher)
   const [attachDocTx, setAttachDocTx] = useState<TransactionWithInvoice | null>(null)
@@ -3389,8 +3392,21 @@ export default function TransactionsPage() {
     if (templatePickerTransaction) {
       setBookingDialogTransaction(templatePickerTransaction)
       setBookingDialogTemplate(null)
+      setBookingDialogAccount(null)
       setBookingDialogOpen(true)
     }
+  }
+
+  // Account picked from the template picker's "Konton" search group
+  // (issue #1877): same route as "Bokför manuellt", with the picked account
+  // prefilled on the counter line of the journal entry form.
+  function handlePickAccount(accountNumber: string) {
+    if (!templatePickerTransaction) return
+    setBookingDialogTransaction(templatePickerTransaction)
+    setBookingDialogTemplate(null)
+    setBookingDialogAccount(accountNumber)
+    setTemplatePickerOpen(false)
+    setBookingDialogOpen(true)
   }
 
   // Complex (multi-leg or otherwise non-convertible) library template picked
@@ -3400,6 +3416,7 @@ export default function TransactionsPage() {
     if (!templatePickerTransaction) return
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(raw)
+    setBookingDialogAccount(null)
     setTemplatePickerOpen(false)
     setBookingDialogOpen(true)
   }
@@ -3964,10 +3981,14 @@ export default function TransactionsPage() {
           open
           onOpenChange={(o) => {
             setBookingDialogOpen(o)
-            if (!o) setBookingDialogTemplate(null)
+            if (!o) {
+              setBookingDialogTemplate(null)
+              setBookingDialogAccount(null)
+            }
           }}
           transaction={bookingDialogTransaction}
           preselectedTemplate={bookingDialogTemplate}
+          preselectedAccount={bookingDialogAccount}
           onBooked={handleTransactionBooked}
         />
       )}
@@ -4037,6 +4058,7 @@ export default function TransactionsPage() {
               handleOpenTemplateReview(templatePickerTransaction, templateId)
             }}
             onPickLibraryTemplate={handlePickLibraryTemplate}
+            onSelectAccount={handlePickAccount}
           />
         </DialogContent>
       </Dialog>}
