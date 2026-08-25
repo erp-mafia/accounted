@@ -3,11 +3,13 @@
  *
  * Pins: the actor gate (service-role p_user_id, owner/admin only), every
  * eligibility guard (locked, closed, company lock date, year-end state,
- * next-year dependency, VAT declared evidence), the typed-confirmation
- * mismatch, the happy path (all source types and statuses deleted, documents
- * DETACHED never deleted, sie_imports flipped to undone, voucher_sequences
- * reset), and the all-or-nothing rollback when an entry is referenced by
- * another record (RESTRICT FK).
+ * next-year dependency, VAT declared evidence, ROT/RUT reliance, cross-year
+ * rättelse/storno references), the typed-confirmation mismatch, the happy
+ * path (all source types and statuses deleted, documents DETACHED never
+ * deleted, sie_imports flipped to undone, dimension registry lockstep,
+ * voucher_sequences reset, RESET_SNAPSHOT content archive), and the
+ * all-or-nothing rollback when an entry is referenced by another record
+ * (RESTRICT FK).
  */
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
@@ -268,6 +270,61 @@ describe('reset_fiscal_year: eligibility guards', () => {
       expect.arrayContaining([expect.objectContaining({ code: 'vat_declared' })]),
     )
   })
+
+  it('refuses when an entry in another year corrects an entry in this year', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    const targetId = await insertPostedEntry({ companyId, userId, fiscalPeriodId })
+    const nextId = await insertFiscalPeriod({
+      userId,
+      companyId,
+      name: '2027',
+      periodStart: '2027-01-01',
+      periodEnd: '2027-12-31',
+    })
+    // A draft in 2027 correcting a 2026 entry: deleting the target would
+    // fire the FK's ON DELETE SET NULL as an UPDATE on the referrer, which
+    // either trips the immutability trigger (posted) or silently severs the
+    // chain (draft). Both must be refused up front.
+    const referrerId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId: nextId,
+      sourceType: 'manual',
+      status: 'draft',
+      voucherNumber: 0,
+      entryDate: '2027-03-15',
+    })
+    await getPool().query(
+      `UPDATE public.journal_entries SET correction_of_id = $1 WHERE id = $2`,
+      [targetId, referrerId],
+    )
+
+    const result = await callReset(companyId, fiscalPeriodId, '2026', userId)
+    expect(result).toMatchObject({ ok: false, code: 'FISCAL_YEAR_RESET_INELIGIBLE' })
+    expect(result.blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'cross_year_reference' })]),
+    )
+    expect(await entryCount(companyId, fiscalPeriodId)).toBe(1)
+  })
+
+  it('refuses when a filed rot/rut payout request relies on the year', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    const settlementId = await insertPostedEntry({ companyId, userId, fiscalPeriodId })
+    await getPool().query(
+      `INSERT INTO public.rot_rut_payout_requests
+         (company_id, user_id, deduction_type, name, status, requested_total,
+          file_name, settlement_journal_entry_id, submitted_at)
+       VALUES ($1, $2, 'rot', 'Begaran 1', 'submitted', 12500, 'begaran.xml', $3, now())`,
+      [companyId, userId, settlementId],
+    )
+
+    const result = await callReset(companyId, fiscalPeriodId, '2026', userId)
+    expect(result).toMatchObject({ ok: false, code: 'FISCAL_YEAR_RESET_INELIGIBLE' })
+    expect(result.blockers).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'rot_rut_state' })]),
+    )
+    expect(await entryCount(companyId, fiscalPeriodId)).toBe(1)
+  })
 })
 
 describe('reset_fiscal_year: typed confirmation', () => {
@@ -316,9 +373,9 @@ describe('reset_fiscal_year: happy path', () => {
     const docId = randomUUID()
     await getPool().query(
       `INSERT INTO public.document_attachments
-         (id, user_id, storage_path, file_name, sha256_hash, journal_entry_id)
-       VALUES ($1, $2, 'test/reset.pdf', 'reset.pdf', $3, $4)`,
-      [docId, userId, `hash-${docId}`, importedId],
+         (id, user_id, company_id, storage_path, file_name, sha256_hash, journal_entry_id)
+       VALUES ($1, $2, $3, 'test/reset.pdf', 'reset.pdf', $4, $5)`,
+      [docId, userId, companyId, `hash-${docId}`, importedId],
     )
 
     // A completed SIE import on the year: must flip to 'undone'.
@@ -337,6 +394,21 @@ describe('reset_fiscal_year: happy path', () => {
          (user_id, company_id, fiscal_period_id, voucher_series, last_number)
        VALUES ($1, $2, $3, 'A', 2)`,
       [userId, companyId, fiscalPeriodId],
+    )
+
+    // A dimension + value the import introduced: registry lockstep (mirrors
+    // undo_sie_import) must remove them once nothing references them, since
+    // undo_sie_import can never run for an import the reset marked undone.
+    const dimId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.dimensions (id, company_id, sie_dim_no, name, created_by_import_id)
+       VALUES ($1, $2, 7, 'Projekt (import)', $3)`,
+      [dimId, companyId, importId],
+    )
+    await getPool().query(
+      `INSERT INTO public.dimension_values (company_id, dimension_id, code, name, created_by_import_id)
+       VALUES ($1, $2, 'P1', 'Testprojekt', $3)`,
+      [companyId, dimId, importId],
     )
 
     const result = await callReset(companyId, fiscalPeriodId, '2026', userId)
@@ -374,6 +446,38 @@ describe('reset_fiscal_year: happy path', () => {
       [companyId, fiscalPeriodId],
     )
     expect(Number(auditRows[0].n)).toBe(1)
+
+    // Räkenskapsinformation archive: one company-scoped RESET_SNAPSHOT row
+    // per deleted verifikat, with the full lines (accounts + amounts).
+    const { rows: snapRows } = await getPool().query<{
+      old_state: { lines: Array<Record<string, unknown>> }
+    }>(
+      `SELECT old_state FROM public.audit_log
+        WHERE company_id = $1 AND action = 'RESET_SNAPSHOT'
+          AND table_name = 'journal_entries'`,
+      [companyId],
+    )
+    expect(snapRows).toHaveLength(3)
+    const withLines = snapRows.filter(
+      (r) => Array.isArray(r.old_state.lines) && r.old_state.lines.length > 0,
+    )
+    expect(withLines.length).toBeGreaterThanOrEqual(2)
+    expect(withLines[0].old_state.lines[0]).toHaveProperty('account_number')
+    expect(withLines[0].old_state.lines[0]).toHaveProperty('debit_amount')
+    expect(withLines[0].old_state.lines[0]).toHaveProperty('credit_amount')
+
+    // Dimension registry lockstep: the import-created dimension and value
+    // are gone (nothing references them any more).
+    const { rows: dimRows } = await getPool().query(
+      `SELECT id FROM public.dimensions WHERE id = $1`,
+      [dimId],
+    )
+    expect(dimRows).toHaveLength(0)
+    const { rows: dimValRows } = await getPool().query(
+      `SELECT id FROM public.dimension_values WHERE dimension_id = $1`,
+      [dimId],
+    )
+    expect(dimValRows).toHaveLength(0)
   })
 })
 
@@ -418,9 +522,9 @@ describe('reset_fiscal_year: linked entries roll back everything', () => {
     const docId = randomUUID()
     await getPool().query(
       `INSERT INTO public.document_attachments
-         (id, user_id, storage_path, file_name, sha256_hash, journal_entry_id)
-       VALUES ($1, $2, 'test/rollback.pdf', 'rollback.pdf', $3, $4)`,
-      [docId, userId, `hash-${docId}`, freeId],
+         (id, user_id, company_id, storage_path, file_name, sha256_hash, journal_entry_id)
+       VALUES ($1, $2, $3, 'test/rollback.pdf', 'rollback.pdf', $4, $5)`,
+      [docId, userId, companyId, `hash-${docId}`, freeId],
     )
 
     const result = await callReset(companyId, fiscalPeriodId, '2026', userId)

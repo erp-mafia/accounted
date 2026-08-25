@@ -1445,10 +1445,10 @@ export default function JournalEntryList({
         {/* Discoverability for "Ångra import" (issue #1883): when the page
             shows import-sourced vouchers, point at the SIE import history
             where a bad import can be undone in one step. One page-domain
-            attn line (design convention 6). */}
-        {entries.some(
-          (e) => e.source_type === 'import' || e.source_type === 'opening_balance',
-        ) && (
+            attn line (design convention 6). Only source_type 'import' is an
+            SIE marker: 'opening_balance' is also written by year-end closing
+            and the manual IB flows, which have nothing to undo here. */}
+        {entries.some((e) => e.source_type === 'import') && (
           <AttnLine
             className="px-1 pb-2"
             action={{ label: t('import_attn_action'), href: '/import?history=sie' }}

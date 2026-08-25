@@ -128,6 +128,8 @@ export type FiscalYearResetBlockerCode =
   | 'next_year_dependency'
   | 'vat_declared'
   | 'agi_declared'
+  | 'rot_rut_state'
+  | 'cross_year_reference'
 
 export interface FiscalYearResetBlocker {
   code: FiscalYearResetBlockerCode
@@ -3703,6 +3705,7 @@ export type AuditAction =
   | 'SECURITY_EVENT'
   | 'INTEGRITY_FAILURE'
   | 'COMMITTED_AT_OVERRIDE'
+  | 'RESET_SNAPSHOT'
 
 export interface AuditLogEntry {
   id: string

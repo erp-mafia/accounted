@@ -702,6 +702,29 @@ function journalEntryAuditEvent(
         object,
         details: [`Datum: ${fmtValue(oldState?.entry_date)}`, `Text: ${fmtValue(oldState?.description)}`],
       })
+    case 'RESET_SNAPSHOT': {
+      // reset_fiscal_year archives the full verifikat content (accounts,
+      // amounts, line text) in a company-scoped row before deleting; the
+      // trigger's DELETE row that follows carries only the header.
+      const rawLines = oldState?.lines
+      const lineDetails = Array.isArray(rawLines)
+        ? rawLines.map((raw) => {
+            const line = raw as Record<string, unknown>
+            return `${str(line.account_number) ?? '?'}: debet ${fmtValue(line.debit_amount)}, kredit ${fmtValue(line.credit_amount)}`
+          })
+        : []
+      return auditEvent(row, {
+        category: 'verifikation',
+        code: 'journal_entry.reset_snapshot',
+        event: 'Verifikationsinnehåll arkiverat inför nollställning',
+        object,
+        details: [
+          `Datum: ${fmtValue(oldState?.entry_date)}`,
+          `Text: ${fmtValue(oldState?.description)}`,
+          ...lineDetails,
+        ],
+      })
+    }
     case 'COMMITTED_AT_OVERRIDE':
       return auditEvent(row, {
         category: 'verifikation',

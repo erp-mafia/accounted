@@ -2376,6 +2376,13 @@ export default function ImportPage() {
     if (searchParams.get('history') === 'sie') {
       setView('import')
       setSieHistoryOpen(true)
+      // The history table renders below ~8 import rows: scroll it into view
+      // (same pattern as the #cloud-backup hash deep link below).
+      setTimeout(() => {
+        document
+          .getElementById('sie-import-history')
+          ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      }, 80)
     }
   }, [isSandbox, searchParams])
 
@@ -2554,7 +2561,7 @@ export default function ImportPage() {
                 />
               </div>
               {sieHistoryOpen && (
-                <div className="mt-6">
+                <div className="mt-6" id="sie-import-history">
                   <SIEImportHistory />
                 </div>
               )}

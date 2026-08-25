@@ -128,6 +128,10 @@ export function FiscalYearResetDialog({
         return t('fy_reset_blocker_vat')
       case 'agi_declared':
         return t('fy_reset_blocker_agi')
+      case 'rot_rut_state':
+        return t('fy_reset_blocker_rot_rut')
+      case 'cross_year_reference':
+        return t('fy_reset_blocker_cross_year')
       default:
         return t('fy_reset_blocker_other')
     }
