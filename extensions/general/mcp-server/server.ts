@@ -17,6 +17,9 @@ import {
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { getCanonicalBaseUrl } from '@/lib/api/v1/base-url'
+import { createCompanyCore } from '@/lib/company/create-company'
+import { CompanySetupSchema, planCompanySetup } from '@/lib/company/onboarding-input'
 import {
   ANONYMOUS_METHODS,
   ANONYMOUS_RATE_LIMIT,
@@ -157,7 +160,7 @@ import {
   hashRequest,
   IdempotencyKeyReuseError,
 } from '@/lib/api/idempotency'
-import { toToolError, type NextActionHint } from './tool-result'
+import { toToolError, withNext, type NextActionHint } from './tool-result'
 import {
   addCompanyToNextHint,
   addCompanyToTopLevelNext,
@@ -1431,6 +1434,42 @@ export function deriveToolMeta(t: { name: string; outputSchema?: Record<string, 
 
 export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'search' }): boolean {
   return tool.catalogVisibility !== 'search'
+}
+
+/**
+ * Absolute origin for links the user opens in a browser. A deployment
+ * without NEXT_PUBLIC_APP_URL falls back to localhost in getCanonicalBaseUrl,
+ * which would hand a remote user an unusable link: refuse instead.
+ */
+function connectLinkBaseUrl(): string {
+  if (!process.env.NEXT_PUBLIC_APP_URL) {
+    throw Object.assign(
+      new Error('NEXT_PUBLIC_APP_URL is not configured on this installation; cannot build a connect link'),
+      { code: 'INTERNAL_ERROR' }
+    )
+  }
+  return getCanonicalBaseUrl()
+}
+
+/**
+ * The team a company created through the API/MCP path attaches to when the
+ * caller does not name one: the user's first (usually the silent personal)
+ * team, mirroring what the web wizard passes. null when the user has no
+ * team at all; create_company_for_user then leaves team_id NULL.
+ */
+async function defaultTeamForUser(supabase: SupabaseClient, userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('team_members')
+    .select('team_id')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  if (error) {
+    log.warn('default team lookup failed', { error: error.message })
+    return null
+  }
+  return (data?.team_id as string | undefined) ?? null
 }
 
 function paginatedSchema(itemsKey: string, itemSchema: Record<string, unknown> = { type: 'object' }) {
@@ -2898,6 +2937,232 @@ export const tools: McpTool[] = [
         companies,
         count: companies.length,
         default_company_id: hasAccessibleDefault ? defaultCompanyId : null,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_create_company',
+    title: 'Create Company',
+    description:
+      'Create a NEW company for the connected user, set up for bookkeeping (chart, settings, first fiscal period, tax deadlines; 30-day trial). Preview first (no confirm), read it back, then confirm=true. Ask, never assume: form, orgnr, VAT + moms period, method. Skill: onboarding.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 200 },
+        entity_type: { type: 'string', enum: ['enskild_firma', 'aktiebolag'] },
+        org_number: { type: 'string', description: '10 digits; required when VAT-registered' },
+        vat_registered: { type: 'boolean' },
+        moms_period: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'Required when vat_registered' },
+        accounting_method: { type: 'string', enum: ['accrual', 'cash'] },
+        f_skatt: { type: 'boolean' },
+        fiscal_year_start_month: { type: 'integer', minimum: 1, maximum: 12 },
+        first_fiscal_year: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { start: { type: 'string' }, end: { type: 'string' } },
+          required: ['start', 'end'],
+          description: 'YYYY-MM-DD; first fiscal year only',
+        },
+        address_line1: { type: 'string' },
+        postal_code: { type: 'string' },
+        city: { type: 'string' },
+        team_id: { type: 'string', format: 'uuid' },
+        confirm: { type: 'boolean', description: 'true creates; omitted = preview' },
+      },
+      required: ['name', 'entity_type', 'vat_registered', 'accounting_method', 'f_skatt'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        created: { type: 'boolean' },
+        requires_confirmation: { type: 'boolean' },
+        company_id: { type: 'string' },
+        preview: { type: 'object' },
+        next: { type: 'object' },
+        message: { type: 'string' },
+      },
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, _companyId, userId, supabase) {
+      const { confirm, ...setup } = args
+      const parsed = CompanySetupSchema.safeParse(setup)
+      if (!parsed.success) {
+        const detail = parsed.error.issues
+          .map((issue) => `${issue.path.join('.') || 'input'}: ${issue.message}`)
+          .join('; ')
+        throw Object.assign(new Error(`Invalid company setup: ${detail}`), { code: 'VALIDATION_ERROR' })
+      }
+      const plan = planCompanySetup(parsed.data)
+      if (!plan.ok) {
+        throw Object.assign(new Error(`Invalid fiscal period: ${plan.error}`), { code: 'VALIDATION_ERROR' })
+      }
+
+      const teamId = parsed.data.team_id ?? (await defaultTeamForUser(supabase, userId))
+      const preview = {
+        name: parsed.data.name,
+        entity_type: parsed.data.entity_type,
+        org_number: (plan.input.settings.org_number as string | null) ?? null,
+        vat_registered: parsed.data.vat_registered,
+        vat_number: (plan.input.settings.vat_number as string | null) ?? null,
+        moms_period: parsed.data.vat_registered ? parsed.data.moms_period ?? null : null,
+        accounting_method: parsed.data.accounting_method,
+        f_skatt: parsed.data.f_skatt,
+        fiscal_period: plan.fiscalPeriod,
+        team_id: teamId,
+      }
+
+      if (confirm !== true) {
+        return {
+          created: false,
+          requires_confirmation: true,
+          preview,
+          message:
+            'Nothing was created. Read the preview back to the user (especially the fiscal period dates and the VAT setup), then call gnubok_create_company again with the same arguments and confirm=true.',
+        }
+      }
+
+      const result = await createCompanyCore(supabase, plan.input, () =>
+        supabase.rpc('create_company_for_user', {
+          p_user_id: userId,
+          p_name: parsed.data.name,
+          p_entity_type: parsed.data.entity_type,
+          p_team_id: teamId,
+        })
+      )
+      if (result.error !== undefined) {
+        const code = result.error === 'org_number_invalid' ? 'VALIDATION_ERROR' : 'COMPANY_CREATE_FAILED'
+        throw Object.assign(new Error(result.error), { code })
+      }
+
+      return {
+        created: true,
+        company_id: result.companyId,
+        ...preview,
+        trial: 'A 30-day trial with every paid capability (bank sync, Skatteverket, AI, e-mail) is active from now.',
+        message:
+          'Company created and ready for bookkeeping. This connection uses it automatically from the next call. Remaining setup: bank connection, Skatteverket connection, and the first transactions.',
+        next: {
+          description: 'Load the onboarding skill for the remaining setup steps (bank, Skatteverket, first transactions).',
+          tool: 'gnubok_load_skill',
+          args: { slug: 'onboarding' },
+        },
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_connect_bank',
+    title: 'Connect Bank',
+    description:
+      'Bank connection status plus the browser link where the user connects a bank (PSD2, BankID consent; must be logged in to Accounted there). Use after gnubok_create_company or when transactions are missing because no bank is connected.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        connected: { type: 'boolean' },
+        connections: { type: 'array', items: { type: 'object' } },
+        connect_url: { type: 'string' },
+        instructions: { type: 'string' },
+      },
+      required: ['connected', 'connections', 'connect_url', 'instructions'],
+    },
+    catalogVisibility: 'search',
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(_args, companyId, _userId, supabase) {
+      const { data, error } = await supabase
+        .from('bank_connections')
+        .select('id, bank_name, status, created_at')
+        .eq('company_id', companyId)
+        .in('status', ['pending', 'pending_selection', 'active', 'expired', 'error'])
+        .order('created_at', { ascending: false })
+      if (error) throw error
+      const connections = (data ?? []) as Array<{ id: string; bank_name: string | null; status: string; created_at: string }>
+      const active = connections.filter((c) => c.status === 'active')
+      const connectUrl = `${connectLinkBaseUrl()}/import?mode=psd2`
+      return {
+        connected: active.length > 0,
+        connections: connections.map((c) => ({
+          connection_id: c.id,
+          bank: c.bank_name,
+          status: c.status,
+          since: c.created_at,
+        })),
+        connect_url: connectUrl,
+        instructions:
+          active.length > 0
+            ? 'At least one bank is connected and syncing. To add another bank, give the user the connect_url.'
+            : 'Give the user the connect_url to open in their browser (they must be logged in to Accounted there). They pick their bank and approve with BankID; consent lasts up to 180 days and the first transactions arrive within a minute. Tell them to come back here when done, then continue with gnubok_list_uncategorized_transactions.',
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_connect_skatteverket',
+    title: 'Connect Skatteverket',
+    description:
+      'Skatteverket connection status plus the browser link where the user authorises Accounted (BankID as firmatecknare; logged in to Accounted there). Enables skattekonto sync and filing of moms/AGI. Use after gnubok_create_company or when a filing tool reports no connection.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        available: { type: 'boolean' },
+        connected: { type: 'boolean' },
+        token_expires_at: { type: ['string', 'null'] },
+        connect_url: { type: ['string', 'null'] },
+        instructions: { type: 'string' },
+      },
+      required: ['available', 'connected', 'token_expires_at', 'connect_url', 'instructions'],
+    },
+    catalogVisibility: 'search',
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(_args, companyId, _userId, supabase) {
+      const enabled = process.env.SKATTEVERKET_ENABLED === 'true'
+      const { data, error } = await supabase
+        .from('skatteverket_tokens')
+        .select('expires_at')
+        .eq('company_id', companyId)
+        .order('expires_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (error) throw error
+      const token = data as { expires_at: string } | null
+      const connected = Boolean(token)
+      const connectUrl = `${connectLinkBaseUrl()}/api/extensions/ext/skatteverket/authorize?return_to=%2F`
+      return {
+        available: enabled,
+        connected,
+        token_expires_at: token?.expires_at ?? null,
+        connect_url: enabled ? connectUrl : null,
+        instructions: !enabled
+          ? 'The Skatteverket integration is not enabled on this installation. Declarations can still be downloaded as files and filed manually at skatteverket.se.'
+          : connected
+            ? 'Skatteverket is connected. Skattekonto syncs automatically; momsdeklaration and AGI can be filed from here (each filing stages for approval).'
+            : 'Give the user the connect_url to open in their browser (logged in to Accounted). Skatteverket asks them to identify with BankID as firmatecknare and approve the access; they land back in Accounted afterwards. Tell them to come back here when done.',
       }
     },
   },
@@ -18437,14 +18702,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '',
             ...(isAnonymous
               ? [
-                  'NOT CONNECTED YET. Without an account you can call gnubok_search_tools, gnubok_list_skills and gnubok_load_skill. Every other tool needs the user to connect their Accounted account: calling one returns an authentication challenge that your client shows as a Connect prompt. A user who has no account creates one right there (BankID or e-mail, about a minute), and the call is then retried automatically. To start bookkeeping for a company that is not in Accounted yet, call gnubok_list_companies to trigger the connect step, then continue with the setup.',
+                  'NOT CONNECTED YET. Without an account you can call gnubok_search_tools, gnubok_list_skills and gnubok_load_skill. Every other tool needs the user to connect their Accounted account: calling one returns an authentication challenge that your client shows as a Connect prompt. A user who has no account creates one right there (BankID or e-mail, about a minute), and the call is then retried automatically. To set up bookkeeping for a company that is not in Accounted yet, load the "onboarding" skill (gnubok_load_skill) and follow it: gnubok_create_company is the first protected call and triggers the connect step.',
                   '',
                 ]
               : []),
             'Discovery:',
             '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size.',
             '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster.',
-            `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId ?? 'none yet: this account has no company; it must be created in the web app before company-data tools work'}); when selecting another company, repeat company_id on every company-data call, including approval.`,
+            `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId ?? 'none yet: this account has no company. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}); when selecting another company, repeat company_id on every company-data call, including approval.`,
             '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
             '• When a tool is missing, a description misled you, a result looks wrong, or something worked unusually well, call gnubok_feedback (context + suggestion, optional tool_name). It is read by the product team and has fixed real bugs; include ids and what you expected. Rate-limited 1/min/key, so batch a session\'s findings into one call.',

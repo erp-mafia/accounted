@@ -435,6 +435,20 @@ describe('account with no company yet (issue #1814)', () => {
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
+  it('pre-ticks companies:write so the agent can create the company, other writes stay unticked', async () => {
+    mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1', email: 'ny@example.se' }))
+
+    const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
+    const html = await response.text()
+
+    const companiesWrite = html.match(/<input[^>]*value="companies:write"[^>]*>/)?.[0]
+    expect(companiesWrite).toBeDefined()
+    expect(companiesWrite!).toContain('checked')
+    const transactionsWrite = html.match(/<input[^>]*value="transactions:write"[^>]*>/)?.[0]
+    expect(transactionsWrite).toBeDefined()
+    expect(transactionsWrite!).not.toContain('checked')
+  })
+
   it('POST still issues an authorization code', async () => {
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1', email: 'ny@example.se' }))
 
