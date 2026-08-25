@@ -256,15 +256,18 @@ describe('findCompanyTokenUser', () => {
     expect(await findCompanyTokenUser(supabase, 'company-1')).toEqual({
       userId: 'user-b',
       needsReconsent: false,
+      createdAt: '2',
     })
     expect(await findCompanyTokenUser(supabase, 'company-1', { preferUserId: 'user-a' })).toEqual({
       userId: 'user-a',
       needsReconsent: false,
+      createdAt: '1',
     })
     // Preferring a user whose row is dead still yields the live row.
     expect(await findCompanyTokenUser(supabase, 'company-1', { preferUserId: 'user-c' })).toEqual({
       userId: 'user-b',
       needsReconsent: false,
+      createdAt: '2',
     })
   })
 })

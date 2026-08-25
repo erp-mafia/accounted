@@ -203,9 +203,15 @@ describe('tools/list payload size guard', () => {
     //     silently, and agents inferred "consumed" from status 'failed' both
     //     ways. The enum is the contract; the description is one clause;
     //     headroom before the change was ~15 tokens, so even that crossed.
+    //   * 60K to 60.2K with skatteverket_connection on the briefing: the
+    //     connection-health block (status/source/connected_at) that lets an
+    //     agent warn the user about a dead 65-minute SKV session at session
+    //     start instead of mid-task. The runtime block is emitted only for
+    //     companies with a connection; this cost is the outputSchema contract
+    //     (~140 tokens), already trimmed to two short description strings.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(60_000)
+    expect(approxTokens).toBeLessThan(60_200)
   })
 })
