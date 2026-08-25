@@ -303,6 +303,8 @@
     "login_error_user_banned": "Kontot är avstängt. Kontakta supporten om du tror att det är fel.",
     "login_error_reset_link": "Återställ lösenordet",
     "continue_with_provider": "Fortsätt med {provider}",
+    "continue_with_sso": "Fortsätt med SSO",
+    "saml_no_domain": "SSO är inte konfigurerat. Kontakta din administratör.",
     "callback_error_title_oauth": "Extern inloggning misslyckades",
     "callback_error_body_oauth": "Inloggningen med extern tjänst kunde inte slutföras. Försök igen, eller logga in med en annan metod.",
     "session_idle": "Du har varit inaktiv. Logga in igen.",

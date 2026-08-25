@@ -62,6 +62,7 @@ describe('fetchAuthSettings', () => {
       providers: [],
       passwordLoginEnabled: true,
       registrationEnabled: true,
+      samlEnabled: false,
     })
     expect(spy).not.toHaveBeenCalled()
   })
@@ -75,6 +76,7 @@ describe('fetchAuthSettings', () => {
       providers: [],
       passwordLoginEnabled: true,
       registrationEnabled: true,
+      samlEnabled: false,
     })
   })
 
@@ -87,6 +89,7 @@ describe('fetchAuthSettings', () => {
       providers: [],
       passwordLoginEnabled: true,
       registrationEnabled: true,
+      samlEnabled: false,
     })
   })
 
@@ -237,5 +240,21 @@ describe('fetchAuthSettings', () => {
     expect(result.providers).toEqual([{ id: 'google', label: 'Google', isCustom: false }])
     // Only one fetch call (settings), no admin call
     expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns samlEnabled=true when SAML is enabled', async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'anon-key-123'
+    mockFetch(fakeSettings({ saml_enabled: true }))
+    const result = await fetchAuthSettings()
+    expect(result.samlEnabled).toBe(true)
+  })
+
+  it('returns samlEnabled=false when SAML is disabled', async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'anon-key-123'
+    mockFetch(fakeSettings({ saml_enabled: false }))
+    const result = await fetchAuthSettings()
+    expect(result.samlEnabled).toBe(false)
   })
 })

@@ -76,7 +76,7 @@ export function LoginClient({
   initialMethod: LoginMethod | null
   authSettings: GoTrueAuthSettings
 }) {
-  const { providers, passwordLoginEnabled, registrationEnabled } = authSettings
+  const { providers, passwordLoginEnabled, registrationEnabled, samlEnabled } = authSettings
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -175,6 +175,38 @@ export function LoginClient({
     setFormError(null)
     setResetCaptchaToken(null)
     setShowResetPassword(false)
+  }
+
+  const handleSamlLogin = async () => {
+    setFormError(null)
+    setIsLoading(true)
+    try {
+      const ssoDomain = process.env.NEXT_PUBLIC_SSO_DOMAIN
+      const ssoProviderId = process.env.NEXT_PUBLIC_SSO_PROVIDER_ID
+      const params = ssoProviderId
+        ? { providerId: ssoProviderId }
+        : ssoDomain
+          ? { domain: ssoDomain }
+          : null
+      if (!params) {
+        setFormError({ kind: 'oauth', message: tAuth('saml_no_domain') })
+        return
+      }
+      const { error } = await supabase.auth.signInWithSSO({
+        ...params,
+        options: { redirectTo: `${window.location.origin}/auth/callback?flow=oauth` },
+      })
+      if (error) {
+        setFormError({ kind: 'oauth', message: error.message })
+      }
+    } catch (error) {
+      setFormError({
+        kind: 'oauth',
+        message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
+      })
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   // Accept a pending invite, if any, and report a non-definitive failure.
@@ -751,6 +783,21 @@ export function LoginClient({
                     />
                   ))}
                 </div>
+              ) : samlEnabled ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full h-11 gap-2"
+                  onClick={handleSamlLogin}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  )}
+                  {tAuth('continue_with_sso')}
+                </Button>
               ) : (
                 <p className="text-center text-sm text-muted-foreground">
                   {tAuth('login_no_methods')}

@@ -96,6 +96,8 @@ export interface GoTrueAuthSettings {
   passwordLoginEnabled: boolean
   /** Whether self-service registration is allowed (disable_signup = false) */
   registrationEnabled: boolean
+  /** Whether SAML SSO is enabled */
+  samlEnabled: boolean
 }
 
 /**
@@ -117,7 +119,7 @@ export async function fetchAuthSettings(): Promise<GoTrueAuthSettings> {
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
   if (!supabaseUrl || !anonKey) {
-    return { providers: [], passwordLoginEnabled: true, registrationEnabled: true }
+    return { providers: [], passwordLoginEnabled: true, registrationEnabled: true, samlEnabled: false }
   }
 
   try {
@@ -128,7 +130,7 @@ export async function fetchAuthSettings(): Promise<GoTrueAuthSettings> {
     })
 
     if (!res.ok) {
-      return { providers: [], passwordLoginEnabled: true, registrationEnabled: true }
+      return { providers: [], passwordLoginEnabled: true, registrationEnabled: true, samlEnabled: false }
     }
 
     const data: GoTrueSettingsResponse = await res.json()
@@ -163,8 +165,9 @@ export async function fetchAuthSettings(): Promise<GoTrueAuthSettings> {
       providers,
       passwordLoginEnabled: data.external.email === true,
       registrationEnabled: !data.disable_signup,
+      samlEnabled: data.saml_enabled,
     }
   } catch {
-    return { providers: [], passwordLoginEnabled: true, registrationEnabled: true }
+    return { providers: [], passwordLoginEnabled: true, registrationEnabled: true, samlEnabled: false }
   }
 }
