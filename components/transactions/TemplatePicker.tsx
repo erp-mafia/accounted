@@ -396,8 +396,10 @@ export default function TemplatePicker({
       tt.name.toLowerCase().includes(q) ||
       (tt.description ?? '').toLowerCase().includes(q) ||
       // An all-digit query also prefix-matches the accounts a user template
-      // books to, mirroring the static catalog's account matching.
-      (isDigits && tt.lines.some((l) => l.account.startsWith(qTrimmed)))
+      // books to, mirroring the static catalog's account matching: business
+      // lines only, so the settlement leg (typically 1930) and VAT lines do
+      // not light up every template.
+      (isDigits && tt.lines.some((l) => l.type === 'business' && l.account.startsWith(qTrimmed)))
     )
     const staticMatches = searchTemplates(searchQuery, entityType).filter((tt) => {
       return tt.direction === templateDirection || tt.direction === 'transfer'
