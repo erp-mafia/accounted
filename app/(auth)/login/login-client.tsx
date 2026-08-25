@@ -194,7 +194,7 @@ export function LoginClient({
       }
       const { error } = await supabase.auth.signInWithSSO({
         ...params,
-        options: { redirectTo: `${window.location.origin}/auth/callback?flow=oauth` },
+        options: { redirectTo: `${window.location.origin}/auth/callback?flow=oauth&next=${encodeURIComponent(nextPath)}` },
       })
       if (error) {
         setFormError({ kind: 'oauth', message: error.message })
@@ -779,6 +779,7 @@ export function LoginClient({
                     <OAuthButton
                       key={provider.id}
                       provider={provider}
+                      next={nextPath}
                       onError={(message) => setFormError({ kind: 'oauth', message })}
                     />
                   ))}
@@ -816,7 +817,7 @@ export function LoginClient({
                 </Button>
               ) : (
                 <p className="text-center text-sm text-muted-foreground">
-                  {tAuth('login_no_methods')}
+                  {tAuth('no_login_methods')}
                 </p>
               )
             )}
