@@ -203,9 +203,22 @@ describe('tools/list payload size guard', () => {
     //     silently, and agents inferred "consumed" from status 'failed' both
     //     ways. The enum is the contract; the description is one clause;
     //     headroom before the change was ~15 tokens, so even that crossed.
+    //   * 60K to 60.2K with skatteverket_connection on the briefing: the
+    //     connection-health block (status/source/connected_at) that lets an
+    //     agent warn the user about a dead 65-minute SKV session at session
+    //     start instead of mid-task. The runtime block is emitted only for
+    //     companies with a connection; this cost is the outputSchema contract
+    //     (~140 tokens), already trimmed to two short description strings.
+    //   * 60.2K to 60.7K with gnubok_create_company (issue #1814 PR 3): a
+    //     default-catalog tool by necessity, since a client that has not
+    //     connected yet can only call what tools/list shows and this is the
+    //     first protected call of agent-driven onboarding. Its contract was
+    //     trimmed to bare property names first (the two connect-link tools
+    //     are search-only); headroom before the change was ~0 after the skatteverket_connection bump, so even the
+    //     bare contract crossed by ~420.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(60_000)
+    expect(approxTokens).toBeLessThan(60_700)
   })
 })
