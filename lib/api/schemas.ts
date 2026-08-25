@@ -1630,6 +1630,14 @@ export const CreateInvoiceFromWebshopOrderSchema = z.object({
   customer_id: uuid.optional(),
 })
 
+/**
+ * Mark a webshop order as booked/handled outside the integration, with an
+ * optional reference to the existing (posted) verifikat that covers it.
+ */
+export const MarkWebshopOrderBookedSchema = z.object({
+  journal_entry_id: uuid.optional(),
+})
+
 /** {"<payment_method>": {mode:'book', account:'1930'} | {mode:'invoice'}} */
 export const WebshopStoreSettingsUpdateSchema = z.object({
   platform: WebshopPlatformSchema,
@@ -3744,6 +3752,21 @@ export const CompanyMigrationResetSchema = z.object({
   confirm_retained_archive: z.literal(true, {
     error: 'Bekräfta att den tidigare företagskopian sparas som arkiv',
   }),
+})
+
+/**
+ * POST /api/bookkeeping/fiscal-periods/[id]/reset
+ *
+ * Typed confirmation for the destructive fiscal-year reset: the caller must
+ * restate the year's label (fiscal_periods.name) exactly. The RPC repeats
+ * the match server-side, so this only provides early Swedish feedback.
+ */
+export const FiscalYearResetSchema = z.object({
+  confirm_name: z
+    .string()
+    .trim()
+    .min(1, 'Ange räkenskapsårets namn exakt som det visas')
+    .max(200, 'Räkenskapsårets namn får vara högst 200 tecken'),
 })
 
 /**

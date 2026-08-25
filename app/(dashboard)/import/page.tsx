@@ -2370,6 +2370,20 @@ export default function ImportPage() {
     if (viewParam === 'export' || viewParam === 'import') {
       setView(viewParam)
     }
+    // Deep link from surfaces where a bad import is discovered (e.g. the
+    // voucher list): /import?history=sie lands directly on the fold-open
+    // SIE import history so "Ångra import" is one click away.
+    if (searchParams.get('history') === 'sie') {
+      setView('import')
+      setSieHistoryOpen(true)
+      // The history table renders below ~8 import rows: scroll it into view
+      // (same pattern as the #cloud-backup hash deep link below).
+      setTimeout(() => {
+        document
+          .getElementById('sie-import-history')
+          ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      }, 80)
+    }
   }, [isSandbox, searchParams])
 
   // Hash-based deep links: all live on the export tab; #sie-export opens
@@ -2547,7 +2561,7 @@ export default function ImportPage() {
                 />
               </div>
               {sieHistoryOpen && (
-                <div className="mt-6">
+                <div className="mt-6" id="sie-import-history">
                   <SIEImportHistory />
                 </div>
               )}

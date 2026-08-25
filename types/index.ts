@@ -117,6 +117,53 @@ export interface CompanyMigrationResetRpcResult {
   counts?: CompanyMigrationResetEligibility['counts']
 }
 
+// Fiscal-year reset (issue #1883): guarded hard-delete of one OPEN fiscal
+// year's vouchers. Mirrors the migration-reset envelope shapes above.
+export type FiscalYearResetBlockerCode =
+  | 'period_closed'
+  | 'period_locked'
+  | 'company_lock_date'
+  | 'year_end_state'
+  | 'arsredovisning_state'
+  | 'next_year_dependency'
+  | 'vat_declared'
+  | 'agi_declared'
+  | 'rot_rut_state'
+  | 'cross_year_reference'
+
+export interface FiscalYearResetBlocker {
+  code: FiscalYearResetBlockerCode
+  count?: number
+  date?: string
+}
+
+export interface FiscalYearResetEligibility {
+  eligible: boolean
+  blockers: FiscalYearResetBlocker[]
+  period: {
+    id: string
+    name: string
+    period_start: string
+    period_end: string
+  }
+  counts: {
+    vouchers: number
+    documents_to_detach: number
+  }
+}
+
+export interface FiscalYearResetRpcResult {
+  ok: boolean
+  code?: string
+  eligible?: boolean
+  blockers?: FiscalYearResetBlocker[]
+  period?: FiscalYearResetEligibility['period']
+  counts?: FiscalYearResetEligibility['counts']
+  deleted?: number
+  detached_documents?: number
+  period_name?: string
+}
+
 // User preferences (cross-company)
 export interface UserPreferences {
   id: string
@@ -3658,6 +3705,7 @@ export type AuditAction =
   | 'SECURITY_EVENT'
   | 'INTEGRITY_FAILURE'
   | 'COMMITTED_AT_OVERRIDE'
+  | 'RESET_SNAPSHOT'
 
 export interface AuditLogEntry {
   id: string
@@ -4218,6 +4266,11 @@ export interface WebshopOrder {
   legacy_transaction_id: string | null
   /** Financial delta arrived from the store after booking froze this row. */
   remote_changed_after_freeze: boolean
+  /** User marked the row as booked/handled outside the integration. */
+  manually_booked_at: string | null
+  manually_booked_by: string | null
+  /** Optional informational reference to the existing verifikat. */
+  manually_booked_journal_entry_id: string | null
   created_at: string
   updated_at: string
 }

@@ -29,6 +29,10 @@ export interface ReviewTemplate {
   name_sv: string
   debit_account?: string
   credit_account?: string
+  /** AB-specific account overrides (static catalog templates carry these;
+   *  the booking engine substitutes them for aktiebolag). */
+  debit_account_ab?: string
+  credit_account_ab?: string
   vat_treatment?: VatTreatment | null
   vat_rate?: number
   special_rules_sv?: string
