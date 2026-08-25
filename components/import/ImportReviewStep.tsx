@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -28,6 +29,10 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import ImportTheater from '@/components/import/ImportTheater'
+import {
+  defaultImportOpeningBalancesOn,
+  defaultOpeningBalanceSeries,
+} from '@/lib/import/opening-balance-defaults'
 import type { ImportPreview, AccountMapping } from '@/lib/import/types'
 import type { TheaterModel } from '@/lib/import/theater-model'
 
@@ -50,6 +55,9 @@ export interface ImportExecuteOptions {
   importTransactions: boolean
   updateAccountNames: boolean
   voucherSeries: string
+  /** Series for the Ingående balanser voucher. Defaults to one the file's
+   *  own vouchers do not use, so their numbering is never shifted (#1882). */
+  openingBalanceSeries: string
   markImportedNoDocRequired: boolean
 }
 
@@ -63,17 +71,23 @@ export default function ImportReviewStep({
 }: ImportReviewStepProps) {
   const { canWrite } = useCanWrite()
   const { company } = useCompany()
+  const t = useTranslations('import')
   const [options, setOptions] = useState<ImportExecuteOptions>({
     createFiscalPeriod: true,
     importOpeningBalances: true,
     importTransactions: true,
     updateAccountNames: true,
     voucherSeries: 'B',
+    openingBalanceSeries: defaultOpeningBalanceSeries(preview.voucherSeriesInFile ?? []),
     markImportedNoDocRequired: false,
   })
   const [defaultSeries, setDefaultSeries] = useState<string | null>(null)
   const [existingSeries, setExistingSeries] = useState<Set<string>>(new Set())
   const [seriesLoaded, setSeriesLoaded] = useState(false)
+  // Posted opening-balance vouchers already booked in the file's fiscal year.
+  // Non-zero means a re-import: the IB toggle then defaults OFF (issue #1882;
+  // a field report accumulated five IB vouchers from repeated test imports).
+  const [existingIbCount, setExistingIbCount] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -84,9 +98,26 @@ export default function ImportReviewStep({
 
     let cancelled = false
     ;(async () => {
+      // Smart IB-toggle default (issue #1882): a posted opening-balance
+      // voucher already booked inside the file's fiscal year means this is
+      // a re-import, and importing IB again would create a duplicate
+      // "Ingående balanser" verifikat.
+      const ibCountQuery =
+        preview.fiscalYearStart && preview.fiscalYearEnd
+          ? supabase
+              .from('journal_entries')
+              .select('id', { count: 'exact', head: true })
+              .eq('company_id', company.id)
+              .eq('source_type', 'opening_balance')
+              .eq('status', 'posted')
+              .gte('entry_date', preview.fiscalYearStart)
+              .lte('entry_date', preview.fiscalYearEnd)
+          : Promise.resolve({ count: 0, error: null })
+
       const [
         { data: settingsData, error: settingsError },
         { data: sequencesData, error: sequencesError },
+        { count: ibCount, error: ibCountError },
       ] = await Promise.all([
         supabase
           .from('company_settings')
@@ -97,6 +128,7 @@ export default function ImportReviewStep({
           .from('voucher_sequences')
           .select('voucher_series')
           .eq('company_id', company.id),
+        ibCountQuery,
       ])
 
       if (cancelled) return
@@ -107,22 +139,34 @@ export default function ImportReviewStep({
       if (sequencesError) {
         console.error('Failed to load voucher sequences', sequencesError)
       }
+      if (ibCountError) {
+        console.error('Failed to check for existing opening-balance vouchers', ibCountError)
+      }
 
       const companyDefault = settingsData?.default_voucher_series || null
       const sequences = new Set<string>((sequencesData || []).map((row) => row.voucher_series))
+      const existingIb = ibCountError ? 0 : (ibCount ?? 0)
 
       setDefaultSeries(companyDefault)
       setExistingSeries(sequences)
+      setExistingIbCount(existingIb)
 
       const initial = companyDefault || (sequences.has('B') ? 'B' : Array.from(sequences).sort()[0]) || 'A'
-      setOptions((prev) => ({ ...prev, voucherSeries: initial }))
+      setOptions((prev) => ({
+        ...prev,
+        voucherSeries: initial,
+        importOpeningBalances: defaultImportOpeningBalancesOn({
+          hasOpeningBalances: preview.openingBalanceTotal > 0,
+          existingIbEntryCount: existingIb,
+        }),
+      }))
       setSeriesLoaded(true)
     })()
 
     return () => {
       cancelled = true
     }
-  }, [company?.id])
+  }, [company?.id, preview.fiscalYearStart, preview.fiscalYearEnd, preview.openingBalanceTotal])
 
   // Block browser close/refresh during import
   useUnsavedChanges(isLoading)
@@ -297,6 +341,9 @@ export default function ImportReviewStep({
                   ? `Skapar verifikation för IB på ${formatCurrency(preview.openingBalanceTotal)}`
                   : 'Inga ingående balanser i filen'}
               </p>
+              {existingIbCount > 0 && (
+                <p className="text-sm text-muted-foreground">{t('ib_exists_hint')}</p>
+              )}
             </div>
             <Switch
               id="import-opening-balances"
@@ -305,6 +352,41 @@ export default function ImportReviewStep({
               disabled={!hasOpeningBalances}
             />
           </div>
+
+          {/* Voucher series for the opening-balance voucher (issue #1882) */}
+          {options.importOpeningBalances && hasOpeningBalances && (
+            <div className="space-y-2">
+              <Label htmlFor="opening-balance-series" className="font-medium">
+                {t('ib_series_label')}
+              </Label>
+              <Select
+                value={options.openingBalanceSeries}
+                onValueChange={(value) => updateOption('openingBalanceSeries', value)}
+                disabled={!seriesLoaded}
+              >
+                <SelectTrigger id="opening-balance-series" className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SERIES_LETTERS.map((letter) => {
+                    const isDefault = defaultSeries === letter
+                    const isExisting = existingSeries.has(letter)
+                    const suffix = isDefault
+                      ? ', standard'
+                      : isExisting
+                        ? ', används redan'
+                        : ''
+                    return (
+                      <SelectItem key={letter} value={letter}>
+                        {`Serie ${letter}${suffix}`}
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="text-sm text-muted-foreground">{t('ib_series_hint')}</p>
+            </div>
+          )}
 
           {/* Transactions */}
           <div className="flex items-start justify-between">

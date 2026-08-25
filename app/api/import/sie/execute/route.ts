@@ -109,6 +109,10 @@ export const POST = withRouteContext(
           importOpeningBalances: options.importOpeningBalances,
           importTransactions: options.importTransactions,
           voucherSeries: options.voucherSeries || companyDefaultSeries,
+          // Series for the Ingående balanser voucher (issue #1882). Optional:
+          // executeSIEImport falls back to a series the file's vouchers do
+          // not use, never the hardcoded 'A' that shifted the A numbering.
+          openingBalanceSeries: options.openingBalanceSeries || undefined,
           updateAccountNames: options.updateAccountNames ?? true,
           markImportedNoDocRequired: options.markImportedNoDocRequired ?? false,
         },

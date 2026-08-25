@@ -4695,6 +4695,10 @@ async function commitImportSie(
   const importOpeningBalances = Boolean(params.import_opening_balances)
   const importTransactions = Boolean(params.import_transactions)
   const voucherSeries = params.voucher_series as string | undefined
+  // Optional IB-voucher series (issue #1882). Absent on operations staged
+  // before the param existed: executeSIEImport then defaults to a series
+  // the file's own vouchers do not use.
+  const openingBalanceSeries = params.opening_balance_series as string | undefined
   // Default true (not Boolean(...): operations staged before this param
   // existed must keep the file's account names, matching the UI default).
   const updateAccountNames =
@@ -4719,6 +4723,7 @@ async function commitImportSie(
       importOpeningBalances,
       importTransactions,
       voucherSeries,
+      openingBalanceSeries,
       updateAccountNames,
     })
 
