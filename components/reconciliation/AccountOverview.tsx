@@ -558,12 +558,6 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
         </p>
       )}
 
-      {/* Underlag for the balansdag in play: the signed date, else the date the next sign-off would cover. */}
-      <ReconciliationUnderlag
-        accountKey={account.account_key}
-        throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
-      />
-
       {/* Bridge: how the difference is explained. */}
       {status.bridge.length > 0 && (
         <dl className="max-w-[520px] text-[13px]">
@@ -625,6 +619,12 @@ export function AccountOverview({ account, rail, otherBankAccounts = [], window,
           </span>
         )}
       </div>
+
+      {/* Underlag for the balansdag in play: the signed date, else the date the next sign-off would cover. */}
+      <ReconciliationUnderlag
+        accountKey={account.account_key}
+        throughDate={status.signoff && status.signoff.through_date >= signoffDefaultDate ? status.signoff.through_date : signoffDefaultDate}
+      />
 
       {items.older_unmatched_count > 0 && (
         <p className="text-[12.5px] text-muted-foreground">

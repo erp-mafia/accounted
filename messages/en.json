@@ -8066,6 +8066,7 @@
     "heading_dated": "Supporting documents as of {date}",
     "attach": "Attach document",
     "empty": "No supporting documents for this date. Attach the bank statement, engagement letter or other specification the account was reconciled against.",
+    "empty_short": "nothing attached",
     "remove": "Remove",
     "attached": "{name} attached",
     "removed": "{name} removed. The file stays in the archive with a note about the removal.",

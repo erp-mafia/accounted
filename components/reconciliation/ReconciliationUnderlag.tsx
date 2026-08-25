@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Paperclip } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
@@ -111,11 +110,16 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
   }
 
   return (
-    <section aria-label={t('heading')} className="space-y-2">
+    <section aria-label={t('heading')} className="space-y-1.5">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h3 className="text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
           {t('heading_dated', { date: formatDate(throughDate) })}
         </h3>
+        {attachments !== null && attachments.length === 0 && (
+          <span className="text-[12.5px] text-muted-foreground" title={t('empty')}>
+            {t('empty_short')}
+          </span>
+        )}
         {canWrite && (
           <>
             <input
@@ -123,26 +127,24 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
               type="file"
               accept={ACCEPT}
               multiple
-              className="sr-only"
+              className="hidden"
               onChange={(e) => void upload(e.target.files)}
               aria-label={t('attach')}
             />
-            <Button
-              size="sm"
-              variant="outline"
+            <button
+              type="button"
               onClick={() => inputRef.current?.click()}
               disabled={busy !== null}
               aria-busy={busy === 'upload'}
+              className={cn(QUIET_LINK_CLASS, 'inline-flex items-center gap-1')}
             >
-              <Paperclip className="h-3.5 w-3.5" />
+              <Paperclip className="h-3 w-3" aria-hidden="true" />
               {t('attach')}
-            </Button>
+            </button>
           </>
         )}
       </div>
-      {attachments === null ? null : attachments.length === 0 ? (
-        <p className="text-[12.5px] text-muted-foreground">{t('empty')}</p>
-      ) : (
+      {attachments === null || attachments.length === 0 ? null : (
         <ul className="max-w-[560px] divide-y divide-border/60 text-[13px]">
           {attachments.map((a) => (
             <li key={a.id} className="group flex items-center gap-3 py-1.5">
