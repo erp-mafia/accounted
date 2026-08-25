@@ -52,6 +52,8 @@ interface BulkBookOrderResult {
   journal_entry_id?: string
   voucher_series?: string | null
   voucher_number?: number | null
+  /** Orderunderlag PDF archived on the verifikat (#1881); never fatal. */
+  underlag_archived?: boolean
   error?: BulkBookFailure
 }
 
@@ -308,7 +310,7 @@ export const POST = withRouteContext(
         supabase,
         companyId,
         user.id,
-        id,
+        resolvedOrder,
         {
           fiscal_period_id: fiscalPeriodId,
           entry_date: entryDate,
@@ -338,6 +340,7 @@ export const POST = withRouteContext(
         journal_entry_id: outcome.journalEntryId,
         voucher_series: outcome.journalEntry?.voucher_series ?? null,
         voucher_number: outcome.journalEntry?.voucher_number ?? null,
+        underlag_archived: outcome.underlagArchived,
       })
     }
 

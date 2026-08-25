@@ -3,6 +3,7 @@ import type { Logger } from '@/lib/logger'
 import { createDraftEntry, commitEntry } from '@/lib/bookkeeping/engine'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { ensureWebshopPrefillAccounts } from '@/lib/webshop-orders/ensure-accounts'
+import { archiveWebshopOrderUnderlag } from '@/lib/webshop-orders/order-underlag'
 import { roundOre } from '@/lib/money'
 import type {
   CreateJournalEntryLineInput,
@@ -176,7 +177,13 @@ export interface BookOrderEngineInput {
 
 export type BookOrderEngineOutcome =
   /** Committed; journalEntry is commitEntry's post-commit fetch (may be null). */
-  | { ok: true; journalEntry: JournalEntry | null; journalEntryId: string }
+  | {
+      ok: true
+      journalEntry: JournalEntry | null
+      journalEntryId: string
+      /** Orderunderlag PDF archived on the verifikat (#1881); never fatal. */
+      underlagArchived: boolean
+    }
   /** Another request booked/invoiced the row between our read and the claim. */
   | { ok: false; kind: 'claimed_elsewhere' }
   /** The conditional claim update itself errored (DB failure). */
@@ -196,10 +203,15 @@ export async function bookOrderThroughEngine(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  orderId: string,
+  /**
+   * The order row, with FX already resolved (resolveOrderFx): the underlag
+   * archived after commit renders the SEK conversion facts from it.
+   */
+  order: WebshopOrder,
   input: BookOrderEngineInput,
   log: Logger,
 ): Promise<BookOrderEngineOutcome> {
+  const orderId = order.id
   // The prefill can legitimately reach 3004, 3740 and the 1686 clearing
   // account, none of which seed_chart_of_accounts() seeds. Without this the
   // first Bokför on a fresh company died on AccountsNotInChartError for an
@@ -285,11 +297,27 @@ export async function bookOrderThroughEngine(
   // No extra event here: commitEntry() already emits
   // journal_entry.committed from inside the engine.
 
+  // Archive the orderunderlag (lines, customer, payment method) on the
+  // committed verifikat (#1881). Never fatal: the booking is immutable at
+  // this point, and a verifikat left without underlag surfaces on the
+  // "saknar underlag" worklist (webshop_order is a needs-doc source type),
+  // where the user can attach a document by hand. Living here, not in a
+  // route, so the single-order and bulk paths can never diverge on it.
+  const underlag = await archiveWebshopOrderUnderlag({
+    supabase,
+    companyId,
+    userId,
+    order,
+    journalEntryId: journalEntry?.id ?? draft.id,
+    log,
+  })
+
   return {
     ok: true,
     journalEntry,
     // commitEntry's post-commit fetch can theoretically return no row;
     // the entry still exists under draft.id.
     journalEntryId: journalEntry?.id ?? draft.id,
+    underlagArchived: underlag.ok,
   }
 }

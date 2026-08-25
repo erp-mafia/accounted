@@ -19,8 +19,10 @@ import type {
   MigrationDocumentation,
 } from './types'
 import type { CreateJournalEntryLineInput } from '@/types'
+import { roundOre } from '@/lib/money'
 import { mappingsToMap, getMappingStats } from './account-mapper'
 import { syncMappedAccounts } from './account-sync'
+import { defaultOpeningBalanceSeries } from './opening-balance-defaults'
 import {
   calculateFileHash,
   getEffectiveOpeningBalances,
@@ -99,6 +101,13 @@ export function generateImportPreview(
       lowConfidence: mappingStats.lowConfidence,
     },
     excludedSystemAccounts: [],
+    voucherSeriesInFile: [
+      ...new Set(
+        parsed.vouchers
+          .map((v) => (v.series ?? '').trim())
+          .filter((s) => s.length > 0)
+      ),
+    ].sort(),
     issues: derivedFromPriorYearUB
       ? [
           ...parsed.issues,
@@ -763,7 +772,8 @@ async function createOpeningBalanceEntry(
   fiscalPeriodId: string,
   parsed: ParsedSIEFile,
   accountMap: Map<string, string>,
-  roundingAdjustment: number
+  roundingAdjustment: number,
+  voucherSeries: string
 ): Promise<string | null> {
   // Effective set: explicit #IB 0, or IB derived from #UB -1 (issue #675).
   const { balances: currentYearBalances, derivedFromPriorYearUB } =
@@ -831,7 +841,11 @@ async function createOpeningBalanceEntry(
       ? 'Ingående balanser från SIE-import (härledda från föregående års utgående balans)'
       : 'Ingående balanser från SIE-import',
     source_type: 'opening_balance',
-    voucher_series: 'A',
+    // Never hardcoded to 'A': the IB entry is created BEFORE the file's
+    // vouchers, so booking it in a series the file uses would consume that
+    // series' next number and shift every imported voucher one number
+    // higher than in the source system (issue #1882).
+    voucher_series: voucherSeries,
     lines,
   })
 
@@ -2025,6 +2039,9 @@ export async function executeSIEImport(
     importOpeningBalances: boolean
     importTransactions: boolean
     voucherSeries?: string
+    // Series for the opening-balance voucher. Defaults to a series the
+    // file's own vouchers do not use (issue #1882): never 'A'.
+    openingBalanceSeries?: string
     onExistingPeriod?: 'block' | 'replace'
     updateAccountNames?: boolean
     // Opt-in: mark every imported (source_type='import') verifikat as "Inget
@@ -2353,6 +2370,52 @@ export async function executeSIEImport(
     // Source series from #VER are preserved per-voucher by importVouchers.
     const defaultSeries = options.voucherSeries || 'B'
 
+    // Series for the IB voucher: caller's choice, else the first candidate
+    // the file's own vouchers do not use. The IB entry is created before
+    // the file's vouchers, so a colliding series would consume its next
+    // number and shift the whole series by one (issue #1882).
+    //
+    // Type-checked, not just trimmed: the web execute route and MCP accept
+    // untyped JSON, and a non-string here must fall back to the default,
+    // not crash mid-import after the fiscal period was already created.
+    // Uppercased before persisting: a lowercase 'a' would otherwise book a
+    // case-distinct parallel series next to 'A', fragmenting what BFL
+    // 5 kap requires to be one systematic series, and would slip past the
+    // collision warning below.
+    const requestedOpeningBalanceSeries =
+      typeof options.openingBalanceSeries === 'string'
+        ? options.openingBalanceSeries.trim().toUpperCase()
+        : ''
+    const seriesUsedByFile = new Set(
+      parsed.vouchers
+        .map((v) => (v.series ?? '').trim().toUpperCase())
+        .filter((s) => s.length > 0)
+    )
+    // Series-less #VER records (SIE4I subsystem files) resolve to
+    // defaultSeries at import time, so the default picker must treat that
+    // series as used by the file too: otherwise the IB voucher can land in
+    // it and shift those vouchers' numbering, the same #1882 pattern.
+    if (parsed.vouchers.some((v) => !(v.series ?? '').trim())) {
+      seriesUsedByFile.add(defaultSeries.trim().toUpperCase())
+    }
+    const openingBalanceSeries =
+      requestedOpeningBalanceSeries || defaultOpeningBalanceSeries(seriesUsedByFile)
+
+    // An explicitly chosen IB series that the file's vouchers also use
+    // reintroduces the numbering shift this option exists to prevent.
+    // Honor the choice (the caller may know better) but say what it does.
+    if (
+      requestedOpeningBalanceSeries &&
+      options.importOpeningBalances &&
+      options.importTransactions &&
+      seriesUsedByFile.has(requestedOpeningBalanceSeries)
+    ) {
+      result.warnings.push(
+        `Vald verifikationsserie för ingående balanser (${requestedOpeningBalanceSeries}) används även av filens verifikationer: ` +
+        'IB-verifikationen tar seriens nästa nummer, så filens verifikationer i den serien kan förskjutas ett nummer jämfört med källsystemet.'
+      )
+    }
+
     // Validate and import opening balances.
     //
     // IB imbalance is NORMAL in Swedish SIE files for two common reasons:
@@ -2401,6 +2464,120 @@ export async function executeSIEImport(
             'Stäm av mot SIE-filens #IB om du är osäker.'
           )
         } else {
+        // Orphan-IB guard (issue #1882): the period pointer above is not
+        // proof that no IB voucher exists. replace_sie_import deletes only
+        // source_type='import' entries and CLEARS the period's OB pointer,
+        // so a prior import's IB voucher (source_type='opening_balance')
+        // survives every replace cycle with no pointer left behind: each
+        // re-import then created another "Ingående balanser" verifikat
+        // (field report: five accumulated). Look the survivors up directly
+        // and skip when any exist. On a failed check, skip too (fail
+        // closed against duplication) and say why.
+        const { data: existingIbEntries, error: existingIbError } = await supabase
+          .from('journal_entries')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', result.fiscalPeriodId)
+          .eq('source_type', 'opening_balance')
+          .eq('status', 'posted')
+
+        if (existingIbError) {
+          result.warnings.push(
+            `Ingående balanser hoppades över: det gick inte att kontrollera om en IB-verifikation redan finns (${existingIbError.message}). ` +
+            'Importera om filen med enbart ingående balanser, eller skapa IB manuellt, om ingen IB-verifikation finns.'
+          )
+        } else if ((existingIbEntries?.length ?? 0) > 0) {
+          // Skip the duplicate, but leave a consistent state behind. With
+          // the pointer NULL, getOpeningBalances falls back to
+          // compute_prior_opening_balances, which excludes an IB entry
+          // dated ON period_start (reports then show IB = 0), the manual
+          // IB flow (gated on opening_balances_set) can double-book, and
+          // year-end's duplicate-IB blocker never arms. So when the
+          // survivor is unambiguous (exactly one), relink it as the
+          // period's OB entry (permitted by
+          // enforce_opening_balance_immutability while the pointer is
+          // NULL) and diff its lines against the file's IB so a stale
+          // orphan is called out instead of silently kept. Both steps are
+          // best effort: the skip alone already stops the duplication, and
+          // reverseEntry clears the pointer again if the user stornos the
+          // relinked voucher to re-import corrected balances.
+          const orphans = existingIbEntries ?? []
+          let relinked = false
+          let amountsDiffer = false
+          if (orphans.length === 1) {
+            try {
+              const expected = validateIBBalance(parsed, accountMap)
+              const expectedNet = new Map<string, number>()
+              for (const line of expected.lines) {
+                const prev = expectedNet.get(line.account_number) ?? 0
+                expectedNet.set(
+                  line.account_number,
+                  roundOre(prev + line.debit_amount - line.credit_amount)
+                )
+              }
+              if (Math.abs(expected.roundingAdjustment) > 0.01) {
+                // createOpeningBalanceEntry books the adjustment on 2099
+                // with the opposite sign of the mapped diff.
+                const prev = expectedNet.get('2099') ?? 0
+                expectedNet.set('2099', roundOre(prev - expected.roundingAdjustment))
+              }
+
+              const { data: orphanLines, error: orphanLinesError } = await supabase
+                .from('journal_entry_lines')
+                .select('account_number, debit_amount, credit_amount')
+                .eq('journal_entry_id', orphans[0].id)
+              if (orphanLinesError) {
+                throw new Error(orphanLinesError.message)
+              }
+              const orphanNet = new Map<string, number>()
+              for (const line of orphanLines ?? []) {
+                const prev = orphanNet.get(line.account_number) ?? 0
+                orphanNet.set(
+                  line.account_number,
+                  roundOre(prev + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0))
+                )
+              }
+              for (const account of new Set([...expectedNet.keys(), ...orphanNet.keys()])) {
+                const diff = (expectedNet.get(account) ?? 0) - (orphanNet.get(account) ?? 0)
+                if (Math.abs(diff) > 0.01) {
+                  amountsDiffer = true
+                  break
+                }
+              }
+
+              await linkOpeningBalanceEntryToPeriod(
+                supabase,
+                companyId,
+                result.fiscalPeriodId,
+                orphans[0].id
+              )
+              relinked = true
+            } catch (relinkError) {
+              // Best effort only: a failed comparison or relink keeps the
+              // pre-guard state, and the warning below still says what to
+              // do about the surviving IB voucher.
+              console.error('[sie-import] orphan-IB relink skipped (non-fatal):', relinkError)
+            }
+          }
+
+          let ibSkipWarning =
+            orphans.length === 1
+              ? 'En verifikation för ingående balanser finns redan i räkenskapsåret: hoppar över IB-import för att inte skapa en dubblett.'
+              : `${orphans.length} verifikationer för ingående balanser finns redan i räkenskapsåret: hoppar över IB-import för att inte skapa ännu en dubblett.`
+          if (relinked) {
+            ibSkipWarning +=
+              ' Den befintliga IB-verifikationen har kopplats som räkenskapsårets ingående balans.'
+          }
+          if (amountsDiffer) {
+            ibSkipWarning +=
+              ' OBS: den befintliga IB-verifikationens belopp skiljer sig från filens ingående balanser. ' +
+              'Ångra (storno) den gamla IB-verifikationen och importera om filen om filens belopp är de rätta.'
+          } else {
+            ibSkipWarning +=
+              ' Ångra eller ta bort den gamla IB-verifikationen först om du vill importera om ingående balanser.'
+          }
+          result.warnings.push(ibSkipWarning)
+        } else {
         const ibValidation = validateIBBalance(parsed, accountMap)
 
         if (ibValidation.lines.length > 0) {
@@ -2448,7 +2625,8 @@ export async function executeSIEImport(
             result.fiscalPeriodId,
             parsed,
             accountMap,
-            ibRoundingAdjustment
+            ibRoundingAdjustment,
+            openingBalanceSeries
           )
 
           if (result.openingBalanceEntryId) {
@@ -2462,6 +2640,7 @@ export async function executeSIEImport(
               result.openingBalanceEntryId
             )
           }
+        }
         }
         }
       }

@@ -60,16 +60,14 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
+import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
 import type { FiscalPeriod, JournalEntry, JournalEntryLine } from '@/types'
 
-const NEEDS_ATTACHMENT = new Set([
-  'manual',
-  'bank_transaction',
-  'supplier_invoice_registered',
-  'supplier_invoice_paid',
-  'supplier_invoice_cash_payment',
-  'import',
-])
+// Shared source of truth (lib/worklist/types.ts) so the per-row chip and
+// waiver UI can never drift from the worklist count and the SQL predicate
+// (skeptic finding on #1881: a hardcoded copy here missed webshop_order,
+// leaving flagged rows without chip or waiver toggle).
+const NEEDS_ATTACHMENT = new Set<string>(NEEDS_DOC_SOURCE_TYPES)
 
 // Column-header sorting (support feedback: "filtrera/sortera alla rubriker").
 // The sort order is a priority-ordered STACK of keys (max 3): the second key

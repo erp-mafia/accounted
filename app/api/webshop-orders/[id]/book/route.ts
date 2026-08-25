@@ -22,9 +22,10 @@ ensureInitialized()
  * (source_type 'webshop_order'). Period/company locks and balance are
  * enforced by the engine + DB triggers as usual.
  *
- * The flow itself (guards, FX retry, draft -> claim -> commit) lives in
- * lib/webshop-orders/book-order.ts, shared verbatim with the bulk endpoint
- * (POST /api/webshop-orders/bulk-book) so the two paths cannot drift.
+ * The flow itself (guards, FX retry, draft -> claim -> commit, orderunderlag
+ * archiving) lives in lib/webshop-orders/book-order.ts, shared verbatim with
+ * the bulk endpoint (POST /api/webshop-orders/bulk-book) so the two paths
+ * cannot drift.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'webshop_order.book',
@@ -55,6 +56,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
 
+    // Also keeps the in-memory row in sync (total_sek/exchange_rate): the
+    // underlag renders the SEK conversion facts from it after commit.
     const resolvedOrder = await resolveOrderFx(supabase, companyId, order, log)
     if (!resolvedOrder) {
       return errorResponseFromCode('WEBSHOP_ORDER_FX_UNRESOLVED', log, {
@@ -67,7 +70,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       supabase,
       companyId,
       user.id,
-      id,
+      resolvedOrder,
       { fiscal_period_id, entry_date, description, lines, voucher_series, notes },
       log,
     )
@@ -99,6 +102,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     return NextResponse.json({
       data: outcome.journalEntry,
       journal_entry_id: outcome.journalEntryId,
+      underlag_archived: outcome.underlagArchived,
       success: true,
     })
   },

@@ -153,6 +153,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         importOpeningBalances: z.boolean().optional().default(true),
         importTransactions: z.boolean().optional().default(true),
         voucherSeries: z.string().min(1).max(2).optional().default('A'),
+        // Series for the Ingående balanser voucher (issue #1882). No default
+        // here: executeSIEImport picks a series the file's vouchers do not
+        // use, so the IB entry never shifts the file's own numbering.
+        openingBalanceSeries: z.string().min(1).max(2).optional(),
         updateAccountNames: z.boolean().optional().default(true),
       })
       // OWASP V4.5: reject unknown keys so a future schema-extension
@@ -294,6 +298,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           importOpeningBalances: options.importOpeningBalances,
           importTransactions: options.importTransactions,
           voucherSeries: options.voucherSeries,
+          openingBalanceSeries: options.openingBalanceSeries,
           updateAccountNames: options.updateAccountNames,
         },
       )

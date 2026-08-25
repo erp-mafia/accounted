@@ -48,6 +48,14 @@ vi.mock('@/lib/webshop-orders/ensure-accounts', () => ({
   ensureWebshopPrefillAccounts: (...args: unknown[]) => mockEnsureAccounts(...args),
 }))
 
+// Underlag rendering/archiving behaviour lives in
+// lib/webshop-orders/__tests__/order-underlag.test.ts; here we only assert
+// that every booked order gets one archive call through the shared flow.
+const mockArchiveUnderlag = vi.fn()
+vi.mock('@/lib/webshop-orders/order-underlag', () => ({
+  archiveWebshopOrderUnderlag: (...args: unknown[]) => mockArchiveUnderlag(...args),
+}))
+
 import { POST } from '../bulk-book/route'
 
 const PERIOD_UUID = '550e8400-e29b-41d4-a716-446655440000'
@@ -91,6 +99,7 @@ interface BulkResult {
   order_number: string | null
   success: boolean
   journal_entry_id?: string
+  underlag_archived?: boolean
   error?: {
     code: string
     message: string
@@ -123,6 +132,7 @@ describe('POST /api/webshop-orders/bulk-book', () => {
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase })
     requireWriteMock.mockResolvedValue({ ok: true })
     mockEnsureAccounts.mockResolvedValue(undefined)
+    mockArchiveUnderlag.mockResolvedValue({ ok: true, documentId: 'doc-1' })
     mockCreateDraftEntry.mockImplementation(() => {
       draftCounter += 1
       return Promise.resolve(
@@ -220,6 +230,17 @@ describe('POST /api/webshop-orders/bulk-book', () => {
     })
     const secondInput = mockCreateDraftEntry.mock.calls[1][3] as { source_id: string }
     expect(secondInput.source_id).toBe(ORDER_2)
+    // Each booked order gets its orderunderlag through the shared flow
+    // (#1881); the per-order result reports it.
+    expect(mockArchiveUnderlag).toHaveBeenCalledTimes(2)
+    expect(mockArchiveUnderlag).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: 'company-1',
+        userId: 'user-1',
+        order: expect.objectContaining({ id: ORDER_1 }),
+      }),
+    )
+    expect(body.data.results.every((r) => r.underlag_archived === true)).toBe(true)
   })
 
   it('applies the payment_account override to every order', async () => {
