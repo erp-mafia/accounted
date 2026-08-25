@@ -1,10 +1,15 @@
 /**
  * Fetch available auth providers and capabilities from Supabase GoTrue.
  *
- * Calls the public /auth/v1/settings endpoint which returns which providers
- * are enabled and whether signups are disabled. No authentication required
- * (just the anon key).
+ * Calls two endpoints:
+ * 1. /auth/v1/settings (anon key) - returns built-in providers and signup config
+ * 2. auth.admin.customProviders.listProviders() (service_role key) - custom OIDC/OAuth providers
+ *
+ * Both are merged into a single provider list. If the service_role key is
+ * unavailable, only built-in providers are returned (custom providers are skipped).
  */
+
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 
 export type ExternalProvider =
   | 'apple'
@@ -135,6 +140,24 @@ export async function fetchAuthSettings(): Promise<GoTrueAuthSettings> {
         label: PROVIDER_META[name]?.label ?? name,
         isCustom: !(name in PROVIDER_META),
       }))
+
+    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      try {
+        const serviceClient = createServiceClientNoCookies()
+        const { data: customData } = await serviceClient.auth.admin.customProviders.listProviders()
+        for (const cp of customData?.providers ?? []) {
+          if (cp.enabled && cp.identifier) {
+            providers.push({
+              id: cp.identifier,
+              label: PROVIDER_META[cp.identifier]?.label ?? cp.name ?? cp.identifier,
+              isCustom: !(cp.identifier in PROVIDER_META),
+            })
+          }
+        }
+      } catch {
+        // Custom providers are best-effort; don't break login if the admin endpoint is unreachable.
+      }
+    }
 
     return {
       providers,
