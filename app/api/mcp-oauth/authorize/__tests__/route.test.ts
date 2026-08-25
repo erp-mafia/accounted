@@ -4,7 +4,7 @@ import crypto from 'crypto'
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
   isAllowedRedirectUri: vi.fn(),
-  requireCompanyId: vi.fn(),
+  getActiveCompanyId: vi.fn(),
   getBranding: vi.fn(),
 }))
 
@@ -21,7 +21,7 @@ vi.mock('@/lib/auth/oauth-allowlist', () => ({
 }))
 
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: (...args: unknown[]) => mocks.requireCompanyId(...args),
+  getActiveCompanyId: (...args: unknown[]) => mocks.getActiveCompanyId(...args),
 }))
 
 vi.mock('@/lib/branding/service', () => ({
@@ -37,15 +37,25 @@ function buildAuthorizeUrl(params: Record<string, string>): string {
 }
 
 function buildSupabase(
-  user: { id: string } | null,
+  user: { id: string; email?: string } | null,
   companyName = 'Test AB',
   aal: { currentLevel: string; nextLevel: string } = { currentLevel: 'aal2', nextLevel: 'aal2' },
+  verifiedFactors: number = aal.nextLevel === 'aal2' ? 1 : 0,
 ) {
   return {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user }, error: null }),
       mfa: {
         getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: aal, error: null }),
+        listFactors: vi.fn().mockResolvedValue({
+          data: {
+            totp: Array.from({ length: verifiedFactors }, (_, i) => ({
+              id: `factor-${i}`,
+              status: 'verified',
+            })),
+          },
+          error: null,
+        }),
       },
     },
     from: vi.fn().mockReturnValue({
@@ -67,7 +77,7 @@ describe('GET /api/mcp-oauth/authorize: CSP', () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
     mocks.isAllowedRedirectUri.mockResolvedValue(true)
-    mocks.requireCompanyId.mockResolvedValue('company-1')
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
     mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
   })
 
@@ -258,7 +268,7 @@ describe('MFA step-up on /api/mcp-oauth/authorize', () => {
     vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
     mocks.isAllowedRedirectUri.mockResolvedValue(true)
-    mocks.requireCompanyId.mockResolvedValue('company-1')
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
     mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
   })
 
@@ -310,6 +320,63 @@ describe('MFA step-up on /api/mcp-oauth/authorize', () => {
     expect(response.status).toBe(200)
   })
 
+  it('GET fails closed to /mfa/verify when the assurance lookup returns nothing', async () => {
+    // A transient auth error must never read as "no MFA needed": consent
+    // here mints a key that bypasses MFA on every later call.
+    const supabase = buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal1' }, 1)
+    ;(supabase.auth.mfa.getAuthenticatorAssuranceLevel as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: null,
+      error: { message: 'boom' },
+    })
+    mocks.createClient.mockResolvedValue(supabase)
+
+    const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
+    expect(new URL(response.headers.get('location')!).pathname).toBe('/mfa/verify')
+  })
+
+  it('GET steps up (not enroll) when a verified factor exists despite an AAL1 answer', async () => {
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal1' }, 1),
+    )
+
+    const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
+    expect(new URL(response.headers.get('location')!).pathname).toBe('/mfa/verify')
+  })
+
+  it('GET sends a password account with no factor to /mfa/enroll with returnTo', async () => {
+    // A brand-new account created inside the OAuth popup (issue #1814) has no
+    // company, so the middleware never forced enrollment. Without this leg the
+    // consent would mint an MFA-exempt key for an account with no second factor.
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal1' }, 0),
+    )
+
+    const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
+
+    expect(response.status).toBeGreaterThanOrEqual(300)
+    expect(response.status).toBeLessThan(400)
+    const location = new URL(response.headers.get('location')!)
+    expect(location.pathname).toBe('/mfa/enroll')
+    const returnTo = new URL(location.searchParams.get('returnTo')!, location.origin)
+    expect(returnTo.pathname).toBe('/api/mcp-oauth/authorize')
+    expect(returnTo.searchParams.get('state')).toBe('xyz')
+  })
+
+  it('POST refuses consent from a password account with no factor', async () => {
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal1' }, 0),
+    )
+
+    const formData = new FormData()
+    formData.set('consent', 'allow')
+    const response = await POST(
+      new Request(buildAuthorizeUrl(authorizeParams), { method: 'POST', body: formData }),
+    )
+
+    expect(new URL(response.headers.get('location')!).pathname).toBe('/mfa/enroll')
+    expect(response.headers.get('location')).not.toContain('code=')
+  })
+
   it('GET skips step-up for BankID-linked users (inherently 2FA)', async () => {
     const supabase = buildSupabase(
       { id: 'user-1' },
@@ -324,6 +391,66 @@ describe('MFA step-up on /api/mcp-oauth/authorize', () => {
 
     const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
     expect(response.status).toBe(200)
+  })
+})
+
+describe('account with no company yet (issue #1814)', () => {
+  // Someone who signed up inside the MCP client's OAuth popup has an account
+  // but no company. Consent must still complete: the key is minted unbound
+  // and binds itself once the company exists.
+  const authorizeParams = {
+    response_type: 'code',
+    redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    scope: 'mcp',
+    state: 'xyz',
+  }
+
+  function signScope(scopeParam: string): string {
+    const key = crypto.createHash('sha256').update('oauth-scope:test-service-key').digest()
+    return crypto.createHmac('sha256', key).update(scopeParam).digest('base64url')
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    mocks.isAllowedRedirectUri.mockResolvedValue(true)
+    mocks.getActiveCompanyId.mockResolvedValue(null)
+    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+  })
+
+  it('GET renders consent labelled with the account instead of a company', async () => {
+    const supabase = buildSupabase({ id: 'user-1', email: 'ny@example.se' })
+    mocks.createClient.mockResolvedValue(supabase)
+
+    const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
+    expect(response.status).toBe(200)
+
+    const html = await response.text()
+    expect(html).toContain('ny@example.se')
+    expect(html).toContain('inget företag')
+    expect(html).not.toContain('Test AB')
+    // No company to look up: company_settings is never queried.
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('POST still issues an authorization code', async () => {
+    mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1', email: 'ny@example.se' }))
+
+    const formData = new FormData()
+    formData.set('consent', 'allow')
+    formData.set('scope_binding', 'mcp')
+    formData.set('scope_binding_sig', signScope('mcp'))
+
+    const response = await POST(
+      new Request(buildAuthorizeUrl(authorizeParams), { method: 'POST', body: formData }),
+    )
+
+    expect(response.status).toBe(303)
+    const location = new URL(response.headers.get('location')!)
+    expect(location.searchParams.get('code')).toBe('test-auth-code')
+    expect(location.searchParams.get('state')).toBe('xyz')
   })
 })
 
@@ -350,7 +477,7 @@ describe('RFC 9207 iss parameter on authorization responses', () => {
     vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.test.example')
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
     mocks.isAllowedRedirectUri.mockResolvedValue(true)
-    mocks.requireCompanyId.mockResolvedValue('company-1')
+    mocks.getActiveCompanyId.mockResolvedValue('company-1')
     mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
   })
 

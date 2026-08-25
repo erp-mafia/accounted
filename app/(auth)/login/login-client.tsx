@@ -93,6 +93,10 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   // (/login?next=/api/mcp-oauth/authorize?...). Sanitized to a same-origin
   // relative path; '/' means no explicit destination.
   const nextPath = safeReturnTo(searchParams.get('next'), '/')
+  // A visitor who arrives here from the MCP consent page and has no account
+  // yet must be able to sign up without losing that destination (issue
+  // #1814). The register page re-sanitises it through safeReturnTo.
+  const registerHref = nextPath === '/' ? '/register' : `/register?next=${encodeURIComponent(nextPath)}`
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
   const googleAuthEnabled = isGoogleAuthEnabled()
@@ -548,7 +552,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
               <p className="mt-1 text-muted-foreground">{tAuth('bankid_no_account_body')}</p>
               <p className="mt-1">
                 <Link
-                  href="/register"
+                  href={registerHref}
                   className="text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
                 >
                   {tAuth('bankid_no_account_create')}
@@ -696,6 +700,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                 {googleAuthEnabled && (
                   <GoogleAuthButton
                     compact
+                    next={nextPath}
                     onError={(message) => setFormError({ kind: 'oauth', message })}
                   />
                 )}
@@ -718,7 +723,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         <p className="mt-6 text-center text-[13px] text-muted-foreground">
           {tAuth('login_new_here')}{' '}
           <Link
-            href="/register"
+            href={registerHref}
             className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
           >
             {tAuth('no_account')}

@@ -29,10 +29,22 @@ interface ToolSchemaSource {
 }
 
 export function codedError(
-  code: 'VALIDATION_ERROR' | 'NOT_FOUND' | 'FORBIDDEN' | 'INTERNAL_ERROR',
+  code: 'VALIDATION_ERROR' | 'NOT_FOUND' | 'FORBIDDEN' | 'INTERNAL_ERROR' | 'NO_COMPANY_YET',
   message: string
 ) {
   return Object.assign(new Error(message), { code })
+}
+
+/**
+ * Thrown when a company-scoped operation runs on a key whose user has no
+ * company at all (minted from the OAuth popup before onboarding, issue
+ * #1814). Maps to the NO_COMPANY_YET structured error with its remediation.
+ */
+export function noCompanyYetError(): Error {
+  return codedError(
+    'NO_COMPANY_YET',
+    'This account has no company yet. Create the company in the web app, then retry.'
+  )
 }
 
 function isCompanyRole(value: unknown): value is CompanyRole {
@@ -86,10 +98,14 @@ export function extractRequestedCompany(
 export async function resolveMcpCompanyContext(args: {
   supabase: SupabaseClient
   userId: string
-  defaultCompanyId: string
+  /** null while the key's user has no company (see validateApiKey). */
+  defaultCompanyId: string | null
   requestedCompanyId?: string
 }): Promise<McpCompanyContext> {
   const companyId = args.requestedCompanyId ?? args.defaultCompanyId
+  if (!companyId) {
+    throw noCompanyYetError()
+  }
 
   const { data: membership, error } = await args.supabase
     .from('company_members')
