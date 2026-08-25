@@ -244,15 +244,18 @@ export const POST = withRouteContext(
     // Rate-classification guard (Swedish accounting review + skeptic
     // finding): output VAT books on 2611/2621/2631 per rate regardless of
     // the template, and the momsdeklaration counts a custom account toward
-    // ruta 05 only when the account is configured for that rate (explicit
-    // momssats, a rate-mapped treatment, or a rate-conforming 30x1/2/3
-    // number + name: the exact rules the report uses). A mismatched choice
-    // would silently drop the sale's base out of ruta 05 while its VAT
-    // lands in ruta 10-12, so the sweep refuses it and points at the fix.
-    // Rate 0 buckets carry no output VAT and span legitimate momsfri/
-    // export/EU accounts, so only the taxable rates are checked. Accounts
-    // from our own default set are checked statically: each is valid only
-    // for the rate it is the default for.
+    // ruta 05 only when the account resolves to that rate. The effective
+    // rate mirrors fetchDynamicVatAccounts EXACTLY, precedence included: an
+    // explicit momssats always wins, then a rate-mapped treatment, and
+    // number+name inference only when nothing is configured, so an account
+    // explicitly set to 6% can never pass a 25% slot on its name alone
+    // (review finding). A mismatched choice would silently drop the sale's
+    // base out of ruta 05 while its VAT lands in ruta 10-12, so the sweep
+    // refuses it and points at the fix. Rate 0 buckets carry no output VAT
+    // and span legitimate momsfri/export/EU accounts (usually unconfigured),
+    // so they only refuse an account whose resolved rate CONTRADICTS 0%
+    // (review finding). Accounts from our own default set are checked
+    // statically: each is valid only for the rate it is the default for.
     const mismatchedAccounts: { rate: number; account: string }[] = []
     for (const { rate, account } of revenueTemplatePairs) {
       if (WEBSHOP_PREFILL_ACCOUNTS.includes(account)) {
@@ -261,19 +264,19 @@ export const POST = withRouteContext(
         }
         continue
       }
-      if (rate === 0) continue
       const row = chartRowByAccount.get(account)
       if (!row) continue // unreachable: the existence guard above returned
       const expected = rate / 100
       const configured =
         row.default_vat_rate === null ? null : Number(row.default_vat_rate)
-      const treatmentRate = isAccountVatTreatment(row.default_vat_treatment)
-        ? defaultRateForVatTreatment(row.default_vat_treatment, 3)
-        : null
-      const inferred = inferDomesticSalesRate(account, row.account_name)
-      if (configured !== expected && treatmentRate !== expected && inferred !== expected) {
-        mismatchedAccounts.push({ rate, account })
-      }
+      const effective = isAccountVatTreatment(row.default_vat_treatment)
+        ? (configured ?? defaultRateForVatTreatment(row.default_vat_treatment, 3))
+        : (configured ?? inferDomesticSalesRate(account, row.account_name))
+      const mismatch =
+        rate === 0
+          ? effective !== null && effective !== 0
+          : effective !== expected
+      if (mismatch) mismatchedAccounts.push({ rate, account })
     }
     if (mismatchedAccounts.length > 0) {
       return errorResponseFromCode(

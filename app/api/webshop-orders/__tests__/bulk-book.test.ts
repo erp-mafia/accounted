@@ -438,6 +438,116 @@ describe('POST /api/webshop-orders/bulk-book', () => {
     expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
+  it('refuses when an explicit momssats contradicts the rate, despite a conforming name', async () => {
+    // Swedish review finding: explicit configuration must take precedence
+    // over number+name inference, mirroring fetchDynamicVatAccounts. An
+    // account set to 6% never qualifies for a 25% slot on its name alone.
+    enqueue({ data: [makeOrderRow()] })
+    enqueue({ data: [] }) // store settings
+    enqueue({
+      data: [
+        {
+          account_number: '3041',
+          account_name: 'Försäljning tjänster 25 % moms',
+          is_active: true,
+          default_vat_rate: 0.06,
+          default_vat_treatment: null,
+        },
+      ],
+    }) // chart check
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string }
+    }>(
+      await postBulk({
+        order_ids: [ORDER_1],
+        revenue_accounts: { '25': '3041' },
+      }),
+    )
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_REVENUE_ACCOUNT_RATE_MISMATCH')
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a rate-0 slot for an account explicitly configured as taxable', async () => {
+    // Swedish review finding: rate 0 carries no VAT amount, but a taxable-
+    // configured account in the 0% slot still distorts the ruta 05 base.
+    enqueue({
+      data: [
+        makeOrderRow({
+          total: 500,
+          total_sek: 500,
+          total_tax: 0,
+          vat_breakdown: [{ rate: 0, net: 500, tax: 0 }],
+        }),
+      ],
+    })
+    enqueue({ data: [] }) // store settings
+    enqueue({
+      data: [
+        {
+          account_number: '3051',
+          account_name: 'Försäljning varor',
+          is_active: true,
+          default_vat_rate: 0.25,
+          default_vat_treatment: null,
+        },
+      ],
+    }) // chart check
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string }
+    }>(
+      await postBulk({
+        order_ids: [ORDER_1],
+        revenue_accounts: { '0': '3051' },
+      }),
+    )
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_REVENUE_ACCOUNT_RATE_MISMATCH')
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('accepts an unconfigured momsfri account in the rate-0 slot', async () => {
+    // Export/EU/momsfri accounts are usually unconfigured; only a resolved
+    // TAXABLE rate contradicts the 0% slot.
+    enqueue({
+      data: [
+        makeOrderRow({
+          total: 500,
+          total_sek: 500,
+          total_tax: 0,
+          vat_breakdown: [{ rate: 0, net: 500, tax: 0 }],
+        }),
+      ],
+    })
+    enqueue({ data: [] }) // store settings
+    enqueue({
+      data: [
+        {
+          account_number: '3105',
+          account_name: 'Försäljning varor till land utanför EU',
+          is_active: true,
+          default_vat_rate: null,
+          default_vat_treatment: null,
+        },
+      ],
+    }) // chart check
+    enqueue({ data: [{ id: ORDER_1 }] }) // claim
+    const { status, body } = await parseJsonResponse<BulkResponse>(
+      await postBulk({
+        order_ids: [ORDER_1],
+        revenue_accounts: { '0': '3105' },
+      }),
+    )
+    expect(status).toBe(200)
+    expect(body.data.booked_count).toBe(1)
+    const lines = (
+      mockCreateDraftEntry.mock.calls[0][3] as {
+        lines: { account_number: string; credit_amount: number }[]
+      }
+    ).lines
+    expect(lines.find((l) => l.account_number === '3105')?.credit_amount).toBe(500)
+  })
+
   it('accepts a custom account qualified by its rate-conforming number and name', async () => {
     // No explicit momssats, but 3041 + a name naming exactly "25 % moms"
     // is what the ruta 05 report logic itself accepts (inferDomesticSalesRate).
