@@ -955,3 +955,61 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
     expect(supabase.from).not.toHaveBeenCalled()
   })
 })
+
+describe('gnubok_bulk_book_transactions: approval-queue title', () => {
+  // Feedback seq 261545: "Samlingsverifikation: 1 transaktioner 2026-07-22"
+  // carried no amount, direction or counterparty, so the CEO approving from a
+  // phone could not tell what he was authorising.
+  it('carries direction, amount, currency, date and the lead counterparty', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const inserts = captureInserts(supabase)
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: REGISTRY_ROWS, error: null })
+    enqueue({ data: VALUE_ROWS, error: null })
+    enqueue({
+      data: [
+        { id: 'tx-1', amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
+        { id: 'tx-2', amount: -600, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '4010', account_name: 'Inköp material och varor' },
+        { account_number: '1930', account_name: 'Företagskonto' },
+      ],
+      error: null,
+    })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-bulk-title' }, error: null })
+
+    await bulkBookTransactions.execute(
+      {
+        tx_ids: ['tx-1', 'tx-2'],
+        default_dimensions: { '6': 'villa almgren tak' },
+        new_entry: {
+          description: 'Samlingsverifikation material',
+          lines: [
+            { account_number: '4010', debit_amount: 1000, credit_amount: 0, currency: 'SEK', dimensions: { '1': 'KS01' } },
+            { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+          ],
+        },
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    const staged = inserts.find((i) => i.table === 'pending_operations')
+    expect(staged).toBeDefined()
+    const title = staged!.payload.title as string
+    expect(title).toContain('Samlingsverifikation')
+    expect(title).toContain('1 000,00 SEK')
+    expect(title).toMatch(/^Samlingsverifikation -/)
+    expect(title).toContain('2026-05-12')
+    expect(title).toContain('NORDNET UTTAG')
+    expect(title).toContain('(+1 till)')
+  })
+})
