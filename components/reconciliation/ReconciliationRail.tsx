@@ -1,8 +1,9 @@
 'use client'
 
-import { Fragment } from 'react'
+import { Fragment, useState } from 'react'
 import Image from 'next/image'
 import { useTranslations } from 'next-intl'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
 
@@ -63,10 +64,38 @@ interface ReconciliationRailProps {
   onSelect: (accountKey: string) => void
 }
 
+const MANUAL_OPEN_STORAGE_KEY = 'Accounted:recon-rail-manual-open'
+
 export function ReconciliationRail({ accounts, selectedKey, onSelect }: ReconciliationRailProps) {
   const t = useTranslations('reconciliation')
   const fed = accounts.filter((a) => a.kind !== 'manual')
   const manual = accounts.filter((a) => a.kind === 'manual')
+  const selectedIsManual = selectedKey?.startsWith('manual:') ?? false
+
+  // The manual group folds: a migrated company has twenty-odd balance
+  // accounts, and the bank rows must stay in view. It opens when a manual
+  // account is selected and otherwise remembers the last choice per browser.
+  const [manualOpen, setManualOpen] = useState<boolean>(() => {
+    if (selectedIsManual) return true
+    try {
+      return window.localStorage.getItem(MANUAL_OPEN_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  // Derived, not synced: the selected row must stay visible.
+  const showManual = manualOpen || selectedIsManual
+  const toggleManual = () => {
+    setManualOpen((open) => {
+      try {
+        window.localStorage.setItem(MANUAL_OPEN_STORAGE_KEY, open ? '0' : '1')
+      } catch {
+        // Per-browser convenience only.
+      }
+      return !open
+    })
+  }
+  const manualUnsigned = manual.filter((a) => a.status?.state !== 'reconciled').length
 
   const stateLabel = (account: ReconciliationAccount): string => {
     const state = account.status?.state ?? 'unknown'
@@ -150,15 +179,31 @@ export function ReconciliationRail({ accounts, selectedKey, onSelect }: Reconcil
         {fed.map(renderRow)}
         {manual.length > 0 && (
           <Fragment>
-            {fed.length > 0 && (
-              <li
-                aria-hidden
-                className="mt-3 px-3 pb-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
+            <li className={cn(fed.length > 0 && 'mt-3')}>
+              <button
+                type="button"
+                onClick={toggleManual}
+                aria-expanded={showManual}
+                aria-controls="recon-rail-manual"
+                className="flex w-full items-center gap-1.5 rounded-lg px-3 py-1.5 text-left text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground hover:bg-muted/60"
               >
-                {t('rail_group_manual')}
-              </li>
+                {showManual ? (
+                  <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
+                ) : (
+                  <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+                )}
+                <span className="min-w-0 flex-1 truncate">{t('rail_group_manual')}</span>
+                <span className="shrink-0 normal-case tracking-normal tabular-nums" data-ph-mask>
+                  {manualUnsigned > 0 ? t('rail_group_manual_unsigned', { count: manualUnsigned, total: manual.length }) : String(manual.length)}
+                </span>
+              </button>
+            </li>
+            {showManual && (
+              <Fragment>
+                <li id="recon-rail-manual" className="sr-only" aria-hidden />
+                {manual.map(renderRow)}
+              </Fragment>
             )}
-            {manual.map(renderRow)}
           </Fragment>
         )}
       </ul>

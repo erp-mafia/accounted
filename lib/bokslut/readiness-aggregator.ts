@@ -7,6 +7,7 @@ import { generateReconciliation as generateAPReconciliation } from '@/lib/report
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 import { createLogger } from '@/lib/logger'
 import { describeFiscalYearGap, findFiscalYearGaps, type PeriodLike } from '@/lib/bookkeeping/fiscal-year-gaps'
+import { listReconciliationAccounts } from '@/lib/reconciliation/service'
 import type { YearEndBlocker, YearEndValidation } from '@/types'
 
 const log = createLogger('bokslut-readiness')
@@ -233,6 +234,32 @@ export async function buildBokslutReadinessReport(
     message:
       'Periodiseringar (förutbetalda kostnader 17xx, upplupna kostnader 29xx) bokas manuellt. Tänk på att vända dem 1 januari nästa år.',
   })
+
+  // Bokslutsbilagor: every balance account signed off per balansdagen is what
+  // Reko 760/765 asks for. Advisory: a failed read costs only this reminder.
+  try {
+    const accounts = await listReconciliationAccounts(supabase, companyId, {
+      today: period.period_end,
+      windowFrom: period.period_start,
+      windowTo: period.period_end,
+      withStatus: false,
+    })
+    const live = accounts.filter((a) => !a.superseded_by)
+    const unsigned = live.filter((a) => !a.signed_off_through || a.signed_off_through < period.period_end)
+    if (live.length > 0) {
+      reminders.push({
+        code: 'bilagor_unsigned',
+        severity: unsigned.length > 0 ? 'warning' : 'info',
+        message:
+          unsigned.length > 0
+            ? `${unsigned.length} av ${live.length} balanskonton är inte signerade per balansdagen ${period.period_end}. Bokslutsbilagorna samlar avstämning, underlag och signering per konto.`
+            : `Alla ${live.length} balanskonton är signerade per balansdagen ${period.period_end}. Bokslutsbilagorna kan skrivas ut.`,
+        href: '/reports/bokslutsbilagor',
+      })
+    }
+  } catch (err) {
+    log.warn('bilagor reminder failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
+  }
 
   if (entityType === 'enskild_firma') {
     // Pre-compute the EF declaration so the wizard's overview reflects what

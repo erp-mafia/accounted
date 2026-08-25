@@ -618,6 +618,33 @@ describe('generateTrialBalance', () => {
     expect(tables).not.toContain('journal_entry_lines')
   })
 
+  it('does not fail closed for a period klarmarkerad in a previous system (closed_externally)', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: {
+            period_start: '2024-01-01',
+            period_end: '2024-12-31',
+            opening_balance_entry_id: null,
+            closing_entry_id: null,
+            is_closed: true,
+            closed_externally: true,
+          },
+          error: null,
+        },
+      ],
+      journal_entries: [{ data: [], error: null }],
+      journal_entry_lines: [{ data: [], error: null }],
+      chart_of_accounts: [{ data: [], error: null }],
+    }
+
+    // The closing verifikat lives in the old software: nothing to strip, the
+    // booked balances are the statutory pre-closing balances.
+    await expect(
+      generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'exclude-final' }),
+    ).resolves.toMatchObject({ isBalanced: true })
+  })
+
   it('keeps year-end adjustments for an open period without a final closing entry', async () => {
     mockResults = {
       fiscal_periods: [
