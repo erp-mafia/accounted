@@ -40,13 +40,23 @@ export const DEFAULT_PAYMENT_ACCOUNT = '1686'
 /** BAS 2026 name for DEFAULT_PAYMENT_ACCOUNT; used when adding it to a chart. */
 export const DEFAULT_PAYMENT_ACCOUNT_NAME = 'Fordringar för kontokort och kuponger'
 
-/** Revenue account per Swedish VAT rate (BAS 2026). */
-const REVENUE_ACCOUNT_BY_RATE: Record<number, string> = {
+/**
+ * Default revenue account per Swedish VAT rate: the standard BAS 2026
+ * "Försäljning inom Sverige" accounts. Exported so the bulk dialog can
+ * prefill its per-rate revenue pickers with the effective defaults. BAS 2026
+ * has no standard goods/services subdivision of 30xx (such a split, e.g. an
+ * own 3040-series, is company-specific), which is why the revenue template
+ * is a per-rate account choice against the company's own chart rather than
+ * a hardcoded varor/tjänster preset.
+ */
+export const DEFAULT_REVENUE_ACCOUNT_BY_RATE: Readonly<Record<number, string>> = {
   25: '3001',
   12: '3002',
   6: '3003',
   0: '3004',
 }
+
+const REVENUE_ACCOUNT_BY_RATE = DEFAULT_REVENUE_ACCOUNT_BY_RATE
 
 /** Output VAT account per rate. */
 const VAT_ACCOUNT_BY_RATE: Record<number, string> = {
@@ -207,6 +217,12 @@ export interface OrderBookingLinesInput {
   settings?: WebshopStoreSettings | null
   /** Explicit override of the payment counter-account (dialog edit). */
   paymentAccount?: string
+  /**
+   * Revenue template: revenue account per Swedish VAT rate. A rate not in
+   * the map falls back to DEFAULT_REVENUE_ACCOUNT_BY_RATE. Only the revenue
+   * side is templated; output VAT accounts are always derived from the rate.
+   */
+  revenueAccounts?: Partial<Record<number, string>>
 }
 
 /**
@@ -217,6 +233,7 @@ export function buildOrderBookingLines({
   order,
   settings,
   paymentAccount,
+  revenueAccounts,
 }: OrderBookingLinesInput): CreateJournalEntryLineInput[] {
   const isSek = order.currency.toUpperCase() === 'SEK'
   const rate = isSek ? 1 : order.exchange_rate
@@ -287,7 +304,9 @@ export function buildOrderBookingLines({
   }
   for (const bucket of breakdown) {
     const revenueAccount =
-      REVENUE_ACCOUNT_BY_RATE[bucket.rate] ?? REVENUE_ACCOUNT_BY_RATE[25]
+      revenueAccounts?.[bucket.rate] ??
+      REVENUE_ACCOUNT_BY_RATE[bucket.rate] ??
+      REVENUE_ACCOUNT_BY_RATE[25]
     const vatAccount = VAT_ACCOUNT_BY_RATE[bucket.rate] ?? VAT_ACCOUNT_BY_RATE[25]
     pushSigned(revenueAccount, round(bucket.net))
     pushSigned(vatAccount, round(bucket.tax))

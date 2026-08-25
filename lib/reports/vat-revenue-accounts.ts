@@ -17,7 +17,14 @@ const DOMESTIC_SALES_RATE_BY_SUFFIX: Record<string, number> = { '1': 0.25, '2': 
 const CONTRADICTING_ACCOUNT_NAME =
   /momsfri|momsfritt|utan moms|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|\boss\b|\b0\s*%/i
 
-function inferDomesticSalesRate(accountNumber: string, accountName: string): number | null {
+/**
+ * Infer the domestic-sales VAT rate a class 3 account represents from its
+ * number pattern (30x1/30x2/30x3) and a rate-naming account name. Exported
+ * for the webshop bulk sweep's revenue-template guard, which must accept an
+ * account for a rate exactly when this report logic would count it toward
+ * ruta 05 for that rate.
+ */
+export function inferDomesticSalesRate(accountNumber: string, accountName: string): number | null {
   const accountMatch = /^30\d([123])$/.exec(accountNumber)
   if (!accountMatch || CONTRADICTING_ACCOUNT_NAME.test(accountName)) return null
   const expectedRate = DOMESTIC_SALES_RATE_BY_SUFFIX[accountMatch[1]]

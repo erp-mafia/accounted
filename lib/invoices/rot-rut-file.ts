@@ -1,4 +1,5 @@
 import type { Invoice, InvoiceItem } from '@/types'
+import { truncateToWholeKronor } from '@/lib/money'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { deductionSekConverter, SCHABLON_WORK_TYPES, type DeductionType } from './rot-rut-rules'
 
@@ -377,7 +378,15 @@ export function evaluateInvoiceForFile(
   const prisForArbete = Math.round(
     typeLines.reduce((sum, l) => sum + toSek(l.line_total ?? 0) + toSek(l.vat_amount ?? 0), 0),
   )
-  const begartBelopp = Math.round(
+  // BegartBelopp rounds DOWN (truncateToWholeKronor, the Skatteverket-bound
+  // amount rule): skattereduktionen is capped at a share of the work price
+  // (HUSFL: 50 % RUT / 30 % ROT), so a deduction with öre, 62,50 or 187,50,
+  // must become 62 / 187, never 63 / 188. Half-up rounding requested more
+  // than the cap and the 1513 fordran: at the exact RUT cap it manufactured
+  // begärt > betalt and blocked a correct invoice; below the cap (ROT 30 %)
+  // it over-requested by up to a krona. The helper öre-rounds before
+  // truncating so float noise (62.499999...) cannot drop a whole krona.
+  const begartBelopp = truncateToWholeKronor(
     typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0),
   )
   const betaltBelopp = prisForArbete - begartBelopp
@@ -390,9 +399,11 @@ export function evaluateInvoiceForFile(
     return block('ZERO_DEDUCTION', 'Fakturans ROT/RUT-avdrag är 0 kr: det finns inget belopp att begära.')
   }
   // The buyer must have paid at least as much as is being requested
-  // (skattereduktionen är max 50 % av arbetskostnaden). Independent rounding
-  // of pris/begärt could otherwise even push BetaltBelopp negative, which
-  // Skatteverkets schema rejects outright.
+  // (skattereduktionen är max 50 % av arbetskostnaden). With begärt floored,
+  // any invoice whose ledger deduction respects the cap passes by
+  // construction (2*floor(D) is an integer <= pris <= round(pris)); this
+  // guard now only catches corrupted deduction data, where BetaltBelopp
+  // could even go negative, which Skatteverkets schema rejects outright.
   if (begartBelopp > betaltBelopp) {
     return block(
       'DEDUCTION_EXCEEDS_PAYMENT',

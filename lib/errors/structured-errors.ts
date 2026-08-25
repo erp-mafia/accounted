@@ -3921,6 +3921,20 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The order has a VAT rate that is not a Swedish rate (25/12/6/0 %), for example foreign OSS VAT. Book the order individually and review the lines.',
   },
+  WEBSHOP_ORDER_REVENUE_ACCOUNT_RATE_MISMATCH: {
+    httpStatus: 422,
+    message_sv:
+      'Ett valt intäktskonto är inte upplagt för momssatsen det ska ta emot, så försäljningen skulle falla ur momsdeklarationens ruta 05. Ange kontots momssats i kontoplanen (eller välj ett konto för rätt sats) och försök igen.',
+    message_en:
+      'A chosen revenue account is not configured for the VAT rate it would receive, so the sale would drop out of ruta 05 in the VAT declaration. Set the account VAT rate in the chart of accounts (or pick an account for the right rate) and try again.',
+  },
+  WEBSHOP_ORDER_REVENUE_ACCOUNT_UNKNOWN: {
+    httpStatus: 422,
+    message_sv:
+      'Ett valt intäktskonto finns inte i kontoplanen eller är inaktivt. Lägg till eller aktivera kontot under Kontoplan och försök igen.',
+    message_en:
+      'A chosen revenue account is not in the chart of accounts or is inactive. Add or activate the account in the chart of accounts and try again.',
+  },
   WEBSHOP_ORDER_RESIDUAL_TOO_LARGE: {
     httpStatus: 422,
     message_sv:
