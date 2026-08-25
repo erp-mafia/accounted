@@ -28,6 +28,7 @@ import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
+import { AttnLine } from '@/components/ui/attn-line'
 import ImportTheater from '@/components/import/ImportTheater'
 import {
   defaultImportOpeningBalancesOn,
@@ -155,6 +156,15 @@ export default function ImportReviewStep({
       setOptions((prev) => ({
         ...prev,
         voucherSeries: initial,
+        // Recompute with the effective transaction series excluded: file
+        // vouchers WITHOUT a series land in that series at import time, so
+        // the IB default must avoid it too (issue #1882). Safe to overwrite:
+        // the select is disabled until seriesLoaded, so no user choice can
+        // be clobbered here.
+        openingBalanceSeries: defaultOpeningBalanceSeries([
+          ...(preview.voucherSeriesInFile ?? []),
+          initial,
+        ]),
         importOpeningBalances: defaultImportOpeningBalancesOn({
           hasOpeningBalances: preview.openingBalanceTotal > 0,
           existingIbEntryCount: existingIb,
@@ -193,6 +203,13 @@ export default function ImportReviewStep({
   ) => {
     setOptions((prev) => ({ ...prev, [key]: value }))
   }
+
+  // Series used by the file's own #VER records, uppercased for comparison.
+  // Booking the IB voucher in one of these consumes that series' next
+  // number and shifts the file's numbering by one (issue #1882).
+  const seriesInFile = new Set(
+    (preview.voucherSeriesInFile ?? []).map((s) => s.trim().toUpperCase())
+  )
 
   // Calculate what will be imported
   const mappedCount = mappings.filter((m) => m.targetAccount).length
@@ -369,13 +386,19 @@ export default function ImportReviewStep({
                 </SelectTrigger>
                 <SelectContent>
                   {SERIES_LETTERS.map((letter) => {
+                    // The collision that matters for the IB voucher is with
+                    // the FILE's own series (issue #1882): flag those first,
+                    // ahead of the company-sequence hints.
+                    const isInFile = seriesInFile.has(letter)
                     const isDefault = defaultSeries === letter
                     const isExisting = existingSeries.has(letter)
-                    const suffix = isDefault
-                      ? ', standard'
-                      : isExisting
-                        ? ', används redan'
-                        : ''
+                    const suffix = isInFile
+                      ? `, ${t('ib_series_in_file')}`
+                      : isDefault
+                        ? ', standard'
+                        : isExisting
+                          ? ', används redan'
+                          : ''
                     return (
                       <SelectItem key={letter} value={letter}>
                         {`Serie ${letter}${suffix}`}
@@ -384,7 +407,11 @@ export default function ImportReviewStep({
                   })}
                 </SelectContent>
               </Select>
-              <p className="text-sm text-muted-foreground">{t('ib_series_hint')}</p>
+              {seriesInFile.has(options.openingBalanceSeries.toUpperCase()) ? (
+                <AttnLine>{t('ib_series_collision')}</AttnLine>
+              ) : (
+                <p className="text-sm text-muted-foreground">{t('ib_series_hint')}</p>
+              )}
             </div>
           )}
 

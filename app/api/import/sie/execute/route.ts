@@ -112,7 +112,12 @@ export const POST = withRouteContext(
           // Series for the Ingående balanser voucher (issue #1882). Optional:
           // executeSIEImport falls back to a series the file's vouchers do
           // not use, never the hardcoded 'A' that shifted the A numbering.
-          openingBalanceSeries: options.openingBalanceSeries || undefined,
+          // Type-checked: this route has no Zod schema on options, and a
+          // non-string must fall back, not crash mid-import.
+          openingBalanceSeries:
+            typeof options.openingBalanceSeries === 'string'
+              ? options.openingBalanceSeries
+              : undefined,
           updateAccountNames: options.updateAccountNames ?? true,
           markImportedNoDocRequired: options.markImportedNoDocRequired ?? false,
         },

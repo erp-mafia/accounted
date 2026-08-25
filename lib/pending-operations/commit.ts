@@ -4697,8 +4697,10 @@ async function commitImportSie(
   const voucherSeries = params.voucher_series as string | undefined
   // Optional IB-voucher series (issue #1882). Absent on operations staged
   // before the param existed: executeSIEImport then defaults to a series
-  // the file's own vouchers do not use.
-  const openingBalanceSeries = params.opening_balance_series as string | undefined
+  // the file's own vouchers do not use. Type-checked, not cast: staged
+  // params are caller-supplied JSON.
+  const openingBalanceSeries =
+    typeof params.opening_balance_series === 'string' ? params.opening_balance_series : undefined
   // Default true (not Boolean(...): operations staged before this param
   // existed must keep the file's account names, matching the UI default).
   const updateAccountNames =

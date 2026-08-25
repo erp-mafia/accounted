@@ -15880,7 +15880,12 @@ export const tools: McpTool[] = [
           import_opening_balances: Boolean(args.import_opening_balances),
           import_transactions: Boolean(args.import_transactions),
           voucher_series: args.voucher_series,
-          opening_balance_series: args.opening_balance_series,
+          // Hosts do not always enforce inputSchema: a non-string must fall
+          // back to the engine default, not crash at commit time.
+          opening_balance_series:
+            typeof args.opening_balance_series === 'string'
+              ? args.opening_balance_series
+              : undefined,
           // Default true: Boolean(undefined) would silently flip it off.
           update_account_names:
             args.update_account_names === undefined ? true : Boolean(args.update_account_names),

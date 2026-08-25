@@ -158,7 +158,17 @@ function standardQueues(): Record<string, QueuedResult[]> {
     ],
     journal_entries: [
       { count: 0 }, // companyHasPriorActivity: first-ever import
-      { count: 0 }, // orphan-IB guard: no surviving IB voucher
+      { data: [] }, // orphan-IB guard: no surviving IB voucher
+    ],
+  }
+}
+
+/** Lines matching makeParsedFile()'s IB: 1930 D 5000 / 2010 K 5000. */
+function matchingOrphanLines(): QueuedResult {
+  return {
+    data: [
+      { account_number: '1930', debit_amount: 5000, credit_amount: 0 },
+      { account_number: '2010', debit_amount: 0, credit_amount: 5000 },
     ],
   }
 }
@@ -297,6 +307,84 @@ describe('executeSIEImport: IB voucher series (issue #1882)', () => {
     const input = vi.mocked(createJournalEntry).mock.calls[0][3]
     expect(input.voucher_series).toBe('M')
   })
+
+  it('falls back to the default when openingBalanceSeries is not a string', async () => {
+    const result = await executeSIEImport(
+      buildRoutingSupabase(standardQueues()),
+      'company-1',
+      'user-1',
+      makeParsedFile(),
+      standardMappings,
+      // Web execute and MCP accept untyped JSON: a non-string must not
+      // crash mid-import (after the fiscal period is already created).
+      { ...standardOptions, openingBalanceSeries: 123 as unknown as string },
+    )
+
+    expect(result.errors).toEqual([])
+    expect(result.success).toBe(true)
+    const input = vi.mocked(createJournalEntry).mock.calls[0][3]
+    expect(input.voucher_series).toBe('M')
+  })
+
+  it('avoids the effective default series when the file has series-less vouchers', async () => {
+    // Series-less #VER records resolve to options.voucherSeries at import
+    // time, so an IB voucher in that series would shift their numbering:
+    // the same #1882 pattern through the fallback.
+    const parsed = makeParsedFile({
+      vouchers: [makeVoucher('', 1), makeVoucher('', 2)],
+      stats: {
+        totalAccounts: 2,
+        totalVouchers: 2,
+        totalTransactionLines: 4,
+        fiscalYearStart: '2024-01-01',
+        fiscalYearEnd: '2024-12-31',
+      },
+    })
+
+    const result = await executeSIEImport(
+      buildRoutingSupabase(standardQueues()),
+      'company-1',
+      'user-1',
+      parsed,
+      standardMappings,
+      { ...standardOptions, voucherSeries: 'M' },
+    )
+
+    expect(result.success).toBe(true)
+    const input = vi.mocked(createJournalEntry).mock.calls[0][3]
+    expect(input.voucher_series).toBe('O')
+  })
+
+  it('warns when an explicitly chosen IB series collides with the file', async () => {
+    const parsed = makeParsedFile({
+      vouchers: [makeVoucher('A', 1)],
+      stats: {
+        totalAccounts: 2,
+        totalVouchers: 1,
+        totalTransactionLines: 2,
+        fiscalYearStart: '2024-01-01',
+        fiscalYearEnd: '2024-12-31',
+      },
+    })
+
+    const result = await executeSIEImport(
+      buildRoutingSupabase(standardQueues()),
+      'company-1',
+      'user-1',
+      parsed,
+      standardMappings,
+      // importTransactions must be on for the shift to be real: the
+      // warning is gated on it.
+      { ...standardOptions, importTransactions: true, openingBalanceSeries: 'A' },
+    )
+
+    expect(result.warnings.join(' ')).toMatch(
+      /Vald verifikationsserie för ingående balanser \(A\) används även av filens verifikationer/
+    )
+    // The choice is honored: the caller may know better.
+    const input = vi.mocked(createJournalEntry).mock.calls[0][3]
+    expect(input.voucher_series).toBe('A')
+  })
 })
 
 describe('executeSIEImport: orphan-IB guard (issue #1882)', () => {
@@ -304,11 +392,17 @@ describe('executeSIEImport: orphan-IB guard (issue #1882)', () => {
     vi.clearAllMocks()
   })
 
-  it('skips IB creation when a posted IB voucher already exists in the period', async () => {
+  it('skips IB creation and relinks the surviving voucher when one posted IB already exists', async () => {
     const queues = standardQueues()
     queues.journal_entries = [
       { count: 0 }, // companyHasPriorActivity: replace deleted all import entries
-      { count: 1 }, // orphan-IB guard: a prior import's IB voucher survived
+      { data: [{ id: 'orphan-ib-1' }] }, // orphan-IB guard: one survivor
+    ]
+    queues.journal_entry_lines = [matchingOrphanLines()]
+    queues.fiscal_periods = [
+      { data: { id: 'fp-1' } },
+      { data: { opening_balances_set: false, opening_balance_entry_id: null } },
+      {}, // linkOpeningBalanceEntryToPeriod update: ok
     ]
 
     const result = await executeSIEImport(
@@ -322,11 +416,76 @@ describe('executeSIEImport: orphan-IB guard (issue #1882)', () => {
 
     expect(createJournalEntry).not.toHaveBeenCalled()
     expect(result.openingBalanceEntryId).toBeNull()
-    expect(result.warnings.join(' ')).toMatch(
-      /verifikation för ingående balanser finns redan i räkenskapsåret/
-    )
+    const warnings = result.warnings.join(' ')
+    expect(warnings).toMatch(/verifikation för ingående balanser finns redan i räkenskapsåret/)
+    // Relinked: the survivor becomes the period's OB entry again, so
+    // reports, year-end's duplicate-IB blocker, and the manual IB gate
+    // all see it.
+    expect(warnings).toMatch(/har kopplats som räkenskapsårets ingående balans/)
+    // Amounts match the file: no stale-IB callout.
+    expect(warnings).not.toMatch(/skiljer sig/)
     expect(result.success).toBe(true)
     expect(result.errors).toEqual([])
+  })
+
+  it('calls out a surviving IB whose amounts differ from the file', async () => {
+    const queues = standardQueues()
+    queues.journal_entries = [
+      { count: 0 },
+      { data: [{ id: 'orphan-ib-1' }] },
+    ]
+    // Stale orphan: 1930 D 4000 (file says 5000).
+    queues.journal_entry_lines = [
+      {
+        data: [
+          { account_number: '1930', debit_amount: 4000, credit_amount: 0 },
+          { account_number: '2010', debit_amount: 0, credit_amount: 4000 },
+        ],
+      },
+    ]
+    queues.fiscal_periods = [
+      { data: { id: 'fp-1' } },
+      { data: { opening_balances_set: false, opening_balance_entry_id: null } },
+      {}, // relink update: ok
+    ]
+
+    const result = await executeSIEImport(
+      buildRoutingSupabase(queues),
+      'company-1',
+      'user-1',
+      makeParsedFile(),
+      standardMappings,
+      standardOptions,
+    )
+
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    const warnings = result.warnings.join(' ')
+    expect(warnings).toMatch(/skiljer sig från filens ingående balanser/)
+    expect(warnings).toMatch(/Ångra \(storno\)/)
+    expect(result.success).toBe(true)
+  })
+
+  it('skips without relinking when several posted IB vouchers exist', async () => {
+    const queues = standardQueues()
+    queues.journal_entries = [
+      { count: 0 },
+      { data: [{ id: 'orphan-ib-1' }, { id: 'orphan-ib-2' }] },
+    ]
+
+    const result = await executeSIEImport(
+      buildRoutingSupabase(queues),
+      'company-1',
+      'user-1',
+      makeParsedFile(),
+      standardMappings,
+      standardOptions,
+    )
+
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    const warnings = result.warnings.join(' ')
+    expect(warnings).toMatch(/2 verifikationer för ingående balanser finns redan/)
+    expect(warnings).not.toMatch(/har kopplats/)
+    expect(result.success).toBe(true)
   })
 
   it('fails closed against duplication when the orphan check errors', async () => {
