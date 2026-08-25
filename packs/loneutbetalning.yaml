@@ -12,7 +12,7 @@ meta:
     Bruttolön debiteras 7010, avdragen personalskatt krediteras 2710 och
     nettolönen krediteras 1930. Skatteandelen här är schablonmässiga 30 %:
     justera raderna efter det faktiska skatteavdraget enligt skattetabell.
-    Arbetsgivaravgifter (7510/2730) och semesterlöneskuld (7290/2920) bokas
+    Arbetsgivaravgifter (7510/2731) och semesterlöneskuld (7290/2920) bokas
     som egna verifikat, inte i den här mallen.
 lines:
   - account: '7010'
