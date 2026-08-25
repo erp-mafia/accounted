@@ -572,7 +572,7 @@ describe('ensureFiscalPeriod validation', () => {
       { data: [], error: null },
       { data: [], error: null },
       { data: { id: 'fp-2025' }, error: null },
-      { data: [{ id: 'fp-2026' }], error: null },
+      { data: [{ id: 'fp-2026', period_start: '2026-01-01' }], error: null },
       { data: null, error: null },
     ])
 
@@ -587,6 +587,72 @@ describe('ensureFiscalPeriod validation', () => {
     expect(findCalls('fiscal_periods', 'update')).toContainEqual([
       { previous_period_id: 'fp-2025' },
     ])
+  })
+
+  // previous_period_id means "the räkenskapsår immediately before". Linking
+  // the NEAREST period across a gap of missing years made year-end seed a
+  // company's opening balances two years forward (feedback seq 249297): the
+  // chain must only ever be wired between date-adjacent periods.
+  it('does not relink a successor that is not date-adjacent (gap of missing years)', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: { id: 'fp-2024-25' }, error: null },
+      // Onboarding-seeded 2026/2027 exists; 2025/2026 is missing.
+      { data: [{ id: 'fp-2026-27', period_start: '2026-05-01' }], error: null },
+    ])
+
+    const id = await ensureFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2024-05-01',
+      '2025-04-30',
+    )
+
+    expect(id).toBe('fp-2024-25')
+    expect(findCalls('fiscal_periods', 'update')).toEqual([])
+  })
+
+  it('links the predecessor only when it ends the day before the new period starts', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null },
+      { data: [], error: null },
+      { data: [{ id: 'fp-2022', period_end: '2022-12-31' }], error: null }, // nearest, but 2023-2024 missing
+      { data: { id: 'fp-2025' }, error: null },
+      { data: [], error: null },
+    ])
+
+    await ensureFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2025-01-01',
+      '2025-12-31',
+    )
+
+    const [insertPayload] = findCalls('fiscal_periods', 'insert')[0] as [{ previous_period_id: string | null }]
+    expect(insertPayload.previous_period_id).toBeNull()
+
+    const adjacent = createQueuedMockSupabase()
+    adjacent.enqueueMany([
+      { data: null, error: null },
+      { data: [], error: null },
+      { data: [{ id: 'fp-2024', period_end: '2024-12-31' }], error: null },
+      { data: { id: 'fp-2025' }, error: null },
+      { data: [], error: null },
+    ])
+
+    await ensureFiscalPeriod(
+      adjacent.supabase as unknown as Supabase,
+      'company-id',
+      '2025-01-01',
+      '2025-12-31',
+    )
+
+    const [adjacentPayload] = adjacent.findCalls('fiscal_periods', 'insert')[0] as [{ previous_period_id: string | null }]
+    expect(adjacentPayload.previous_period_id).toBe('fp-2024')
   })
 
   // BFL 3 kap. caps any räkenskapsår at 18 months (12 is the norm; 18 is the

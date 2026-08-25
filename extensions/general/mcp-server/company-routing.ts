@@ -28,7 +28,7 @@ interface ToolSchemaSource {
   inputSchema: Record<string, unknown>
 }
 
-function codedError(
+export function codedError(
   code: 'VALIDATION_ERROR' | 'NOT_FOUND' | 'FORBIDDEN' | 'INTERNAL_ERROR',
   message: string
 ) {

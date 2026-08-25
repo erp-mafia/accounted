@@ -615,14 +615,24 @@ export async function ensureFiscalPeriod(
   // route: point this period at its closest predecessor, then relink the
   // immediate successor (if any) to follow this one, so multi-year SIE files
   // chain correctly regardless of the order #RAR years are processed in.
+  //
+  // Adjacency is required on both sides. previous_period_id means "the
+  // räkenskapsår immediately before", and year-end seeds opening balances
+  // into whatever follows the chain: linking the NEAREST period across a gap
+  // of missing years once sent a company's IB two years forward (feedback
+  // seq 249297). A gap stays unlinked until the missing year is imported.
   const { data: predecessors } = await supabase
     .from('fiscal_periods')
-    .select('id')
+    .select('id, period_end')
     .eq('company_id', companyId)
     .lt('period_end', startDate)
     .order('period_end', { ascending: false })
     .limit(1)
-  const previousPeriodId = predecessors && predecessors.length > 0 ? predecessors[0].id : null
+  const nearestPredecessor = predecessors && predecessors.length > 0 ? predecessors[0] : null
+  const previousPeriodId =
+    nearestPredecessor && nearestPredecessor.period_end === shiftIsoDate(startDate, -1)
+      ? nearestPredecessor.id
+      : null
 
   const { data: newPeriod, error } = await supabase
     .from('fiscal_periods')
@@ -643,16 +653,21 @@ export async function ensureFiscalPeriod(
   }
 
   // Relink the immediate successor (e.g. when an earlier year is imported after
-  // a later one) so the chain holds in both directions.
+  // a later one) so the chain holds in both directions. Only a successor that
+  // starts the day after this period qualifies (see above).
   const { data: successors } = await supabase
     .from('fiscal_periods')
-    .select('id')
+    .select('id, period_start')
     .eq('company_id', companyId)
     .gt('period_start', endDate)
     .neq('id', newPeriod.id)
     .order('period_start', { ascending: true })
     .limit(1)
-  if (successors && successors.length > 0) {
+  if (
+    successors &&
+    successors.length > 0 &&
+    successors[0].period_start === shiftIsoDate(endDate, 1)
+  ) {
     await supabase
       .from('fiscal_periods')
       .update({ previous_period_id: newPeriod.id })
@@ -661,6 +676,13 @@ export async function ensureFiscalPeriod(
   }
 
   return newPeriod.id
+}
+
+/** Shift a YYYY-MM-DD string by `days` in pure UTC (no local DST drift). */
+function shiftIsoDate(isoDate: string, days: number): string {
+  const d = new Date(isoDate + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
 }
 
 /**

@@ -102,6 +102,12 @@ export async function listAccountItems(
   const limit = clampLimit(options.limit)
   const offset = Math.max(0, Math.floor(options.offset ?? 0))
 
+  // A manual account has no external rows to bucket: its bridge is IB,
+  // movement and UB against a specification or the signer's underlag.
+  if (parsed.kind === 'manual') {
+    return { items: [], count: 0, total_count: 0, has_more: false, older_unmatched_count: 0 }
+  }
+
   if (parsed.kind === 'skattekonto') {
     const status = await getSkattekontoReconciliationStatus(supabase, companyId, {
       today: options.today,

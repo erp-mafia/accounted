@@ -1,9 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Scale } from 'lucide-react'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -41,6 +44,7 @@ interface ReconciliationWorkspaceProps {
 
 export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: ReconciliationWorkspaceProps) {
   const t = useTranslations('reconciliation')
+  const tParm = useTranslations('bokslutsbilagor')
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -120,15 +124,6 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
       }
       action={
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <SegmentedControl
-            value={mode}
-            onChange={setMode}
-            aria-label={t('title')}
-            options={[
-              { value: 'overview', label: t('mode_overview') },
-              { value: 'match', label: t('mode_match') },
-            ]}
-          />
           <FyPicker
             value={periodId}
             onChange={(id, period) => {
@@ -198,12 +193,28 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
     )
   }
 
+  const railFooter = (
+    <Link href="/reports/bokslutsbilagor" className={cn(QUIET_LINK_CLASS, 'block px-3 pt-4 text-[12.5px]')}>
+      {tParm('open_parm')}
+    </Link>
+  )
+
   return (
     <div className="space-y-6">
       {header}
+      {/* How the selected account is worked: a view of the body, so it sits with the body, not with the page scope. */}
+      <SegmentedControl
+        value={mode}
+        onChange={setMode}
+        aria-label={t('title')}
+        options={[
+          { value: 'overview', label: t('mode_overview') },
+          { value: 'match', label: t('mode_match') },
+        ]}
+      />
       {selected && mode === 'match' && (
         <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-          <ReconciliationRail accounts={accounts} selectedKey={selected.account_key} onSelect={select} />
+          <ReconciliationRail accounts={accounts} selectedKey={selected.account_key} onSelect={select} footer={railFooter} />
           <div className="min-w-0">
             <ManualMatchMode key={selected.account_key} account={selected} window={window} onChanged={() => void load()} />
           </div>
@@ -213,7 +224,7 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
         <AccountOverview
           key={selected.account_key}
           account={selected}
-          rail={<ReconciliationRail accounts={accounts} selectedKey={selected.account_key} onSelect={select} />}
+          rail={<ReconciliationRail accounts={accounts} selectedKey={selected.account_key} onSelect={select} footer={railFooter} />}
           otherBankAccounts={accounts.filter((a) => a.kind === 'bank' && a.account_key !== selected.account_key && !a.superseded_by)}
           window={window}
           onChanged={() => void load()}

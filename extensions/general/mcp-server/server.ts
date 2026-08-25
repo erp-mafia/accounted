@@ -154,11 +154,13 @@ import {
   addCompanyToNextHint,
   addCompanyToTopLevelNext,
   assertMcpCompanyWriteAccess,
+  codedError,
   extractRequestedCompany,
   isCompanyDependentTool,
   projectToolInputSchema,
   resolveMcpCompanyContext,
 } from './company-routing'
+import { findUnknownArgKeys, listArgKeys } from './arg-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import {
   matchSupplierByIdentity,
@@ -9103,7 +9105,7 @@ export const tools: McpTool[] = [
 
       const { data: txs, error: txError } = await supabase
         .from('transactions')
-        .select('id, amount, currency, date, journal_entry_id')
+        .select('id, amount, currency, date, journal_entry_id, description, merchant_name')
         .in('id', txIds)
         .eq('company_id', companyId)
       if (txError || !txs || txs.length !== txIds.length) {
@@ -9203,10 +9205,24 @@ export const tools: McpTool[] = [
         })
       }
 
+      // The queue title is what a reviewer approves from (often on a phone):
+      // "Samlingsverifikation: 1 transaktioner 2026-07-22" carried no amount,
+      // direction or counterparty, so the approver could not tell what they
+      // were authorising (feedback seq 261545). Same per-tx text the
+      // categorize titles already carry; preview_data stays aggregate-only.
+      const batchTotal = txs.reduce((sum, t) => sum + Number(t.amount), 0)
+      const batchAmount =
+        `${direction === 'income' ? '+' : '-'}` +
+        `${Math.abs(batchTotal).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ` +
+        `${txs[0]!.currency ?? 'SEK'}`
+      const batchLead = String(txs[0]!.merchant_name || txs[0]!.description || '').trim().slice(0, 40)
+      const batchRest = txIds.length > 1 ? ` (+${txIds.length - 1} till)` : ''
+      const batchTitle = existingJeId
+        ? `Länka ${txIds.length} transaktioner ${batchAmount} ${txDate} till verifikat: ${batchLead}${batchRest}`
+        : `Samlingsverifikation ${batchAmount} ${txDate}: ${batchLead}${batchRest}`
+
       return stagePendingOperation(supabase, companyId, userId, 'bulk_book_transactions',
-        existingJeId
-          ? `Länka ${txIds.length} transaktioner till verifikat (${txDate})`
-          : `Samlingsverifikation: ${txIds.length} transaktioner ${txDate}`,
+        batchTitle,
         {
           tx_ids: txIds,
           existing_journal_entry_id: existingJeId,
@@ -9940,14 +9956,14 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_reconciliation_status',
     title: 'Reconciliation Status',
-    description: 'Reconciliation bridge for one account. Pass account_key ("skattekonto" or "bank:<cash_account_id>") for bridge lines + counts; without it, the legacy bank status for account_number (default 1930). Judge health on unexplained_difference, not difference.',
+    description: 'Reconciliation bridge. account_key: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>" (any other balance account, see its manual block). Without it: legacy bank status for account_number. Judge on unexplained_difference.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         account_key: {
           type: 'string',
-          description: '"skattekonto" or "bank:<cash_account_id>". When set, returns the account-keyed status (bridge[], counts, kind block).',
+          description: '"skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". Returns the account-keyed status (bridge[], counts, kind block); for manual keys date_to is the balansdag.',
         },
         date_from: { type: 'string', description: 'Start date YYYY-MM-DD' },
         date_to: { type: 'string', description: 'End date YYYY-MM-DD' },
@@ -10201,16 +10217,17 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_reconcile_signoff',
     title: 'Reconcile: Sign off',
-    description: 'Mark one account (skattekonto or bank:<cash_account_id>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0 through that date, or force + note. Writes nothing to the ledger. Stages (medium risk); dry_run previews.',
+    description: 'Mark one account (skattekonto, bank:<id> or manual:<BAS>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0, or force + note. Manual accounts without a specification take external_balance (underlag, ledger sign). Stages; dry_run previews.',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>".' },
+        account_key: { type: 'string', description: '"skattekonto", "bank:<cash_account_id>" or "manual:<BAS>".' },
         through_date: { type: 'string', description: 'Inclusive YYYY-MM-DD the account is reconciled through (not in the future; not past the skattekonto snapshot).' },
         note: { type: 'string', description: 'Free text. Required with force.' },
         force: { type: 'boolean', description: 'Sign despite an unexplained difference or an unknown outside balance. Needs note.' },
+        external_balance: { type: 'number', description: 'Manual accounts without a system specification only: balance per underlag, ledger sign (liabilities negative).' },
         dry_run: { type: 'boolean' },
         idempotency_key: { type: 'string' },
       },
@@ -10234,7 +10251,12 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         accountKey,
-        { through_date: throughDate, note: (args.note as string | undefined) ?? null, force: args.force === true },
+        {
+          through_date: throughDate,
+          note: (args.note as string | undefined) ?? null,
+          force: args.force === true,
+          external_balance: typeof args.external_balance === 'number' ? args.external_balance : null,
+        },
         { dryRun: true },
       )
       if (!preview) throw new Error(`Unknown account_key "${accountKey}" for this company`)
@@ -10252,6 +10274,7 @@ export const tools: McpTool[] = [
           through_date: throughDate,
           note: (args.note as string | undefined) ?? null,
           force: args.force === true,
+          external_balance: typeof args.external_balance === 'number' ? args.external_balance : null,
         },
         previewData,
         actor,
@@ -16901,6 +16924,7 @@ export const tools: McpTool[] = [
         error: { type: 'string' },
         error_code: { type: 'string' },
         auto_rejected: { type: 'boolean' },
+        operation_status: { type: 'string', enum: ['pending', 'committed', 'rejected', 'failed_partial'], description: 'pending = not consumed, re-approvable' },
       },
       required: ['status', 'operation_id'],
     },
@@ -17014,6 +17038,7 @@ export const tools: McpTool[] = [
         ...(result.error ? { error: result.error } : {}),
         ...(result.code ? { error_code: result.code } : {}),
         ...(result.auto_rejected ? { auto_rejected: true } : {}),
+        ...(result.operation_status ? { operation_status: result.operation_status } : {}),
       }
     },
   },
@@ -18537,6 +18562,19 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       try {
         const extracted = extractRequestedCompany(rawToolArgs)
         toolArgs = extracted.toolArgs
+
+        // Hosts do not reliably enforce inputSchema, so a misspelled
+        // parameter used to be dropped silently (see arg-guard.ts). Thrown
+        // inside this try so it reaches the caller as the structured
+        // VALIDATION_ERROR envelope, never as a half-applied call.
+        const unknownArgKeys = findUnknownArgKeys(tool.inputSchema as Record<string, unknown>, toolArgs)
+        if (unknownArgKeys.length > 0) {
+          throw codedError(
+            'VALIDATION_ERROR',
+            `Unknown parameter${unknownArgKeys.length > 1 ? 's' : ''} ${unknownArgKeys.map((k) => `"${k}"`).join(', ')} for ${requestedToolName}. ` +
+              `Valid parameters: ${listArgKeys(tool.inputSchema as Record<string, unknown>).join(', ') || '(none)'}. Unknown keys are rejected, not ignored.`,
+          )
+        }
 
         if (isCompanyDependentTool(toolName)) {
           const companyContext = await resolveMcpCompanyContext({
