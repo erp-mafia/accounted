@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildOrderBookingLines,
   fallbackVatBreakdown,
+  orderBookingDescription,
   resolveBookingWarnings,
   resolvePaymentAccount,
   DEFAULT_PAYMENT_ACCOUNT,
@@ -309,5 +310,48 @@ describe('resolveBookingWarnings', () => {
         customer_country: 'DK',
       }),
     ).toEqual(['foreign_vat'])
+  })
+})
+
+describe('orderBookingDescription', () => {
+  it('labels an order with its payment method', () => {
+    expect(
+      orderBookingDescription({
+        row_type: 'order',
+        order_number: '1001',
+        payment_method: 'swish',
+        payment_method_title: 'Swish',
+      }),
+    ).toBe('Order 1001 (Swish)')
+  })
+
+  it('falls back to the raw method key, then to no method', () => {
+    expect(
+      orderBookingDescription({
+        row_type: 'order',
+        order_number: '1001',
+        payment_method: 'swish',
+        payment_method_title: null,
+      }),
+    ).toBe('Order 1001 (swish)')
+    expect(
+      orderBookingDescription({
+        row_type: 'order',
+        order_number: '1001',
+        payment_method: null,
+        payment_method_title: null,
+      }),
+    ).toBe('Order 1001')
+  })
+
+  it('labels refunds without the method', () => {
+    expect(
+      orderBookingDescription({
+        row_type: 'refund',
+        order_number: '1001',
+        payment_method: 'swish',
+        payment_method_title: 'Swish',
+      }),
+    ).toBe('Återbetalning order 1001')
   })
 })

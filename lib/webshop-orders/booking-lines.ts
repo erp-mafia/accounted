@@ -55,8 +55,10 @@ const VAT_ACCOUNT_BY_RATE: Record<number, string> = {
   6: '2631',
 }
 
-/** Öresavrundning. */
-const ROUNDING_ACCOUNT = '3740'
+/** Öresavrundning. Exported so the bulk route can find and bound the
+ * residual line it emits (a residual above öre scale means the order's
+ * totals do not match its VAT breakdown and needs per-order review). */
+export const ROUNDING_ACCOUNT = '3740'
 
 /**
  * Every account this prefill can emit, as a closed set.
@@ -118,6 +120,21 @@ export function fallbackVatBreakdown(
   return [{ rate: 25, net, tax }]
 }
 
+/**
+ * VAT-bucket rates the account maps above can express (Swedish rates). A
+ * bucket with any other rate (e.g. a German 19% OSS bucket stored raw by the
+ * sync) would fall back to the 25% accounts: acceptable only as the single
+ * dialog's editable prefill, never in an unreviewed sweep. Returns the
+ * distinct offending rates, empty when every bucket is representable.
+ */
+export function unsupportedVatRates(breakdown: WebshopVatBreakdownLine[]): number[] {
+  const bad = new Set<number>()
+  for (const bucket of breakdown) {
+    if (REVENUE_ACCOUNT_BY_RATE[bucket.rate] === undefined) bad.add(bucket.rate)
+  }
+  return Array.from(bad).sort((a, b) => a - b)
+}
+
 export type BookingWarning = 'zero_rate_foreign' | 'foreign_vat'
 
 /**
@@ -151,6 +168,26 @@ export function resolveBookingWarnings(
     warnings.push('foreign_vat')
   }
   return warnings
+}
+
+/**
+ * The default verifikat/line description for an order or refund row. Kept as
+ * a single helper so the dialog prefill, the single-order route and the bulk
+ * route all label the booking identically.
+ */
+export function orderBookingDescription(
+  order: Pick<
+    WebshopOrder,
+    'row_type' | 'order_number' | 'payment_method' | 'payment_method_title'
+  >,
+): string {
+  if (order.row_type === 'refund') {
+    return `Återbetalning order ${order.order_number}`
+  }
+  const methodLabel = order.payment_method_title || order.payment_method || ''
+  return methodLabel
+    ? `Order ${order.order_number} (${methodLabel})`
+    : `Order ${order.order_number}`
 }
 
 export interface OrderBookingLinesInput {
@@ -201,13 +238,7 @@ export function buildOrderBookingLines({
 
   const toSek = (amount: number) => round(Math.abs(amount) * rate)
 
-  const methodLabel = order.payment_method_title || order.payment_method || ''
-  const baseDescription = methodLabel
-    ? `Order ${order.order_number} (${methodLabel})`
-    : `Order ${order.order_number}`
-  const description = isRefund
-    ? `Återbetalning order ${order.order_number}`
-    : baseDescription
+  const description = orderBookingDescription(order)
 
   const currencyMeta = (amountAbs: number): Partial<CreateJournalEntryLineInput> =>
     isSek

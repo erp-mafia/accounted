@@ -1625,6 +1625,20 @@ export const BookWebshopOrderSchema = z.object({
   notes: z.string().max(2000).optional(),
 })
 
+/**
+ * Bulk booking of webshop orders: each order books as its OWN verifikat
+ * through the same server-side flow as the single-order endpoint (never one
+ * combined journal write). Max 50 = one orders-page of selection.
+ */
+export const BulkBookWebshopOrdersSchema = z.object({
+  order_ids: z.array(uuid).min(1).max(50),
+  /**
+   * Optional override: prefill every order's payment leg against this
+   * account instead of the per-store payment-method mapping.
+   */
+  payment_account: accountNumber.optional(),
+})
+
 export const CreateInvoiceFromWebshopOrderSchema = z.object({
   /** Omitted: match by email/orgnr within the company, else create. */
   customer_id: uuid.optional(),
