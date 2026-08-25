@@ -81,9 +81,17 @@ export function ReconciliationRail({ accounts, selectedKey, onSelect }: Reconcil
     return synced ? t('rail_synced', { date: formatDate(synced) }) : t('rail_never_synced')
   }
 
+  // A manual account with nothing to compare against is not a problem, just
+  // not attested yet: neutral until it is signed or a specification differs.
+  const dotState = (account: ReconciliationAccount): keyof typeof DOT_CLASS => {
+    const state = account.status?.state ?? 'unknown'
+    if (account.kind === 'manual' && state === 'open' && account.status?.unexplained_difference == null) return 'unknown'
+    return state
+  }
+
   const renderRow = (account: ReconciliationAccount) => {
     const selected = account.account_key === selectedKey
-    const state = account.status?.state ?? 'unknown'
+    const state = dotState(account)
     const open = account.status
       ? account.status.open_counts.proposed +
         account.status.open_counts.unmatched_external +
