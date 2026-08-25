@@ -35,6 +35,7 @@ export interface OrderBookableFailure {
   code:
     | 'WEBSHOP_ORDER_ALREADY_BOOKED'
     | 'WEBSHOP_ORDER_ALREADY_INVOICED'
+    | 'WEBSHOP_ORDER_MANUALLY_BOOKED'
     | 'WEBSHOP_ORDER_REFUND_PARENT_INVOICED'
     | 'WEBSHOP_ORDER_NOT_PAID'
     | 'WEBSHOP_ORDER_LEGACY_TRANSACTION_BOOKED'
@@ -62,6 +63,14 @@ export async function assertOrderBookable(
     return {
       code: 'WEBSHOP_ORDER_ALREADY_INVOICED',
       details: { invoice_id: order.invoice_id },
+    }
+  }
+  // Marked as booked outside the integration: booking it here would post
+  // the same business event twice. The mark is user-reversible.
+  if (order.manually_booked_at) {
+    return {
+      code: 'WEBSHOP_ORDER_MANUALLY_BOOKED',
+      details: { manually_booked_at: order.manually_booked_at },
     }
   }
   // Refunds of an invoiced order belong in the credit-note flow.
@@ -233,9 +242,9 @@ export async function bookOrderThroughEngine(
     }
   }
 
-  // The claim guards BOTH links: a concurrent create-invoice between our
-  // read and this update must lose too (mutual exclusivity, not just
-  // no-double-booking).
+  // The claim guards BOTH links plus the manual mark: a concurrent
+  // create-invoice or mark-booked between our read and this update must
+  // lose too (mutual exclusivity, not just no-double-booking).
   const { data: claimed, error: claimError } = await supabase
     .from('webshop_orders')
     .update({ journal_entry_id: draft.id })
@@ -243,6 +252,7 @@ export async function bookOrderThroughEngine(
     .eq('company_id', companyId)
     .is('journal_entry_id', null)
     .is('invoice_id', null)
+    .is('manually_booked_at', null)
     .select('id')
   if (claimError || !claimed || claimed.length === 0) {
     await cancelDraft()

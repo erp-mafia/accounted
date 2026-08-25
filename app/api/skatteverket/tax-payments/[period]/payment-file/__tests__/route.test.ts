@@ -45,7 +45,7 @@ vi.mock('@/lib/branding/service', () => ({
 }))
 
 vi.mock('@/lib/skatteverket/skattekonto-ocr', () => ({
-  generateSkattekontoOcr: vi.fn().mockReturnValue('1234567890'),
+  resolveSkattekontoOcr: vi.fn().mockResolvedValue('1655954700217'),
   SKATTEKONTO_BANKGIRO: '5050-1055',
 }))
 
@@ -107,7 +107,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
 
   it('generates the LB file (happy path)', async () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
-    enqueue({ data: { name: 'Test AB', org_number: '5566778899' } }) // companies
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -129,7 +129,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     // the matching salary booking credited 2731 with the same number: the
     // payment must be exactly their sum.
     enqueue({ data: { id: 'agi-1', total_tax: 12268, total_avgifter: 16073 } }) // agi
-    enqueue({ data: { name: 'Test AB', org_number: '5566778899' } }) // companies
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -148,7 +148,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     // (the öre parks as a small skattekonto överskott, the pre-existing
     // equilibrium). Truncating here would strand the öre on 2731 instead.
     enqueue({ data: { id: 'agi-1', total_tax: 12268, total_avgifter: 16073.84 } }) // agi
-    enqueue({ data: { name: 'Test AB', org_number: '5566778899' } }) // companies
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
@@ -163,7 +163,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
 
   it('generates a pain.001 file when format=pain001', async () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
-    enqueue({ data: { name: 'Test AB', org_number: '5566778899' } }) // companies
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
     const response = await GET(
@@ -185,14 +185,14 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
       payee: { type: 'bankgiro', bankgiro: '50501055' },
       payeeName: 'Skatteverket',
       amount: 1500,
-      reference: { type: 'ocr', value: '1234567890' },
+      reference: { type: 'ocr', value: '1655954700217' },
     })
   })
 
   it('returns 400 when the pain.001 debtor is missing an IBAN', async () => {
     mockResolveBatchDebtor.mockResolvedValue({ ok: false, missing: 'iban' })
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
-    enqueue({ data: { name: 'Test AB', org_number: '5566778899' } }) // companies
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {

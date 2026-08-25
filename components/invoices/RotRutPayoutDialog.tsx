@@ -192,6 +192,21 @@ export default function RotRutPayoutDialog({
       ).sort((a, b) => b.localeCompare(a)),
     [eligible],
   )
+  // The year picker must never disappear: an empty eligible list used to hide
+  // it, making the whole dialog look dead even though the type picker worked
+  // (#1884). With no eligible years the current year stands in as the only,
+  // inert, choice.
+  const fallbackYear = String(new Date().getFullYear())
+  const yearItems = (years.length > 0 ? years : [fallbackYear]).map((year) => ({
+    id: year,
+    label: year,
+  }))
+  const yearValue = selectedYear || fallbackYear
+  const otherTypeBlockedCount = useMemo(
+    () => blocked.filter((candidate) => candidate.code === 'NO_DEDUCTION_OF_TYPE').length,
+    [blocked],
+  )
+  const otherBlockedCount = blocked.length - otherTypeBlockedCount
   const visibleCandidates = useMemo(
     () =>
       eligible.filter((candidate) => candidate.betalnings_datum.startsWith(selectedYear)),
@@ -351,16 +366,14 @@ export default function RotRutPayoutDialog({
             ]}
             disabled={loading || generating}
           />
-          {years.length > 0 && (
-            <ContextPicker
-              value={selectedYear}
-              onChange={changeYear}
-              triggerLabel={selectedYear}
-              ariaLabel={t('rot_rut_year_aria')}
-              items={years.map((year) => ({ id: year, label: year }))}
-              disabled={loading || generating}
-            />
-          )}
+          <ContextPicker
+            value={yearValue}
+            onChange={changeYear}
+            triggerLabel={yearValue}
+            ariaLabel={t('rot_rut_year_aria')}
+            items={yearItems}
+            disabled={loading || generating}
+          />
         </div>
 
         {loading ? (
@@ -401,6 +414,19 @@ export default function RotRutPayoutDialog({
                   <p className="mt-1 text-xs text-muted-foreground">
                     {t('rot_rut_no_eligible_description')}
                   </p>
+                  {otherTypeBlockedCount > 0 && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {t('rot_rut_other_type_hint', {
+                        count: otherTypeBlockedCount,
+                        type: t(type === 'rot' ? 'rot_rut_type_rut' : 'rot_rut_type_rot'),
+                      })}
+                    </p>
+                  )}
+                  {otherBlockedCount > 0 && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {t('rot_rut_blocked_below_hint', { count: otherBlockedCount })}
+                    </p>
+                  )}
                 </div>
               ) : (
                 <div className="max-h-64 divide-y overflow-y-auto rounded-lg border">
@@ -465,7 +491,14 @@ export default function RotRutPayoutDialog({
             </section>
 
             {blocked.length > 0 && (
-              <details className="rounded-lg border border-dashed px-3 py-2.5">
+              <details
+                className="rounded-lg border border-dashed px-3 py-2.5"
+                // With nothing eligible the reasons ARE the content: start
+                // expanded so the dialog explains itself instead of looking
+                // empty. The element stays a plain details, so the user can
+                // still collapse it.
+                open={visibleCandidates.length === 0 || undefined}
+              >
                 <summary className="cursor-pointer text-sm font-medium">
                   {t('rot_rut_blocked_title', { count: blocked.length })}
                 </summary>

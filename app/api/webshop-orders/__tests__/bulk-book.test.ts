@@ -80,6 +80,7 @@ function makeOrderRow(overrides: Record<string, unknown> = {}) {
     payment_method_title: 'Swish',
     journal_entry_id: null,
     invoice_id: null,
+    manually_booked_at: null,
     legacy_transaction_id: null,
     ...overrides,
   }
@@ -272,6 +273,22 @@ describe('POST /api/webshop-orders/bulk-book', () => {
     const succeeded = body.data.results.find((r) => r.order_id === ORDER_2)
     expect(succeeded?.success).toBe(true)
     expect(mockCommitEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses an order marked as booked outside the integration (per-order)', async () => {
+    enqueue({
+      data: [
+        makeOrderRow({ manually_booked_at: '2026-08-01T00:00:00Z' }),
+        makeOrderRow({ id: ORDER_2, order_number: '1002' }),
+      ],
+    })
+    enqueue({ data: [] }) // store settings
+    enqueue({ data: [{ id: ORDER_2 }] }) // claim order 2
+    const { status, body } = await parseJsonResponse<BulkResponse>(await postBulk())
+    expect(status).toBe(200)
+    const failed = body.data.results.find((r) => r.order_id === ORDER_1)
+    expect(failed?.error?.code).toBe('WEBSHOP_ORDER_MANUALLY_BOOKED')
+    expect(body.data.booked_count).toBe(1)
   })
 
   it('continues after an engine failure and cleans up that order alone', async () => {
