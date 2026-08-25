@@ -45,9 +45,10 @@ import {
   lookupActiveLink,
   mintLinkCode,
 } from './lib/linking'
-import { sendText, getDisplayPhoneNumber, MAX_REPLY_BUTTONS } from './lib/graph-api'
+import { sendText, sendReaction, getDisplayPhoneNumber, MAX_REPLY_BUTTONS } from './lib/graph-api'
 import { botCopy, TEMPLATE } from './lib/messages'
 import { kickInboundProcessing } from './lib/process-inbound'
+import { CHAT_ALLOWED_MIME_TYPES, normalizeChatMime } from './lib/chat-mime'
 import {
   DEBOUNCE_WINDOW_MS,
   getContext,
@@ -627,6 +628,19 @@ async function handleLinkedSender(
       // Media intake and answer interpretation both run deferred (the answer
       // path may call the LLM; the webhook must 200 in seconds).
       if (messageId) deferredMessageIds.push(messageId)
+      // Instant "received" signal: the detailed ack waits on extraction
+      // (10-60s), which read as a black hole to someone standing at a
+      // register. A reaction on the sender's own bubble lands within
+      // seconds, adds no chat noise, and the row just persisted plus the
+      // sweep guarantee (ingest or M18) make it honest. Only for files the
+      // pipeline will accept: junk earns M15, not a checkmark. One Graph
+      // call (~10s timeout worst case) stays inside Meta's webhook budget,
+      // and a redelivered wamid returns on the 23505 above, so no re-react.
+      if (disposition.kind === 'media' && msg.wamid) {
+        if (CHAT_ALLOWED_MIME_TYPES.has(normalizeChatMime(msg.media?.mime))) {
+          await sendReaction(msg.from, msg.wamid)
+        }
+      }
       return
     case 'company_retry': {
       const options = conversation ? (getContext(conversation).company_options ?? []) : []
