@@ -135,6 +135,7 @@ type NavLabelKey =
   | 'deadlines'
   | 'periodiseringar'
   | 'year_end'
+  | 'bokslutsbilagor'
   | 'annual_report'
   | 'income_declaration'
   | 'help'
