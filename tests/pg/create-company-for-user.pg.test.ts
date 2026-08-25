@@ -5,7 +5,7 @@ import { getClient, getPool, runAsServiceRole } from './setup'
 import { insertAuthUser } from './fixtures'
 
 /**
- * create_company_for_user (migration 20260824170000): the service-role twin
+ * create_company_for_user (migration 20260825120000): the service-role twin
  * of create_company_with_owner used by the MCP tool gnubok_create_company and
  * POST /api/v1/companies (issue #1814 PR 3).
  *
