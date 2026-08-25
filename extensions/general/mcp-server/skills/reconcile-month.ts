@@ -46,14 +46,14 @@ Per account: outside vs ledger, what was linked, what the user still has to book
 ## Rules
 
 - Links and sign-offs never touch the ledger; booking does, and always stages.
-- One outside row links to one verifikat in this version; other shapes come back as UNSUPPORTED_PAIR_SHAPE. A fee or rounding difference needs a residual booking by the user first.
+- One or more outside rows link to one verifikat; other shapes come back as UNSUPPORTED_PAIR_SHAPE. A small fee, interest or rounding difference on a bank account is closed with \`gnubok_reconcile_residual({ account_key, external_ids, journal_entry_id, kind, dry_run: true })\`, then without dry_run: it links the rows and books the difference (6570 / 8410 / 8310 / 3740) in one staged step. Anything larger than the cap is a missing booking, not a fee.
 - Never judge on \`difference\`; the bridge explains it. Judge on \`unexplained_difference\`.
 - A skattekonto sign-off date cannot pass the saldo snapshot; ask for a fetch.
 
 ## Tools used
 
 - \`gnubok_get_reconciliation_status\`, \`gnubok_list_reconciliation_items\` (read)
-- \`gnubok_reconcile_match\`, \`gnubok_reconcile_unmatch\`, \`gnubok_reconcile_signoff\` (staged writes)
+- \`gnubok_reconcile_match\`, \`gnubok_reconcile_unmatch\`, \`gnubok_reconcile_residual\`, \`gnubok_reconcile_signoff\` (staged writes)
 - \`gnubok_categorize_transaction\`, \`gnubok_link_transaction_to_journal_entry\` (bank-side booking)
 - \`gnubok_approve_pending_operation\` (when the user approves in chat)
 - Resource: \`Accounted://reconciliation/summary\`

@@ -68,6 +68,7 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       // staged link (bank accounts and skattekonto alike).
       'gnubok_list_reconciliation_items',
       'gnubok_reconcile_match',
+      'gnubok_reconcile_residual',
       'gnubok_reconcile_signoff',
       'gnubok_list_voucher_gaps',
       'gnubok_explain_voucher_gap',
@@ -84,6 +85,9 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       'gnubok_list_reconciliation_items',
       'gnubok_reconcile_match',
       'gnubok_reconcile_unmatch',
+      // Near-miss on a bank account (fee, interest, rounding): link and book
+      // the difference in one staged step.
+      'gnubok_reconcile_residual',
       // Rows with no counterpart: book them (bank side) or link to the
       // verifikat that already holds the affärshändelse.
       'gnubok_categorize_transaction',

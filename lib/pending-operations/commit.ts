@@ -25,6 +25,7 @@ import {
 import { roundOre } from '@/lib/money'
 import { matchPairs, unmatchLink } from '@/lib/reconciliation/actions'
 import { signOffAccount } from '@/lib/reconciliation/signoff'
+import { bookResidualAndLink, ReconciliationResidualError } from '@/lib/reconciliation/residual'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import {
@@ -6085,6 +6086,64 @@ async function commitReconciliationSignoff(
   }
 }
 
+/**
+ * reconciliation_residual: book the remainder of a bank selection as a small
+ * fee / interest / rounding verifikat and link the selection, through the same
+ * service the page and the v1 API use (lib/reconciliation/residual.ts). The
+ * amount and direction are recomputed at commit time; a refusal (grown past
+ * the cap, rows linked meanwhile, locked period) leaves nothing half done.
+ */
+async function commitReconciliationResidual(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const accountKey = params.account_key as string | undefined
+  const externalIds = params.external_ids as string[] | undefined
+  const journalEntryId = params.journal_entry_id as string | undefined
+  const kind = params.kind as 'bank_fee' | 'rounding' | 'interest_income' | 'interest_expense' | undefined
+  if (!accountKey || !Array.isArray(externalIds) || externalIds.length === 0 || !journalEntryId || !kind) {
+    return { error: 'account_key, external_ids, journal_entry_id and kind are required', status: 400 }
+  }
+  try {
+    const result = await bookResidualAndLink(
+      supabase,
+      companyId,
+      userId,
+      accountKey,
+      {
+        external_ids: externalIds,
+        journal_entry_id: journalEntryId,
+        kind,
+        entry_date: (params.entry_date as string | undefined) ?? undefined,
+        description: (params.description as string | undefined) ?? undefined,
+      },
+      { dryRun: false },
+    )
+    if (!result) return { error: `Unknown account_key ${accountKey}`, status: 404 }
+    if (result.dry_run) return { error: 'Unexpected dry-run result', status: 500 }
+    return {
+      data: {
+        account_key: accountKey,
+        residual_journal_entry_id: result.residual_journal_entry_id,
+        residual_amount: result.residual_amount,
+        applied: result.applied,
+        skipped: result.skipped,
+      },
+    }
+  } catch (err) {
+    if (err instanceof ReconciliationResidualError) {
+      return {
+        error: err.message,
+        errorCode: err.code,
+        status: err.code === 'RESIDUAL_ROWS_NOT_FOUND' || err.code === 'RESIDUAL_ENTRY_NOT_FOUND' ? 404 : 400,
+      }
+    }
+    throw err
+  }
+}
+
 async function commitLinkTransactionJournalEntry(
   supabase: SupabaseClient,
   userId: string,
@@ -6428,6 +6487,9 @@ async function commitPendingOperationInner(
         break
       case 'reconciliation_signoff':
         result = await commitReconciliationSignoff(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'reconciliation_residual':
+        result = await commitReconciliationResidual(supabase, userId, companyId, pendingOp.params)
         break
       case 'submit_vat_declaration':
         result = await commitSubmitVatDeclaration(supabase, userId, companyId, pendingOp.params)

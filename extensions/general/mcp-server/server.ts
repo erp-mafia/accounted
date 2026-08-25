@@ -173,6 +173,7 @@ import { getAccountStatus } from '@/lib/reconciliation/service'
 import { listAccountItems } from '@/lib/reconciliation/items'
 import { matchPairs } from '@/lib/reconciliation/actions'
 import { signOffAccount } from '@/lib/reconciliation/signoff'
+import { bookResidualAndLink, RESIDUAL_MAX_AMOUNT } from '@/lib/reconciliation/residual'
 import { parseAccountKey, type ReconciliationItemBucket } from '@/lib/reconciliation/schemas'
 import { decryptPersonnummer, maskEmployeeForResponse, maskPersonnummer } from '@/lib/salary/personnummer'
 import {
@@ -1388,6 +1389,7 @@ const TOOL_PREFLIGHT_MAP: Record<string, string> = {
   gnubok_book_salary_run: 'gnubok_get_salary_run',
   gnubok_reconcile_match: 'gnubok_get_reconciliation_status',
   gnubok_reconcile_signoff: 'gnubok_get_reconciliation_status',
+  gnubok_reconcile_residual: 'gnubok_get_reconciliation_status',
 }
 
 /**
@@ -10190,6 +10192,78 @@ export const tools: McpTool[] = [
         actor,
         {
           description: 'After approval, the account shows "avstämt t.o.m." in the Avstämning page and on its status.',
+          tool: 'gnubok_get_reconciliation_status',
+          args: { account_key: accountKey },
+        },
+        {
+          dryRun: args.dry_run === true,
+          idempotencyKey: args.idempotency_key as string | undefined,
+        },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_reconcile_residual',
+    title: 'Reconcile: Book Residual and Link',
+    description: 'Close a near-match on a bank account in one step: link 1..50 bank tx to one verifikat and book the small difference as bank fee (6570), interest (8410/8310) or rounding (3740). Bank only; refused at 0, above the cap, or wrong direction. Stages; dry_run previews.',
+    catalogVisibility: 'search',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        account_key: { type: 'string', description: '"bank:<cash_account_id>" (skattekonto is refused: Skatteverket posts ränta and avgifter as rows of their own).' },
+        external_ids: { type: 'array', items: { type: 'string' }, description: 'transaction_id list (1..50) that together settle the verifikat except for the residual.' },
+        journal_entry_id: { type: 'string', description: 'The verifikat the transactions belong to.' },
+        kind: { type: 'string', enum: ['bank_fee', 'interest_expense', 'interest_income', 'rounding'], description: 'What the difference is. bank_fee / interest_expense: money left the bank unbooked; interest_income: money arrived unbooked; rounding: either way.' },
+        entry_date: { type: 'string', description: 'YYYY-MM-DD for the residual verifikat. Default: the latest transaction date.' },
+        description: { type: 'string', description: 'Verifikat text. Default per kind.' },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['account_key', 'external_ids', 'journal_entry_id', 'kind'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const accountKey = args.account_key as string
+      const externalIds = args.external_ids as string[]
+      const journalEntryId = args.journal_entry_id as string
+      const kind = args.kind as 'bank_fee' | 'rounding' | 'interest_income' | 'interest_expense'
+      if (!parseAccountKey(accountKey)) throw new Error(`Invalid account_key "${accountKey}"`)
+      if (!Array.isArray(externalIds) || externalIds.length === 0 || externalIds.length > 50) {
+        throw new Error('external_ids must hold 1..50 transaction ids')
+      }
+      // Policy runs now (dry run of the booking) so a refusal (zero, above the
+      // cap, wrong direction, skattekonto) surfaces here, not at approval time;
+      // the executor recomputes the residual when the user approves.
+      const input = {
+        external_ids: externalIds,
+        journal_entry_id: journalEntryId,
+        kind,
+        entry_date: args.entry_date as string | undefined,
+        description: args.description as string | undefined,
+      }
+      const preview = await bookResidualAndLink(supabase, companyId, userId, accountKey, input, { dryRun: true })
+      if (!preview) throw new Error(`Unknown account_key "${accountKey}" for this company`)
+      if (!preview.dry_run) throw new Error('Unexpected live result from a dry run')
+      const wouldBook = preview.would_book
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'reconciliation_residual',
+        `Bokför restpost ${wouldBook.residual_amount} ${wouldBook.currency} (${kind}) på ${accountKey} och koppla ${externalIds.length} rad(er)`,
+        { account_key: accountKey, ...input },
+        { ...wouldBook, account_key: accountKey, transaction_count: externalIds.length, max_amount: RESIDUAL_MAX_AMOUNT },
+        actor,
+        {
+          description: 'After approval, re-read the bridge: the selection is matched and the residual verifikat anchors on the first transaction.',
           tool: 'gnubok_get_reconciliation_status',
           args: { account_key: accountKey },
         },
