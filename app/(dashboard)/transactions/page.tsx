@@ -3401,10 +3401,13 @@ export default function TransactionsPage() {
 
   // "Andra rader" on the proposal view: close the review and reopen the
   // manual booking dialog prefilled with the exact lines the preview showed.
-  function handleEditProposedLines(lines: ProposalLine[]) {
-    if (!quickReview?.transaction) return
+  // The transaction comes from the dialog itself (its enriched mirror), not
+  // from quickReview state: an in-dialog SEK-rate backfill lives only on the
+  // enriched row, and the booking dialog stamps the settlement leg's FX
+  // metadata from that row's exchange_rate.
+  function handleEditProposedLines(lines: ProposalLine[], transaction: TransactionWithInvoice) {
     setQuickReviewOpen(false)
-    setBookingDialogTransaction(quickReview.transaction)
+    setBookingDialogTransaction(transaction)
     setBookingDialogTemplate(null)
     setBookingDialogProposalLines(lines)
     setBookingDialogOpen(true)

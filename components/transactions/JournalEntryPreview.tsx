@@ -21,6 +21,7 @@ export default function JournalEntryPreview(props: JournalEntryPreviewProps) {
     templateVatRate,
     templateVatTreatment,
     templateSupplierType,
+    counterpartyLegacy,
     linePattern,
     settlementAccount,
   } = props
@@ -40,10 +41,11 @@ export default function JournalEntryPreview(props: JournalEntryPreviewProps) {
       templateVatRate,
       templateVatTreatment,
       templateSupplierType,
+      counterpartyLegacy,
       linePattern,
       settlementAccount,
     }),
-    [amount, amountSek, category, vatTreatment, accountOverride, entityType, templateDebitAccount, templateCreditAccount, templateVatRate, templateVatTreatment, templateSupplierType, linePattern, settlementAccount]
+    [amount, amountSek, category, vatTreatment, accountOverride, entityType, templateDebitAccount, templateCreditAccount, templateVatRate, templateVatTreatment, templateSupplierType, counterpartyLegacy, linePattern, settlementAccount]
   )
 
   if (lines.length === 0) return null

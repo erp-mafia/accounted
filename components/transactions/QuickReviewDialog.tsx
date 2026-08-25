@@ -13,8 +13,7 @@ import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-d
 import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, AlertTriangle, Inbox, FileText, X } from 'lucide-react'
 import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
-import { getVatRate } from '@/lib/bookkeeping/vat-entries'
-import { computeProposalLines } from '@/lib/bookkeeping/proposal-lines'
+import { computeProposalLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine, ProposalLinesInput } from '@/lib/bookkeeping/proposal-lines'
 import type { ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
 import { resolveExplicitVat } from '@/lib/transactions/quick-review-defaults'
@@ -66,9 +65,12 @@ interface QuickReviewDialogProps {
   /**
    * "Andra rader": hand the COMPUTED proposal lines (exactly what the
    * verifikation preview shows) to the parent, which routes them into
-   * TransactionBookingDialog as an editable prefill.
+   * TransactionBookingDialog as an editable prefill. The transaction passed
+   * back is the dialog's ENRICHED row (with any in-dialog SEK conversion
+   * backfill): the parent must hand that one to the booking dialog so the
+   * settlement leg's FX metadata carries the same rate the amounts used.
    */
-  onEditLines?: (lines: ProposalLine[]) => void
+  onEditLines?: (lines: ProposalLine[], transaction: TransactionWithInvoice) => void
 }
 
 export default function QuickReviewDialog({
@@ -271,34 +273,52 @@ export default function QuickReviewDialog({
     .map(([, code]) => code)
     .join(' · ')
 
+  // Static templates carry AB-specific accounts; the engine substitutes them
+  // at booking time, so the preview and the prefill must show the same
+  // substitution (an aktiebolag must never be handed 2013-style EF accounts).
+  const entityAccounts = resolveTemplateAccountsForEntity(template ?? {}, entityType)
+
   // The one proposal definition: rendered by JournalEntryPreview and, via
   // "Andra rader", computed into editable prefill lines. Building it once
-  // guarantees the user edits exactly the lines they were shown.
+  // guarantees the user edits exactly the lines they were shown, and every
+  // branch mirrors the engine path that books the proposal (see
+  // lib/bookkeeping/proposal-lines.ts).
   const proposalInput: ProposalLinesInput = {
     amount: tx.amount,
     amountSek: sekAmount,
     ...(hasCounterpartyPattern
       ? { linePattern: counterpartyLinePattern ?? undefined }
       : isTemplateBooking && template?.debit_account && template?.credit_account
-        ? {
-            templateDebitAccount: template.debit_account,
-            templateCreditAccount: template.credit_account,
-            // A counterparty template carries a treatment but no rate,
-            // and its legacy booking path emits an input-VAT leg from
-            // that treatment only (no basbelopp pair), so it gets the
-            // rate alone: passing the treatment too would preview
-            // reverse-charge lines the engine never books.
-            templateVatRate: isCounterpartyTemplate
-              ? (template.vat_treatment ? getVatRate(template.vat_treatment) : 0)
-              : template.vat_rate,
-            ...(isCounterpartyTemplate
-              ? {}
-              : {
-                  templateVatTreatment: template.vat_treatment,
-                  templateSupplierType: template.reverse_charge_supplier_type,
-                }),
+        ? isCounterpartyTemplate
+          ? {
+              // Legacy counterparty pair: computeProposalLines mirrors the
+              // legacy booking path (VAT incl. the 2645/2614 fiktiv-moms
+              // pair on expenses only, no basbelopp, mismatches mirrored).
+              templateDebitAccount: template.debit_account,
+              templateCreditAccount: template.credit_account,
+              templateVatTreatment: template.vat_treatment ?? null,
+              counterpartyLegacy: true,
+            }
+          : {
+              templateDebitAccount: entityAccounts.debitAccount ?? template.debit_account,
+              templateCreditAccount: entityAccounts.creditAccount ?? template.credit_account,
+              templateVatRate: template.vat_rate,
+              templateVatTreatment: template.vat_treatment,
+              templateSupplierType: template.reverse_charge_supplier_type,
+            }
+        : {
+            category,
+            // Send the WIRE value, not the UI sentinel: 'none' as a seeded
+            // default stays undefined (server derives, no VAT for exempt
+            // categories), 'none' as a deviation becomes explicit 'exempt'.
+            // Passing raw 'none' made the mapping re-derive the category
+            // default and preview (and, worse, prefill) 25% moms against an
+            // explicit no-VAT choice: the exact collapse resolveExplicitVat
+            // exists to prevent on the confirm path.
+            vatTreatment: resolveExplicitVat(isLiabilityAccount ? 'none' : vatTreatment, defaultVat),
+            accountOverride,
+            entityType,
           }
-        : { category, vatTreatment: isLiabilityAccount ? 'none' : vatTreatment, accountOverride, entityType }
     ),
   }
 
@@ -308,7 +328,7 @@ export default function QuickReviewDialog({
 
   function handleEditLines() {
     if (!onEditLines || proposalLines.length === 0) return
-    onEditLines(proposalLines)
+    onEditLines(proposalLines, tx)
   }
 
   async function handleConfirm() {
@@ -554,9 +574,9 @@ export default function QuickReviewDialog({
           {/* Only when there IS a single debit/credit pair to show: a
               multi-line counterparty pattern has none, and a template that
               never carried accounts would render "D:  → K: ". */}
-          {!hasCounterpartyPattern && template?.debit_account && template?.credit_account && (
+          {!hasCounterpartyPattern && entityAccounts.debitAccount && entityAccounts.creditAccount && (
             <p className="mt-1.5 text-xs font-mono text-muted-foreground">
-              D: {formatAccountWithName(template.debit_account)} → K: {formatAccountWithName(template.credit_account)}
+              D: {formatAccountWithName(entityAccounts.debitAccount)} → K: {formatAccountWithName(entityAccounts.creditAccount)}
             </p>
           )}
         </div>
