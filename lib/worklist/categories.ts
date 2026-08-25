@@ -30,6 +30,9 @@ export const NEEDS_DOC_SOURCE_TYPES = [
   'supplier_invoice_paid',
   'supplier_invoice_cash_payment',
   'import',
+  // Webshop order bookings rest on the generated orderunderlag (#1881); an
+  // entry whose underlag failed to attach must surface here.
+  'webshop_order',
 ] as const
 
 /**

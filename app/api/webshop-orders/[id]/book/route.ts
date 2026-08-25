@@ -9,6 +9,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { ensureWebshopPrefillAccounts } from '@/lib/webshop-orders/ensure-accounts'
+import { archiveWebshopOrderUnderlag } from '@/lib/webshop-orders/order-underlag'
 import { roundOre } from '@/lib/money'
 import type { Currency, WebshopOrder } from '@/types'
 
@@ -123,6 +124,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             .eq('id', id)
             .eq('company_id', companyId)
           resolved = !fxError
+          if (resolved) {
+            // Keep the in-memory row in sync: the underlag renders the SEK
+            // conversion facts from it after commit.
+            order.total_sek = totalSek
+            order.exchange_rate = rate.rate
+          }
         }
       } catch (err) {
         log.warn('booking-time FX retry failed', err as Error)
@@ -240,11 +247,26 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // No extra event here: commitEntry() already emits
     // journal_entry.committed from inside the engine.
 
+    // Archive the orderunderlag (lines, customer, payment method) on the
+    // committed verifikat (#1881). Never fatal: the booking is immutable at
+    // this point, and a verifikat left without underlag surfaces on the
+    // "saknar underlag" worklist (webshop_order is a needs-doc source type),
+    // where the user can attach a document by hand.
+    const underlag = await archiveWebshopOrderUnderlag({
+      supabase,
+      companyId,
+      userId: user.id,
+      order,
+      journalEntryId: journalEntry?.id ?? draft.id,
+      log,
+    })
+
     return NextResponse.json({
       data: journalEntry,
       // commitEntry's post-commit fetch can theoretically return no row;
       // the entry still exists under draft.id.
       journal_entry_id: journalEntry?.id ?? draft.id,
+      underlag_archived: underlag.ok,
       success: true,
     })
   },

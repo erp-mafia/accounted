@@ -354,6 +354,39 @@ describe('document surfaces unification', () => {
     expect((res.verifikat ?? []).map((v) => v.journal_entry_id).sort()).toEqual(expected.sort())
   })
 
+  it('webshop_order: flagged without underlag, silenced by the archived orderunderlag (#1881)', async () => {
+    // The book route archives a generated orderunderlag on the verifikat; a
+    // historical booking (or a failed attach) has no doc and must surface.
+    const s = await seedCompany()
+    const mkWebshopJe = (n: number) =>
+      insertPostedJournalEntry({
+        userId: s.userId,
+        companyId: s.companyId,
+        fiscalPeriodId: s.fiscalPeriodId,
+        voucherNumber: n,
+        entryDate: '2026-06-15',
+        description: `webshop order ${n}`,
+        sourceType: 'webshop_order',
+        lines: [
+          { accountNumber: '1930', debitAmount: 100 * n, creditAmount: 0 },
+          { accountNumber: '3001', debitAmount: 0, creditAmount: 100 * n },
+        ],
+      })
+    const jeWithUnderlag = await mkWebshopJe(1)
+    const jeWithoutUnderlag = await mkWebshopJe(2)
+    await attachDocument({
+      userId: s.userId,
+      companyId: s.companyId,
+      journalEntryId: jeWithUnderlag,
+    })
+
+    const res = await verifikatSurface(s.companyId)
+    expect(res.ok).toBe(true)
+    const ids = (res.verifikat ?? []).map((v) => v.journal_entry_id)
+    expect(ids).toContain(jeWithoutUnderlag)
+    expect(ids).not.toContain(jeWithUnderlag)
+  })
+
   it('tenant guard on the transactions surface (NULL + foreign company)', async () => {
     const { rows } = await getPool().query<{ r: TransactionsResult }>(
       `SELECT public.transactions_without_documents(NULL, NULL, 20, 0) AS r`,
