@@ -162,6 +162,7 @@ Response `200`:
     counts: { proposed: number, unmatched_external: number, unmatched_ledger: number, matched: number, ignored: number },
     skattekonto: { saldo_skatteverket: number, fetched_at: string, history_start: string, opening_difference: number, upcoming_count: number, upcoming_total: number, ledger_balance_before_start: number },
     bank: Record<string, unknown>,
+    manual?: { period_id: string, period_start: string, period_end: string, opening_balance: number, movement: number, closing_balance: number, specification: { provider: "ar" | "ap" | "vacation", label_sv: string, label_en: string, amount: number, unconverted_fx_count: number } },
     signoff?: { id: string, account_key: string, through_date: string, external_balance: number, ledger_balance: number, unexplained_difference: number, note: string, signed_by: string, signed_at: string, reopened_at: string, reopened_by: string, reopen_reason: string }
   },
   meta: {
@@ -443,13 +444,13 @@ Response `200`:
 **Mark an account reconciled through a date (sign-off).**
 `scope:reconciliation:signoff · risk:medium · dry-run · reversible`
 
-Body: { through_date: "YYYY-MM-DD", note?, force? }. Recomputes the bridge through the date and refuses unless unexplained_difference is zero; with force: true and a note it signs anyway and records the difference. Refuses dates in the future, dates past the skattekonto snapshot (NOT_FETCHED_THROUGH), and dates at or before an existing active sign-off (ALREADY_SIGNED_OFF: reopen that one first). ?dry_run=true returns would_sign without writing. Undo with POST .../signoff/{signoffId}/reopen.
+Body: { through_date: "YYYY-MM-DD", note?, force?, external_balance? }. Recomputes the bridge through the date and refuses unless unexplained_difference is zero; with force: true and a note it signs anyway and records the difference. Refuses dates in the future, dates past the skattekonto snapshot (NOT_FETCHED_THROUGH), and dates at or before an existing active sign-off (ALREADY_SIGNED_OFF: reopen that one first). For a manual:NNNN account without a system specification (anything but 1510/2440/2920/2940), external_balance is the balance per the signer's underlag in ledger sign (liabilities negative); the difference against the booked balance is recorded, and a non-zero one still needs force + note. On bank, skattekonto and specification accounts external_balance is refused (EXTERNAL_BALANCE_NOT_ALLOWED). ?dry_run=true returns would_sign without writing. Undo with POST .../signoff/{signoffId}/reopen.
 
 **Use when:** The month (or period) is explained and you want the account marked as reconciled through its last day, as a human would in the Avstämning page.
 **Do not use for:** Linking rows or booking anything: a sign-off changes no data in the ledger. Use .../links and the booking endpoints first.
 
 **Pitfalls:**
-- Refusal codes come back as VALIDATION_ERROR with details.code: INVALID_DATE, DATE_IN_FUTURE, NOT_FETCHED_THROUGH, OUTSIDE_UNKNOWN, NOT_RECONCILED, NOTE_REQUIRED; ALREADY_SIGNED_OFF and SIGNOFF_RACE come back as CONFLICT.
+- Refusal codes come back as VALIDATION_ERROR with details.code: INVALID_DATE, DATE_IN_FUTURE, NOT_FETCHED_THROUGH, OUTSIDE_UNKNOWN, NOT_RECONCILED, NOTE_REQUIRED, EXTERNAL_BALANCE_NOT_ALLOWED; ALREADY_SIGNED_OFF and SIGNOFF_RACE come back as CONFLICT.
 - force: true without a note is NOTE_REQUIRED: the note is what the next reader sees next to the non-zero difference.
 - Idempotency-Key is required; repeating the same key replays the first response.
 
@@ -460,7 +461,7 @@ Body: { through_date: "YYYY-MM-DD", note?, force? }. Recomputes the bridge throu
 
 Request body:
 ```ts
-{ through_date: string, note?: string, force?: boolean }
+{ through_date: string, note?: string, force?: boolean, external_balance?: number }
 ```
 
 Response `200`:

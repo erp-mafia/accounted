@@ -648,6 +648,35 @@ export async function createNextPeriod(
     throw new Error(`Failed to create next period: ${insertError?.message}`)
   }
 
+  // Heal a chain wired across the gap this period fills: a later period that
+  // claims the CURRENT period as predecessor but actually starts the day
+  // after the new one now follows the new period (findNextPeriod explains
+  // how such links arise). The new period's own row cannot match: it starts
+  // the day after current, not the day after itself. Best-effort: the period
+  // is created either way, and findNextPeriod no longer trusts a
+  // non-adjacent link.
+  const { data: mischained } = await supabase
+    .from('fiscal_periods')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('previous_period_id', currentPeriodId)
+    .eq('period_start', addDaysUTC(nextEndStr, 1))
+  if (mischained && mischained.length > 0) {
+    const successorIds = mischained.map((row: { id: string }) => row.id)
+    const { error: relinkError } = await supabase
+      .from('fiscal_periods')
+      .update({ previous_period_id: newPeriod.id })
+      .in('id', successorIds)
+      .eq('company_id', companyId)
+    if (relinkError) {
+      log.error('failed to relink successor onto the newly created period', relinkError, {
+        companyId,
+        newPeriodId: newPeriod.id,
+        successorIds,
+      })
+    }
+  }
+
   return newPeriod as FiscalPeriod
 }
 
@@ -685,16 +714,33 @@ export async function findNextPeriod(
     .eq('previous_period_id', currentPeriodId)
     .maybeSingle()
 
-  if (chained) {
-    return chained as FiscalPeriod
-  }
-
   // UTC-only arithmetic: anchor the date string at UTC midnight, then
   // advance via setUTCDate. Using Date(string) + setDate/getDate causes an
   // off-by-one on servers in TZ+ when the day after period_end crosses a
   // DST spring-forward, because setDate(local) writes local-time fields
   // and toISOString() converts back through the shifted offset.
   const expectedStartStr = addDaysUTC(current.period_end, 1)
+
+  // The chain is only trusted when it is date-adjacent. SIE import used to
+  // point previous_period_id at the NEAREST later period regardless of the
+  // gap (40 such rows on prod as of 2026-08-24), and year-end then seeded a
+  // whole missing year's opening balances into a period two years out
+  // because this returned the chained row unchecked (feedback seq 249297).
+  // A non-adjacent link means the true next period is missing or unlinked:
+  // fall through to the date lookup and let the caller create it.
+  if (chained) {
+    const chainedPeriod = chained as FiscalPeriod
+    if (chainedPeriod.period_start === expectedStartStr) {
+      return chainedPeriod
+    }
+    log.warn('fiscal period chain is not date-adjacent: ignoring previous_period_id link', {
+      companyId,
+      currentPeriodId,
+      chainedPeriodId: chainedPeriod.id,
+      expectedStart: expectedStartStr,
+      chainedStart: chainedPeriod.period_start,
+    })
+  }
 
   const { data: byDate } = await supabase
     .from('fiscal_periods')

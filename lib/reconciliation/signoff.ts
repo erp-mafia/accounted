@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import { parseAccountKey, type ReconciliationSignoff, type ReconciliationStatus } from './schemas'
 import { getAccountStatus } from './service'
 import { getLatestSignoff, getSignoffById, insertSignoff, stampReopen } from './signoff-store'
@@ -31,6 +32,7 @@ export type SignoffErrorCode =
   | 'SIGNOFF_NOT_FOUND'
   | 'ALREADY_REOPENED'
   | 'SIGNOFF_RACE'
+  | 'EXTERNAL_BALANCE_NOT_ALLOWED'
 
 export class ReconciliationSignoffError extends Error {
   readonly code: SignoffErrorCode
@@ -48,6 +50,13 @@ export interface SignoffInput {
   note?: string | null
   /** Sign even though the engine reports an unexplained difference or an unknown outside balance. Needs a note. */
   force?: boolean
+  /**
+   * The balance per the signer's underlag, in ledger sign (liabilities
+   * negative). Only for manual accounts without a system specification; the
+   * bank, the skattekonto and the reskontra/semesterskuld accounts have their
+   * own outside truth and refuse it.
+   */
+  external_balance?: number | null
 }
 
 export interface SignoffOptions {
@@ -90,8 +99,7 @@ export async function signOffAccount(
   options: SignoffOptions = {},
 ): Promise<SignoffResult | null> {
   const parsed = parseAccountKey(accountKey)
-  // Manual accounts get their adapter later; until then they are not reconcilable.
-  if (!parsed || parsed.kind === 'manual') return null
+  if (!parsed) return null
   const today = options.today ?? isoToday()
   const throughDate = input.through_date
   if (!ISO_DATE_RE.test(throughDate) || Number.isNaN(Date.parse(throughDate))) {
@@ -123,6 +131,24 @@ export async function signOffAccount(
       `Skattekontot är hämtat t.o.m. ${asOfDate}. Hämta igen innan du stämmer av ett senare datum.`,
       'NOT_FETCHED_THROUGH',
     )
+  }
+
+  // A stated outside balance is the manual adapter's outside truth for the
+  // date. Where the system keeps a specification (or a feed) the stated
+  // number would only hide a real difference, so it is refused there.
+  if (input.external_balance != null) {
+    if (status.kind !== 'manual' || status.manual?.specification) {
+      throw new ReconciliationSignoffError(
+        'Kontot har redan en sanning utanför bokföringen (bank, Skatteverket, reskontra eller beräkning). Ange inget saldo manuellt; signera med en notering om något avviker.',
+        'EXTERNAL_BALANCE_NOT_ALLOWED',
+      )
+    }
+    const external = roundOre(input.external_balance)
+    const difference = status.ledger_balance == null ? null : roundOre(status.ledger_balance - external)
+    status.external_balance = external
+    status.difference = difference
+    status.unexplained_difference = difference
+    status.is_reconciled = difference != null && Math.abs(difference) < 0.005
   }
 
   const unexplained = status.unexplained_difference
@@ -212,7 +238,7 @@ export async function reopenSignoff(
   input: { reason?: string | null } = {},
 ): Promise<ReconciliationSignoff | null> {
   const parsed = parseAccountKey(accountKey)
-  if (!parsed || parsed.kind === 'manual') return null
+  if (!parsed) return null
   const existing = await getSignoffById(supabase, companyId, accountKey, signoffId)
   if (!existing) {
     throw new ReconciliationSignoffError('Signeringen hittades inte.', 'SIGNOFF_NOT_FOUND')
