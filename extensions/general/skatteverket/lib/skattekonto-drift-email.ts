@@ -1,5 +1,6 @@
 import { getEmailService } from '@/lib/email/service'
 import { createLogger } from '@/lib/logger'
+import { resolveMemberEmails } from '@/lib/notifications/member-email'
 import { formatDate } from '@/lib/utils'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { EventPayload } from '@/lib/events/types'
@@ -124,27 +125,11 @@ async function resolveAuthorisedRecipient(
   userId: string,
 ): Promise<string | null> {
   // 1. Build the set of active member emails for this company. We accept
-  //    only addresses that appear here.
-  const { data: members, error: membersError } = await ctx.supabase
-    .from('company_members')
-    .select('user_id, profiles!inner(email)')
-    .eq('company_id', ctx.companyId)
-
-  if (membersError) {
-    // Without the allowlist every candidate is rejected below, so a failed
-    // lookup silently cancels the alert. Say so out loud.
-    log.warn('could not read company members for drift alert', {
-      companyId: ctx.companyId,
-      error: membersError.message,
-    })
-  }
-
-  type MemberRow = { user_id: string; profiles: { email?: string | null } | { email?: string | null }[] | null }
+  //    only addresses that appear here. A failed lookup resolves to an empty
+  //    map, cancelling the alert: the helper logs it out loud.
+  const memberEmails = await resolveMemberEmails(ctx.supabase, ctx.companyId)
   const allowedEmails = new Set<string>()
-  for (const m of (members ?? []) as MemberRow[]) {
-    const profile = Array.isArray(m.profiles) ? m.profiles[0] : m.profiles
-    if (profile?.email) allowedEmails.add(profile.email.toLowerCase())
-  }
+  for (const email of memberEmails.values()) allowedEmails.add(email.toLowerCase())
 
   if (allowedEmails.size === 0) return null
 
@@ -175,20 +160,9 @@ async function resolveAuthorisedRecipient(
     })
   }
 
-  // 3. Fall back to the syncing user's email if they're still a member.
-  const { data: profile, error: profileError } = await ctx.supabase
-    .from('profiles')
-    .select('email')
-    .eq('id', userId)
-    .maybeSingle()
-  if (profileError) {
-    log.warn('could not read syncing user profile for drift alert', {
-      companyId: ctx.companyId,
-      userId,
-      error: profileError.message,
-    })
-  }
-  const userEmail = (profile as { email?: string | null } | null)?.email
+  // 3. Fall back to the syncing user's email: present in the map only while
+  //    they are still a member.
+  const userEmail = memberEmails.get(userId)
   if (userEmail && allowedEmails.has(userEmail.toLowerCase())) {
     return userEmail
   }

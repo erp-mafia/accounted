@@ -41,26 +41,30 @@ interface QueryRecord {
   filters: Record<string, unknown>
 }
 
-type MemberRow = { user_id: string; profiles: { email: string } }
+type MemberRow = { user_id: string; email: string }
 
-const OWNER: MemberRow = { user_id: 'user-1', profiles: { email: 'owner@example.com' } }
-const ACCOUNTANT: MemberRow = { user_id: 'user-2', profiles: { email: 'revisor@byra.se' } }
+const OWNER: MemberRow = { user_id: 'user-1', email: 'owner@example.com' }
+const ACCOUNTANT: MemberRow = { user_id: 'user-2', email: 'revisor@byra.se' }
 
 /**
  * Hand-rolled mock (instead of createQueuedMockSupabase) because the
  * assertions need the selected COLUMN list per table: the bug this covers was
  * a select of a column that does not exist on company_settings.
+ *
+ * Recipient resolution is the two-step lookup from
+ * lib/notifications/member-email: company_members yields user ids, profiles
+ * yields their emails via an .in() read.
  */
 function makeSupabase(
   opts: {
     members?: MemberRow[] | null
     membersError?: { message: string } | null
+    profilesError?: { message: string } | null
     settings?: Record<string, unknown> | null
     settingsError?: { message: string } | null
-    profile?: { email: string } | null
-    profileError?: { message: string } | null
   } = {},
 ) {
+  const members = opts.members === undefined ? [OWNER] : opts.members ?? []
   const queries: QueryRecord[] = []
   const from = (table: string) => {
     const record: QueryRecord = { table, filters: {} }
@@ -68,7 +72,7 @@ function makeSupabase(
     const result = () => {
       if (table === 'company_members') {
         return {
-          data: opts.members === undefined ? [OWNER] : opts.members,
+          data: opts.membersError ? null : members.map((m) => ({ user_id: m.user_id })),
           error: opts.membersError ?? null,
         }
       }
@@ -86,8 +90,10 @@ function makeSupabase(
       }
       if (table === 'profiles') {
         return {
-          data: opts.profile === undefined ? { email: OWNER.profiles.email } : opts.profile,
-          error: opts.profileError ?? null,
+          data: opts.profilesError
+            ? null
+            : members.map((m) => ({ id: m.user_id, email: m.email })),
+          error: opts.profilesError ?? null,
         }
       }
       return { data: null, error: null }
@@ -102,7 +108,15 @@ function makeSupabase(
         record.filters[key] = value
         return builder
       },
-      maybeSingle: async () => result(),
+      in: (key: string, value: unknown) => {
+        record.filters[key] = value
+        return builder
+      },
+      maybeSingle: async () => {
+        const r = result()
+        const rows = r.data as Array<Record<string, unknown>> | null
+        return { data: Array.isArray(rows) ? rows[0] ?? null : rows, error: r.error }
+      },
       then: (resolve: (v: unknown) => void) => resolve(result()),
     })
     return builder
@@ -149,19 +163,19 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
   it('sends to the configured tax contact when it belongs to an active member', async () => {
     const { supabase } = makeSupabase({
       members: [OWNER, ACCOUNTANT],
-      settings: { tax_contact_email: ACCOUNTANT.profiles.email },
+      settings: { tax_contact_email: ACCOUNTANT.email },
     })
 
     await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
 
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
-    expect(sentTo()).toBe(ACCOUNTANT.profiles.email)
+    expect(sentTo()).toBe(ACCOUNTANT.email)
   })
 
   it('reads tax_contact_email: the column the settings UI actually writes', async () => {
     const { supabase, queries } = makeSupabase({
       members: [OWNER, ACCOUNTANT],
-      settings: { tax_contact_email: ACCOUNTANT.profiles.email },
+      settings: { tax_contact_email: ACCOUNTANT.email },
     })
 
     await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
@@ -189,7 +203,7 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
 
     await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
 
-    expect(sentTo()).toBe(OWNER.profiles.email)
+    expect(sentTo()).toBe(OWNER.email)
   })
 
   it('refuses a tax contact that is not an active member, and says so', async () => {
@@ -200,7 +214,7 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
 
     await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
 
-    expect(sentTo()).toBe(OWNER.profiles.email)
+    expect(sentTo()).toBe(OWNER.email)
     expect(warnedWith('not an active member')).toBe(true)
   })
 
@@ -215,7 +229,7 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
 
     expect(warnedWith('could not read tax contact email')).toBe(true)
     // Still delivers to the documented fallback rather than dropping the alert.
-    expect(sentTo()).toBe(OWNER.profiles.email)
+    expect(sentTo()).toBe(OWNER.email)
   })
 
   it('does not silently swallow a member lookup error', async () => {
@@ -230,17 +244,16 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
-  it('does not silently swallow a profile lookup error on the fallback path', async () => {
+  it('does not silently swallow a member-email lookup error', async () => {
     const { supabase } = makeSupabase({
       members: [OWNER],
       settings: null,
-      profile: null,
-      profileError: { message: 'timeout' },
+      profilesError: { message: 'timeout' },
     })
 
     await handleSkattekontoDriftDetected(payload, makeCtx(supabase))
 
-    expect(warnedWith('could not read syncing user profile')).toBe(true)
+    expect(warnedWith('could not read member emails')).toBe(true)
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
@@ -266,7 +279,7 @@ describe('handleSkattekontoDriftDetected recipient resolution', () => {
   it('keeps the drift figures out of the email body', async () => {
     const { supabase } = makeSupabase({
       members: [OWNER, ACCOUNTANT],
-      settings: { tax_contact_email: ACCOUNTANT.profiles.email },
+      settings: { tax_contact_email: ACCOUNTANT.email },
     })
 
     await handleSkattekontoDriftDetected(payload, makeCtx(supabase))

@@ -247,6 +247,8 @@ import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/a
 import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatteverket/lib/declaration-prep'
 import { writeSkatteverketAudit } from '@/extensions/general/skatteverket/lib/audit'
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
+import { findCompanyTokenUser, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
@@ -3793,6 +3795,22 @@ export const tools: McpTool[] = [
           },
           required: ['tool', 'when', 'include'],
         },
+        skatteverket_connection: {
+          type: 'object',
+          additionalProperties: false,
+          description:
+            'Present only when a Skatteverket connection exists. needs_reconsent: only a person can fix it (BankID under Inställningar → Skatteverket); warn the user before starting SKV work.',
+          properties: {
+            status: { type: 'string', enum: ['active', 'needs_reconsent'] },
+            source: { type: 'string', enum: ['user', 'system'] },
+            connected_at: {
+              type: ['string', 'null'],
+              description: 'Personal sessions last ~65 min from this time; system connections do not expire.',
+            },
+            message: { type: 'string' },
+          },
+          required: ['status', 'source'],
+        },
       },
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
     },
@@ -3852,6 +3870,45 @@ export const tools: McpTool[] = [
               },
             })),
           }
+        } catch {
+          return null
+        }
+      })()
+
+      // Skatteverket connection health, so the agent warns the user at
+      // session start instead of discovering a dead session mid-task.
+      // Best-effort and emitted only when a connection (or verified system
+      // grant) exists: never-connected companies pay no payload for it.
+      const safeSkvConnection = (async (): Promise<
+        | {
+            status: 'active' | 'needs_reconsent'
+            source: 'user' | 'system'
+            connected_at?: string | null
+            message?: string
+          }
+        | null
+      > => {
+        try {
+          if (process.env.SKATTEVERKET_ENABLED !== 'true') return null
+          if (
+            getSystemAuthMode() === 'on' &&
+            isSystemAuthConfigured() &&
+            (await hasVerifiedGrant(companyId, 'lasombud'))
+          ) {
+            return { status: 'active', source: 'system' }
+          }
+          const token = await findCompanyTokenUser(supabase, companyId)
+          if (!token) return null
+          if (token.needsReconsent) {
+            return {
+              status: 'needs_reconsent',
+              source: 'user',
+              connected_at: token.createdAt,
+              message:
+                'Skatteverket-sessionen har gått ut. Skatteverkets personliga inloggning gäller bara ca 1 timme, så detta är normalt. Be användaren ansluta igen med BankID under Inställningar → Skatteverket; bara en person kan göra det, så försök inte med Skatteverket-verktyg förrän användaren bekräftat.',
+            }
+          }
+          return { status: 'active', source: 'user', connected_at: token.createdAt }
         } catch {
           return null
         }
@@ -4049,6 +4106,7 @@ export const tools: McpTool[] = [
       }
 
       const ledgerDigest = await safeLedgerDigest
+      const skvConnection = await safeSkvConnection
 
       return {
         company,
@@ -4064,6 +4122,7 @@ export const tools: McpTool[] = [
         })),
         ...(dimensionsBlock ? { dimensions: dimensionsBlock } : {}),
         ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
+        ...(skvConnection ? { skatteverket_connection: skvConnection } : {}),
         // Static per-workflow loadouts (issue #1098): lets a deferred-loading
         // harness batch-load a whole workflow cluster in one call. Validated
         // against the tool registry at module init (assertRecommendedLoadoutsValid).

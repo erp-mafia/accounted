@@ -198,9 +198,15 @@ describe('tools/list payload size guard', () => {
     //     so strict clients stop failing successful unmatched uploads (seq
     //     261972). Prose trimmed to the floor first; headroom before the
     //     change was ~19 tokens, so even the trimmed contract crossed.
+    //   * 59.95K to 60.15K with skatteverket_connection on the briefing: the
+    //     connection-health block (status/source/connected_at) that lets an
+    //     agent warn the user about a dead 65-minute SKV session at session
+    //     start instead of mid-task. The runtime block is emitted only for
+    //     companies with a connection; this cost is the outputSchema contract
+    //     (~140 tokens), already trimmed to two short description strings.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(59_950)
+    expect(approxTokens).toBeLessThan(60_150)
   })
 })
