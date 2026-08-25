@@ -24,6 +24,12 @@ vi.mock('@/lib/events', () => ({
   eventBus: { emit: vi.fn().mockResolvedValue(undefined) },
 }))
 vi.mock('@/lib/salary/salary-entries', () => ({ createSalaryRunEntries: vi.fn() }))
+// The booking core refreshes the payslip YTD snapshot first; it is a
+// display-only side effect with its own tests (lib/salary/__tests__/ytd.test.ts),
+// so stub it out rather than queue its reads into every booking fixture.
+vi.mock('@/lib/salary/ytd', () => ({
+  refreshRunYtd: vi.fn().mockResolvedValue({ ok: true, updated: 0 }),
+}))
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
