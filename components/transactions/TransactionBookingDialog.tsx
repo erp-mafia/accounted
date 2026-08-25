@@ -43,12 +43,17 @@ interface TransactionBookingDialogProps {
    * library-template path.
    */
   proposalLines?: ProposalLine[] | null
+  /** Account number (string, e.g. '5460') to prefill on the counter line:
+   *  set when the user picked an account from the template picker's "Konton"
+   *  search results. Ignored when a preselectedTemplate is present. */
+  preselectedAccount?: string | null
 }
 
 function buildInitialLines(
   transaction: TransactionWithInvoice,
   bankLineDescription: string,
   bankAccount: string = '1930',
+  counterAccount?: string | null,
 ): FormLine[] {
   const sekAmount = Math.round(Math.abs(resolveSekAmount(
     transaction.amount,
@@ -77,7 +82,7 @@ function buildInitialLines(
   }
 
   const counterLine: FormLine = {
-    account_number: '',
+    account_number: counterAccount ?? '',
     debit_amount: isExpense ? amountStr : '',
     credit_amount: isExpense ? '' : amountStr,
     line_description: '',
@@ -124,6 +129,7 @@ export default function TransactionBookingDialog({
   onBooked,
   preselectedTemplate,
   proposalLines,
+  preselectedAccount,
 }: TransactionBookingDialogProps) {
   const t = useTranslations('tx_booking_dialog')
   const { toast } = useToast()
@@ -396,7 +402,7 @@ export default function TransactionBookingDialog({
           <div className="space-y-4">
             {bankAccount !== null && (
               <JournalEntryForm
-                key={`${transaction.id}-${proposalLines && proposalLines.length > 0 ? 'proposal' : preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
+                key={`${transaction.id}-${proposalLines && proposalLines.length > 0 ? 'proposal' : preselectedTemplate?.id ?? 'default'}-${preselectedAccount ?? 'none'}-${bankAccount}`}
                 embedded
                 initialLines={
                   proposalLines && proposalLines.length > 0
@@ -408,7 +414,7 @@ export default function TransactionBookingDialog({
                       })
                     : preselectedTemplate
                       ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
-                      : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount)
+                      : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, preselectedAccount)
                 }
                 initialDate={transaction.date}
                 initialDescription={transaction.description}
