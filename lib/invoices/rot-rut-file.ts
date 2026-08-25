@@ -84,6 +84,7 @@ export type RotRutBlockerCode =
   | 'MISSING_PAYMENT_DATE'
   | 'FUTURE_PAYMENT_DATE'
   | 'NO_DEDUCTION_OF_TYPE'
+  | 'DEDUCTION_TOTAL_MISSING'
   | 'MIXED_DEDUCTION_TYPES'
   | 'MIXED_PAYMENT_YEARS'
   | 'TOO_MANY_CASES'
@@ -187,6 +188,15 @@ export function evaluateInvoiceForFile(
   const otherLines = items.filter((i) => isDeductionLine(i, otherType))
 
   if (typeLines.length === 0) {
+    // Point at the other list instead of a bare "no lines": a paid RUT
+    // invoice viewed as ROT (the dialog default) used to read as "no
+    // invoices" with no hint that it lives under the other type.
+    if (otherLines.length > 0) {
+      return block(
+        'NO_DEDUCTION_OF_TYPE',
+        `Fakturans avdrag är ${otherType.toUpperCase()}: fakturan hanteras under ${otherType.toUpperCase()}, inte ${type.toUpperCase()}.`,
+      )
+    }
     return block('NO_DEDUCTION_OF_TYPE', `Fakturan har inga ${type.toUpperCase()}-rader.`)
   }
   // One invoice must map to exactly one ärende in exactly one file. Mixed
@@ -199,7 +209,46 @@ export function evaluateInvoiceForFile(
     )
   }
 
-  if (invoice.status !== 'paid') {
+  // Header/lines integrity: the lines claim a deduction but the invoice
+  // header never recorded it (older rows and import paths where
+  // computeInvoiceDeductionTotal never wrote deduction_total). Building the
+  // file from line amounts alone would request money the ledger never booked
+  // to 1513 (the 1513 debit is driven by the header total), and the missing
+  // header is also why such an invoice can never reach status paid: its
+  // remaining_amount wrongly includes the deduction. Refuse with the root
+  // cause instead of a misleading "not paid".
+  const lineDeductionTotal = typeLines.reduce((sum, l) => sum + (l.deduction_amount ?? 0), 0)
+  if (lineDeductionTotal > 0 && (invoice.deduction_total ?? 0) <= 0) {
+    return block(
+      'DEDUCTION_TOTAL_MISSING',
+      'Fakturan har ROT/RUT-rader men inget sparat avdragsbelopp: avdraget är inte bokfört mot Skatteverket. Rätta fakturan, eller kontakta supporten om den inte går att redigera.',
+    )
+  }
+
+  // "Paid" for a rot/rut claim means the BUYER has paid their share: the
+  // deduction itself is Skatteverket's to pay and is excluded from
+  // remaining_amount (total - paid_amount - deduction_total, migration
+  // 20260817191708). Invoices settled through older payment paths can sit at
+  // partially_paid although the customer share is fully paid; a
+  // remaining_amount of exactly 0 is the deterministic signal for that, so
+  // those are accepted here instead of being dropped as unpaid.
+  const remaining =
+    typeof invoice.remaining_amount === 'number' ? invoice.remaining_amount : null
+  const customerSharePaid =
+    invoice.status === 'paid' ||
+    (invoice.status === 'partially_paid' && remaining !== null && remaining <= 0)
+  if (!customerSharePaid) {
+    if (invoice.status === 'partially_paid' && remaining !== null && remaining > 0) {
+      const currencyLabel = (invoice.currency ?? 'SEK').toUpperCase()
+      const amount = remaining.toLocaleString('sv-SE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })
+      return block(
+        'NOT_PAID',
+        `Fakturan är delbetald: ${amount} ${currencyLabel === 'SEK' ? 'kr' : currencyLabel} av kundens del återstår innan utbetalning kan begäras.`,
+      )
+    }
     return block('NOT_PAID', 'Kunden måste ha betalat sin del av fakturan innan utbetalning kan begäras.')
   }
   const paidDate = invoice.paid_at ? String(invoice.paid_at).slice(0, 10) : null

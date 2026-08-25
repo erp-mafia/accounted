@@ -411,6 +411,86 @@ describe('eligibility blockers', () => {
     if (!result.ok) expect(result.blocker.code).toBe('NO_DEDUCTION_OF_TYPE')
   })
 
+  it('NO_DEDUCTION_OF_TYPE points at the other type when the deduction is the other kind', () => {
+    // A rot invoice evaluated as rut must say "this is ROT", not just "no
+    // rut lines": the dialog's empty list gave no pointer at all (#1884).
+    const result = evaluateInvoiceForFile('rut', makeRotInvoice())
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.blocker.message).toContain('ROT')
+      expect(result.blocker.message).toContain('hanteras under ROT')
+    }
+  })
+
+  it('NO_DEDUCTION_OF_TYPE keeps the plain message when no deduction lines exist at all', () => {
+    const items = [makeItem({ deduction_type: null, work_type: null, deduction_amount: 0 })]
+    const result = evaluateInvoiceForFile('rot', makeRotInvoice({}, items))
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.blocker.code).toBe('NO_DEDUCTION_OF_TYPE')
+      expect(result.blocker.message).toBe('Fakturan har inga ROT-rader.')
+    }
+  })
+
+  it('DEDUCTION_TOTAL_MISSING when lines carry a deduction the header never recorded', () => {
+    // Older imports left deduction_total NULL/0 despite deduction lines:
+    // those invoices previously fell out of the candidate query entirely.
+    for (const headerTotal of [0, undefined]) {
+      const result = evaluateInvoiceForFile(
+        'rot',
+        makeRotInvoice({ deduction_total: headerTotal }),
+      )
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.blocker.code).toBe('DEDUCTION_TOTAL_MISSING')
+    }
+  })
+
+  it('DEDUCTION_TOTAL_MISSING wins over NOT_PAID (the missing header is why the status is stuck)', () => {
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ deduction_total: 0, status: 'partially_paid', remaining_amount: 3000 }),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.blocker.code).toBe('DEDUCTION_TOTAL_MISSING')
+  })
+
+  it('accepts partially_paid with remaining_amount 0 (customer share settled via an older path)', () => {
+    // remaining_amount = total - paid_amount - deduction_total (migration
+    // 20260817191708): 0 means the buyer paid their share even though the
+    // status never flipped to paid.
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 0, paid_amount: 9500 }),
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.arende.begart_belopp).toBe(3000)
+      expect(result.value.arende.betalnings_datum).toBe('2026-06-20')
+    }
+  })
+
+  it('NOT_PAID with the outstanding amount for a genuinely partial payment', () => {
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 4500, paid_amount: 5000 }),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.blocker.code).toBe('NOT_PAID')
+      expect(result.blocker.message).toContain('delbetald')
+      expect(result.blocker.message).toContain('kr')
+    }
+  })
+
+  it('MISSING_PAYMENT_DATE for a settled partially_paid invoice without paid_at', () => {
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 0, paid_at: null }),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.blocker.code).toBe('MISSING_PAYMENT_DATE')
+  })
+
   it('MIXED_DEDUCTION_TYPES when rot and rut lines share an invoice', () => {
     const items = [
       makeItem(),
