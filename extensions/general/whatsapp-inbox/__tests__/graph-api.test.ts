@@ -3,6 +3,8 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 import {
   sendText,
+  sendReaction,
+  RECEIVED_REACTION_EMOJI,
   downloadMedia,
   getDisplayPhoneNumber,
   resetDisplayNumberCacheForTests,
@@ -93,6 +95,45 @@ describe('graph-api', () => {
         template: TEMPLATE.m18Error,
       })
       expect(result.ok).toBe(false)
+    })
+  })
+
+  describe('sendReaction', () => {
+    it('posts a reaction payload targeting the inbound wamid', async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ messages: [{ id: 'wamid.REACT' }] }), { status: 200 }),
+      )
+
+      await sendReaction('46701234567', 'wamid.IN1')
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/111222333/messages')
+      expect((init.headers as Record<string, string>).Authorization).toBe('Bearer token-1')
+      const body = JSON.parse(init.body as string)
+      expect(body.type).toBe('reaction')
+      expect(body.to).toBe('46701234567')
+      expect(body.reaction).toEqual({
+        message_id: 'wamid.IN1',
+        emoji: RECEIVED_REACTION_EMOJI,
+      })
+      // U+2705 exactly: the checkmark must never silently become another char.
+      expect(RECEIVED_REACTION_EMOJI.codePointAt(0)).toBe(0x2705)
+    })
+
+    it('never throws on non-2xx (best-effort, like mark-read)', async () => {
+      fetchMock.mockResolvedValueOnce(new Response('{"error":{}}', { status: 500 }))
+      await expect(sendReaction('46701234567', 'wamid.IN1')).resolves.toBeUndefined()
+    })
+
+    it('never throws on a network error', async () => {
+      fetchMock.mockRejectedValueOnce(new Error('ECONNRESET'))
+      await expect(sendReaction('46701234567', 'wamid.IN1')).resolves.toBeUndefined()
+    })
+
+    it('never throws when the access token is missing', async () => {
+      delete process.env.WHATSAPP_ACCESS_TOKEN
+      await expect(sendReaction('46701234567', 'wamid.IN1')).resolves.toBeUndefined()
+      expect(fetchMock).not.toHaveBeenCalled()
     })
   })
 

@@ -283,6 +283,14 @@ export async function GET(request: Request) {
   //     instructions"), which is the whole point of the consent step.
   const grantCeiling = new Set<ApiKeyScope>(parsed.scopes ?? ALL_SCOPES)
   const preChecked = new Set<ApiKeyScope>(parsed.scopes ?? DEFAULT_OAUTH_SCOPES)
+  // An account with no company is connecting in order to create one
+  // (issue #1814): pre-tick the one write scope that gnubok_create_company
+  // needs, so the agent-driven setup does not dead-end on insufficient scope
+  // right after signup. Still a checkbox the user can untick, and still
+  // bounded by the client's ceiling.
+  if (!companyId && grantCeiling.has('companies:write')) {
+    preChecked.add('companies:write')
+  }
   const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, grantCeiling)
 
   // Render consent page

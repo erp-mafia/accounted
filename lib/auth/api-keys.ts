@@ -28,7 +28,7 @@ export const API_KEY_SCOPES = {
   'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI, logga körjournalresor' },
   // v1 REST API: added Phase 1
   'companies:read':     { label: 'Företag: läs',        description: 'Lista och visa företagsprofiler som API-nyckeln har tillgång till' },
-  'companies:write':    { label: 'Företag: skriv',      description: 'Uppdatera företagsinställningar via stagade verktyg eller REST-endpointen PATCH /api/v1/companies/{companyId}/settings' },
+  'companies:write':    { label: 'Företag: skriv',      description: 'Skapa nya företag och uppdatera företagsinställningar (gnubok_create_company, stagade verktyg, REST POST /api/v1/companies och PATCH /api/v1/companies/{companyId}/settings)' },
   'events:read':        { label: 'Händelser: läs',      description: 'Polla händelseloggen (event_log) som webhook-fallback' },
   'webhooks:manage':    { label: 'Webhooks: hantera',   description: 'Skapa, lista, uppdatera och radera webhook-prenumerationer' },
   'operations:read':    { label: 'Operationer: läs',    description: 'Hämta status för långkörande operationer (importer, bokslut, omvärdering)' },
@@ -179,6 +179,9 @@ export const SCOPE_GROUPS = [
 export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Companies
   gnubok_list_companies:                  'companies:read',
+  gnubok_create_company:                  'companies:write',
+  gnubok_connect_bank:                    'companies:read',
+  gnubok_connect_skatteverket:            'companies:read',
   gnubok_get_company_settings:            'companies:read',
   gnubok_update_company_settings:         'companies:write',
   // Transactions
