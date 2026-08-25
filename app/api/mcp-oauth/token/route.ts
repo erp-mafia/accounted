@@ -9,7 +9,7 @@ import {
   DEFAULT_OAUTH_SCOPES,
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
-import { requireCompanyId } from '@/lib/company/context'
+import { getActiveCompanyId } from '@/lib/company/context'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
 
@@ -125,7 +125,10 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     .lt('created_at', new Date(Date.now() - 10 * 60 * 1000).toISOString())
     .then(() => {})
 
-  const companyId = await requireCompanyId(supabase, payload.userId)
+  // null for an account that has no company yet (signed up from the OAuth
+  // popup, issue #1814). The key is minted unbound; validateApiKey binds it
+  // to the user's first company on the first call after one exists.
+  const companyId = await getActiveCompanyId(supabase, payload.userId)
 
   const { key, hash, prefix } = generateApiKey()
   const refresh = generateRefreshToken()

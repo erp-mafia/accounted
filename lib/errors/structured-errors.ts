@@ -2858,6 +2858,19 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Företaget kunde inte hittas.',
     message_en: 'Company not found.',
   },
+  // An API key minted for an account that has not created its first company
+  // yet (signup from the MCP OAuth popup, issue #1814). Not a lookup miss:
+  // there is nothing to look up until the company exists.
+  NO_COMPANY_YET: {
+    httpStatus: 409,
+    message_sv: 'Kontot har inget företag ännu. Skapa företaget i appen och försök igen.',
+    message_en: 'This account has no company yet. Create the company in the web app, then retry; the connection picks it up automatically.',
+    remediation: {
+      description:
+        'Ask the user to finish company setup in the Accounted web app (/onboarding). No re-authentication is needed afterwards: the same connection binds to the new company on its next call.',
+      tool: 'gnubok_list_companies',
+    },
+  },
   // Phase 5 PR-1 carry-over: distinct error code for the salary-run DELETE
   // FK-null guard so an operator seeing this in logs knows a journal entry
   // is at risk, not just a status race.
@@ -3460,14 +3473,20 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     message_sv: 'Skatteverket-integrationen är inte aktiverad i denna miljö.',
     message_en: 'The Skatteverket integration is not enabled in this environment.',
   },
+  // One code covers both never-connected and expired: splitting it would
+  // ripple through every consumer, and the declaration-status path already
+  // differentiates in its message (DECISIONS.md 2026-08-25). The copy is
+  // agent-directive on purpose: only a person can run the BankID flow, so
+  // the agent must hand the task to the user instead of retrying.
   SKATTEVERKET_NOT_CONNECTED: {
     httpStatus: 401,
     message_sv:
-      'Anslutningen till Skatteverket saknas eller har gått ut. Anslut med BankID under Inställningar → Skatteverket.',
-    message_en: 'No valid Skatteverket connection. Reconnect with BankID before retrying.',
+      'Anslutningen till Skatteverket saknas eller har gått ut. Om företaget varit anslutet tidigare är detta normalt: Skatteverkets personliga inloggning gäller bara ca 1 timme. Be användaren ansluta (igen) med BankID under Inställningar → Skatteverket.',
+    message_en:
+      'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last only about 1 hour. Tell the user to connect (or reconnect) with BankID under Inställningar → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
     remediation: {
       description:
-        'Connect (or reconnect) to Skatteverket with BankID under Settings → Skatteverket, then retry.',
+        'A person must connect (or reconnect) to Skatteverket with BankID under Inställningar → Skatteverket. Personal Skatteverket sessions expire after about 1 hour by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
     },
   },
   SKATTEVERKET_ACCESS_DENIED: {

@@ -3,6 +3,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const mocks = vi.hoisted(() => ({
   supabaseFactory: vi.fn(),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
@@ -20,7 +21,7 @@ vi.mock('@/lib/auth/oauth-codes', () => ({
 }))
 
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getActiveCompanyId: (...args: unknown[]) => mocks.getActiveCompanyId(...args),
 }))
 
 import { POST } from '../route'
@@ -91,6 +92,45 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(body.refresh_token).toMatch(/^gnubok_rt_/)
       expect(body.token_type).toBe('Bearer')
       expect(body.expires_in).toBe(3600)
+    })
+
+    it('mints an unbound key (company_id null) when the user has no company yet', async () => {
+      // Signup inside the OAuth popup (issue #1814): the account exists, the
+      // company does not. The key is stored unbound and validateApiKey binds
+      // it on the first call after the company is created.
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        exp: Date.now() + 60_000,
+      })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+      mocks.getActiveCompanyId.mockResolvedValueOnce(null)
+
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany([
+        { data: null, error: null }, // insert into oauth_used_codes
+        { data: null, error: null }, // delete expired codes (best-effort)
+        { data: null, error: null }, // insert into api_keys
+      ])
+
+      const res = await POST(
+        formRequest({
+          grant_type: 'authorization_code',
+          code: 'ciphertext',
+          code_verifier: 'verifier',
+          redirect_uri: 'https://claude.ai/api/cb',
+        })
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.access_token).toMatch(/^gnubok_sk_/)
+
+      const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted).toBeDefined()
+      expect(inserted.user_id).toBe('user-1')
+      expect(inserted.company_id).toBeNull()
     })
 
     it('rejects an already-used auth code (replay)', async () => {

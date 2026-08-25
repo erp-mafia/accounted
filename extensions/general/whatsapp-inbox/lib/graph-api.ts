@@ -328,6 +328,53 @@ export async function markReadWithTyping(wamid: string): Promise<void> {
   }
 }
 
+/** The instant "received" signal on accepted media (U+2705 check mark).
+ *  Built via fromCharCode so no literal emoji byte can be mangled in transit. */
+export const RECEIVED_REACTION_EMOJI = String.fromCharCode(0x2705)
+
+/**
+ * React to an inbound message with an emoji. This is the instant "your
+ * receipt reached us" signal, sent from the webhook itself: reactions attach
+ * to the sender's own bubble and add no message of their own, so the
+ * debounced combined ack (M4/M5) stays the ONE message per burst. Best-effort
+ * and cosmetic exactly like markReadWithTyping: a failure is logged and
+ * swallowed, no outbound whatsapp_messages row is persisted (a reaction is
+ * not a message in the conversation model), and intake is unaffected.
+ */
+export async function sendReaction(
+  to: string,
+  wamid: string,
+  emoji: string = RECEIVED_REACTION_EMOJI,
+): Promise<void> {
+  try {
+    const response = await fetchWithTimeout(
+      `${GRAPH_BASE}/${getPhoneNumberId()}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${getAccessToken()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to,
+          type: 'reaction',
+          reaction: { message_id: wamid, emoji },
+        }),
+      },
+      { timeoutMs: SEND_TIMEOUT_MS, description: 'WhatsApp reaction' },
+    )
+    if (!response.ok) {
+      log.warn('WhatsApp reaction failed', { status: response.status })
+    }
+  } catch (err) {
+    log.warn('WhatsApp reaction errored', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
 export interface DownloadedMedia {
   buffer: ArrayBuffer
   mime: string | null

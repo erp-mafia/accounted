@@ -7,9 +7,25 @@ const UUID_PATTERN =
 
 const COMPANY_INDEPENDENT_TOOLS = new Set([
   'gnubok_search_tools',
+  'gnubok_list_skills',
   'gnubok_load_skill',
   'gnubok_list_companies',
+  // Creates the company: by definition it runs before one exists.
+  'gnubok_create_company',
 ])
+
+/**
+ * Company-independent tools that still USE a company when one is available:
+ * they run without one (anonymous or not-yet-onboarded callers, issue #1814)
+ * but accept an explicit company_id, which is then membership-checked like
+ * on any company-dependent tool. gnubok_list_skills filters skills by the
+ * company's entity type, employees and VAT registration.
+ */
+const OPTIONAL_COMPANY_TOOLS = new Set(['gnubok_list_skills'])
+
+export function isOptionalCompanyTool(toolName: string): boolean {
+  return OPTIONAL_COMPANY_TOOLS.has(toolName)
+}
 
 export const COMPANY_ID_INPUT_PROPERTY = {
   type: 'string',
@@ -29,10 +45,22 @@ interface ToolSchemaSource {
 }
 
 export function codedError(
-  code: 'VALIDATION_ERROR' | 'NOT_FOUND' | 'FORBIDDEN' | 'INTERNAL_ERROR',
+  code: 'VALIDATION_ERROR' | 'NOT_FOUND' | 'FORBIDDEN' | 'INTERNAL_ERROR' | 'NO_COMPANY_YET',
   message: string
 ) {
   return Object.assign(new Error(message), { code })
+}
+
+/**
+ * Thrown when a company-scoped operation runs on a key whose user has no
+ * company at all (minted from the OAuth popup before onboarding, issue
+ * #1814). Maps to the NO_COMPANY_YET structured error with its remediation.
+ */
+export function noCompanyYetError(): Error {
+  return codedError(
+    'NO_COMPANY_YET',
+    'This account has no company yet. Create the company in the web app, then retry.'
+  )
 }
 
 function isCompanyRole(value: unknown): value is CompanyRole {
@@ -56,7 +84,7 @@ export function isTenantWriteScope(scope: ApiKeyScope | undefined): boolean {
 }
 
 export function projectToolInputSchema(tool: ToolSchemaSource): Record<string, unknown> {
-  if (!isCompanyDependentTool(tool.name)) return tool.inputSchema
+  if (!isCompanyDependentTool(tool.name) && !isOptionalCompanyTool(tool.name)) return tool.inputSchema
 
   const properties =
     tool.inputSchema.properties && typeof tool.inputSchema.properties === 'object'
@@ -86,10 +114,14 @@ export function extractRequestedCompany(
 export async function resolveMcpCompanyContext(args: {
   supabase: SupabaseClient
   userId: string
-  defaultCompanyId: string
+  /** null while the key's user has no company (see validateApiKey). */
+  defaultCompanyId: string | null
   requestedCompanyId?: string
 }): Promise<McpCompanyContext> {
   const companyId = args.requestedCompanyId ?? args.defaultCompanyId
+  if (!companyId) {
+    throw noCompanyYetError()
+  }
 
   const { data: membership, error } = await args.supabase
     .from('company_members')

@@ -62,7 +62,7 @@ registerEndpoint({
   doNotUseFor:
     'Computing the declaration from the books (use the VAT report), or filing: submission is a separate BankID-signed flow.',
   pitfalls: [
-    'This is a live Skatteverket read: it fails with SKATTEVERKET_NOT_CONNECTED (401) until someone in the company has connected with BankID under Installningar, and the response reflects SKV\'s state, not the books.',
+    'This is a live Skatteverket read: it fails with SKATTEVERKET_NOT_CONNECTED (401) when the company has neither a member\'s BankID connection (made under Installningar) nor a verified ombud grant, and the response reflects SKV\'s state, not the books. Personal BankID sessions expire after ~1 hour by design, so an expired connection is normal: ask the user to reconnect; only a person can, so do not retry until they confirm.',
     'submitted=null and decided=null with HTTP 200 means "nothing on file for the period": it is not an error.',
     'A submitted declaration can lack a beslut for days: poll decided separately rather than assuming both appear together.',
     'redovisningsperiod is SKV\'s YYYYMM format (the period\'s LAST month): quarterly period 1 is 03, not 01.',

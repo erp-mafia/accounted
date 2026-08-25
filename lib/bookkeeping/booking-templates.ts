@@ -1649,6 +1649,26 @@ export function getTemplateGroups(): TemplateGroupInfo[] {
  * Fuzzy search templates by name, keywords, or description.
  * Optionally filter by entity type.
  */
+/**
+ * Account-number matching for template search: an all-digit token prefix-
+ * matches the template's BUSINESS account(s), i.e. the cost/revenue side,
+ * not the settlement side. Matching the settlement leg too would make "1930"
+ * (the default bank account) light up nearly every template, which is noise,
+ * not search. Transfers have no business/settlement split, so both legs
+ * match. AB-variant accounts are included so the search works for both
+ * entity types. Account numbers are identifiers (strings): prefix match only.
+ */
+function templateAccountMatches(t: BookingTemplate, token: string): boolean {
+  if (!/^\d+$/.test(token)) return false
+  const candidates =
+    t.direction === 'expense'
+      ? [t.debit_account, t.debit_account_ab]
+      : t.direction === 'income'
+        ? [t.credit_account, t.credit_account_ab]
+        : [t.debit_account, t.credit_account, t.debit_account_ab, t.credit_account_ab]
+  return candidates.some((acc) => !!acc && acc.startsWith(token))
+}
+
 export function searchTemplates(query: string, entityType?: EntityType): BookingTemplate[] {
   if (!query.trim()) return []
   const q = query.toLowerCase()
@@ -1666,7 +1686,8 @@ export function searchTemplates(query: string, entityType?: EntityType): Booking
       t.name_en.toLowerCase().includes(token) ||
       t.description_sv.toLowerCase().includes(token) ||
       t.keywords.some((kw) => kw.toLowerCase().includes(token)) ||
-      t.id.includes(token)
+      t.id.includes(token) ||
+      templateAccountMatches(t, token)
     )
   })
 }

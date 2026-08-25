@@ -2,6 +2,21 @@ import { createServerClient } from '@supabase/ssr'
 import { type NextRequest, NextResponse } from 'next/server'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
+import { safeReturnTo } from '@/lib/auth/safe-return-to'
+
+/**
+ * The one `next` destination this callback honours for a fresh session: the
+ * MCP OAuth consent page. A signup that started from an MCP client's Connect
+ * popup (issue #1814) confirms its e-mail or completes Google OAuth here, and
+ * has to land back on consent instead of the dashboard. Consent handles the
+ * zero-company state itself, which is why this is safe where an arbitrary
+ * deep link would not be (a brand-new account has no membership to spend a
+ * deep link on). Same-origin only, via safeReturnTo.
+ */
+function oauthResumePath(next: string): string | null {
+  const safe = safeReturnTo(next, '/')
+  return safe.startsWith('/api/mcp-oauth/authorize?') ? safe : null
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
@@ -9,6 +24,7 @@ export async function GET(request: NextRequest) {
   const token_hash = searchParams.get('token_hash')
   const type = searchParams.get('type')
   const next = searchParams.get('next') ?? '/'
+  const resumeOAuth = oauthResumePath(next)
 
   // Collect cookies that Supabase sets during auth so we can
   // explicitly forward them on the redirect response.
@@ -101,7 +117,9 @@ export async function GET(request: NextRequest) {
       // Check MFA status: redirect to verify if factor is enrolled but session is AAL1
       const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
       if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-        const response = NextResponse.redirect(new URL('/mfa/verify', origin))
+        const verifyUrl = new URL('/mfa/verify', origin)
+        if (resumeOAuth) verifyUrl.searchParams.set('returnTo', resumeOAuth)
+        const response = NextResponse.redirect(verifyUrl)
         for (const { name, value, options } of pendingCookies) {
           response.cookies.set({ name, value, ...options })
         }
@@ -220,8 +238,10 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      // Always redirect to dashboard: it handles zero-company and incomplete states
-      redirectPath = '/'
+      // Redirect to the dashboard (it handles zero-company and incomplete
+      // states), unless the session was created to resume an MCP OAuth
+      // consent flow: that page handles the zero-company state too.
+      redirectPath = resumeOAuth ?? '/'
     }
 
     // Create redirect and explicitly set auth cookies on the response
