@@ -153,6 +153,26 @@ export function resolveBookingWarnings(
   return warnings
 }
 
+/**
+ * The default verifikat/line description for an order or refund row. Kept as
+ * a single helper so the dialog prefill, the single-order route and the bulk
+ * route all label the booking identically.
+ */
+export function orderBookingDescription(
+  order: Pick<
+    WebshopOrder,
+    'row_type' | 'order_number' | 'payment_method' | 'payment_method_title'
+  >,
+): string {
+  if (order.row_type === 'refund') {
+    return `Återbetalning order ${order.order_number}`
+  }
+  const methodLabel = order.payment_method_title || order.payment_method || ''
+  return methodLabel
+    ? `Order ${order.order_number} (${methodLabel})`
+    : `Order ${order.order_number}`
+}
+
 export interface OrderBookingLinesInput {
   order: Pick<
     WebshopOrder,
@@ -201,13 +221,7 @@ export function buildOrderBookingLines({
 
   const toSek = (amount: number) => round(Math.abs(amount) * rate)
 
-  const methodLabel = order.payment_method_title || order.payment_method || ''
-  const baseDescription = methodLabel
-    ? `Order ${order.order_number} (${methodLabel})`
-    : `Order ${order.order_number}`
-  const description = isRefund
-    ? `Återbetalning order ${order.order_number}`
-    : baseDescription
+  const description = orderBookingDescription(order)
 
   const currencyMeta = (amountAbs: number): Partial<CreateJournalEntryLineInput> =>
     isSek
