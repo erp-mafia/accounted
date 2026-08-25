@@ -2978,6 +2978,7 @@
     "label_template": "Mall",
     "label_category": "Kategori",
     "change_template": "Byt mall",
+    "edit_lines": "Ändra rader",
     "reverse_charge_warning": "Omvänd skattskyldighet kräver leverantörens momsregistreringsnummer och land.",
     "label_account": "Konto",
     "label_dimensions": "Dimensioner",
