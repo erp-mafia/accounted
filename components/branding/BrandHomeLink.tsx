@@ -8,9 +8,12 @@
  * with the same dimensions, classes and aria-label as before, keeping
  * default hosts byte-identical.
  *
- * With `showLabel` (expanded sidebar) a branded host also renders the
- * brand's app name beside the mark (byra-editable in the Varumärke
- * settings). Unbranded hosts never show a label.
+ * With `showLabel` (expanded sidebar) a branded host without an uploaded
+ * logo renders the brand's app name beside the mark (byra-editable in the
+ * Varumärke settings). With an uploaded logo the logo carries the brand
+ * alone (same founder call as BrandWordmark, 2026-08-05: byrå logos usually
+ * carry their own name, so logo + text read as a duplicate). Unbranded
+ * hosts never show a label.
  */
 
 import Link from 'next/link'
@@ -20,7 +23,7 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 
 export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
   const { appName, logoUrl, logoPath, brand } = useBranding()
-  const label = brand ? brand.appName : null
+  const label = brand && !logoUrl ? brand.appName : null
   // Byrå team members (any role) home to the cockpit, never to "/" (which
   // would open whatever client company happens to be active). Everyone
   // outside a byrå keeps the legacy home link.
