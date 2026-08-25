@@ -10,6 +10,8 @@ const COMPANY_INDEPENDENT_TOOLS = new Set([
   'gnubok_list_skills',
   'gnubok_load_skill',
   'gnubok_list_companies',
+  // Creates the company: by definition it runs before one exists.
+  'gnubok_create_company',
 ])
 
 /**
