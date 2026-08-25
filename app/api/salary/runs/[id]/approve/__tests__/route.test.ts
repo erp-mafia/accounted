@@ -17,9 +17,16 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 vi.mock('@/lib/events', () => ({ eventBus: { emit: vi.fn().mockResolvedValue(undefined) } }))
+// Approval refreshes the payslip YTD snapshot (display-only side effect,
+// covered by lib/salary/__tests__/ytd.test.ts): stub it so its reads do not
+// have to be queued into every approval fixture.
+vi.mock('@/lib/salary/ytd', () => ({
+  refreshRunYtd: vi.fn().mockResolvedValue({ ok: true, updated: 0 }),
+}))
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { refreshRunYtd } from '@/lib/salary/ytd'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -82,6 +89,12 @@ describe('POST /api/salary/runs/[id]/approve: bank-detail guard', () => {
 
     expect(status).toBe(200)
     expect(body.data.status).toBe('approved')
+    // Approval is the first status lönebesked can be sent from, so the
+    // Ackumulerat snapshot is brought up to date here.
+    expect(refreshRunYtd).toHaveBeenCalledWith(expect.anything(), {
+      companyId: 'company-1',
+      salaryRunId: 'run-1',
+    })
   })
 
   it('still blocks when an employee who is actually paid has no bank details', async () => {

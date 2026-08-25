@@ -30,6 +30,10 @@ vi.mock('@/lib/auth/api-keys', async () => {
   }
 })
 
+vi.mock('@/lib/salary/ytd', () => ({
+  refreshRunYtd: vi.fn().mockResolvedValue({ ok: true, updated: 0 }),
+}))
+
 vi.mock('@supabase/supabase-js', async () => {
   const actual = await vi.importActual<typeof import('@supabase/supabase-js')>('@supabase/supabase-js')
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
@@ -63,6 +67,7 @@ vi.mock('@/lib/salary/agi/generate-declaration', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as calculate } from '../calculate/route'
 import { POST as approve } from '../approve/route'
+import { refreshRunYtd } from '@/lib/salary/ytd'
 import { POST as markPaid } from '../mark-paid/route'
 import { POST as book } from '../book/route'
 import { POST as generateAgi } from '../generate-agi/route'
@@ -296,6 +301,12 @@ describe('POST /salary-runs/:id/approve', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.status).toBe('approved')
+    // Parity with the dashboard approve route: the payslip's Ackumulerat
+    // snapshot is refreshed at the first status lönebesked can be sent from.
+    expect(refreshRunYtd).toHaveBeenCalledWith(expect.anything(), {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+    })
   })
 
   it('returns SALARY_RUN_APPROVE_VALIDATION_FAILED for missing bank details', async () => {

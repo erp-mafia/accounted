@@ -28,6 +28,7 @@ import type { Logger } from '@/lib/logger'
 import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
+import { refreshRunYtd } from '@/lib/salary/ytd'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
 import { eventBus } from '@/lib/events'
 
@@ -89,6 +90,17 @@ async function bookLoadedRun(
   run: Record<string, unknown>,
   roster: RosterRow[],
 ): Promise<BookRunResult<BookedRunData>> {
+  // Refresh the payslip's "Ackumulerat" snapshot before the status flip. The
+  // snapshot was written at calculation time from the months authorized back
+  // then; a month authorized since (the normal case when next month's run is
+  // prepared early) is missing from it. Non-fatal: YTD is display only and
+  // never reaches a verifikation, so a refresh failure must not block a
+  // booking.
+  const ytdRefresh = await refreshRunYtd(supabase, { companyId, salaryRunId })
+  if (!ytdRefresh.ok) {
+    log.warn('YTD refresh failed before booking', { salaryRunId, message: ytdRefresh.message })
+  }
+
   // Nollkörning: a run with no monetary effect (employees set to 0 kr, or no
   // roster at all) has nothing to post. The bookkeeping engine forbids
   // zero-amount vouchers (every entry must balance with debit & credit > 0),
