@@ -16,6 +16,8 @@ import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPi
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import { resolveSekAmount, buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type { BookingTemplateLibrary, CashAccount } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
@@ -33,6 +35,14 @@ interface TransactionBookingDialogProps {
     matched?: boolean,
   ) => void
   preselectedTemplate?: BookingTemplateLibrary | null
+  /**
+   * "Andra rader" hand-off from a proposal view (QuickReviewDialog): the
+   * COMPUTED lines the user was shown, prefilled for per-line editing. Takes
+   * precedence over preselectedTemplate. The settlement leg's account is
+   * swapped for the transaction's resolved cash account, same as the
+   * library-template path.
+   */
+  proposalLines?: ProposalLine[] | null
 }
 
 function buildInitialLines(
@@ -113,6 +123,7 @@ export default function TransactionBookingDialog({
   transaction,
   onBooked,
   preselectedTemplate,
+  proposalLines,
 }: TransactionBookingDialogProps) {
   const t = useTranslations('tx_booking_dialog')
   const { toast } = useToast()
@@ -385,12 +396,19 @@ export default function TransactionBookingDialog({
           <div className="space-y-4">
             {bankAccount !== null && (
               <JournalEntryForm
-                key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
+                key={`${transaction.id}-${proposalLines && proposalLines.length > 0 ? 'proposal' : preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
                 embedded
                 initialLines={
-                  preselectedTemplate
-                    ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
-                    : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount)
+                  proposalLines && proposalLines.length > 0
+                    ? proposalLinesToFormLines(proposalLines, {
+                        settlementAccount: bankAccount,
+                        currency: transaction.currency,
+                        foreignAmount: Math.abs(transaction.amount),
+                        exchangeRate: transaction.exchange_rate,
+                      })
+                    : preselectedTemplate
+                      ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
+                      : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount)
                 }
                 initialDate={transaction.date}
                 initialDescription={transaction.description}

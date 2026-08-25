@@ -2978,6 +2978,7 @@
     "label_template": "Template",
     "label_category": "Category",
     "change_template": "Change template",
+    "edit_lines": "Edit lines",
     "reverse_charge_warning": "Reverse charge requires the supplier's VAT registration number and country.",
     "label_account": "Account",
     "label_dimensions": "Dimensions",

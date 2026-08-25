@@ -39,6 +39,7 @@ import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking
 import { resolveQuickReviewDefaults, type ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
 import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
 import { isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
+import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type {
   TransactionWithInvoice,
   ViewMode,
@@ -326,6 +327,9 @@ export default function TransactionsPage() {
   const [bookingDialogOpen, setBookingDialogOpen] = useState(false)
   const [bookingDialogTransaction, setBookingDialogTransaction] = useState<TransactionWithInvoice | null>(null)
   const [bookingDialogTemplate, setBookingDialogTemplate] = useState<BookingTemplateLibrary | null>(null)
+  // "Andra rader" hand-off: the computed proposal lines from QuickReviewDialog,
+  // prefilled into TransactionBookingDialog for per-line editing.
+  const [bookingDialogProposalLines, setBookingDialogProposalLines] = useState<ProposalLine[] | null>(null)
 
   // Attach-underlag dialog (tx→doc mirror of the Documents view's matcher)
   const [attachDocTx, setAttachDocTx] = useState<TransactionWithInvoice | null>(null)
@@ -2990,6 +2994,7 @@ export default function TransactionsPage() {
     setBookingDialogOpen(false)
     setBookingDialogTransaction(null)
     setBookingDialogTemplate(null)
+    setBookingDialogProposalLines(null)
     if (matched) {
       toast({ title: 'Bankhändelsen kopplad', description: 'Ingen ny bokföring skapad.' })
     } else {
@@ -3389,8 +3394,20 @@ export default function TransactionsPage() {
     if (templatePickerTransaction) {
       setBookingDialogTransaction(templatePickerTransaction)
       setBookingDialogTemplate(null)
+      setBookingDialogProposalLines(null)
       setBookingDialogOpen(true)
     }
+  }
+
+  // "Andra rader" on the proposal view: close the review and reopen the
+  // manual booking dialog prefilled with the exact lines the preview showed.
+  function handleEditProposedLines(lines: ProposalLine[]) {
+    if (!quickReview?.transaction) return
+    setQuickReviewOpen(false)
+    setBookingDialogTransaction(quickReview.transaction)
+    setBookingDialogTemplate(null)
+    setBookingDialogProposalLines(lines)
+    setBookingDialogOpen(true)
   }
 
   // Complex (multi-leg or otherwise non-convertible) library template picked
@@ -3400,6 +3417,7 @@ export default function TransactionsPage() {
     if (!templatePickerTransaction) return
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(raw)
+    setBookingDialogProposalLines(null)
     setTemplatePickerOpen(false)
     setBookingDialogOpen(true)
   }
@@ -3964,10 +3982,14 @@ export default function TransactionsPage() {
           open
           onOpenChange={(o) => {
             setBookingDialogOpen(o)
-            if (!o) setBookingDialogTemplate(null)
+            if (!o) {
+              setBookingDialogTemplate(null)
+              setBookingDialogProposalLines(null)
+            }
           }}
           transaction={bookingDialogTransaction}
           preselectedTemplate={bookingDialogTemplate}
+          proposalLines={bookingDialogProposalLines}
           onBooked={handleTransactionBooked}
         />
       )}
@@ -4118,6 +4140,7 @@ export default function TransactionsPage() {
           counterpartyDefaultDimensions={quickReview?.defaultDimensions ?? null}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
+          onEditLines={handleEditProposedLines}
         />
       )}
 
