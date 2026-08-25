@@ -1,7 +1,22 @@
-import { type NextRequest } from 'next/server'
+import { NextResponse, type NextRequest } from 'next/server'
+import { usesForbiddenWhiteLabelBackend } from '@/lib/domains/production-white-label-backend'
 import { updateSession } from '@/lib/supabase/middleware'
 
 export async function proxy(request: NextRequest) {
+  if (
+    usesForbiddenWhiteLabelBackend(
+      request.nextUrl.hostname,
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+    )
+  ) {
+    return new NextResponse(null, {
+      status: 503,
+      headers: {
+        'Cache-Control': 'no-store',
+      },
+    })
+  }
+
   return await updateSession(request)
 }
 
