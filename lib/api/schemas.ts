@@ -1631,15 +1631,22 @@ export const BookWebshopOrderSchema = z.object({
  * combined journal write). Max 50 = one orders-page of selection.
  */
 /**
- * Revenue account for the bulk revenue template: class 3 only. The template
- * routes the revenue side of the sweep; a non-revenue account here would put
- * sales on a balance or cost account with no reviewing user per line. Orders
- * needing an off-class-3 revenue leg go through the single-order dialog,
- * which is fully line-editable.
+ * Revenue account for the bulk revenue template: class 3 only, and never
+ * 3740. The template routes the revenue side of the sweep; a non-revenue
+ * account here would put sales on a balance or cost account with no
+ * reviewing user per line. 3740 (öresavrundning) is excluded because the
+ * bulk route bounds the rounding residual by that account: a templated
+ * revenue line on 3740 would both misbook real revenue as rounding and
+ * blind that guard (skeptic finding). Orders needing an off-class-3 revenue
+ * leg go through the single-order dialog, which is fully line-editable.
  */
-const webshopRevenueAccount = accountNumber.refine((n) => n.startsWith('3'), {
-  message: 'Intäktskontot måste vara ett konto i klass 3 (3000-3999)',
-})
+const webshopRevenueAccount = accountNumber
+  .refine((n) => n.startsWith('3'), {
+    message: 'Intäktskontot måste vara ett konto i klass 3 (3000-3999)',
+  })
+  .refine((n) => n !== '3740', {
+    message: 'Öresavrundningskontot 3740 kan inte användas som intäktskonto',
+  })
 
 export const BulkBookWebshopOrdersSchema = z.object({
   order_ids: z.array(uuid).min(1).max(50),

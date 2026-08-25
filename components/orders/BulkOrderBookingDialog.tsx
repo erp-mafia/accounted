@@ -19,6 +19,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   DEFAULT_REVENUE_ACCOUNT_BY_RATE,
+  ROUNDING_ACCOUNT,
   resolveBookingWarnings,
   resolvePaymentAccount,
   unsupportedVatRates,
@@ -186,9 +187,10 @@ export default function BulkOrderBookingDialog({
   }, [open])
 
   const overrideValid = ACCOUNT_NUMBER_RE.test(overrideAccount)
-  // A revenue-template account must be a class 3 account (schema mirror).
+  // A revenue-template account must be class 3 and never 3740 (schema
+  // mirror: 3740 is the rounding account the residual guard keys on).
   const revenueAccountValid = (value: string) =>
-    ACCOUNT_NUMBER_RE.test(value) && value.startsWith('3')
+    ACCOUNT_NUMBER_RE.test(value) && value.startsWith('3') && value !== ROUNDING_ACCOUNT
   const revenueAllValid = ratesPresent.every(({ rate }) =>
     revenueAccountValid(revenueAccounts[rate] ?? ''),
   )

@@ -295,7 +295,17 @@ describe('POST /api/webshop-orders/bulk-book', () => {
       ],
     })
     enqueue({ data: [] }) // store settings
-    enqueue({ data: [{ account_number: '3041', is_active: true }] }) // chart check
+    enqueue({
+      data: [
+        {
+          account_number: '3041',
+          account_name: 'Försäljning tjänster',
+          is_active: true,
+          default_vat_rate: 0.25,
+          default_vat_treatment: null,
+        },
+      ],
+    }) // chart check
     enqueue({ data: [{ id: ORDER_1 }] }) // claim order 1
     enqueue({ data: [{ id: ORDER_2 }] }) // claim order 2
     const { status, body } = await parseJsonResponse<BulkResponse>(
@@ -327,7 +337,17 @@ describe('POST /api/webshop-orders/bulk-book', () => {
   it('aborts the whole sweep when a template account is not active in the chart', async () => {
     enqueue({ data: [makeOrderRow()] })
     enqueue({ data: [] }) // store settings
-    enqueue({ data: [{ account_number: '3041', is_active: false }] }) // chart check
+    enqueue({
+      data: [
+        {
+          account_number: '3041',
+          account_name: 'Försäljning tjänster',
+          is_active: false,
+          default_vat_rate: 0.25,
+          default_vat_treatment: null,
+        },
+      ],
+    }) // chart check
     const { status, body } = await parseJsonResponse<{
       error: { code: string; details?: { accounts?: string[] } }
     }>(
@@ -354,33 +374,149 @@ describe('POST /api/webshop-orders/bulk-book', () => {
     expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
-  it('skips the chart check for template accounts in the closed prefill set', async () => {
-    // 3002 is auto-repaired by ensureWebshopPrefillAccounts downstream, so
-    // the template guard must not refuse it on a fresh chart: no chart-check
-    // query is queued and the order still books.
+  it('returns 400 for 3740 as a revenue-template account (residual guard integrity)', async () => {
+    // Skeptic counterexample: a 3740 revenue line would be found first by an
+    // account-keyed residual lookup and let a mangled order book its gap as
+    // öresavrundning. The schema bans it outright.
+    const { status } = await parseJsonResponse(
+      await postBulk({
+        order_ids: [ORDER_1],
+        revenue_accounts: { '25': '3740' },
+      }),
+    )
+    expect(status).toBe(400)
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a default-set account templated onto the wrong rate', async () => {
+    // 3002 is the 12% default; routing 25% revenue to it would book a
+    // taxable 25% sale on a 12% account while VAT still books 2611.
     enqueue({ data: [makeOrderRow()] })
     enqueue({ data: [] }) // store settings
-    enqueue({ data: [{ id: ORDER_1 }] }) // claim
-    const { status, body } = await parseJsonResponse<BulkResponse>(
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { accounts?: unknown[] } }
+    }>(
       await postBulk({
         order_ids: [ORDER_1],
         revenue_accounts: { '25': '3002' },
       }),
     )
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_REVENUE_ACCOUNT_RATE_MISMATCH')
+    expect(body.error.details?.accounts).toEqual([{ rate: 25, account: '3002' }])
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a custom account not configured for the rate (ruta 05 integrity)', async () => {
+    // Swedish accounting review finding: an account with no momssats, no
+    // treatment and no rate-conforming name drops the sale's base out of
+    // ruta 05 while the VAT books ruta 10. The sweep refuses and names it.
+    enqueue({ data: [makeOrderRow()] })
+    enqueue({ data: [] }) // store settings
+    enqueue({
+      data: [
+        {
+          account_number: '3051',
+          account_name: 'Försäljning tjänster',
+          is_active: true,
+          default_vat_rate: null,
+          default_vat_treatment: null,
+        },
+      ],
+    }) // chart check
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { accounts?: unknown[] } }
+    }>(
+      await postBulk({
+        order_ids: [ORDER_1],
+        revenue_accounts: { '25': '3051' },
+      }),
+    )
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_REVENUE_ACCOUNT_RATE_MISMATCH')
+    expect(body.error.details?.accounts).toEqual([{ rate: 25, account: '3051' }])
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('accepts a custom account qualified by its rate-conforming number and name', async () => {
+    // No explicit momssats, but 3041 + a name naming exactly "25 % moms"
+    // is what the ruta 05 report logic itself accepts (inferDomesticSalesRate).
+    enqueue({ data: [makeOrderRow()] })
+    enqueue({ data: [] }) // store settings
+    enqueue({
+      data: [
+        {
+          account_number: '3041',
+          account_name: 'Försäljning tjänster 25 % moms',
+          is_active: true,
+          default_vat_rate: null,
+          default_vat_treatment: null,
+        },
+      ],
+    }) // chart check
+    enqueue({ data: [{ id: ORDER_1 }] }) // claim
+    const { status, body } = await parseJsonResponse<BulkResponse>(
+      await postBulk({
+        order_ids: [ORDER_1],
+        revenue_accounts: { '25': '3041' },
+      }),
+    )
     expect(status).toBe(200)
     expect(body.data.booked_count).toBe(1)
-    const lines = (
-      mockCreateDraftEntry.mock.calls[0][3] as {
-        lines: { account_number: string; credit_amount: number }[]
-      }
-    ).lines
-    expect(lines.find((l) => l.account_number === '3002')?.credit_amount).toBe(400)
+  })
+
+  it('still bounds the residual when the revenue is templated (mangled order)', async () => {
+    // Skeptic scenario, post-fix: gift-card order whose gross (500) exceeds
+    // its VAT breakdown (0.80 + 0.20). The residual line is identified
+    // structurally (last line), so the templated revenue line can never
+    // shadow it and the order is refused, exactly as without a template.
+    enqueue({
+      data: [
+        makeOrderRow({
+          total: 500,
+          total_sek: 500,
+          total_tax: 0.2,
+          vat_breakdown: [{ rate: 25, net: 0.8, tax: 0.2 }],
+        }),
+      ],
+    })
+    enqueue({ data: [] }) // store settings
+    enqueue({
+      data: [
+        {
+          account_number: '3041',
+          account_name: 'Försäljning tjänster',
+          is_active: true,
+          default_vat_rate: 0.25,
+          default_vat_treatment: null,
+        },
+      ],
+    }) // chart check
+    const { status, body } = await parseJsonResponse<BulkResponse>(
+      await postBulk({
+        order_ids: [ORDER_1],
+        revenue_accounts: { '25': '3041' },
+      }),
+    )
+    expect(status).toBe(200)
+    expect(body.data.results[0].error?.code).toBe('WEBSHOP_ORDER_RESIDUAL_TOO_LARGE')
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
   it('composes the revenue template with the payment_account override', async () => {
     enqueue({ data: [makeOrderRow()] })
     enqueue({ data: [] }) // store settings
-    enqueue({ data: [{ account_number: '3041', is_active: true }] }) // chart check
+    enqueue({
+      data: [
+        {
+          account_number: '3041',
+          account_name: 'Försäljning tjänster',
+          is_active: true,
+          default_vat_rate: 0.25,
+          default_vat_treatment: null,
+        },
+      ],
+    }) // chart check
     enqueue({ data: [{ id: ORDER_1 }] }) // claim
     const { status } = await parseJsonResponse(
       await postBulk({

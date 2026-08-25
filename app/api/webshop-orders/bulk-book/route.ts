@@ -12,9 +12,15 @@ import {
   orderBookingDescription,
   resolvePaymentAccount,
   unsupportedVatRates,
+  DEFAULT_REVENUE_ACCOUNT_BY_RATE,
   ROUNDING_ACCOUNT,
   WEBSHOP_PREFILL_ACCOUNTS,
 } from '@/lib/webshop-orders/booking-lines'
+import { inferDomesticSalesRate } from '@/lib/reports/vat-revenue-accounts'
+import {
+  defaultRateForVatTreatment,
+  isAccountVatTreatment,
+} from '@/lib/vat/account-vat-treatment'
 import {
   assertOrderBookable,
   bookOrderThroughEngine,
@@ -122,12 +128,19 @@ export const POST = withRouteContext(
     const { order_ids, payment_account, revenue_accounts } = validation.data
 
     // Revenue template: rate-keyed map for buildOrderBookingLines. The JSON
-    // keys are strings ('25'); the builder keys by numeric rate.
-    const revenueAccountByRate: Partial<Record<number, string>> = {}
+    // keys are strings ('25'); the builder keys by numeric rate. Typed as a
+    // full Record (only truthy strings are ever inserted) so Object.values
+    // stays string[] under the build's type-check.
+    const revenueAccountByRate: Record<number, string> = {}
     for (const [rate, account] of Object.entries(revenue_accounts ?? {})) {
       if (account) revenueAccountByRate[Number(rate)] = account
     }
-    const revenueTemplateAccounts = [...new Set(Object.values(revenueAccountByRate))]
+    const revenueTemplatePairs = Object.entries(revenueAccountByRate).map(
+      ([rate, account]) => ({ rate: Number(rate), account }),
+    )
+    const revenueTemplateAccounts = [
+      ...new Set(revenueTemplatePairs.map((p) => p.account)),
+    ]
 
     // Dedupe but keep the caller's order for the result list.
     const ids = [...new Set(order_ids)]
@@ -176,20 +189,30 @@ export const POST = withRouteContext(
 
     // Revenue-template accounts are user-chosen, so they are never
     // auto-created (ensureWebshopPrefillAccounts only repairs our own closed
-    // prefill set; accounts in that set are exempt from this check for the
-    // same reason). Verify up front that every chosen account exists and is
-    // active in the company's chart, and abort the WHOLE sweep otherwise:
-    // a typo would fail every order on the same AccountsNotInChartError
-    // anyway, and one loud refusal naming the accounts beats fifty per-order
-    // engine errors. A lookup failure aborts too, same doctrine as the
-    // settings fetch above.
+    // prefill set; accounts in that set are exempt from the existence check
+    // for the same reason). Verify up front that every chosen account exists
+    // and is active in the company's chart, and abort the WHOLE sweep
+    // otherwise: a typo would fail every order on the same
+    // AccountsNotInChartError anyway, and one loud refusal naming the
+    // accounts beats fifty per-order engine errors. A lookup failure aborts
+    // too, same doctrine as the settings fetch above.
     const chartCheckedAccounts = revenueTemplateAccounts.filter(
       (account) => !WEBSHOP_PREFILL_ACCOUNTS.includes(account),
     )
+    const chartRowByAccount = new Map<
+      string,
+      {
+        account_name: string
+        default_vat_rate: number | string | null
+        default_vat_treatment: string | null
+      }
+    >()
     if (chartCheckedAccounts.length > 0) {
       const { data: chartRows, error: chartError } = await supabase
         .from('chart_of_accounts')
-        .select('account_number, is_active')
+        .select(
+          'account_number, account_name, is_active, default_vat_rate, default_vat_treatment',
+        )
         .eq('company_id', companyId)
         .in('account_number', chartCheckedAccounts)
       if (chartError) {
@@ -199,13 +222,16 @@ export const POST = withRouteContext(
           { status: 500 },
         )
       }
-      const activeAccounts = new Set(
-        (chartRows ?? [])
-          .filter((row) => row.is_active)
-          .map((row) => row.account_number as string),
-      )
+      for (const row of chartRows ?? []) {
+        if (!row.is_active) continue
+        chartRowByAccount.set(row.account_number as string, {
+          account_name: (row.account_name as string) ?? '',
+          default_vat_rate: row.default_vat_rate as number | string | null,
+          default_vat_treatment: row.default_vat_treatment as string | null,
+        })
+      }
       const unknownAccounts = chartCheckedAccounts.filter(
-        (account) => !activeAccounts.has(account),
+        (account) => !chartRowByAccount.has(account),
       )
       if (unknownAccounts.length > 0) {
         return errorResponseFromCode('WEBSHOP_ORDER_REVENUE_ACCOUNT_UNKNOWN', log, {
@@ -213,6 +239,48 @@ export const POST = withRouteContext(
           details: { accounts: unknownAccounts },
         })
       }
+    }
+
+    // Rate-classification guard (Swedish accounting review + skeptic
+    // finding): output VAT books on 2611/2621/2631 per rate regardless of
+    // the template, and the momsdeklaration counts a custom account toward
+    // ruta 05 only when the account is configured for that rate (explicit
+    // momssats, a rate-mapped treatment, or a rate-conforming 30x1/2/3
+    // number + name: the exact rules the report uses). A mismatched choice
+    // would silently drop the sale's base out of ruta 05 while its VAT
+    // lands in ruta 10-12, so the sweep refuses it and points at the fix.
+    // Rate 0 buckets carry no output VAT and span legitimate momsfri/
+    // export/EU accounts, so only the taxable rates are checked. Accounts
+    // from our own default set are checked statically: each is valid only
+    // for the rate it is the default for.
+    const mismatchedAccounts: { rate: number; account: string }[] = []
+    for (const { rate, account } of revenueTemplatePairs) {
+      if (WEBSHOP_PREFILL_ACCOUNTS.includes(account)) {
+        if (DEFAULT_REVENUE_ACCOUNT_BY_RATE[rate] !== account) {
+          mismatchedAccounts.push({ rate, account })
+        }
+        continue
+      }
+      if (rate === 0) continue
+      const row = chartRowByAccount.get(account)
+      if (!row) continue // unreachable: the existence guard above returned
+      const expected = rate / 100
+      const configured =
+        row.default_vat_rate === null ? null : Number(row.default_vat_rate)
+      const treatmentRate = isAccountVatTreatment(row.default_vat_treatment)
+        ? defaultRateForVatTreatment(row.default_vat_treatment, 3)
+        : null
+      const inferred = inferDomesticSalesRate(account, row.account_name)
+      if (configured !== expected && treatmentRate !== expected && inferred !== expected) {
+        mismatchedAccounts.push({ rate, account })
+      }
+    }
+    if (mismatchedAccounts.length > 0) {
+      return errorResponseFromCode(
+        'WEBSHOP_ORDER_REVENUE_ACCOUNT_RATE_MISMATCH',
+        log,
+        { requestId, details: { accounts: mismatchedAccounts } },
+      )
     }
 
     // Sequential on purpose: each order is its own draft -> claim -> commit
@@ -342,8 +410,15 @@ export const POST = withRouteContext(
       // MAX_RESIDUAL_SEK means the gross total and the VAT breakdown
       // disagree (gift-card redemptions, mangled orders); in the single
       // dialog the user sees the fat 3740 line and stops, so the sweep must
-      // refuse instead of booking the gap as "öresavrundning".
-      const residualLine = lines.find((l) => l.account_number === ROUNDING_ACCOUNT)
+      // refuse instead of booking the gap as "öresavrundning". The residual
+      // is identified structurally as the LAST line: the builder appends it
+      // after every bucket line, and find-by-account would read the wrong
+      // line whenever an earlier line also sits on 3740 (e.g. a 3740
+      // payment_account, or historically a 3740 template account before the
+      // schema banned it), silently disarming this guard (skeptic finding).
+      const lastLine = lines[lines.length - 1]
+      const residualLine =
+        lastLine.account_number === ROUNDING_ACCOUNT ? lastLine : undefined
       const residualAbs = residualLine
         ? Math.max(residualLine.debit_amount || 0, residualLine.credit_amount || 0)
         : 0

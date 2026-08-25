@@ -6318,7 +6318,7 @@
     "bulk_revenue_label": "Välj intäktskonton (bokföringsmall)",
     "bulk_revenue_rate": "Försäljning {rate} % moms",
     "bulk_revenue_rate_aria": "Intäktskonto för {rate} % moms",
-    "invalid_revenue_account": "Ange ett intäktskonto i klass 3, t.ex. 3041.",
+    "invalid_revenue_account": "Ange ett intäktskonto i klass 3 (inte 3740), t.ex. 3041.",
     "bulk_confirm": "Bokför {count, plural, one {# order} other {# ordrar}}",
     "bulk_error_title": "Bokföringen misslyckades",
     "bulk_success_title": "Klart",
