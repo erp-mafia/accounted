@@ -165,6 +165,7 @@ import {
   codedError,
   extractRequestedCompany,
   isCompanyDependentTool,
+  isOptionalCompanyTool,
   noCompanyYetError,
   projectToolInputSchema,
   resolveMcpCompanyContext,
@@ -18583,7 +18584,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           )
         }
 
-        if (isCompanyDependentTool(toolName)) {
+
+        // Optional-company tools resolve (and membership-check) a company only
+        // when the caller names one; anonymous callers have no memberships to
+        // check, so a company_id from them is dropped rather than resolved.
+        const wantsCompanyContext =
+          isCompanyDependentTool(toolName) ||
+          (isOptionalCompanyTool(toolName) && !isAnonymous && extracted.requestedCompanyId !== undefined)
+        if (wantsCompanyContext) {
           const companyContext = await resolveMcpCompanyContext({
             supabase,
             userId,

@@ -115,6 +115,18 @@ describe('MCP lazy authentication', () => {
     expect(mocks.validateApiKey).not.toHaveBeenCalled()
   })
 
+  it('ignores a company_id on a public tool when anonymous instead of touching tenant tables', async () => {
+    const response = await handleMcpRequest(
+      rpc('tools/call', {
+        name: 'gnubok_list_skills',
+        arguments: { company_id: '11111111-1111-4111-8111-111111111111' },
+      })
+    )
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.result.isError).not.toBe(true)
+  })
+
   it('challenges a protected tool call with a transport-level 401 + WWW-Authenticate', async () => {
     const response = await handleMcpRequest(
       rpc('tools/call', { name: 'gnubok_list_companies', arguments: {} })
