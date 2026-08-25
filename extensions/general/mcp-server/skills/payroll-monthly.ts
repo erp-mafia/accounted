@@ -52,7 +52,7 @@ Variable lines (overtime, weekend supplement, milage, traktamente, förmåner) a
 - **Skatteavdrag**: tax-table lookup (skattetabell + kolumn → table column for the gross level)
 - **Nettolön** (net): bruttolön − skatteavdrag
 - **Sociala avgifter (arbetsgivaravgifter)**: 31.42 % of bruttolön (standard 2025). Reduced rates apply to specific age groups: always check the current statutory rates before relying on these:
-  - **Born 1937 or earlier**: **0 %**: no avgifter at all (oldest cohort, never paid into the modern pension system). Easy to miss; the BAS journal entries for 7510/2730 simply don't apply for these employees.
+  - **Born 1937 or earlier**: **0 %**: no avgifter at all (oldest cohort, never paid into the modern pension system). Easy to miss; the BAS journal entries for 7510/2731 simply don't apply for these employees.
   - **Age 66+ on 1 January of the income year (67+ from income year 2026)**: 10.21 % (only ålderspensionsavgift). The threshold rises with the riktålder; verify the cohort year for the current run rather than hard-coding a birth year.
   - **växa-stöd / temporary youth reduction**: ages 19-23, salary ≤ 25 000 SEK/month, capped duration. The exact rate and window vary year-over-year (e.g. 20.81 % during 1 Apr 2026: 30 Sep 2027 per Prop. 2025/26:34): confirm against Skatteverket's current published table before applying.
 - **Semesterlöneskuld** (vacation accrual): 12 % of bruttolön (default). Booked monthly to 2920.
@@ -73,11 +73,11 @@ Errors at this stage usually mean missing tax-table data: fall back to \`getDefa
 - Debit **7210** (lön tjänstemän) or **7010** (lön arbetare): bruttolön
 - Debit **7510** (sociala avgifter): \`avgift_base × applicable_rate\`: **per employee**, using the rate from Step 4 (default 31.42 %, or a reduced rate when applicable: 10.21 % for 66+, växa-stöd, etc.)
 - Credit **2710** (källskatt): skatteavdrag
-- Credit **2730** (lagstadgade arbetsgivaravgifter): same amount as the 7510 debit (the avgift cost is the same number as the avgift liability)
+- Credit **2731** (avräkning lagstadgade sociala avgifter): same amount as the 7510 debit (the avgift cost is the same number as the avgift liability). 2731 is what the engine books and what the skattekonto AGI draw debits; crediting the group account 2730 instead splits the liability across two accounts (issue #1870)
 - Credit **2920** (semesterlöneskuld): 12 % × bruttolön (debit 7290 to balance)
 - Credit **1930** (bank): nettolön (when paid)
 
-When a run mixes full-rate and reduced-rate employees, the 7510/2730 lines are summed across all employees: the *total* avgift line equals \`Σ(per-employee avgift_base × per-employee rate)\`, **not** \`Σ bruttolön × 31.42 %\`. \`gnubok_calculate_salary_run\` already does this aggregation.
+When a run mixes full-rate and reduced-rate employees, the 7510/2731 lines are summed across all employees: the *total* avgift line equals \`Σ(per-employee avgift_base × per-employee rate)\`, **not** \`Σ bruttolön × 31.42 %\`. \`gnubok_calculate_salary_run\` already does this aggregation.
 
 ### Step 7: Generate AGI
 
