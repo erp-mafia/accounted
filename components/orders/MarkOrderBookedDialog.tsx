@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Loader2 } from 'lucide-react'
 import {
   Dialog,
@@ -17,7 +17,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { WebshopOrder } from '@/types'
 
 interface MarkOrderBookedDialogProps {
@@ -71,6 +71,7 @@ export default function MarkOrderBookedDialog({
   onMarked,
 }: MarkOrderBookedDialogProps) {
   const t = useTranslations('webshop_orders')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [candidates, setCandidates] = useState<EntryCandidate[]>([])
   const [loading, setLoading] = useState(false)
@@ -141,7 +142,11 @@ export default function MarkOrderBookedDialog({
       if (!res.ok || json.error) {
         toast({
           title: t('mark_failed'),
-          description: getErrorMessage(json, { context: 'transaction', statusCode: res.status }),
+          description: getErrorMessage(json, {
+            context: 'transaction',
+            statusCode: res.status,
+            locale: errorLocale,
+          }),
           variant: 'destructive',
         })
         return

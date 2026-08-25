@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { MoreHorizontal, ShoppingCart } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
@@ -20,7 +20,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { WebshopOrder, WebshopStoreSettings } from '@/types'
 
@@ -64,6 +64,7 @@ function tabQuery(tab: StatusTab): string {
 
 export default function OrdersPage() {
   const t = useTranslations('webshop_orders')
+  const errorLocale = useLocale() as ErrorLocale
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const [rows, setRows] = useState<WebshopOrder[]>([])
@@ -150,6 +151,7 @@ export default function OrdersPage() {
             description: getErrorMessage(json, {
               context: 'transaction',
               statusCode: res.status,
+              locale: errorLocale,
             }),
             variant: 'destructive',
           })
@@ -160,7 +162,7 @@ export default function OrdersPage() {
         toast({ title: t('unmark_failed'), variant: 'destructive' })
       }
     },
-    [load, t, toast],
+    [load, t, toast, errorLocale],
   )
 
   const tabs: Array<{ key: StatusTab; label: string }> = [
