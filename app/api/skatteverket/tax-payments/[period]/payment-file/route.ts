@@ -5,7 +5,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'
 import { resolveBatchDebtor } from '@/lib/payments/batch-service'
-import { generateSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
+import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { getBranding } from '@/lib/branding/service'
 import { roundOre } from '@/lib/money'
@@ -86,7 +86,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
 
   const { data: company } = await supabase
     .from('companies')
-    .select('name, org_number')
+    .select('name, org_number, entity_type')
     .eq('id', companyId)
     .single()
 
@@ -97,9 +97,18 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     )
   }
 
+  // The reference is the company's twelve-digit identity plus a Luhn check
+  // digit (13 digits), not the ten-digit form: Skatteverket rejects the short
+  // one. Skatteverket's own reported OCR wins when the skattekonto has been
+  // synced; the derived value is the fallback.
   let ocr: string
   try {
-    ocr = generateSkattekontoOcr(company.org_number)
+    ocr = await resolveSkattekontoOcr(
+      supabase,
+      companyId,
+      company.org_number,
+      company.entity_type === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag',
+    )
   } catch (err) {
     return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
   }

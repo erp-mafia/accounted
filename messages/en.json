@@ -7028,6 +7028,7 @@
     "submitted": "Submitted",
     "pending_stale_draft": "A signing draft exists at Skatteverket but is outdated — unlock and submit the underlag again.",
     "pending_awaiting_signature": "Granskningsunderlag ready — waiting for BankID signature in Mina Sidor.",
+    "pending_signature_unverifiable": "Granskningsunderlag ready. If it has already been signed in Mina Sidor, that will not show here until the Skatteverket connection is renewed.",
     "pending_underlag_submitted": "Underlag received by Skatteverket. Create a granskningsunderlag to proceed to signing.",
     "pending_not_submitted": "Not submitted to Skatteverket yet. Deadline: the 12th of the month after payout (the 17th in January/August for employers whose total annual payroll is below SEK 40 million).",
     "draft_locked_title": "The draft is locked and ready to be signed",
