@@ -6461,6 +6461,8 @@
     "rot_rut_clear_selection": "Rensa val",
     "rot_rut_no_eligible_title": "Inga fakturor är redo",
     "rot_rut_no_eligible_description": "När en ROT- eller RUT-faktura är betald och har fullständiga köparuppgifter visas den här.",
+    "rot_rut_other_type_hint": "{count, plural, one {1 faktura har} other {# fakturor har}} {type}-avdrag och visas när du byter till {type} ovan.",
+    "rot_rut_blocked_below_hint": "{count, plural, one {1 faktura kan} other {# fakturor kan}} inte tas med ännu: se orsakerna under \"Kan inte tas med\" nedan.",
     "rot_rut_paid_at": "Betald {date}",
     "rot_rut_max_cases_help": "Skatteverket tillåter högst {count} ärenden i samma fil. Skapa flera filer om fler fakturor ska begäras.",
     "rot_rut_generate_file": "Skapa och hämta fil",

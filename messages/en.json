@@ -6461,6 +6461,8 @@
     "rot_rut_clear_selection": "Clear selection",
     "rot_rut_no_eligible_title": "No invoices are ready",
     "rot_rut_no_eligible_description": "A paid ROT or RUT invoice appears here once its buyer details are complete.",
+    "rot_rut_other_type_hint": "{count, plural, one {1 invoice carries} other {# invoices carry}} {type} deductions and will appear when you switch to {type} above.",
+    "rot_rut_blocked_below_hint": "{count, plural, one {1 invoice cannot} other {# invoices cannot}} be included yet: see the reasons under \"Cannot be included\" below.",
     "rot_rut_paid_at": "Paid {date}",
     "rot_rut_max_cases_help": "Skatteverket allows at most {count} cases in one file. Create multiple files if you need to request more invoices.",
     "rot_rut_generate_file": "Create and download file",
