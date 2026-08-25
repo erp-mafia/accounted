@@ -116,7 +116,7 @@ Följande delsystem matar journalen:
 | Banktransaktioner | Synkroniserade via PSD2 (Enable Banking) eller importerade bankfiler | Kontering via kategoriseringsregler och konteringsmallar |
 | Kvitto- och underlagshantering | Uppladdade eller inmejlade underlag, maskinellt avlästa | Kontering efter granskning |
 | Kreditnotor | Kreditering av utgående och inkommande fakturor | Omvänd kontering av originalfaktura |
-| Löner | Lönekörningar, arbetsgivardeklaration (AGI) | Debet 7xxx + 7510, kredit 2710/2730/1930 |
+| Löner | Lönekörningar, arbetsgivardeklaration (AGI) | Debet 7xxx + 7510, kredit 2710/2731/1930 |
 | Anläggningstillgångar | Anläggningsregister med årliga avskrivningar | Debet 78xx, kredit 12xx |
 | Periodiseringar | Periodiseringsscheman över flera perioder | Debet/kredit 17xx respektive 29xx |
 
