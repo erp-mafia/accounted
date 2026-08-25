@@ -127,8 +127,13 @@ describe('a signup that did not come from an invitation', () => {
 })
 
 describe('the duplicate-email screen', () => {
-  it('sends the user to plain /login', () => {
-    expect(duplicateScreen()).toContain('<Link href="/login">')
+  it('sends the user to /login, carrying only the sanitized destination', () => {
+    // loginHref is /login, or /login?next=… when the signup started from the
+    // MCP consent page (issue #1814). Nothing else may ride on that link.
+    expect(duplicateScreen()).toContain('<Link href={loginHref}>')
+    expect(CODE).toContain(
+      "const loginHref = nextPath === '/' ? '/login' : `/login?next=${encodeURIComponent(nextPath)}`",
+    )
   })
 
   it('does not put the address in the URL of a page that never reads it', () => {
@@ -142,12 +147,22 @@ describe('the duplicate-email screen', () => {
 })
 
 describe('the post-auth destination parameter', () => {
-  it('does not read `next`', () => {
-    // Nothing links to /register with one: bounceToAuth (lib/supabase/
-    // middleware.ts) targets /login and the two MFA pages, and
-    // app/invite/[token]/page.tsx sends `?invite=`. An unread parameter cannot
-    // redirect anyone.
-    expect(CODE).not.toContain("searchParams.get('next')")
+  it('reads `next` exactly once, and only through safeReturnTo', () => {
+    // /login forwards `next` here for a visitor who arrived from the MCP
+    // consent page without an account (issue #1814). The raw value must never
+    // be consumed anywhere else on the page: every later use goes through
+    // nextPath, which safeReturnTo has already vetted.
+    expect(CODE.match(/searchParams\.get\('next'\)/g)).toHaveLength(1)
+    expect(CODE).toContain("const nextPath = safeReturnTo(searchParams.get('next'), '/')")
+  })
+
+  it('only ever navigates to the vetted destination, never a raw parameter', () => {
+    // Every hard navigation on the page targets nextPath or '/'.
+    const targets = CODE.match(/window\.location\.(?:assign\([^)]*\)|href = [^\n]+)/g) ?? []
+    expect(targets.length).toBeGreaterThan(0)
+    for (const target of targets) {
+      expect(target).toMatch(/^window\.location\.(?:assign\(nextPath\)|href = (?:nextPath|'\/'))$/)
+    }
   })
 
   it('would have to sanitize a destination through safeReturnTo if one is ever added', () => {

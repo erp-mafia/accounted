@@ -21,6 +21,7 @@ import { GoogleMark } from '@/components/ui/provider-marks'
 export function GoogleAuthButton({
   onError,
   compact = false,
+  next,
 }: {
   onError: (message: string) => void
   /**
@@ -29,6 +30,14 @@ export function GoogleAuthButton({
    * kept as the accessible name.
    */
   compact?: boolean
+  /**
+   * Post-auth destination, already passed through safeReturnTo by the caller.
+   * Forwarded to /auth/callback as `next` so an OAuth sign-in or sign-up that
+   * started from the MCP consent page (/login?next=/api/mcp-oauth/authorize…)
+   * resumes the consent flow instead of landing on the dashboard. '/' (the
+   * safeReturnTo fallback) means no destination and is not forwarded.
+   */
+  next?: string
 }) {
   const [isRedirecting, setIsRedirecting] = useState(false)
   const supabase = createClient()
@@ -38,10 +47,13 @@ export function GoogleAuthButton({
   const handleClick = async () => {
     setIsRedirecting(true)
     try {
+      const callback = new URL('/auth/callback', window.location.origin)
+      callback.searchParams.set('flow', 'oauth')
+      if (next && next !== '/') callback.searchParams.set('next', next)
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback?flow=oauth`,
+          redirectTo: callback.toString(),
         },
       })
       if (error) {
