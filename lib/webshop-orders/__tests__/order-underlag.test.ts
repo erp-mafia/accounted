@@ -13,6 +13,7 @@ import {
   buildOrderUnderlagModel,
   orderUnderlagFilename,
   archiveWebshopOrderUnderlag,
+  formatAmount,
 } from '../order-underlag'
 
 function makeOrder(overrides: Partial<WebshopOrder> = {}): WebshopOrder {
@@ -206,6 +207,23 @@ describe('buildOrderUnderlagModel', () => {
     expect(model.currency).toBe('EUR')
     expect(model.totalSek).toBe(561.5)
     expect(model.exchangeRate).toBe(11.23)
+  })
+})
+
+describe('formatAmount', () => {
+  it('renders negatives with an ASCII hyphen, never U+2212 (WinAnsi PDF fonts drop it)', () => {
+    const formatted = formatAmount(-500)
+    // sv-SE Intl emits U+2212 MINUS SIGN; Helvetica/WinAnsi has no glyph for
+    // it, so an unguarded refund amount would silently render as positive in
+    // the archived underlag (skeptic finding).
+    expect(formatted.includes(String.fromCharCode(0x2212))).toBe(false)
+    expect(formatted.startsWith('-')).toBe(true)
+    expect(formatted.endsWith('500,00')).toBe(true)
+  })
+
+  it('formats two decimals with a Swedish decimal comma', () => {
+    expect(formatAmount(80.24).endsWith('80,24')).toBe(true)
+    expect(formatAmount(0)).toBe('0,00')
   })
 })
 

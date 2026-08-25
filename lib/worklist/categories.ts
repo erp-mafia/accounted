@@ -16,24 +16,11 @@ import {
 } from '@/lib/invoices/matchable-statuses'
 import type { SuggestedMatch } from './types'
 
-const log = createLogger('worklist')
+// Canonical home is lib/worklist/types.ts (dependency-free, client-safe);
+// re-exported here so existing server-side imports keep working.
+export { NEEDS_DOC_SOURCE_TYPES } from './types'
 
-/**
- * Journal-entry source types that require underlag (BFL 5 kap 7§). Source
- * types representing system-generated entries (VAT settlement, year-end,
- * currency revaluation, …) are exempt by omission.
- */
-export const NEEDS_DOC_SOURCE_TYPES = [
-  'manual',
-  'bank_transaction',
-  'supplier_invoice_registered',
-  'supplier_invoice_paid',
-  'supplier_invoice_cash_payment',
-  'import',
-  // Webshop order bookings rest on the generated orderunderlag (#1881); an
-  // entry whose underlag failed to attach must surface here.
-  'webshop_order',
-] as const
+const log = createLogger('worklist')
 
 /**
  * Upper bound on the unconsumed-inbox scan in countInboxDocuments. An inbox

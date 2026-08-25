@@ -310,11 +310,21 @@ const styles = StyleSheet.create({
   },
 })
 
-function formatAmount(amount: number): string {
+// U+2212 MINUS SIGN, which sv-SE Intl emits for negatives. Standard PDF
+// fonts (Helvetica/WinAnsi) have no glyph for it and drop it silently, so a
+// refund would render as a POSITIVE amount in the archived underlag (skeptic
+// finding; same guard as formatPdfCurrency in lib/invoices/pdf-template).
+// Built via fromCharCode so no escape sequence can mangle in transit.
+const UNICODE_MINUS = String.fromCharCode(0x2212)
+
+/** Exported for tests: the sign guard must never regress. */
+export function formatAmount(amount: number): string {
   return new Intl.NumberFormat('sv-SE', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(amount)
+  })
+    .format(amount)
+    .replaceAll(UNICODE_MINUS, '-')
 }
 
 export interface OrderUnderlagCompany {
@@ -377,7 +387,7 @@ export function WebshopOrderUnderlagPDF({
             ) : null}
             {model.totalSek !== null ? (
               <Text style={styles.blockText}>
-                Bokfört i SEK: {formatAmount(model.totalSek)} kr
+                Motsvarande i SEK: {formatAmount(model.totalSek)} kr
                 {model.exchangeRate ? ` (kurs ${model.exchangeRate})` : ''}
               </Text>
             ) : null}
