@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import {
   foldText,
   buildAccountIndex,
+  buildActiveAccountIndex,
   searchAccounts,
+  type ChartAccountLike,
   type SearchableAccount,
 } from '../account-search'
 
@@ -102,5 +104,44 @@ describe('searchAccounts', () => {
   it('honours the result limit', () => {
     expect(searchAccounts(idx, '', 2)).toHaveLength(2)
     expect(searchAccounts(idx, '6', 2)).toHaveLength(2)
+  })
+})
+
+// The booking-dialog picker path (issue #1877): chart rows straight from
+// /api/bookkeeping/accounts, indexed active-only, searched by number prefix
+// or name. Synthetic fixture mirrors the reported case: 5460 active, plus a
+// deactivated sibling that must never surface.
+describe('buildActiveAccountIndex', () => {
+  const chart: ChartAccountLike[] = [
+    { account_number: '1930', account_name: 'Företagskonto', account_class: 1, is_active: true },
+    { account_number: '5460', account_name: 'Förbrukningsmaterial', account_class: 5, is_active: true },
+    { account_number: '5410', account_name: 'Förbrukningsinventarier', account_class: 5, is_active: false },
+    // No is_active flag at all: counts as active (server already filtered).
+    { account_number: '6212', account_name: 'Mobiltelefon', account_class: 6 },
+  ]
+  const activeIdx = buildActiveAccountIndex(chart)
+
+  it('finds an active account by number prefix (the reported "5460" case)', () => {
+    expect(numbers(searchAccounts(activeIdx, '5460'))).toEqual(['5460'])
+    expect(numbers(searchAccounts(activeIdx, '54'))).toEqual(['5460'])
+  })
+
+  it('finds an active account by name, case-insensitively with åäö', () => {
+    expect(numbers(searchAccounts(activeIdx, 'Förbrukningsmaterial'))).toEqual(['5460'])
+    expect(numbers(searchAccounts(activeIdx, 'FÖRBRUKNINGSMATERIAL'))).toEqual(['5460'])
+    expect(numbers(searchAccounts(activeIdx, 'forbrukningsmaterial'))).toEqual(['5460'])
+  })
+
+  it('excludes accounts explicitly marked inactive', () => {
+    expect(numbers(searchAccounts(activeIdx, '5410'))).toEqual([])
+    expect(numbers(searchAccounts(activeIdx, 'Förbrukningsinventarier'))).toEqual([])
+  })
+
+  it('treats rows without an is_active flag as active', () => {
+    expect(numbers(searchAccounts(activeIdx, 'mobiltelefon'))).toEqual(['6212'])
+  })
+
+  it('marks every indexed row as active for the result renderer', () => {
+    expect(searchAccounts(activeIdx, '').every((i) => i.isActive)).toBe(true)
   })
 })
