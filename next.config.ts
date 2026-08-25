@@ -12,6 +12,13 @@ const isDev = process.env.NODE_ENV === "development";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 
+// Hosted builds only widen the CSP when Turnstile is prepared. The generic
+// Docker image builds with a site-key sentinel, so it always includes this
+// origin and can safely enable Turnstile later through runtime substitution.
+const turnstileOrigin = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY
+  ? " https://challenges.cloudflare.com"
+  : "";
+
 // WebSocket origin for Supabase Realtime. Hosted projects are covered by the
 // wss://*.supabase.co wildcard below, but a SELF-HOSTED Supabase URL is not:
 // Realtime opens wss://<supabase-host>/realtime/v1/websocket, and WebKit
@@ -36,7 +43,7 @@ const cspDirectives = [
   // re-widen the policy for no benefit and undo the ad-blocker resistance.
   `connect-src 'self' ${supabaseUrl} ${supabaseWsUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com`,
   `style-src 'self' 'unsafe-inline' https://*.enablebanking.com`,
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com${turnstileOrigin}`,
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
   "worker-src 'self' blob:",
@@ -47,7 +54,7 @@ const cspDirectives = [
   // "Det här innehållet har blockerats" in Chrome. Firefox uses PDF.js and
   // Edge uses its own viewer, so neither hits this. See crbug.com/271452.
   "object-src 'self' blob:",
-  `frame-src 'self' blob: ${supabaseUrl}`,
+  `frame-src 'self' blob: ${supabaseUrl}${turnstileOrigin}`,
   "frame-ancestors 'none'",
 ].join("; ");
 
