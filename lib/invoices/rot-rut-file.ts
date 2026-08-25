@@ -1,5 +1,5 @@
 import type { Invoice, InvoiceItem } from '@/types'
-import { roundOre } from '@/lib/money'
+import { truncateToWholeKronor } from '@/lib/money'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { deductionSekConverter, SCHABLON_WORK_TYPES, type DeductionType } from './rot-rut-rules'
 
@@ -378,14 +378,16 @@ export function evaluateInvoiceForFile(
   const prisForArbete = Math.round(
     typeLines.reduce((sum, l) => sum + toSek(l.line_total ?? 0) + toSek(l.vat_amount ?? 0), 0),
   )
-  // BegartBelopp rounds DOWN: skattereduktionen is capped at a share of the
-  // work price (HUSFL: 50 % RUT / 30 % ROT), so an exact half-krona deduction
-  // (125 kr work -> 62,50) must become 62, never 63. Half-up rounding would
-  // request more than the cap and manufacture begärt > betalt out of a
-  // perfectly correct invoice. The öre-level rounding before the floor keeps
-  // float noise (62.499999...) from dropping a whole krona.
-  const begartBelopp = Math.floor(
-    roundOre(typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0)),
+  // BegartBelopp rounds DOWN (truncateToWholeKronor, the Skatteverket-bound
+  // amount rule): skattereduktionen is capped at a share of the work price
+  // (HUSFL: 50 % RUT / 30 % ROT), so a deduction with öre, 62,50 or 187,50,
+  // must become 62 / 187, never 63 / 188. Half-up rounding requested more
+  // than the cap and the 1513 fordran: at the exact RUT cap it manufactured
+  // begärt > betalt and blocked a correct invoice; below the cap (ROT 30 %)
+  // it over-requested by up to a krona. The helper öre-rounds before
+  // truncating so float noise (62.499999...) cannot drop a whole krona.
+  const begartBelopp = truncateToWholeKronor(
+    typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0),
   )
   const betaltBelopp = prisForArbete - begartBelopp
   if (prisForArbete < 2) {

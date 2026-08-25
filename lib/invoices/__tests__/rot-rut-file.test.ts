@@ -697,6 +697,26 @@ describe('eligibility blockers', () => {
     expect(xml).toContain('<ns2:BegartBelopp>62</ns2:BegartBelopp>')
   })
 
+  it('floors a ROT half-öre deduction that the old rounding pushed past the 30 % cap', () => {
+    // 500 kr labor + 125 moms = 625 kr; ROT 30 % = 187,50. Half-up rounding
+    // emitted 188, which exceeded both the statutory cap and the 1513 fordran
+    // (and, unlike the RUT-at-50 % case, passed the begärt > betalt guard).
+    // The floor emits 187/438. Skeptic finding on PR #1910: pins that the fix
+    // deliberately lowers this class of previously-passing ROT files by 1 kr.
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({}, [
+        makeItem({ line_total: 500, vat_amount: 125, deduction_amount: 187.5, labor_hours: 5 }),
+      ]),
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.arende.pris_for_arbete).toBe(625)
+      expect(result.value.arende.begart_belopp).toBe(187)
+      expect(result.value.arende.betalt_belopp).toBe(438)
+    }
+  })
+
   it('öre-rounds the deduction sum before flooring so float noise cannot drop a krona', () => {
     // Three öre-level lines summing to exactly 63.00 in FP-land can land at
     // 62.999999...; the floor must apply to the öre-rounded sum (63), not the
