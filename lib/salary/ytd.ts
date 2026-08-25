@@ -22,6 +22,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Run statuses whose amounts count toward an employee's YTD.
@@ -67,17 +68,38 @@ interface ComputePriorYtdArgs {
   openingRows?: OpeningBalanceYtdRow[]
 }
 
+/**
+ * A read that fails must never look like a read that found nothing: an empty
+ * result silently rewrites the snapshot to the current month alone. Every
+ * query here throws instead, and `refreshRunYtd` turns that into `ok: false`
+ * for its callers to log.
+ */
 async function loadOpeningRows(
   supabase: SupabaseClient,
   companyId: string,
   employeeIds: string[],
 ): Promise<OpeningBalanceYtdRow[]> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('employee_opening_balances')
     .select('employee_id, cutover_date, ytd_gross, ytd_tax, ytd_net')
     .eq('company_id', companyId)
     .in('employee_id', employeeIds)
+  if (error) throw new Error(error.message)
   return (data || []) as OpeningBalanceYtdRow[]
+}
+
+/**
+ * A prior month's contribution to an employee's YTD.
+ *
+ * `salary_run` is typed as an object: supabase-js infers the to-one embed as
+ * an array, but PostgREST returns an object for a many-to-one relationship.
+ */
+interface PriorRunRow {
+  employee_id: string
+  gross_salary: number
+  tax_withheld: number
+  net_salary: number
+  salary_run: { period_year: number; period_month: number }
 }
 
 /**
@@ -98,26 +120,26 @@ export async function computePriorYtd(
   const opening = openingRows ?? (await loadOpeningRows(supabase, companyId, employeeIds))
   const openingByEmployee = new Map(opening.map((row) => [row.employee_id, row]))
 
-  const { data: priorRuns } = await supabase
-    .from('salary_run_employees')
-    .select(
-      'employee_id, gross_salary, tax_withheld, net_salary, salary_run:salary_runs!inner(period_year, period_month, status)',
-    )
-    .eq('company_id', companyId)
-    .in('employee_id', employeeIds)
-    .eq('salary_run.period_year', periodYear)
-    .in('salary_run.status', YTD_COUNTED_STATUSES)
-    .lt('salary_run.period_month', periodMonth)
+  // Paginated: a full roster times eleven prior months passes PostgREST's
+  // 1000-row cap well before an employer is large by Swedish standards, and a
+  // silent truncation here understates somebody's Ackumulerat. Ordered by the
+  // PK so page boundaries neither skip nor duplicate a month.
+  const priorRuns = (await fetchAllRows(({ from, to }) =>
+    supabase
+      .from('salary_run_employees')
+      .select(
+        'employee_id, gross_salary, tax_withheld, net_salary, salary_run:salary_runs!inner(period_year, period_month, status)',
+      )
+      .eq('company_id', companyId)
+      .in('employee_id', employeeIds)
+      .eq('salary_run.period_year', periodYear)
+      .in('salary_run.status', YTD_COUNTED_STATUSES)
+      .lt('salary_run.period_month', periodMonth)
+      .order('id')
+      .range(from, to),
+  )) as unknown as PriorRunRow[]
 
-  // Cast via unknown: supabase-js infers the to-one `salary_run` embed as an
-  // array, but PostgREST returns an object for a many-to-one relationship.
-  for (const prior of (priorRuns || []) as unknown as Array<{
-    employee_id: string
-    gross_salary: number
-    tax_withheld: number
-    net_salary: number
-    salary_run: { period_year: number; period_month: number }
-  }>) {
+  for (const prior of priorRuns) {
     // The opening balance is authoritative for pre-cutover YTD: a run
     // backdated before the cutover month covers a month the opening already
     // carries, so counting both would double the YTD.
@@ -156,6 +178,18 @@ export async function computePriorYtd(
   return ytdByEmployee
 }
 
+/** The roster columns the refresh reads and rewrites. */
+interface RosterYtdRow {
+  id: string
+  employee_id: string
+  gross_salary: number
+  tax_withheld: number
+  net_salary: number
+  ytd_gross: number
+  ytd_tax: number
+  ytd_net: number
+}
+
 export type RefreshRunYtdResult =
   | { ok: true; updated: number }
   | { ok: false; message: string }
@@ -182,31 +216,31 @@ export async function refreshRunYtd(
   if (runError) return { ok: false, message: runError.message }
   if (!run) return { ok: false, message: 'salary run not found' }
 
-  const { data: roster, error: rosterError } = await supabase
-    .from('salary_run_employees')
-    .select('id, employee_id, gross_salary, tax_withheld, net_salary, ytd_gross, ytd_tax, ytd_net')
-    .eq('salary_run_id', salaryRunId)
-    .eq('company_id', companyId)
-  if (rosterError) return { ok: false, message: rosterError.message }
+  let rows: RosterYtdRow[]
+  let prior: Map<string, YtdTotals>
+  try {
+    rows = (await fetchAllRows(({ from, to }) =>
+      supabase
+        .from('salary_run_employees')
+        .select(
+          'id, employee_id, gross_salary, tax_withheld, net_salary, ytd_gross, ytd_tax, ytd_net',
+        )
+        .eq('salary_run_id', salaryRunId)
+        .eq('company_id', companyId)
+        .order('id')
+        .range(from, to),
+    )) as unknown as RosterYtdRow[]
+    if (rows.length === 0) return { ok: true, updated: 0 }
 
-  const rows = (roster || []) as Array<{
-    id: string
-    employee_id: string
-    gross_salary: number
-    tax_withheld: number
-    net_salary: number
-    ytd_gross: number
-    ytd_tax: number
-    ytd_net: number
-  }>
-  if (rows.length === 0) return { ok: true, updated: 0 }
-
-  const prior = await computePriorYtd(supabase, {
-    companyId,
-    periodYear: run.period_year as number,
-    periodMonth: run.period_month as number,
-    employeeIds: rows.map((row) => row.employee_id),
-  })
+    prior = await computePriorYtd(supabase, {
+      companyId,
+      periodYear: run.period_year as number,
+      periodMonth: run.period_month as number,
+      employeeIds: rows.map((row) => row.employee_id),
+    })
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : 'unknown error' }
+  }
 
   let updated = 0
   for (const row of rows) {

@@ -285,13 +285,26 @@ export async function runSalaryCalculation(
   //     would otherwise freeze a YTD that is missing that month forever.
   //     YTD is display + reporting only: the per-month tax lookup and the
   //     per-month avgifter caps never read it.
-  const ytdByEmployee = await computePriorYtd(supabase, {
-    companyId,
-    periodYear: run.period_year as number,
-    periodMonth: run.period_month as number,
-    employeeIds: rosterEmployeeIds,
-    openingRows,
-  })
+  //     A failed read throws rather than yielding an empty carry-in: writing
+  //     a snapshot that silently drops every prior month is worse than
+  //     failing the calculation, and matches how this function treats every
+  //     other query error.
+  let ytdByEmployee: Map<string, { gross: number; tax: number; net: number }>
+  try {
+    ytdByEmployee = await computePriorYtd(supabase, {
+      companyId,
+      periodYear: run.period_year as number,
+      periodMonth: run.period_month as number,
+      employeeIds: rosterEmployeeIds,
+      openingRows,
+    })
+  } catch (err) {
+    return {
+      ok: false,
+      code: 'DATABASE_ERROR',
+      details: { reason: err instanceof Error ? err.message : 'YTD aggregation failed' },
+    }
+  }
 
   // 7. Pay period bounds: used to load per-day absence + worked-day records.
   const periodYear = run.period_year as number

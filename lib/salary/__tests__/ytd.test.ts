@@ -132,6 +132,52 @@ describe('computePriorYtd', () => {
     expect(ytd.get('e1')).toEqual({ gross: 25000, tax: 4346, net: 20654 })
   })
 
+  it('orders the paged prior-run read on the primary key', async () => {
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [] })
+
+    await computePriorYtd(mock.supabase as never, {
+      companyId: COMPANY,
+      periodYear: 2026,
+      periodMonth: 8,
+      employeeIds: ['e1'],
+    })
+
+    // Without a stable total order, a roster wide enough to page would skip
+    // or double a month across the page boundary.
+    expect(mock.findCall('salary_run_employees', 'order')).toEqual(['id'])
+  })
+
+  it('throws rather than reporting an empty carry-in when the read fails', async () => {
+    mock.enqueue({ data: [] })
+    mock.enqueue({ error: { message: 'boom' } })
+
+    // Returning an empty map here would silently rewrite the snapshot to the
+    // current month alone, which is the exact failure this module exists to
+    // prevent.
+    await expect(
+      computePriorYtd(mock.supabase as never, {
+        companyId: COMPANY,
+        periodYear: 2026,
+        periodMonth: 8,
+        employeeIds: ['e1'],
+      }),
+    ).rejects.toThrow('boom')
+  })
+
+  it('throws when the opening-balance read fails', async () => {
+    mock.enqueue({ error: { message: 'opening down' } })
+
+    await expect(
+      computePriorYtd(mock.supabase as never, {
+        companyId: COMPANY,
+        periodYear: 2026,
+        periodMonth: 8,
+        employeeIds: ['e1'],
+      }),
+    ).rejects.toThrow('opening down')
+  })
+
   it('skips the opening-balance query when the caller already loaded them', async () => {
     mock.enqueue({ data: [] }) // prior runs
 
@@ -247,6 +293,34 @@ describe('refreshRunYtd', () => {
     })
 
     expect(result).toEqual({ ok: false, message: 'boom' })
+  })
+
+  it('reports a failed prior-run read instead of writing a truncated snapshot', async () => {
+    enqueueRun()
+    mock.enqueue({
+      data: [
+        {
+          id: 'sre-1',
+          employee_id: 'e1',
+          gross_salary: 35000,
+          tax_withheld: 6709,
+          net_salary: 28291,
+          ytd_gross: 60000,
+          ytd_tax: 11055,
+          ytd_net: 48945,
+        },
+      ],
+    })
+    mock.enqueue({ data: [] }) // opening balances
+    mock.enqueue({ error: { message: 'boom' } }) // prior runs
+
+    const result = await refreshRunYtd(mock.supabase as never, {
+      companyId: COMPANY,
+      salaryRunId: 'run-1',
+    })
+
+    expect(result).toEqual({ ok: false, message: 'boom' })
+    expect(mock.findCall('salary_run_employees', 'update')).toBeUndefined()
   })
 
   it('is a no-op for a run with no roster', async () => {
