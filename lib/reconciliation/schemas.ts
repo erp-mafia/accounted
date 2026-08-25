@@ -80,6 +80,24 @@ export const ReconciliationSignoffSchema = z.object({
 })
 export type ReconciliationSignoff = z.infer<typeof ReconciliationSignoffSchema>
 
+/** One underlag file attached to an account's balansdag (account_reconciliation_attachments). */
+export const ReconciliationAttachmentSchema = z.object({
+  id: z.string(),
+  account_key: AccountKeySchema,
+  through_date: z.string(),
+  file_name: z.string(),
+  mime_type: z.string(),
+  size_bytes: z.number().int(),
+  sha256: z.string(),
+  note: z.string().nullable(),
+  uploaded_by: z.string(),
+  uploaded_at: z.string(),
+  removed_at: z.string().nullable(),
+  removed_by: z.string().nullable(),
+  removed_reason: z.string().nullable(),
+})
+export type ReconciliationAttachment = z.infer<typeof ReconciliationAttachmentSchema>
+
 export const ReconciliationAccountSchema = z.object({
   account_key: AccountKeySchema,
   kind: ReconciliationKindSchema,

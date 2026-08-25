@@ -7,6 +7,7 @@ import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { AlertTriangle, Info, XCircle } from 'lucide-react'
 import Link from 'next/link'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
+import { BokslutChecklist } from './BokslutChecklist'
 
 interface PreflightStepProps {
   report: BokslutReadinessReport | null
@@ -100,6 +101,8 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
           ))}
         </section>
       )}
+
+      <BokslutChecklist periodId={report.period.id} />
 
       {report.reminders.length > 0 && (
         <section>

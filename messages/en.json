@@ -8056,5 +8056,40 @@
     "settings_toggle_help": "Shows the driving log in the menu. There you log business trips and book tax-free mileage allowance at the statutory rate.",
     "settings_save_failed_title": "Could not save the setting",
     "settings_open_page": "Open the driving log"
+  },
+  "reconciliation_underlag": {
+    "heading": "Supporting documents",
+    "heading_dated": "Supporting documents as of {date}",
+    "attach": "Attach document",
+    "empty": "No supporting documents for this date. Attach the bank statement, engagement letter or other specification the account was reconciled against.",
+    "remove": "Remove",
+    "attached": "{name} attached",
+    "removed": "{name} removed. The file stays in the archive with a note about the removal.",
+    "upload_failed": "Could not attach the document",
+    "remove_failed": "Could not remove the document",
+    "too_large_title": "The file is too large"
+  },
+  "bokslut_checklist": {
+    "heading": "Closing checklist",
+    "progress": "{done} of {total} done",
+    "group_avstamning": "Reconciliations",
+    "group_periodisering": "Accruals",
+    "group_vardering": "Valuation",
+    "group_dispositioner": "Appropriations and tax",
+    "group_kontroll": "Controls",
+    "group_rapportering": "Reporting",
+    "auto_chip": "computed",
+    "done_at": "done {date}",
+    "open": "Open",
+    "reopen": "Reopen",
+    "not_applicable": "Not applicable",
+    "use_auto": "Let the system decide",
+    "save_failed": "Could not save the checklist"
+  },
+  "fiscal_year_gaps": {
+    "title": "{count, plural, one {One fiscal year is missing} other {# fiscal years are missing}}",
+    "gap": "{from} to {to} (between {after} and {before})",
+    "hint": "Import the SIE file for that year, or create the fiscal year manually, so balances roll forward.",
+    "manage": "Manage fiscal years"
   }
 }

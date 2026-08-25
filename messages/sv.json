@@ -8056,5 +8056,40 @@
     "settings_toggle_help": "Visar körjournalen i menyn. Där loggar du tjänsteresor och bokför milersättning skattefritt enligt schablon.",
     "settings_save_failed_title": "Kunde inte spara inställningen",
     "settings_open_page": "Öppna körjournalen"
+  },
+  "reconciliation_underlag": {
+    "heading": "Underlag",
+    "heading_dated": "Underlag per {date}",
+    "attach": "Bifoga underlag",
+    "empty": "Inget underlag bifogat för det här datumet. Bifoga kontoutdrag, engagemangsbesked eller annan specifikation som kontot stämts av mot.",
+    "remove": "Ta bort",
+    "attached": "{name} bifogad",
+    "removed": "{name} borttagen. Filen finns kvar i arkivet med en notering om borttagningen.",
+    "upload_failed": "Kunde inte bifoga underlaget",
+    "remove_failed": "Kunde inte ta bort underlaget",
+    "too_large_title": "Filen är för stor"
+  },
+  "bokslut_checklist": {
+    "heading": "Bokslutschecklista",
+    "progress": "{done} av {total} klara",
+    "group_avstamning": "Avstämningar",
+    "group_periodisering": "Periodiseringar",
+    "group_vardering": "Värdering",
+    "group_dispositioner": "Dispositioner och skatt",
+    "group_kontroll": "Kontroller",
+    "group_rapportering": "Rapportering",
+    "auto_chip": "beräknas",
+    "done_at": "klart {date}",
+    "open": "Öppna",
+    "reopen": "Öppna igen",
+    "not_applicable": "Ej tillämpligt",
+    "use_auto": "Låt systemet bedöma",
+    "save_failed": "Kunde inte spara checklistan"
+  },
+  "fiscal_year_gaps": {
+    "title": "{count, plural, one {Ett räkenskapsår saknas} other {# räkenskapsår saknas}}",
+    "gap": "{from} till {to} (mellan {after} och {before})",
+    "hint": "Importera SIE-filen för det året, eller skapa räkenskapsåret manuellt, så att balanserna rullar fram.",
+    "manage": "Hantera räkenskapsår"
   }
 }
