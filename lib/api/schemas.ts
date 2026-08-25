@@ -1630,6 +1630,14 @@ export const CreateInvoiceFromWebshopOrderSchema = z.object({
   customer_id: uuid.optional(),
 })
 
+/**
+ * Mark a webshop order as booked/handled outside the integration, with an
+ * optional reference to the existing (posted) verifikat that covers it.
+ */
+export const MarkWebshopOrderBookedSchema = z.object({
+  journal_entry_id: uuid.optional(),
+})
+
 /** {"<payment_method>": {mode:'book', account:'1930'} | {mode:'invoice'}} */
 export const WebshopStoreSettingsUpdateSchema = z.object({
   platform: WebshopPlatformSchema,

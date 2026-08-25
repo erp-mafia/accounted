@@ -3912,6 +3912,25 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The order has no customer data. Choose an existing customer to invoice.',
   },
+  WEBSHOP_ORDER_MANUALLY_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är markerad som bokförd utanför integrationen. Ångra markeringen först om du vill bokföra eller fakturera den härifrån.',
+    message_en:
+      'The order is marked as booked outside the integration. Undo the mark first if you want to book or invoice it from here.',
+  },
+  WEBSHOP_ORDER_MARK_ENTRY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Verifikatet som ordern skulle kopplas till hittades inte.',
+    message_en: 'The journal entry to link the order to was not found.',
+  },
+  WEBSHOP_ORDER_MARK_ENTRY_NOT_POSTED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikatet är inte bokfört. Ordern kan bara kopplas till ett bokfört verifikat.',
+    message_en:
+      'The journal entry is not posted. The order can only be linked to a posted entry.',
+  },
 }
 
 const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
