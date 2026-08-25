@@ -9,7 +9,7 @@ import {
 } from '@/lib/auth/api-keys'
 import { validateQuery } from '@/lib/api/validate'
 import { EventsQuerySchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
+import { getActiveCompanyId } from '@/lib/company/context'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -126,10 +126,13 @@ export async function GET(request: Request) {
   }
 
   // Session auth resolves the active company; API-key auth uses the key's bound company.
-  const companyId = keyCompanyId ?? await requireCompanyId(supabase, userId)
+  // A key minted before the user's first company exists (companyless OAuth,
+  // issue #1814) has no bound company either; both cases resolve to null and
+  // fail closed below rather than throwing.
+  const companyId = keyCompanyId ?? await getActiveCompanyId(supabase, userId)
   // Defense in depth: never run the event_log query with an empty/undefined
-  // scope. requireCompanyId throws when there is no company, but guard the
-  // key-bound path too so a malformed binding can't widen the query scope.
+  // scope. A user with no company resolves to null, and the guard also covers
+  // a malformed key binding so it can't widen the query scope.
   if (!companyId) {
     return errorResponseFromCode('FORBIDDEN', log)
   }
