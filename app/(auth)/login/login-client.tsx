@@ -587,7 +587,7 @@ export function LoginClient({
 
   const showBankIdChip = method === 'email' && bankIdEnabled
   const showEmailChip = method === 'bankid' && passwordLoginEnabled
-  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + providers.length
+  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + providers.length + (samlEnabled ? 1 : 0)
 
   const hasPrimaryMethod =
     (method === 'bankid' && bankIdEnabled) ||
@@ -782,6 +782,22 @@ export function LoginClient({
                       onError={(message) => setFormError({ kind: 'oauth', message })}
                     />
                   ))}
+                  {samlEnabled && !hasPrimaryMethod && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full h-11 gap-2"
+                      onClick={handleSamlLogin}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                      )}
+                      {tAuth('continue_with_provider', { provider: 'SAML' })}
+                    </Button>
+                  )}
                 </div>
               ) : samlEnabled ? (
                 <Button
@@ -796,7 +812,7 @@ export function LoginClient({
                   ) : (
                     <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   )}
-                  {tAuth('continue_with_sso')}
+                  {tAuth('continue_with_provider', { provider: 'SAML' })}
                 </Button>
               ) : (
                 <p className="text-center text-sm text-muted-foreground">
@@ -840,7 +856,6 @@ export function LoginClient({
                   <OAuthButton
                     key={provider.id}
                     provider={provider}
-                    compact
                     next={nextPath}
                     onError={(message) => setFormError({ kind: 'oauth', message })}
                   />
@@ -854,6 +869,22 @@ export function LoginClient({
                   >
                     <Mail className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     {tAuth('method_email_chip')}
+                  </Button>
+                )}
+                {samlEnabled && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full gap-2"
+                    onClick={handleSamlLogin}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <KeyRound className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    )}
+                    {tAuth('continue_with_provider', { provider: 'SAML' })}
                   </Button>
                 )}
               </div>
