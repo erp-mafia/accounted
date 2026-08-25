@@ -82,9 +82,7 @@ export function OAuthButton({
     }
   }
 
-  const label = provider.isCustom
-    ? tAuth('continue_with_sso')
-    : tAuth('continue_with_provider', { provider: provider.label })
+  const label = tAuth('continue_with_provider', { provider: provider.label })
 
   return (
     <Button
@@ -102,7 +100,7 @@ export function OAuthButton({
           <ProviderMark provider={provider} />
         </span>
       )}
-      {compact ? (provider.isCustom ? tAuth('sso_chip') : provider.label) : label}
+      {compact ? provider.label : label}
     </Button>
   )
 }

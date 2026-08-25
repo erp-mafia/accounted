@@ -303,8 +303,6 @@
     "login_error_user_banned": "This account has been suspended. Contact support if you think this is a mistake.",
     "login_error_reset_link": "Reset your password",
     "continue_with_provider": "Continue with {provider}",
-    "continue_with_sso": "Continue with SSO",
-    "sso_chip": "SSO",
     "callback_error_title_oauth": "External sign-in didn't work",
     "callback_error_body_oauth": "The external sign-in could not be completed. Try again, or sign in with another method.",
     "session_idle": "You were inactive. Sign in again.",
