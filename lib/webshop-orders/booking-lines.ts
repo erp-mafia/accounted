@@ -120,6 +120,21 @@ export function fallbackVatBreakdown(
   return [{ rate: 25, net, tax }]
 }
 
+/**
+ * VAT-bucket rates the account maps above can express (Swedish rates). A
+ * bucket with any other rate (e.g. a German 19% OSS bucket stored raw by the
+ * sync) would fall back to the 25% accounts: acceptable only as the single
+ * dialog's editable prefill, never in an unreviewed sweep. Returns the
+ * distinct offending rates, empty when every bucket is representable.
+ */
+export function unsupportedVatRates(breakdown: WebshopVatBreakdownLine[]): number[] {
+  const bad = new Set<number>()
+  for (const bucket of breakdown) {
+    if (REVENUE_ACCOUNT_BY_RATE[bucket.rate] === undefined) bad.add(bucket.rate)
+  }
+  return Array.from(bad).sort((a, b) => a - b)
+}
+
 export type BookingWarning = 'zero_rate_foreign' | 'foreign_vat'
 
 /**

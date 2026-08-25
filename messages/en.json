@@ -6323,7 +6323,8 @@
     "bulk_skipped_missing_breakdown": "Skipped (no VAT breakdown, book individually): {numbers}",
     "bulk_skipped_invoice_mode": "Skipped (invoice flow per store settings): {numbers}",
     "bulk_warning_orders": "VAT warning on order {numbers}. Book them individually if you want to review the lines.",
-    "bulk_none_bookable": "None of the selected orders can be booked in a sweep. Book them individually."
+    "bulk_none_bookable": "None of the selected orders can be booked in a sweep. Book them individually.",
+    "bulk_skipped_unsupported_rate": "Skipped (non-Swedish VAT rate, book individually): {numbers}"
   },
   "sales_orders": {
     "title": "Sales orders",

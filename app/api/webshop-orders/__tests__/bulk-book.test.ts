@@ -328,6 +328,36 @@ describe('POST /api/webshop-orders/bulk-book', () => {
     expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
+  it('refuses a bucket with a non-Swedish VAT rate (foreign OSS bucket)', async () => {
+    // Skeptic counterexample: a German 19% bucket passes the non-empty gate
+    // and yields zero residual, but REVENUE/VAT_ACCOUNT_BY_RATE[19] would
+    // fall back to the 25% accounts and book German VAT as Swedish
+    // utgaende moms. The sweep must refuse; only the single dialog may show
+    // that prefill for correction.
+    enqueue({
+      data: [
+        makeOrderRow({
+          total: 1190,
+          total_tax: 190,
+          vat_breakdown: [{ rate: 19, net: 1000, tax: 190 }],
+        }),
+        makeOrderRow({ id: ORDER_2, order_number: '1002' }),
+      ],
+    })
+    enqueue({ data: [] }) // store settings
+    enqueue({ data: [{ id: ORDER_2 }] }) // claim order 2
+    const { status, body } = await parseJsonResponse<BulkResponse>(await postBulk())
+    expect(status).toBe(200)
+    const failed = body.data.results.find((r) => r.order_id === ORDER_1)
+    expect(failed?.error?.code).toBe('WEBSHOP_ORDER_UNSUPPORTED_VAT_RATE')
+    expect(failed?.error?.details?.rates).toEqual([19])
+    expect(body.data.booked_count).toBe(1)
+    // The 19% prefill must never have reached the engine.
+    expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
+    const input = mockCreateDraftEntry.mock.calls[0][3] as { source_id: string }
+    expect(input.source_id).toBe(ORDER_2)
+  })
+
   it('refuses invoice-mode payment methods even with an account override', async () => {
     enqueue({
       data: [

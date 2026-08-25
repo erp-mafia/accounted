@@ -6323,7 +6323,8 @@
     "bulk_skipped_missing_breakdown": "Hoppas över (saknar momsuppdelning, bokför enskilt): {numbers}",
     "bulk_skipped_invoice_mode": "Hoppas över (fakturaflöde enligt butiksinställningarna): {numbers}",
     "bulk_warning_orders": "Momsvarning på order {numbers}. Bokför dem enskilt om du vill granska raderna.",
-    "bulk_none_bookable": "Inga av de markerade ordrarna kan bokföras i svep. Bokför dem enskilt."
+    "bulk_none_bookable": "Inga av de markerade ordrarna kan bokföras i svep. Bokför dem enskilt.",
+    "bulk_skipped_unsupported_rate": "Hoppas över (momssats som inte är svensk, bokför enskilt): {numbers}"
   },
   "sales_orders": {
     "title": "Order",

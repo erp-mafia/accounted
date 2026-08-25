@@ -20,6 +20,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   resolveBookingWarnings,
   resolvePaymentAccount,
+  unsupportedVatRates,
 } from '@/lib/webshop-orders/booking-lines'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { roundOre } from '@/lib/money'
@@ -74,15 +75,24 @@ export default function BulkOrderBookingDialog({
   // sweep the server then partially refuses:
   // - empty vat_breakdown: the prefill would be a ratio-inferred GUESS that
   //   only the single dialog's editable form may show;
+  // - a non-Swedish VAT rate (foreign OSS bucket): the account map would
+  //   silently fall back to the 25% accounts;
   // - invoice-mode mapping: the store routes this method through the invoice
   //   flow, and booking would foreclose Skapa faktura for the order.
   // The server enforces the same rules for non-UI callers.
-  const { bookableOrders, skippedMissingBreakdown, skippedInvoiceMode } = useMemo(() => {
+  const {
+    bookableOrders,
+    skippedMissingBreakdown,
+    skippedUnsupportedRate,
+    skippedInvoiceMode,
+  } = useMemo(() => {
     const missing: WebshopOrder[] = []
+    const badRate: WebshopOrder[] = []
     const invoiceMode: WebshopOrder[] = []
     const bookable: WebshopOrder[] = []
     for (const order of orders) {
       if (order.vat_breakdown.length === 0) missing.push(order)
+      else if (unsupportedVatRates(order.vat_breakdown).length > 0) badRate.push(order)
       else if (resolvePaymentAccount(order, settingsFor(order)).invoiceMode)
         invoiceMode.push(order)
       else bookable.push(order)
@@ -90,6 +100,7 @@ export default function BulkOrderBookingDialog({
     return {
       bookableOrders: bookable,
       skippedMissingBreakdown: missing,
+      skippedUnsupportedRate: badRate,
       skippedInvoiceMode: invoiceMode,
     }
   }, [orders, settingsFor])
@@ -339,6 +350,13 @@ export default function BulkOrderBookingDialog({
               <p className="attn text-[12.5px]" data-ph-mask="">
                 {t('bulk_skipped_missing_breakdown', {
                   numbers: skippedMissingBreakdown.map((o) => o.order_number).join(', '),
+                })}
+              </p>
+            )}
+            {skippedUnsupportedRate.length > 0 && (
+              <p className="attn text-[12.5px]" data-ph-mask="">
+                {t('bulk_skipped_unsupported_rate', {
+                  numbers: skippedUnsupportedRate.map((o) => o.order_number).join(', '),
                 })}
               </p>
             )}

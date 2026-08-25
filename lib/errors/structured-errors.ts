@@ -3914,6 +3914,13 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The payment method is marked as invoice flow in the store settings. Create an invoice from the order instead, or book it individually.',
   },
+  WEBSHOP_ORDER_UNSUPPORTED_VAT_RATE: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern har en momssats som inte är en svensk sats (25/12/6/0 %), till exempel utländsk OSS-moms. Bokför ordern enskilt och granska raderna.',
+    message_en:
+      'The order has a VAT rate that is not a Swedish rate (25/12/6/0 %), for example foreign OSS VAT. Book the order individually and review the lines.',
+  },
   WEBSHOP_ORDER_RESIDUAL_TOO_LARGE: {
     httpStatus: 422,
     message_sv:

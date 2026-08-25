@@ -11,6 +11,7 @@ import {
   buildOrderBookingLines,
   orderBookingDescription,
   resolvePaymentAccount,
+  unsupportedVatRates,
   ROUNDING_ACCOUNT,
 } from '@/lib/webshop-orders/booking-lines'
 import {
@@ -202,6 +203,23 @@ export const POST = withRouteContext(
           order_number: order.order_number,
           success: false,
           error: failureFromCode('WEBSHOP_ORDER_VAT_BREAKDOWN_MISSING'),
+        })
+        continue
+      }
+
+      // A bucket with a non-Swedish rate (e.g. a German 19% OSS bucket the
+      // sync stored raw) would silently fall back to the 25% accounts and
+      // book foreign VAT as Swedish utgaende moms. Only the single dialog
+      // may show that as an editable prefill (skeptic finding).
+      const badRates = unsupportedVatRates(order.vat_breakdown)
+      if (badRates.length > 0) {
+        results.push({
+          order_id: id,
+          order_number: order.order_number,
+          success: false,
+          error: failureFromCode('WEBSHOP_ORDER_UNSUPPORTED_VAT_RATE', {
+            rates: badRates,
+          }),
         })
         continue
       }
