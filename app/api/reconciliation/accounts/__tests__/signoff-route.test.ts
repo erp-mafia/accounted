@@ -93,9 +93,37 @@ describe('dashboard sign-off routes', () => {
       'company-1',
       'user-1',
       'skattekonto',
-      { through_date: '2026-07-31', note: 'ok', force: undefined },
+      { through_date: '2026-07-31', note: 'ok', force: undefined, external_balance: null },
       { dryRun: true },
     )
+  })
+
+  it('POST forwards a stated external_balance for a manual account and 400s a non-numeric one', async () => {
+    const res = await signPOST(
+      createMockRequest('http://localhost/api/reconciliation/accounts/manual:2350/signoff', { method: 'POST', body: {
+        through_date: '2026-07-31',
+        external_balance: -250000,
+        note: 'Enligt engagemangsbesked',
+      } }),
+      p({ accountKey: 'manual:2350' }),
+    )
+    expect(res.status).toBe(200)
+    expect(signMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      'manual:2350',
+      { through_date: '2026-07-31', note: 'Enligt engagemangsbesked', force: undefined, external_balance: -250000 },
+      { dryRun: false },
+    )
+    const bad = await signPOST(
+      createMockRequest('http://localhost/api/reconciliation/accounts/manual:2350/signoff', { method: 'POST', body: {
+        through_date: '2026-07-31',
+        external_balance: '250 000',
+      } }),
+      p({ accountKey: 'manual:2350' }),
+    )
+    expect(bad.status).toBe(400)
   })
 
   it('POST 400s a missing or malformed through_date', async () => {

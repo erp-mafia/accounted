@@ -9875,14 +9875,14 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_reconciliation_status',
     title: 'Reconciliation Status',
-    description: 'Reconciliation bridge for one account. Pass account_key ("skattekonto" or "bank:<cash_account_id>") for bridge lines + counts; without it, the legacy bank status for account_number (default 1930). Judge health on unexplained_difference, not difference.',
+    description: 'Reconciliation bridge. account_key: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>" (any other balance account, see its manual block). Without it: legacy bank status for account_number. Judge on unexplained_difference.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         account_key: {
           type: 'string',
-          description: '"skattekonto" or "bank:<cash_account_id>". When set, returns the account-keyed status (bridge[], counts, kind block).',
+          description: '"skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". Returns the account-keyed status (bridge[], counts, kind block); for manual keys date_to is the balansdag.',
         },
         date_from: { type: 'string', description: 'Start date YYYY-MM-DD' },
         date_to: { type: 'string', description: 'End date YYYY-MM-DD' },
@@ -10136,16 +10136,17 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_reconcile_signoff',
     title: 'Reconcile: Sign off',
-    description: 'Mark one account (skattekonto or bank:<cash_account_id>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0 through that date, or force + note. Writes nothing to the ledger. Stages (medium risk); dry_run previews.',
+    description: 'Mark one account (skattekonto, bank:<id> or manual:<BAS>) as reconciled through a date ("avstämt t.o.m."). Refused unless unexplained_difference is 0, or force + note. Manual accounts without a specification take external_balance (underlag, ledger sign). Stages; dry_run previews.',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>".' },
+        account_key: { type: 'string', description: '"skattekonto", "bank:<cash_account_id>" or "manual:<BAS>".' },
         through_date: { type: 'string', description: 'Inclusive YYYY-MM-DD the account is reconciled through (not in the future; not past the skattekonto snapshot).' },
         note: { type: 'string', description: 'Free text. Required with force.' },
         force: { type: 'boolean', description: 'Sign despite an unexplained difference or an unknown outside balance. Needs note.' },
+        external_balance: { type: 'number', description: 'Manual accounts without a system specification only: balance per underlag, ledger sign (liabilities negative).' },
         dry_run: { type: 'boolean' },
         idempotency_key: { type: 'string' },
       },
@@ -10169,7 +10170,12 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         accountKey,
-        { through_date: throughDate, note: (args.note as string | undefined) ?? null, force: args.force === true },
+        {
+          through_date: throughDate,
+          note: (args.note as string | undefined) ?? null,
+          force: args.force === true,
+          external_balance: typeof args.external_balance === 'number' ? args.external_balance : null,
+        },
         { dryRun: true },
       )
       if (!preview) throw new Error(`Unknown account_key "${accountKey}" for this company`)
@@ -10187,6 +10193,7 @@ export const tools: McpTool[] = [
           through_date: throughDate,
           note: (args.note as string | undefined) ?? null,
           force: args.force === true,
+          external_balance: typeof args.external_balance === 'number' ? args.external_balance : null,
         },
         previewData,
         actor,

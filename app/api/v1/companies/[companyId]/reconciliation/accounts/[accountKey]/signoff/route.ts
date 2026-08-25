@@ -24,6 +24,7 @@ const SignoffRequest = z.object({
   through_date: z.string().regex(ISO_DATE_RE),
   note: z.string().max(2000).nullable().optional(),
   force: z.boolean().optional(),
+  external_balance: z.number().finite().nullable().optional(),
 })
 
 const SignoffResponse = z.object({
@@ -89,11 +90,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff',
   summary: 'Mark an account reconciled through a date (sign-off).',
   description:
-    'Body: { through_date: "YYYY-MM-DD", note?, force? }. Recomputes the bridge through the date and refuses unless unexplained_difference is zero; with force: true and a note it signs anyway and records the difference. Refuses dates in the future, dates past the skattekonto snapshot (NOT_FETCHED_THROUGH), and dates at or before an existing active sign-off (ALREADY_SIGNED_OFF: reopen that one first). ?dry_run=true returns would_sign without writing. Undo with POST .../signoff/{signoffId}/reopen.',
+    'Body: { through_date: "YYYY-MM-DD", note?, force?, external_balance? }. Recomputes the bridge through the date and refuses unless unexplained_difference is zero; with force: true and a note it signs anyway and records the difference. Refuses dates in the future, dates past the skattekonto snapshot (NOT_FETCHED_THROUGH), and dates at or before an existing active sign-off (ALREADY_SIGNED_OFF: reopen that one first). For a manual:NNNN account without a system specification (anything but 1510/2440/2920/2940), external_balance is the balance per the signer\'s underlag in ledger sign (liabilities negative); the difference against the booked balance is recorded, and a non-zero one still needs force + note. On bank, skattekonto and specification accounts external_balance is refused (EXTERNAL_BALANCE_NOT_ALLOWED). ?dry_run=true returns would_sign without writing. Undo with POST .../signoff/{signoffId}/reopen.',
   useWhen: 'The month (or period) is explained and you want the account marked as reconciled through its last day, as a human would in the Avstämning page.',
   doNotUseFor: 'Linking rows or booking anything: a sign-off changes no data in the ledger. Use .../links and the booking endpoints first.',
   pitfalls: [
-    'Refusal codes come back as VALIDATION_ERROR with details.code: INVALID_DATE, DATE_IN_FUTURE, NOT_FETCHED_THROUGH, OUTSIDE_UNKNOWN, NOT_RECONCILED, NOTE_REQUIRED; ALREADY_SIGNED_OFF and SIGNOFF_RACE come back as CONFLICT.',
+    'Refusal codes come back as VALIDATION_ERROR with details.code: INVALID_DATE, DATE_IN_FUTURE, NOT_FETCHED_THROUGH, OUTSIDE_UNKNOWN, NOT_RECONCILED, NOTE_REQUIRED, EXTERNAL_BALANCE_NOT_ALLOWED; ALREADY_SIGNED_OFF and SIGNOFF_RACE come back as CONFLICT.',
     'force: true without a note is NOTE_REQUIRED: the note is what the next reader sees next to the non-zero difference.',
     'Idempotency-Key is required; repeating the same key replays the first response.',
   ],
@@ -169,7 +170,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; accountKey:
         ctx.companyId!,
         ctx.userId,
         accountKey,
-        { through_date: parsed.data.through_date, note: parsed.data.note ?? null, force: parsed.data.force },
+        {
+          through_date: parsed.data.through_date,
+          note: parsed.data.note ?? null,
+          force: parsed.data.force,
+          external_balance: parsed.data.external_balance ?? null,
+        },
         { dryRun: ctx.dryRun },
       )
       if (!result) {

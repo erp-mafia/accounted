@@ -6070,6 +6070,7 @@ async function commitReconciliationSignoff(
         through_date: throughDate,
         note: (params.note as string | null | undefined) ?? null,
         force: params.force === true,
+        external_balance: typeof params.external_balance === 'number' ? params.external_balance : null,
       },
       { dryRun: false },
     )

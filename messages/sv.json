@@ -7806,7 +7806,7 @@
   },
   "reconciliation": {
     "title": "Avstämning",
-    "help_text": "Varje konto med en sanning utanför bokföringen, banken eller skattekontot, stäms av här. Det som finns utanför jämförs med det som är bokfört, varje rad på ena sidan kopplas till en rad på den andra, och det som blir kvar förklaras eller bokförs.",
+    "help_text": "Varje konto med en sanning utanför bokföringen: banken, skattekontot och övriga balanskonton mot reskontra, beräkning eller ditt underlag. Koppla raderna, förklara differensen och signera när kontot stämmer.",
     "rail_heading": "Konton",
     "rail_synced": "hämtat {date}",
     "rail_never_synced": "aldrig hämtat",
@@ -7926,7 +7926,20 @@
     "row_mark_ib": "Märk som IB",
     "row_move": "Flytta till konto",
     "toast_marked_ib": "Verifikatet markerades som ingående balans",
-    "toast_moved": "Transaktionen flyttades till {account}"
+    "toast_moved": "Transaktionen flyttades till {account}",
+    "rail_group_manual": "Övriga balanskonton",
+    "rail_never_signed": "inte avstämt",
+    "state_unsigned": "Inte avstämt",
+    "tile_external_manual": "Saldo enligt underlag",
+    "tile_external_manual_sub": "anges när du signerar",
+    "tile_external_signed": "enligt signering t.o.m. {date}",
+    "tile_spec_today": "öppna poster idag",
+    "action_open_ledger": "Öppna huvudboken",
+    "manual_hint": "Kontot hämtas inte från någon källa utanför bokföringen. Jämför saldot med ditt underlag, ange det när du signerar och skriv en notering om något avviker.",
+    "manual_spec_hint": "Specifikationen kommer från systemet: {label}. Differensen ska vara noll innan du signerar, annars signerar du med en notering.",
+    "signoff_external_balance": "Saldo enligt underlag",
+    "signoff_external_balance_help": "Samma tecken som i bokföringen, skulder anges med minus. Bokfört: {amount}.",
+    "signoff_external_balance_optional": "Lämna tomt om du bara vill signera med en notering."
   },
   "skattekonto": {
     "help_text": "Saldot och händelserna hämtas från Skatteverket och synkas automatiskt varje natt. Genomförda händelser bokförs mot 1630 Skattekonto, oftast automatiskt; det som inte kan matchas flaggas i listan. Betala in via bankgiro 5050-1055 med ditt OCR-nummer.",

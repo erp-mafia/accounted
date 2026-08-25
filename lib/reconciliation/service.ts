@@ -14,6 +14,7 @@ import {
 } from './schemas'
 import { getLatestSignoff, getLatestSignoffs } from './signoff-store'
 import { bankLogoUrl } from './bank-logos'
+import { getManualReconciliationStatus, listManualAccounts } from './manual-reconciliation'
 
 const log = createLogger('reconciliation/service')
 
@@ -22,9 +23,10 @@ const log = createLogger('reconciliation/service')
  *
  * The dashboard routes, the public v1 API and the MCP tools all call these
  * functions; none of them re-implements bank or skattekonto logic. Kind
- * adapters (bank today via bank-reconciliation.ts, skattekonto via
- * skattekonto-reconciliation.ts, manual later) hang off `account_key`, so
- * adding an account type is one adapter, never a new set of endpoints.
+ * adapters (bank via bank-reconciliation.ts, skattekonto via
+ * skattekonto-reconciliation.ts, every other balance account via
+ * manual-reconciliation.ts) hang off `account_key`, so adding an account
+ * type is one adapter, never a new set of endpoints.
  *
  * Core runs with zero extensions: the skattekonto adapter reads the core
  * `skattekonto_transactions` table and the snapshot row the extension leaves
@@ -338,7 +340,24 @@ export async function listReconciliationAccounts(
     })
   }
 
-  return skattekonto ? [...bankAccounts, skattekonto] : bankAccounts
+  // The rest of the balance sheet: every account the two feeds above do not
+  // own, reconciled against a system specification or the signer's underlag.
+  // A failed read costs only this group, never the bank or skattekonto rows.
+  let manualAccounts: ReconciliationAccount[] = []
+  try {
+    const exclude = new Set<string>(cashAccounts.map((a) => a.ledger_account))
+    if (skattekonto) exclude.add(skattekonto.account_number)
+    manualAccounts = await listManualAccounts(supabase, companyId, {
+      asOf: window.to,
+      exclude,
+      signoffs,
+      withStatus,
+    })
+  } catch (err) {
+    log.warn('manual accounts failed', { companyId, error: err instanceof Error ? err.message : String(err) })
+  }
+
+  return [...bankAccounts, ...(skattekonto ? [skattekonto] : []), ...manualAccounts]
 }
 
 export interface GetAccountStatusOptions {
@@ -385,7 +404,12 @@ export async function getAccountStatus(
     }
     status = await bankStatus(supabase, companyId, data as CashAccountRow, window, today)
   }
-  // manual accounts: later adapter
+  if (parsed.kind === 'manual') {
+    status = await getManualReconciliationStatus(supabase, companyId, parsed.accountNumber, {
+      today,
+      asOf: options.windowTo ?? today,
+    })
+  }
   if (!status) return null
 
   // The latest active sign-off rides along on every status read (page, v1,
@@ -395,6 +419,24 @@ export async function getAccountStatus(
   } catch (err) {
     log.warn('sign-off read failed', { companyId, accountKey, error: err instanceof Error ? err.message : String(err) })
     status.signoff = null
+  }
+
+  // A manual account without a system specification has no live outside
+  // balance; the one the signer stated for this very balansdag is the
+  // attested truth, so the status shows it instead of "okänt".
+  if (
+    status.kind === 'manual' &&
+    status.external_balance == null &&
+    status.signoff &&
+    status.signoff.external_balance != null &&
+    status.signoff.through_date === status.as_of.slice(0, 10)
+  ) {
+    const external = status.signoff.external_balance
+    const difference = status.ledger_balance == null ? null : roundOre(status.ledger_balance - external)
+    status.external_balance = external
+    status.difference = difference
+    status.unexplained_difference = difference
+    status.is_reconciled = difference != null && Math.abs(difference) < 0.005
   }
   return status
 }

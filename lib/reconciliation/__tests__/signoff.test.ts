@@ -79,11 +79,129 @@ describe('signOffAccount', () => {
     )
   })
 
-  it('returns null for an unknown or manual account key', async () => {
+  it('returns null for an unknown account key and for a key the engine does not resolve', async () => {
     const { supabase } = createQueuedMockSupabase()
     expect(await signOffAccount(supabase as never, COMPANY, USER, 'nope', { through_date: '2026-07-31' })).toBeNull()
-    expect(await signOffAccount(supabase as never, COMPANY, USER, 'manual:1910', { through_date: '2026-07-31' })).toBeNull()
     expect(statusMock).not.toHaveBeenCalled()
+    statusMock.mockResolvedValue(null)
+    expect(
+      await signOffAccount(supabase as never, COMPANY, USER, 'manual:1910', { through_date: '2026-07-31' }, { today: TODAY }),
+    ).toBeNull()
+    expect(statusMock).toHaveBeenCalledWith(supabase, COMPANY, 'manual:1910', { today: TODAY, windowTo: '2026-07-31' })
+  })
+
+  describe('manual accounts', () => {
+    function manualStatus(overrides: Record<string, unknown> = {}) {
+      return status({
+        account_key: 'manual:2350',
+        kind: 'manual',
+        account_number: '2350',
+        as_of: '2026-07-31T00:00:00.000Z',
+        external_balance: null,
+        ledger_balance: -250000,
+        difference: null,
+        unexplained_difference: null,
+        is_reconciled: false,
+        manual: { specification: null },
+        ...overrides,
+      })
+    }
+
+    it('signs with the stated balance when it equals the booked one, recording both', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      statusMock.mockResolvedValue(manualStatus())
+      const result = await signOffAccount(
+        supabase as never,
+        COMPANY,
+        USER,
+        'manual:2350',
+        { through_date: '2026-07-31', external_balance: -250000, note: 'Enligt engagemangsbesked' },
+        { today: TODAY },
+      )
+      expect(result).toMatchObject({ dry_run: false })
+      expect(insertMock).toHaveBeenCalledWith(
+        supabase,
+        COMPANY,
+        expect.objectContaining({
+          account_key: 'manual:2350',
+          external_balance: -250000,
+          ledger_balance: -250000,
+          unexplained_difference: 0,
+        }),
+      )
+    })
+
+    it('treats the gap between stated and booked as the unexplained difference', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      statusMock.mockResolvedValue(manualStatus())
+      await expect(
+        signOffAccount(
+          supabase as never,
+          COMPANY,
+          USER,
+          'manual:2350',
+          { through_date: '2026-07-31', external_balance: -249500 },
+          { today: TODAY },
+        ),
+      ).rejects.toMatchObject({ code: 'NOT_RECONCILED' })
+      const forced = await signOffAccount(
+        supabase as never,
+        COMPANY,
+        USER,
+        'manual:2350',
+        { through_date: '2026-07-31', external_balance: -249500, force: true, note: 'Amortering bokförs i augusti.' },
+        { today: TODAY, dryRun: true },
+      )
+      expect(forced).toMatchObject({
+        dry_run: true,
+        would_sign: { external_balance: -249500, ledger_balance: -250000, unexplained_difference: -500, forced: true },
+      })
+    })
+
+    it('still needs force + note when no balance is stated', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      statusMock.mockResolvedValue(manualStatus())
+      await expect(
+        signOffAccount(supabase as never, COMPANY, USER, 'manual:2350', { through_date: '2026-07-31' }, { today: TODAY }),
+      ).rejects.toMatchObject({ code: 'OUTSIDE_UNKNOWN' })
+    })
+
+    it('refuses a stated balance where the system already has an outside truth', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      statusMock.mockResolvedValue(
+        manualStatus({
+          account_key: 'manual:1510',
+          account_number: '1510',
+          external_balance: 12000,
+          ledger_balance: 12000,
+          unexplained_difference: 0,
+          is_reconciled: true,
+          manual: { specification: { provider: 'ar', amount: 12000 } },
+        }),
+      )
+      await expect(
+        signOffAccount(
+          supabase as never,
+          COMPANY,
+          USER,
+          'manual:1510',
+          { through_date: '2026-07-31', external_balance: 12000 },
+          { today: TODAY },
+        ),
+      ).rejects.toMatchObject({ code: 'EXTERNAL_BALANCE_NOT_ALLOWED' })
+      statusMock.mockResolvedValue(status())
+      await expect(
+        signOffAccount(
+          supabase as never,
+          COMPANY,
+          USER,
+          'skattekonto',
+          { through_date: '2026-07-31', external_balance: 1000 },
+          { today: TODAY },
+        ),
+      ).rejects.toMatchObject({ code: 'EXTERNAL_BALANCE_NOT_ALLOWED' })
+      expect(insertMock).not.toHaveBeenCalled()
+    })
   })
 
   it('rejects a malformed date and a date in the future', async () => {
