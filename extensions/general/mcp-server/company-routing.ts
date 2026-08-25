@@ -12,6 +12,19 @@ const COMPANY_INDEPENDENT_TOOLS = new Set([
   'gnubok_list_companies',
 ])
 
+/**
+ * Company-independent tools that still USE a company when one is available:
+ * they run without one (anonymous or not-yet-onboarded callers, issue #1814)
+ * but accept an explicit company_id, which is then membership-checked like
+ * on any company-dependent tool. gnubok_list_skills filters skills by the
+ * company's entity type, employees and VAT registration.
+ */
+const OPTIONAL_COMPANY_TOOLS = new Set(['gnubok_list_skills'])
+
+export function isOptionalCompanyTool(toolName: string): boolean {
+  return OPTIONAL_COMPANY_TOOLS.has(toolName)
+}
+
 export const COMPANY_ID_INPUT_PROPERTY = {
   type: 'string',
   format: 'uuid',
@@ -69,7 +82,7 @@ export function isTenantWriteScope(scope: ApiKeyScope | undefined): boolean {
 }
 
 export function projectToolInputSchema(tool: ToolSchemaSource): Record<string, unknown> {
-  if (!isCompanyDependentTool(tool.name)) return tool.inputSchema
+  if (!isCompanyDependentTool(tool.name) && !isOptionalCompanyTool(tool.name)) return tool.inputSchema
 
   const properties =
     tool.inputSchema.properties && typeof tool.inputSchema.properties === 'object'
