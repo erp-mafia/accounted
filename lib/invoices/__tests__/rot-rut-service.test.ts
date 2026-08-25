@@ -214,6 +214,26 @@ describe('listRotRutCandidates', () => {
     expect(result.blocked[0].message).not.toContain('avbryt')
   })
 
+  it('blocks, not drops, an invoice whose request carries an unknown status', async () => {
+    // The decided set is enumerated (paid/partially_paid): a future or
+    // unexpected request status must land in blocked with the generic
+    // ALREADY_REQUESTED message, never vanish from both lists.
+    const invoice = makeRotRow()
+    const result = await listRotRutCandidates(
+      mockedSupabase([invoice], [invoice], [activeItem(invoice.id, 'queued')]),
+      'company-1',
+      'rot',
+      TODAY,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.eligible).toHaveLength(0)
+    expect(result.blocked).toHaveLength(1)
+    expect(result.blocked[0].code).toBe('ALREADY_REQUESTED')
+    expect(result.blocked[0].message).toContain('ingår redan i')
+  })
+
   it('omits invoices whose begäran is decided: finished business, not a drop-out', async () => {
     const invoice = makeRotRow()
     const result = await listRotRutCandidates(

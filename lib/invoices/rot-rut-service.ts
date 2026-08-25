@@ -44,6 +44,15 @@ type InvoiceWithCustomer = Invoice & { customer?: { name?: string | null } | nul
  *  (total - paid_amount - deduction_total). */
 const CANDIDATE_STATUSES = ['paid', 'partially_paid']
 
+/** Request statuses where Skatteverkets beslut has been recorded: the claim is
+ *  finished business, visible in the request history, so the invoice is
+ *  deliberately omitted from both lists (see DECISIONS.md, #1884). Enumerated
+ *  explicitly so a request status outside the known lifecycle can never make
+ *  an invoice vanish silently: anything not decided here, and not
+ *  cancelled/rejected (filtered out in the query), surfaces as
+ *  ALREADY_REQUESTED. */
+const DECIDED_REQUEST_STATUSES = ['paid', 'partially_paid']
+
 /**
  * Deduction-carrying invoices evaluated against the file rules. Never drops
  * an invoice silently: every fetched candidate lands in `eligible` or in
@@ -135,17 +144,14 @@ export async function listRotRutCandidates(
 
   for (const invoice of invoices) {
     const activeRequest = activeRequestByInvoice.get(invoice.id)
-    const inFlightRequest =
-      activeRequest &&
-      (activeRequest.status === 'generated' || activeRequest.status === 'submitted')
-        ? activeRequest
-        : null
-    // Decided begäran (request status paid/partially_paid) first, before ANY
+    // Decided begäran (request status paid/partially_paid, enumerated
+    // explicitly in DECIDED_REQUEST_STATUSES) first, before ANY
     // classification: the claim is finished business on every tab, so the
     // invoice must vanish from both lists. Checking wrong-type first would
     // resurface every historically decided invoice forever in the OTHER
     // type's blocked list.
-    if (activeRequest && !inFlightRequest) continue
+    if (activeRequest && DECIDED_REQUEST_STATUSES.includes(activeRequest.status)) continue
+    const holdingRequest = activeRequest ?? null
 
     const result = evaluateInvoiceForFile(type, invoice, { today })
 
@@ -163,19 +169,23 @@ export async function listRotRutCandidates(
       continue
     }
 
-    if (inFlightRequest) {
+    if (holdingRequest) {
       // In-flight begäran (generated but maybe never uploaded, or awaiting
-      // beslut): the invoice is spoken for, say so instead of vanishing.
-      const requestLabel = inFlightRequest.name ? `begäran "${inFlightRequest.name}"` : 'en begäran'
+      // beslut): the invoice is spoken for, say so instead of vanishing. A
+      // request status outside the known lifecycle gets the generic message:
+      // being held with a vague reason still beats disappearing.
+      const requestLabel = holdingRequest.name ? `begäran "${holdingRequest.name}"` : 'en begäran'
       blocked.push({
         invoice_id: invoice.id,
         invoice_number: invoice.invoice_number ?? null,
         customer_name: invoice.customer?.name ?? null,
         code: 'ALREADY_REQUESTED',
         message:
-          inFlightRequest.status === 'generated'
+          holdingRequest.status === 'generated'
             ? `Fakturan ingår redan i ${requestLabel} som är skapad men inte uppladdad. Ladda upp filen hos Skatteverket, eller avbryt begäran för att ta med fakturan i en ny fil.`
-            : `Fakturan ingår redan i ${requestLabel} som väntar på Skatteverkets beslut.`,
+            : holdingRequest.status === 'submitted'
+              ? `Fakturan ingår redan i ${requestLabel} som väntar på Skatteverkets beslut.`
+              : `Fakturan ingår redan i ${requestLabel}.`,
       })
       continue
     }

@@ -221,7 +221,7 @@ export function evaluateInvoiceForFile(
   if (lineDeductionTotal > 0 && (invoice.deduction_total ?? 0) <= 0) {
     return block(
       'DEDUCTION_TOTAL_MISSING',
-      'Fakturan har ROT/RUT-rader men inget sparat avdragsbelopp: avdraget är inte bokfört mot Skatteverket. Rätta fakturan, eller kontakta supporten om den inte går att redigera.',
+      'Fakturan har ROT/RUT-rader men inget sparat avdragsbelopp: avdraget är inte bokfört mot Skatteverket. Ett utkast kan redigeras direkt; en skickad eller betald faktura rättas med kreditfaktura och en ny faktura. Kontakta supporten om ingen av vägarna fungerar.',
     )
   }
 
