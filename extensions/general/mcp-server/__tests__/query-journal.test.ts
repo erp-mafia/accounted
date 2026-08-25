@@ -249,6 +249,7 @@ function makeLineRow(opts: {
   entry_notes?: string | null
   voucher_number?: number
   entry_date?: string
+  entry_status?: string
 }) {
   return {
     id: opts.id,
@@ -268,7 +269,7 @@ function makeLineRow(opts: {
       description: opts.entry_description ?? '',
       notes: opts.entry_notes ?? null,
       source_type: 'bank_transaction',
-      status: 'posted',
+      status: opts.entry_status ?? 'posted',
     },
   }
 }
@@ -1004,5 +1005,104 @@ describe('gnubok_query_journal: accounts argument normalization', () => {
     await expect(
       tool().execute({ accounts }, 'company-1', 'user-1', supabase),
     ).rejects.toThrow(/capped at 50/)
+  })
+})
+
+describe('gnubok_query_journal: status default and balance integrity', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_query_journal')!
+
+  // A storno pair on 2614: the reversed original (credit) and its posted
+  // storno (debit). Under the ledger inclusion rule they net to zero; a
+  // posted-only view sees just the storno leg and fabricates a +940.27
+  // "balance". This is the exact shape that made a customer's agent find
+  // phantom VAT residuals and demand a revert of correct books.
+  const stornoPair = () => [
+    makeLineRow({
+      id: 'l-orig', account_number: '2614', debit_amount: 0, credit_amount: 940.27,
+      entry_status: 'reversed', entry_date: '2026-05-31',
+    }),
+    makeLineRow({
+      id: 'l-storno', account_number: '2614', debit_amount: 940.27, credit_amount: 0,
+      entry_status: 'posted', entry_date: '2026-05-31', voucher_number: 2,
+    }),
+  ]
+
+  it("declares status_filter_warning in the output schema and 'all' as the documented default", () => {
+    const t = tool()
+    const out = t.outputSchema as { properties?: Record<string, unknown> }
+    expect(out.properties?.status_filter_warning).toBeDefined()
+    const statusProp = (t.inputSchema as {
+      properties: Record<string, { description?: string }>
+    }).properties.status
+    expect(statusProp.description).toMatch(/Default 'all'/)
+  })
+
+  it('defaults to posted + reversed so a storno pair nets to zero (ledger rule)', async () => {
+    const { supabase, entryQueries } = makeTwoStepTextMock(stornoPair())
+    const result = (await tool().execute(
+      { accounts: ['2614'] },
+      'company-1', 'user-1', supabase,
+    )) as {
+      lines: unknown[]
+      totals: { net: number }
+      status_filter_warning?: string
+      applied_filters: { status: string }
+    }
+
+    expect(result.applied_filters.status).toBe('all')
+    expect(result.lines).toHaveLength(2)
+    expect(result.totals.net).toBe(0)
+    expect(result.status_filter_warning).toBeUndefined()
+    // The entry pass filters on BOTH statuses; no separate opposite-status
+    // count query runs on the default path.
+    const statusFilters = entryQueries().flatMap((q) =>
+      q.filters.filter((f) => f.column === 'status'),
+    )
+    expect(statusFilters).toEqual([
+      { op: 'in', column: 'status', value: ['posted', 'reversed'] },
+    ])
+  })
+
+  it("explicit status 'posted' returns one leg and warns that totals are not balances", async () => {
+    const { supabase, entryQueries } = makeTwoStepTextMock(stornoPair())
+    const result = (await tool().execute(
+      { accounts: ['2614'], status: 'posted' },
+      'company-1', 'user-1', supabase,
+    )) as {
+      lines: Array<{ line_id: string }>
+      totals: { net: number }
+      status_filter_warning?: string
+    }
+
+    expect(result.lines.map((l) => l.line_id)).toEqual(['l-storno'])
+    expect(result.totals.net).toBe(940.27)
+    expect(result.status_filter_warning).toMatch(/can differ from account balances/)
+    expect(result.status_filter_warning).toMatch(/status 'all'/)
+    // Singular/plural agreement: one excluded entry reads "1 entry ... is".
+    expect(result.status_filter_warning).toMatch(/1 entry with status 'reversed' in the filtered range is excluded/)
+    // The warning is grounded in a real opposite-status count query.
+    const oppositeCount = entryQueries().some((q) =>
+      q.filters.some((f) => f.op === 'eq' && f.column === 'status' && f.value === 'reversed'),
+    )
+    expect(oppositeCount).toBe(true)
+  })
+
+  it('omits the warning when the one-leg filter excluded nothing', async () => {
+    const rows = [
+      makeLineRow({ id: 'l1', account_number: '2614', debit_amount: 100, entry_status: 'posted' }),
+    ]
+    const { supabase } = makeTwoStepTextMock(rows)
+    const result = (await tool().execute(
+      { accounts: ['2614'], status: 'posted' },
+      'company-1', 'user-1', supabase,
+    )) as { status_filter_warning?: string }
+    expect(result.status_filter_warning).toBeUndefined()
+  })
+
+  it('rejects an unknown status value instead of matching nothing', async () => {
+    const { supabase } = makeTwoStepTextMock([])
+    await expect(
+      tool().execute({ status: 'draft' }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/status must be/)
   })
 })
