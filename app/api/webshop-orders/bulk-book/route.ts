@@ -13,6 +13,7 @@ import {
   resolvePaymentAccount,
   unsupportedVatRates,
   ROUNDING_ACCOUNT,
+  WEBSHOP_PREFILL_ACCOUNTS,
 } from '@/lib/webshop-orders/booking-lines'
 import {
   assertOrderBookable,
@@ -92,7 +93,9 @@ function failureFromError(err: unknown): BulkBookFailure {
  * Book N selected webshop order/refund rows in one sweep, each with the
  * standard order template: payment account (per-store payment-method mapping,
  * or the optional payment_account override) against revenue + output VAT per
- * rate from the row's own vat_breakdown.
+ * rate from the row's own vat_breakdown. The optional revenue_accounts map
+ * (the "bokföringsmall") routes the revenue side per rate to a chosen class 3
+ * account instead of the standard 3001-series; VAT accounts stay derived.
  *
  * Deliberately NOT a samlingsverifikation: every order books as its OWN
  * verifikat through the exact same flow as POST /api/webshop-orders/[id]/book
@@ -116,7 +119,15 @@ export const POST = withRouteContext(
   async (request, { supabase, user, companyId, log, requestId }) => {
     const validation = await validateBody(request, BulkBookWebshopOrdersSchema)
     if (!validation.success) return validation.response
-    const { order_ids, payment_account } = validation.data
+    const { order_ids, payment_account, revenue_accounts } = validation.data
+
+    // Revenue template: rate-keyed map for buildOrderBookingLines. The JSON
+    // keys are strings ('25'); the builder keys by numeric rate.
+    const revenueAccountByRate: Partial<Record<number, string>> = {}
+    for (const [rate, account] of Object.entries(revenue_accounts ?? {})) {
+      if (account) revenueAccountByRate[Number(rate)] = account
+    }
+    const revenueTemplateAccounts = [...new Set(Object.values(revenueAccountByRate))]
 
     // Dedupe but keep the caller's order for the result list.
     const ids = [...new Set(order_ids)]
@@ -162,6 +173,47 @@ export const POST = withRouteContext(
       settingsRows.find(
         (s) => s.platform === order.platform && s.store_scope === order.store_scope,
       ) ?? null
+
+    // Revenue-template accounts are user-chosen, so they are never
+    // auto-created (ensureWebshopPrefillAccounts only repairs our own closed
+    // prefill set; accounts in that set are exempt from this check for the
+    // same reason). Verify up front that every chosen account exists and is
+    // active in the company's chart, and abort the WHOLE sweep otherwise:
+    // a typo would fail every order on the same AccountsNotInChartError
+    // anyway, and one loud refusal naming the accounts beats fifty per-order
+    // engine errors. A lookup failure aborts too, same doctrine as the
+    // settings fetch above.
+    const chartCheckedAccounts = revenueTemplateAccounts.filter(
+      (account) => !WEBSHOP_PREFILL_ACCOUNTS.includes(account),
+    )
+    if (chartCheckedAccounts.length > 0) {
+      const { data: chartRows, error: chartError } = await supabase
+        .from('chart_of_accounts')
+        .select('account_number, is_active')
+        .eq('company_id', companyId)
+        .in('account_number', chartCheckedAccounts)
+      if (chartError) {
+        log.error('bulk-book chart lookup failed; aborting sweep', chartError)
+        return NextResponse.json(
+          { error: getErrorMessage(chartError, { context: 'transaction' }) },
+          { status: 500 },
+        )
+      }
+      const activeAccounts = new Set(
+        (chartRows ?? [])
+          .filter((row) => row.is_active)
+          .map((row) => row.account_number as string),
+      )
+      const unknownAccounts = chartCheckedAccounts.filter(
+        (account) => !activeAccounts.has(account),
+      )
+      if (unknownAccounts.length > 0) {
+        return errorResponseFromCode('WEBSHOP_ORDER_REVENUE_ACCOUNT_UNKNOWN', log, {
+          requestId,
+          details: { accounts: unknownAccounts },
+        })
+      }
+    }
 
     // Sequential on purpose: each order is its own draft -> claim -> commit
     // round trip through the engine, and voucher numbers are assigned
@@ -271,6 +323,7 @@ export const POST = withRouteContext(
           order: resolvedOrder,
           settings,
           paymentAccount: payment_account,
+          revenueAccounts: revenueAccountByRate,
         })
       } catch (err) {
         // buildOrderBookingLines throws only on an unresolved SEK amount,

@@ -279,6 +279,126 @@ describe('POST /api/webshop-orders/bulk-book', () => {
     expect(input.lines[0].account_number).toBe('1580')
   })
 
+  it('routes revenue through the revenue template and keeps VAT derived', async () => {
+    enqueue({
+      data: [
+        makeOrderRow(),
+        makeOrderRow({
+          id: ORDER_2,
+          order_number: '1002',
+          external_id: 'x2',
+          total: 112,
+          total_tax: 12,
+          total_sek: 112,
+          vat_breakdown: [{ rate: 12, net: 100, tax: 12 }],
+        }),
+      ],
+    })
+    enqueue({ data: [] }) // store settings
+    enqueue({ data: [{ account_number: '3041', is_active: true }] }) // chart check
+    enqueue({ data: [{ id: ORDER_1 }] }) // claim order 1
+    enqueue({ data: [{ id: ORDER_2 }] }) // claim order 2
+    const { status, body } = await parseJsonResponse<BulkResponse>(
+      await postBulk({
+        order_ids: [ORDER_1, ORDER_2],
+        revenue_accounts: { '25': '3041' },
+      }),
+    )
+    expect(status).toBe(200)
+    expect(body.data.booked_count).toBe(2)
+    const firstLines = (
+      mockCreateDraftEntry.mock.calls[0][3] as {
+        lines: { account_number: string; credit_amount: number }[]
+      }
+    ).lines
+    // 25% revenue re-routed to the chosen account; VAT stays on 2611.
+    expect(firstLines.find((l) => l.account_number === '3041')?.credit_amount).toBe(400)
+    expect(firstLines.some((l) => l.account_number === '3001')).toBe(false)
+    expect(firstLines.find((l) => l.account_number === '2611')?.credit_amount).toBe(100)
+    // The 12% order is untouched by a 25%-only template.
+    const secondLines = (
+      mockCreateDraftEntry.mock.calls[1][3] as {
+        lines: { account_number: string; credit_amount: number }[]
+      }
+    ).lines
+    expect(secondLines.find((l) => l.account_number === '3002')?.credit_amount).toBe(100)
+  })
+
+  it('aborts the whole sweep when a template account is not active in the chart', async () => {
+    enqueue({ data: [makeOrderRow()] })
+    enqueue({ data: [] }) // store settings
+    enqueue({ data: [{ account_number: '3041', is_active: false }] }) // chart check
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { accounts?: string[] } }
+    }>(
+      await postBulk({
+        order_ids: [ORDER_1],
+        revenue_accounts: { '25': '3041' },
+      }),
+    )
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_REVENUE_ACCOUNT_UNKNOWN')
+    expect(body.error.details?.accounts).toEqual(['3041'])
+    // Nothing may book on a template the user has to fix first.
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a non-class-3 revenue-template account', async () => {
+    const { status } = await parseJsonResponse(
+      await postBulk({
+        order_ids: [ORDER_1],
+        revenue_accounts: { '25': '1930' },
+      }),
+    )
+    expect(status).toBe(400)
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('skips the chart check for template accounts in the closed prefill set', async () => {
+    // 3002 is auto-repaired by ensureWebshopPrefillAccounts downstream, so
+    // the template guard must not refuse it on a fresh chart: no chart-check
+    // query is queued and the order still books.
+    enqueue({ data: [makeOrderRow()] })
+    enqueue({ data: [] }) // store settings
+    enqueue({ data: [{ id: ORDER_1 }] }) // claim
+    const { status, body } = await parseJsonResponse<BulkResponse>(
+      await postBulk({
+        order_ids: [ORDER_1],
+        revenue_accounts: { '25': '3002' },
+      }),
+    )
+    expect(status).toBe(200)
+    expect(body.data.booked_count).toBe(1)
+    const lines = (
+      mockCreateDraftEntry.mock.calls[0][3] as {
+        lines: { account_number: string; credit_amount: number }[]
+      }
+    ).lines
+    expect(lines.find((l) => l.account_number === '3002')?.credit_amount).toBe(400)
+  })
+
+  it('composes the revenue template with the payment_account override', async () => {
+    enqueue({ data: [makeOrderRow()] })
+    enqueue({ data: [] }) // store settings
+    enqueue({ data: [{ account_number: '3041', is_active: true }] }) // chart check
+    enqueue({ data: [{ id: ORDER_1 }] }) // claim
+    const { status } = await parseJsonResponse(
+      await postBulk({
+        order_ids: [ORDER_1],
+        payment_account: '1930',
+        revenue_accounts: { '25': '3041' },
+      }),
+    )
+    expect(status).toBe(200)
+    const lines = (
+      mockCreateDraftEntry.mock.calls[0][3] as {
+        lines: { account_number: string; debit_amount: number; credit_amount: number }[]
+      }
+    ).lines
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: 500 })
+    expect(lines.find((l) => l.account_number === '3041')?.credit_amount).toBe(400)
+  })
+
   it('reports per-order failure without aborting the batch (guard failure)', async () => {
     enqueue({
       data: [

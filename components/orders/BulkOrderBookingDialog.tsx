@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
+  DEFAULT_REVENUE_ACCOUNT_BY_RATE,
   resolveBookingWarnings,
   resolvePaymentAccount,
   unsupportedVatRates,
@@ -50,9 +51,11 @@ interface BulkOrderBookingDialogProps {
  * Book N selected orders with the standard order template in one sweep
  * (confirm up front, convention 10). Each order still becomes its own
  * verifikat server-side via the same flow as the single-order dialog; this
- * dialog only chooses the payment counter-account policy: per-store mapping
- * (default) or one explicit account for the whole selection. Partial failure
- * is surfaced per order in a result list instead of aborting the batch.
+ * dialog chooses two sweep-wide policies: the payment counter-account
+ * (per-store mapping by default, or one explicit account) and the revenue
+ * template (revenue account per VAT rate, standard 3001-series by default).
+ * Partial failure is surfaced per order in a result list instead of
+ * aborting the batch.
  */
 export default function BulkOrderBookingDialog({
   open,
@@ -67,6 +70,8 @@ export default function BulkOrderBookingDialog({
 
   const [overrideEnabled, setOverrideEnabled] = useState(false)
   const [overrideAccount, setOverrideAccount] = useState('')
+  const [revenueEnabled, setRevenueEnabled] = useState(false)
+  const [revenueAccounts, setRevenueAccounts] = useState<Record<number, string>>({})
   const [submitting, setSubmitting] = useState(false)
   const [results, setResults] = useState<BulkBookOrderResult[] | null>(null)
 
@@ -132,6 +137,22 @@ export default function BulkOrderBookingDialog({
     return Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label))
   }, [bookableOrders, settingsFor])
 
+  // The VAT rates actually present in the bookable selection, highest first,
+  // with order counts: the revenue template only offers inputs for rates a
+  // revenue line will actually book on.
+  const ratesPresent = useMemo(() => {
+    const counts = new Map<number, number>()
+    for (const order of bookableOrders) {
+      const rates = new Set(order.vat_breakdown.map((b) => b.rate))
+      for (const rate of rates) {
+        counts.set(rate, (counts.get(rate) ?? 0) + 1)
+      }
+    }
+    return Array.from(counts.entries())
+      .sort(([a], [b]) => b - a)
+      .map(([rate, count]) => ({ rate, count }))
+  }, [bookableOrders])
+
   // Advisory VAT warnings stay per order, not an anonymous count: the user
   // must be able to tell WHICH orders deserve the single-dialog review.
   const warningOrderNumbers = useMemo(
@@ -148,11 +169,15 @@ export default function BulkOrderBookingDialog({
       ? accountGroups[0].account
       : null
 
-  // Reset per open so a second sweep starts clean.
+  // Reset per open so a second sweep starts clean. The revenue inputs
+  // prefill with the effective defaults (prefill-plus-override editor
+  // pattern): the user edits from what would book, not from blank fields.
   useEffect(() => {
     if (open) {
       setOverrideEnabled(false)
       setOverrideAccount(uniformAccount ?? '')
+      setRevenueEnabled(false)
+      setRevenueAccounts({ ...DEFAULT_REVENUE_ACCOUNT_BY_RATE })
       setSubmitting(false)
       setResults(null)
     }
@@ -161,8 +186,33 @@ export default function BulkOrderBookingDialog({
   }, [open])
 
   const overrideValid = ACCOUNT_NUMBER_RE.test(overrideAccount)
+  // A revenue-template account must be a class 3 account (schema mirror).
+  const revenueAccountValid = (value: string) =>
+    ACCOUNT_NUMBER_RE.test(value) && value.startsWith('3')
+  const revenueAllValid = ratesPresent.every(({ rate }) =>
+    revenueAccountValid(revenueAccounts[rate] ?? ''),
+  )
   const canConfirm =
-    !submitting && bookableOrders.length > 0 && (!overrideEnabled || overrideValid)
+    !submitting &&
+    bookableOrders.length > 0 &&
+    (!overrideEnabled || overrideValid) &&
+    (!revenueEnabled || revenueAllValid)
+
+  // Only DIFFS from the default map are sent (store-diffs convention). An
+  // untouched default (e.g. 3004) must ride the default path server-side,
+  // where our closed prefill set is auto-added to a fresh chart; sending it
+  // explicitly would be a semantic no-op that changes nothing but intent.
+  const revenueDiffs = useMemo(() => {
+    if (!revenueEnabled) return null
+    const diffs: Record<string, string> = {}
+    for (const { rate } of ratesPresent) {
+      const chosen = revenueAccounts[rate]
+      if (chosen && chosen !== DEFAULT_REVENUE_ACCOUNT_BY_RATE[rate]) {
+        diffs[String(rate)] = chosen
+      }
+    }
+    return Object.keys(diffs).length > 0 ? diffs : null
+  }, [revenueEnabled, ratesPresent, revenueAccounts])
 
   async function handleConfirm() {
     if (!canConfirm) return
@@ -176,6 +226,7 @@ export default function BulkOrderBookingDialog({
           ...(overrideEnabled && overrideValid
             ? { payment_account: overrideAccount }
             : {}),
+          ...(revenueDiffs ? { revenue_accounts: revenueDiffs } : {}),
         }),
       })
       if (!response.ok) {
@@ -339,6 +390,66 @@ export default function BulkOrderBookingDialog({
                   )}
                 </div>
               )}
+            </div>
+
+            {/* Revenue template (bokföringsmall): revenue account per VAT
+                rate present in the selection. Static rows show the effective
+                accounts (convention 10); the checkbox swaps them for inputs
+                prefilled with the same defaults. VAT accounts are derived
+                from the rate and deliberately not editable here. */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+                <Checkbox
+                  checked={revenueEnabled}
+                  onCheckedChange={(v) => setRevenueEnabled(v === true)}
+                />
+                {t('bulk_revenue_label')}
+              </label>
+              <ul className="space-y-1">
+                {ratesPresent.map(({ rate, count }) => {
+                  const value = revenueAccounts[rate] ?? ''
+                  const valid = revenueAccountValid(value)
+                  return (
+                    <li
+                      key={rate}
+                      className="flex items-center justify-between gap-4 text-sm"
+                    >
+                      <span className="truncate">
+                        {t('bulk_revenue_rate', { rate })}
+                      </span>
+                      {revenueEnabled ? (
+                        <span className="flex flex-col items-end gap-1">
+                          <Input
+                            value={value}
+                            onChange={(e) =>
+                              setRevenueAccounts((prev) => ({
+                                ...prev,
+                                [rate]: e.target.value.trim(),
+                              }))
+                            }
+                            inputMode="numeric"
+                            maxLength={4}
+                            className="w-28 tabular-nums"
+                            aria-label={t('bulk_revenue_rate_aria', { rate })}
+                            aria-invalid={!valid}
+                          />
+                          {!valid && (
+                            <span className="text-xs text-destructive" role="alert">
+                              {t('invalid_revenue_account')}
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="tabular-nums text-muted-foreground">
+                          {DEFAULT_REVENUE_ACCOUNT_BY_RATE[rate]}
+                          {' · '}
+                          {t('bulk_group_count', { count })}
+                        </span>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
             </div>
             </>
             )}
