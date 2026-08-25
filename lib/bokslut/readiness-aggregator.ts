@@ -6,6 +6,7 @@ import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
 import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 import { createLogger } from '@/lib/logger'
+import { describeFiscalYearGap, findFiscalYearGaps, type PeriodLike } from '@/lib/bookkeeping/fiscal-year-gaps'
 import type { YearEndBlocker, YearEndValidation } from '@/types'
 
 const log = createLogger('bokslut-readiness')
@@ -76,6 +77,26 @@ export interface BokslutReadinessReport {
  * Phase 2 will replace each reminder with a concrete proposal once the
  * relevant calculator ships.
  */
+/**
+ * A missing räkenskapsår anywhere in the chain is a warning on every
+ * bokslut: balances do not roll across a hole (a one-file SIE migration
+ * that skipped a year is the usual cause). Advisory: a failed read costs
+ * only this warning.
+ */
+async function fiscalYearGapWarnings(supabase: SupabaseClient, companyId: string): Promise<string[]> {
+  try {
+    const { data, error } = await supabase
+      .from('fiscal_periods')
+      .select('id, name, period_start, period_end')
+      .eq('company_id', companyId)
+    if (error) throw new Error(error.message)
+    return findFiscalYearGaps((data ?? []) as PeriodLike[]).map(describeFiscalYearGap)
+  } catch (err) {
+    log.warn('fiscal year gap check failed', { companyId, error: err instanceof Error ? err.message : String(err) })
+    return []
+  }
+}
+
 export async function buildBokslutReadinessReport(
   supabase: SupabaseClient,
   companyId: string,
@@ -249,7 +270,7 @@ export async function buildBokslutReadinessReport(
     ready: validation.ready,
     blockers: validation.errors,
     blockerItems: validation.blockers,
-    warnings: validation.warnings,
+    warnings: [...validation.warnings, ...(await fiscalYearGapWarnings(supabase, companyId))],
     reminders,
     draftCount: validation.draftCount,
     unexplainedGapCount: validation.unexplainedGaps.length,

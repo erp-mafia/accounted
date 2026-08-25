@@ -8068,5 +8068,28 @@
     "upload_failed": "Could not attach the document",
     "remove_failed": "Could not remove the document",
     "too_large_title": "The file is too large"
+  },
+  "bokslut_checklist": {
+    "heading": "Closing checklist",
+    "progress": "{done} of {total} done",
+    "group_avstamning": "Reconciliations",
+    "group_periodisering": "Accruals",
+    "group_vardering": "Valuation",
+    "group_dispositioner": "Appropriations and tax",
+    "group_kontroll": "Controls",
+    "group_rapportering": "Reporting",
+    "auto_chip": "computed",
+    "done_at": "done {date}",
+    "open": "Open",
+    "reopen": "Reopen",
+    "not_applicable": "Not applicable",
+    "use_auto": "Let the system decide",
+    "save_failed": "Could not save the checklist"
+  },
+  "fiscal_year_gaps": {
+    "title": "{count, plural, one {One fiscal year is missing} other {# fiscal years are missing}}",
+    "gap": "{from} to {to} (between {after} and {before})",
+    "hint": "Import the SIE file for that year, or create the fiscal year manually, so balances roll forward.",
+    "manage": "Manage fiscal years"
   }
 }
