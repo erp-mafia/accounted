@@ -12,7 +12,7 @@ The official plugin for [Accounted](https://app.accounted.se), the open-source S
 /plugin install accounted@accounted
 ```
 
-Then run `/mcp` and authenticate with Accounted (OAuth consent screen; read-only scopes by default, write scopes are ticked explicitly). Start with `/accounted:start`.
+Then run `/mcp` and authenticate with Accounted (OAuth consent screen; read-only scopes by default, write scopes are ticked explicitly). No account yet? Create it on that same screen, with BankID or e-mail. Start with `/accounted:start`: for a brand-new account it walks you through setting up the company (company form, organisationsnummer, VAT, fiscal year) right here in the conversation, then hands you the bank and Skatteverket connect links.
 
 ## Skills
 

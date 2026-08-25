@@ -4218,6 +4218,11 @@ export interface WebshopOrder {
   legacy_transaction_id: string | null
   /** Financial delta arrived from the store after booking froze this row. */
   remote_changed_after_freeze: boolean
+  /** User marked the row as booked/handled outside the integration. */
+  manually_booked_at: string | null
+  manually_booked_by: string | null
+  /** Optional informational reference to the existing verifikat. */
+  manually_booked_journal_entry_id: string | null
   created_at: string
   updated_at: string
 }

@@ -84,6 +84,7 @@ export type RotRutBlockerCode =
   | 'MISSING_PAYMENT_DATE'
   | 'FUTURE_PAYMENT_DATE'
   | 'NO_DEDUCTION_OF_TYPE'
+  | 'DEDUCTION_TOTAL_MISSING'
   | 'MIXED_DEDUCTION_TYPES'
   | 'MIXED_PAYMENT_YEARS'
   | 'TOO_MANY_CASES'
@@ -187,6 +188,15 @@ export function evaluateInvoiceForFile(
   const otherLines = items.filter((i) => isDeductionLine(i, otherType))
 
   if (typeLines.length === 0) {
+    // Point at the other list instead of a bare "no lines": a paid RUT
+    // invoice viewed as ROT (the dialog default) used to read as "no
+    // invoices" with no hint that it lives under the other type.
+    if (otherLines.length > 0) {
+      return block(
+        'NO_DEDUCTION_OF_TYPE',
+        `Fakturans avdrag är ${otherType.toUpperCase()}: fakturan hanteras under ${otherType.toUpperCase()}, inte ${type.toUpperCase()}.`,
+      )
+    }
     return block('NO_DEDUCTION_OF_TYPE', `Fakturan har inga ${type.toUpperCase()}-rader.`)
   }
   // One invoice must map to exactly one ärende in exactly one file. Mixed
@@ -199,7 +209,53 @@ export function evaluateInvoiceForFile(
     )
   }
 
-  if (invoice.status !== 'paid') {
+  // Header/lines integrity: the lines claim a deduction but the invoice
+  // header never recorded it (older rows and import paths where
+  // computeInvoiceDeductionTotal never wrote deduction_total). Building the
+  // file from line amounts alone would request money the ledger never booked
+  // to 1513 (the 1513 debit is driven by the header total), and the missing
+  // header is also why such an invoice can never reach status paid: its
+  // remaining_amount wrongly includes the deduction. Refuse with the root
+  // cause instead of a misleading "not paid".
+  const lineDeductionTotal = typeLines.reduce((sum, l) => sum + (l.deduction_amount ?? 0), 0)
+  if (lineDeductionTotal > 0 && (invoice.deduction_total ?? 0) <= 0) {
+    return block(
+      'DEDUCTION_TOTAL_MISSING',
+      'Fakturan har ROT/RUT-rader men inget sparat avdragsbelopp: avdraget är inte bokfört mot Skatteverket. Ett utkast kan redigeras direkt; en skickad eller betald faktura rättas med kreditfaktura och en ny faktura. Kontakta supporten om ingen av vägarna fungerar.',
+    )
+  }
+
+  // "Paid" for a rot/rut claim means the BUYER has paid their share: the
+  // deduction itself is Skatteverket's to pay (fakturamodellen). The customer
+  // share outstanding is DERIVED from the header fields here, with the same
+  // formula as buildInvoiceWriteData and migration 20260817191708
+  // (total - paid_amount - deduction_total), deliberately NOT read off
+  // remaining_amount: at least one writer (payment-sync's storno path)
+  // recomputes remaining_amount without subtracting the deduction, so the
+  // stored column is not a deterministic signal, while total, paid_amount and
+  // deduction_total are maintained by every settlement path. Invoices settled
+  // through older payment paths can sit at partially_paid although the
+  // customer share is fully paid; those are accepted here instead of being
+  // dropped as unpaid. Amounts are invoice currency throughout.
+  const customerShareOutstanding =
+    Math.round(
+      (invoice.total - (invoice.paid_amount ?? 0) - (invoice.deduction_total ?? 0)) * 100,
+    ) / 100
+  const customerSharePaid =
+    invoice.status === 'paid' ||
+    (invoice.status === 'partially_paid' && customerShareOutstanding <= 0)
+  if (!customerSharePaid) {
+    if (invoice.status === 'partially_paid') {
+      const currencyLabel = (invoice.currency ?? 'SEK').toUpperCase()
+      const amount = customerShareOutstanding.toLocaleString('sv-SE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })
+      return block(
+        'NOT_PAID',
+        `Fakturan är delbetald: ${amount} ${currencyLabel === 'SEK' ? 'kr' : currencyLabel} av kundens del återstår innan utbetalning kan begäras.`,
+      )
+    }
     return block('NOT_PAID', 'Kunden måste ha betalat sin del av fakturan innan utbetalning kan begäras.')
   }
   const paidDate = invoice.paid_at ? String(invoice.paid_at).slice(0, 10) : null
