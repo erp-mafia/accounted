@@ -198,9 +198,14 @@ describe('tools/list payload size guard', () => {
     //     so strict clients stop failing successful unmatched uploads (seq
     //     261972). Prose trimmed to the floor first; headroom before the
     //     change was ~19 tokens, so even the trimmed contract crossed.
+    //   * 59.95K to 60K with operation_status on gnubok_approve_pending_operation
+    //     (feedback seq 261545): a failed approve used to consume the op
+    //     silently, and agents inferred "consumed" from status 'failed' both
+    //     ways. The enum is the contract; the description is one clause;
+    //     headroom before the change was ~15 tokens, so even that crossed.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(59_950)
+    expect(approxTokens).toBeLessThan(60_000)
   })
 })
