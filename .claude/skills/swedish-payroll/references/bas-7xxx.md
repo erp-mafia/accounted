@@ -79,7 +79,8 @@
 | Account | Name | Purpose |
 |---|---|---|
 | 2710 | Personalskatt | Tax withholding liability |
-| 2730 | Lagstadgade sociala avgifter | Employer contribution liability |
+| 2730 | Lagstadgade sociala avgifter och särskild löneskatt | Employer contribution liability (group account) |
+| 2731 | Avräkning lagstadgade sociala avgifter | Reported-but-unpaid arbetsgivaravgifter; the account this codebase books and the skattekonto AGI draw clears. Use 2731 or 2730 consistently, never both in one company (issue #1870) |
 | 2820/2821 | Löneskulder | Net pay liability |
 | 2920 | Upplupna semesterlöner | Vacation pay liability |
 | 2940/2941 | Upplupna lagstadgade sociala avgifter | Social charges on vacation liability |
@@ -88,7 +89,7 @@
 ## Standard monthly journal entry flow
 
 1. Gross salary: Debit 7210 / Credit 2710 (tax withheld) + Credit 1930 (net pay)
-2. Employer social charges: Debit 7510 / Credit 2730
+2. Employer social charges: Debit 7510 / Credit 2731 (this codebase's convention; 2730 is the group-account alternative, never mixed with 2731 in the same company)
 3. Vacation accrual: Debit 7290 / Credit 2920
 4. Social charges on accrual: Debit 7519 / Credit 2940
 5. Pension premiums: Debit 7410 / Credit 2440 or 2740

@@ -100,16 +100,16 @@
     "version": 2
   },
   "horizontal/swedish-payroll": {
-    "hash": "8cbedb0245ae1f3a042bc2310d9563424ed58ef9fc6f3e853693844323653faa",
-    "version": 4
+    "hash": "b9d3a10d1c949b01185df001b08f150ebbaeca88bb837913bd9edab6f90e3859",
+    "version": 5
   },
   "horizontal/swedish-payroll/agi-filing": {
     "hash": "91aa490472fafff434088301dd193ed474589b36ae22bdaab640b42bc3b3c255",
     "version": 1
   },
   "horizontal/swedish-payroll/bas-7xxx": {
-    "hash": "6e7167788b3d2f9442163e29b77e79703bfc3394ff90223d2d9d096554638437",
-    "version": 1
+    "hash": "61464f317f81e9bb55d6d65a747a457b85440b076145ed44cd4055b2f0d3c324",
+    "version": 2
   },
   "horizontal/swedish-payroll/benefits": {
     "hash": "bb4ead2f45691bc84c09b7433e3b2c719c93b54f702978cfd362b125ae9c8ca2",
