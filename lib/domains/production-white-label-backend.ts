@@ -1,3 +1,6 @@
+// This is an owner-approved production classification, not an auth callback
+// allowlist. Do not derive it from NEXT_PUBLIC_WHITELABEL_DOMAINS, which can
+// also contain demo, pilot, or self-hosted domains.
 const CUSTOMER_PRODUCTION_WHITE_LABEL_HOSTS = new Set([
   'acount.accounted.se',
   'arbore.accounted.se',

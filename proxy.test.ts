@@ -57,6 +57,14 @@ describe('production white-label proxy guard', () => {
     expect(updateSessionMock).toHaveBeenCalledWith(request)
   })
 
+  it('does not treat the callback allowlist as a production classification', async () => {
+    vi.stubEnv('NEXT_PUBLIC_WHITELABEL_DOMAINS', 'internal-demo.accounted.test')
+    const request = new NextRequest('https://internal-demo.accounted.test/login')
+
+    expect((await proxy(request)).status).toBe(204)
+    expect(updateSessionMock).toHaveBeenCalledOnce()
+  })
+
   it('allows the production host after it moves to a different backend', async () => {
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', PRODUCTION_URL)
     const request = new NextRequest('https://acount.accounted.se/login')
