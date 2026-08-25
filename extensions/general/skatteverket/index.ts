@@ -55,7 +55,6 @@ import {
   SkattekontoBookingError,
 } from './lib/skattekonto-booking'
 import { handleSkattekontoDriftDetected } from './lib/skattekonto-drift-email'
-import { handleSkattekontoConnectionExpired } from './lib/connection-expired-notification'
 import {
   findMatchCandidates,
   findMatchSuggestionsBulk,
@@ -196,7 +195,8 @@ function readAuthFailureResponse(reason: 'no_token' | 'needs_reconsent'): NextRe
   if (reason === 'needs_reconsent') {
     return NextResponse.json(
       {
-        error: 'Anslutningen mot Skatteverket behöver förnyas. Anslut igen med BankID.',
+        error:
+          'Anslutningen mot Skatteverket har gått ut. Skatteverkets inloggning gäller bara ca 1 timme, så detta är normalt. Anslut igen med BankID.',
         code: 'SESSION_EXPIRED',
       },
       { status: 401 },
@@ -2483,14 +2483,14 @@ export const skatteverketExtension: Extension = {
     },
   ],
 
+  // skattekonto.connection.expired is still emitted (needs_reconsent flagging,
+  // UI banner, agent briefing) but has no email consumer: with SKV's 65-minute
+  // personal sessions a per-episode expiry mail is one mail per connect, which
+  // trains users to ignore it. See DECISIONS.md 2026-08-25.
   eventHandlers: [
     {
       eventType: 'skattekonto.drift_detected',
       handler: handleSkattekontoDriftDetected,
-    },
-    {
-      eventType: 'skattekonto.connection.expired',
-      handler: handleSkattekontoConnectionExpired,
     },
   ],
 

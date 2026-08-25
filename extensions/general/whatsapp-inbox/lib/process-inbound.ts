@@ -69,15 +69,8 @@ import { appendQuestionHistory, updateItemContext } from './item-context'
 
 const log = createLogger('whatsapp-inbox/process-inbound')
 
-/** Chat intake accepts what phones actually produce. Narrower than the upload
- *  allowlist on purpose: WhatsApp transcodes photos to JPEG, so HEIC never
- *  arrives, and everything else gets the M15 nudge. */
-export const CHAT_ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'application/pdf',
-])
+export { CHAT_ALLOWED_MIME_TYPES } from './chat-mime'
+import { CHAT_ALLOWED_MIME_TYPES, normalizeChatMime } from './chat-mime'
 
 /** M17 is sent at most once per this window per sender, not once per file. */
 const RATE_LIMIT_NOTICE_WINDOW_MS = 10 * 60 * 1000
@@ -457,7 +450,7 @@ async function processMediaMessage(
       : await getOrCreateConversation(supabase, link.id)
 
     // ── MIME allowlist (before staging: never park junk) ───
-    const mime = (row.media_mime ?? '').split(';')[0].trim().toLowerCase()
+    const mime = normalizeChatMime(row.media_mime)
     if (!CHAT_ALLOWED_MIME_TYPES.has(mime)) {
       await sendText(supabase, { to, body: copy.m15Unsupported(), template: TEMPLATE.m15Unsupported, ...replyBase })
       await markStatus(supabase, row.id, 'skipped', {

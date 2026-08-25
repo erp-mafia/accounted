@@ -3473,14 +3473,20 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     message_sv: 'Skatteverket-integrationen är inte aktiverad i denna miljö.',
     message_en: 'The Skatteverket integration is not enabled in this environment.',
   },
+  // One code covers both never-connected and expired: splitting it would
+  // ripple through every consumer, and the declaration-status path already
+  // differentiates in its message (DECISIONS.md 2026-08-25). The copy is
+  // agent-directive on purpose: only a person can run the BankID flow, so
+  // the agent must hand the task to the user instead of retrying.
   SKATTEVERKET_NOT_CONNECTED: {
     httpStatus: 401,
     message_sv:
-      'Anslutningen till Skatteverket saknas eller har gått ut. Anslut med BankID under Inställningar → Skatteverket.',
-    message_en: 'No valid Skatteverket connection. Reconnect with BankID before retrying.',
+      'Anslutningen till Skatteverket saknas eller har gått ut. Om företaget varit anslutet tidigare är detta normalt: Skatteverkets personliga inloggning gäller bara ca 1 timme. Be användaren ansluta (igen) med BankID under Inställningar → Skatteverket.',
+    message_en:
+      'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last only about 1 hour. Tell the user to connect (or reconnect) with BankID under Inställningar → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
     remediation: {
       description:
-        'Connect (or reconnect) to Skatteverket with BankID under Settings → Skatteverket, then retry.',
+        'A person must connect (or reconnect) to Skatteverket with BankID under Inställningar → Skatteverket. Personal Skatteverket sessions expire after about 1 hour by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
     },
   },
   SKATTEVERKET_ACCESS_DENIED: {

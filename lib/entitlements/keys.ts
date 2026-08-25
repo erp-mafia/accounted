@@ -89,6 +89,9 @@ export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, Capability
   gnubok_send_invoice: CAPABILITY.email_send,
   gnubok_vat_declaration_submit: CAPABILITY.skatteverket,
   gnubok_agi_submit: CAPABILITY.skatteverket,
+  // Onboarding connect-link tools (issue #1814): gated like the links' targets.
+  gnubok_connect_bank: CAPABILITY.bank_sync,
+  gnubok_connect_skatteverket: CAPABILITY.skatteverket,
   // AI document OCR (Bedrock): the inbox's paid extraction, reachable via MCP.
   gnubok_create_document_upload: CAPABILITY.ai,
   gnubok_complete_document_upload: CAPABILITY.ai,
