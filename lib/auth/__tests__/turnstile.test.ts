@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { eventBus } from '@/lib/events/bus'
 import {
   captchaTokenOptions,
   getTurnstileRolloutState,
@@ -10,6 +11,11 @@ import {
 
 const readRepoFile = (file: string) =>
   readFileSync(path.join(process.cwd(), file), 'utf8')
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  eventBus.clear()
+})
 
 afterEach(() => {
   vi.unstubAllEnvs()
