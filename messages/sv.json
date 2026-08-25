@@ -8066,6 +8066,7 @@
     "heading_dated": "Underlag per {date}",
     "attach": "Bifoga underlag",
     "empty": "Inget underlag bifogat för det här datumet. Bifoga kontoutdrag, engagemangsbesked eller annan specifikation som kontot stämts av mot.",
+    "empty_short": "inget bifogat",
     "remove": "Ta bort",
     "attached": "{name} bifogad",
     "removed": "{name} borttagen. Filen finns kvar i arkivet med en notering om borttagningen.",

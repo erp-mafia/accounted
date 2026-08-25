@@ -62,11 +62,13 @@ interface ReconciliationRailProps {
   accounts: ReconciliationAccount[]
   selectedKey: string | null
   onSelect: (accountKey: string) => void
+  /** Rendered under the list: the way to the pärm the accounts feed. */
+  footer?: React.ReactNode
 }
 
 const MANUAL_OPEN_STORAGE_KEY = 'Accounted:recon-rail-manual-open'
 
-export function ReconciliationRail({ accounts, selectedKey, onSelect }: ReconciliationRailProps) {
+export function ReconciliationRail({ accounts, selectedKey, onSelect, footer }: ReconciliationRailProps) {
   const t = useTranslations('reconciliation')
   const fed = accounts.filter((a) => a.kind !== 'manual')
   const manual = accounts.filter((a) => a.kind === 'manual')
@@ -207,6 +209,7 @@ export function ReconciliationRail({ accounts, selectedKey, onSelect }: Reconcil
           </Fragment>
         )}
       </ul>
+      {footer}
     </nav>
   )
 }
