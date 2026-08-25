@@ -144,6 +144,36 @@ describe('listRotRutCandidates', () => {
     expect(result.eligible[0].begart_belopp).toBe(6250)
   })
 
+  it('lists a half-krona RUT deduction as eligible with begärt floored', async () => {
+    // 125 kr work incl moms → 62,50 kr deduction. Whole-kronor file amounts
+    // must floor to 62 (the 50 % cap); half-up rounding used to block this
+    // invoice as DEDUCTION_EXCEEDS_PAYMENT (63 > 62).
+    const invoice = makeRotRow(
+      { deduction_total: 62.5 },
+      [
+        makeRotItem({
+          deduction_type: 'rut',
+          work_type: 'STAD',
+          line_total: 100,
+          vat_amount: 25,
+          deduction_amount: 62.5,
+          labor_hours: 1,
+          housing_designation: null,
+        }),
+      ],
+    )
+    const result = await listRotRutCandidates(mockedSupabase([invoice], [invoice], []), 'company-1', 'rut', TODAY)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.blocked).toHaveLength(0)
+    expect(result.eligible).toHaveLength(1)
+    expect(result.eligible[0]).toMatchObject({
+      pris_for_arbete: 125,
+      begart_belopp: 62,
+    })
+  })
+
   it('accepts partially_paid with remaining 0 and blocks a genuine partial with the amount', async () => {
     // Drop path 2: the customer paid their share but the status never
     // flipped to paid (older settlement paths). remaining_amount decides.

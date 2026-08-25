@@ -301,8 +301,9 @@ describe('foreign-currency invoices: kronor conversion', () => {
     expect(xml).toContain('<ns2:BetaltBelopp>29925</ns2:BetaltBelopp>')
     expect(result.requested_total).toBe(12825)
 
-    // The begäran and the receivable must be the same claim.
-    expect(result.arenden[0].begart_belopp).toBe(Math.round(ledger1513(invoice)))
+    // The begäran and the receivable must be the same claim (whole kronor,
+    // floored: the file may never ask for more than the 1513 fordran).
+    expect(result.arenden[0].begart_belopp).toBe(Math.floor(ledger1513(invoice)))
   })
 
   it('asks for 8 906 kr, not 781, on the 781.25 EUR deduction case', () => {
@@ -657,6 +658,106 @@ describe('eligibility blockers', () => {
       ]),
     )
     expect(result.ok).toBe(true)
+  })
+
+  it('floors a half-krona deduction instead of manufacturing begärt > betalt', () => {
+    // 100 kr work + 25 kr moms = 125 kr; rut 50 % = 62,50 kr. The file is
+    // whole kronor and the deduction may never exceed the 50 % cap, so the
+    // begäran must ask for 62 (floor), not 63 (half-up), which would exceed
+    // the cap and trip DEDUCTION_EXCEEDS_PAYMENT on a perfectly correct
+    // invoice. Regression for the 2026-08-25 support case.
+    const invoice = makeRotInvoice({}, [
+      makeItem({
+        deduction_type: 'rut',
+        work_type: 'STAD',
+        line_total: 100,
+        vat_amount: 25,
+        deduction_amount: 62.5,
+        labor_hours: 1,
+        housing_designation: null,
+      }),
+    ])
+
+    const evaluated = evaluateInvoiceForFile('rut', invoice)
+    expect(evaluated.ok).toBe(true)
+    if (evaluated.ok) {
+      expect(evaluated.value.arende.pris_for_arbete).toBe(125)
+      expect(evaluated.value.arende.begart_belopp).toBe(62)
+      expect(evaluated.value.arende.betalt_belopp).toBe(63)
+    }
+
+    const xml = buildRotRutFile({
+      type: 'rut',
+      name: 'Halvkrona',
+      invoices: [invoice],
+      today: TODAY,
+    }).xml!
+    expect(xml).toContain('<ns2:PrisForArbete>125</ns2:PrisForArbete>')
+    expect(xml).toContain('<ns2:BetaltBelopp>63</ns2:BetaltBelopp>')
+    expect(xml).toContain('<ns2:BegartBelopp>62</ns2:BegartBelopp>')
+  })
+
+  it('floors a ROT half-öre deduction that the old rounding pushed past the 30 % cap', () => {
+    // 500 kr labor + 125 moms = 625 kr; ROT 30 % = 187,50. Half-up rounding
+    // emitted 188, which exceeded both the statutory cap and the 1513 fordran
+    // (and, unlike the RUT-at-50 % case, passed the begärt > betalt guard).
+    // The floor emits 187/438. Skeptic finding on PR #1910: pins that the fix
+    // deliberately lowers this class of previously-passing ROT files by 1 kr.
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({}, [
+        makeItem({ line_total: 500, vat_amount: 125, deduction_amount: 187.5, labor_hours: 5 }),
+      ]),
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.arende.pris_for_arbete).toBe(625)
+      expect(result.value.arende.begart_belopp).toBe(187)
+      expect(result.value.arende.betalt_belopp).toBe(438)
+    }
+  })
+
+  it('öre-rounds the deduction sum before flooring so float noise cannot drop a krona', () => {
+    // Three öre-level lines summing to exactly 63.00 in FP-land can land at
+    // 62.999999...; the floor must apply to the öre-rounded sum (63), not the
+    // raw float (62).
+    const result = evaluateInvoiceForFile(
+      'rut',
+      makeRotInvoice({}, [
+        makeItem({
+          id: 'i1',
+          deduction_type: 'rut',
+          work_type: 'STAD',
+          line_total: 33.6,
+          vat_amount: 8.4,
+          deduction_amount: 21.0,
+          labor_hours: 1,
+          housing_designation: null,
+        }),
+        makeItem({
+          id: 'i2',
+          deduction_type: 'rut',
+          work_type: 'STAD',
+          line_total: 33.6,
+          vat_amount: 8.4,
+          deduction_amount: 20.99,
+          labor_hours: 1,
+          housing_designation: null,
+        }),
+        makeItem({
+          id: 'i3',
+          deduction_type: 'rut',
+          work_type: 'STAD',
+          line_total: 33.62,
+          vat_amount: 8.41,
+          deduction_amount: 21.01,
+          labor_hours: 1,
+          housing_designation: null,
+        }),
+      ]),
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.arende.begart_belopp).toBe(63)
   })
 
   it('collects blockers per invoice while still emitting eligible ones', () => {
