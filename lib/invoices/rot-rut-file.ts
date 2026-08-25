@@ -1,4 +1,5 @@
 import type { Invoice, InvoiceItem } from '@/types'
+import { roundOre } from '@/lib/money'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { deductionSekConverter, SCHABLON_WORK_TYPES, type DeductionType } from './rot-rut-rules'
 
@@ -384,7 +385,7 @@ export function evaluateInvoiceForFile(
   // perfectly correct invoice. The öre-level rounding before the floor keeps
   // float noise (62.499999...) from dropping a whole krona.
   const begartBelopp = Math.floor(
-    Math.round(typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0) * 100) / 100,
+    roundOre(typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0)),
   )
   const betaltBelopp = prisForArbete - begartBelopp
   if (prisForArbete < 2) {
