@@ -197,3 +197,22 @@ describe('MCP company routing', () => {
     })
   })
 })
+
+describe('optional-company tools (issue #1814)', () => {
+  it('gnubok_list_skills is company-independent but still advertises company_id', () => {
+    expect(isCompanyDependentTool('gnubok_list_skills')).toBe(false)
+    const projected = projectToolInputSchema({
+      name: 'gnubok_list_skills',
+      inputSchema: { type: 'object', properties: { tag: { type: 'string' } } },
+    })
+    expect((projected.properties as Record<string, unknown>).company_id).toBeDefined()
+  })
+
+  it('purely context-free tools do not advertise company_id', () => {
+    const projected = projectToolInputSchema({
+      name: 'gnubok_search_tools',
+      inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+    })
+    expect((projected.properties as Record<string, unknown>).company_id).toBeUndefined()
+  })
+})
