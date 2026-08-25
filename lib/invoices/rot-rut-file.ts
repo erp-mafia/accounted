@@ -377,8 +377,14 @@ export function evaluateInvoiceForFile(
   const prisForArbete = Math.round(
     typeLines.reduce((sum, l) => sum + toSek(l.line_total ?? 0) + toSek(l.vat_amount ?? 0), 0),
   )
-  const begartBelopp = Math.round(
-    typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0),
+  // BegartBelopp rounds DOWN: skattereduktionen is capped at a share of the
+  // work price (HUSFL: 50 % RUT / 30 % ROT), so an exact half-krona deduction
+  // (125 kr work -> 62,50) must become 62, never 63. Half-up rounding would
+  // request more than the cap and manufacture begärt > betalt out of a
+  // perfectly correct invoice. The öre-level rounding before the floor keeps
+  // float noise (62.499999...) from dropping a whole krona.
+  const begartBelopp = Math.floor(
+    Math.round(typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0) * 100) / 100,
   )
   const betaltBelopp = prisForArbete - begartBelopp
   if (prisForArbete < 2) {
@@ -390,9 +396,11 @@ export function evaluateInvoiceForFile(
     return block('ZERO_DEDUCTION', 'Fakturans ROT/RUT-avdrag är 0 kr: det finns inget belopp att begära.')
   }
   // The buyer must have paid at least as much as is being requested
-  // (skattereduktionen är max 50 % av arbetskostnaden). Independent rounding
-  // of pris/begärt could otherwise even push BetaltBelopp negative, which
-  // Skatteverkets schema rejects outright.
+  // (skattereduktionen är max 50 % av arbetskostnaden). With begärt floored,
+  // any invoice whose ledger deduction respects the cap passes by
+  // construction (2*floor(D) is an integer <= pris <= round(pris)); this
+  // guard now only catches corrupted deduction data, where BetaltBelopp
+  // could even go negative, which Skatteverkets schema rejects outright.
   if (begartBelopp > betaltBelopp) {
     return block(
       'DEDUCTION_EXCEEDS_PAYMENT',
