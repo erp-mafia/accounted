@@ -308,6 +308,21 @@ describe('executeSIEImport: IB voucher series (issue #1882)', () => {
     expect(input.voucher_series).toBe('M')
   })
 
+  it('uppercases a caller-chosen lowercase series so it cannot book a case-distinct parallel series', async () => {
+    const result = await executeSIEImport(
+      buildRoutingSupabase(standardQueues()),
+      'company-1',
+      'user-1',
+      makeParsedFile(),
+      standardMappings,
+      { ...standardOptions, openingBalanceSeries: 'k' },
+    )
+
+    expect(result.success).toBe(true)
+    const input = vi.mocked(createJournalEntry).mock.calls[0][3]
+    expect(input.voucher_series).toBe('K')
+  })
+
   it('falls back to the default when openingBalanceSeries is not a string', async () => {
     const result = await executeSIEImport(
       buildRoutingSupabase(standardQueues()),

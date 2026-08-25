@@ -2378,8 +2378,14 @@ export async function executeSIEImport(
     // Type-checked, not just trimmed: the web execute route and MCP accept
     // untyped JSON, and a non-string here must fall back to the default,
     // not crash mid-import after the fiscal period was already created.
+    // Uppercased before persisting: a lowercase 'a' would otherwise book a
+    // case-distinct parallel series next to 'A', fragmenting what BFL
+    // 5 kap requires to be one systematic series, and would slip past the
+    // collision warning below.
     const requestedOpeningBalanceSeries =
-      typeof options.openingBalanceSeries === 'string' ? options.openingBalanceSeries.trim() : ''
+      typeof options.openingBalanceSeries === 'string'
+        ? options.openingBalanceSeries.trim().toUpperCase()
+        : ''
     const seriesUsedByFile = new Set(
       parsed.vouchers
         .map((v) => (v.series ?? '').trim().toUpperCase())
@@ -2402,7 +2408,7 @@ export async function executeSIEImport(
       requestedOpeningBalanceSeries &&
       options.importOpeningBalances &&
       options.importTransactions &&
-      seriesUsedByFile.has(requestedOpeningBalanceSeries.toUpperCase())
+      seriesUsedByFile.has(requestedOpeningBalanceSeries)
     ) {
       result.warnings.push(
         `Vald verifikationsserie för ingående balanser (${requestedOpeningBalanceSeries}) används även av filens verifikationer: ` +
