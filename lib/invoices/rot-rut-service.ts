@@ -133,10 +133,24 @@ export async function listRotRutCandidates(
   const blocked: RotRutBlockedSummary[] = []
 
   for (const invoice of invoices) {
+    const activeRequest = activeRequestByInvoice.get(invoice.id)
+    const inFlightRequest =
+      activeRequest &&
+      (activeRequest.status === 'generated' || activeRequest.status === 'submitted')
+        ? activeRequest
+        : null
+    // Decided begäran (request status paid/partially_paid) first, before ANY
+    // classification: the claim is finished business on every tab, so the
+    // invoice must vanish from both lists. Checking wrong-type first would
+    // resurface every historically decided invoice forever in the OTHER
+    // type's blocked list.
+    if (activeRequest && !inFlightRequest) continue
+
     const result = evaluateInvoiceForFile(type, invoice, { today })
 
-    // Wrong-type first: even when the invoice also sits in an active begäran,
-    // the useful fact under THIS type is that it belongs to the other list.
+    // Wrong-type next: even when the invoice sits in an in-flight begäran,
+    // the useful fact under THIS type is that it belongs to the other list
+    // (where it shows as ALREADY_REQUESTED).
     if (!result.ok && result.blocker.code === 'NO_DEDUCTION_OF_TYPE') {
       blocked.push({
         invoice_id: invoice.id,
@@ -148,24 +162,20 @@ export async function listRotRutCandidates(
       continue
     }
 
-    const activeRequest = activeRequestByInvoice.get(invoice.id)
-    if (activeRequest) {
+    if (inFlightRequest) {
       // In-flight begäran (generated but maybe never uploaded, or awaiting
       // beslut): the invoice is spoken for, say so instead of vanishing.
-      // Decided requests (paid/partially_paid) are finished: skip silently.
-      if (activeRequest.status === 'generated' || activeRequest.status === 'submitted') {
-        const requestLabel = activeRequest.name ? `begäran "${activeRequest.name}"` : 'en begäran'
-        blocked.push({
-          invoice_id: invoice.id,
-          invoice_number: invoice.invoice_number ?? null,
-          customer_name: invoice.customer?.name ?? null,
-          code: 'ALREADY_REQUESTED',
-          message:
-            activeRequest.status === 'generated'
-              ? `Fakturan ingår redan i ${requestLabel} som är skapad men inte uppladdad. Ladda upp filen hos Skatteverket, eller avbryt begäran för att ta med fakturan i en ny fil.`
-              : `Fakturan ingår redan i ${requestLabel} som väntar på Skatteverkets beslut.`,
-        })
-      }
+      const requestLabel = inFlightRequest.name ? `begäran "${inFlightRequest.name}"` : 'en begäran'
+      blocked.push({
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number ?? null,
+        customer_name: invoice.customer?.name ?? null,
+        code: 'ALREADY_REQUESTED',
+        message:
+          inFlightRequest.status === 'generated'
+            ? `Fakturan ingår redan i ${requestLabel} som är skapad men inte uppladdad. Ladda upp filen hos Skatteverket, eller avbryt begäran för att ta med fakturan i en ny fil.`
+            : `Fakturan ingår redan i ${requestLabel} som väntar på Skatteverkets beslut.`,
+      })
       continue
     }
 

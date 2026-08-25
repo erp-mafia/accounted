@@ -226,21 +226,28 @@ export function evaluateInvoiceForFile(
   }
 
   // "Paid" for a rot/rut claim means the BUYER has paid their share: the
-  // deduction itself is Skatteverket's to pay and is excluded from
-  // remaining_amount (total - paid_amount - deduction_total, migration
-  // 20260817191708). Invoices settled through older payment paths can sit at
-  // partially_paid although the customer share is fully paid; a
-  // remaining_amount of exactly 0 is the deterministic signal for that, so
-  // those are accepted here instead of being dropped as unpaid.
-  const remaining =
-    typeof invoice.remaining_amount === 'number' ? invoice.remaining_amount : null
+  // deduction itself is Skatteverket's to pay (fakturamodellen). The customer
+  // share outstanding is DERIVED from the header fields here, with the same
+  // formula as buildInvoiceWriteData and migration 20260817191708
+  // (total - paid_amount - deduction_total), deliberately NOT read off
+  // remaining_amount: at least one writer (payment-sync's storno path)
+  // recomputes remaining_amount without subtracting the deduction, so the
+  // stored column is not a deterministic signal, while total, paid_amount and
+  // deduction_total are maintained by every settlement path. Invoices settled
+  // through older payment paths can sit at partially_paid although the
+  // customer share is fully paid; those are accepted here instead of being
+  // dropped as unpaid. Amounts are invoice currency throughout.
+  const customerShareOutstanding =
+    Math.round(
+      (invoice.total - (invoice.paid_amount ?? 0) - (invoice.deduction_total ?? 0)) * 100,
+    ) / 100
   const customerSharePaid =
     invoice.status === 'paid' ||
-    (invoice.status === 'partially_paid' && remaining !== null && remaining <= 0)
+    (invoice.status === 'partially_paid' && customerShareOutstanding <= 0)
   if (!customerSharePaid) {
-    if (invoice.status === 'partially_paid' && remaining !== null && remaining > 0) {
+    if (invoice.status === 'partially_paid') {
       const currencyLabel = (invoice.currency ?? 'SEK').toUpperCase()
-      const amount = remaining.toLocaleString('sv-SE', {
+      const amount = customerShareOutstanding.toLocaleString('sv-SE', {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       })

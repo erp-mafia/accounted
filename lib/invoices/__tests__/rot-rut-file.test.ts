@@ -454,10 +454,9 @@ describe('eligibility blockers', () => {
     if (!result.ok) expect(result.blocker.code).toBe('DEDUCTION_TOTAL_MISSING')
   })
 
-  it('accepts partially_paid with remaining_amount 0 (customer share settled via an older path)', () => {
-    // remaining_amount = total - paid_amount - deduction_total (migration
-    // 20260817191708): 0 means the buyer paid their share even though the
-    // status never flipped to paid.
+  it('accepts partially_paid when the customer share is settled (older settlement paths)', () => {
+    // Customer share = total - deduction_total = 9 500; paid_amount covers it
+    // even though the status never flipped to paid.
     const result = evaluateInvoiceForFile(
       'rot',
       makeRotInvoice({ status: 'partially_paid', remaining_amount: 0, paid_amount: 9500 }),
@@ -469,6 +468,23 @@ describe('eligibility blockers', () => {
     }
   })
 
+  it('derives the customer share from header fields, not the stored remaining_amount', () => {
+    // payment-sync's storno path recomputes remaining_amount WITHOUT
+    // subtracting deduction_total (total - paid = 3 000 here), so the stored
+    // column can carry Skatteverkets share. The gate must key on
+    // total - paid_amount - deduction_total = 0 and accept anyway.
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 3000, paid_amount: 9500 }),
+    )
+    expect(result.ok).toBe(true)
+  })
+
+  // Same formatting as the blocker message (sv-SE uses NBSP thousands
+  // separators, so a typed-out literal would never match).
+  const svAmount = (n: number): string =>
+    n.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
   it('NOT_PAID with the outstanding amount for a genuinely partial payment', () => {
     const result = evaluateInvoiceForFile(
       'rot',
@@ -478,14 +494,30 @@ describe('eligibility blockers', () => {
     if (!result.ok) {
       expect(result.blocker.code).toBe('NOT_PAID')
       expect(result.blocker.message).toContain('delbetald')
-      expect(result.blocker.message).toContain('kr')
+      expect(result.blocker.message).toContain(`${svAmount(4500)} kr`)
+    }
+  })
+
+  it('reports the TRUE customer share even when remaining_amount is corrupted', () => {
+    // Stored remaining says 7 500 (payment-sync storno formula), but the
+    // customer share outstanding is 12 500 - 5 000 - 3 000 = 4 500: the
+    // message must not tell the user to collect Skatteverkets 3 000 kr.
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 7500, paid_amount: 5000 }),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.blocker.code).toBe('NOT_PAID')
+      expect(result.blocker.message).toContain(svAmount(4500))
+      expect(result.blocker.message).not.toContain(svAmount(7500))
     }
   })
 
   it('MISSING_PAYMENT_DATE for a settled partially_paid invoice without paid_at', () => {
     const result = evaluateInvoiceForFile(
       'rot',
-      makeRotInvoice({ status: 'partially_paid', remaining_amount: 0, paid_at: null }),
+      makeRotInvoice({ status: 'partially_paid', remaining_amount: 0, paid_amount: 9500, paid_at: null }),
     )
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.blocker.code).toBe('MISSING_PAYMENT_DATE')

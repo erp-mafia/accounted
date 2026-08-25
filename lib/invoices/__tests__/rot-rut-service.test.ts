@@ -229,6 +229,24 @@ describe('listRotRutCandidates', () => {
     expect(result.blocked).toHaveLength(0)
   })
 
+  it('omits decided invoices of the OTHER type too: no eternal wrong-type pointer', async () => {
+    // A rut invoice whose begäran was decided years ago must not resurface
+    // forever as NO_DEDUCTION_OF_TYPE under the rot view: decided means
+    // finished on every tab (skeptic finding on #1884).
+    const invoice = makeRutRow()
+    const result = await listRotRutCandidates(
+      mockedSupabase([invoice], [invoice], [activeItem(invoice.id, 'paid', 'RUT gammal')]),
+      'company-1',
+      'rot',
+      TODAY,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.eligible).toHaveLength(0)
+    expect(result.blocked).toHaveLength(0)
+  })
+
   it('lets the other-type pointer win over ALREADY_REQUESTED under the wrong type', async () => {
     const invoice = makeRutRow()
     const result = await listRotRutCandidates(
