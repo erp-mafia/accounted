@@ -7,7 +7,8 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } =
+  createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -80,6 +81,37 @@ describe('GET /api/webshop-orders', () => {
     expect(status).toBe(200)
     expect(body.data).toHaveLength(2)
     expect(body.stores.map((s) => s.store_scope)).toEqual(['a.se', 'b.se'])
+  })
+
+  it('unbooked filter excludes manually marked rows (#1879)', async () => {
+    enqueue({ data: [], count: 0 })
+    enqueue({ data: [] })
+    const response = await listOrders(
+      createMockRequest('/api/webshop-orders?booked=unbooked'),
+    )
+    expect(response.status).toBe(200)
+    const isFilters = findCalls('webshop_orders', 'is')
+    expect(isFilters).toEqual(
+      expect.arrayContaining([
+        ['journal_entry_id', null],
+        ['manually_booked_at', null],
+      ]),
+    )
+  })
+
+  it('booked filter includes manually marked rows (#1879)', async () => {
+    enqueue({ data: [], count: 0 })
+    enqueue({ data: [] })
+    const response = await listOrders(
+      createMockRequest('/api/webshop-orders?booked=booked'),
+    )
+    expect(response.status).toBe(200)
+    const orFilters = findCalls('webshop_orders', 'or')
+    expect(orFilters).toEqual(
+      expect.arrayContaining([
+        ['journal_entry_id.not.is.null,manually_booked_at.not.is.null'],
+      ]),
+    )
   })
 })
 

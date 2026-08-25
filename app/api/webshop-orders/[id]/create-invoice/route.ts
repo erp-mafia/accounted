@@ -71,6 +71,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         details: { journal_entry_id: order.journal_entry_id },
       })
     }
+    // Marked as booked outside the integration: an invoice for the same sale
+    // would double-count the revenue. The mark is user-reversible.
+    if (order.manually_booked_at) {
+      return errorResponseFromCode('WEBSHOP_ORDER_MANUALLY_BOOKED', log, {
+        requestId,
+        details: { manually_booked_at: order.manually_booked_at },
+      })
+    }
     // Refund rows never convert (kreditfaktura is created from the invoice).
     if (order.row_type === 'refund') {
       return errorResponseFromCode('WEBSHOP_ORDER_REFUND_NOT_CONVERTIBLE', log, { requestId })
@@ -296,6 +304,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
       .is('invoice_id', null)
       .is('journal_entry_id', null)
+      .is('manually_booked_at', null)
       .select('id')
     if (linkError || !linked || linked.length === 0) {
       await supabase.from('invoice_items').delete().eq('invoice_id', invoice.id)
