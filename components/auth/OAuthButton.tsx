@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Loader2, KeyRound } from 'lucide-react'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { GoogleMark } from '@/components/ui/provider-marks'
+import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import type { ResolvedProvider } from '@/lib/auth/gotrue-providers'
 
 /**
@@ -15,6 +15,7 @@ import type { ResolvedProvider } from '@/lib/auth/gotrue-providers'
  */
 function ProviderMark({ provider }: { provider: ResolvedProvider }) {
   if (provider.id === 'google') return <GoogleMark />
+  else if (provider.id === 'azure') return <MicrosoftMark />
   // Known providers without a dedicated mark show the first letter
   if (!provider.isCustom) {
     return (
