@@ -13,12 +13,22 @@ import {
   type BookingTemplate,
   type TemplateGroup,
 } from '@/lib/bookkeeping/booking-templates'
+import {
+  buildActiveAccountIndex,
+  searchAccounts,
+  type AccountSearchItem,
+  type ChartAccountLike,
+} from '@/lib/bookkeeping/account-search'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import { convertLibraryToBookingTemplate, LIBRARY_TEMPLATE_PREFIX, isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import type { BookingTemplateLibrary, EntityType } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+
+// Cap on the "Konton" search-result group: enough to cover sibling accounts
+// on a number-prefix query without drowning the template results.
+const ACCOUNT_RESULT_LIMIT = 8
 
 const GROUP_ORDER: TemplateGroup[] = [
   'premises', 'vehicle', 'it_software', 'office_supplies', 'marketing',
@@ -199,6 +209,32 @@ function TemplateCard({ template, selected, onClick, compact }: TemplateCardProp
   )
 }
 
+// A chart-of-accounts hit in the search results (issue #1877): clicking it
+// routes into the manual booking flow with the account prefilled, so typing
+// "5460" or "Förbrukningsmaterial" always yields a path to booking even when
+// no template covers the account.
+function AccountResultCard({ account, onClick }: { account: AccountSearchItem; onClick: () => void }) {
+  const t = useTranslations('tx_template_picker')
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full text-left rounded-lg border border-border px-3 py-2.5 transition-colors hover:bg-muted/50"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className="font-mono text-sm shrink-0">{account.account_number}</span>
+          <span className="font-medium text-sm leading-tight truncate">{account.account_name}</span>
+        </div>
+        <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+          <PenLine className="h-3 w-3" />
+          {t('opens_editor_badge')}
+        </span>
+      </div>
+    </button>
+  )
+}
+
 interface TemplatePickerProps {
   direction: 'expense' | 'income'
   entityType?: EntityType
@@ -207,6 +243,11 @@ interface TemplatePickerProps {
   onSelect: (template: BookingTemplate) => void
   onSelectCounterparty?: (templateId: string) => void
   onPickLibraryTemplate?: (raw: BookingTemplateLibrary) => void
+  // When provided, the search field also matches the company's active chart
+  // of accounts and shows hits as a "Konton" result group; picking one routes
+  // into the manual booking flow with the account prefilled. Omitting it
+  // keeps the picker template-only (and skips the accounts fetch).
+  onSelectAccount?: (accountNumber: string) => void
   selectedTemplateId?: string
 }
 
@@ -217,12 +258,18 @@ export default function TemplatePicker({
   onSelect,
   onSelectCounterparty,
   onPickLibraryTemplate,
+  onSelectAccount,
   selectedTemplateId,
 }: TemplatePickerProps) {
   const t = useTranslations('tx_template_picker')
   const [searchQuery, setSearchQuery] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [libraryRaw, setLibraryRaw] = useState<BookingTemplateLibrary[]>([])
+  const [chartAccounts, setChartAccounts] = useState<ChartAccountLike[]>([])
+  // Boolean gate rather than the callback itself: the parent recreates the
+  // handler every render, and depending on its identity would refetch the
+  // chart on each keystroke of the page underneath.
+  const accountSearchEnabled = !!onSelectAccount
 
   // Map direction to template direction filter (transfers show in both).
   // Direction filtering applies only to the static "Vanliga mallar" list:   // user-created library templates ignore it (inferred direction is unreliable
@@ -249,6 +296,29 @@ export default function TemplatePicker({
     })()
     return () => { controller.abort() }
   }, [])
+
+  // Fetch the company's active chart so the search field can surface real
+  // accounts (issue #1877: an active konto like 5460 was unfindable because
+  // only template metadata was searched). The endpoint returns active
+  // accounts by default; buildActiveAccountIndex re-filters as defense in
+  // depth. Gated on the consumer actually routing account picks somewhere.
+  useEffect(() => {
+    if (!accountSearchEnabled) return
+    const controller = new AbortController()
+    ;(async () => {
+      try {
+        const res = await fetch('/api/bookkeeping/accounts', { signal: controller.signal })
+        if (!res.ok) return
+        const { data } = await res.json() as { data?: ChartAccountLike[] }
+        if (data) setChartAccounts(data)
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+      }
+    })()
+    return () => { controller.abort() }
+  }, [accountSearchEnabled])
+
+  const accountIndex = useMemo(() => buildActiveAccountIndex(chartAccounts), [chartAccounts])
 
   // Lazy convertibility map. A template is "convertible" if it fits the
   // simple debit/credit pair shape the QuickReview booking path expects.
@@ -310,23 +380,33 @@ export default function TemplatePicker({
     })
   }, [relevantLibraryRaw, convertedById])
 
-  // Search results (static + library). Library search ignores direction; the
-  // static catalog still respects it because it's curated content.
+  // Search results (static + library + chart accounts). Library search
+  // ignores direction; the static catalog still respects it because it's
+  // curated content. Accounts are direction-agnostic: the manual flow the
+  // pick routes into handles either side.
   const searchResults = useMemo<
-    | { library: BookingTemplateLibrary[]; staticTemplates: BookingTemplate[] }
+    | { library: BookingTemplateLibrary[]; staticTemplates: BookingTemplate[]; accounts: AccountSearchItem[] }
     | null
   >(() => {
-    if (!searchQuery.trim()) return null
-    const q = searchQuery.toLowerCase()
+    const qTrimmed = searchQuery.trim()
+    if (!qTrimmed) return null
+    const q = qTrimmed.toLowerCase()
+    const isDigits = /^\d+$/.test(qTrimmed)
     const libraryMatches = sortedLibraryRaw.filter((tt) =>
       tt.name.toLowerCase().includes(q) ||
-      (tt.description ?? '').toLowerCase().includes(q)
+      (tt.description ?? '').toLowerCase().includes(q) ||
+      // An all-digit query also prefix-matches the accounts a user template
+      // books to, mirroring the static catalog's account matching.
+      (isDigits && tt.lines.some((l) => l.account.startsWith(qTrimmed)))
     )
     const staticMatches = searchTemplates(searchQuery, entityType).filter((tt) => {
       return tt.direction === templateDirection || tt.direction === 'transfer'
     })
-    return { library: libraryMatches, staticTemplates: staticMatches }
-  }, [searchQuery, entityType, templateDirection, sortedLibraryRaw])
+    const accountMatches = accountSearchEnabled
+      ? searchAccounts(accountIndex, searchQuery, ACCOUNT_RESULT_LIMIT)
+      : []
+    return { library: libraryMatches, staticTemplates: staticMatches, accounts: accountMatches }
+  }, [searchQuery, entityType, templateDirection, sortedLibraryRaw, accountIndex, accountSearchEnabled])
 
   // Group templates by group for display
   const commonGrouped = useMemo(() => groupTemplates(allCommon), [allCommon])
@@ -396,7 +476,7 @@ export default function TemplatePicker({
         <Input
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder={t('search_placeholder')}
+          placeholder={accountSearchEnabled ? t('search_placeholder_with_accounts') : t('search_placeholder')}
           className="pl-9 h-9"
         />
       </div>
@@ -406,31 +486,55 @@ export default function TemplatePicker({
         {/* Search results */}
         {searchResults !== null ? (
           (() => {
-            const totalResults = searchResults.library.length + searchResults.staticTemplates.length
+            const templateResults = searchResults.library.length + searchResults.staticTemplates.length
+            const totalResults = templateResults + searchResults.accounts.length
             return (
-              <div>
-                <p className="text-xs font-medium text-muted-foreground mb-2">
-                  {totalResults === 0 ? t('no_results') : t('n_results', { count: totalResults })}
-                </p>
-                <div className="space-y-1.5">
-                  {searchResults.library.map((raw) => (
-                    <LibraryTemplateCard
-                      key={raw.id}
-                      raw={raw}
-                      converted={convertedById.get(raw.id) ?? null}
-                      selected={selectedTemplateId === (convertedById.get(raw.id)?.id ?? raw.id)}
-                      onClick={() => handleSelectLibraryRaw(raw)}
-                    />
-                  ))}
-                  {searchResults.staticTemplates.map((tt) => (
-                    <TemplateCard
-                      key={tt.id}
-                      template={tt}
-                      selected={selectedTemplateId === tt.id}
-                      onClick={() => handleSelect(tt)}
-                    />
-                  ))}
+              <div className="space-y-4">
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">
+                    {totalResults === 0 ? t('no_results') : t('n_results', { count: totalResults })}
+                  </p>
+                  {totalResults === 0 && accountSearchEnabled && (
+                    <p className="text-xs text-muted-foreground">
+                      {t('no_results_manual_hint')}
+                    </p>
+                  )}
+                  <div className="space-y-1.5">
+                    {searchResults.library.map((raw) => (
+                      <LibraryTemplateCard
+                        key={raw.id}
+                        raw={raw}
+                        converted={convertedById.get(raw.id) ?? null}
+                        selected={selectedTemplateId === (convertedById.get(raw.id)?.id ?? raw.id)}
+                        onClick={() => handleSelectLibraryRaw(raw)}
+                      />
+                    ))}
+                    {searchResults.staticTemplates.map((tt) => (
+                      <TemplateCard
+                        key={tt.id}
+                        template={tt}
+                        selected={selectedTemplateId === tt.id}
+                        onClick={() => handleSelect(tt)}
+                      />
+                    ))}
+                  </div>
                 </div>
+                {searchResults.accounts.length > 0 && onSelectAccount && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-2">
+                      {t('accounts_group')}
+                    </p>
+                    <div className="space-y-1.5">
+                      {searchResults.accounts.map((acc) => (
+                        <AccountResultCard
+                          key={acc.account_number}
+                          account={acc}
+                          onClick={() => onSelectAccount(acc.account_number)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })()
