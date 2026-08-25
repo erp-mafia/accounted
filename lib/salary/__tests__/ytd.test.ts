@@ -5,7 +5,12 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { computePriorYtd, refreshRunYtd, YTD_COUNTED_STATUSES } from '../ytd'
+import {
+  computePriorYtd,
+  loadOpeningBalances,
+  refreshRunYtd,
+  YTD_COUNTED_STATUSES,
+} from '../ytd'
 
 const COMPANY = 'company-1'
 
@@ -23,6 +28,40 @@ describe('YTD_COUNTED_STATUSES', () => {
     // A month in `paid` has left the building; a month in `corrected` is
     // superseded by its correction run and would double the month.
     expect([...YTD_COUNTED_STATUSES]).toEqual(['approved', 'paid', 'booked'])
+  })
+})
+
+describe('loadOpeningBalances', () => {
+  let mock: ReturnType<typeof createQueuedMockSupabase>
+
+  beforeEach(() => {
+    mock = createQueuedMockSupabase()
+  })
+
+  it('short-circuits an empty roster without querying', async () => {
+    expect(await loadOpeningBalances(mock.supabase as never, COMPANY, [])).toEqual([])
+    expect(mock.calls).toHaveLength(0)
+  })
+
+  it('reads the karens carry-over alongside the YTD columns, ordered for paging', async () => {
+    mock.enqueue({ data: [] })
+
+    await loadOpeningBalances(mock.supabase as never, COMPANY, ['e1'])
+
+    // karens_periods_adjustment feeds sjuklön, so it rides along with the YTD
+    // columns rather than costing a second read of the same row.
+    expect(mock.findCall('employee_opening_balances', 'select')).toEqual([
+      'employee_id, cutover_date, ytd_gross, ytd_tax, ytd_net, karens_periods_adjustment',
+    ])
+    expect(mock.findCall('employee_opening_balances', 'order')).toEqual(['id'])
+  })
+
+  it('throws rather than reporting nobody has a cutover balance', async () => {
+    mock.enqueue({ error: { message: 'opening down' } })
+
+    await expect(
+      loadOpeningBalances(mock.supabase as never, COMPANY, ['e1']),
+    ).rejects.toThrow('opening down')
   })
 })
 
@@ -163,19 +202,6 @@ describe('computePriorYtd', () => {
         employeeIds: ['e1'],
       }),
     ).rejects.toThrow('boom')
-  })
-
-  it('throws when the opening-balance read fails', async () => {
-    mock.enqueue({ error: { message: 'opening down' } })
-
-    await expect(
-      computePriorYtd(mock.supabase as never, {
-        companyId: COMPANY,
-        periodYear: 2026,
-        periodMonth: 8,
-        employeeIds: ['e1'],
-      }),
-    ).rejects.toThrow('opening down')
   })
 
   it('skips the opening-balance query when the caller already loaded them', async () => {

@@ -33,7 +33,7 @@ import { loadAndDeriveAbsence } from './derive-absence-line-items'
 import { getLineItemAccount } from './account-mapping'
 import { computePremiumLines } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
-import { computePriorYtd, type OpeningBalanceYtdRow } from './ytd'
+import { computePriorYtd, loadOpeningBalances } from './ytd'
 import { dailyDivisor, hourlyDivisor } from './work-schedule'
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
@@ -261,22 +261,6 @@ export async function runSalaryCalculation(
     string,
     { cutoverDate: string; karensPeriodsAdjustment: number }
   >()
-  const openingRows: Array<OpeningBalanceYtdRow & { karens_periods_adjustment: number }> = []
-  if (rosterEmployeeIds.length > 0) {
-    const { data: openingData } = await supabase
-      .from('employee_opening_balances')
-      .select('employee_id, cutover_date, ytd_gross, ytd_tax, ytd_net, karens_periods_adjustment')
-      .eq('company_id', companyId)
-      .in('employee_id', rosterEmployeeIds)
-
-    for (const opening of (openingData || []) as typeof openingRows) {
-      openingRows.push(opening)
-      openingByEmployee.set(opening.employee_id, {
-        cutoverDate: opening.cutover_date,
-        karensPeriodsAdjustment: opening.karens_periods_adjustment ?? 0,
-      })
-    }
-  }
 
   // 6b. YTD carried into this period (prior counted runs + any pre-cutover
   //     balance). Stored on the roster rows below as the payslip's
@@ -285,12 +269,22 @@ export async function runSalaryCalculation(
   //     would otherwise freeze a YTD that is missing that month forever.
   //     YTD is display + reporting only: the per-month tax lookup and the
   //     per-month avgifter caps never read it.
-  //     A failed read throws rather than yielding an empty carry-in: writing
-  //     a snapshot that silently drops every prior month is worse than
-  //     failing the calculation, and matches how this function treats every
-  //     other query error.
+  //
+  //     A failed read throws rather than yielding an empty carry-in. Silently
+  //     dropping every prior month (and, from the same rows, the karensavdrag
+  //     adjustment that reaches sjuklön) is worse than failing the
+  //     calculation, and matches how this function treats every other query
+  //     error.
   let ytdByEmployee: Map<string, { gross: number; tax: number; net: number }>
   try {
+    const openingRows = await loadOpeningBalances(supabase, companyId, rosterEmployeeIds)
+    for (const opening of openingRows) {
+      openingByEmployee.set(opening.employee_id, {
+        cutoverDate: opening.cutover_date,
+        karensPeriodsAdjustment: opening.karens_periods_adjustment ?? 0,
+      })
+    }
+
     ytdByEmployee = await computePriorYtd(supabase, {
       companyId,
       periodYear: run.period_year as number,

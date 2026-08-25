@@ -69,23 +69,37 @@ interface ComputePriorYtdArgs {
 }
 
 /**
- * A read that fails must never look like a read that found nothing: an empty
- * result silently rewrites the snapshot to the current month alone. Every
- * query here throws instead, and `refreshRunYtd` turns that into `ok: false`
- * for its callers to log.
+ * An opening balance as stored, including the karensavdrag carry-over that
+ * the sjuklön calculation reads (not YTD's business, but the same row).
  */
-async function loadOpeningRows(
+export interface OpeningBalanceRow extends OpeningBalanceYtdRow {
+  karens_periods_adjustment: number
+}
+
+/**
+ * Every cutover opening balance on a roster.
+ *
+ * Throws on a read error rather than returning nothing: an empty result is
+ * indistinguishable from "nobody has a cutover balance", which would drop
+ * both the carry-in YTD and the karensavdrag adjustment without a trace.
+ * `refreshRunYtd` and `runSalaryCalculation` each turn the throw into their
+ * own error result.
+ */
+export async function loadOpeningBalances(
   supabase: SupabaseClient,
   companyId: string,
   employeeIds: string[],
-): Promise<OpeningBalanceYtdRow[]> {
-  const { data, error } = await supabase
-    .from('employee_opening_balances')
-    .select('employee_id, cutover_date, ytd_gross, ytd_tax, ytd_net')
-    .eq('company_id', companyId)
-    .in('employee_id', employeeIds)
-  if (error) throw new Error(error.message)
-  return (data || []) as OpeningBalanceYtdRow[]
+): Promise<OpeningBalanceRow[]> {
+  if (employeeIds.length === 0) return []
+  return (await fetchAllRows(({ from, to }) =>
+    supabase
+      .from('employee_opening_balances')
+      .select('employee_id, cutover_date, ytd_gross, ytd_tax, ytd_net, karens_periods_adjustment')
+      .eq('company_id', companyId)
+      .in('employee_id', employeeIds)
+      .order('id')
+      .range(from, to),
+  )) as unknown as OpeningBalanceRow[]
 }
 
 /**
@@ -117,7 +131,7 @@ export async function computePriorYtd(
   const ytdByEmployee = new Map<string, YtdTotals>()
   if (employeeIds.length === 0) return ytdByEmployee
 
-  const opening = openingRows ?? (await loadOpeningRows(supabase, companyId, employeeIds))
+  const opening = openingRows ?? (await loadOpeningBalances(supabase, companyId, employeeIds))
   const openingByEmployee = new Map(opening.map((row) => [row.employee_id, row]))
 
   // Paginated: a full roster times eleven prior months passes PostgREST's
