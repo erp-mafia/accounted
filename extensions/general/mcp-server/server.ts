@@ -2671,6 +2671,49 @@ const REPORT_DIMENSIONS_FILTER_SCHEMA = {
   description: 'Filter: SIE dim no → value (code OR name, resolved server-side), e.g. {"6":"P001"}. P&L view only: opening balances are excluded when set.',
 } as const
 
+// Optional custom date range on the report tools. Historically from_date /
+// to_date were silently dropped (the inputSchema said additionalProperties:
+// false but nothing enforced it), so an agent asking for January-July got the
+// full fiscal year back with no signal. Validate loudly instead.
+function parseReportRangeArgs(
+  args: Record<string, unknown>,
+  period: { period_start: string; period_end: string },
+  keys: { from?: string; to: string },
+): { fromDate?: string; toDate?: string } {
+  const rawFrom = keys.from ? (args[keys.from] as string | undefined) : undefined
+  const rawTo = args[keys.to] as string | undefined
+
+  for (const [key, value] of [[keys.from, rawFrom], [keys.to, rawTo]] as const) {
+    if (value === undefined || key === undefined) continue
+    if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) {
+      throw new Error(`${key} must be an ISO date (YYYY-MM-DD).`)
+    }
+    if (value < period.period_start || value > period.period_end) {
+      throw new Error(
+        `${key} must be within the fiscal period (${period.period_start} to ${period.period_end}). ` +
+        `For another year, pass that year's period_id.`,
+      )
+    }
+  }
+  if (rawFrom && rawTo && rawFrom > rawTo) {
+    throw new Error(`${keys.from} must not be after ${keys.to}.`)
+  }
+  return { fromDate: rawFrom, toDate: rawTo }
+}
+
+// Reject unknown args on tools that opt in, instead of silently ignoring
+// them: a misspelled parameter (fromdate=) must not degrade to a full-period
+// report the agent mistakes for the range it asked for.
+function rejectUnknownArgs(args: Record<string, unknown>, allowed: readonly string[]): void {
+  const unknown = Object.keys(args).filter((k) => !allowed.includes(k))
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown parameter(s): ${unknown.join(', ')}. Allowed: ${allowed.join(', ')}. ` +
+      `Unknown parameters are rejected rather than silently ignored.`,
+    )
+  }
+}
+
 // Output-schema fragments for the echo fields (never in `required`).
 const DIMENSION_FILTER_OUTPUT_PROPS = {
   dimension_filter: {
@@ -6323,12 +6366,14 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_income_statement',
     title: 'Income Statement (Resultaträkning)',
-    description: 'Income statement (resultaträkning) for a fiscal period: revenue, expenses, net result by account category. Optional dimensions filter scopes to tagged lines (kostnadsställe/projekt).',
+    description: 'Income statement (resultaträkning) for a fiscal period or a from_date/to_date range inside it: revenue, expenses, net result. Optional dimensions filter (kostnadsställe/projekt).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
+        from_date: { type: 'string', description: 'Start YYYY-MM-DD inside the period' },
+        to_date: { type: 'string', description: 'End YYYY-MM-DD inside the period' },
         dimensions: REPORT_DIMENSIONS_FILTER_SCHEMA,
       },
     },
@@ -6369,15 +6414,24 @@ export const tools: McpTool[] = [
 
       if (!period) throw new Error('Fiscal period not found.')
 
+      rejectUnknownArgs(args, ['period_id', 'from_date', 'to_date', 'dimensions'])
+      const range = parseReportRangeArgs(args, period, { from: 'from_date', to: 'to_date' })
       const dimFilter = await resolveReportDimensionFilter(supabase, companyId, args.dimensions)
 
       const result = await generateIncomeStatement(
         supabase,
         companyId,
         periodId!,
-        dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+        {
+          ...range,
+          ...(dimFilter.filter ? { dimensions: dimFilter.filter } : {}),
+        },
       )
-      result.period = { start: period.period_start, end: period.period_end }
+      // Echo the effective range, not the fiscal-period bounds.
+      result.period = {
+        start: range.fromDate ?? period.period_start,
+        end: range.toDate ?? period.period_end,
+      }
 
       return {
         period_name: period.name,
@@ -8207,12 +8261,13 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_balance_sheet',
     title: 'Balance Sheet (Balansräkning)',
-    description: 'Balance sheet (balansräkning) for a fiscal period: assets, equity, and liabilities sections with totals + balance check.',
+    description: 'Balance sheet (balansräkning) for a fiscal period or as of as_of_date: assets, equity, liabilities with totals + balance check.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
+        as_of_date: { type: 'string', description: 'Balance date YYYY-MM-DD (default period end)' },
       },
     },
     outputSchema: { type: 'object' },
@@ -8247,12 +8302,18 @@ export const tools: McpTool[] = [
 
       if (!period) throw new Error('Fiscal period not found.')
 
-      const result = await generateBalanceSheet(supabase, companyId, periodId!)
+      rejectUnknownArgs(args, ['period_id', 'as_of_date'])
+      const range = parseReportRangeArgs(args, period, { to: 'as_of_date' })
+
+      const result = await generateBalanceSheet(supabase, companyId, periodId!, {
+        toDate: range.toDate,
+      })
 
       return {
         period_name: period.name,
         ...result,
-        period: { start: period.period_start, end: period.period_end },
+        // Echo the effective window: cumulative from period start to as_of_date.
+        period: { start: period.period_start, end: range.toDate ?? period.period_end },
       }
     },
   },
