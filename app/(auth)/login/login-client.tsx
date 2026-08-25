@@ -35,7 +35,15 @@ import {
 import { buildPasswordResetRedirectTo } from '@/lib/domains/trusted-app-origin'
 import { AuthFormError } from '@/components/auth/AuthFormError'
 import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import {
+  TurnstileChallenge,
+  type TurnstileChallengeHandle,
+} from '@/components/auth/TurnstileChallenge'
 import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
+import {
+  captchaTokenOptions,
+  isTurnstileSubmissionBlocked,
+} from '@/lib/auth/turnstile'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
@@ -77,8 +85,12 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   // Consecutive credential failures; from the second one on, the error line
   // grows a reset-password action (extra help on repeated errors).
   const [failedAttempts, setFailedAttempts] = useState(0)
+  const [passwordCaptchaToken, setPasswordCaptchaToken] = useState<string | null>(null)
+  const [resetCaptchaToken, setResetCaptchaToken] = useState<string | null>(null)
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const emailInputRef = useRef<HTMLInputElement>(null)
+  const passwordTurnstileRef = useRef<TurnstileChallengeHandle>(null)
+  const resetTurnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -145,11 +157,13 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
 
   const openResetForm = () => {
     setFormError(null)
+    setResetCaptchaToken(null)
     setShowResetPassword(true)
   }
 
   const closeResetForm = () => {
     setFormError(null)
+    setResetCaptchaToken(null)
     setShowResetPassword(false)
   }
 
@@ -248,6 +262,12 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   const handlePasswordLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setFormError(null)
+
+    if (isTurnstileSubmissionBlocked(passwordCaptchaToken)) {
+      setFormError({ kind: 'unknown', message: tAuth('turnstile_required') })
+      return
+    }
+
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -258,6 +278,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
       const { error } = await supabase.auth.signInWithPassword({
         email: emailValue,
         password: passwordValue,
+        options: captchaTokenOptions(passwordCaptchaToken),
       })
 
       if (error) {
@@ -317,6 +338,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
+      passwordTurnstileRef.current?.reset()
       setIsLoading(false)
     }
   }
@@ -324,6 +346,12 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   const handleResetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setFormError(null)
+
+    if (isTurnstileSubmissionBlocked(resetCaptchaToken)) {
+      setFormError({ kind: 'unknown', message: tAuth('turnstile_required') })
+      return
+    }
+
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -332,6 +360,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(emailValue, {
         redirectTo: buildPasswordResetRedirectTo(window.location.origin),
+        ...captchaTokenOptions(resetCaptchaToken),
       })
 
       if (error) {
@@ -357,6 +386,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
+      resetTurnstileRef.current?.reset()
       setIsLoading(false)
     }
   }
@@ -465,7 +495,20 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                   className="h-11"
                 />
               </div>
-              <Button type="submit" className="w-full h-11" disabled={isLoading || !!resetCooldownUntil}>
+              <TurnstileChallenge
+                ref={resetTurnstileRef}
+                action="accounted_password_reset"
+                onTokenChange={setResetCaptchaToken}
+              />
+              <Button
+                type="submit"
+                className="w-full h-11"
+                disabled={
+                  isLoading ||
+                  !!resetCooldownUntil ||
+                  isTurnstileSubmissionBlocked(resetCaptchaToken)
+                }
+              >
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -653,7 +696,16 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                     </p>
                   )}
                 </div>
-                <Button type="submit" className="w-full h-11" disabled={isLoading}>
+                <TurnstileChallenge
+                  ref={passwordTurnstileRef}
+                  action="accounted_login"
+                  onTokenChange={setPasswordCaptchaToken}
+                />
+                <Button
+                  type="submit"
+                  className="w-full h-11"
+                  disabled={isLoading || isTurnstileSubmissionBlocked(passwordCaptchaToken)}
+                >
                   {isLoading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />

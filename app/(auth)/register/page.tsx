@@ -25,8 +25,16 @@ import {
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
 import { AuthFormError } from '@/components/auth/AuthFormError'
 import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import {
+  TurnstileChallenge,
+  type TurnstileChallengeHandle,
+} from '@/components/auth/TurnstileChallenge'
 import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
+import {
+  captchaTokenOptions,
+  isTurnstileSubmissionBlocked,
+} from '@/lib/auth/turnstile'
 import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { cn } from '@/lib/utils'
@@ -82,9 +90,11 @@ function RegisterPageContent() {
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [confirmError, setConfirmError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const confirmInputRef = useRef<HTMLInputElement>(null)
   const emailInputRef = useRef<HTMLInputElement>(null)
+  const turnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
   const router = useRouter()
   const supabase = createClient()
@@ -316,6 +326,11 @@ function RegisterPageContent() {
       return
     }
 
+    if (isTurnstileSubmissionBlocked(captchaToken)) {
+      setFormError({ kind: 'unknown', message: tAuth('turnstile_required') })
+      return
+    }
+
     setIsLoading(true)
 
     try {
@@ -328,6 +343,7 @@ function RegisterPageContent() {
         password: passwordValue,
         options: {
           emailRedirectTo: confirmationCallback.toString(),
+          ...captchaTokenOptions(captchaToken),
         },
       })
 
@@ -405,6 +421,7 @@ function RegisterPageContent() {
         message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
+      turnstileRef.current?.reset()
       setIsLoading(false)
     }
   }
@@ -755,7 +772,16 @@ function RegisterPageContent() {
                 </p>
               )}
             </div>
-            <Button type="submit" className="w-full h-11" disabled={isLoading}>
+            <TurnstileChallenge
+              ref={turnstileRef}
+              action="accounted_signup"
+              onTokenChange={setCaptchaToken}
+            />
+            <Button
+              type="submit"
+              className="w-full h-11"
+              disabled={isLoading || isTurnstileSubmissionBlocked(captchaToken)}
+            >
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
