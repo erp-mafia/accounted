@@ -153,7 +153,7 @@ describe('v1 reconciliation sign-off', () => {
       COMPANY_ID,
       'user-1',
       'skattekonto',
-      { through_date: '2026-07-31', note: 'ok', force: undefined },
+      { through_date: '2026-07-31', note: 'ok', force: undefined, external_balance: null },
       { dryRun: false },
     )
   })

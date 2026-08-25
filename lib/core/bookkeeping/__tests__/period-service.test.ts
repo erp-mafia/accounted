@@ -946,4 +946,104 @@ describe('findNextPeriod', () => {
     const result = await findNextPeriod(supabase as never, 'company-1', 'missing')
     expect(result).toBeNull()
   })
+
+  // Feedback seq 249297: an SIE import had wired 2026/2027.previous_period_id
+  // to 2024/2025 across a missing 2025/2026, and run_year_end seeded the
+  // closing balances of 2024/2025 into 2026/2027 because the chained row was
+  // returned unchecked. A non-adjacent link must be ignored so the caller
+  // creates the chronologically correct next period instead.
+  it('ignores a chained period that is not date-adjacent and falls back to the date lookup', async () => {
+    const current = makeFiscalPeriod({
+      id: 'fp-2024-25',
+      period_start: '2024-05-01',
+      period_end: '2025-04-30',
+    })
+    const twoYearsOut = makeFiscalPeriod({
+      id: 'fp-2026-27',
+      period_start: '2026-05-01',
+      period_end: '2027-04-30',
+      previous_period_id: 'fp-2024-25',
+    })
+
+    results = [
+      { data: current, error: null },     // fetch current
+      { data: twoYearsOut, error: null }, // chained lookup hits the wrong period
+      { data: null, error: null },        // date lookup: 2025-05-01 does not exist
+    ]
+
+    const supabase = makeClient()
+    const result = await findNextPeriod(supabase as never, 'company-1', 'fp-2024-25')
+    expect(result).toBeNull()
+  })
+
+  it('prefers the date-adjacent period over a mis-chained one', async () => {
+    const current = makeFiscalPeriod({
+      id: 'fp-2024-25',
+      period_start: '2024-05-01',
+      period_end: '2025-04-30',
+    })
+    const twoYearsOut = makeFiscalPeriod({
+      id: 'fp-2026-27',
+      period_start: '2026-05-01',
+      period_end: '2027-04-30',
+      previous_period_id: 'fp-2024-25',
+    })
+    const adjacent = makeFiscalPeriod({
+      id: 'fp-2025-26',
+      period_start: '2025-05-01',
+      period_end: '2026-04-30',
+      previous_period_id: null,
+    })
+
+    results = [
+      { data: current, error: null },
+      { data: twoYearsOut, error: null },
+      { data: adjacent, error: null },
+    ]
+
+    const supabase = makeClient()
+    const result = await findNextPeriod(supabase as never, 'company-1', 'fp-2024-25')
+    expect(result?.id).toBe('fp-2025-26')
+  })
+})
+
+describe('createNextPeriod chain healing', () => {
+  it('relinks a successor that was chained across the gap onto the new period', async () => {
+    const current = makeFiscalPeriod({
+      id: 'fp-2024-25',
+      period_start: '2024-05-01',
+      period_end: '2025-04-30',
+    })
+    const created = makeFiscalPeriod({
+      id: 'fp-2025-26',
+      period_start: '2025-05-01',
+      period_end: '2026-04-30',
+      previous_period_id: 'fp-2024-25',
+    })
+
+    results = [
+      { data: current, error: null },            // fetch current
+      { data: [], error: null },                  // overlap check
+      { data: created, error: null },             // insert
+      { data: [{ id: 'fp-2026-27' }], error: null }, // mis-chained successor starting 2026-05-01
+      { data: null, error: null },                // relink update
+    ]
+
+    const client = makeClient()
+    const builders: Array<Record<string, unknown>> = []
+    const from = client.from
+    client.from = vi.fn().mockImplementation(() => {
+      const b = from()
+      builders.push(b)
+      return b
+    })
+
+    const result = await createNextPeriod(client as never, 'company-1', 'user-1', 'fp-2024-25')
+    expect(result.id).toBe('fp-2025-26')
+
+    const relink = builders.find((b) => (b.update as ReturnType<typeof vi.fn>).mock.calls.length > 0)
+    expect(relink).toBeDefined()
+    expect((relink!.update as ReturnType<typeof vi.fn>).mock.calls[0][0]).toEqual({ previous_period_id: 'fp-2025-26' })
+    expect((relink!.in as ReturnType<typeof vi.fn>).mock.calls[0]).toEqual(['id', ['fp-2026-27']])
+  })
 })

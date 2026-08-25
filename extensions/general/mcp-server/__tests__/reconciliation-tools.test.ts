@@ -201,7 +201,7 @@ describe('gnubok_reconcile_signoff', () => {
       COMPANY,
       USER,
       'skattekonto',
-      { through_date: '2026-07-31', note: null, force: false },
+      { through_date: '2026-07-31', note: null, force: false, external_balance: null },
       { dryRun: true },
     )
     expect(out).toMatchObject({ staged: false, dry_run: true, risk_level: 'medium' })

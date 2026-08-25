@@ -11,6 +11,8 @@ const SignoffBodySchema = z.object({
   through_date: z.string().regex(ISO_DATE_RE),
   note: z.string().max(2000).nullable().optional(),
   force: z.boolean().optional(),
+  /** Manual accounts without a system specification: the balance per the signer's underlag, ledger sign. */
+  external_balance: z.number().finite().nullable().optional(),
   dry_run: z.boolean().optional(),
 })
 
@@ -65,7 +67,12 @@ export const POST = withRouteContext<{ params: Promise<{ accountKey: string }> }
         companyId,
         user.id,
         accountKey,
-        { through_date: parsed.data.through_date, note: parsed.data.note ?? null, force: parsed.data.force },
+        {
+          through_date: parsed.data.through_date,
+          note: parsed.data.note ?? null,
+          force: parsed.data.force,
+          external_balance: parsed.data.external_balance ?? null,
+        },
         { dryRun: parsed.data.dry_run === true },
       )
       if (!result) {

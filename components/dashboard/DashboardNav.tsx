@@ -45,6 +45,7 @@ import {
   PanelLeftClose,
   Library,
   BookCheck,
+  FolderArchive,
   ShoppingCart,
   Car,
 } from 'lucide-react'
@@ -134,6 +135,7 @@ type NavLabelKey =
   | 'deadlines'
   | 'periodiseringar'
   | 'year_end'
+  | 'bokslutsbilagor'
   | 'annual_report'
   | 'income_declaration'
   | 'help'
@@ -247,6 +249,7 @@ const navItems: NavItem[] = [
   { href: '/deadlines', labelKey: 'deadlines', icon: CalendarClock, group: 'skatt' },
   { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt', fold: 'bokslut' },
   { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt', fold: 'bokslut' },
+  { href: '/reports/bokslutsbilagor', labelKey: 'bokslutsbilagor', icon: FolderArchive, group: 'skatt', fold: 'bokslut' },
   { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', fold: 'bokslut', entityOnly: 'aktiebolag' },
   { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', fold: 'bokslut', entityOnly: 'aktiebolag' },
   { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', fold: 'bokslut', entityOnly: 'enskild_firma' },
