@@ -15,6 +15,7 @@ import { getClient, getPool } from '@/tests/pg/setup'
 const SNAPSHOT = 'public._backfill_remaining_20260817'
 let fixtureClient: PoolClient
 
+/** Assert grant-layer denial while restoring the fixture transaction after the expected error. */
 async function expectSnapshotDenied(
   role: 'anon' | 'authenticated',
   sql: string,
