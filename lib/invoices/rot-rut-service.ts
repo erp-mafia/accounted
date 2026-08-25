@@ -40,7 +40,8 @@ type InvoiceWithCustomer = Invoice & { customer?: { name?: string | null } | nul
 /** Invoice statuses a candidate may carry. partially_paid is included because
  *  invoices settled through older payment paths can hold a fully paid
  *  customer share while the status never flipped to paid:
- *  evaluateInvoiceForFile decides via remaining_amount. */
+ *  evaluateInvoiceForFile decides via the derived customer share
+ *  (total - paid_amount - deduction_total). */
 const CANDIDATE_STATUSES = ['paid', 'partially_paid']
 
 /**
