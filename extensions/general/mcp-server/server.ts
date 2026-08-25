@@ -156,6 +156,7 @@ import {
   codedError,
   extractRequestedCompany,
   isCompanyDependentTool,
+  noCompanyYetError,
   projectToolInputSchema,
   resolveMcpCompanyContext,
 } from './company-routing'
@@ -17964,8 +17965,12 @@ function emitToolCallTelemetry(payload: {
   errorMessage: string | null
   requestId: string | number | null
   userId: string
-  companyId: string
+  // null/empty while the key's user has no company yet (issue #1814): the
+  // event-log persister requires a company scope, so nothing is emitted.
+  companyId: string | null
 }): void {
+  if (!payload.companyId) return
+  const companyId = payload.companyId
   emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.tool_called',
@@ -17986,7 +17991,7 @@ function emitToolCallTelemetry(payload: {
         errorMessage: payload.errorMessage ? payload.errorMessage.slice(0, 500) : null,
         requestId: payload.requestId,
         userId: payload.userId,
-        companyId: payload.companyId,
+        companyId,
         sessionId: payload.actor.sessionId ?? null,
         client: payload.actor.client ?? null,
       },
@@ -18005,8 +18010,10 @@ function emitToolsListTelemetry(payload: {
   latencyMs: number
   requestId: string | number | null
   userId: string
-  companyId: string
+  companyId: string | null
 }): void {
+  if (!payload.companyId) return
+  const companyId = payload.companyId
   emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.tools_list_called',
@@ -18018,7 +18025,7 @@ function emitToolsListTelemetry(payload: {
         latencyMs: payload.latencyMs,
         requestId: payload.requestId,
         userId: payload.userId,
-        companyId: payload.companyId,
+        companyId,
         sessionId: payload.actor.sessionId ?? null,
         client: payload.actor.client ?? null,
       },
@@ -18038,8 +18045,10 @@ function emitResourceReadTelemetry(payload: {
   latencyMs: number
   requestId: string | number | null
   userId: string
-  companyId: string
+  companyId: string | null
 }): void {
+  if (!payload.companyId) return
+  const companyId = payload.companyId
   emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.resource_read',
@@ -18054,7 +18063,7 @@ function emitResourceReadTelemetry(payload: {
         actorLabel: payload.actor.label ?? null,
         requestId: payload.requestId,
         userId: payload.userId,
-        companyId: payload.companyId,
+        companyId,
         sessionId: payload.actor.sessionId ?? null,
         client: payload.actor.client ?? null,
       },
@@ -18101,9 +18110,9 @@ function checkAndEmitNextHintFollowed(
   toolName: string,
   actor: ActorContext,
   userId: string,
-  companyId: string,
+  companyId: string | null,
 ): void {
-  if (!sessionId) return
+  if (!sessionId || !companyId) return
   const prev = lastResponseHintBySession.get(sessionId)
   if (!prev || prev.expiresAt < Date.now() || prev.suggestedTool !== toolName) return
   // Consume the hint so we don't double-count if the agent calls the same
@@ -18137,8 +18146,10 @@ function emitSkillLoaded(payload: {
   tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
   actor: ActorContext
   userId: string
-  companyId: string
+  companyId: string | null
 }): void {
+  if (!payload.companyId) return
+  const companyId = payload.companyId
   emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.skill_loaded',
@@ -18150,7 +18161,7 @@ function emitSkillLoaded(payload: {
         actorId: payload.actor.id ?? null,
         actorLabel: payload.actor.label ?? null,
         userId: payload.userId,
-        companyId: payload.companyId,
+        companyId,
       },
     })
     .catch((err) => console.error('[mcp] skill_loaded emit failed:', err)))
@@ -18161,8 +18172,10 @@ function emitWorkflowStarted(payload: {
   slug: string
   actor: ActorContext
   userId: string
-  companyId: string
+  companyId: string | null
 }): void {
+  if (!payload.companyId) return
+  const companyId = payload.companyId
   emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.workflow_started',
@@ -18173,7 +18186,7 @@ function emitWorkflowStarted(payload: {
         actorId: payload.actor.id ?? null,
         actorLabel: payload.actor.label ?? null,
         userId: payload.userId,
-        companyId: payload.companyId,
+        companyId,
       },
     })
     .catch((err) => console.error('[mcp] workflow_started emit failed:', err)))
@@ -18381,7 +18394,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             'Discovery:',
             '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size.',
             '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster.',
-            `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId}); when selecting another company, repeat company_id on every company-data call, including approval.`,
+            `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId ?? 'none yet: this account has no company; it must be created in the web app before company-data tools work'}); when selecting another company, repeat company_id on every company-data call, including approval.`,
             '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
             '• When a tool is missing, a description misled you, a result looks wrong, or something worked unusually well, call gnubok_feedback (context + suggestion, optional tool_name). It is read by the product team and has fixed real bugs; include ids and what you expected. Rate-limited 1/min/key, so batch a session\'s findings into one call.',
@@ -18555,7 +18568,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
 
       let toolArgs: Record<string, unknown>
-      let effectiveCompanyId = companyId
+      // null only for the company-independent tools on a key whose user has
+      // no company yet (issue #1814): resolveMcpCompanyContext refuses every
+      // company-dependent tool with NO_COMPANY_YET before it gets here.
+      let effectiveCompanyId: string | null = companyId
       const companyRoutingStartedAt = Date.now()
       try {
         const extracted = extractRequestedCompany(rawToolArgs)
@@ -18611,12 +18627,18 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         )
       }
 
+      // The McpTool.execute contract takes a string company id. Only the
+      // company-independent tools (search, skills, list_companies) can reach
+      // this point unbound, and none of them dereferences the id as a tenant:
+      // the empty string is a placeholder for their signature, never a scope.
+      const tenantId: string = effectiveCompanyId ?? ''
+
       // Enforce the capability paywall: the MCP/agent path is a paid chokepoint
       // just like the HTTP routes (send_invoice → email_send, the two SKV
       // submissions → skatteverket). Fail-closed; self-hosted short-circuits to
       // all-on inside hasCapability. Blocks before any pending op is staged.
       const requiredCapability = MCP_TOOL_CAPABILITY_MAP[toolName]
-      if (requiredCapability && !(await hasCapability(supabase, effectiveCompanyId, requiredCapability))) {
+      if (requiredCapability && !(await hasCapability(supabase, tenantId, requiredCapability))) {
         const capError = { error: capabilityBlockedError(requiredCapability) }
         const publicCapError = projectMcpPayload(capError, toolNamespace)
         emitToolCallTelemetry({
@@ -18696,7 +18718,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // so nothing is ever started for a call that would have been refused.
       if (taskCapable && tool.shouldRunAsTask?.(toolArgs)) {
         const task = await createMcpTask(supabase, {
-          companyId: effectiveCompanyId,
+          companyId: tenantId,
           userId,
           apiKeyId,
           toolName,
@@ -18704,8 +18726,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         const taskStartedAt = Date.now()
         emitAfterResponse(async () => {
           try {
-            const rawResult = await tool.execute(toolArgs, effectiveCompanyId, userId, supabase, actor)
-            const canonicalResult = addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
+            const rawResult = await tool.execute(toolArgs, tenantId, userId, supabase, actor)
+            const canonicalResult = effectiveCompanyId
+              ? addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
+              : rawResult
             const result = projectMcpPayload(canonicalResult, toolNamespace)
             const stored: Record<string, unknown> = {
               resultType: 'complete',
@@ -18780,8 +18804,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
           ;(toolArgs as Record<string, unknown>).__toolNamespace = toolNamespace
         }
-        const rawResult = await tool.execute(toolArgs, effectiveCompanyId, userId, supabase, actor)
-        const canonicalResult = addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
+        const rawResult = await tool.execute(toolArgs, tenantId, userId, supabase, actor)
+        const canonicalResult = effectiveCompanyId
+          ? addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
+          : rawResult
         const result = projectMcpPayload(canonicalResult, toolNamespace)
         const latencyMs = Date.now() - callStartedAt
         const response: Record<string, unknown> = {
@@ -18961,6 +18987,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       const dataResource = findResource(uri)
       if (dataResource) {
         try {
+          // Data resources are company-scoped; an unbound key (no company yet,
+          // issue #1814) gets the same NO_COMPANY_YET answer as tools/call.
+          if (!companyId) throw noCompanyYetError()
           const result = await dataResource.read({
             supabase,
             companyId,

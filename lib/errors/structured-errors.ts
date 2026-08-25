@@ -2858,6 +2858,19 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Företaget kunde inte hittas.',
     message_en: 'Company not found.',
   },
+  // An API key minted for an account that has not created its first company
+  // yet (signup from the MCP OAuth popup, issue #1814). Not a lookup miss:
+  // there is nothing to look up until the company exists.
+  NO_COMPANY_YET: {
+    httpStatus: 409,
+    message_sv: 'Kontot har inget företag ännu. Skapa företaget i appen och försök igen.',
+    message_en: 'This account has no company yet. Create the company in the web app, then retry; the connection picks it up automatically.',
+    remediation: {
+      description:
+        'Ask the user to finish company setup in the Accounted web app (/onboarding). No re-authentication is needed afterwards: the same connection binds to the new company on its next call.',
+      tool: 'gnubok_list_companies',
+    },
+  },
   // Phase 5 PR-1 carry-over: distinct error code for the salary-run DELETE
   // FK-null guard so an operator seeing this in logs knows a journal entry
   // is at risk, not just a status race.
