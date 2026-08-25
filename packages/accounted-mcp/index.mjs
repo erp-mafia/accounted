@@ -54,6 +54,14 @@ if (!API_KEY) {
     'Error: ACCOUNTED_API_KEY is required.\n' +
       'Get your API key at: https://app.accounted.se/settings?tab=api\n' +
       '\n' +
+      'No API key (or no account yet)? Connect over OAuth instead; the sign-in\n' +
+      'screen lets you create the account, and setup continues in the chat:\n' +
+      '  claude mcp add --transport http accounted \\\n' +
+      '    "https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted"\n' +
+      '  codex mcp add accounted --url \\\n' +
+      '    "https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted"\n' +
+      '  Claude.ai / Desktop: Settings > Connectors > Add custom connector with that URL.\n' +
+      '\n' +
       'Add it to your Claude Desktop config:\n' +
       '{\n' +
       '  "mcpServers": {\n' +
