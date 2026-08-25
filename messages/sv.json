@@ -344,6 +344,7 @@
     "bankid_resume_continue": "Fortsätt",
     "bankid_resume_hint": "Slutför BankID-identifieringen...",
     "bankid_resume_restart": "Starta om",
+    "no_login_methods": "Inga inloggningsmetoder är tillgängliga på den här installationen. Kontakta din administratör.",
     "terms_prefix": "Genom att logga in godkänner du våra",
     "terms_link": "villkor",
     "terms_and": "och",

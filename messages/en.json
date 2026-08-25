@@ -344,6 +344,7 @@
     "bankid_resume_continue": "Continue",
     "bankid_resume_hint": "Complete the BankID identification...",
     "bankid_resume_restart": "Start over",
+    "no_login_methods": "No sign-in methods are available on this installation. Contact your administrator.",
     "terms_prefix": "By signing in you agree to our",
     "terms_link": "terms",
     "terms_and": "and",

@@ -557,6 +557,11 @@ export function LoginClient({
   const showEmailChip = method === 'bankid' && passwordLoginEnabled
   const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + providers.length
 
+  const hasPrimaryMethod =
+    (method === 'bankid' && bankIdEnabled) ||
+    (method === 'email' && passwordLoginEnabled)
+  const hasSecondaryMethods = chipCount > 0
+
   return (
     <div className="min-h-dvh flex flex-col items-center justify-center bg-frame p-4">
       <div className="w-full max-w-sm animate-slide-up">
@@ -630,9 +635,9 @@ export function LoginClient({
           )}
 
           <div key={method} className="animate-fade-in">
-            {method === 'bankid' ? (
+            {method === 'bankid' && bankIdEnabled ? (
               <BankIdAuth mode="login" hero onComplete={handleBankIdComplete} />
-            ) : !passwordLoginEnabled ? null : (
+            ) : method === 'email' && passwordLoginEnabled ? (
               <form onSubmit={handlePasswordLogin} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="email">{tAuth('email_label')}</Label>
@@ -735,10 +740,26 @@ export function LoginClient({
                   )}
                 </Button>
               </form>
+            ) : (
+              providers.length > 0 ? (
+                <div className="space-y-3">
+                  {providers.map((provider) => (
+                    <OAuthButton
+                      key={provider.id}
+                      provider={provider}
+                      onError={(message) => setFormError({ kind: 'oauth', message })}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center text-sm text-muted-foreground">
+                  {tAuth('login_no_methods')}
+                </p>
+              )
             )}
           </div>
 
-          {chipCount > 0 && (
+          {hasPrimaryMethod && hasSecondaryMethods && (
             <>
               <div className="relative my-6">
                 <div className="absolute inset-0 flex items-center">
