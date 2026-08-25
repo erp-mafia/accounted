@@ -299,6 +299,72 @@ describe('GET /reports/balance-sheet', () => {
     const body = await res.json()
     expect(body.data.period).toEqual({ start: '2026-01-01', end: '2026-12-31' })
   })
+
+  it('maps as_of to the generator toDate and echoes the effective window', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        fiscal_periods: {
+          data: {
+            id: PERIOD_ID,
+            period_start: '2026-01-01',
+            period_end: '2026-12-31',
+            is_closed: false,
+            locked_at: null,
+          },
+          error: null,
+        },
+      }),
+    )
+    mocks.generateBalanceSheet.mockResolvedValue({ sections: [], totals: {} })
+
+    const res = await balanceSheet(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/balance-sheet?period_id=${PERIOD_ID}&as_of=2026-07-31`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mocks.generateBalanceSheet).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      PERIOD_ID,
+      { fromDate: undefined, toDate: '2026-07-31' },
+    )
+    const body = await res.json()
+    expect(body.data.period).toEqual({ start: '2026-01-01', end: '2026-07-31' })
+  })
+
+  it('returns 400 VALIDATION_ERROR when both as_of and to_date are passed', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        fiscal_periods: {
+          data: {
+            id: PERIOD_ID,
+            period_start: '2026-01-01',
+            period_end: '2026-12-31',
+            is_closed: false,
+            locked_at: null,
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await balanceSheet(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/balance-sheet?period_id=${PERIOD_ID}&as_of=2026-07-31&to_date=2026-06-30`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(mocks.generateBalanceSheet).not.toHaveBeenCalled()
+  })
 })
 
 describe('GET /reports/income-statement', () => {
@@ -330,6 +396,111 @@ describe('GET /reports/income-statement', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.period).toEqual({ start: '2026-01-01', end: '2026-12-31' })
+  })
+
+  function mockPeriodClient() {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        fiscal_periods: {
+          data: {
+            id: PERIOD_ID,
+            period_start: '2026-01-01',
+            period_end: '2026-12-31',
+            is_closed: false,
+            locked_at: null,
+          },
+          error: null,
+        },
+      }),
+    )
+  }
+
+  it('passes from_date/to_date to the generator and echoes the effective range', async () => {
+    mockPeriodClient()
+    mocks.generateIncomeStatement.mockResolvedValue({ sections: [], grossMargin: 0, netResult: 0 })
+
+    const res = await incomeStatement(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/income-statement?period_id=${PERIOD_ID}&from_date=2026-01-01&to_date=2026-07-31`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mocks.generateIncomeStatement).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      PERIOD_ID,
+      { fromDate: '2026-01-01', toDate: '2026-07-31' },
+    )
+    const body = await res.json()
+    expect(body.data.period).toEqual({ start: '2026-01-01', end: '2026-07-31' })
+  })
+
+  it('returns 400 VALIDATION_ERROR for a malformed from_date', async () => {
+    mockPeriodClient()
+
+    const res = await incomeStatement(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/income-statement?period_id=${PERIOD_ID}&from_date=07%2F31%2F2026`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(mocks.generateIncomeStatement).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 VALIDATION_ERROR when the range is outside the fiscal period', async () => {
+    mockPeriodClient()
+
+    const res = await incomeStatement(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/income-statement?period_id=${PERIOD_ID}&to_date=2027-01-31`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(mocks.generateIncomeStatement).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 VALIDATION_ERROR when from_date is after to_date', async () => {
+    mockPeriodClient()
+
+    const res = await incomeStatement(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/income-statement?period_id=${PERIOD_ID}&from_date=2026-08-01&to_date=2026-07-01`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(mocks.generateIncomeStatement).not.toHaveBeenCalled()
+  })
+
+  it('rejects unknown query parameters instead of silently ignoring them', async () => {
+    mockPeriodClient()
+
+    const res = await incomeStatement(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/income-statement?period_id=${PERIOD_ID}&fromdate=2026-01-01`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.unknown_params).toEqual(['fromdate'])
+    expect(mocks.generateIncomeStatement).not.toHaveBeenCalled()
   })
 })
 

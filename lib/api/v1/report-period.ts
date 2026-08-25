@@ -12,6 +12,7 @@ import { z } from 'zod'
 import type { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
+import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
 
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
@@ -94,6 +95,94 @@ export async function loadPeriodFromQuery(
   }
 
   return { ok: true, period: data as FiscalPeriodRow }
+}
+
+export type QueryParamsResult = { ok: true } | { ok: false; response: Response }
+
+/**
+ * Reject unknown query parameters instead of silently ignoring them.
+ *
+ * Report endpoints historically dropped anything they didn't read, so an
+ * agent passing a misspelled or unsupported parameter (e.g. `from=` instead
+ * of `from_date=`) got a full-period report back with no signal that its
+ * intent was ignored. For date-scoped financial reports that's dangerous:
+ * the caller believes it holds a January-July resultatrapport when it holds
+ * the whole year. Scoped to the report routes that opt in; not a global v1
+ * behavior change.
+ */
+export async function assertKnownQueryParams(
+  request: Request,
+  allowed: readonly string[],
+  ctx: { requestId: string; log: Logger },
+): Promise<QueryParamsResult> {
+  const url = new URL(request.url)
+  const unknown = [...new Set(url.searchParams.keys())].filter((k) => !allowed.includes(k))
+  if (unknown.length === 0) return { ok: true }
+  return {
+    ok: false,
+    response: await v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+      requestId: ctx.requestId,
+      details: {
+        unknown_params: unknown,
+        allowed_params: [...allowed],
+        message: `Unknown query parameter(s): ${unknown.join(', ')}. Unknown parameters are rejected rather than silently ignored.`,
+      },
+    }),
+  }
+}
+
+export type RangeResult =
+  | { ok: true; range: DateRange }
+  | { ok: false; response: Response }
+
+/**
+ * Parse the optional `from_date` / `to_date` (and, when `asOfAlias` is set,
+ * `as_of` as an alias for `to_date`: the natural vocabulary for a balance
+ * position) from the query string, validated against the fiscal period via
+ * the same `parseReportDateRange` the dashboard report routes use. Keeping
+ * one validator means the REST surface accepts exactly the ranges the web
+ * UI accepts: clamped inside the räkenskapsår, `from_date <= to_date`.
+ */
+export async function loadRangeFromQuery(
+  request: Request,
+  period: FiscalPeriodRow,
+  ctx: { requestId: string; log: Logger },
+  opts?: { asOfAlias?: boolean },
+): Promise<RangeResult> {
+  const url = new URL(request.url)
+  const searchParams = new URLSearchParams(url.searchParams)
+
+  if (opts?.asOfAlias) {
+    const asOf = searchParams.get('as_of')
+    if (asOf !== null) {
+      if (searchParams.get('to_date') !== null) {
+        return {
+          ok: false,
+          response: await v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+            requestId: ctx.requestId,
+            details: {
+              field: 'as_of',
+              message: 'Pass either as_of or to_date, not both (as_of is an alias for to_date).',
+            },
+          }),
+        }
+      }
+      searchParams.set('to_date', asOf)
+      searchParams.delete('as_of')
+    }
+  }
+
+  const parsed = parseReportDateRange(searchParams, period)
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      response: await v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { fields: ['from_date', 'to_date'], message: parsed.error },
+      }),
+    }
+  }
+  return { ok: true, range: parsed.range }
 }
 
 /**
