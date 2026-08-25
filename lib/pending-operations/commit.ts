@@ -208,6 +208,12 @@ export interface CommitResult {
   // callers that do not recognize the code fall back to `error`.
   code?: string
   account_numbers?: string[]
+  // Where the pending_operations row landed, independent of `status`:
+  // 'pending' means the op was NOT consumed and can be approved again
+  // (recoverable refusal: capability, chart accounts, Skatteverket, or an
+  // authorization failure that happened before any side-effect). Agents
+  // used to infer "consumed" from status 'failed' and were wrong both ways.
+  operation_status?: 'pending' | 'committed' | 'rejected' | 'failed_partial'
 }
 
 export interface CommitOptions {
@@ -5874,6 +5880,7 @@ async function commitMatchBatchAllocate(
 
 async function commitBulkBookTransactions(
   supabase: SupabaseClient,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
@@ -5910,6 +5917,10 @@ async function commitBulkBookTransactions(
     p_existing_journal_entry_id: existingJeId,
     p_new_entry: newEntry,
     p_company_id: companyId,
+    // This path runs on the cookieless service client where auth.uid() is
+    // NULL; the RPC honors p_user_id only for service_role callers
+    // (migration 20260824170000), so the approving human is the actor.
+    p_user_id: userId,
   })
   if (error) {
     // Sanitised log (A.8.11, CC7.2): only error code + message.
@@ -5921,9 +5932,15 @@ async function commitBulkBookTransactions(
   }
   const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string; mode?: string; linked_tx_count?: number; docs_linked?: number }
   if (!result || !result.ok) {
+    const code = result?.code
+    const entry = code ? getErrorEntry(code) : undefined
     return {
-      error: result?.code || 'bulk_book_transactions failed',
-      status: 400,
+      error: code || 'bulk_book_transactions failed',
+      // Registry httpStatus so the dispatcher can tell an authorization
+      // refusal (403: nothing posted, op must stay pending) from bad input
+      // (400) or a vanished/already-booked tx (404/409: auto-reject).
+      status: entry?.httpStatus ?? 400,
+      ...(code ? { errorCode: code } : {}),
       data: result?.details as Record<string, unknown> | undefined,
     }
   }
@@ -6070,6 +6087,7 @@ async function commitReconciliationSignoff(
         through_date: throughDate,
         note: (params.note as string | null | undefined) ?? null,
         force: params.force === true,
+        external_balance: typeof params.external_balance === 'number' ? params.external_balance : null,
       },
       { dryRun: false },
     )
@@ -6256,6 +6274,7 @@ async function commitPendingOperationInner(
       error: CAPABILITY_BLOCKED_MESSAGE_SV,
       http_status: 403,
       code: 'capability_blocked',
+      operation_status: 'pending',
     }
   }
 
@@ -6471,7 +6490,7 @@ async function commitPendingOperationInner(
         result = await commitMatchBatchAllocate(supabase, userId, companyId, pendingOp.params)
         break
       case 'bulk_book_transactions':
-        result = await commitBulkBookTransactions(supabase, companyId, pendingOp.params)
+        result = await commitBulkBookTransactions(supabase, userId, companyId, pendingOp.params)
         break
       case 'bulk_book_inbox_items':
         result = await commitBulkBookInboxItems(supabase, userId, companyId, pendingOp.params)
@@ -6527,6 +6546,7 @@ async function commitPendingOperationInner(
         http_status: 500,
         code: 'partial_commit',
         data: { posted_ids: err.postedIds },
+        operation_status: 'failed_partial',
       }
     }
     // Accounts-not-in-chart is RECOVERABLE: the booking itself is valid; the
@@ -6545,6 +6565,7 @@ async function commitPendingOperationInner(
         http_status: 400,
         code: ACCOUNTS_NOT_IN_CHART,
         account_numbers: err.accountNumbers,
+        operation_status: 'pending',
       }
     }
     // Recoverable Skatteverket failure (extension disabled, no connection,
@@ -6561,6 +6582,7 @@ async function commitPendingOperationInner(
         error: err.message,
         http_status: err.httpStatus,
         code: err.code,
+        operation_status: 'pending',
       }
     }
     const isBkErr = isBookkeepingError(err)
@@ -6580,6 +6602,7 @@ async function commitPendingOperationInner(
       status: 'failed',
       error: message,
       http_status: isBkErr ? 400 : 500,
+      operation_status: 'rejected',
     }
   }
 
@@ -6612,6 +6635,27 @@ async function commitPendingOperationInner(
         http_status: result.status ?? 500,
         code: 'partial_commit',
         data: { posted_ids: partialPostedIds },
+        operation_status: 'failed_partial',
+      }
+    }
+    // Authorization refusals (401/403) happen BEFORE any side-effect and say
+    // nothing about the op's content: the credential, not the booking, was
+    // wrong. Release the claim back to 'pending' so the op survives for a
+    // caller that IS authorized (the /pending UI, or a key with the scope),
+    // instead of vanishing as 'rejected'. Feedback seq 261545: three
+    // samlingsverifikat were consumed this way and the user believed they
+    // had been approved.
+    if (result.status === 401 || result.status === 403) {
+      await supabase
+        .from('pending_operations')
+        .update({ status: 'pending' })
+        .eq('id', pendingOp.id)
+      return {
+        status: 'failed',
+        error: result.error,
+        http_status: result.status,
+        ...(result.errorCode ? { code: result.errorCode } : {}),
+        operation_status: 'pending',
       }
     }
     const isAutoReject = result.status === 404 || result.status === 409
@@ -6661,6 +6705,7 @@ async function commitPendingOperationInner(
         http_status: result.status,
         ...(result.errorCode ? { code: result.errorCode } : {}),
         ...(failureDetails ? { data: failureDetails } : {}),
+        operation_status: 'rejected',
       }
     }
     return {
@@ -6669,6 +6714,7 @@ async function commitPendingOperationInner(
       http_status: result.status ?? 500,
       ...(result.errorCode ? { code: result.errorCode } : {}),
       ...(failureDetails ? { data: failureDetails } : {}),
+      operation_status: 'rejected',
     }
   }
 
@@ -6705,5 +6751,6 @@ async function commitPendingOperationInner(
   return {
     status: 'committed',
     data: result.data,
+    operation_status: 'committed',
   }
 }

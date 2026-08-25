@@ -9,6 +9,8 @@ import { generateJournalRegister } from './journal-register'
 import { calculateVatDeclaration } from './vat-declaration'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
+import { listAttachmentRowsInRange } from '@/lib/reconciliation/attachments-store'
+import { generateBokslutsbilagor } from './bokslutsbilagor'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBranding } from '@/lib/branding/service'
 import {
@@ -152,6 +154,7 @@ export async function generateFullArchive(
           const reports = await generatePeriodReports(supabase, companyId, period)
           const periodFolder = rapporterFolder.folder(periodLabel(period))!
           writeReports(periodFolder, reports)
+          await writeBokslutsbilagor(periodFolder, supabase, companyId, period.id)
         })
       )
     }
@@ -167,10 +170,12 @@ export async function generateFullArchive(
     const reports = await generatePeriodReports(supabase, companyId, period)
     const rapporter = zip.folder('rapporter')!
     writeReports(rapporter, reports)
+    await writeBokslutsbilagor(rapporter, supabase, companyId, period.id)
   }
 
   if (options.include_documents !== false) {
     await writeDocuments(zip, supabase, companyId, periods, options.scope)
+    await writeReconciliationAttachments(zip, supabase, companyId, periods)
   }
 
   if (options.scope === 'all') {
@@ -552,6 +557,124 @@ async function writeDocuments(
   }
 
   dokument.file('manifest.json', JSON.stringify(manifest, null, 2))
+}
+
+/**
+ * The bokslutsbilagor pärm for one period, as JSON and PDF next to the other
+ * reports. Archive runs have no acting user, so the checklist's
+ * readiness-derived items are left as stored. Best-effort like the reports:
+ * a failure is logged into the folder rather than aborting the archive.
+ */
+async function writeBokslutsbilagor(
+  folder: JSZip,
+  supabase: SupabaseClient,
+  companyId: string,
+  periodId: string
+): Promise<void> {
+  try {
+    const report = await generateBokslutsbilagor(supabase, companyId, periodId, { appVersion: currentAppVersion() })
+    if (!report) return
+    folder.file('bokslutsbilagor.json', JSON.stringify(report, null, 2))
+    // The renderer and the template load on demand: the template registers
+    // styles at import time, and this module is imported far more widely
+    // than the pärm is rendered (tests stub @react-pdf/renderer partially).
+    const [{ BokslutsbilagorPDF }, { renderToBuffer }] = await Promise.all([
+      import('./bokslutsbilagor-pdf-template'),
+      import('@react-pdf/renderer'),
+    ])
+    const pdf = await renderToBuffer(BokslutsbilagorPDF({ report }))
+    folder.file('bokslutsbilagor.pdf', new Uint8Array(pdf))
+  } catch (err) {
+    folder.file('bokslutsbilagor.error.txt', err instanceof Error ? err.message : 'Unknown error')
+  }
+}
+
+interface ReconciliationAttachmentManifestEntry {
+  attachment_id: string
+  account_key: string
+  through_date: string
+  file_name: string
+  storage_path: string
+  sha256: string
+  mime_type: string
+  size_bytes: number
+  note: string | null
+  uploaded_at: string
+  removed_at: string | null
+  removed_reason: string | null
+  zip_path: string | null
+  status: 'downloaded' | 'removed' | 'error'
+  error?: string
+}
+
+/**
+ * The underlag behind the reconciliation sign-offs (bokslutsbilagor): every
+ * file attached to a balansdag inside the archived periods, laid out as
+ * `bilagor/<period>/<account_key>/<through_date>_<file>`, plus a manifest
+ * with the content hashes. Removed files are listed (with their stamp) but
+ * not copied: the manifest is the record that they were attached and then
+ * withdrawn. A failed read lands in the manifest rather than aborting the
+ * archive, like writeDocuments.
+ */
+async function writeReconciliationAttachments(
+  zip: JSZip,
+  supabase: SupabaseClient,
+  companyId: string,
+  periods: FiscalPeriodRow[]
+): Promise<void> {
+  const manifest: ReconciliationAttachmentManifestEntry[] = []
+  const usedPaths = new Set<string>()
+  const sorted = [...periods].sort((a, b) => a.period_start.localeCompare(b.period_start))
+  const from = sorted[0].period_start
+  const to = sorted[sorted.length - 1].period_end
+
+  try {
+    const rows = await listAttachmentRowsInRange(supabase, companyId, from, to, { includeRemoved: true })
+    for (const row of rows) {
+      const period = sorted.find((p) => row.through_date >= p.period_start && row.through_date <= p.period_end)
+      const base = {
+        attachment_id: row.id,
+        account_key: row.account_key,
+        through_date: row.through_date,
+        file_name: row.file_name,
+        storage_path: row.storage_path,
+        sha256: row.sha256,
+        mime_type: row.mime_type,
+        size_bytes: row.size_bytes,
+        note: row.note,
+        uploaded_at: row.uploaded_at,
+        removed_at: row.removed_at,
+        removed_reason: row.removed_reason,
+      }
+      if (row.removed_at) {
+        manifest.push({ ...base, zip_path: null, status: 'removed' })
+        continue
+      }
+      if (!period) continue
+      let zipPath = `bilagor/${periodLabel(period)}/${row.account_key.replace(':', '_')}/${row.through_date}_${row.file_name}`
+      if (usedPaths.has(zipPath)) {
+        const dot = zipPath.lastIndexOf('.')
+        const suffix = `_${row.id.slice(0, 8)}`
+        zipPath = dot > zipPath.lastIndexOf('/') ? `${zipPath.slice(0, dot)}${suffix}${zipPath.slice(dot)}` : `${zipPath}${suffix}`
+      }
+      usedPaths.add(zipPath)
+      try {
+        const { data, error } = await supabase.storage.from(row.storage_bucket).download(row.storage_path)
+        if (error || !data) {
+          manifest.push({ ...base, zip_path: null, status: 'error', error: error?.message || 'Download returned no data' })
+          continue
+        }
+        zip.file(zipPath, await data.arrayBuffer())
+        manifest.push({ ...base, zip_path: zipPath, status: 'downloaded' })
+      } catch (err) {
+        manifest.push({ ...base, zip_path: null, status: 'error', error: err instanceof Error ? err.message : 'Unknown error' })
+      }
+    }
+  } catch {
+    // Attachment listing failed: the archive still carries everything else.
+  }
+
+  zip.folder('bilagor')!.file('manifest.json', JSON.stringify(manifest, null, 2))
 }
 
 /**
@@ -988,6 +1111,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // through which date with the numbers as they stood, plus reopen stamps.
   // Part of the avstämningsdokumentation an auditor asks for; kept.
   { name: 'account_reconciliations', file: 'account_reconciliations.json', orderBy: 'signed_at' },
+  // The bokslut checklist per räkenskapsår (which closing steps were done,
+  // by whom, when): the konsult's documented bokslutsarbete (Reko 760); kept.
+  { name: 'bokslut_checklist_items', file: 'bokslut_checklist_items.json', orderBy: 'updated_at', pageKey: 'item_key' },
   { name: 'journal_entry_no_doc_required', file: 'journal_entry_no_doc_required.json', pageKey: 'journal_entry_id' },
   { name: 'rot_rut_payout_requests', file: 'rot_rut_payout_requests.json', orderBy: 'created_at' },
   // No `denormalize`: rot_rut_payout_requests has no currency column either.
@@ -1017,6 +1143,7 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
   voucher_sequences: 'revision/systemdokumentation.json (verifikationsserier)',
   audit_log: 'revision/behandlingshistorik.json',
   document_attachments: 'dokument/ + dokument/manifest.json',
+  account_reconciliation_attachments: 'bilagor/ + bilagor/manifest.json',
   sie_imports: 'sie/imports.json + sie/original/',
   sie_account_mappings: 'sie/account_mappings.json',
 }
