@@ -18,7 +18,10 @@ import {
 } from '@/lib/api/v1/report-period'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 
-const ALLOWED_PARAMS = ['period_id', 'from_date', 'to_date', 'as_of'] as const
+// No from_date here: a balansräkning is a cumulative position, not a flow
+// over a window; a from_date would only mislabel the echoed period. Matches
+// the MCP tool, which exposes as_of_date alone.
+const ALLOWED_PARAMS = ['period_id', 'to_date', 'as_of'] as const
 
 // Use z.unknown for the rich nested shape: the lib types are stable and
 // callers consume via `data.sections[…]`. Strict Zod schemas here would
@@ -38,7 +41,7 @@ registerEndpoint({
   doNotUseFor:
     'Per-account drill-down (use /reports/general-ledger). Net result for the period (use /reports/income-statement).',
   pitfalls: [
-    '`period_id` is required; `as_of` / `from_date` / `to_date` are optional and must lie within that fiscal period. `as_of` and `to_date` are aliases: pass at most one.',
+    '`period_id` is required; `as_of` (alias: `to_date`, pass at most one) is optional and must lie within that fiscal period. `from_date` is not accepted: a balance sheet is a cumulative position, not a flow over a window.',
     'Unknown query parameters are rejected with VALIDATION_ERROR, not silently ignored.',
     'Balance sheet equity includes the period\'s computed result: recalculation happens on every call, so a freshly-posted entry is reflected immediately (no caching).',
   ],

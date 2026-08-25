@@ -110,13 +110,19 @@ export type QueryParamsResult = { ok: true } | { ok: false; response: Response }
  * the whole year. Scoped to the report routes that opt in; not a global v1
  * behavior change.
  */
+// Params the withApiV1 wrapper itself reads on every request; a route-level
+// allowlist must never reject them.
+const WRAPPER_PARAMS = ['dry_run']
+
 export async function assertKnownQueryParams(
   request: Request,
   allowed: readonly string[],
   ctx: { requestId: string; log: Logger },
 ): Promise<QueryParamsResult> {
   const url = new URL(request.url)
-  const unknown = [...new Set(url.searchParams.keys())].filter((k) => !allowed.includes(k))
+  const unknown = [...new Set(url.searchParams.keys())].filter(
+    (k) => !allowed.includes(k) && !WRAPPER_PARAMS.includes(k),
+  )
   if (unknown.length === 0) return { ok: true }
   return {
     ok: false,

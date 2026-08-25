@@ -336,6 +336,37 @@ describe('GET /reports/balance-sheet', () => {
     expect(body.data.period).toEqual({ start: '2026-01-01', end: '2026-07-31' })
   })
 
+  it('rejects from_date as an unknown parameter (a balance sheet is a position, not a flow)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        fiscal_periods: {
+          data: {
+            id: PERIOD_ID,
+            period_start: '2026-01-01',
+            period_end: '2026-12-31',
+            is_closed: false,
+            locked_at: null,
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await balanceSheet(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/balance-sheet?period_id=${PERIOD_ID}&from_date=2026-07-01`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.unknown_params).toEqual(['from_date'])
+    expect(mocks.generateBalanceSheet).not.toHaveBeenCalled()
+  })
+
   it('returns 400 VALIDATION_ERROR when both as_of and to_date are passed', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -484,6 +515,36 @@ describe('GET /reports/income-statement', () => {
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(mocks.generateIncomeStatement).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 VALIDATION_ERROR for an empty from_date value', async () => {
+    mockPeriodClient()
+
+    const res = await incomeStatement(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/income-statement?period_id=${PERIOD_ID}&from_date=`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(mocks.generateIncomeStatement).not.toHaveBeenCalled()
+  })
+
+  it('tolerates the wrapper-level dry_run parameter', async () => {
+    mockPeriodClient()
+    mocks.generateIncomeStatement.mockResolvedValue({ sections: [], grossMargin: 0, netResult: 0 })
+
+    const res = await incomeStatement(
+      makeReq(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/income-statement?period_id=${PERIOD_ID}&dry_run=true`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
   })
 
   it('rejects unknown query parameters instead of silently ignoring them', async () => {

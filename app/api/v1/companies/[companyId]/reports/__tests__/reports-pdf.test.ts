@@ -150,6 +150,20 @@ beforeEach(() => {
 })
 
 describe('GET /reports/income-statement/pdf', () => {
+  it('returns 401 without a bearer token', async () => {
+    mockClientWith()
+
+    const res = await incomeStatementPdf(
+      new Request(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/income-statement/pdf?period_id=${PERIOD_ID}`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(401)
+    expect(mocks.renderToBuffer).not.toHaveBeenCalled()
+  })
+
   it('renders a PDF for a custom range with the range in the filename', async () => {
     mockClientWith()
     mocks.generateIncomeStatement.mockResolvedValue({ ...INCOME_STATEMENT_REPORT })
@@ -209,6 +223,20 @@ describe('GET /reports/income-statement/pdf', () => {
 })
 
 describe('GET /reports/balance-sheet/pdf', () => {
+  it('returns 401 without a bearer token', async () => {
+    mockClientWith()
+
+    const res = await balanceSheetPdf(
+      new Request(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/reports/balance-sheet/pdf?period_id=${PERIOD_ID}`,
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(401)
+    expect(mocks.renderToBuffer).not.toHaveBeenCalled()
+  })
+
   it('renders the balance position as of a custom date', async () => {
     mockClientWith()
     mocks.generateBalanceSheet.mockResolvedValue({ ...BALANCED_BALANCE_SHEET })
@@ -247,7 +275,7 @@ describe('GET /reports/balance-sheet/pdf', () => {
       companyParams(COMPANY_ID),
     )
 
-    expect(res.status).not.toBe(200)
+    expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('REPORT_GENERATION_FAILED')
     expect(mocks.renderToBuffer).not.toHaveBeenCalled()

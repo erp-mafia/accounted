@@ -27,7 +27,10 @@ import {
 } from '@/lib/reports/financial-statement-pdf'
 import type { CompanySettings } from '@/types'
 
-const ALLOWED_PARAMS = ['period_id', 'from_date', 'to_date', 'as_of'] as const
+// No from_date: a balansräkning is a cumulative position, not a flow over a
+// window (see the JSON route). as_of is the natural spelling; to_date is
+// accepted as its synonym for consistency with the income statement.
+const ALLOWED_PARAMS = ['period_id', 'to_date', 'as_of'] as const
 
 registerEndpoint({
   operation: 'reports.balance-sheet.pdf',
@@ -41,7 +44,7 @@ registerEndpoint({
   doNotUseFor:
     'Machine-readable figures (use the JSON endpoint without /pdf). The formal K2/K3 årsredovisning document (use the year-end flow).',
   pitfalls: [
-    '`period_id` is required; `as_of` / `from_date` / `to_date` are optional and must lie within that fiscal period. `as_of` and `to_date` are aliases: pass at most one.',
+    '`period_id` is required; `as_of` (alias: `to_date`, pass at most one) is optional and must lie within that fiscal period. `from_date` is not accepted: a balance sheet is a cumulative position, not a flow over a window.',
     'Unknown query parameters are rejected with VALIDATION_ERROR, not silently ignored.',
     'An unbalanced balansräkning (>= 1 kr difference) returns REPORT_GENERATION_FAILED instead of a PDF: fix the imbalance first.',
     'The PDF is marked "utkast": it is a working report, not a fastställd årsredovisning.',
@@ -111,8 +114,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // Same gate as the dashboard export: ÅRL 3 kap requires balansräkningen
     // to balance; a PDF of an unbalanced one would misrepresent the books.
     if (balanceSheetImbalanceKronor(report) >= 1) {
+      // 400, matching the dashboard export: the imbalance is a condition in
+      // the caller's books, not a server fault; a 5xx would put retry loops
+      // and error monitoring on a request that will never succeed unchanged.
       return v1ErrorResponseFromCode('REPORT_GENERATION_FAILED', ctx.log, {
         requestId: ctx.requestId,
+        status: 400,
         details: {
           report: 'balance-sheet-pdf',
           reason:

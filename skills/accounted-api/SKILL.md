@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 136 endpoints.
+  pagination, scopes), and all 138 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -140,7 +140,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 136 operations. Paths are shown without
+API version `2026-05-12`, 138 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (5)
@@ -326,17 +326,19 @@ POST /companies/{companyId}/salary-runs/{id}/mark-paid : Mark an approved salary
 GET /companies/{companyId}/salary-runs/{id}/payslips/{employeeId}/pdf : Download one employee's payslip as PDF [scope:payroll:read risk:low idempotent]
 ```
 
-### Reports (14)
+### Reports (16)
 
 Full detail: [references/reports.md](references/reports.md)
 
 ```text
 GET /companies/{companyId}/reports/ar-ledger : AR ledger: unpaid customer invoices with aging [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/avgifter-basis : Annual arbetsgivaravgifter basis per employee [scope:payroll:read risk:low idempotent]
-GET /companies/{companyId}/reports/balance-sheet : Balance sheet (balansräkning) for a fiscal period [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/balance-sheet : Balance sheet (balansräkning) for a fiscal period or as of a custom date [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/balance-sheet/pdf : Balance sheet (balansräkning) as a PDF [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/continuity-check : IB/UB continuity check: opening balances match prior closing [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/general-ledger : General ledger (huvudbok) for a fiscal period [scope:reports:read risk:low idempotent]
-GET /companies/{companyId}/reports/income-statement : Income statement (resultatrapport) for a fiscal period [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/income-statement : Income statement (resultatrapport) for a fiscal period or a custom date range [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/income-statement/pdf : Income statement (resultaträkning) as a PDF [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/journal-register : Journal register (verifikationsregister) for a fiscal period [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/monthly-breakdown : Income statement broken down by month for a fiscal period [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/salary-journal : Salary journal (lönejournal) for a year and optional month range [scope:payroll:read risk:low idempotent]

@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { eventBus } from '@/lib/events/bus'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { tools } from '../server'
@@ -30,6 +31,7 @@ const PERIOD_ROW = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  eventBus.clear()
 })
 
 describe('gnubok_get_income_statement: from_date/to_date', () => {
