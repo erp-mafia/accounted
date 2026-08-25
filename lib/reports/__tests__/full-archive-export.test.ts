@@ -53,6 +53,11 @@ vi.mock('../journal-register', () => ({
 
 // The bilagor step reads account_reconciliation_attachments through the
 // store; an empty list keeps the queued-mock order of these tests intact.
+// The pärm step runs the reconciliation and checklist readers; a null report
+// keeps the queued-mock order of these tests intact.
+vi.mock('../bokslutsbilagor', () => ({
+  generateBokslutsbilagor: vi.fn().mockResolvedValue(null),
+}))
 vi.mock('@/lib/reconciliation/attachments-store', () => ({
   listAttachmentRowsInRange: vi.fn().mockResolvedValue([]),
 }))

@@ -336,6 +336,21 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     searchTerms:
       'behandlingshistorik audit trail audit log händelselogg ändringslogg logg historik vem gjorde vad processing history revision systemdokumentation',
   },
+  {
+    // Bokslutsbilagor (Reko 140/760/765): the pärm per räkenskapsår, one
+    // bilaga per balance account as of the balansdag with balances, the
+    // specification or stated balance, the sign-off and the underlag files.
+    // Whole period only: a bilaga is per balansdag, not per date range.
+    slug: 'bokslutsbilagor',
+    labelKey: 'name_bokslutsbilagor',
+    descKey: 'desc_bokslutsbilagor',
+    category: 'export',
+    params: 'fiscal',
+    exports: ['pdf'],
+    libraryOnly: true,
+    searchTerms:
+      'bokslutsbilagor bilagor bilaga bokslutspärm pärm avstämning avstämningar underlag signering reko balanskonton specifikation kontoutdrag engagemangsbesked checklista',
+  },
 ]
 
 /** Reports that take a fiscal period + optional date sub-range. */

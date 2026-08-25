@@ -6732,6 +6732,8 @@
     "name_grundbok": "Grundbok",
     "name_behandlingshistorik": "Behandlingshistorik",
     "desc_behandlingshistorik": "Vem gjorde vad och när: bokförda verifikationer, rättelser och ändringar i systemet (BFL 5 kap. 11 §)",
+    "name_bokslutsbilagor": "Bokslutsbilagor",
+    "desc_bokslutsbilagor": "Pärmen per räkenskapsår: varje balanskonto per balansdagen med bokfört saldo, underlag, signering och bifogade filer",
     "bh_summary": "{count, plural, =1 {1 händelse} other {# händelser}}",
     "bh_range_to": "till",
     "bh_version": "Programversion",
@@ -8091,5 +8093,23 @@
     "gap": "{from} till {to} (mellan {after} och {before})",
     "hint": "Importera SIE-filen för det året, eller skapa räkenskapsåret manuellt, så att balanserna rullar fram.",
     "manage": "Hantera räkenskapsår"
+  },
+  "bokslutsbilagor": {
+    "open_parm": "Bokslutsbilagor",
+    "load_failed": "Kunde inte hämta bokslutsbilagorna.",
+    "empty_title": "Inga balanskonton ännu",
+    "empty_desc": "Pärmen fylls när räkenskapsåret har saldon eller rörelser på balanskonton. Stäm av och signera dem på Avstämning.",
+    "open_reconciliation": "Öppna Avstämning",
+    "summary": "{accounts} balanskonton per {date}, {signed} signerade per balansdagen, {files} bifogade filer",
+    "checklist_summary": "checklista {done} av {total}",
+    "col_account": "Konto",
+    "col_booked": "Bokfört",
+    "col_external": "Enligt underlag",
+    "col_difference": "Differens",
+    "col_signoff": "Signering",
+    "col_files": "Filer",
+    "signed": "{who}, {when}",
+    "signed_other_date": "t.o.m. {date} ({who}), inte balansdagen",
+    "unsigned": "Ej signerad"
   }
 }
