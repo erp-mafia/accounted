@@ -731,6 +731,7 @@ export async function getReconciliationStatus(
   // manufacture a phantom, unexplainable difference. Ordered on id (unique) so
   // pages never duplicate or skip rows across boundaries.
   type StatusTxRow = {
+    id?: string | null
     date: string | null
     amount: number | string | null
     journal_entry_id: string | null
@@ -741,7 +742,7 @@ export async function getReconciliationStatus(
   const transactions = await fetchAllRows<StatusTxRow>(({ from, to }) => {
     let txQuery = supabase
       .from('transactions')
-      .select('date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
+      .select('id, date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
       .eq('company_id', companyId)
     txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
     if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
@@ -755,6 +756,16 @@ export async function getReconciliationStatus(
     accountNumber: bankAccount,
     currency,
   })
+
+  // Transactions anchored through transaction_voucher_links (bulk-booked
+  // samlingsverifikat, residual bookings) carry journal_entry_id = NULL on the
+  // row itself. They are settled all the same, so the matched/unmatched split
+  // below must see them; is_transaction_booked() is the SQL twin of this.
+  const junctionLinkedTxIds = await fetchJunctionLinkedTxIds(
+    supabase,
+    companyId,
+    transactions.map((tx) => tx.id).filter((id): id is string => typeof id === 'string'),
+  )
 
   // Get GL bank-account lines. We fetch posted AND reversed entries and count
   // them TOGETHER: the exact inclusion rule the trial balance and balance sheet
@@ -926,13 +937,15 @@ export async function getReconciliationStatus(
   // Matched/unmatched partition the RECONCILABLE (non-ignored) set, so
   // matched_count + unmatched_transaction_count always equals the number of
   // rows behind bank_transaction_total.
-  const matchedCount = reconcilableTx.filter((tx) => tx.journal_entry_id !== null).length
+  const isLinked = (tx: StatusTxRow): boolean =>
+    tx.journal_entry_id !== null || (typeof tx.id === 'string' && junctionLinkedTxIds.has(tx.id))
+  const matchedCount = reconcilableTx.filter(isLinked).length
   // The gross split behind the net: what the user actually recognises as
   // "what moved on the bank", so the page never has to explain "netto".
   const bankInflow = reconcilableTx.reduce((sum, tx) => sum + Math.max(Number(tx.amount) || 0, 0), 0)
   const bankOutflow = reconcilableTx.reduce((sum, tx) => sum + Math.min(Number(tx.amount) || 0, 0), 0)
 
-  const unmatchedTx = reconcilableTx.filter((tx) => tx.journal_entry_id === null)
+  const unmatchedTx = reconcilableTx.filter((tx) => !isLinked(tx))
   const unmatchedTransactionCount = unmatchedTx.length
   const unmatchedTransactionTotal = unmatchedTx.reduce(
     (sum, tx) => sum + (Number(tx.amount) || 0),
@@ -1207,6 +1220,14 @@ export async function unlinkReconciliation(
     return { success: false, error: 'Failed to unlink transaction' }
   }
 
+  // A residual booking (or a bulk-book) anchors the same transaction through
+  // transaction_voucher_links as well; "koppla bort" means every anchor goes.
+  await supabase
+    .from('transaction_voucher_links')
+    .delete()
+    .eq('company_id', companyId)
+    .eq('transaction_id', transactionId)
+
   logMatchEvent(supabase, userId, transactionId, 'unmatched', {
     previousState: {
       journal_entry_id: tx.journal_entry_id,
@@ -1465,6 +1486,33 @@ export async function fetchUnlinkedGLLines(
   } catch {
     return []
   }
+}
+
+/**
+ * Ids of the given transactions that are anchored to a verifikat through
+ * transaction_voucher_links (journal_entry_id NULL on the row itself). Chunked
+ * on the id list so a busy window never pushes the .in() past URL limits;
+ * a failed read returns the empty set rather than throwing, mirroring
+ * fetchUnlinkedGLLines' legacy contract.
+ */
+export async function fetchJunctionLinkedTxIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionIds: string[],
+): Promise<Set<string>> {
+  const out = new Set<string>()
+  const CHUNK = 150
+  for (let i = 0; i < transactionIds.length; i += CHUNK) {
+    const chunk = transactionIds.slice(i, i + CHUNK)
+    const { data, error } = await supabase
+      .from('transaction_voucher_links')
+      .select('transaction_id')
+      .eq('company_id', companyId)
+      .in('transaction_id', chunk)
+    if (error) return out
+    for (const row of (data ?? []) as Array<{ transaction_id: string }>) out.add(row.transaction_id)
+  }
+  return out
 }
 
 /** A match candidate that carries how many transactions already point at it. */

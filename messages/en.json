@@ -7913,7 +7913,16 @@
     "match_no_entry": "No voucher selected",
     "match_difference": "Difference {amount}",
     "match_hint_residual": "The difference must be 0 to link. Book the remainder first, then link.",
-    "match_apply": "Link {count} events"
+    "match_apply": "Link {count} events",
+    "match_hint_residual_skv": "The difference must be 0 to link. On the tax account, interest and fees are events of their own: link them instead.",
+    "match_residual_label": "Book the remainder as",
+    "match_residual_pick": "Pick a kind",
+    "match_residual_apply": "Book {amount} and link",
+    "residual_bank_fee": "Bank fee (6570)",
+    "residual_interest_expense": "Interest expense (8410)",
+    "residual_interest_income": "Interest income (8310)",
+    "residual_rounding": "Rounding (3740)",
+    "toast_residual_booked": "{amount} booked and linked"
   },
   "skattekonto": {
     "help_text": "The balance and events are fetched from Skatteverket and synced automatically every night. Completed events are booked against 1630 Skattekonto, usually automatically; anything that cannot be matched is flagged in the list. Pay in via bankgiro 5050-1055 with your OCR number.",

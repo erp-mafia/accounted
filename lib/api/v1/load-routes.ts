@@ -162,6 +162,7 @@ import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/
 import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/items/[itemId]/ignore/route'
 import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/signoff/route'
 import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/signoff/[signoffId]/reopen/route'
+import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/residual/route'
 
 // Dimensions PR2: registry list + value creation (kostnadsställe/projekt).
 import '@/app/api/v1/companies/[companyId]/dimensions/route'

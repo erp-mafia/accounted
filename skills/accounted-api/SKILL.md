@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 134 endpoints.
+  pagination, scopes), and all 135 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -140,7 +140,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 134 operations. Paths are shown without
+API version `2026-05-12`, 135 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (4)
@@ -251,7 +251,7 @@ POST /companies/{companyId}/documents/{id}/link : Link a document to a journal e
 POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consumed by a journal entry [scope:documents:write risk:low idempotent]
 ```
 
-### Banking (21)
+### Banking (22)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -264,6 +264,7 @@ GET /companies/{companyId}/reconciliation/accounts/{accountKey}/items : List the
 POST /companies/{companyId}/reconciliation/accounts/{accountKey}/items/{itemId}/ignore : Ignore or restore one outside row [scope:reconciliation:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/reconciliation/accounts/{accountKey}/links : Link outside rows to existing verifikat (pairs or proposals) [scope:reconciliation:write risk:medium dry-run reversible]
 DELETE /companies/{companyId}/reconciliation/accounts/{accountKey}/links/{linkId} : Remove a link between an outside row and a verifikat [scope:reconciliation:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/reconciliation/accounts/{accountKey}/residual : Book the remainder of a bank selection as a fee/interest/rounding verifikat and link the selection [scope:transactions:write risk:medium dry-run]
 GET /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff : Sign-off history for one reconcilable account [scope:reconciliation:read risk:low idempotent reversible]
 POST /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff : Mark an account reconciled through a date (sign-off) [scope:reconciliation:signoff risk:medium dry-run reversible]
 POST /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff/{signoffId}/reopen : Reopen (undo) a reconciliation sign-off [scope:reconciliation:signoff risk:low idempotent dry-run reversible]

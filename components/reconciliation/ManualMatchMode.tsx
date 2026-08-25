@@ -14,6 +14,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { roundOre } from '@/lib/money'
 import type { ReconciliationAccount, ReconciliationItem } from '@/lib/reconciliation/schemas'
 import type { ReconciliationWindow } from './AccountOverview'
+import type { ResidualKind } from '@/lib/reconciliation/residual'
 
 /**
  * "Matcha manuellt": the two-pane worksheet from the approved design. Left:
@@ -43,6 +44,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
   const [pickedExternal, setPickedExternal] = useState<Set<string>>(new Set())
   const [pickedEntry, setPickedEntry] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [residualKind, setResidualKind] = useState<ResidualKind | ''>('')
 
   const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
   const isSkv = account.kind === 'skattekonto'
@@ -118,6 +120,31 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
       }
       setPickedExternal(new Set())
       setPickedEntry(null)
+      await load()
+      onChanged()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function bookResidual() {
+    if (!entry || pickedExternal.size === 0 || !residualKind) return
+    setBusy(true)
+    try {
+      const res = await fetch(`${base}/residual`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ external_ids: [...pickedExternal], journal_entry_id: entry.item_id, kind: residualKind }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast({ title: t('toast_failed'), description: getUserErrorMessage(json, { statusCode: res.status }), variant: 'destructive' })
+        return
+      }
+      toast({ title: t('toast_residual_booked', { amount: formatCurrency(Math.abs(Number(json.data?.residual_amount ?? 0)), currency) }) })
+      setPickedExternal(new Set())
+      setPickedEntry(null)
+      setResidualKind('')
       await load()
       onChanged()
     } finally {
@@ -269,7 +296,27 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
           {t('match_difference', { amount: formatCurrency(difference, currency) })}
         </span>
         {Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && entry && (
-          <span className="text-[12.5px] text-muted-foreground">{t('match_hint_residual')}</span>
+          isSkv ? (
+            <span className="text-[12.5px] text-muted-foreground">{t('match_hint_residual_skv')}</span>
+          ) : (
+            <span className="flex items-center gap-2 text-[12.5px]">
+              <label htmlFor="residual-kind" className="text-muted-foreground">{t('match_residual_label')}</label>
+              <select
+                id="residual-kind"
+                value={residualKind}
+                onChange={(e) => setResidualKind(e.target.value as ResidualKind | '')}
+                className="h-8 rounded-lg border border-border bg-background px-2 text-[12.5px]"
+              >
+                <option value="">{t('match_residual_pick')}</option>
+                {(difference < 0 ? ['bank_fee', 'interest_expense', 'rounding'] : ['interest_income', 'rounding']).map((k) => (
+                  <option key={k} value={k}>{t(`residual_${k}`)}</option>
+                ))}
+              </select>
+              <Button size="sm" variant="outline" onClick={() => void bookResidual()} disabled={!residualKind || busy} aria-busy={busy}>
+                {t('match_residual_apply', { amount: formatCurrency(Math.abs(difference), currency) })}
+              </Button>
+            </span>
+          )
         )}
         <span className="ml-auto">
           <Button size="sm" onClick={() => void link()} disabled={!canLink} aria-busy={busy}>

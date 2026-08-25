@@ -348,6 +348,60 @@ Response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/residual`
+
+**Book the remainder of a bank selection as a fee/interest/rounding verifikat and link the selection.**
+`scope:transactions:write · risk:medium · dry-run`
+
+Body: { external_ids: [transaction ids], journal_entry_id, kind: "bank_fee" | "interest_expense" | "interest_income" | "rounding", entry_date?, description? }. Computes the difference between the transactions' sum and the verifikat's net on the bank account, books it on 6570 / 8410 / 8310 / 3740 against the bank account (dated on the latest transaction by default), links the transactions to the main verifikat and anchors the residual verifikat through transaction_voucher_links. Bank accounts only (bank:<cash_account_id>). Refused when the difference is 0 (RESIDUAL_ZERO), above 5000 kr (RESIDUAL_TOO_LARGE: that is a missing booking, not a fee), or when the kind points the wrong way (RESIDUAL_DIRECTION). ?dry_run=true returns would_book without writing.
+
+**Use when:** A manual match misses by a small amount that is genuinely a bank fee, interest or rounding, and you want to close it in one step instead of booking a verifikat and then linking.
+**Do not use for:** Skattekonto rows (Skatteverket posts ränta and avgifter as their own rows: link them), or differences that are really a missing booking (book that properly).
+
+**Pitfalls:**
+- The kind must match the direction: money that left the bank unbooked is bank_fee / interest_expense; money that arrived unbooked is interest_income; rounding works either way.
+- Links are made before the booking and undone if the booking is refused (a locked period), so a refusal leaves nothing half done.
+- Idempotency-Key is required; repeating the same key replays the first response.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `accountKey` | path | `string` | yes |  |
+
+Request body:
+```ts
+{
+  external_ids: string[],
+  journal_entry_id: string,
+  kind: "bank_fee" | "rounding" | "interest_income" | "interest_expense",
+  entry_date?: string,
+  description?: string
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    dry_run: boolean,
+    residual_journal_entry_id?: string,
+    residual_amount?: number,
+    applied?: { external_id: string, journal_entry_id: string }[],
+    skipped?: { code: string, message: string }[],
+    would_book?: { kind: string, counter_account: string, ledger_account: string, currency: string, transactions_total: number, entry_net: number, residual_amount: number, entry_date: string, description: string, lines: { account_number: string, debit_amount: number, credit_amount: number }[] }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/reconciliation/accounts/{accountKey}/signoff`
 
 **Sign-off history for one reconcilable account.**

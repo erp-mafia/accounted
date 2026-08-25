@@ -2178,7 +2178,7 @@ describe('unscoped cash-account diagnostic', () => {
     expect(firstFrom?.args[0]).toBe('transactions')
     const firstSelect = calls.find((c) => c.method === 'select')
     expect(firstSelect?.args[0]).toBe(
-      'date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id',
+      'id, date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id',
     )
   })
 
