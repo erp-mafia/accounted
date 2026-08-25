@@ -114,7 +114,12 @@ export function ContextPicker({
           <div
             ref={listRef}
             role="listbox"
-            className="fixed z-[60] min-w-[220px] max-w-[320px] rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
+            // Portaled to document.body, so inside a modal dialog the list is
+            // DOM-wise outside DialogContent: data-dialog-companion keeps a
+            // click in it from dismissing the dialog, and pointer-events-auto
+            // undoes the modal body lock that would swallow item clicks.
+            data-dialog-companion=""
+            className="pointer-events-auto fixed z-[60] min-w-[220px] max-w-[320px] rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
             style={{ top: pos.top, left: pos.left }}
           >
             <div className="max-h-72 overflow-y-auto px-1">
