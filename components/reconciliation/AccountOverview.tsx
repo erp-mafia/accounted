@@ -1,9 +1,10 @@
 'use client'
 
-import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
+import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -67,6 +68,8 @@ export interface ReconciliationWindow {
 
 interface AccountOverviewProps {
   account: ReconciliationAccount
+  /** The other bank accounts in the rail: targets for "Flytta till konto". */
+  otherBankAccounts?: ReconciliationAccount[]
   /** The account rail. Rendered inside the summary grid so the items table below can span the full page width (the approved layout). */
   rail: ReactNode
   /** The selected period: scopes the bank bridge and the item windows; its end is the default sign-off date. */
@@ -75,7 +78,7 @@ interface AccountOverviewProps {
   onChanged: () => void
 }
 
-export function AccountOverview({ account, rail, window, onChanged }: AccountOverviewProps) {
+export function AccountOverview({ account, rail, otherBankAccounts = [], window, onChanged }: AccountOverviewProps) {
   const t = useTranslations('reconciliation')
   const locale = useLocale()
   const { toast } = useToast()
@@ -87,6 +90,9 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
   const [bookRow, setBookRow] = useState<ReconciliationItem | null>(null)
   const [signoffOpen, setSignoffOpen] = useState(false)
   const [matcher, setMatcher] = useState<MatcherMatch[] | null>(null)
+  const searchParams = useSearchParams()
+  const autorunRequested = searchParams.get('autorun') === '1'
+  const autorunDone = useRef(false)
 
   const isSkv = account.kind === 'skattekonto'
   const base = `/api/reconciliation/accounts/${encodeURIComponent(account.account_key)}`
@@ -317,6 +323,48 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
     }
   }
 
+  async function markOpeningBalance(item: ReconciliationItem) {
+    setBusy(item.item_id)
+    try {
+      const data = await postJson('/api/reconciliation/bank/mark-opening-balance', { journal_entry_id: item.item_id })
+      if (data !== null) {
+        toast({ title: t('toast_marked_ib') })
+        await refresh()
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function moveToAccount(item: ReconciliationItem, target: ReconciliationAccount) {
+    setBusy(item.item_id)
+    try {
+      const res = await fetch(`/api/transactions/${item.item_id}/cash-account`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_number: target.account_number }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast({ title: t('toast_failed'), description: getUserErrorMessage(json, { statusCode: res.status }), variant: 'destructive' })
+        return
+      }
+      toast({ title: t('toast_moved', { account: `${target.name} (${target.account_number})` }) })
+      await refresh()
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  // ?autorun=1 (the old bankavstämning deep link from the transactions inbox):
+  // run the matcher preview once the bridge is up, once per mount.
+  useEffect(() => {
+    if (!autorunRequested || autorunDone.current || isSkv || !status) return
+    autorunDone.current = true
+    void runMatcher()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when the status first loads
+  }, [autorunRequested, isSkv, status])
+
   // ---- render -------------------------------------------------------------
 
   if (loadError) {
@@ -431,7 +479,6 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
     (byBucket.get('unmatched_external')?.length ?? 0) +
     (byBucket.get('unmatched_ledger')?.length ?? 0)
 
-  const bankViewHref = '/reports/bank-reconciliation'
 
   // Default sign-off date: the window end, never past today nor past the
   // skattekonto snapshot. The button hides when that date is already signed.
@@ -537,20 +584,26 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
             {t('signoff_button', { date: formatDate(signoffDefaultDate) })}
           </Button>
         )}
-        <span className="ml-auto">
-          <Link href={isSkv ? '/skattekonto' : bankViewHref} className={QUIET_LINK_CLASS}>
-            {isSkv ? t('action_open_skattekonto') : t('action_open_bank_view')}
-          </Link>
-        </span>
+        {isSkv && (
+          <span className="ml-auto">
+            <Link href="/skattekonto" className={QUIET_LINK_CLASS}>
+              {t('action_open_skattekonto')}
+            </Link>
+          </span>
+        )}
       </div>
 
       {items.older_unmatched_count > 0 && (
         <p className="text-[12.5px] text-muted-foreground">
           {t('older_unmatched', { count: items.older_unmatched_count })}
-          {' · '}
-          <Link href={isSkv ? '/skattekonto' : bankViewHref} className={QUIET_LINK_CLASS}>
-            {t('older_show')}
-          </Link>
+          {isSkv && (
+            <>
+              {' · '}
+              <Link href="/skattekonto" className={QUIET_LINK_CLASS}>
+                {t('older_show')}
+              </Link>
+            </>
+          )}
         </p>
       )}
 
@@ -635,6 +688,9 @@ export function AccountOverview({ account, rail, window, onChanged }: AccountOve
                           onIgnore={() => void setIgnored(item, true)}
                           onUnignore={() => void setIgnored(item, false)}
                           onBook={() => setBookRow(item)}
+                          onMarkIb={!isSkv && item.side === 'ledger' && item.bucket === 'unmatched_ledger' ? () => void markOpeningBalance(item) : undefined}
+                          moveTargets={!isSkv && item.item_type === 'transaction' && item.bucket === 'unmatched_external' ? otherBankAccounts : []}
+                          onMove={(target) => void moveToAccount(item, target)}
                         />
                       ))}
                   </Fragment>
@@ -710,6 +766,11 @@ interface ItemRowProps {
   onIgnore: () => void
   onUnignore: () => void
   onBook: () => void
+  /** "Märk som IB" for a ledger row without a bank counterpart (bank accounts). */
+  onMarkIb?: () => void
+  /** Other bank accounts a stray transaction can be moved to. */
+  moveTargets: ReconciliationAccount[]
+  onMove: (target: ReconciliationAccount) => void
 }
 
 function ItemRow({
@@ -724,6 +785,9 @@ function ItemRow({
   onIgnore,
   onUnignore,
   onBook,
+  onMarkIb,
+  moveTargets,
+  onMove,
 }: ItemRowProps) {
   const t = useTranslations('reconciliation')
   const can = (a: ReconciliationItem['actions'][number]) => item.actions.includes(a)
@@ -836,6 +900,30 @@ function ItemRow({
             <button type="button" onClick={onUnignore} disabled={anyBusy} className={QUIET_LINK_CLASS}>
               {t('row_unignore')}
             </button>
+          )}
+          {onMarkIb && (
+            <button type="button" onClick={onMarkIb} disabled={anyBusy} className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}>
+              {t('row_mark_ib')}
+            </button>
+          )}
+          {moveTargets.length > 0 && (
+            <select
+              aria-label={t('row_move')}
+              value=""
+              disabled={anyBusy}
+              onChange={(e) => {
+                const target = moveTargets.find((a) => a.account_key === e.target.value)
+                if (target) onMove(target)
+              }}
+              className={cn('h-7 rounded-full border border-border bg-background px-2 text-[11.5px] text-muted-foreground', HOVER_REVEAL_CLASS)}
+            >
+              <option value="">{t('row_move')}</option>
+              {moveTargets.map((a) => (
+                <option key={a.account_key} value={a.account_key}>
+                  {a.name} ({a.account_number})
+                </option>
+              ))}
+            </select>
           )}
         </span>
       </td>

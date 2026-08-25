@@ -7922,7 +7922,11 @@
     "residual_interest_expense": "Interest expense (8410)",
     "residual_interest_income": "Interest income (8310)",
     "residual_rounding": "Rounding (3740)",
-    "toast_residual_booked": "{amount} booked and linked"
+    "toast_residual_booked": "{amount} booked and linked",
+    "row_mark_ib": "Mark as opening balance",
+    "row_move": "Move to account",
+    "toast_marked_ib": "The voucher was marked as opening balance",
+    "toast_moved": "The transaction was moved to {account}"
   },
   "skattekonto": {
     "help_text": "The balance and events are fetched from Skatteverket and synced automatically every night. Completed events are booked against 1630 Skattekonto, usually automatically; anything that cannot be matched is flagged in the list. Pay in via bankgiro 5050-1055 with your OCR number.",

@@ -7922,7 +7922,11 @@
     "residual_interest_expense": "Räntekostnad (8410)",
     "residual_interest_income": "Ränteintäkt (8310)",
     "residual_rounding": "Öresavrundning (3740)",
-    "toast_residual_booked": "{amount} bokfört och kopplat"
+    "toast_residual_booked": "{amount} bokfört och kopplat",
+    "row_mark_ib": "Märk som IB",
+    "row_move": "Flytta till konto",
+    "toast_marked_ib": "Verifikatet markerades som ingående balans",
+    "toast_moved": "Transaktionen flyttades till {account}"
   },
   "skattekonto": {
     "help_text": "Saldot och händelserna hämtas från Skatteverket och synkas automatiskt varje natt. Genomförda händelser bokförs mot 1630 Skattekonto, oftast automatiskt; det som inte kan matchas flaggas i listan. Betala in via bankgiro 5050-1055 med ditt OCR-nummer.",

@@ -152,10 +152,7 @@ export async function buildBokslutReadinessReport(
         reconciliation.unmatched_transaction_count > 0
           ? `${reconciliation.unmatched_transaction_count} banktransaktioner är inte matchade. Avstäm banken innan bokslut.`
           : `Bankavstämningen visar en differens på ${reconciliation.difference.toFixed(2)} kr.`,
-      // Bankavstämning's real route: the earlier '/reconciliation/bank' href
-      // pointed at a page that has never existed, so the wizard's "Öppna"
-      // link 404ed.
-      href: '/reports/bank-reconciliation',
+      href: '/reconciliation',
     })
   }
 

@@ -7,7 +7,6 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { ChevronLeft } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
-import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -17,10 +16,6 @@ import { ReportDateRange, type DateRangeValue } from '@/components/common/Report
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import type { FiscalPeriod } from '@/types'
-
-/** Preset memory for the bank-reconciliation range, deliberately separate from
- *  the shared report-family key so the two cannot steer each other. */
-const RECONCILIATION_RANGE_KEY_PREFIX = 'Accounted:recon-range-preset:'
 
 function ReportViewLoading() {
   return (
@@ -60,10 +55,6 @@ const BehandlingshistorikView = dynamic(() =>
   import('./BehandlingshistorikView').then((module) => ({ default: module.BehandlingshistorikView })),
   { loading: ReportViewLoading },
 )
-const BankReconciliationView = dynamic(() =>
-  import('./BankReconciliationView').then((module) => ({ default: module.BankReconciliationView })),
-  { loading: ReportViewLoading },
-)
 
 /**
  * The focused single-report experience at /reports/[slug]. Carries one report:
@@ -76,13 +67,10 @@ function FocusedReportInner({
   slug,
   initialPeriods,
   initialCompanyId,
-  autoRun,
 }: {
   slug: string
   initialPeriods: FiscalPeriod[]
   initialCompanyId: string | null
-  /** ?autorun=1: the bank-reconciliation view runs its preview once on load. */
-  autoRun?: boolean
 }) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -134,16 +122,7 @@ function FocusedReportInner({
           // Page help behind a "?" (UI-migration convention 7): the report
           // bodies carry no instructional copy in the page flow.
           help={
-            slug === 'bank-reconciliation' ? (
-              <HelpPopover>
-                <div className="space-y-2">
-                  <p>{t('help_bank_reconciliation_scope')}</p>
-                  <p>{t('help_bank_reconciliation_preview')}</p>
-                  <p>{t('help_bank_reconciliation_ib')}</p>
-                  <p>{t('help_bank_reconciliation_ignored')}</p>
-                </div>
-              </HelpPopover>
-            ) : undefined
+            undefined
           }
           action={
             <FyPicker
@@ -171,14 +150,6 @@ function FocusedReportInner({
           periodEnd={selectedPeriodBounds.end}
           value={dateRange}
           onChange={setDateRange}
-          // A reconciliation is carried out over a whole räkenskapsår, so it
-          // opens on the full year and keeps its own preset memory: inheriting
-          // a "Denna månad" left over from Resultatrapport would show an
-          // alarming difference for a window the user never chose here.
-          defaultPreset={slug === 'bank-reconciliation' ? 'full_year' : undefined}
-          storageKeyPrefix={
-            slug === 'bank-reconciliation' ? RECONCILIATION_RANGE_KEY_PREFIX : undefined
-          }
         />
       )}
 
@@ -198,14 +169,12 @@ function FocusedReportInner({
           slug={slug}
           reportName={reportName}
           periodId={selectedPeriod}
-          periodBounds={selectedPeriodBounds}
           dateRange={dateRange}
           dimensionFilter={dimensionFilter}
           accountFilter={accountFilter}
           isEnskildFirma={isEnskildFirma}
           isAktiebolag={isAktiebolag}
           onNavigateToAccount={navigateToAccount}
-          autoRun={autoRun}
         />
       ) : (
         <EmptyState
@@ -223,26 +192,22 @@ function FocusedView({
   slug,
   reportName,
   periodId,
-  periodBounds,
   dateRange,
   dimensionFilter,
   accountFilter,
   isEnskildFirma,
   isAktiebolag,
   onNavigateToAccount,
-  autoRun,
 }: {
   slug: string
   reportName: string
   periodId: string
-  periodBounds: { start: string; end: string } | null
   dateRange: DateRangeValue
   dimensionFilter: DimensionFilterValue | null
   accountFilter: string | null
   isEnskildFirma: boolean
   isAktiebolag: boolean
   onNavigateToAccount: (account: string) => void
-  autoRun?: boolean
 }) {
   switch (slug) {
     case 'resultatrapport':
@@ -275,15 +240,6 @@ function FocusedView({
       return <SupplierLedgerView periodId={periodId} />
     case 'behandlingshistorik':
       return <BehandlingshistorikView periodId={periodId} dateRange={dateRange} />
-    case 'bank-reconciliation':
-      return (
-        <BankReconciliationView
-          periodId={periodId}
-          periodBounds={periodBounds}
-          dateRange={dateRange}
-          autoRun={autoRun}
-        />
-      )
     default:
       return null
   }
@@ -293,13 +249,10 @@ export function FocusedReport({
   slug,
   initialPeriods,
   initialCompanyId,
-  autoRun,
 }: {
   slug: string
   initialPeriods: FiscalPeriod[]
   initialCompanyId: string | null
-  /** ?autorun=1: the bank-reconciliation view runs its preview once on load. */
-  autoRun?: boolean
 }) {
   return (
     <Suspense fallback={<div className="space-y-8" />}>
@@ -307,7 +260,6 @@ export function FocusedReport({
         slug={slug}
         initialPeriods={initialPeriods}
         initialCompanyId={initialCompanyId}
-        autoRun={autoRun}
       />
     </Suspense>
   )
