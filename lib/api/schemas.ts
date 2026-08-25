@@ -3755,6 +3755,21 @@ export const CompanyMigrationResetSchema = z.object({
 })
 
 /**
+ * POST /api/bookkeeping/fiscal-periods/[id]/reset
+ *
+ * Typed confirmation for the destructive fiscal-year reset: the caller must
+ * restate the year's label (fiscal_periods.name) exactly. The RPC repeats
+ * the match server-side, so this only provides early Swedish feedback.
+ */
+export const FiscalYearResetSchema = z.object({
+  confirm_name: z
+    .string()
+    .trim()
+    .min(1, 'Ange räkenskapsårets namn exakt som det visas')
+    .max(200, 'Räkenskapsårets namn får vara högst 200 tecken'),
+})
+
+/**
  * POST /api/notices/dismiss
  *
  * notice_id is an opaque lib/notices id (category + state discriminator).

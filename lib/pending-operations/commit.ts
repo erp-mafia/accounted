@@ -33,7 +33,10 @@ import {
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
 } from '@/lib/customers/personal-number-shape'
-import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
+import {
+  encryptCustomerPersonalNumber,
+  maskStoredCustomerPersonalNumber,
+} from '@/lib/customers/protect-personal-number'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import {
   normalizeVatRateToDecimal,
@@ -483,11 +486,31 @@ async function commitUpdateCustomer(
   if (currentError) return { error: currentError.message, status: 500 }
   if (!current) return { error: 'Customer not found', status: 404 }
 
-  const updateData: Record<string, unknown> = { ...changes }
+  // personal_number never travels in plaintext: staging validated the input
+  // and stored AES-256-GCM ciphertext under personal_number_encrypted (see
+  // CustomerChangesSchema). Map it onto the customers.personal_number column
+  // with the REST PATCH semantics: ciphertext sets the value, explicit null
+  // clears it, absent leaves the stored value untouched (a masked echo was
+  // already dropped at staging and never reaches this executor).
+  const { personal_number_encrypted: personalNumberEncrypted, ...columnChanges } = changes
+  const updateData: Record<string, unknown> = { ...columnChanges }
   if (changes.customer_number !== undefined) {
     updateData.customer_number = changes.customer_number || null
   }
   const effectiveType = changes.customer_type ?? current.customer_type
+  if (personalNumberEncrypted !== undefined) {
+    // Same guard as staging and the REST PATCH route: only individual rows
+    // get their identifiers masked on read (GDPR art. 5.1 c), so a
+    // personnummer on a business customer is refused, not stored. Re-checked
+    // here so a tampered pending_operations row cannot slip past it.
+    if (personalNumberEncrypted !== null && effectiveType !== 'individual') {
+      return {
+        error: 'personal_number is only allowed for customer_type "individual"',
+        status: 400,
+      }
+    }
+    updateData.personal_number = personalNumberEncrypted
+  }
   if (changes.customer_type !== undefined && effectiveType !== 'individual') {
     updateData.personal_number = null
   }
@@ -518,7 +541,7 @@ async function commitUpdateCustomer(
     .update(updateData)
     .eq('id', customerId)
     .eq('company_id', companyId)
-    .select('id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, language, default_payment_terms, notes')
+    .select('id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, language, default_payment_terms, notes, personal_number')
     .maybeSingle()
 
   if (error) {
@@ -548,6 +571,9 @@ async function commitUpdateCustomer(
       language: data.language ?? 'sv',
       default_payment_terms: data.default_payment_terms,
       notes: data.notes ?? null,
+      // Never the stored ciphertext, and never plaintext: result_data is
+      // persisted on the pending operation and rendered in approval UIs.
+      personal_number_masked: maskStoredCustomerPersonalNumber(data.personal_number),
     },
   }
 }
