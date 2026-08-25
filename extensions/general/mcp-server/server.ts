@@ -1437,6 +1437,21 @@ export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'se
 }
 
 /**
+ * Absolute origin for links the user opens in a browser. A deployment
+ * without NEXT_PUBLIC_APP_URL falls back to localhost in getCanonicalBaseUrl,
+ * which would hand a remote user an unusable link: refuse instead.
+ */
+function connectLinkBaseUrl(): string {
+  if (!process.env.NEXT_PUBLIC_APP_URL) {
+    throw Object.assign(
+      new Error('NEXT_PUBLIC_APP_URL is not configured on this installation; cannot build a connect link'),
+      { code: 'INTERNAL_ERROR' }
+    )
+  }
+  return getCanonicalBaseUrl()
+}
+
+/**
  * The team a company created through the API/MCP path attaches to when the
  * caller does not name one: the user's first (usually the silent personal)
  * team, mirroring what the web wizard passes. null when the user has no
@@ -2965,7 +2980,6 @@ export const tools: McpTool[] = [
         requires_confirmation: { type: 'boolean' },
         company_id: { type: 'string' },
         preview: { type: 'object' },
-        data: { type: 'object' },
         next: { type: 'object' },
         message: { type: 'string' },
       },
@@ -3027,21 +3041,19 @@ export const tools: McpTool[] = [
         throw Object.assign(new Error(result.error), { code })
       }
 
-      return withNext(
-        {
-          created: true,
-          company_id: result.companyId,
-          ...preview,
-          trial: 'A 30-day trial with every paid capability (bank sync, Skatteverket, AI, e-mail) is active from now.',
-          message:
-            'Company created and ready for bookkeeping. This connection uses it automatically from the next call. Remaining setup: bank connection, Skatteverket connection, and the first transactions.',
-        },
-        {
+      return {
+        created: true,
+        company_id: result.companyId,
+        ...preview,
+        trial: 'A 30-day trial with every paid capability (bank sync, Skatteverket, AI, e-mail) is active from now.',
+        message:
+          'Company created and ready for bookkeeping. This connection uses it automatically from the next call. Remaining setup: bank connection, Skatteverket connection, and the first transactions.',
+        next: {
           description: 'Load the onboarding skill for the remaining setup steps (bank, Skatteverket, first transactions).',
           tool: 'gnubok_load_skill',
           args: { slug: 'onboarding' },
-        }
-      )
+        },
+      }
     },
   },
 
@@ -3082,7 +3094,7 @@ export const tools: McpTool[] = [
       if (error) throw error
       const connections = (data ?? []) as Array<{ id: string; bank_name: string | null; status: string; created_at: string }>
       const active = connections.filter((c) => c.status === 'active')
-      const connectUrl = `${getCanonicalBaseUrl()}/import?mode=psd2`
+      const connectUrl = `${connectLinkBaseUrl()}/import?mode=psd2`
       return {
         connected: active.length > 0,
         connections: connections.map((c) => ({
@@ -3140,7 +3152,7 @@ export const tools: McpTool[] = [
       if (error) throw error
       const token = data as { expires_at: string } | null
       const connected = Boolean(token)
-      const connectUrl = `${getCanonicalBaseUrl()}/api/extensions/ext/skatteverket/authorize?return_to=%2F`
+      const connectUrl = `${connectLinkBaseUrl()}/api/extensions/ext/skatteverket/authorize?return_to=%2F`
       return {
         available: enabled,
         connected,

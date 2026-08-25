@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { eventBus } from '@/lib/events/bus'
 
 const mocks = vi.hoisted(() => ({
   createCompanyCore: vi.fn(),
@@ -43,6 +44,7 @@ const setup = {
 describe('gnubok_create_company', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
   })
 
   it('is a companies:write, company-independent write tool', () => {
@@ -84,10 +86,8 @@ describe('gnubok_create_company', () => {
       supabase as never
     )) as Record<string, unknown>
 
-    // withNext envelope: { data, next }
-    const data = result.data as Record<string, unknown>
-    expect(data.created).toBe(true)
-    expect(data.company_id).toBe(COMPANY_ID)
+    expect(result.created).toBe(true)
+    expect(result.company_id).toBe(COMPANY_ID)
     expect(supabase.rpc).toHaveBeenCalledWith('create_company_for_user', {
       p_user_id: 'user-1',
       p_name: 'Testbolaget AB',

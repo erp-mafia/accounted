@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { eventBus } from '@/lib/events/bus'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { tools } from '../server'
 
@@ -26,6 +27,8 @@ function listClient(rows: unknown[] | null, error: unknown = null) {
 
 describe('onboarding connect-link tools', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
     vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.example.test')
   })
   afterEach(() => {
@@ -77,6 +80,14 @@ describe('onboarding connect-link tools', () => {
     const result = (await skvTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
     expect(result.connected).toBe(true)
     expect(result.token_expires_at).toBe('2026-12-01T00:00:00Z')
+  })
+
+  it('refuses to hand out a link when NEXT_PUBLIC_APP_URL is not configured', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '')
+    const { from } = listClient([])
+    await expect(bankTool.execute({}, COMPANY_ID, 'user-1', { from } as never)).rejects.toMatchObject({
+      code: 'INTERNAL_ERROR',
+    })
   })
 
   it('skatteverket: says so when the integration is disabled on the installation', async () => {
