@@ -131,21 +131,26 @@ async function requireAal2(
   if (!shouldEnforceMfa(user)) return null
   const url = new URL(request.url)
   const returnTo = `${url.pathname}${url.search}`
-  const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-  if (aal?.nextLevel === 'aal2') {
-    if (aal.currentLevel === 'aal2') return null
-    return NextResponse.redirect(
-      new URL(`/mfa/verify?returnTo=${encodeURIComponent(returnTo)}`, url.origin),
-    )
-  }
-  // nextLevel below aal2 means no verified factor exists. Mirrors the
-  // middleware's enrollment gate (lib/supabase/middleware.ts), fail-closed.
+  const stepUp = (page: '/mfa/verify' | '/mfa/enroll') =>
+    NextResponse.redirect(new URL(`${page}?returnTo=${encodeURIComponent(returnTo)}`, url.origin))
+
+  // Only a positive "this session is AAL2" answer lets consent through. A
+  // failed or empty assurance lookup is treated as AAL1 (verify page), never
+  // as "no MFA needed": the alternative would mint an MFA-exempt key on a
+  // transient auth error.
+  const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  if (aalError || !aal) return stepUp('/mfa/verify')
+  if (aal.currentLevel === 'aal2') return null
+  if (aal.nextLevel === 'aal2') return stepUp('/mfa/verify')
+
+  // nextLevel below aal2 should mean no verified factor exists. If one does
+  // exist anyway (inconsistent answer), step up rather than enroll a second
+  // factor. Otherwise enroll: mirrors the middleware gate (lib/supabase/
+  // middleware.ts), which skips zero-company users and so never ran for an
+  // account created inside the popup.
   const { data: factors } = await supabase.auth.mfa.listFactors()
   const hasVerifiedFactor = factors?.totp?.some((f) => f.status === 'verified') ?? false
-  if (hasVerifiedFactor) return null
-  return NextResponse.redirect(
-    new URL(`/mfa/enroll?returnTo=${encodeURIComponent(returnTo)}`, url.origin),
-  )
+  return stepUp(hasVerifiedFactor ? '/mfa/verify' : '/mfa/enroll')
 }
 
 function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Response {

@@ -320,6 +320,29 @@ describe('MFA step-up on /api/mcp-oauth/authorize', () => {
     expect(response.status).toBe(200)
   })
 
+  it('GET fails closed to /mfa/verify when the assurance lookup returns nothing', async () => {
+    // A transient auth error must never read as "no MFA needed": consent
+    // here mints a key that bypasses MFA on every later call.
+    const supabase = buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal1' }, 1)
+    ;(supabase.auth.mfa.getAuthenticatorAssuranceLevel as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: null,
+      error: { message: 'boom' },
+    })
+    mocks.createClient.mockResolvedValue(supabase)
+
+    const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
+    expect(new URL(response.headers.get('location')!).pathname).toBe('/mfa/verify')
+  })
+
+  it('GET steps up (not enroll) when a verified factor exists despite an AAL1 answer', async () => {
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal1' }, 1),
+    )
+
+    const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
+    expect(new URL(response.headers.get('location')!).pathname).toBe('/mfa/verify')
+  })
+
   it('GET sends a password account with no factor to /mfa/enroll with returnTo', async () => {
     // A brand-new account created inside the OAuth popup (issue #1814) has no
     // company, so the middleware never forced enrollment. Without this leg the

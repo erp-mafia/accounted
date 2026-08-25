@@ -48,6 +48,11 @@ function MfaEnrollContent() {
     router.push(returnTo)
     router.refresh()
   }
+  // Back must not bounce into the consent page: with no factor enrolled it
+  // redirects straight back here. Abort the connect flow to the app instead.
+  const abort = () => {
+    router.push(returnTo.startsWith('/api/') ? '/' : returnTo)
+  }
 
   // UX defense: middleware already blocks this route for BankID-only users
   // without a password, but a stale tab might land here too. Bounce them to
@@ -228,7 +233,7 @@ function MfaEnrollContent() {
           <Button
             variant="ghost"
             className="w-full mt-4 text-muted-foreground"
-            onClick={leave}
+            onClick={abort}
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
             Tillbaka
@@ -327,7 +332,7 @@ function MfaEnrollContent() {
         <Button
           variant="ghost"
           className="w-full mt-4 text-muted-foreground"
-          onClick={leave}
+          onClick={abort}
         >
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
