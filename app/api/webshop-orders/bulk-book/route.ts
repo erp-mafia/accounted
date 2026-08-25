@@ -10,6 +10,8 @@ import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import {
   buildOrderBookingLines,
   orderBookingDescription,
+  resolvePaymentAccount,
+  ROUNDING_ACCOUNT,
 } from '@/lib/webshop-orders/booking-lines'
 import {
   assertOrderBookable,
@@ -20,10 +22,26 @@ import type { WebshopOrder, WebshopStoreSettings } from '@/types'
 
 ensureInitialized()
 
+// Up to 50 sequential draft -> claim -> commit round trips against the
+// engine; the default function window is not guaranteed to fit them, and a
+// kill between claim and commit would leave an order pointing at an
+// uncommitted draft (skeptic finding). Same budget as the other batch routes.
+export const maxDuration = 300
+
+/**
+ * A residual on 3740 above this magnitude (SEK) is not öresavrundning: it
+ * means the order's gross total does not match its VAT breakdown (gift
+ * cards, plugin-mangled orders). Legitimate per-bucket öre rounding and FX
+ * drift stay well below this; anything above needs the single-order dialog
+ * where the user sees the line.
+ */
+const MAX_RESIDUAL_SEK = 1
+
 interface BulkBookFailure {
   code: string
   message: string
   message_en: string
+  details?: Record<string, unknown>
 }
 
 interface BulkBookOrderResult {
@@ -37,12 +55,16 @@ interface BulkBookOrderResult {
 }
 
 /** Failure envelope for a known structured-error code. */
-function failureFromCode(code: string): BulkBookFailure {
+function failureFromCode(
+  code: string,
+  details?: Record<string, unknown>,
+): BulkBookFailure {
   const entry = getErrorEntry(code)
   return {
     code,
     message: entry?.message_sv ?? code,
     message_en: entry?.message_en ?? code,
+    ...(details ? { details } : {}),
   }
 }
 
@@ -76,10 +98,15 @@ function failureFromError(err: unknown): BulkBookFailure {
  * period locks, balance, voucher numbering and anything later added to the
  * single-order path (e.g. underlag anchoring) apply per order automatically.
  *
+ * The sweep has no reviewing user, so it only books orders whose lines are
+ * DERIVED, never guessed: rows with an empty vat_breakdown (ratio-inferred
+ * fallback), invoice-mode payment methods, or a 3740 residual above öre
+ * scale are refused per order and pointed at the single-order dialog.
+ *
  * Partial failure is expected and reported per order: one refused row (period
- * locked, raced booking, unresolved FX) never aborts the rest of the batch.
- * The response is 200 with results[] as long as the request itself was valid
- * and at least one requested order exists for the company.
+ * locked, raced booking, unresolved FX, review-needed) never aborts the rest
+ * of the batch. The response is 200 with results[] as long as the request
+ * itself was valid and at least one requested order exists for the company.
  */
 export const POST = withRouteContext(
   'webshop_order.bulk_book',
@@ -111,18 +138,23 @@ export const POST = withRouteContext(
     }
 
     // Per-store settings drive the payment-method -> account prefill exactly
-    // like the single-order dialog. A fetch failure falls back to the default
-    // clearing account rather than aborting the sweep.
-    let settingsRows: WebshopStoreSettings[] = []
+    // like the single-order dialog. A fetch failure ABORTS the sweep: falling
+    // back to the default clearing account here would silently book every
+    // order against 1686 while the user just confirmed a dialog showing their
+    // mapped accounts (skeptic finding). Failing loudly is recoverable;
+    // fifty wrong immutable verifikat are not.
     const { data: settingsData, error: settingsError } = await supabase
       .from('webshop_store_settings')
       .select('*')
       .eq('company_id', companyId)
     if (settingsError) {
-      log.warn('bulk-book settings fetch failed; using default accounts', settingsError)
-    } else {
-      settingsRows = (settingsData ?? []) as WebshopStoreSettings[]
+      log.error('bulk-book settings fetch failed; aborting sweep', settingsError)
+      return NextResponse.json(
+        { error: getErrorMessage(settingsError, { context: 'transaction' }) },
+        { status: 500 },
+      )
     }
+    const settingsRows = (settingsData ?? []) as WebshopStoreSettings[]
     const settingsFor = (order: WebshopOrder): WebshopStoreSettings | null =>
       settingsRows.find(
         (s) => s.platform === order.platform && s.store_scope === order.store_scope,
@@ -152,7 +184,40 @@ export const POST = withRouteContext(
           order_id: id,
           order_number: order.order_number,
           success: false,
-          error: failureFromCode(guardFailure.code),
+          error: failureFromCode(guardFailure.code, guardFailure.details),
+        })
+        continue
+      }
+
+      // No VAT breakdown from the store: buildOrderBookingLines would fall
+      // back to a ratio-INFERRED single bucket, which the single-order dialog
+      // shows as an editable guess for the user to correct. There is no
+      // reviewing user in a sweep, so a guessed rate split must never become
+      // an immutable verifikat here (skeptic finding: a 25%+6% mixed sale
+      // classified as 12% books wrong revenue/VAT accounts and rutor, and an
+      // amount-only refund would reverse zero moms via 3004).
+      if (order.vat_breakdown.length === 0) {
+        results.push({
+          order_id: id,
+          order_number: order.order_number,
+          success: false,
+          error: failureFromCode('WEBSHOP_ORDER_VAT_BREAKDOWN_MISSING'),
+        })
+        continue
+      }
+
+      const settings = settingsFor(order)
+      // The store's own mapping routes this payment method through the
+      // invoice flow. Booking it directly would both post a wrong clearing
+      // leg and permanently foreclose Skapa faktura for the order (the claim
+      // sets journal_entry_id). The override does not bypass this: it
+      // changes the account, not the flow the merchant configured.
+      if (resolvePaymentAccount(order, settings).invoiceMode) {
+        results.push({
+          order_id: id,
+          order_number: order.order_number,
+          success: false,
+          error: failureFromCode('WEBSHOP_ORDER_INVOICE_MODE_METHOD'),
         })
         continue
       }
@@ -184,7 +249,7 @@ export const POST = withRouteContext(
       try {
         lines = buildOrderBookingLines({
           order: resolvedOrder,
-          settings: settingsFor(resolvedOrder),
+          settings,
           paymentAccount: payment_account,
         })
       } catch (err) {
@@ -195,6 +260,28 @@ export const POST = withRouteContext(
           order_number: order.order_number,
           success: false,
           error: failureFromError(err),
+        })
+        continue
+      }
+
+      // Residual bound: the 3740 line exists to absorb öre rounding and FX
+      // drift, both bounded by a few öre per bucket. A residual above
+      // MAX_RESIDUAL_SEK means the gross total and the VAT breakdown
+      // disagree (gift-card redemptions, mangled orders); in the single
+      // dialog the user sees the fat 3740 line and stops, so the sweep must
+      // refuse instead of booking the gap as "öresavrundning".
+      const residualLine = lines.find((l) => l.account_number === ROUNDING_ACCOUNT)
+      const residualAbs = residualLine
+        ? Math.max(residualLine.debit_amount || 0, residualLine.credit_amount || 0)
+        : 0
+      if (residualAbs > MAX_RESIDUAL_SEK) {
+        results.push({
+          order_id: id,
+          order_number: order.order_number,
+          success: false,
+          error: failureFromCode('WEBSHOP_ORDER_RESIDUAL_TOO_LARGE', {
+            residual: residualAbs,
+          }),
         })
         continue
       }

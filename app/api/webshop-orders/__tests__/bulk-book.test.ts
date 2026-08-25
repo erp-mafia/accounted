@@ -91,7 +91,12 @@ interface BulkResult {
   order_number: string | null
   success: boolean
   journal_entry_id?: string
-  error?: { code: string; message: string; message_en: string }
+  error?: {
+    code: string
+    message: string
+    message_en: string
+    details?: Record<string, unknown>
+  }
 }
 
 interface BulkResponse {
@@ -270,9 +275,111 @@ describe('POST /api/webshop-orders/bulk-book', () => {
     expect(failed?.success).toBe(false)
     expect(failed?.error?.code).toBe('WEBSHOP_ORDER_ALREADY_BOOKED')
     expect(failed?.error?.message).toBeTruthy()
+    // Guard details survive into the per-order envelope (skeptic finding).
+    expect(failed?.error?.details?.journal_entry_id).toBe('je-existing')
     const succeeded = body.data.results.find((r) => r.order_id === ORDER_2)
     expect(succeeded?.success).toBe(true)
     expect(mockCommitEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses an order with no VAT breakdown instead of booking the guessed split', async () => {
+    // Skeptic counterexample: 25%+6% mixed sale whose sync stored no per-rate
+    // breakdown; the ratio fallback would classify it as a 12% sale. The
+    // sweep must refuse it (only the single dialog may show the guess) and
+    // still book the healthy order.
+    enqueue({
+      data: [
+        makeOrderRow({ total: 1117, total_tax: 117, vat_breakdown: [] }),
+        makeOrderRow({ id: ORDER_2, order_number: '1002' }),
+      ],
+    })
+    enqueue({ data: [] }) // store settings
+    enqueue({ data: [{ id: ORDER_2 }] }) // claim order 2
+    const { status, body } = await parseJsonResponse<BulkResponse>(await postBulk())
+    expect(status).toBe(200)
+    const failed = body.data.results.find((r) => r.order_id === ORDER_1)
+    expect(failed?.error?.code).toBe('WEBSHOP_ORDER_VAT_BREAKDOWN_MISSING')
+    expect(body.data.booked_count).toBe(1)
+    // The guessed lines must never have reached the engine.
+    expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
+    const input = mockCreateDraftEntry.mock.calls[0][3] as { source_id: string }
+    expect(input.source_id).toBe(ORDER_2)
+  })
+
+  it('refuses a refund row with no VAT breakdown (zero-moms reversal guard)', async () => {
+    enqueue({
+      data: [
+        makeOrderRow({
+          row_type: 'refund',
+          parent_order_id: null,
+          total: -500,
+          total_sek: -500,
+          total_tax: 0,
+          vat_breakdown: [],
+        }),
+      ],
+    })
+    enqueue({ data: [] }) // store settings
+    const { status, body } = await parseJsonResponse<BulkResponse>(
+      await postBulk({ order_ids: [ORDER_1] }),
+    )
+    expect(status).toBe(200)
+    expect(body.data.results[0].error?.code).toBe('WEBSHOP_ORDER_VAT_BREAKDOWN_MISSING')
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses invoice-mode payment methods even with an account override', async () => {
+    enqueue({
+      data: [
+        makeOrderRow({ payment_method: 'bacs', payment_method_title: 'Bank transfer' }),
+      ],
+    })
+    enqueue({
+      data: [
+        {
+          id: 'settings-1',
+          company_id: 'company-1',
+          platform: 'woocommerce',
+          store_scope: 'butik.example.se',
+          payment_method_account_map: { bacs: { mode: 'invoice' } },
+        },
+      ],
+    })
+    const { status, body } = await parseJsonResponse<BulkResponse>(
+      await postBulk({ order_ids: [ORDER_1], payment_account: '1930' }),
+    )
+    expect(status).toBe(200)
+    expect(body.data.results[0].error?.code).toBe('WEBSHOP_ORDER_INVOICE_MODE_METHOD')
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses an order whose 3740 residual is above ore scale', async () => {
+    // Gift-card-style gap: gross 880 but the breakdown sums to 1000, so the
+    // builder would dump 120 kr on 3740 "oresavrundning". Not öre: refuse.
+    enqueue({
+      data: [
+        makeOrderRow({
+          total: 880,
+          total_tax: 200,
+          vat_breakdown: [{ rate: 25, net: 800, tax: 200 }],
+        }),
+      ],
+    })
+    enqueue({ data: [] }) // store settings
+    const { status, body } = await parseJsonResponse<BulkResponse>(
+      await postBulk({ order_ids: [ORDER_1] }),
+    )
+    expect(status).toBe(200)
+    expect(body.data.results[0].error?.code).toBe('WEBSHOP_ORDER_RESIDUAL_TOO_LARGE')
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
+  it('aborts the whole sweep when the settings fetch fails (no silent 1686 fallback)', async () => {
+    enqueue({ data: [makeOrderRow()] })
+    enqueue({ data: null, error: { message: 'connection reset' } }) // settings fetch fails
+    const { status } = await parseJsonResponse(await postBulk({ order_ids: [ORDER_1] }))
+    expect(status).toBe(500)
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
   it('refuses an order marked as booked outside the integration (per-order)', async () => {

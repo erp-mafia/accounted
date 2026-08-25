@@ -55,8 +55,10 @@ const VAT_ACCOUNT_BY_RATE: Record<number, string> = {
   6: '2631',
 }
 
-/** Öresavrundning. */
-const ROUNDING_ACCOUNT = '3740'
+/** Öresavrundning. Exported so the bulk route can find and bound the
+ * residual line it emits (a residual above öre scale means the order's
+ * totals do not match its VAT breakdown and needs per-order review). */
+export const ROUNDING_ACCOUNT = '3740'
 
 /**
  * Every account this prefill can emit, as a closed set.

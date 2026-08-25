@@ -3900,6 +3900,27 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The order was invoiced through a customer invoice. Handle the refund with a credit note instead of booking the refund row directly.',
   },
+  WEBSHOP_ORDER_VAT_BREAKDOWN_MISSING: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern saknar momsuppdelning från butiken, så konteringen kan inte härledas säkert. Bokför ordern enskilt och granska raderna.',
+    message_en:
+      'The order has no VAT breakdown from the store, so the posting cannot be derived reliably. Book the order individually and review the lines.',
+  },
+  WEBSHOP_ORDER_INVOICE_MODE_METHOD: {
+    httpStatus: 409,
+    message_sv:
+      'Betalsättet är markerat som fakturaflöde i butiksinställningarna. Skapa faktura från ordern i stället, eller bokför den enskilt.',
+    message_en:
+      'The payment method is marked as invoice flow in the store settings. Create an invoice from the order instead, or book it individually.',
+  },
+  WEBSHOP_ORDER_RESIDUAL_TOO_LARGE: {
+    httpStatus: 422,
+    message_sv:
+      'Orderns belopp stämmer inte med momsuppdelningen (differensen är större än öresavrundning). Bokför ordern enskilt och granska raderna.',
+    message_en:
+      'The order total does not match its VAT breakdown (the difference is larger than öre rounding). Book the order individually and review the lines.',
+  },
   WEBSHOP_ORDER_CREATE_INVOICE_CUSTOMER_FAILED: {
     httpStatus: 500,
     message_sv: 'Kunden kunde inte skapas från orderns uppgifter.',

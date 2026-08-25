@@ -69,23 +69,48 @@ export default function BulkOrderBookingDialog({
   const [submitting, setSubmitting] = useState(false)
   const [results, setResults] = useState<BulkBookOrderResult[] | null>(null)
 
+  // Client-side mirror of the server's review guards, so the confirmation
+  // describes exactly what will book (convention 10) instead of promising a
+  // sweep the server then partially refuses:
+  // - empty vat_breakdown: the prefill would be a ratio-inferred GUESS that
+  //   only the single dialog's editable form may show;
+  // - invoice-mode mapping: the store routes this method through the invoice
+  //   flow, and booking would foreclose Skapa faktura for the order.
+  // The server enforces the same rules for non-UI callers.
+  const { bookableOrders, skippedMissingBreakdown, skippedInvoiceMode } = useMemo(() => {
+    const missing: WebshopOrder[] = []
+    const invoiceMode: WebshopOrder[] = []
+    const bookable: WebshopOrder[] = []
+    for (const order of orders) {
+      if (order.vat_breakdown.length === 0) missing.push(order)
+      else if (resolvePaymentAccount(order, settingsFor(order)).invoiceMode)
+        invoiceMode.push(order)
+      else bookable.push(order)
+    }
+    return {
+      bookableOrders: bookable,
+      skippedMissingBreakdown: missing,
+      skippedInvoiceMode: invoiceMode,
+    }
+  }, [orders, settingsFor])
+
   // Signed sum per currency: refunds carry negative totals and reduce the
   // batch total honestly instead of inflating it.
   const currencyTotals = useMemo(() => {
     const byCurrency = new Map<string, number>()
-    for (const order of orders) {
+    for (const order of bookableOrders) {
       const code = order.currency.toUpperCase()
       byCurrency.set(code, roundOre((byCurrency.get(code) ?? 0) + order.total))
     }
     return Array.from(byCurrency.entries()).sort(([a], [b]) => a.localeCompare(b))
-  }, [orders])
+  }, [bookableOrders])
 
   // Payment-method groups with their resolved counter-account, so the user
   // sees exactly which account each slice of the selection will book against
   // before confirming.
   const accountGroups = useMemo(() => {
     const groups = new Map<string, { label: string; account: string; count: number }>()
-    for (const order of orders) {
+    for (const order of bookableOrders) {
       const { account } = resolvePaymentAccount(order, settingsFor(order))
       const label = order.payment_method_title || order.payment_method || ''
       const key = `${label}|${account}`
@@ -94,11 +119,16 @@ export default function BulkOrderBookingDialog({
       else groups.set(key, { label, account, count: 1 })
     }
     return Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label))
-  }, [orders, settingsFor])
+  }, [bookableOrders, settingsFor])
 
-  const warningCount = useMemo(
-    () => orders.filter((o) => resolveBookingWarnings(o).length > 0).length,
-    [orders],
+  // Advisory VAT warnings stay per order, not an anonymous count: the user
+  // must be able to tell WHICH orders deserve the single-dialog review.
+  const warningOrderNumbers = useMemo(
+    () =>
+      bookableOrders
+        .filter((o) => resolveBookingWarnings(o).length > 0)
+        .map((o) => o.order_number),
+    [bookableOrders],
   )
 
   const uniformAccount =
@@ -121,7 +151,7 @@ export default function BulkOrderBookingDialog({
 
   const overrideValid = ACCOUNT_NUMBER_RE.test(overrideAccount)
   const canConfirm =
-    !submitting && orders.length > 0 && (!overrideEnabled || overrideValid)
+    !submitting && bookableOrders.length > 0 && (!overrideEnabled || overrideValid)
 
   async function handleConfirm() {
     if (!canConfirm) return
@@ -131,7 +161,7 @@ export default function BulkOrderBookingDialog({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          order_ids: orders.map((o) => o.id),
+          order_ids: bookableOrders.map((o) => o.id),
           ...(overrideEnabled && overrideValid
             ? { payment_account: overrideAccount }
             : {}),
@@ -187,7 +217,7 @@ export default function BulkOrderBookingDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] sm:max-w-[560px] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{t('bulk_title', { count: orders.length })}</DialogTitle>
+          <DialogTitle>{t('bulk_title', { count: bookableOrders.length })}</DialogTitle>
           <DialogDescription>{t('bulk_description')}</DialogDescription>
         </DialogHeader>
 
@@ -220,6 +250,8 @@ export default function BulkOrderBookingDialog({
           </div>
         ) : (
           <div className="space-y-4">
+            {bookableOrders.length > 0 && (
+            <>
             <div className="rounded-lg border border-border bg-card p-3">
               <p className="text-xs font-medium text-muted-foreground">
                 {t('bulk_totals_label')}
@@ -297,13 +329,35 @@ export default function BulkOrderBookingDialog({
                 </div>
               )}
             </div>
+            </>
+            )}
 
-            {/* Advisory only (soft-guard rule): the sweep still books; orders
-                needing line-level review are better booked one by one. */}
-            {warningCount > 0 && (
-              <p className="attn text-[12.5px]">
-                {t('bulk_warning_count', { count: warningCount })}
+            {/* Skip notices: these selected orders will NOT be part of the
+                sweep (mirrored server-side); the escape hatch is the
+                single-order dialog where the lines are reviewable. */}
+            {skippedMissingBreakdown.length > 0 && (
+              <p className="attn text-[12.5px]" data-ph-mask="">
+                {t('bulk_skipped_missing_breakdown', {
+                  numbers: skippedMissingBreakdown.map((o) => o.order_number).join(', '),
+                })}
               </p>
+            )}
+            {skippedInvoiceMode.length > 0 && (
+              <p className="attn text-[12.5px]" data-ph-mask="">
+                {t('bulk_skipped_invoice_mode', {
+                  numbers: skippedInvoiceMode.map((o) => o.order_number).join(', '),
+                })}
+              </p>
+            )}
+            {/* Advisory only (soft-guard rule): the sweep still books these;
+                the named orders are better reviewed one by one. */}
+            {warningOrderNumbers.length > 0 && (
+              <p className="attn text-[12.5px]" data-ph-mask="">
+                {t('bulk_warning_orders', { numbers: warningOrderNumbers.join(', ') })}
+              </p>
+            )}
+            {bookableOrders.length === 0 && (
+              <p className="text-sm text-muted-foreground">{t('bulk_none_bookable')}</p>
             )}
           </div>
         )}
@@ -324,7 +378,7 @@ export default function BulkOrderBookingDialog({
               </Button>
               <Button onClick={() => void handleConfirm()} disabled={!canConfirm}>
                 {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {t('bulk_confirm', { count: orders.length })}
+                {t('bulk_confirm', { count: bookableOrders.length })}
               </Button>
             </>
           )}

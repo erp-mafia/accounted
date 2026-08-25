@@ -6312,7 +6312,6 @@
     "bulk_no_method": "No payment method",
     "bulk_group_count": "{count, plural, one {# order} other {# orders}}",
     "bulk_override_label": "Book all against the same payment account",
-    "bulk_warning_count": "{count, plural, one {# of the orders has a VAT warning. Book it separately if you want to review the lines.} other {# of the orders have VAT warnings. Book them separately if you want to review the lines.}}",
     "bulk_confirm": "Book {count, plural, one {# order} other {# orders}}",
     "bulk_error_title": "Booking failed",
     "bulk_success_title": "Done",
@@ -6320,7 +6319,11 @@
     "bulk_partial_summary": "{booked} booked, {failed} failed",
     "bulk_failed_heading": "Could not be booked",
     "bulk_unknown_error": "Unknown error",
-    "bulk_close": "Close"
+    "bulk_close": "Close",
+    "bulk_skipped_missing_breakdown": "Skipped (no VAT breakdown, book individually): {numbers}",
+    "bulk_skipped_invoice_mode": "Skipped (invoice flow per store settings): {numbers}",
+    "bulk_warning_orders": "VAT warning on order {numbers}. Book them individually if you want to review the lines.",
+    "bulk_none_bookable": "None of the selected orders can be booked in a sweep. Book them individually."
   },
   "sales_orders": {
     "title": "Sales orders",

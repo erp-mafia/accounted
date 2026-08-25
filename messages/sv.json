@@ -6312,7 +6312,6 @@
     "bulk_no_method": "Utan betalsätt",
     "bulk_group_count": "{count, plural, one {# order} other {# ordrar}}",
     "bulk_override_label": "Bokför alla mot samma betalkonto",
-    "bulk_warning_count": "{count, plural, one {# av ordrarna har en momsvarning. Bokför den separat om du vill granska raderna.} other {# av ordrarna har momsvarningar. Bokför dem separat om du vill granska raderna.}}",
     "bulk_confirm": "Bokför {count, plural, one {# order} other {# ordrar}}",
     "bulk_error_title": "Bokföringen misslyckades",
     "bulk_success_title": "Klart",
@@ -6320,7 +6319,11 @@
     "bulk_partial_summary": "{booked} bokförda, {failed} misslyckades",
     "bulk_failed_heading": "Kunde inte bokföras",
     "bulk_unknown_error": "Okänt fel",
-    "bulk_close": "Stäng"
+    "bulk_close": "Stäng",
+    "bulk_skipped_missing_breakdown": "Hoppas över (saknar momsuppdelning, bokför enskilt): {numbers}",
+    "bulk_skipped_invoice_mode": "Hoppas över (fakturaflöde enligt butiksinställningarna): {numbers}",
+    "bulk_warning_orders": "Momsvarning på order {numbers}. Bokför dem enskilt om du vill granska raderna.",
+    "bulk_none_bookable": "Inga av de markerade ordrarna kan bokföras i svep. Bokför dem enskilt."
   },
   "sales_orders": {
     "title": "Order",
