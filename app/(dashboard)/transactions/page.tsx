@@ -3180,7 +3180,7 @@ export default function TransactionsPage() {
         description: `${successes} transaktioner ignorerade`,
         action: (
           <ToastAction altText="Öppna Bankavstämning" asChild>
-            <Link href="/reports/bank-reconciliation">Bankavstämning</Link>
+            <Link href="/reconciliation">Avstämning</Link>
           </ToastAction>
         ),
       })
@@ -3852,7 +3852,7 @@ export default function TransactionsPage() {
                 className="px-1 pt-3"
                 action={{
                   label: t('recon_attn_action'),
-                  href: '/reports/bank-reconciliation?autorun=1',
+                  href: '/reconciliation?autorun=1',
                 }}
               >
                 {t('recon_attn', { count: selectableInboxIds.length })}
@@ -3900,7 +3900,7 @@ export default function TransactionsPage() {
         <BankSyncNowButton />
         <BankSyncSinceLastVisit />
         <Link
-          href="/reports/bank-reconciliation"
+          href="/reconciliation"
           className="ml-auto transition-colors duration-150 hover:text-foreground"
         >
           Bankavstämning →

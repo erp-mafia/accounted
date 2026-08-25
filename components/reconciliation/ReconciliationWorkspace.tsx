@@ -214,6 +214,7 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
           key={selected.account_key}
           account={selected}
           rail={<ReconciliationRail accounts={accounts} selectedKey={selected.account_key} onSelect={select} />}
+          otherBankAccounts={accounts.filter((a) => a.kind === 'bank' && a.account_key !== selected.account_key && !a.superseded_by)}
           window={window}
           onChanged={() => void load()}
         />

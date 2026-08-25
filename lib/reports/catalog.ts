@@ -305,6 +305,10 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     // uses the shared ReportDateRange like every other report, mounted with a
     // full-year default and its own preset memory (see FocusedReport).
     params: 'fiscal-range',
+    // 2026-08-25: the bank view was absorbed by /reconciliation (matcher,
+    // manual N:1 matching, residual booking, IB tag, move-to-account all live
+    // there). The slug stays for old links and the report library; it redirects.
+    route: '/reconciliation',
   },
 
   // --- Export & arkiv: library-only ---
