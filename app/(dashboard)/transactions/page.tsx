@@ -39,6 +39,7 @@ import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking
 import { resolveQuickReviewDefaults, type ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
 import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
 import { isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
+import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type {
   TransactionWithInvoice,
   ViewMode,
@@ -326,6 +327,9 @@ export default function TransactionsPage() {
   const [bookingDialogOpen, setBookingDialogOpen] = useState(false)
   const [bookingDialogTransaction, setBookingDialogTransaction] = useState<TransactionWithInvoice | null>(null)
   const [bookingDialogTemplate, setBookingDialogTemplate] = useState<BookingTemplateLibrary | null>(null)
+  // "Andra rader" hand-off: the computed proposal lines from QuickReviewDialog,
+  // prefilled into TransactionBookingDialog for per-line editing.
+  const [bookingDialogProposalLines, setBookingDialogProposalLines] = useState<ProposalLine[] | null>(null)
   // Account picked from the template picker's "Konton" search results:
   // prefills the counter line when the manual booking dialog opens.
   const [bookingDialogAccount, setBookingDialogAccount] = useState<string | null>(null)
@@ -2993,6 +2997,7 @@ export default function TransactionsPage() {
     setBookingDialogOpen(false)
     setBookingDialogTransaction(null)
     setBookingDialogTemplate(null)
+    setBookingDialogProposalLines(null)
     if (matched) {
       toast({ title: 'Bankhändelsen kopplad', description: 'Ingen ny bokföring skapad.' })
     } else {
@@ -3392,9 +3397,25 @@ export default function TransactionsPage() {
     if (templatePickerTransaction) {
       setBookingDialogTransaction(templatePickerTransaction)
       setBookingDialogTemplate(null)
+      setBookingDialogProposalLines(null)
       setBookingDialogAccount(null)
       setBookingDialogOpen(true)
     }
+  }
+
+  // "Andra rader" on the proposal view: close the review and reopen the
+  // manual booking dialog prefilled with the exact lines the preview showed.
+  // The transaction comes from the dialog itself (its enriched mirror), not
+  // from quickReview state: an in-dialog SEK-rate backfill lives only on the
+  // enriched row, and the booking dialog stamps the settlement leg's FX
+  // metadata from that row's exchange_rate.
+  function handleEditProposedLines(lines: ProposalLine[], transaction: TransactionWithInvoice) {
+    setQuickReviewOpen(false)
+    setBookingDialogTransaction(transaction)
+    setBookingDialogTemplate(null)
+    setBookingDialogAccount(null)
+    setBookingDialogProposalLines(lines)
+    setBookingDialogOpen(true)
   }
 
   // Account picked from the template picker's "Konton" search group
@@ -3404,6 +3425,7 @@ export default function TransactionsPage() {
     if (!templatePickerTransaction) return
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(null)
+    setBookingDialogProposalLines(null)
     setBookingDialogAccount(accountNumber)
     setTemplatePickerOpen(false)
     setBookingDialogOpen(true)
@@ -3416,6 +3438,7 @@ export default function TransactionsPage() {
     if (!templatePickerTransaction) return
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(raw)
+    setBookingDialogProposalLines(null)
     setBookingDialogAccount(null)
     setTemplatePickerOpen(false)
     setBookingDialogOpen(true)
@@ -3983,11 +4006,13 @@ export default function TransactionsPage() {
             setBookingDialogOpen(o)
             if (!o) {
               setBookingDialogTemplate(null)
+              setBookingDialogProposalLines(null)
               setBookingDialogAccount(null)
             }
           }}
           transaction={bookingDialogTransaction}
           preselectedTemplate={bookingDialogTemplate}
+          proposalLines={bookingDialogProposalLines}
           preselectedAccount={bookingDialogAccount}
           onBooked={handleTransactionBooked}
         />
@@ -4140,6 +4165,7 @@ export default function TransactionsPage() {
           counterpartyDefaultDimensions={quickReview?.defaultDimensions ?? null}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
+          onEditLines={handleEditProposedLines}
         />
       )}
 

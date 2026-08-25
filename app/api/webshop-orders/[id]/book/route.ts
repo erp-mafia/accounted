@@ -54,6 +54,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         details: { invoice_id: order.invoice_id },
       })
     }
+    // Marked as booked outside the integration: booking it here would post
+    // the same business event twice. The mark is user-reversible.
+    if (order.manually_booked_at) {
+      return errorResponseFromCode('WEBSHOP_ORDER_MANUALLY_BOOKED', log, {
+        requestId,
+        details: { manually_booked_at: order.manually_booked_at },
+      })
+    }
     // Refunds of an invoiced order belong in the credit-note flow.
     if (order.row_type === 'refund' && order.parent_order_id) {
       const { data: parent } = await supabase
@@ -189,9 +197,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
     }
 
-    // The claim guards BOTH links: a concurrent create-invoice between our
-    // read and this update must lose too (mutual exclusivity, not just
-    // no-double-booking).
+    // The claim guards BOTH links plus the manual mark: a concurrent
+    // create-invoice or mark-booked between our read and this update must
+    // lose too (mutual exclusivity, not just no-double-booking).
     const { data: claimed, error: claimError } = await supabase
       .from('webshop_orders')
       .update({ journal_entry_id: draft.id })
@@ -199,6 +207,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
       .is('journal_entry_id', null)
       .is('invoice_id', null)
+      .is('manually_booked_at', null)
       .select('id')
     if (claimError || !claimed || claimed.length === 0) {
       await cancelDraft()
