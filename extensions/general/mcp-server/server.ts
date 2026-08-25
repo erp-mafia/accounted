@@ -83,6 +83,7 @@ import {
 } from '@/lib/customers/personal-number-shape'
 import {
   PERSONAL_NUMBER_PLAINTEXT_RE,
+  isMaskedPersonalNumber,
   maskCustomerPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
 import {
@@ -4974,6 +4975,10 @@ export const tools: McpTool[] = [
         city: { type: 'string' },
         country: { type: 'string' },
         org_number: { type: 'string' },
+        personal_number: {
+          type: ['string', 'null'],
+          description: 'Personnummer, individual customers only. Encrypted at staging, masked on read. Null clears; a masked value (********-1234) means unchanged.',
+        },
         vat_number: { type: 'string', description: 'EU VAT numbers are revalidated with VIES when the update is approved.' },
         language: { type: 'string', enum: ['sv', 'en'] },
         default_payment_terms: { type: 'integer', minimum: 1 },
@@ -5012,6 +5017,35 @@ export const tools: McpTool[] = [
         if (args[key] !== undefined) changes[key] = args[key]
       }
 
+      // personal_number never enters `changes` in plaintext: staging-pii-guard
+      // forbids that key in staged payloads. REST PATCH semantics
+      // (app/api/customers/[id]/route.ts): a masked echo of a read
+      // ('********-1234' or '********-????') carries no new value and is
+      // dropped; explicit null clears; a plaintext personnummer is validated
+      // here and staged as AES-256-GCM ciphertext, so the approval preview
+      // only ever sees the masked form.
+      const personalNumberArg = args.personal_number
+      let personalNumber: string | null = null
+      if (personalNumberArg !== undefined) {
+        if (personalNumberArg !== null && typeof personalNumberArg !== 'string') {
+          throw new Error('personal_number must be a string or null.')
+        }
+        const trimmed = personalNumberArg === null ? null : personalNumberArg.trim()
+        if (trimmed === null) {
+          changes.personal_number_encrypted = null
+        } else if (isMaskedPersonalNumber(trimmed)) {
+          // Echo of a read: leave the stored personnummer alone.
+        } else if (!PERSONAL_NUMBER_PLAINTEXT_RE.test(trimmed)) {
+          throw new Error(
+            'personal_number must be a Swedish personnummer: YYYYMMDD-XXXX, YYMMDD-XXXX or the digits alone. '
+            + 'Null clears the stored value; a masked value leaves it unchanged.',
+          )
+        } else {
+          personalNumber = trimmed
+          changes.personal_number_encrypted = encryptCustomerPersonalNumber(trimmed)
+        }
+      }
+
       const parsed = UpdateCustomerParamsSchema.safeParse({
         customer_id: args.customer_id,
         changes,
@@ -5023,13 +5057,23 @@ export const tools: McpTool[] = [
 
       const { data: current, error } = await supabase
         .from('customers')
-        .select('id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, language, default_payment_terms, notes')
+        .select('id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, language, default_payment_terms, notes, personal_number')
         .eq('id', parsed.data.customer_id)
         .eq('company_id', companyId)
         .maybeSingle()
 
       if (error) throw new Error(`Database error: ${error.message}`)
       if (!current) throw new Error('Customer not found.')
+
+      // Same guard as gnubok_create_customer and the REST PATCH route: only
+      // individual rows get their identifiers masked on read (GDPR art.
+      // 5.1 c), so a personnummer on a business customer is refused. Checked
+      // against the type the row will END UP with, so a simultaneous type
+      // change cannot smuggle one through.
+      const effectiveCustomerType = (parsed.data.changes.customer_type ?? current.customer_type) as string
+      if (personalNumber && effectiveCustomerType !== 'individual') {
+        throw new Error('personal_number is only allowed for customer_type "individual".')
+      }
 
       const currentPreview = {
         customer_id: current.id,
@@ -5049,6 +5093,19 @@ export const tools: McpTool[] = [
         language: current.language ?? 'sv',
         default_payment_terms: current.default_payment_terms,
         notes: current.notes ?? null,
+        // The stored value is ciphertext; the preview (and the approval UI
+        // that renders it) only ever sees the masked form.
+        personal_number_masked: maskStoredCustomerPersonalNumber(current.personal_number),
+      }
+
+      // The preview never carries the ciphertext either: a personal_number
+      // change is shown as its masked form (or null when clearing).
+      const { personal_number_encrypted: _stagedCiphertext, ...visibleChanges } = parsed.data.changes
+      const previewChanges: Record<string, unknown> = { ...visibleChanges }
+      if (parsed.data.changes.personal_number_encrypted !== undefined) {
+        previewChanges.personal_number_masked = personalNumber
+          ? maskCustomerPersonalNumber(personalNumber)
+          : null
       }
 
       return stagePendingOperation(
@@ -5060,14 +5117,22 @@ export const tools: McpTool[] = [
         parsed.data,
         {
           current: currentPreview,
-          changes: parsed.data.changes,
-          proposed: { ...currentPreview, ...parsed.data.changes },
+          changes: previewChanges,
+          proposed: { ...currentPreview, ...previewChanges },
         },
         actor,
         undefined,
         {
           dryRun: Boolean(args.dry_run),
           idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          // The ciphertext in params has a random IV, so params differ on
+          // every retry when a personnummer is staged; hash the masked
+          // preview instead (same reasoning as gnubok_create_customer). Only
+          // set for personnummer-bearing updates so every other update keeps
+          // its previous hash identity.
+          ...(parsed.data.changes.personal_number_encrypted !== undefined
+            ? { idempotencyParams: { customer_id: parsed.data.customer_id, changes: previewChanges } }
+            : {}),
         },
       )
     },
