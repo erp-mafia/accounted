@@ -60,6 +60,7 @@ import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 // Snapshot of a struck line, as stored in journal_entry_rattelse_log.
 type StruckLineSnapshot = {
@@ -344,12 +345,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   }, [fetchData])
 
   if (isLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center py-24">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mb-3" />
-        <p className="text-sm text-muted-foreground">{t('loading')}</p>
-      </div>
-    )
+    return <DetailPageSkeleton />
   }
 
   if (error || !entry) {

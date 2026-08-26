@@ -98,6 +98,7 @@ const PEPPOL_STATUS_KEYS = new Set([
 ])
 const PEPPOL_SENDABLE_STATUSES = new Set<InvoiceStatus>(['draft', 'sent', 'overdue'])
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 // Why the downloaded file is not the invoice the customer received. One key
 // per reason: "no archived copy exists" and "the archive could not be reached"
@@ -1171,11 +1172,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   }
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
+    return <DetailPageSkeleton cards={3} />
   }
 
   if (!invoice) {
