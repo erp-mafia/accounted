@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -12,6 +12,8 @@ import {
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Plus, Lock, Unlock, Loader2, Eraser } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
@@ -39,9 +41,11 @@ export function FiscalYearsManager() {
   const { toast } = useToast()
   const { role } = useCompany()
   const { dialogProps, confirm } = useDestructiveConfirm()
-  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [hasError, setHasError] = useState(false)
+  // Session-cached registry (lib/reference-data): the same list every
+  // picker renders, so a lock/unlock/reset here is visible everywhere the
+  // moment the cache is invalidated below.
+  const { periods, isLoading, error: periodsError } = useFiscalPeriods()
+  const hasError = !!periodsError && periods.length === 0
   const [dialogOpen, setDialogOpen] = useState(false)
   const [mutatingId, setMutatingId] = useState<string | null>(null)
   const [resetTarget, setResetTarget] = useState<FiscalPeriod | null>(null)
@@ -50,21 +54,7 @@ export function FiscalYearsManager() {
   // too (requireWrite); this just hides controls a viewer/member can't use.
   const canManage = role === 'owner' || role === 'admin'
 
-  const fetchPeriods = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bookkeeping/fiscal-periods')
-      if (!res.ok) throw new Error('fetch failed')
-      const { data } = await res.json()
-      setPeriods((data as FiscalPeriod[]) || [])
-      setHasError(false)
-    } catch {
-      setHasError(true)
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { fetchPeriods() }, [fetchPeriods])
+  const refreshPeriods = useCallback(() => invalidateReferenceData('ref:fiscal-periods'), [])
 
   // Newest first: matches the API's ordering and reads most-recent-at-top.
   const sorted = [...periods].sort((a, b) => b.period_start.localeCompare(a.period_start))
@@ -82,7 +72,7 @@ export function FiscalYearsManager() {
         throw new Error(body?.error?.message || t('fy_action_error'))
       }
       toast({ title: action === 'lock' ? t('fy_lock_success') : t('fy_unlock_success') })
-      await fetchPeriods()
+      await refreshPeriods()
     } catch (err) {
       toast({
         title: t('fy_action_error'),
@@ -219,7 +209,7 @@ export function FiscalYearsManager() {
         onOpenChange={setDialogOpen}
         entryDate={suggestSeedDate(periods, new Date().toISOString().split('T')[0])}
         periods={periods}
-        onCreated={fetchPeriods}
+        onCreated={refreshPeriods}
       />
 
       {resetTarget && (
@@ -230,7 +220,7 @@ export function FiscalYearsManager() {
           onOpenChange={(open) => {
             if (!open) setResetTarget(null)
           }}
-          onReset={fetchPeriods}
+          onReset={refreshPeriods}
         />
       )}
 

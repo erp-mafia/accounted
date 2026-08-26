@@ -1,5 +1,15 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { createLogger } from '@/lib/logger'
+import {
+  PROXY_TIMING_HEADER,
+  classifyProxyRequest,
+  createProxyTimings,
+  formatProxyServerTiming,
+  proxyRouteTemplate,
+  timed,
+  type ProxyTimings,
+} from '@/lib/supabase/proxy-timing'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
@@ -28,6 +38,8 @@ import {
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
 
+const log = createLogger('proxy')
+
 /**
  * Host-scoped marker that the signed-in user is on their home domain, so the
  * affinity check below costs zero queries on the hot path. Expiry re-runs the
@@ -36,7 +48,41 @@ import {
 const HOME_DOMAIN_OK_COOKIE = 'gnubok-home-ok'
 const HOME_DOMAIN_OK_MAX_AGE = 15 * 60
 
+/**
+ * Auth proxy entry point. Wraps the real work so every response carries a
+ * per-phase timing header and emits one structured log line, mirroring what
+ * withRouteContext does for API routes: without it the proxy's sequential
+ * network calls (getUser, session state, company RPC, MFA lookups) were the
+ * one part of a request nobody could measure. Page/RSC/prefetch responses
+ * get `Server-Timing` (visible in the browser Timing tab); /api responses
+ * get `X-Proxy-Timing` so the route wrapper's own Server-Timing is left
+ * alone. Token-carrying paths are collapsed before logging.
+ */
 export async function updateSession(request: NextRequest) {
+  const start = Date.now()
+  const timing = createProxyTimings()
+  const response = await updateSessionInner(request, timing)
+  const totalMs = Date.now() - start
+  const pathname = request.nextUrl.pathname
+  const kind = classifyProxyRequest(pathname, request.headers)
+  response.headers.set(
+    kind === 'api' ? PROXY_TIMING_HEADER : 'Server-Timing',
+    formatProxyServerTiming(timing, totalMs),
+  )
+  log.info('proxy completed', {
+    kind,
+    route: proxyRouteTemplate(pathname),
+    status: response.status,
+    ...timing,
+    totalMs,
+  })
+  return response
+}
+
+async function updateSessionInner(
+  request: NextRequest,
+  timing: ProxyTimings,
+): Promise<NextResponse> {
   let supabaseResponse = NextResponse.next({
     request,
   })
@@ -71,7 +117,7 @@ export async function updateSession(request: NextRequest) {
   const {
     data: { user },
     error: authError,
-  } = await supabase.auth.getUser()
+  } = await timed(timing, 'authMs', () => supabase.auth.getUser())
 
   // Get the pathname
   const pathname = request.nextUrl.pathname
@@ -102,8 +148,12 @@ export async function updateSession(request: NextRequest) {
     !apiRequestSkipsSessionTimeout(pathname, hasAuthorizationHeader)
   ) {
     const encodedState = request.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
-    const sessionId = await getSupabaseSessionId(supabase)
-    const verifiedState = await verifySessionTimeoutState(encodedState)
+    const sessionId = await timed(timing, 'sessionMs', () =>
+      getSupabaseSessionId(supabase),
+    )
+    const verifiedState = await timed(timing, 'sessionMs', () =>
+      verifySessionTimeoutState(encodedState),
+    )
 
     if (encodedState && !verifiedState) {
       await signOutTimedOutSession(supabase)
@@ -130,7 +180,9 @@ export async function updateSession(request: NextRequest) {
       const method = isSessionAuthMethod(hintedMethod)
         ? hintedMethod
         : 'password'
-      const autoLogout = await fetchAutoLogoutPreference(supabase, user.id)
+      const autoLogout = await timed(timing, 'sessionMs', () =>
+        fetchAutoLogoutPreference(supabase, user.id),
+      )
 
       // Unknown preference (failed read): mint nothing, so no fail-open
       // snapshot gets persisted; the next request retries the read.
@@ -193,8 +245,9 @@ export async function updateSession(request: NextRequest) {
       hasAuthorizationHeader,
     )
     if (!skipMfaGate && user && shouldEnforceMfa(user)) {
-      const { data: aal } =
-        await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+      const { data: aal } = await timed(timing, 'mfaMs', () =>
+        supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
+      )
       if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
         return NextResponse.json({ error: 'MFA-verifiering krävs.' }, { status: 403 })
       }
@@ -346,11 +399,15 @@ export async function updateSession(request: NextRequest) {
     degraded: boolean
   } | null = null
   const resolveCompanyOnce = async () =>
-    (resolvedCompany ??= await resolveCompanyForMiddleware(supabase, user.id, request))
+    (resolvedCompany ??= await timed(timing, 'companyMs', () =>
+      resolveCompanyForMiddleware(supabase, user.id, request),
+    ))
 
   // MFA enforcement (application-side only, not RLS)
   if (shouldEnforceMfa(user)) {
-    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+    const { data: aal } = await timed(timing, 'mfaMs', () =>
+      supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
+    )
 
     // User has MFA enrolled but hasn't verified this session → redirect to verify
     if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
@@ -358,14 +415,28 @@ export async function updateSession(request: NextRequest) {
     }
 
     // MFA required but user has no factor enrolled yet → force enrollment
-    // Skip for users with no companies (still setting up)
-    const { companyId: companyIdForMfa } = await resolveCompanyOnce()
-    if (companyIdForMfa) {
-      const { data: factors } = await supabase.auth.mfa.listFactors()
-      const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
+    // Skip for users with no companies (still setting up).
+    //
+    // Only worth asking when the session is NOT at AAL2: reaching AAL2
+    // requires having verified a challenge on a verified factor, so the
+    // factor list cannot be empty there. auth-js implements listFactors()
+    // as a getUser() network round trip, and running it here on every
+    // page, RSC and prefetch request for every MFA-verified user was the
+    // second Supabase Auth call per request (measured via mw-mfa, PR #1922).
+    // The narrow case this defers is a user who unenrols their last factor
+    // mid-session: the JWT keeps aal2 until the next token refresh, so the
+    // enrolment bounce lands on the refresh instead of the next click.
+    if (aal?.currentLevel !== 'aal2') {
+      const { companyId: companyIdForMfa } = await resolveCompanyOnce()
+      if (companyIdForMfa) {
+        const { data: factors } = await timed(timing, 'mfaMs', () =>
+          supabase.auth.mfa.listFactors(),
+        )
+        const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
 
-      if (!hasVerifiedFactor) {
-        return bounceToAuth(request, '/mfa/enroll')
+        if (!hasVerifiedFactor) {
+          return bounceToAuth(request, '/mfa/enroll')
+        }
       }
     }
   }

@@ -3794,6 +3794,7 @@
     "bank_add_now": "Add now",
     "customer_card_title": "Customer",
     "select_customer_placeholder": "Select customer",
+    "loading_customers": "Loading customers ...",
     "no_customers_yet": "No customers yet",
     "create_customer": "Create customer",
     "create_customer_dialog_title": "Add customer",

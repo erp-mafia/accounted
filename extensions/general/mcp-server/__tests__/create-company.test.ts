@@ -55,6 +55,25 @@ describe('gnubok_create_company', () => {
     expect(tool.annotations.destructiveHint).toBe(false)
   })
 
+  it('defaults an omitted accounting_method by form and flags it in the preview', async () => {
+    const supabase = supabaseWithTeam(TEAM_ID)
+    const { accounting_method: _dropped, ...withoutMethod } = setup
+    const result = (await tool.execute(withoutMethod, '', 'user-1', supabase as never)) as Record<string, unknown>
+
+    expect(result.created).toBe(false)
+    const preview = result.preview as Record<string, unknown>
+    expect(preview.accounting_method).toBe('accrual')
+    expect(preview.accounting_method_defaulted).toBe(true)
+  })
+
+  it('does not flag an explicitly chosen accounting_method as defaulted', async () => {
+    const supabase = supabaseWithTeam(TEAM_ID)
+    const result = (await tool.execute(setup, '', 'user-1', supabase as never)) as Record<string, unknown>
+    const preview = result.preview as Record<string, unknown>
+    expect(preview.accounting_method).toBe('accrual')
+    expect('accounting_method_defaulted' in preview).toBe(false)
+  })
+
   it('previews without creating when confirm is not true', async () => {
     const supabase = supabaseWithTeam(TEAM_ID)
     const result = (await tool.execute(setup, '', 'user-1', supabase as never)) as Record<string, unknown>

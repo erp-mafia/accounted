@@ -83,7 +83,9 @@ describe('gnubok_lookup_company', () => {
 
     const ask = result.still_to_ask as string[]
     expect(ask.some((q) => q.startsWith('moms_period ('))).toBe(true)
-    expect(ask.some((q) => q.startsWith('accounting_method'))).toBe(true)
+    // accounting_method defaults by form in create_company (flagged in its
+    // preview) and is deliberately not a question here.
+    expect(ask.some((q) => q.startsWith('accounting_method'))).toBe(false)
     // Registry facts are confirmed, never re-asked.
     expect(ask.some((q) => q.startsWith('entity_type'))).toBe(false)
     expect(ask.some((q) => q.startsWith('vat_registered'))).toBe(false)
@@ -151,6 +153,19 @@ describe('gnubok_lookup_company', () => {
     )
     const suggested = result.suggested_create_company_input as Record<string, unknown>
     expect('fiscal_year_start_month' in suggested).toBe(false)
+  })
+
+  it('treats no-closed-period as first year up to 18 months after registration (extended first year)', async () => {
+    // The Arcim case: registered 13 months ago, no annual report filed, first
+    // räkenskapsår runs to 31 Dec under the BFL 3 kap 3 § 18-month cap.
+    mocks.lookupCompanyByOrgNumber.mockResolvedValue(
+      found({ fiscalYear: null, registrationDate: Date.now() - 396 * 24 * 60 * 60 * 1000 })
+    )
+    const result = await run('5560000001')
+
+    const ask = result.still_to_ask as string[]
+    expect(ask.some((q) => q.includes('first_fiscal_year'))).toBe(true)
+    expect(ask.some((q) => q.includes('calendar year or broken year'))).toBe(false)
   })
 
   it('returns not_found with the full question list when no company matches', async () => {

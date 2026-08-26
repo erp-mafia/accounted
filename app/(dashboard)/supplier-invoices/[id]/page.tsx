@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useAccounts } from '@/lib/reference-data/hooks'
 import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -38,7 +39,8 @@ import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
-import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment, BASAccount } from '@/types'
+import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment } from '@/types'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 interface EditableLine {
   account_number: string
@@ -107,8 +109,10 @@ export default function SupplierInvoiceDetailPage() {
   const [payAmount, setPayAmount] = useState('')
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0])
   const [paymentAccount, setPaymentAccount] = useState('1930')
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
-  const [areAccountsLoading, setAreAccountsLoading] = useState(false)
+  // Chart of accounts for the payment dialog, from the session cache
+  // (lib/reference-data): one request per session at most, shared with
+  // every other picker, instead of a deferred fetch per detail page.
+  const { accounts, isLoading: areAccountsLoading } = useAccounts()
   // Which action is in flight, not just whether one is: the acting button
   // shows the spinner while the others only disable. A single boolean put
   // identical pending feedback (none) on every button at once.
@@ -304,28 +308,6 @@ export default function SupplierInvoiceDetailPage() {
       ctrl.abort()
     }
   }, [isPayDialogOpen, invoice, payAmount, paymentAccount])
-
-  // The chart of accounts is only needed by the payment dialog. Defer the
-  // request until the user opens it instead of blocking the detail page.
-  useEffect(() => {
-    if (!isPayDialogOpen || accounts.length > 0) return
-
-    let cancelled = false
-    ;(async () => {
-      setAreAccountsLoading(true)
-      try {
-        const response = await fetch('/api/bookkeeping/accounts')
-        if (cancelled || !response.ok) return
-        const { data } = await response.json()
-        if (Array.isArray(data)) setAccounts(data as BASAccount[])
-      } finally {
-        if (!cancelled) setAreAccountsLoading(false)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [accounts.length, isPayDialogOpen])
 
   async function handleApprove() {
     setProcessingAction('approve')
@@ -529,12 +511,7 @@ export default function SupplierInvoiceDetailPage() {
   }
 
   if (isLoading) {
-    return (
-      <div className="space-y-8">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-48 w-full" />
-      </div>
-    )
+    return <DetailPageSkeleton cards={3} />
   }
 
   if (!invoice) {

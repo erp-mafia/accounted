@@ -19,6 +19,7 @@ import { Loader2 } from 'lucide-react'
 import { computeSuggestedPeriod } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { fiscalPeriodAdvisoryText } from '@/lib/bookkeeping/fiscal-period-warnings'
 import type { FiscalPeriod } from '@/types'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 interface Props {
   open: boolean
@@ -107,6 +108,11 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
         })
         return
       }
+
+      // Every picker and form reads periods from the session cache
+      // (lib/reference-data): refresh it now so the new year is selectable
+      // everywhere at once, not only in the caller that gets onCreated.
+      void invalidateReferenceData('ref:fiscal-periods')
 
       // The 200 may carry non-blocking advisories (today: a prior räkenskapsår
       // still open, which is the normal state while the bokslut runs). The

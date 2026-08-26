@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import Link from 'next/link'
+import { NavLink } from './NavLink'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
@@ -674,9 +674,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         : 'text-muted-foreground/40 cursor-not-allowed',
     )
     return enabled ? (
-      <Link key={item.href} href={item.href} className={baseClass}>
+      <NavLink key={item.href} href={item.href} className={baseClass}>
         {content}
-      </Link>
+      </NavLink>
     ) : (
       <div
         key={item.href}
@@ -752,9 +752,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         : 'opacity-40 cursor-not-allowed',
     )
     return enabled ? (
-      <Link key={item.href} href={item.href} className={baseClass} title={label} aria-label={label}>
+      <NavLink key={item.href} href={item.href} className={baseClass} title={label} aria-label={label}>
         {inner}
-      </Link>
+      </NavLink>
     ) : (
       <div key={item.href} className={baseClass} title={label} aria-disabled="true">
         {inner}
@@ -831,7 +831,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   const label = labelTranslationKey ? tNav(labelTranslationKey) : item.label
                   const active = isActive(item.href)
                   return (
-                    <Link
+                    <NavLink
                       key={item.href}
                       href={item.href}
                       title={label}
@@ -847,7 +847,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                           active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
                         )}
                       />
-                    </Link>
+                    </NavLink>
                   )
                 })}
               </nav>
@@ -867,13 +867,13 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   cockpit, above everything, separated by a hairline. */}
               {byraTeam && !cockpitMode && (
                 <div className="mb-2">
-                  <Link
+                  <NavLink
                     href="/clients"
                     className="group flex items-center px-3 py-[7px] text-[13px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
                   >
                     <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
                     <span className="flex-1">{tNav('back_to_clients')}</span>
-                  </Link>
+                  </NavLink>
                   <div className="mx-3 mt-2 border-t border-border/60" />
                 </div>
               )}
@@ -936,9 +936,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                               : 'text-muted-foreground/40 cursor-not-allowed',
                           )
                           return enabled ? (
-                            <Link key={item.href} href={item.href} className={baseClass}>
+                            <NavLink key={item.href} href={item.href} className={baseClass}>
                               {content}
-                            </Link>
+                            </NavLink>
                           ) : (
                             <div
                               key={item.href}
@@ -1026,9 +1026,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             )
 
             return enabled ? (
-              <Link key={item.href} href={item.href} className={baseClass}>
+              <NavLink key={item.href} href={item.href} className={baseClass}>
                 {content}
-              </Link>
+              </NavLink>
             ) : (
               <div key={item.href} className={baseClass} aria-disabled="true">
                 {content}
@@ -1099,14 +1099,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               {/* Byrå members inside a company: route back to the cockpit. */}
               {byraTeam && !cockpitMode && (
                 <div className="mb-1.5">
-                  <Link
+                  <NavLink
                     href="/clients"
                     onClick={closeMobileMenu}
                     className="flex items-center gap-3 px-3 min-h-[44px] rounded-lg text-foreground active:bg-muted/60 transition-colors"
                   >
                     <ArrowLeft className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
                     <span className="text-sm flex-1">{tNav('back_to_clients')}</span>
-                  </Link>
+                  </NavLink>
                   <div className="mx-3 mt-1.5 h-px bg-border/30" />
                 </div>
               )}
@@ -1140,14 +1140,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       : 'text-muted-foreground/40'
                   )
                   return enabled ? (
-                    <Link
+                    <NavLink
                       key={item.href}
                       href={item.href}
                       onClick={closeMobileMenu}
                       className={baseClass}
                     >
                       {content}
-                    </Link>
+                    </NavLink>
                   ) : (
                     <div key={item.href} className={baseClass} aria-disabled="true">
                       {content}
@@ -1197,14 +1197,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                           : 'text-muted-foreground/40'
                       )
                       return enabled ? (
-                        <Link
+                        <NavLink
                           key={item.href}
                           href={item.href}
                           onClick={closeMobileMenu}
                           className={baseClass}
                         >
                           {content}
-                        </Link>
+                        </NavLink>
                       ) : (
                         <div key={item.href} className={baseClass} aria-disabled="true">
                           {content}
@@ -1247,14 +1247,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                           : 'text-muted-foreground/40'
                       )
                       return enabled ? (
-                        <Link
+                        <NavLink
                           key={item.href}
                           href={item.href}
                           onClick={closeMobileMenu}
                           className={baseClass}
                         >
                           {content}
-                        </Link>
+                        </NavLink>
                       ) : (
                         <div key={item.href} className={baseClass} aria-disabled="true">
                           {content}
@@ -1303,14 +1303,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       : 'text-muted-foreground/40'
                   )
                   return enabled ? (
-                    <Link
+                    <NavLink
                       key={item.href}
                       href={item.href}
                       onClick={closeMobileMenu}
                       className={baseClass}
                     >
                       {content}
-                    </Link>
+                    </NavLink>
                   ) : (
                     <div key={item.href} className={baseClass} aria-disabled="true">
                       {content}

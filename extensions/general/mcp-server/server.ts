@@ -1445,6 +1445,26 @@ export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'se
 }
 
 /**
+ * Resolve SIE file content from tool args: plain text (the model read the
+ * attachment) or base64 (exact bytes, e.g. from a code-execution sandbox).
+ * The base64 path runs the same encoding detection as the HTTP upload route,
+ * so CP437 exports keep their åäö instead of arriving pre-mangled through a
+ * host's UTF-8 read. Returns null when neither field is usable.
+ */
+async function decodeSieToolContent(args: Record<string, unknown>): Promise<string | null> {
+  if (typeof args.file_content === 'string' && args.file_content.length > 0) {
+    return args.file_content
+  }
+  if (typeof args.file_content_base64 === 'string' && args.file_content_base64.length > 0) {
+    const { detectEncoding, decodeBuffer } = await import('@/lib/import/sie-parser')
+    const buffer = Buffer.from(args.file_content_base64, 'base64')
+    const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+    return decodeBuffer(arrayBuffer, detectEncoding(arrayBuffer))
+  }
+  return null
+}
+
+/**
  * Absolute origin for links the user opens in a browser. A deployment
  * without NEXT_PUBLIC_APP_URL falls back to localhost in getCanonicalBaseUrl,
  * which would hand a remote user an unusable link: refuse instead.
@@ -3106,17 +3126,27 @@ export const tools: McpTool[] = [
       if (!vatIsFact) stillToAsk.push('vat_registered (the registry shows no VAT registration; confirm with the user)')
       if (vatIsFact) stillToAsk.push('moms_period (monthly, quarterly or yearly; never guess)')
       else stillToAsk.push('moms_period IF vat_registered turns out true')
-      stillToAsk.push('accounting_method (accrual = faktureringsmetoden, cash = kontantmetoden; never guess)')
+      // accounting_method is deliberately NOT in this list: gnubok_create_company
+      // defaults it by form (AB accrual, EF cash) and flags the default in the
+      // preview, where the user confirms or overrides it in the same "ja".
 
       const startMonth = parseStartMonthDay(lookup.fiscalYear?.startMonthDay)
-      const firstYear = deriveFirstYearDefaults(lookup.registrationDate)
+      // No closed fiscal period in the registry = no annual report filed yet
+      // = still in the first räkenskapsår, which BFL 3 kap 3 § lets run up to
+      // 18 months. The 12-month window alone misses extended first years.
+      const firstYear = deriveFirstYearDefaults(lookup.registrationDate, Date.now(), {
+        noClosedPeriod: lookup.fiscalYear == null,
+      })
+      const registrationIso = lookup.registrationDate
+        ? new Date(lookup.registrationDate).toISOString().slice(0, 10)
+        : null
       if (startMonth !== null) {
         stillToAsk.push(
           `fiscal year: registry shows ${lookup.fiscalYear?.startMonthDay} to ${lookup.fiscalYear?.endMonthDay}; ask "stämmer detta?" instead of an open question`
         )
       } else if (firstYear.isFirstFiscalYear) {
         stillToAsk.push(
-          `fiscal year: company registered recently; suggest a first fiscal year starting ${firstYear.firstYearStart} (first_fiscal_year start/end; an enskild firma's first year must end 31 December)`
+          `fiscal year: no closed period in the registry, so this is likely the FIRST räkenskapsår; suggest first_fiscal_year start ${registrationIso ?? firstYear.firstYearStart} (registration date). End: an enskild firma MUST end 31 December; an AB may pick ANY end within 18 months of start (BFL 3 kap 3 §), 31 December is merely the common default. Ask "stämmer det?" with the choice visible`
         )
       } else {
         stillToAsk.push('fiscal year: calendar year or broken year (no registry data)')
@@ -3154,7 +3184,7 @@ export const tools: McpTool[] = [
         still_to_ask: stillToAsk,
         warnings,
         instructions:
-          'Present the company facts as a short summary for the user to CONFIRM (name, address, F-skatt, VAT status; do not re-ask them). Then ask ONLY the still_to_ask questions, merge the answers into suggested_create_company_input, and call gnubok_create_company (preview first, read it back, then confirm=true).',
+          'Present the company facts as a short summary for the user to CONFIRM (name, address, F-skatt, VAT status; do not re-ask them). An established company with F-skatt/VAT is the NORMAL case even when the user says "nytt bolag" (new = new to Accounted): never refuse or second-guess the orgnr because the company looks established. Ask ONLY the still_to_ask questions, merge answers into suggested_create_company_input, and call gnubok_create_company (preview, read back incl. the defaulted accounting method, then confirm=true).',
       }
     },
   },
@@ -3163,7 +3193,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_company',
     title: 'Create Company',
     description:
-      'Create a NEW company for the connected user, set up for bookkeeping (chart, settings, first fiscal period, tax deadlines; 30-day trial). Call gnubok_lookup_company FIRST to prefill facts from the orgnr. Preview (no confirm), read it back, then confirm=true. Skill: onboarding.',
+      'Create a NEW company, set up for bookkeeping (chart, settings, first fiscal period, tax deadlines; 30-day trial). Ask ONLY orgnr + moms period: gnubok_lookup_company prefills the rest, accounting_method defaults by form. Preview (no confirm), read back, then confirm=true.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3173,7 +3203,7 @@ export const tools: McpTool[] = [
         org_number: { type: 'string', description: '10 digits; required when VAT-registered' },
         vat_registered: { type: 'boolean' },
         moms_period: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'Required when vat_registered' },
-        accounting_method: { type: 'string', enum: ['accrual', 'cash'] },
+        accounting_method: { type: 'string', enum: ['accrual', 'cash'], description: 'Omit to default by form: aktiebolag accrual, enskild firma cash; the preview flags the default' },
         f_skatt: { type: 'boolean' },
         fiscal_year_start_month: { type: 'integer', minimum: 1, maximum: 12 },
         first_fiscal_year: {
@@ -3189,7 +3219,7 @@ export const tools: McpTool[] = [
         team_id: { type: 'string', format: 'uuid' },
         confirm: { type: 'boolean', description: 'true creates; omitted = preview' },
       },
-      required: ['name', 'entity_type', 'vat_registered', 'accounting_method', 'f_skatt'],
+      required: ['name', 'entity_type', 'vat_registered', 'f_skatt'],
     },
     outputSchema: {
       type: 'object',
@@ -3230,7 +3260,18 @@ export const tools: McpTool[] = [
         vat_registered: parsed.data.vat_registered,
         vat_number: (plan.input.settings.vat_number as string | null) ?? null,
         moms_period: parsed.data.vat_registered ? parsed.data.moms_period ?? null : null,
-        accounting_method: parsed.data.accounting_method,
+        accounting_method: plan.resolved.accountingMethod,
+        // Present, never silent: the readback must name the defaulted method
+        // so the user can override it before confirm. The cash default also
+        // carries its eligibility condition (BFL 4 kap 4 §): the registry
+        // cannot verify turnover, so the human must.
+        ...(plan.resolved.accountingMethodDefaulted ? { accounting_method_defaulted: true } : {}),
+        ...(plan.resolved.accountingMethodDefaulted && plan.resolved.accountingMethod === 'cash'
+          ? {
+              accounting_method_note:
+                'Kontantmetoden förutsätter en omsättning som normalt understiger 3 MSEK (BFL 4 kap 4 §); annars gäller faktureringsmetoden. Bekräfta detta med användaren.',
+            }
+          : {}),
         f_skatt: parsed.data.f_skatt,
         fiscal_period: plan.fiscalPeriod,
         team_id: teamId,
@@ -3242,7 +3283,7 @@ export const tools: McpTool[] = [
           requires_confirmation: true,
           preview,
           message:
-            'Nothing was created. Read the preview back to the user (especially the fiscal period dates and the VAT setup), then call gnubok_create_company again with the same arguments and confirm=true.',
+            'Nothing was created. Read the preview back to the user (especially the fiscal period dates, the VAT setup, and the accounting method when accounting_method_defaulted is true: name the default and let them override), then call gnubok_create_company again with the same arguments and confirm=true.',
         }
       }
 
@@ -3279,11 +3320,16 @@ export const tools: McpTool[] = [
     name: 'gnubok_connect_bank',
     title: 'Connect Bank',
     description:
-      'Bank connection status plus the browser link where the user connects a bank (PSD2, BankID consent; must be logged in to Accounted there). Use after gnubok_create_company or when transactions are missing because no bank is connected.',
+      'Bank connection status plus the browser link where the user connects a bank (PSD2, BankID consent; must be logged in to Accounted there). Ask WHICH bank they use first and pass it as bank: the link then starts that bank\'s consent directly instead of a picker.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: {},
+      properties: {
+        bank: {
+          type: 'string',
+          description: "The bank's name as the user said it (e.g. 'Swedbank', 'SEB'); the link auto-starts that bank's consent. Omit to show the picker.",
+        },
+      },
     },
     outputSchema: {
       type: 'object',
@@ -3302,7 +3348,7 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(_args, companyId, _userId, supabase) {
+    async execute(args, companyId, _userId, supabase) {
       const { data, error } = await supabase
         .from('bank_connections')
         .select('id, bank_name, status, created_at')
@@ -3312,7 +3358,12 @@ export const tools: McpTool[] = [
       if (error) throw error
       const connections = (data ?? []) as Array<{ id: string; bank_name: string | null; status: string; created_at: string }>
       const active = connections.filter((c) => c.status === 'active')
-      const connectUrl = `${connectLinkBaseUrl()}/import?mode=psd2`
+      // A named bank deep-links straight into that bank's consent (the page
+      // auto-starts it; unknown names fall back to the prefilled picker).
+      const requestedBank = typeof args.bank === 'string' ? args.bank.trim() : ''
+      const connectUrl = requestedBank
+        ? `${connectLinkBaseUrl()}/import?mode=psd2&bank=${encodeURIComponent(requestedBank)}`
+        : `${connectLinkBaseUrl()}/import?mode=psd2`
       return {
         connected: active.length > 0,
         connections: connections.map((c) => ({
@@ -3325,7 +3376,7 @@ export const tools: McpTool[] = [
         instructions:
           active.length > 0
             ? 'At least one bank is connected and syncing. To add another bank, give the user the connect_url.'
-            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there, pick their bank and approve with BankID; consent lasts up to 180 days and the first transactions arrive within a minute. Tell them to come back here when done, then continue with gnubok_list_uncategorized_transactions.',
+            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. With bank passed, the link starts that bank\'s consent directly; otherwise they pick the bank first. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.',
       }
     },
   },
@@ -16120,14 +16171,178 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_sie_preflight',
+    title: 'SIE Preflight Scan',
+    description:
+      'Scan a SIE file BEFORE import: parse, validate (balances, IB, encoding), duplicate check, orgnr match against the company, suggested account mappings. Read-only, stages nothing. Call FIRST when the user shares a SIE file; pass the returned mappings to gnubok_import_sie.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        file_content: { type: 'string', description: 'Full SIE file contents as text' },
+        file_content_base64: { type: 'string', description: 'Exact file bytes base64-encoded (preferred when available: preserves CP437 åäö)' },
+        filename: { type: 'string' },
+      },
+      required: ['filename'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        verdict: { type: 'string', enum: ['ok', 'ok_with_warnings', 'invalid', 'duplicate'] },
+        file: { type: 'object' },
+        validation: { type: 'object' },
+        org_number_match: { type: ['object', 'null'] },
+        duplicate: { type: ['object', 'null'] },
+        mappings: { type: 'array', items: { type: 'object' } },
+        mapping_stats: { type: 'object' },
+        instructions: { type: 'string' },
+      },
+      required: ['verdict', 'file', 'validation', 'org_number_match', 'duplicate', 'mappings', 'mapping_stats', 'instructions'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const content = await decodeSieToolContent(args)
+      if (!content) {
+        throw Object.assign(
+          new Error('Provide the SIE file as file_content (text) or file_content_base64 (exact bytes).'),
+          { code: 'VALIDATION_ERROR' }
+        )
+      }
+
+      const { parseSIEFile, validateSIEFile } = await import('@/lib/import/sie-parser')
+      const { suggestMappings, getMappingStats, isSystemAccount } = await import('@/lib/import/account-mapper')
+      const { scanSieForCp1252Artifacts, formatSieArtifactWarning } = await import('@/lib/import/sie-artifact-scan')
+      const { generateImportPreview, checkDuplicateImport, checkDuplicatePeriodImport } = await import('@/lib/import/sie-import')
+      const { BAS_REFERENCE } = await import('@/lib/bookkeeping/bas-data')
+
+      let parsed
+      try {
+        parsed = parseSIEFile(content)
+      } catch (e) {
+        throw Object.assign(
+          new Error(`SIE-filen kunde inte tolkas: ${e instanceof Error ? e.message : 'okänt fel'}`),
+          { code: 'VALIDATION_ERROR' }
+        )
+      }
+
+      // Mojibake tripwire (warn, never block): a host that read CP437 bytes
+      // as UTF-8/Latin-1 mangles åäö in names. Numbers and structure survive,
+      // so the import still balances; the user decides whether names matter.
+      const artifactScan = scanSieForCp1252Artifacts(parsed)
+      const encodingWarnings: string[] = []
+      if (artifactScan.flagged) {
+        encodingWarnings.push(
+          `${formatSieArtifactWarning(artifactScan)} Tip: re-share the file as file_content_base64 to preserve the original bytes.`
+        )
+      }
+
+      const validation = validateSIEFile(parsed)
+
+      // Wrong-company tripwire: importing another company's bookkeeping is
+      // the worst silent failure this flow can have. Digits-only comparison;
+      // missing on either side reports unverified instead of ok.
+      const { data: companyRow } = await supabase
+        .from('companies')
+        .select('org_number')
+        .eq('id', companyId)
+        .maybeSingle()
+      const companyOrg = ((companyRow as { org_number?: string | null } | null)?.org_number ?? '').replace(/\D/g, '')
+      const fileOrg = (parsed.header.orgNumber ?? '').replace(/\D/g, '')
+      const orgMatch =
+        companyOrg && fileOrg
+          ? { verified: true, match: companyOrg === fileOrg, company_org_number: companyOrg, file_org_number: fileOrg }
+          : { verified: false, match: null, company_org_number: companyOrg || null, file_org_number: fileOrg || null }
+
+      const duplicateFile = await checkDuplicateImport(supabase, companyId, content)
+      let duplicatePeriod = null
+      if (!duplicateFile && parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd) {
+        duplicatePeriod = await checkDuplicatePeriodImport(
+          supabase,
+          companyId,
+          parsed.stats.fiscalYearStart,
+          parsed.stats.fiscalYearEnd
+        )
+      }
+      const duplicate = duplicateFile
+        ? { kind: 'file', import_id: duplicateFile.id, imported_at: duplicateFile.imported_at }
+        : duplicatePeriod
+          ? {
+              kind: 'period',
+              import_id: duplicatePeriod.id,
+              fiscal_year_start: duplicatePeriod.fiscal_year_start,
+              fiscal_year_end: duplicatePeriod.fiscal_year_end,
+              imported_at: duplicatePeriod.imported_at,
+            }
+          : null
+
+      const bookkeepingAccounts = parsed.accounts.filter((a) => !isSystemAccount(a.number))
+      const { data: storedMappings } = await supabase
+        .from('sie_account_mappings')
+        .select('*')
+        .eq('company_id', companyId)
+      const mappings = suggestMappings(
+        bookkeepingAccounts,
+        BAS_REFERENCE,
+        (storedMappings as import('@/lib/import/types').SIEAccountMappingRecord[]) || undefined
+      )
+      const mappingStats = getMappingStats(mappings)
+      const preview = generateImportPreview(parsed, mappings)
+
+      const allWarnings = [...validation.warnings, ...encodingWarnings]
+      const verdict = !validation.valid
+        ? 'invalid'
+        : duplicate
+          ? 'duplicate'
+          : allWarnings.length > 0 || orgMatch.match === false
+            ? 'ok_with_warnings'
+            : 'ok'
+
+      return {
+        verdict,
+        file: {
+          filename: args.filename,
+          company_name: parsed.header.companyName,
+          org_number: parsed.header.orgNumber,
+          sie_type: parsed.header.sieType,
+          source_program: parsed.header.program ?? null,
+          fiscal_year: { start: parsed.stats.fiscalYearStart, end: parsed.stats.fiscalYearEnd },
+          account_count: bookkeepingAccounts.length,
+          voucher_count: parsed.stats.totalVouchers,
+          transaction_line_count: parsed.stats.totalTransactionLines,
+          opening_balance_total: preview.openingBalanceTotal ?? null,
+        },
+        validation: { valid: validation.valid, errors: validation.errors, warnings: allWarnings },
+        org_number_match: orgMatch,
+        duplicate,
+        mappings,
+        mapping_stats: mappingStats,
+        instructions:
+          verdict === 'invalid'
+            ? 'The file has blocking errors: report them to the user and do not import. A fresh export from the source system usually fixes them.'
+            : verdict === 'duplicate'
+              ? 'This file or fiscal year is already imported. Report it; use gnubok_undo_sie_import first if the user wants to replace it.'
+              : orgMatch.match === false
+                ? 'STOP: the file belongs to a different organisation than this company. Confirm with the user before any import.'
+                : 'Summarize the scan for the user (source system, fiscal year, voucher count, balance status, any warnings). On their go-ahead call gnubok_import_sie with this same file and the returned mappings; the import stages for approval.',
+      }
+    },
+  },
+
+  {
     name: 'gnubok_import_sie',
     title: 'Import SIE File',
-    description: 'Stage SIE-file import (types 1-4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. High-risk, always staged.',
+    description: 'Stage SIE-file import (types 1-4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. High-risk, always staged. Run gnubok_sie_preflight first for the scan and the mappings.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         file_content: { type: 'string', description: 'Full SIE file contents' },
+        file_content_base64: { type: 'string', description: 'Exact file bytes base64-encoded; alternative to file_content (preserves CP437 åäö)' },
         filename: { type: 'string', description: 'Original filename' },
         mappings: {
           type: 'array',
@@ -16141,17 +16356,19 @@ export const tools: McpTool[] = [
         opening_balance_series: { type: 'string', description: 'Series for the IB voucher; default avoids series used by the file' },
         update_account_names: { type: 'boolean', description: 'Use #KONTO names from the file for created and existing accounts (default true). Set false to keep BAS default names.' },
       },
-      required: ['file_content', 'filename', 'mappings'],
+      required: ['filename', 'mappings'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async execute(args, companyId, userId, supabase, actor) {
-      const fileContent = args.file_content as string
+      // Decoded once here; the staged params carry the decoded text so
+      // commitImportSie re-parses exactly what was previewed.
+      const fileContent = await decodeSieToolContent(args)
       const filename = args.filename as string
       const mappings = args.mappings as unknown[] | undefined
 
       if (!fileContent || !filename || !Array.isArray(mappings)) {
-        throw new Error('file_content, filename, and mappings are required')
+        throw new Error('file_content (or file_content_base64), filename, and mappings are required')
       }
 
       // Parse + validate at stage time so the approver sees real content (which

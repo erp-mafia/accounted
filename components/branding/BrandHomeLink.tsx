@@ -37,7 +37,7 @@ export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
           alt=""
           width={26}
           height={26}
-          className="h-[26px] w-[26px] rounded-md object-contain"
+          className="h-[26px] w-[26px] rounded-lg object-contain"
         />
       ) : (
         <Image
@@ -45,7 +45,7 @@ export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
           alt=""
           width={26}
           height={26}
-          className="h-[26px] w-[26px] rounded-md"
+          className="h-[26px] w-[26px] rounded-lg"
         />
       )}
       {showLabel && label && (

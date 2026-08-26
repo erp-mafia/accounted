@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -87,7 +88,11 @@ export default function BulkBookDialog({
   const [loadingTemplates, setLoadingTemplates] = useState(true)
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
   // null = fetch pending; array = loaded (may be empty on error: falls back to '1930')
-  const [cashAccounts, setCashAccounts] = useState<CashAccount[] | null>(null)
+  // Session-cached (lib/reference-data); null only while the list is still
+  // loading, which the pre-fill below reads as "not resolved yet".
+  const { cashAccounts: cachedCashAccounts, isLoading: cashAccountsLoading } = useCashAccounts()
+  const cashAccounts: CashAccount[] | null = cashAccountsLoading ? null : cachedCashAccounts
+  const { settings: companySettings } = useCompanySettings()
   const [mode, setMode] = useState<Mode>('one_line_per_tx')
   const [description, setDescription] = useState('')
   const [manualLines, setManualLines] = useState<ManualLine[]>([])
@@ -102,7 +107,7 @@ export default function BulkBookDialog({
   // company_settings.dimensions_enabled, same gate as JournalEntryForm. One
   // header-level default bag applies to both tabs; the server tags the
   // generated voucher's lines with it.
-  const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>({})
 
   // Documents that will inherit onto the new verifikat. Computed from
@@ -173,43 +178,6 @@ export default function BulkBookDialog({
     }
   }, [open, company, supabase])
 
-  // Fetch cash accounts once when the dialog opens so the manual bank-leg
-  // pre-fill can resolve the correct ledger account per transaction.
-  useEffect(() => {
-    if (!open) return
-    setCashAccounts(null)
-    let cancelled = false
-    fetch('/api/cash-accounts')
-      .then((r) => {
-        if (!r.ok) throw new Error(`cash-accounts fetch failed: ${r.status}`)
-        return r.json()
-      })
-      .then((json) => {
-        if (cancelled) return
-        setCashAccounts((json.data ?? []) as CashAccount[])
-      })
-      .catch(() => {
-        // Fall back to empty list: resolveAccount will return '1930'
-        if (!cancelled) setCashAccounts([])
-      })
-    return () => { cancelled = true }
-  }, [open])
-
-  // Company settings gate the dimension affordance (dimensions_enabled).
-  // Fetched once per open; on failure the pair simply stays hidden.
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    fetch('/api/settings')
-      .then((r) => r.json())
-      .then(({ data }) => {
-        if (!cancelled) setDimensionsEnabled(data?.dimensions_enabled === true)
-      })
-      .catch(() => {
-        if (!cancelled) setDimensionsEnabled(false)
-      })
-    return () => { cancelled = true }
-  }, [open])
 
   // Reset state when dialog closes so the next open starts clean.
   useEffect(() => {
@@ -219,7 +187,6 @@ export default function BulkBookDialog({
       setMode('one_line_per_tx')
       setDescription('')
       setManualLines([])
-      setCashAccounts(null)
       setDefaultDims({})
     } else if (sharedDate) {
       // Pre-fill description with a sensible default the user can edit.

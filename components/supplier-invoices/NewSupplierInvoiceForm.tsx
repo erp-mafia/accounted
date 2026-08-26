@@ -26,6 +26,7 @@ import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { SupplierInvoiceReviewContent } from '@/components/suppliers/SupplierInvoiceReviewContent'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
@@ -162,6 +163,9 @@ export default function NewSupplierInvoiceForm({
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_editor')
+  // Loads the BAS chart chunk after mount and re-renders once names and
+  // descriptions for non-hardcoded accounts are available.
+  useBasReference()
   const ta = useTranslations('accruals')
 
   // When opened from an invoice-inbox item, every redirect should land the
@@ -186,7 +190,7 @@ export default function NewSupplierInvoiceForm({
 
   const {
     suppliers,
-    setSuppliers,
+    refreshSuppliers,
     suppliersLoaded,
     accounts,
     entityType,
@@ -1117,7 +1121,9 @@ export default function NewSupplierInvoiceForm({
       toast({ title: t('create_supplier_failed_title'), description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
     } else {
       const created = result.data as Supplier
-      setSuppliers((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))
+      // The shared supplier list feeds every picker: refresh it (awaited, so
+      // the pending selection below finds the new row).
+      await refreshSuppliers()
       setPendingSupplierSelect(created.id)
       setHasMatchedSupplier(true)
       setShowNewSupplier(false)

@@ -120,6 +120,14 @@ const nextConfig: NextConfig = {
   skipTrailingSlashRedirect: true,
   experimental: {
     optimizePackageImports: ['recharts', 'date-fns', 'framer-motion'],
+    // Client router cache for dynamic routes: a page visited in the last
+    // 30 s (back/forward, re-clicking a nav item) re-renders from the cached
+    // RSC payload instead of a new server request through the auth proxy.
+    // Mutation flows already call router.refresh() where a stale server
+    // render would mislead (16 sites); the client-side reference-data cache
+    // (lib/reference-data) is independent of this and refreshes on its own.
+    // Default was 0 (always refetch). Static routes keep the 5 min default.
+    staleTimes: { dynamic: 30, static: 300 },
   },
   // PostHog reverse proxy. Keeping analytics same-origin buys three things:
   // the strict CSP below needs NO posthog hosts (`connect-src 'self'` already

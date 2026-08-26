@@ -26,6 +26,8 @@ import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-libra
 import { sourceTypeForTemplateCategory } from '@/lib/bookkeeping/template-source-type'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
+import { useAccounts, useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-prefill'
@@ -48,7 +50,7 @@ import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
-import type { CreateJournalEntryLineInput, FiscalPeriod, BASAccount, JournalEntrySourceType, Currency, BookingTemplateLibrary, BookingTemplateCategory } from '@/types'
+import type { CreateJournalEntryLineInput, FiscalPeriod, JournalEntrySourceType, Currency, BookingTemplateLibrary, BookingTemplateCategory } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
 const CURRENCIES: { value: Currency; label: string }[] = [
@@ -150,7 +152,12 @@ export default function JournalEntryForm({
   // copy from this namespace.
   const tTpl = useTranslations('settings_booking_templates')
   const locale = useLocale()
-  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
+  // Session-cached reference data (lib/reference-data): seeded by the
+  // dashboard layout, so the period select, the account picker and the
+  // settings-driven defaults render populated on the first paint instead of
+  // after four round trips, and re-opening the dialog costs no requests.
+  const { periods } = useFiscalPeriods()
+  const { settings: companySettings } = useCompanySettings()
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [entryDate, setEntryDate] = useState(initialDate ?? new Date().toISOString().split('T')[0])
   const [description, setDescription] = useState(initialDescription ?? '')
@@ -160,7 +167,7 @@ export default function JournalEntryForm({
   // when company_settings.dimensions_enabled: a UI-visibility gate; lines
   // that already carry dimensions (e.g. a draft being edited) still round-trip
   // untouched when the toggle is off.
-  const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const [showDims, setShowDims] = useState(false)
   // Header-level default dims ("gäller alla rader"). The per-row maps on
   // `lines` are the ONE source of truth: this state only drives the header
@@ -209,7 +216,7 @@ export default function JournalEntryForm({
   // enabled so the attempt can happen; the handlers gate on validity.
   const [showValidationHints, setShowValidationHints] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
+  const { accounts } = useAccounts()
   // Full BAS catalogue (static reference data, fetched once per session). Lets
   // the account picker surface standard accounts the company hasn't activated
   // yet; picking one activates it at commit via the existing rail.
@@ -258,31 +265,6 @@ export default function JournalEntryForm({
     uploadedFiles.length > 0
   useUnsavedChanges(hasContent)
 
-  async function fetchPeriods() {
-    const res = await fetch('/api/bookkeeping/fiscal-periods')
-    const { data } = await res.json()
-    const fetched: FiscalPeriod[] = data || []
-    setPeriods(fetched)
-
-    // Auto-select period matching the current entry date
-    const match = fetched.find(
-      (p) => entryDate >= p.period_start && entryDate <= p.period_end
-    )
-    if (match) {
-      setSelectedPeriod(match.id)
-      setPeriodMismatch(null)
-    } else if (fetched.length > 0) {
-      setSelectedPeriod(fetched[0].id)
-      setPeriodMismatch('no_period')
-    }
-  }
-
-  async function fetchAccounts() {
-    const res = await fetch('/api/bookkeeping/accounts')
-    const { data } = await res.json()
-    setAccounts(data || [])
-  }
-
   // Resolve + set the default voucher series for a source type from the cached
   // company config: prefer the per-source-type mapping, fall back to the legacy
   // default_voucher_series, then to 'A'. Reads refs (stable), so it can run both
@@ -293,28 +275,28 @@ export default function JournalEntryForm({
   }, [])
 
   useEffect(() => {
-    fetchPeriods()
-    fetchAccounts()
     loadBasCatalog().then(setCatalog).catch(() => {/* search degrades to the active chart */})
-    // Company settings power two things here: dimensions_enabled gates the
-    // tagging affordances (all modes, incl. the TransactionBookingDialog
-    // embed), and the default voucher series seeds the standalone form:
-    // prefer the per-source-type mapping when present; fall back to the legacy
-    // default_voucher_series, then to 'A'. In edit mode the draft's own series
-    // is pre-filled: never override it from the company defaults.
-    fetch('/api/settings').then(r => r.json()).then(({ data }) => {
-      if (!data) return
-      setDimensionsEnabled(data.dimensions_enabled === true)
-      seriesMapRef.current =
-        (data.default_voucher_series_per_source_type as Record<string, string> | null) ?? null
-      defaultSeriesRef.current = data.default_voucher_series || 'A'
-      if (!embedded && !editEntryId) {
-        applySeriesForSourceType(effectiveSourceTypeRef.current)
-      }
-    }).catch(() => {/* keep 'A' + hidden dimension affordances */})
-  }, [embedded, sourceType, editEntryId, applySeriesForSourceType])
+  }, [])
 
-  // Auto-select period when entry date changes
+  // Company settings seed the default voucher series for the standalone form:
+  // prefer the per-source-type mapping when present; fall back to the legacy
+  // default_voucher_series, then to 'A'. In edit mode the draft's own series
+  // is pre-filled: never override it from the company defaults. (dimensions_
+  // enabled, which gates the tagging affordances in all modes incl. the
+  // TransactionBookingDialog embed, is derived directly above.)
+  useEffect(() => {
+    if (!companySettings) return
+    seriesMapRef.current =
+      (companySettings.default_voucher_series_per_source_type as Record<string, string> | null) ?? null
+    defaultSeriesRef.current = companySettings.default_voucher_series || 'A'
+    if (!embedded && !editEntryId) {
+      applySeriesForSourceType(effectiveSourceTypeRef.current)
+    }
+  }, [companySettings, embedded, sourceType, editEntryId, applySeriesForSourceType])
+
+  // Auto-select the period matching the entry date (on load and whenever the
+  // date changes). With no match, fall back to the newest period only when
+  // nothing is selected yet, and flag the mismatch either way.
   useEffect(() => {
     if (periods.length === 0) return
     const match = periods.find(
@@ -324,6 +306,7 @@ export default function JournalEntryForm({
       setSelectedPeriod(match.id)
       setPeriodMismatch(null)
     } else {
+      setSelectedPeriod((current) => current || periods[0].id)
       setPeriodMismatch('no_period')
     }
   }, [entryDate, periods])
@@ -349,12 +332,15 @@ export default function JournalEntryForm({
   // Read-only hint; the actual number is reserved atomically at commit time,
   // so this may shift by one if another entry lands first.
   useEffect(() => {
-    if (embedded || !selectedPeriod || !voucherSeries) {
+    if (embedded || !entryDate || !voucherSeries) {
       setNextVoucherNumber(null)
       return
     }
     let cancelled = false
-    const qs = new URLSearchParams({ period_id: selectedPeriod, series: voucherSeries })
+    // Keyed on the entry date rather than the resolved period so the preview
+    // fires as soon as the series is known: the route resolves the period
+    // from the date itself, which is exactly how selectedPeriod is derived.
+    const qs = new URLSearchParams({ date: entryDate, series: voucherSeries })
     fetch(`/api/bookkeeping/voucher-sequences/next?${qs}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
@@ -368,7 +354,7 @@ export default function JournalEntryForm({
     return () => {
       cancelled = true
     }
-  }, [embedded, selectedPeriod, voucherSeries])
+  }, [embedded, entryDate, voucherSeries])
 
   // Fetch exchange rate from Riksbanken when currency changes
   const fetchRate = useCallback(async (currency: Currency) => {
@@ -821,7 +807,7 @@ export default function JournalEntryForm({
   // reactivating an existing account, where the rest of the row is whatever
   // the company already had stored and is picked up by fetchAccounts.
   const handleAccountCreated = async (account: { account_number: string }) => {
-    await fetchAccounts()
+    await invalidateReferenceData('ref:accounts')
     if (creatingAccountForLine != null) {
       updateLine(creatingAccountForLine, 'account_number', account.account_number)
     }
@@ -2136,7 +2122,7 @@ export default function JournalEntryForm({
         onOpenChange={setShowCreatePeriod}
         entryDate={entryDate}
         periods={periods}
-        onCreated={fetchPeriods}
+        onCreated={() => void invalidateReferenceData('ref:fiscal-periods')}
       />
 
       {/* Clear-all confirmation */}

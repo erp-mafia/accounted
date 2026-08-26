@@ -1,8 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { guardBrowserWrite } from '@/lib/company/tab-guard'
+import { useAccounts } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,23 +24,12 @@ const CLASS_LABELS: Record<number, string> = {
 }
 
 export default function ChartOfAccounts() {
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
-  const [loading, setLoading] = useState(true)
+  // Session-cached chart (lib/reference-data), shared with every picker.
+  const { accounts, isLoading: loading } = useAccounts()
   const [expandedClasses, setExpandedClasses] = useState<Set<number>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
   const [editingSRU, setEditingSRU] = useState<string | null>(null)
   const [sruValue, setSruValue] = useState('')
-
-  async function fetchAccounts() {
-    const res = await fetch('/api/bookkeeping/accounts')
-    const { data } = await res.json()
-    setAccounts(data || [])
-    setLoading(false)
-  }
-
-  useEffect(() => {
-    fetchAccounts()
-  }, [])
 
   async function updateSRUCode(accountId: string, newSruCode: string) {
     // Cross-tab guard (WL-09): browser-direct Supabase write, outside the
@@ -51,9 +42,8 @@ export default function ChartOfAccounts() {
       .update({ sru_code: trimmed })
       .eq('id', accountId)
 
-    setAccounts((prev) =>
-      prev.map((a) => (a.id === accountId ? { ...a, sru_code: trimmed } : a))
-    )
+    // Refresh the shared chart so this list and every picker show the code.
+    await invalidateReferenceData('ref:accounts')
     setEditingSRU(null)
   }
 

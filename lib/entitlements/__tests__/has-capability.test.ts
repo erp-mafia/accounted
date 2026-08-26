@@ -244,6 +244,30 @@ describe('getCompanyEntitlements', () => {
     expect(result.trialExpiredAt).toBeNull()
   })
 
+  it('skips the companies lookup and still scopes grants to the team when teamId is supplied', async () => {
+    const teamId = '22222222-2222-4222-8222-222222222222'
+    const base = makeSupabase({
+      // Deliberately wrong: if the lookup ran, the team scope would be lost.
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [{ capability_key: CAPABILITY.ai, expires_at: null, source: 'stripe' }],
+      },
+      company_capability_config: { data: [] },
+    })
+    const tables: string[] = []
+    const supabase = {
+      from: (table: string) => {
+        tables.push(table)
+        return (base.from as (t: string) => unknown)(table)
+      },
+    } as unknown as SupabaseClient
+    const result = await getCompanyEntitlements(supabase, companyId, { teamId })
+    expect(result.capabilities).toContain(CAPABILITY.ai)
+    expect(result.entitlementState).toBe('paid')
+    expect(tables).not.toContain('companies')
+    expect(tables).toContain('capability_grants')
+  })
+
   it('hides the trial once a non-trial grant is active (converted customer)', async () => {
     const supabase = makeSupabase({
       companies: { data: { team_id: null } },

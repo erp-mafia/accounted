@@ -4,7 +4,8 @@
 // Rendered by the focused /reports/[slug] route (see components/reports/FocusedReport.tsx).
 // The regulated table/figure rendering is unchanged from the original monolith.
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { useDimensions } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -3426,22 +3427,17 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
     data: DimensionPnlReport | null
     error: string | null
   } | null>(null)
-  const [dims, setDims] = useState<{ sie_dim_no: number; name: string }[]>([])
   const [dimNo, setDimNo] = useState('6')
   const reportQs = `${reportQuery(periodId, dateRange)}&dim_no=${encodeURIComponent(dimNo)}`
 
-  // Registered dimensions for the pivot picker (best-effort; the report
-  // defaults to projekt if the registry read fails).
-  useEffect(() => {
-    fetch('/api/dimensions')
-      .then((res) => res.json())
-      .then((payload) => {
-        if (Array.isArray(payload.data)) {
-          setDims(payload.data.map((d: { sie_dim_no: number; name: string }) => ({ sie_dim_no: d.sie_dim_no, name: d.name })))
-        }
-      })
-      .catch(() => {})
-  }, [])
+  // Registered dimensions for the pivot picker, from the session cache
+  // (lib/reference-data); best-effort, the report defaults to projekt while
+  // the registry is unavailable.
+  const { dimensions } = useDimensions()
+  const dims = useMemo(
+    () => dimensions.map((d) => ({ sie_dim_no: d.sie_dim_no, name: d.name })),
+    [dimensions],
+  )
 
   useEffect(() => {
     let cancelled = false

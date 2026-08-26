@@ -28,7 +28,10 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { BASAccount } from '@/types'
-import { BAS_REFERENCE, isStandardBASAccount, type BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
+import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
+import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
+import { ensureBasLoaded } from '@/lib/bookkeeping/bas-lazy'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // ---------------------------------------------------------------------------
@@ -75,6 +78,7 @@ export default function ChartOfAccountsManager() {
   const [collapsedMyClasses, setCollapsedMyClasses] = useState<Set<number>>(new Set())
   const [expandedCatalogClasses, setExpandedCatalogClasses] = useState<Set<number>>(new Set())
   const [hideK2Excluded, setHideK2Excluded] = useState<boolean | null>(null)
+  const { settings: companySettings } = useCompanySettings()
   // Off by default: the list endpoint's `?active=false` means "no filter", so
   // leaving it off keeps first paint on the smaller active-only payload.
   // A deactivated account is otherwise invisible everywhere and unrecoverable.
@@ -132,6 +136,9 @@ export default function ChartOfAccountsManager() {
         (a: { account_number: string; is_active: boolean; is_system_account: boolean }) => [a.account_number, a],
       ),
     )
+    // The full chart is a lazily loaded chunk: only the BAS-katalog tab pays
+    // for it, not every route that renders this component's parent.
+    const BAS_REFERENCE = await ensureBasLoaded()
     const merged: ReferenceAccount[] = BAS_REFERENCE.map((ref) => {
       const userAccount = userMap.get(ref.account_number)
       return {
@@ -205,25 +212,18 @@ export default function ChartOfAccountsManager() {
         fetchReference(),
         (async () => {
           if (hideK2Excluded !== null) return
-          try {
-            const res = await fetch('/api/settings')
-            if (res.ok) {
-              const { data } = await res.json()
-              // Default to hiding K2-excluded accounts if the company uses K2 (plan_type === 'k1')
-              setHideK2Excluded(data?.plan_type === 'k1')
-            } else {
-              setHideK2Excluded(false)
-            }
-          } catch {
-            setHideK2Excluded(false)
-          }
+          // Default to hiding K2-excluded accounts if the company uses K2
+          // (plan_type === 'k1'). Settings come from the session cache.
+          setHideK2Excluded(
+            (companySettings as { plan_type?: string } | null)?.plan_type === 'k1',
+          )
         })(),
       ])
       setReferenceLoaded(true)
     } finally {
       setReferenceLoading(false)
     }
-  }, [referenceLoaded, referenceLoading, fetchReference, hideK2Excluded])
+  }, [referenceLoaded, referenceLoading, fetchReference, hideK2Excluded, companySettings])
 
   const refreshAll = useCallback(async () => {
     await Promise.all([
@@ -566,7 +566,7 @@ export default function ChartOfAccountsManager() {
                                       {t('system_badge')}
                                     </span>
                                   )}
-                                  {!isStandardBASAccount(account.account_number) && (
+                                  {!isStandardBASAccountNumber(account.account_number) && (
                                     <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
                                       {t('own_badge')}
                                     </span>
