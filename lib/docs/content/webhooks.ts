@@ -1,3 +1,22 @@
+import {
+  PUBLIC_WEBHOOK_EVENT_GROUPS,
+  type PublicWebhookEventGroup,
+} from '@/lib/webhooks/public-events'
+
+/**
+ * The "Event types" section, rendered from the same catalogue the fan-out
+ * handler subscribes to and the v1 create schema validates against.
+ */
+function renderEventTypes(): string {
+  return PUBLIC_WEBHOOK_EVENT_GROUPS.map((group: PublicWebhookEventGroup) => {
+    const heading = group.note ? `**${group.title}** *(${group.note})*` : `**${group.title}**`
+    const lines = group.events.map((event) =>
+      event.description ? `- \`${event.type}\`: ${event.description}` : `- \`${event.type}\``,
+    )
+    return [heading, ...lines].join('\n')
+  }).join('\n\n')
+}
+
 export const WEBHOOKS_MD = `# Webhooks
 
 > Receive HMAC-signed POST notifications when state changes in Accounted: invoices paid, journal entries committed, periods locked, salary runs booked, AGI files generated. At-least-once delivery with exponential backoff over ~87 hours (about 3.6 days).
@@ -16,45 +35,7 @@ If you've used [Stripe webhooks](https://docs.stripe.com/webhooks), the model is
 
 The following event types are deliverable as webhooks. Subscribing to a type that requires elevated scope (\`salary_run.*\` and \`agi.*\` need \`payroll:read\`) returns \`INSUFFICIENT_SCOPE\` at registration time.
 
-**Invoicing**
-- \`invoice.created\`: draft invoice created
-- \`invoice.sent\`: invoice marked sent (email delivered or external)
-- \`invoice.paid\`: invoice fully paid
-- \`credit_note.created\`: credit note issued
-
-**AP / suppliers**
-- \`supplier.created\`
-- \`supplier_invoice.registered\`
-- \`supplier_invoice.approved\`
-- \`supplier_invoice.paid\`
-- \`supplier_invoice.credited\`
-- \`supplier_invoice.uncredited\`: credit reversal
-
-**Customers**
-- \`customer.created\`
-
-**Bookkeeping**
-- \`journal_entry.committed\`: voucher posted (immutable from this point)
-- \`journal_entry.reversed\`: storno entry posted
-- \`journal_entry.corrected\`: rättelse via \`correctEntry\` (BFL 5 kap 5 §)
-
-**Transactions**
-- \`transaction.categorized\`: bank transaction assigned an account + tax code
-- \`transaction.reconciled\`: transaction matched to a posted entry
-
-**Periods**
-- \`period.locked\`: fiscal period closed for writes
-- \`period.unlocked\`: fiscal period reopened
-- \`period.year_closed\`: full year-end procedure complete
-
-**Payroll** *(requires \`payroll:read\` scope alongside \`webhooks:manage\`)*
-- \`salary_run.created\`
-- \`salary_run.approved\`
-- \`salary_run.booked\`: journal entries posted
-- \`agi.generated\`: AGI XML produced
-
-**Documents**
-- \`document.uploaded\`
+${renderEventTypes()}
 
 ## Payload shape
 
