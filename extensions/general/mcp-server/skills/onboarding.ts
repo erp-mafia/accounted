@@ -105,16 +105,17 @@ reaches far enough back anyway.
    Exportera data → SIE, **Björn Lundén / Briox / Wint** under Export.
    Every Swedish system exports SIE4 (.se/.sie); ask them to attach the
    file here in the chat.
-2. When the file arrives, get its BYTES to the server without retyping
-   them. Preferred (and REQUIRED for anything beyond a small file): call
-   \`gnubok_create_sie_upload\`, PUT the raw file bytes to the returned
-   \`upload_url\` (from your code sandbox when you have one), compute the
-   file's sha256, then call \`gnubok_sie_preflight\` with \`upload_id\` +
-   \`sha256\` + the same \`filename\`. Small files may go inline
-   (\`file_content_base64\` + \`sha256\` preferred over plain
-   \`file_content\`). NEVER reproduce a large file token by token: the
-   tools refuse oversized inline content because a mid-verifikat
-   truncation imports silently incomplete bookkeeping.
+2. As soon as SIE import is the next step, call
+   \`gnubok_create_sie_upload\`. On claude.ai/Desktop it renders a
+   DRAG-AND-DROP card: the user drops the file on it and the card itself
+   runs the preflight and stages the import with exact bytes; you only
+   narrate the verdict and handle the approval. Without the card: PUT the
+   raw bytes to \`upload_url\` (from your code sandbox), compute sha256,
+   and call \`gnubok_sie_preflight\` with \`upload_id\` + \`sha256\` +
+   \`filename\`; smaller files may go inline as \`file_content_base64\` +
+   \`sha256\`. NEVER reproduce a large file token by token: unhashed
+   oversized inline content is refused because a mid-verifikat truncation
+   imports silently incomplete bookkeeping.
 3. Summarize the preflight in a few lines: source system, fiscal years,
    verifikat count, balance status, org-number match, the one warning that
    matters. On the user's go-ahead: \`gnubok_import_sie\` with the same

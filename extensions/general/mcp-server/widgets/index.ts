@@ -3,12 +3,14 @@ import { receiptMatcherWidget } from './receipt-matcher'
 import { vatReviewWidget } from './vat-review'
 import { pendingOperationsWidget } from './pending-operations'
 import { connectCardWidget } from './connect-card'
+import { sieDropWidget } from './sie-drop'
 
 export const uiWidgets: UiWidget[] = [
   receiptMatcherWidget,
   vatReviewWidget,
   pendingOperationsWidget,
   connectCardWidget,
+  sieDropWidget,
 ]
 
 export function findUiWidget(uri: string): UiWidget | null {

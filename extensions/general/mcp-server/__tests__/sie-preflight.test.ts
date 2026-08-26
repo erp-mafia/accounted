@@ -193,6 +193,18 @@ describe('gnubok_sie_preflight', () => {
     })
   })
 
+  it('accepts oversized base64 WHEN a matching sha256 proves the bytes are complete', async () => {
+    // The drop-card widget path: byte-exact content, hash-verified, so the
+    // anti-retyping cap does not apply.
+    const huge = Buffer.from(VALID_SIE + '\n' + '#KONTO 9999 "x"\n'.repeat(10_000), 'utf8')
+    const { createHash } = await import('node:crypto')
+    const result = await run({
+      file_content_base64: huge.toString('base64'),
+      sha256: createHash('sha256').update(huge).digest('hex'),
+    })
+    expect(result.verdict).toBeDefined()
+  })
+
   it('verifies sha256 on the base64 path and rejects a mismatch as truncation', async () => {
     const bytes = Buffer.from(VALID_SIE, 'utf8')
     const { createHash } = await import('node:crypto')

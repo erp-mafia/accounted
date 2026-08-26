@@ -140,7 +140,7 @@ describe('gnubok_create_company', () => {
         supabase as never
       )) as Record<string, unknown>
 
-      expect(result.history_note).toContain('gnubok_sie_preflight')
+      expect(result.history_note).toContain('gnubok_create_sie_upload')
       expect(result.message).toContain('IN ORDER')
     } finally {
       vi.useRealTimers()
