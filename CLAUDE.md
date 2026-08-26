@@ -72,7 +72,7 @@ npm run skills:generate  # Regenerate agent_atom_registry seed after editing an 
 - **Events**: `lib/events/bus.ts` is a module-level singleton. Any route that emits events must call `ensureInitialized()` (`lib/init.ts`) at module level: otherwise extension handlers are never wired and events silently go nowhere.
 - **Supabase clients**: browser `client.ts`, server `createClient()`, service role `createServiceClient()`, cookieless service role `createServiceClientNoCookies()` (lives in `lib/auth/api-keys.ts`; for API-key/MCP paths). Paginate with `fetchAllRows()`: PostgREST silently caps at 1000 rows.
 - **Extensions**: opt-in plugins in `extensions/general/<name>/`; `extensions.config.json` is the source of truth for what's enabled. Core must run with zero extensions.
-- **MCP server**: the bookkeeping engine is exposed as 100+ MCP tools (`extensions/general/mcp-server/`), authenticated by `gnubok_sk_` API keys (SHA-256, scoped, default 100 RPM per key).
+- **MCP server**: the bookkeeping engine is exposed as 150+ MCP tools (`extensions/general/mcp-server/`), authenticated by `gnubok_sk_` API keys (SHA-256, scoped, default 100 RPM per key).
 - **Types**: import from `@/types` (`types/index.ts`); event types in `lib/events/types.ts`.
 - **User-facing errors are Swedish**: map through `lib/errors/get-error-message.ts`.
 - **Cron**: hosted cron jobs live in `vercel.json`, authenticated via `verifyCronSecret()` (`lib/auth/cron.ts`).
