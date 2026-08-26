@@ -1,8 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -54,17 +56,29 @@ export function FiscalPeriodEditor() {
   const isEF = company?.entity_type === 'enskild_firma'
   const canEdit = role === 'owner' || role === 'admin'
 
+  // Periods come from the session cache (lib/reference-data). The editor
+  // snapshots the FIRST period once per company (a background revalidation
+  // must not reset the dates the user is editing), then loads that period's
+  // posted-entry count, which is what gates editing.
+  const { periods, isLoading: periodsLoading, error: periodsError } = useFiscalPeriods()
+  const periodsRef = useRef(periods)
   useEffect(() => {
-    if (!company) return
+    periodsRef.current = periods
+  }, [periods])
+  const initialisedForRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!company || periodsLoading) return
+    if (initialisedForRef.current === company.id) return
+    initialisedForRef.current = company.id
     let cancelled = false
 
     async function load() {
       setIsLoading(true)
       setLoadError(null)
       try {
-        const res = await fetch('/api/bookkeeping/fiscal-periods')
-        if (!res.ok) throw new Error(t('fp_load_error_periods'))
-        const { data } = (await res.json()) as { data: FiscalPeriod[] }
+        if (periodsError) throw new Error(t('fp_load_error_periods'))
+        const data = periodsRef.current
         if (!data || data.length === 0) {
           if (!cancelled) {
             setPeriod(null)
@@ -97,7 +111,7 @@ export function FiscalPeriodEditor() {
     return () => {
       cancelled = true
     }
-  }, [company, t])
+  }, [company, periodsLoading, periodsError, t])
 
   const validation = validateFirstPeriod(
     startDate,
@@ -153,6 +167,8 @@ export function FiscalPeriodEditor() {
         throw new Error(body.error || t('fp_update_failed_title'))
       }
       setPeriod(body.data as FiscalPeriod)
+      // Every picker reads the shared list: refresh it with the new dates.
+      void invalidateReferenceData('ref:fiscal-periods')
       toast({
         title: t('fp_updated_title'),
         description: `${formatSwedishDate(body.data.period_start)}: ${formatSwedishDate(body.data.period_end)}`,

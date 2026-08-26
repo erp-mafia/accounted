@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
+import { useDimensions } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -44,7 +46,6 @@ import DimensionValueForm, {
   type DimensionValueFormInput,
 } from '@/components/dimensions/DimensionValueForm'
 import {
-  fetchDimensions,
   PROJECT_DIM_NO,
   type DimensionDto,
   type DimensionValueDto,
@@ -76,10 +77,21 @@ export default function DimensionsManager() {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
-  const [dimensions, setDimensions] = useState<DimensionDto[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [loadFailed, setLoadFailed] = useState(false)
-  const [activeDimId, setActiveDimId] = useState<string | null>(null)
+  // The register renders the same session-cached registry the pickers use
+  // (lib/reference-data); every write below invalidates it.
+  const { dimensions: registry, isLoading, error: loadError, refresh: refreshDimensions } = useDimensions()
+  const dimensions = useMemo(
+    () => [...registry].sort((a, b) => a.sort_order - b.sort_order || a.sie_dim_no - b.sie_dim_no),
+    [registry],
+  )
+  const loadFailed = !!loadError
+  // The requested tab, validated against the current registry: a dimension
+  // that disappears falls back to the first one.
+  const [requestedDimId, setActiveDimId] = useState<string | null>(null)
+  const activeDimId =
+    requestedDimId && dimensions.some((d) => d.id === requestedDimId)
+      ? requestedDimId
+      : (dimensions[0]?.id ?? null)
   const [searchTerm, setSearchTerm] = useState('')
   const [sortColumn, setSortColumn] = useState<SortColumn>('code')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
@@ -88,37 +100,17 @@ export default function DimensionsManager() {
   const [newDimDialogOpen, setNewDimDialogOpen] = useState(false)
   const [isCreatingDimension, setIsCreatingDimension] = useState(false)
 
-  const loadDimensions = useCallback(
-    async (showSpinner: boolean) => {
-      if (showSpinner) setIsLoading(true)
-      try {
-        const dims = await fetchDimensions()
-        const sorted = [...dims].sort(
-          (a, b) => a.sort_order - b.sort_order || a.sie_dim_no - b.sie_dim_no,
-        )
-        setDimensions(sorted)
-        setLoadFailed(false)
-        setActiveDimId((prev) =>
-          prev && sorted.some((d) => d.id === prev) ? prev : (sorted[0]?.id ?? null),
-        )
-      } catch (err) {
-        setLoadFailed(true)
-        toast({
-          title: t('load_failed_title'),
-          description: getErrorMessage(err, { locale: errorLocale }),
-          variant: 'destructive',
-        })
-      } finally {
-        setIsLoading(false)
-      }
-    },
-    [toast, t, errorLocale],
-  )
-
   useEffect(() => {
-    void loadDimensions(true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (!loadError) return
+    toast({
+      title: t('load_failed_title'),
+      description: getErrorMessage(loadError, { locale: errorLocale }),
+      variant: 'destructive',
+    })
+  }, [loadError, toast, t, errorLocale])
+
+  /** After a write: refresh the shared registry (this list and every picker). */
+  const loadDimensions = useCallback(() => invalidateReferenceData('ref:dimensions'), [])
 
   const activeDim = useMemo(
     () => dimensions.find((d) => d.id === activeDimId) ?? null,
@@ -227,7 +219,7 @@ export default function DimensionsManager() {
         })
       }
       setDialog(null)
-      await loadDimensions(false)
+      await loadDimensions()
     } catch (err) {
       toast({
         title: t('save_failed_title'),
@@ -262,7 +254,7 @@ export default function DimensionsManager() {
       const createdId = (json?.data?.dimension as { id?: string } | undefined)?.id
       toast({ title: t('dim_created_title') })
       setNewDimDialogOpen(false)
-      await loadDimensions(false)
+      await loadDimensions()
       if (createdId) {
         setActiveDimId(createdId)
         setSearchTerm('')
@@ -300,7 +292,7 @@ export default function DimensionsManager() {
       }
       toast({ title: t('deleted_title') })
       setDialog(null)
-      await loadDimensions(false)
+      await loadDimensions()
     } finally {
       setIsSaving(false)
     }
@@ -359,7 +351,7 @@ export default function DimensionsManager() {
         title={t('load_failed_title')}
         description={t('load_failed_description')}
         actionLabel={t('retry')}
-        onAction={() => void loadDimensions(true)}
+        onAction={() => void refreshDimensions()}
       />
     )
   }

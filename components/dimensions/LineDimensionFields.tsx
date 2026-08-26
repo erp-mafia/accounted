@@ -1,12 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { Label } from '@/components/ui/label'
 import DimensionCombobox from '@/components/dimensions/DimensionCombobox'
-import {
-  fetchDimensionsCached,
-  type DimensionDto,
-} from '@/components/dimensions/types'
+import { useDimensions } from '@/lib/reference-data/hooks'
 
 interface LineDimensionFieldsProps {
   /** Current dimensions map ({sie_dim_no: object_code}), a line's map or the header default. */
@@ -46,24 +43,13 @@ export default function LineDimensionFields({
   stacked,
   inputClassName,
 }: LineDimensionFieldsProps) {
-  const [registry, setRegistry] = useState<DimensionDto[] | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    fetchDimensionsCached()
-      .then((dims) => {
-        if (!cancelled) setRegistry(dims)
-      })
-      .catch(() => {
-        /* keep the hardcoded 1/6 fallback */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  // Registry from the session cache (lib/reference-data): one entry shared
+  // by every line picker on the page; empty while loading or on failure,
+  // which keeps the hardcoded 1/6 fallback below.
+  const { dimensions: registry } = useDimensions()
 
   const fields = useMemo(() => {
-    const active = registry?.filter((d) => d.is_active) ?? []
+    const active = registry.filter((d) => d.is_active)
     if (active.length === 0) return FALLBACK_FIELDS
     return [...active]
       .sort((a, b) => a.sort_order - b.sort_order || a.sie_dim_no - b.sie_dim_no)

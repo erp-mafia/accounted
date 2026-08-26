@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useAccounts, useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import {
   Dialog,
@@ -33,7 +34,6 @@ import {
   resolveFiscalYearStart,
   resolveGapFillStart,
 } from '../lib/date-suggestions'
-import type { CompanySettings } from '@/types'
 import type { StoredAccount } from '../types'
 import {
   BankSyncProgressDialog,
@@ -97,12 +97,41 @@ export function AccountPickerDialog({
   const [lastBookedDate, setLastBookedDate] = useState<string | null>(null)
   // Earliest completed SIE import coverage start: present = migrator flow.
   const [sieCoverageStart, setSieCoverageStart] = useState<string | null>(null)
-  const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
-  const [chartError, setChartError] = useState(false)
+  // Reference data from the session cache (lib/reference-data), seeded by
+  // the dashboard layout: settings, the period containing today and the
+  // chart are known when the dialog opens, no requests of its own. A failed
+  // load keeps settingsLoaded false so the calendar-year fallback is never
+  // presented as the authoritative fiscal-year start (issue #917).
+  const {
+    settings: companySettings,
+    isLoading: settingsLoading,
+    error: settingsError,
+  } = useCompanySettings()
+  const { periods, isLoading: periodsLoading, error: periodsError } = useFiscalPeriods()
+  // Inactive accounts included: the old chart query did not filter on is_active.
+  const { accounts: allAccounts, error: chartLoadError } = useAccounts(false)
+  const settingsLoaded = !settingsLoading && !periodsLoading && !settingsError && !periodsError
+  const currentPeriodStart = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0]
+    const containing = periods
+      .filter((p) => p.period_start <= today && today <= p.period_end)
+      .sort((a, b) => b.period_start.localeCompare(a.period_start))
+    return containing[0]?.period_start || null
+  }, [periods])
+  // 19xx accounts for the per-account ledger combobox. Class 19 = bank/cash
+  // on the BAS chart.
+  const chartAccounts = useMemo<ChartAccount[]>(
+    () =>
+      allAccounts
+        .filter((a) => a.account_number.startsWith('19'))
+        .sort((a, b) => a.account_number.localeCompare(b.account_number))
+        .map((a) => ({ account_number: a.account_number, account_name: a.account_name })),
+    [allAccounts],
+  )
+  // Surface the failure: without the 19xx chart the ledger picker is
+  // silently empty, which reads as "no bank accounts exist".
+  const chartError = Boolean(chartLoadError)
   const [ledgerByUid, setLedgerByUid] = useState<Record<string, string>>({})
-  const [companySettings, setCompanySettings] = useState<Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null>(null)
-  const [currentPeriodStart, setCurrentPeriodStart] = useState<string | null>(null)
-  const [settingsLoaded, setSettingsLoaded] = useState(false)
 
   const [lookbackMode, setLookbackMode] = useState<LookbackMode>('fiscal-year')
   const [customSubMode, setCustomSubMode] = useState<CustomSubMode>('date')
@@ -127,9 +156,6 @@ export function AccountPickerDialog({
 
   useEffect(() => {
     if (open) {
-      // Re-arm the "settings loaded" gate each open so the fiscal-year label
-      // doesn't flash last-open's resolved date before this open's fetch lands.
-      setSettingsLoaded(false)
       const initial = new Set<string>(
         accounts.filter(a => a.enabled !== false).map(a => a.uid)
       )
@@ -159,45 +185,11 @@ export function AccountPickerDialog({
     }
   }, [open, accounts])
 
-  // Load fiscal_year_start_month + entity_type so "Sedan räkenskapsårets början"
-  // resolves to the right date for non-calendar fiscal years, plus the actual
-  // fiscal_periods row containing today: the recurring setting cannot represent
-  // an extended or shortened first year, so the period row wins when it exists.
-  useEffect(() => {
-    if (!open || !company?.id) return
-    let cancelled = false
-    ;(async () => {
-      const today = new Date().toISOString().split('T')[0]
-      const [settingsRes, periodRes] = await Promise.all([
-        supabase
-          .from('company_settings')
-          .select('fiscal_year_start_month, entity_type')
-          .eq('company_id', company.id)
-          .maybeSingle(),
-        supabase
-          .from('fiscal_periods')
-          .select('period_start')
-          .eq('company_id', company.id)
-          .lte('period_start', today)
-          .gte('period_end', today)
-          .order('period_start', { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-      ])
-      if (cancelled) return
-      if (settingsRes.error || periodRes.error) {
-        // A failed fetch must not present the calendar-year fallback as the
-        // authoritative fiscal-year start (issue #917). Leave settingsLoaded
-        // false so the date stays masked; if the user proceeds anyway the
-        // request falls back to the recurring-setting derivation.
-        return
-      }
-      setCompanySettings((settingsRes.data as { fiscal_year_start_month?: number; entity_type?: CompanySettings['entity_type'] } | null) as Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null)
-      setCurrentPeriodStart((periodRes.data as { period_start?: string } | null)?.period_start || null)
-      setSettingsLoaded(true)
-    })()
-    return () => { cancelled = true }
-  }, [open, company?.id, supabase])
+  // fiscal_year_start_month + entity_type make "Sedan räkenskapsårets början"
+  // resolve to the right date for non-calendar fiscal years, and the actual
+  // fiscal_periods row containing today wins when it exists: the recurring
+  // setting cannot represent an extended or shortened first year. Both are
+  // derived above from the session cache.
 
   // Fetch the latest posted verifikat date so we can offer "day after the last
   // booked entry" as a one-click escape from the default fiscal-year start.
@@ -302,31 +294,6 @@ export function AccountPickerDialog({
     })()
     return () => { cancelled = true }
   }, [open, isInitialSelection, company?.id, connectionId, supabase, accounts])
-
-  // Load 19xx accounts from the chart for the per-account ledger combobox.
-  // Class 19 = bank/cash on the BAS chart.
-  useEffect(() => {
-    if (!open || !company?.id) return
-    let cancelled = false
-    ;(async () => {
-      const { data, error } = await supabase
-        .from('chart_of_accounts')
-        .select('account_number, account_name')
-        .eq('company_id', company.id)
-        .like('account_number', '19%')
-        .order('account_number', { ascending: true })
-      if (cancelled) return
-      if (error) {
-        // Surface the failure: without the 19xx chart the ledger picker is
-        // silently empty, which reads as "no bank accounts exist".
-        setChartError(true)
-        return
-      }
-      setChartError(false)
-      setChartAccounts((data as ChartAccount[] | null) || [])
-    })()
-    return () => { cancelled = true }
-  }, [open, company?.id, supabase])
 
   const allSelected = accounts.length > 0 && selected.size === accounts.length
   const noneSelected = selected.size === 0

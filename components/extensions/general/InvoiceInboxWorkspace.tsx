@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -391,7 +392,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // Cash method users see "Bokför direkt" as the primary CTA; accrual users
   // see "Skapa leverantörsfaktura". Defaults to 'accrual' until we've read
   // the company settings so we don't flicker the CTA order on first paint.
-  const [accountingMethod, setAccountingMethod] = useState<AccountingMethod>('accrual')
+  // The company's bookkeeping method drives the CTA hierarchy; read from the
+  // session-cached settings row (lib/reference-data), no request of its own.
+  const { settings: companySettings } = useCompanySettings()
+  const accountingMethod: AccountingMethod =
+    companySettings?.accounting_method === 'cash' ? 'cash' : 'accrual'
 
   // ── Data loading ───────────────────────────────────────────
 
@@ -451,16 +456,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   useEffect(() => {
     fetchItems()
     fetchInboxAddress()
-    // Resolve the company's bookkeeping method: drives CTA hierarchy.
-    fetch('/api/settings')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        const method = body?.data?.accounting_method
-        if (method === 'cash' || method === 'accrual') {
-          setAccountingMethod(method)
-        }
-      })
-      .catch(() => { /* keep 'accrual' default */ })
   }, [fetchItems, fetchInboxAddress])
 
   // Realtime: refetch when any invoice_inbox_items row changes for this
