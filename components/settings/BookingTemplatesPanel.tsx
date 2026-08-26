@@ -22,6 +22,7 @@ import { downloadFile } from '@/lib/browser/download-file'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 export function BookingTemplatesPanel() {
   const t = useTranslations('settings_booking_templates')
@@ -73,6 +74,9 @@ export function BookingTemplatesPanel() {
         return
       }
       setTemplates((prev) => prev.filter((tt) => tt.id !== id))
+      // The pickers read the session cache (lib/reference-data): drop the
+      // deleted template there too, not just from this panel's own list.
+      void invalidateReferenceData('ref:booking-templates')
       toast({ title: t('toast_deleted') })
     } finally {
       setDeletingId(null)
@@ -125,6 +129,7 @@ export function BookingTemplatesPanel() {
       }
       toast({ title: t('toast_import_done'), description: t('toast_import_count', { count: json.imported }) })
       fetchTemplates()
+      void invalidateReferenceData('ref:booking-templates')
     } catch {
       toast({ title: t('toast_import_error'), description: t('toast_invalid_file'), variant: 'destructive' })
     } finally {
