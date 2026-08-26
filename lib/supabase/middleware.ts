@@ -337,7 +337,9 @@ async function updateSessionInner(
   // sessions are per domain, so the user lands on the RIGHT branded login
   // and signs in there ("the domain corrects itself"). This complements the
   // WL-01 signpost, which handles per-company homing INSIDE a domain and
-  // stays the answer for multi-domain company rosters.
+  // stays the answer for multi-domain company rosters. Exemption: byrå
+  // staff who also have canonical-homed companies stay put on the canonical
+  // host; the signpost handles per-company homing.
   const homeOutcome = await resolveHomeDomainOutcome(supabase, user.id, request)
   if (homeOutcome.redirectTo) {
     return NextResponse.redirect(homeOutcome.redirectTo)
@@ -733,7 +735,10 @@ function isAffinityExemptHost(host: string): boolean {
  *
  * Rules (founder call 2026-08-05):
  *   1. A byrå team member's home is their brand's domain: any other product
- *      host (a foreign byrå domain OR the platform domain) redirects there.
+ *      host (a foreign byrå domain OR the platform domain) redirects there,
+ *      EXCEPT on the canonical platform host when the member also has a
+ *      company homed there (a company whose team has no brand): they stay,
+ *      and the WL-01 signpost handles per-company homing.
  *   2. A non-member on a brand domain redirects to the platform app URL,
  *      UNLESS one of their companies is homed under that brand's team (the
  *      byrå's own client users log in on the byrå domain).
@@ -778,6 +783,36 @@ async function resolveHomeDomainOutcome(
   }
   if (byraDomains.length > 0) {
     if (byraDomains.includes(host)) return { redirectTo: null, cacheOk: true }
+
+    // Exemption: a byrå member who ALSO belongs to a company homed on the
+    // canonical domain (its team has no brand, or no team at all) must be
+    // able to reach that company somewhere, and the canonical host is its
+    // only home. Redirecting them off canonical made their own company
+    // deterministically unreachable: on the brand host it renders as a
+    // non-clickable signpost pointing right back at canonical. So on the
+    // canonical host, stay when such a company exists (host-stable verdict,
+    // so it is cacheable); a foreign brand host still redirects, since
+    // nothing of the user's is homed there. Cost: one extra query, only for
+    // byrå members on the canonical host without a fresh home-ok cookie.
+    const canonicalHost = normalizeHost(
+      new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se').hostname,
+    )
+    if (host === canonicalHost) {
+      const { data: companyRows, error: companyError } = await supabase
+        .from('company_members')
+        .select('companies!inner(team_id, teams(brands(id)))')
+        .eq('user_id', userId)
+      if (companyError) {
+        console.error(
+          '[middleware] home-domain canonical-company lookup failed',
+          companyError,
+        )
+        return stay
+      }
+      if ((companyRows ?? []).some(rowHasCanonicalHomedCompany)) {
+        return { redirectTo: null, cacheOk: true }
+      }
+    }
     return { redirectTo: new URL(`https://${byraDomains[0]}/`), cacheOk: false }
   }
 
@@ -800,6 +835,31 @@ async function resolveHomeDomainOutcome(
   const platformUrl = new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se')
   if (normalizeHost(platformUrl.hostname) === host) return { redirectTo: null, cacheOk: true }
   return { redirectTo: platformUrl, cacheOk: false }
+}
+
+/**
+ * Whether a company_members row (carrying the companies → teams → brands
+ * embed) points at a company homed on the canonical domain: no team at all,
+ * or a team without a brands row. The brand null-check happens HERE in JS on
+ * purpose: a PostgREST `.is()` filter on an embedded resource does not
+ * filter the parent rows, so filtering server-side would silently match
+ * every membership. Embeds arrive as object or array depending on the
+ * relationship shape, so both are tolerated (same as the byraRows parsing).
+ */
+function rowHasCanonicalHomedCompany(row: unknown): boolean {
+  const companies = (row as { companies?: unknown }).companies
+  const companyList = Array.isArray(companies) ? companies : companies ? [companies] : []
+  for (const company of companyList) {
+    const teams = (company as { teams?: unknown }).teams
+    if (!teams) return true
+    const teamList = Array.isArray(teams) ? teams : [teams]
+    for (const team of teamList) {
+      const brands = (team as { brands?: unknown }).brands
+      const brandList = Array.isArray(brands) ? brands : brands ? [brands] : []
+      if (brandList.length === 0) return true
+    }
+  }
+  return false
 }
 
 /**

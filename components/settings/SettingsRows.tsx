@@ -6,7 +6,9 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -200,26 +202,53 @@ interface SettingsSelectOption {
   disabled: boolean
 }
 
+type SettingsSelectEntry =
+  | { kind: 'option'; option: SettingsSelectOption }
+  | { kind: 'group'; label: React.ReactNode; options: SettingsSelectOption[] }
+
 function collectSelectOptions(children: React.ReactNode): SettingsSelectOption[] {
-  const options: SettingsSelectOption[] = []
+  return collectSelectEntries(children).flatMap((entry) =>
+    entry.kind === 'group' ? entry.options : [entry.option],
+  )
+}
+
+/**
+ * Walks native-shaped select children. <option>s become option entries;
+ * <optgroup>s become group entries that keep their label (rendered as a
+ * non-interactive header row in the popup, e.g. the ROT/RUT work-type
+ * groups in ArticleForm); fragments/arrays are flattened transparently.
+ */
+function collectSelectEntries(children: React.ReactNode): SettingsSelectEntry[] {
+  const entries: SettingsSelectEntry[] = []
   Children.forEach(children, (child) => {
     if (!isValidElement(child)) return
     if (child.type === 'option') {
       const props = child.props as React.OptionHTMLAttributes<HTMLOptionElement>
-      options.push({
-        value: String(props.value ?? ''),
-        label: props.children,
-        disabled: !!props.disabled,
+      entries.push({
+        kind: 'option',
+        option: {
+          value: String(props.value ?? ''),
+          label: props.children,
+          disabled: !!props.disabled,
+        },
       })
       return
     }
-    // Fragments / arrays of options: flatten (optgroup labels are not used
-    // on settings surfaces).
-    options.push(
-      ...collectSelectOptions((child.props as { children?: React.ReactNode }).children),
+    if (child.type === 'optgroup') {
+      const props = child.props as React.OptgroupHTMLAttributes<HTMLOptGroupElement>
+      entries.push({
+        kind: 'group',
+        label: props.label,
+        options: collectSelectOptions(props.children),
+      })
+      return
+    }
+    // Fragments / arrays of options: flatten.
+    entries.push(
+      ...collectSelectEntries((child.props as { children?: React.ReactNode }).children),
     )
   })
-  return options
+  return entries
 }
 
 export function SettingsSelect({
@@ -235,7 +264,10 @@ export function SettingsSelect({
   onInput,
   'aria-label': ariaLabel,
 }: React.SelectHTMLAttributes<HTMLSelectElement> & { wrapperClassName?: string }) {
-  const options = collectSelectOptions(children)
+  const entries = collectSelectEntries(children)
+  const options = entries.flatMap((entry) =>
+    entry.kind === 'group' ? entry.options : [entry.option],
+  )
   const isControlled = value !== undefined
   // Uncontrolled fallback mirrors the native select: defaultValue if given,
   // else the first option.
@@ -282,15 +314,37 @@ export function SettingsSelect({
           <SelectValue />
         </SelectTrigger>
         <SelectContent align="start">
-          {options.map((option) => (
-            <SelectItem
-              key={option.value}
-              value={toRadixValue(option.value)}
-              disabled={option.disabled}
-            >
-              {option.label}
-            </SelectItem>
-          ))}
+          {entries.map((entry, index) =>
+            entry.kind === 'group' ? (
+              /* Radix Label rows are not Items: arrow-key navigation and
+                 typeahead skip them; they render as muted eyebrow headers. */
+              <SelectGroup key={`group-${index}`}>
+                <SelectLabel
+                  data-ph-unmask=""
+                  className="text-[11px] uppercase tracking-wider"
+                >
+                  {entry.label}
+                </SelectLabel>
+                {entry.options.map((option) => (
+                  <SelectItem
+                    key={option.value}
+                    value={toRadixValue(option.value)}
+                    disabled={option.disabled}
+                  >
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ) : (
+              <SelectItem
+                key={entry.option.value}
+                value={toRadixValue(entry.option.value)}
+                disabled={entry.option.disabled}
+              >
+                {entry.option.label}
+              </SelectItem>
+            ),
+          )}
         </SelectContent>
       </Select>
     </span>

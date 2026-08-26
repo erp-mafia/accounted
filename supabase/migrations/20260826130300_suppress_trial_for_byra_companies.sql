@@ -5,7 +5,7 @@
 -- entitled via the team-scoped partner grant, so the company-scoped 30-day
 -- trial is pure noise there: trial-expiry emails would hit byrå clients with
 -- the wrong message. Personal-team and teamless companies keep the trial
--- exactly as shipped in 20260629120000.
+-- exactly as shipped in 20260818170000 (the full seven-key PAID set).
 --
 -- Replaces ONLY the trigger function body (seed_trial_capability_grants);
 -- the trigger itself (trg_seed_trial_capability_grants, AFTER INSERT ON
@@ -30,9 +30,19 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Full PAID set as of 20260818170000; keep this VALUES list in step with
+  -- lib/entitlements/keys.ts PAID_CAPABILITIES whenever a key is added.
   INSERT INTO public.capability_grants (company_id, capability_key, source, expires_at)
   SELECT NEW.id, k.key, 'trial', NEW.created_at + interval '30 days'
-  FROM (VALUES ('ai'), ('bank_sync'), ('skatteverket'), ('email_send')) AS k(key)
+  FROM (VALUES
+    ('ai'),
+    ('bank_sync'),
+    ('skatteverket'),
+    ('email_send'),
+    ('stripe_payments'),
+    ('woocommerce_sync'),
+    ('shopify_sync')
+  ) AS k(key)
   ON CONFLICT (company_id, team_id, capability_key, source) DO NOTHING;
   RETURN NEW;
 END;

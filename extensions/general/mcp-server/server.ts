@@ -1481,16 +1481,23 @@ function connectLinkBaseUrl(): string {
 
 /**
  * The team a company created through the API/MCP path attaches to when the
- * caller does not name one: the user's first (usually the silent personal)
- * team, mirroring what the web wizard passes. null when the user has no
- * team at all; create_company_for_user then leaves team_id NULL.
+ * caller does not name one: the user's PERSONAL team only (WL-08: companies
+ * created through the normal flow always attach to the personal team; cockpit
+ * flows pass the byrå team id explicitly). Picking the first membership
+ * regardless of kind attached a consultant's private company to their byrå
+ * team, exposing their books to the whole byrå and suppressing the trial.
+ * Mirrors ensure_user_team: earliest teams row with kind='personal'. null
+ * when the user has no personal team; create_company_for_user then leaves
+ * team_id NULL. Explicit team_id args are authorized by the DB gate instead.
  */
 async function defaultTeamForUser(supabase: SupabaseClient, userId: string): Promise<string | null> {
   const { data, error } = await supabase
     .from('team_members')
-    .select('team_id')
+    .select('team_id, teams!inner(kind, created_at)')
     .eq('user_id', userId)
-    .order('created_at', { ascending: true })
+    .eq('teams.kind', 'personal')
+    .order('teams(created_at)', { ascending: true })
+    .order('teams(id)', { ascending: true })
     .limit(1)
     .maybeSingle()
   if (error) {

@@ -34,8 +34,11 @@ const state = vi.hoisted(() => ({
     role?: string
     teams: { kind: string; brands?: { domain: string } | Array<{ domain: string }> | null }
   }>,
-  // Rows the home-domain client lookup on company_members resolves to.
-  clientMemberships: [] as Array<{ company_id: string }>,
+  // Rows any awaited company_members filter chain resolves to: the Rule 2
+  // home-domain client lookup AND the Rule 1 canonical personal-company
+  // exemption both land here (each scenario exercises only one of them).
+  clientMemberships: [] as Array<Record<string, unknown>>,
+  clientMembershipsError: null as unknown,
   // What the mocked resolveBrandByHost returns for the request host.
   hostBrand: null as null | { teamId: string },
   signOut: vi.fn(async () => ({ error: null })),
@@ -75,7 +78,10 @@ vi.mock('@supabase/ssr', () => ({
             }
             if (table === 'company_members') {
               return (resolve: (v: unknown) => void) =>
-                resolve({ data: state.clientMemberships, error: null })
+                resolve({
+                  data: state.clientMembershipsError ? null : state.clientMemberships,
+                  error: state.clientMembershipsError,
+                })
             }
             return undefined
           }
@@ -165,6 +171,7 @@ describe('updateSession redirect destinations', () => {
     }
     state.byraMemberships = []
     state.clientMemberships = []
+    state.clientMembershipsError = null
     state.hostBrand = null
     state.userPreferences = null
     state.userPreferencesError = null
@@ -702,6 +709,79 @@ describe('updateSession redirect destinations', () => {
       expect(response.headers.get('set-cookie')).toContain(
         'gnubok-home-ok=arbore.accounted.se',
       )
+    })
+
+    it('keeps a byrå member with a brandless personal company on the canonical host', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+      // A personal company with no team at all: homed on canonical.
+      state.clientMemberships = [{ companies: { team_id: null, teams: null } }]
+
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      expect(response.status).toBe(200)
+      expect(locationOf(response)).toBeNull()
+      expect(response.headers.get('set-cookie')).toContain(
+        'gnubok-home-ok=app.gnubok.se',
+      )
+    })
+
+    it('counts a company whose team has no brand as canonical-homed too', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+      state.clientMemberships = [
+        { companies: { team_id: 'team-personal', teams: { brands: null } } },
+      ]
+
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('set-cookie')).toContain(
+        'gnubok-home-ok=app.gnubok.se',
+      )
+    })
+
+    it('still redirects a byrå member whose companies are all brand-homed', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+      state.clientMemberships = [
+        { companies: { team_id: 'team-arbore', teams: { brands: { id: 'brand-1' } } } },
+      ]
+
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      expect(locationOf(response)).toBe(`${ARBORE}/`)
+    })
+
+    it('still redirects off a FOREIGN byrå domain even with a canonical personal company', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'acount.accounted.se' } } },
+      ]
+      state.clientMemberships = [{ companies: { team_id: null, teams: null } }]
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(locationOf(response)).toBe(`${ACOUNT}/`)
+    })
+
+    it('stays put without caching when the canonical-company lookup fails', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+      state.clientMembershipsError = { message: 'connection reset' }
+
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      // Fail open: no redirect, and no home-ok cookie so the next request
+      // re-runs the check instead of freezing the error verdict for the TTL.
+      expect(response.status).toBe(200)
+      expect(response.headers.get('set-cookie') ?? '').not.toContain('gnubok-home-ok')
+      expect(errorSpy).toHaveBeenCalled()
+      errorSpy.mockRestore()
     })
 
     it('tolerates the array shape for the embedded brand', async () => {

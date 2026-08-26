@@ -28,6 +28,7 @@ function supabaseWithTeam(teamId: string | null) {
   return {
     from: vi.fn(() => chain),
     rpc: vi.fn().mockResolvedValue({ data: COMPANY_ID, error: null }),
+    chain,
   }
 }
 
@@ -125,6 +126,25 @@ describe('gnubok_create_company', () => {
     ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringContaining('moms_period') })
     expect(supabase.rpc).not.toHaveBeenCalled()
     expect(mocks.createCompanyCore).not.toHaveBeenCalled()
+  })
+
+  it('defaults the team to the user PERSONAL team only (WL-08)', async () => {
+    const supabase = supabaseWithTeam(TEAM_ID)
+    const result = (await tool.execute(setup, '', 'user-1', supabase as never)) as Record<string, unknown>
+
+    expect((result.preview as Record<string, unknown>).team_id).toBe(TEAM_ID)
+    // The default-team lookup must be restricted to kind='personal': picking
+    // the first membership regardless of kind attached a consultant's private
+    // company to their byrå team.
+    expect(supabase.from).toHaveBeenCalledWith('team_members')
+    expect(supabase.chain.select).toHaveBeenCalledWith('team_id, teams!inner(kind, created_at)')
+    expect(supabase.chain.eq).toHaveBeenCalledWith('teams.kind', 'personal')
+  })
+
+  it('leaves team_id null when the user has no personal team', async () => {
+    const supabase = supabaseWithTeam(null)
+    const result = (await tool.execute(setup, '', 'user-1', supabase as never)) as Record<string, unknown>
+    expect((result.preview as Record<string, unknown>).team_id).toBeNull()
   })
 
   it('uses an explicit team_id over the default team', async () => {

@@ -53,6 +53,7 @@ function makeSupabase(teamId: string | null) {
   return {
     from: vi.fn(() => chain),
     rpc: vi.fn().mockResolvedValue({ data: COMPANY_ID, error: null }),
+    chain,
   }
 }
 
@@ -161,6 +162,37 @@ describe('POST /api/v1/companies', () => {
       p_name: 'Acme AB',
       p_entity_type: 'aktiebolag',
       p_team_id: TEAM_ID,
+    })
+  })
+
+  it('defaults the team to the user PERSONAL team only (WL-08)', async () => {
+    const supabase = makeSupabase(TEAM_ID)
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await createCompany(makeRequest(validBody), staticRouteContext())
+    expect(res.status).toBe(201)
+
+    // The default-team lookup must be restricted to kind='personal': picking
+    // the first membership regardless of kind attached a consultant's private
+    // company to their byrå team.
+    expect(supabase.from).toHaveBeenCalledWith('team_members')
+    expect(supabase.chain.select).toHaveBeenCalledWith('team_id, teams!inner(kind, created_at)')
+    expect(supabase.chain.eq).toHaveBeenCalledWith('teams.kind', 'personal')
+  })
+
+  it('passes p_team_id null when the user has no personal team', async () => {
+    const supabase = makeSupabase(null)
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await createCompany(makeRequest(validBody), staticRouteContext())
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data.team_id).toBeNull()
+    expect(supabase.rpc).toHaveBeenCalledWith('create_company_for_user', {
+      p_user_id: USER_ID,
+      p_name: 'Acme AB',
+      p_entity_type: 'aktiebolag',
+      p_team_id: null,
     })
   })
 

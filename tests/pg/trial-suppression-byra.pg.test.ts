@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
 import { insertAuthUser } from '@/tests/pg/fixtures'
+import { PAID_CAPABILITIES } from '@/lib/entitlements/keys'
 
 // Tests for 20260826130300_suppress_trial_for_byra_companies.sql (WL-10):
 // the company-creation trial trigger (trg_seed_trial_capability_grants /
@@ -12,7 +13,10 @@ import { insertAuthUser } from '@/tests/pg/fixtures'
 // The trigger is AFTER INSERT ON companies and reads NEW.team_id, so plain
 // inserts through the pool exercise it on every creation path.
 
-const TRIAL_KEYS = ['ai', 'bank_sync', 'email_send', 'skatteverket']
+// Full PAID set (20260818170000); must stay in step with
+// lib/entitlements/keys.ts PAID_CAPABILITIES. Sorted: trialGrantKeys()
+// orders by capability_key.
+const TRIAL_KEYS = [...PAID_CAPABILITIES].sort()
 
 async function insertTeam(params: {
   createdBy: string
@@ -57,6 +61,23 @@ async function trialGrantKeys(companyId: string): Promise<string[]> {
 }
 
 describe('trial suppression for byrå-team companies', () => {
+  it('the trial seed covers the full seven-key PAID set', () => {
+    // Guard against the seed list drifting from lib/entitlements/keys.ts:
+    // if PAID_CAPABILITIES grows, the migration VALUES list (and this test)
+    // must grow with it.
+    expect(TRIAL_KEYS).toEqual(
+      [
+        'ai',
+        'bank_sync',
+        'email_send',
+        'shopify_sync',
+        'skatteverket',
+        'stripe_payments',
+        'woocommerce_sync',
+      ],
+    )
+  })
+
   it('a company created under a byrå team gets NO trial grants', async () => {
     const byraOwner = await insertAuthUser()
     const byraTeam = await insertTeam({ createdBy: byraOwner, kind: 'byra' })

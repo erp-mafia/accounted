@@ -94,7 +94,7 @@ async function countTeamOwners(
  *
  * The route only writes team_members.role. Propagating the new role into
  * every client company's company_members rows is the job of the AFTER UPDATE
- * trigger team_member_sync_role_update (migration 20260804110000): same
+ * trigger team_member_sync_role_update (migration 20260826130100): same
  * owner/admin -> admin, member -> member mapping as the INSERT sync, and it
  * never mints a company owner. Deliberately not duplicated here.
  *
