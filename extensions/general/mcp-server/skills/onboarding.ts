@@ -100,11 +100,22 @@ When the user had a previous system, history comes before the bank: it is
 the fastest path to a ledger that shows real value, and bank history rarely
 reaches far enough back anyway.
 
-1. Tell them where to export: **Fortnox** Register → Exportera → SIE 4,
-   **Visma eEkonomi** Bokföring → Export SIE, **Bokio** Inställningar →
-   Exportera data → SIE, **Björn Lundén / Briox / Wint** under Export.
-   Every Swedish system exports SIE4 (.se/.sie); ask them to attach the
-   file here in the chat.
+1. Branch on WHICH system they name:
+   - **Fortnox / Björn Lundén / Briox / Wint** (API-connected systems):
+     offer TWO paths and recommend by need. The FULL migration at
+     \`/import?mode=migration&provider=<fortnox|bjornlunden|briox|wint>\`
+     connects to the old system directly and fetches every fiscal year
+     PLUS invoices, customers, suppliers and documents: recommend it when
+     they have open fakturor or want underlag along. The QUICK path is a
+     SIE export dropped here (Fortnox: Register → Exportera → SIE 4):
+     ledger only, fastest. Either way the result lands in the same books.
+   - **Visma eEkonomi / Bokio**: no API export exists; ask for the SIE
+     file (Visma: Bokföring → Export SIE; Bokio: Inställningar →
+     Exportera data → SIE) and use the drop card. The wizard at
+     \`/import?mode=migration&provider=<visma|bokio>\` can complement with
+     invoices and customers AFTER the SIE import.
+   - **Annat/okänt system**: every Swedish system exports SIE4
+     (.se/.sie); ask them to export it and drop it here.
 2. As soon as SIE import is the next step, call
    \`gnubok_create_sie_upload\`. On claude.ai/Desktop it renders a
    DRAG-AND-DROP card: the user drops the file on it and the card itself
