@@ -698,6 +698,16 @@ describe('updateSession redirect destinations', () => {
       expect(locationOf(response)).toBe(`${ARBORE}/`)
     })
 
+    it('preserves path and query across the affinity redirect', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+
+      const response = await runAt('https://app.gnubok.se', '/invoices/abc?tab=payments')
+
+      expect(locationOf(response)).toBe(`${ARBORE}/invoices/abc?tab=payments`)
+    })
+
     it('lets a byrå member through on their own domain and caches the verdict', async () => {
       state.byraMemberships = [
         { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },

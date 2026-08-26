@@ -813,7 +813,15 @@ async function resolveHomeDomainOutcome(
         return { redirectTo: null, cacheOk: true }
       }
     }
-    return { redirectTo: new URL(`https://${byraDomains[0]}/`), cacheOk: false }
+    // Carry the original path and query across the hop so deep links (invite
+    // accepts, direct object URLs) survive the domain correction.
+    return {
+      redirectTo: new URL(
+        `${request.nextUrl.pathname}${request.nextUrl.search}`,
+        `https://${byraDomains[0]}`,
+      ),
+      cacheOk: false,
+    }
   }
 
   // Rule 2: not a byrå member, so only a brand host can be foreign.
@@ -834,7 +842,14 @@ async function resolveHomeDomainOutcome(
 
   const platformUrl = new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se')
   if (normalizeHost(platformUrl.hostname) === host) return { redirectTo: null, cacheOk: true }
-  return { redirectTo: platformUrl, cacheOk: false }
+  // Preserve path + query for the same deep-link reason as the byrå hop.
+  return {
+    redirectTo: new URL(
+      `${request.nextUrl.pathname}${request.nextUrl.search}`,
+      platformUrl.origin,
+    ),
+    cacheOk: false,
+  }
 }
 
 /**

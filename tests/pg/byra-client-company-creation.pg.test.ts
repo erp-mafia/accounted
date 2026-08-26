@@ -45,10 +45,20 @@ async function insertTeamMember(params: {
   )
 }
 
+// withUserContext ROLLS BACK its transaction, so nothing the RPC creates is
+// visible to the plain pool afterwards. All persisted-state assertions must
+// therefore be gathered INSIDE the callback, after RESET ROLE (back to the
+// superuser session role, so RLS cannot hide rows), before the rollback.
 async function createCompanyAs(
   userId: string,
   teamId: string,
-): Promise<{ companyId?: string; sqlstate?: string; message?: string }> {
+): Promise<{
+  companyId?: string
+  companyTeamId?: string
+  memberRoles?: Record<string, { role: string; source: string }>
+  sqlstate?: string
+  message?: string
+}> {
   try {
     return await withUserContext(userId, async (client) => {
       const { rows } = await client.query<{ id: string }>(
@@ -57,7 +67,30 @@ async function createCompanyAs(
          ) AS id`,
         [teamId],
       )
-      return { companyId: rows[0]!.id }
+      const companyId = rows[0]!.id
+      await client.query('RESET ROLE')
+      const company = await client.query<{ team_id: string }>(
+        `SELECT team_id FROM public.companies WHERE id = $1`,
+        [companyId],
+      )
+      const members = await client.query<{
+        user_id: string
+        role: string
+        source: string
+      }>(
+        `SELECT user_id, role, source FROM public.company_members
+         WHERE company_id = $1`,
+        [companyId],
+      )
+      const memberRoles: Record<string, { role: string; source: string }> = {}
+      for (const m of members.rows) {
+        memberRoles[m.user_id] = { role: m.role, source: m.source }
+      }
+      return {
+        companyId,
+        companyTeamId: company.rows[0]?.team_id,
+        memberRoles,
+      }
     })
   } catch (err) {
     return {
@@ -88,28 +121,13 @@ describe('create_company_with_owner byrå admin gate (WL-15)', () => {
 
     const result = await createCompanyAs(admin, byraTeam)
     expect(result.companyId).toBeDefined()
-
-    const { rows } = await getPool().query<{ team_id: string }>(
-      `SELECT team_id FROM public.companies WHERE id = $1`,
-      [result.companyId],
-    )
-    expect(rows[0]!.team_id).toBe(byraTeam)
+    expect(result.companyTeamId).toBe(byraTeam)
 
     // The creating consultant holds the reserved company owner role.
-    const membership = await getPool().query<{ role: string }>(
-      `SELECT role FROM public.company_members
-       WHERE company_id = $1 AND user_id = $2`,
-      [result.companyId, admin],
-    )
-    expect(membership.rows[0]!.role).toBe('owner')
+    expect(result.memberRoles?.[admin]?.role).toBe('owner')
 
     // Team sync granted the byrå owner access too (source='team').
-    const synced = await getPool().query<{ role: string; source: string }>(
-      `SELECT role, source FROM public.company_members
-       WHERE company_id = $1 AND user_id = $2`,
-      [result.companyId, byraOwner],
-    )
-    expect(synced.rows[0]).toEqual({ role: 'admin', source: 'team' })
+    expect(result.memberRoles?.[byraOwner]).toEqual({ role: 'admin', source: 'team' })
   })
 
   it('lets the byrå OWNER create a client company', async () => {
@@ -126,12 +144,7 @@ describe('create_company_with_owner byrå admin gate (WL-15)', () => {
 
     const result = await createCompanyAs(user, personalTeam)
     expect(result.companyId).toBeDefined()
-
-    const { rows } = await getPool().query<{ team_id: string }>(
-      `SELECT team_id FROM public.companies WHERE id = $1`,
-      [result.companyId],
-    )
-    expect(rows[0]!.team_id).toBe(personalTeam)
+    expect(result.companyTeamId).toBe(personalTeam)
   })
 
   it('still rejects a complete non-member with 42501 (20260519180000 preserved)', async () => {
