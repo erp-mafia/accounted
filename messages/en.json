@@ -4910,7 +4910,15 @@
     "send": "Send",
     "sending": "Sending...",
     "send_failed_title": "Could not send",
-    "send_failed_fallback": "Please try again."
+    "send_failed_fallback": "Please try again.",
+    "subject_label": "Subject",
+    "subject_placeholder": "What is it about?",
+    "attach_label": "Attach file",
+    "attach_hint": "Drag here, paste a screenshot or pick a file",
+    "attach_too_many": "You can attach at most {count} files",
+    "attach_too_large": "Attachments may total at most {limit}",
+    "attach_unsupported": "Only images (JPG, PNG, WEBP) and PDF can be attached",
+    "remove_attachment": "Remove attachment"
   },
   "journal_list": {
     "import_attn": "This list contains vouchers from an SIE import. If something went wrong, the whole import can be undone.",

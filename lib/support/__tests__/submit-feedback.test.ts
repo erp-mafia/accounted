@@ -93,6 +93,7 @@ describe('submitFeedback', () => {
 
     expect(captureMock).toHaveBeenCalledWith('support_feedback_submitted', {
       subject: 'Hjälpsida',
+      attachment_count: 0,
       delivered: true,
       email: 'ok',
       ticket: 'ok',
@@ -270,6 +271,64 @@ describe('submitFeedback', () => {
       stubFetchOk()
       await submitFeedback({ subject: 'Moms', message: 'hemlig fritext om bolaget' })
       expect(JSON.stringify(captureMock.mock.calls)).not.toContain('hemlig fritext')
+    })
+
+    it('counts attachments without naming them', async () => {
+      stubFetchOk()
+      await submitFeedback({
+        message: 'Se bilagan',
+        files: [new File(['x'], 'kontoutdrag-privat.png', { type: 'image/png' })],
+      })
+      const props = captureMock.mock.calls[0][1] as Record<string, unknown>
+      expect(props.attachment_count).toBe(1)
+      expect(JSON.stringify(captureMock.mock.calls)).not.toContain('kontoutdrag-privat')
+    })
+  })
+
+  describe('attachments', () => {
+    it('sends multipart with the files when there are any', async () => {
+      const fetchSpy = stubFetchOk()
+      const file = new File(['x'], 'skarmbild.png', { type: 'image/png' })
+
+      await submitFeedback({ subject: 'Trasig vy', message: 'Ser ut så här', files: [file] })
+
+      const init = fetchSpy.mock.calls[0][1]
+      expect(init.body).toBeInstanceOf(FormData)
+      // The browser has to set the multipart boundary itself.
+      expect(init.headers).toBeUndefined()
+      const form = init.body as FormData
+      expect(form.get('subject')).toBe('Trasig vy')
+      expect(form.get('message')).toBe('Ser ut så här')
+      expect(form.getAll('files')).toHaveLength(1)
+      expect((form.get('files') as File).name).toBe('skarmbild.png')
+    })
+
+    it('keeps the JSON body when the file list is empty', async () => {
+      const fetchSpy = stubFetchOk()
+
+      await submitFeedback({ subject: 'Moms', message: 'Jag fastnar', files: [] })
+
+      expect(fetchSpy.mock.calls[0][1].body).toBe(
+        JSON.stringify({ subject: 'Moms', message: 'Jag fastnar' })
+      )
+    })
+
+    it('surfaces the route error when an attachment is rejected', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          json: async () => ({ error: 'Du kan bifoga max 3 filer' }),
+        })
+      )
+
+      const result = await submitFeedback({
+        message: 'Fyra bilder',
+        files: [new File(['x'], 'a.png', { type: 'image/png' })],
+      })
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toBe('Du kan bifoga max 3 filer')
     })
   })
 })
