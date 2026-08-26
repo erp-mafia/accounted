@@ -102,7 +102,22 @@ Authoritative live list: https://docs.peppol.eu/edelivery/codelists/ and https:/
 
 GitHub: https://github.com/OpenPEPPOL/peppol-bis-invoice-3/blob/master/structure/codelist/eas.xml
 
-## Becoming a Peppol Access Point, the operational path
+## Becoming a Peppol Service Provider, the operational path
+
+There is no Peppol licence to buy. Three things, in this order: OpenPeppol membership,
+Testbed certification, then the **Peppol Service Provider Agreement** (v4.0.2, approved
+28 May 2025) signed by the national Peppol Authority. The authority signs only after
+certification passes.
+
+### Sweden's Peppol Authority is Upphandlingsmyndigheten
+
+**Since 1 July 2026, not DIGG.** Contact **peppol@uhmynd.se**. They book an introductory
+digital meeting before anything is signed. OpenPeppol's own Sweden country profile page is
+stale and still names Digg; do not route people there.
+
+The authority charges nothing. SP Agreement clause 14.3: "The Peppol Authority cannot
+charge the Peppol Service Providers or End Users for connecting to or using the Peppol
+Network." Each party bears its own costs (14.1). All the money goes to OpenPeppol.
 
 ### OpenPeppol membership fees (effective 1 July 2025 for new members)
 
@@ -112,26 +127,122 @@ For a small Swedish fintech (S1 size, 1-10 employees):
 |---|---|---|---|---|
 | **AP + SMP S1** | €1,800 | €2,750 | €2,500 | **≈ €7,050** |
 | **AP-only S1+S2** | €1,050 | €1,850 | €1,500 | **≈ €4,400** |
+| **SMP-only S1+S2** | €1,050 | €5,000 | €1,000 | **≈ €7,050** |
 | **End User S1+S2** | €650 | €1,250 | n/a | **≈ €1,900** |
 
-Add infrastructure cost: 24/7 redundant AS4 hosting (€3-10k/yr), monitoring/on-call (€5-20k fully loaded), DigiCert G3 certs (bundled into OpenPeppol annual). DIGG charges no additional Peppol-Authority fee for Swedish service providers but requires signing the **Peppol Service Provider Agreement**.
+The certification fee is charged once at first certification, then folds into the annual
+fee. The annual fee is pro-rata for the remainder of the calendar year on joining.
 
-**Realistic minimum to operate an own AP: €20-40k/year direct cost plus 0.5-1 FTE engineering and 3-6 months upfront build.** Twice-yearly spec updates with a 7-day implementation window and mandatory monthly volume reporting are non-trivial recurring costs.
+**AP-only is a trap for a SaaS vendor.** A participant can be registered in exactly one SMP
+at a time, so AP-only leaves every customer registration and every customer migration
+dependent on another provider's SMP. Adding SMP later costs a second certification.
+
+Add infrastructure cost: 24/7 redundant AS4 hosting (€3-10k/yr), monitoring/on-call
+(€5-20k fully loaded), DigiCert G3 certs (bundled into OpenPeppol annual).
+
+**Realistic minimum to operate an own AP: €20-40k/year direct cost plus 0.5-1 FTE
+engineering and 3-6 months upfront build**, before ISO 27001. Twice-yearly spec updates
+with a 7-day implementation window and mandatory monthly reporting are non-trivial
+recurring costs.
+
+### ISO/IEC 27001 is mandatory from 1 July 2027
+
+Every Peppol Service Provider must hold a valid ISO/IEC 27001 certificate from **1 July
+2027**. OpenPeppol milestones: 30 June 2026 equivalence requests for other certificates,
+**1 September 2026** submit certificates already held, **1 October 2026** submit evidence
+of an ongoing certification project, 1 February 2027 and 1 May 2027 progress reports,
+1 July 2027 hard deadline.
+
+The Statement of Applicability must explicitly cover Access Point, Service Metadata
+Publisher, End User Identification, document management, integrity controls, logging and
+audit trail, backup and business continuity. Scope that omits Peppol operations does not
+count.
+
+For a company of 1-10 people, budget 200-500 kSEK to first certificate plus recurring
+surveillance audits. This, not AS4, is the real barrier to entry.
 
 ### Onboarding steps
 
-1. Submit candidate application to `membership@peppol.eu`.
-2. Sign the **Peppol Member Agreement** with OpenPeppol AISBL.
-3. Sign the **Peppol Service Provider Agreement** (formerly Transport Infrastructure Agreement, TIA) with **DIGG** as Sweden's Peppol Authority.
-4. Implement AS4 + SMP lookup + SBDH handling. Deploy in test environment.
-5. Request DigiCert One G3 test certificate.
-6. Pass the **Peppol Testbed conformance suite**, refactored 2025 with country-specific payload tests. https://peppol.org/tools-support/testbed/
-7. Pay the Certification Fee.
-8. Production certificate issued.
-9. Register SMP in production SML via DIGG.
-10. Commit to monthly volume reporting.
+1. Mail the Peppol Authority (**peppol@uhmynd.se** in Sweden) and book the intro meeting.
+2. Apply to `membership@peppol.eu` for **Candidate Service Provider** status in the chosen
+   category (AP+SMP, AP-only or SMP-only).
+3. Return the signed **Peppol Member Agreement** plus company registration documents.
+   OpenPeppol runs due diligence: registration, solvency and criminal checks.
+4. Pay sign-up plus pro-rata annual fee. Join the eDelivery Community and at least one
+   other Domain Community (Post-Award for invoicing).
+5. Request **PKI test certificates** (DigiCert One G3) via the Peppol Service Desk. A
+   signed member form is sufficient; the SP Agreement is not required yet, so the build
+   can run fully in parallel with the authority track.
+6. Implement AS4 + SMP + SBDH handling. Deploy to test, SML `acc.edelivery.tech.ec.europa.eu`.
+7. Pass the eDelivery test suite at https://www.testbed.peppol.org (client-cert auth).
+8. Download the test report, request the **production** PKI certificate. OpenPeppol's
+   Operating Office evaluates it; a positive result is required before production.
+9. The Peppol Authority signs the Service Provider Agreement.
+10. Register in the production SML, go live, begin monthly reporting.
 
 **Total elapsed time: 3-6 months.**
+
+### What the Testbed actually tests
+
+Six AP test cases, run one at a time, re-runnable as often as needed:
+
+1. **TLS grading verification**, must be Qualys SSL Labs **grade A or above**
+2. AS4 message reception (static config, no SMP registration needed)
+3. AS4 message submission (send a Testbed-supplied artifact unmodified)
+4. Invalid certificate handling
+5. Large AS4 message reception
+6. Large AS4 message submission
+
+Prerequisites: PKI v3 AP test certificate imported into the browser **and** configured on
+the AP itself, HTTPS-only endpoint, a CA chain trusted by both Microsoft and Oracle trust
+stores. Self-signed certificates are rejected outright.
+
+The technical bar is modest. The organisational obligations below are where the cost is.
+
+### What the SP Agreement binds you to (v4.0.2)
+
+Clauses that change product design, not just paperwork:
+
+- **9.2 End user identification.** A contract with every end user (directly, or indirectly
+  through an intermediary), identity verified at onboarding per the Entity Identification
+  rules, and the contract must state the user will be blocked on fraud, spam or criminal
+  acts. Upphandlingsmyndigheten lists a working *kundkännedomsprocess* as a standing
+  obligation. **For a self-serve SaaS this is the largest gap: instant signup is not
+  compatible with it.**
+- **9.3** Membership must be maintained for the life of the agreement.
+- **9.4.2** Log every send and receive, retain per law and never under 3 months,
+  disclosable on reasonable request.
+- **9.4.5** Publish an incident contact (e-mail and phone) and respond to incidents.
+- **9.4.9** Meet the domain minimum service levels and scale if capacity is short. The
+  exact figures live in the member-only Internal Regulations. The widely quoted "99.5%,
+  24/7, service windows under 2 hours announced 3 days ahead, retry 3 times within 2
+  hours" comes from the Norwegian enhanced-network AP requirements, not from OpenPeppol's
+  general post-award rules. Confirm the binding numbers before publishing an SLA.
+- **9.7** The authority can order you to block an end user. That switch must exist.
+- **15 Subcontracting is permitted**, and 9.2 allows the end user relationship to run
+  "indirectly through an intermediary". This is the clause the entire white-label and
+  reseller market rests on, and the fallback if the AP track stalls.
+- **16** You may not collect or expose dataset content or metadata beyond what operating
+  the network requires or the end user instructs. Peppol traffic is not analytics or
+  training material.
+- **18 Penalties** escalate: publication on the member site, publication on the public
+  site, temporary removal from the network, permanent removal. Five working days to supply
+  a remediation plan after a warning note.
+- **19.3 Liability** capped at €500,000 per event and €1,000,000 per year, except wilful
+  acts or gross negligence.
+- **22** Six months' notice to terminate; immediate on unremedied breach after 60 days,
+  insolvency or security failure; **automatic if OpenPeppol membership lapses**.
+
+### Mandatory reporting
+
+Monthly, both required of every Service Provider:
+
+- **TSR** (Transaction Statistics Reporting): per document type, plus which other Access
+  Points you exchanged with. Raw data is derivable from the transport protocol and SBDH.
+- **EUSR** (End User Statistics Reporting): number of end users served, per document type.
+
+Specs: https://docs.peppol.eu/edelivery/specs/reporting/tsr/bis/ and
+https://docs.peppol.eu/edelivery/specs/reporting/eusr/bis/
 
 ### Open-source AS4 / SMP stacks
 
@@ -146,18 +257,18 @@ Add infrastructure cost: 24/7 redundant AS4 hosting (€3-10k/yr), monitoring/on
 
 Trust stores updated to G3-only late 2025. Verify version when integrating.
 
-## DIGG Peppol traffic statistics (Q4 2025)
+## Swedish Peppol traffic statistics (Q4 2025, published by DIGG before the handover)
 
 - October 2025: record **5,668,209 Peppol messages** to Sweden.
 - November 2025: 4,810,015.
 - December 2025: 5,190,513.
 - Volume growth Sept 2024 → Sept 2025: **+30%**.
 - **25,000+ Swedish Peppol receivers** registered.
-- DIGG public sector survey (March 2025): 82% of public sector inbound invoices are e-invoices, 50% of outbound (up from 24%), 85% of public sector orgs use Peppol fully/largely for inbound.
+- Public sector survey (DIGG, March 2025): 82% of public sector inbound invoices are e-invoices, 50% of outbound (up from 24%), 85% of public sector orgs use Peppol fully/largely for inbound.
 - Bankföreningen reports 168.9M e-invoices to consumers in 2024.
 - Total Swedish e-invoice volume estimate: **~250M/year** combining bank rails, Peppol B2G/B2B, and residual non-Peppol flows.
 
-Live stats: https://www.digg.se/digitala-tjanster/peppol/statistik-fran-peppolnatverket-
+Live stats: https://www.upphandlingsmyndigheten.se/digitalisering-och-e-handel/peppol/statistik-fran-peppolnatverket/
 
 ## Authoritative source list
 
@@ -167,6 +278,9 @@ Live stats: https://www.digg.se/digitala-tjanster/peppol/statistik-fran-peppolna
 - Setup AP guide: https://peppol.helger.com/public/menuitem-docs-setup-ap
 - Setup phoss SMP: https://peppol.helger.com/public/menuitem-docs-setup-smp-ph
 - Peppol Testbed: https://peppol.org/tools-support/testbed/
-- OpenPeppol membership: https://peppol.eu/who-is-who/openpeppol-membership/
-- DIGG how Peppol works: https://www.digg.se/digitala-tjanster/peppol/sa-fungerar-peppol-
+- OpenPeppol membership and fees: https://peppol.org/join/ and https://peppol.org/join/fees/
+- Peppol SP Agreement v4.0.2: https://peppol.agid.gov.it/attachments/PeppolServiceProviderAgreement_v4.0.2_AGID_update_final.pdf
+- Test and Onboarding guide v1.4: https://peppol.org/wp-content/uploads/2024/03/Peppol_TestbedAndOnboarding_v1.4.pdf
+- Swedish Peppol Authority (blivande Service Provider): https://www.upphandlingsmyndigheten.se/digitalisering-och-e-handel/peppol/peppol-for-blivande-service-provider/
+- How Peppol works (Upphandlingsmyndigheten): https://www.upphandlingsmyndigheten.se/digitalisering-och-e-handel/peppol/sa-fungerar-peppol/
 - Identifier policy: https://docs.peppol.eu/edelivery/codelists/
