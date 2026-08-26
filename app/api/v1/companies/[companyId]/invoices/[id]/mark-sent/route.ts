@@ -11,7 +11,8 @@
  *      issued invoices consume numbers; this is where the F-series
  *      number gets assigned, NOT at draft-create per PR-B-2a's design).
  *   2. Invoice status flips to 'sent'.
- *   3. If accounting_method='accrual' AND document_type='invoice', a
+ *   3. If the company books at issue (faktureringsmetoden without
+ *      defer_invoice_booking) AND document_type='invoice', a
  *      journal entry is posted via createInvoiceJournalEntry (Debit AR
  *      1510, Credit revenue 3xxx, Credit output VAT 2611/2621/2631).
  *      Under kontantmetoden ('cash') no journal entry is created here:
@@ -40,6 +41,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import {
@@ -76,7 +78,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-sent',
   summary: 'Transition a draft invoice to sent (without emailing).',
   description:
-    'Marks a draft invoice as sent: for invoices delivered outside Accounted (Peppol, postal, manual email). Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). On accounting_method=accrual, also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.',
+    'Marks a draft invoice as sent: for invoices delivered outside Accounted (Peppol, postal, manual email). Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.',
   useWhen:
     'You delivered the invoice through a channel other than Accounted\'s email (Peppol, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted.',
   doNotUseFor:
@@ -211,7 +213,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // decision, payable invoices need a currency-matching account.
     const { data: settings, error: settingsError } = await ctx.supabase
       .from('company_settings')
-      .select('accounting_method, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic')
+      .select('accounting_method, defer_invoice_booking, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
     if (settingsError || !settings) {
@@ -235,7 +237,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const accountingMethod = companySettings.accounting_method ?? 'accrual'
     const entityType = (companySettings.entity_type ?? 'enskild_firma') as EntityType
     const isRealInvoice = !typed.document_type || typed.document_type === 'invoice'
-    const wouldCreateJournalEntry = isRealInvoice && accountingMethod === 'accrual'
+    // #967: kontantmetoden and defer_invoice_booking companies mark sent
+    // WITHOUT booking (same gate as the dashboard, issue-and-book-invoice.ts).
+    const wouldCreateJournalEntry = isRealInvoice && booksInvoicesOnIssue(companySettings)
 
     if (ctx.dryRun) {
       // Preview the post-send state. invoice_number can't be predicted
@@ -311,7 +315,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // fully posted.
     const warnings: { code: string; message: string }[] = []
 
-    // Step 3: journal entry for accrual + real invoices. Failure escalates
+    // Step 3: journal entry for real invoices when the company books at issue. Failure escalates
     // to error-level log AND surfaces in the response as a warning.
     let journalEntryId: string | null = null
     if (wouldCreateJournalEntry) {

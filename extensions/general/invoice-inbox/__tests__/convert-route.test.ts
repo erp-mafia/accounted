@@ -607,3 +607,35 @@ describe('DELETE /items/:id', () => {
     expect(body.data.deleted).toBe(true)
   })
 })
+
+describe('POST /items/:id/convert honours defer_invoice_booking (#967)', () => {
+  const route = findRoute('POST', '/items/:id/convert')
+
+  it('registers WITHOUT the registration JE when the company defers booking', async () => {
+    const { createSupplierInvoiceRegistrationEntry } = await import('@/lib/bookkeeping/supplier-invoice-entries')
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockClear()
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    enqueue({ data: 42 })
+    enqueue({ data: { id: 'invoice-1', status: 'registered' } })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'accrual', defer_invoice_booking: true }) })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: VALID_CONVERT_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status, body } = await parseJsonResponse<{ data: { registration_journal_entry_id: string | null } }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.registration_journal_entry_id).toBeNull()
+    expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+})

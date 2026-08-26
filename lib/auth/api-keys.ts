@@ -179,6 +179,7 @@ export const SCOPE_GROUPS = [
 export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Companies
   gnubok_list_companies:                  'companies:read',
+  gnubok_lookup_company:                  'companies:read',
   gnubok_create_company:                  'companies:write',
   gnubok_connect_bank:                    'companies:read',
   gnubok_connect_skatteverket:            'companies:read',

@@ -24,36 +24,56 @@ inget konto skapar du det där (BankID eller e-post), det tar en minut." The
 call is retried automatically once connected. Do not send the user to the web
 app to sign up first.
 
-## Step 1: gather the facts (ask, never assume)
+## Step 1: ask for the organisationsnummer, then look it up
 
-Collect these before creating anything. The order mirrors the in-app wizard.
+Ask for ONE thing first: the **organisationsnummer** (10 digits; an enskild
+firma's org number is the owner's personnummer, fine to use here). Then call
+\`gnubok_lookup_company\` with it. This mirrors the in-app wizard: the public
+registry answers most of the questions, so the user confirms facts instead of
+filling in a form.
 
-1. **Organisationsnummer** (10 digits). Required when the company is
-   VAT-registered (the momsregistreringsnummer on every invoice derives from
-   it) and strongly recommended otherwise: it drives Skatteverket/SIE exports. An enskild firma's
-   org number is the owner's personnummer; that is fine to store here.
-2. **Company form**: \`aktiebolag\` or \`enskild_firma\`. Only these two are
-   supported today; HB/KB/förening are not.
-3. **Company name** as registered.
-4. **F-skatt**: godkänd för F-skatt? Always ask; the tool refuses to assume it.
-   A brand-new company may still be waiting for Skatteverket's approval (then
-   false).
-5. **Fiscal year**: for enskild firma always the calendar year (do not ask);
-   its first year may be shorter or up to 18 months but always ends 31 December.
-   For an AB ask whether it is the calendar year or another 12-month period
-   (\`fiscal_year_start_month\`). For a company in its FIRST year ask for the
-   exact first fiscal year start and end (BFL 3 kap.: it may be shorter than
-   12 months or up to 18 months) and pass \`first_fiscal_year\`.
-6. **VAT**: momsregistrerad? If yes, which period: \`monthly\`, \`quarterly\` or
-   \`yearly\`. This is required when VAT-registered: without it Accounted
-   generates no VAT deadlines at all, silently. If the user does not know,
-   the rule of thumb: turnover under 1 MSEK may report yearly, under 40 MSEK
-   quarterly, above that monthly; Skatteverket's registration decision states
-   the actual period. Never guess it into the tool; ask.
-7. **Accounting method**: \`accrual\` (faktureringsmetoden) or \`cash\`
-   (kontantmetoden / bokslutsmetoden). Cash is only allowed under 3 MSEK
-   turnover and is common for small enskild firma; AB with invoices usually
-   run accrual.
+The result carries three parts; use them exactly as intended:
+
+- \`company\`: the registry facts. Present them as a SHORT summary for the
+  user to confirm: "Jag hittade Example AB, Storgatan 1 i Stockholm,
+  godkänd för F-skatt och momsregistrerad. Stämmer det?" Do NOT re-ask
+  what the registry already answered.
+- \`suggested_create_company_input\`: prefilled arguments for
+  \`gnubok_create_company\`. Merge the user's remaining answers into it.
+- \`still_to_ask\`: the questions the registry could not answer. Ask exactly
+  these and nothing more.
+
+Rules baked into that split (same as the web onboarding):
+
+- **F-skatt** from the registry is a fact, both true and false.
+- **VAT** is a fact ONLY when positively registered. "No VAT registration
+  found" is a question, never an assumption (ML 17 kap 24 §).
+- **Moms period** (\`monthly\`/\`quarterly\`/\`yearly\`) and **accounting
+  method** (\`accrual\`/\`cash\`) are ALWAYS the user's answer. Rules of
+  thumb if they are unsure: turnover under 1 MSEK may report VAT yearly,
+  under 40 MSEK quarterly, above that monthly (Skatteverket's registration
+  decision states the actual period); cash method is only allowed under
+  3 MSEK turnover and is common for small enskild firma, AB with invoices
+  usually run accrual.
+- **Enskild firma name**: the verksamhetsnamn is freely choosable; suggest
+  the registered name but let the user pick. An AB's registered name is a
+  fact.
+- **Fiscal year**: when the registry shows one, confirm it ("Ert
+  räkenskapsår är 1 januari till 31 december, stämmer det?") instead of
+  asking openly. For a company registered within the last 12 months,
+  suggest a first fiscal year from the registration date and pass
+  \`first_fiscal_year\` (BFL 3 kap.: it may be shorter than 12 months or up
+  to 18 months). Enskild firma is always calendar-year and its first year
+  always ends 31 December.
+
+If the lookup returns \`not_found\` or \`unavailable\`, fall back to asking
+each question in \`still_to_ask\` (the full list) and continue; the flow is
+the same, just without prefill. A brand-new registration can take days to
+appear in the registry.
+
+Only \`aktiebolag\` and \`enskild_firma\` are supported today; HB/KB/förening
+are not. A company marked CEASED in the registry: surface the warning, but
+the user may continue (they know their company best).
 
 ## Step 2: preview, confirm, create
 
@@ -72,20 +92,21 @@ re-authentication.
 ## Step 3: connect the bank
 
 Call \`gnubok_connect_bank\`. It reports existing connections and returns a
-\`connect_url\`. The user opens it in a browser where they are logged in to
-Accounted, picks the bank and approves with BankID (PSD2 consent, up to 180
-days). Transactions start syncing within a minute. If they prefer not to
-connect a bank, they can import bank statements as files in the web app
-instead; do not block on this step.
+\`connect_url\`; on claude.ai/Claude Desktop a connect card with an
+open-in-browser button renders automatically. The user opens the link in a
+browser where they are logged in to Accounted, picks the bank and approves
+with BankID (PSD2 consent, up to 180 days). Transactions start syncing
+within a minute. If they prefer not to connect a bank, they can import bank
+statements as files in the web app instead; do not block on this step.
 
 ## Step 4: connect Skatteverket (optional but recommended)
 
 Call \`gnubok_connect_skatteverket\`. Same pattern: the user opens the
-\`connect_url\`, identifies with BankID as firmatecknare at Skatteverket, and
-lands back in Accounted. This enables skattekonto sync and filing of
-momsdeklaration and arbetsgivardeklaration from here. Filing is never
-mandatory through Accounted: every declaration can be downloaded and filed
-manually.
+connect link (card button on claude.ai/Desktop), identifies with BankID as
+firmatecknare at Skatteverket, and lands back in Accounted. This enables
+skattekonto sync and filing of momsdeklaration and arbetsgivardeklaration
+from here. Filing is never mandatory through Accounted: every declaration
+can be downloaded and filed manually.
 
 ## Step 5: first bookkeeping
 
@@ -96,6 +117,7 @@ import (\`gnubok_import_sie\` in the search catalog) before categorizing.
 
 ## Tools
 
+- \`gnubok_lookup_company\`: registry facts + prefill from the orgnr; call first
 - \`gnubok_create_company\`: preview (no confirm) then create (confirm=true)
 - \`gnubok_list_companies\`: see which companies this connection can reach
 - \`gnubok_connect_bank\`: status + connect link for PSD2 bank consent
@@ -118,7 +140,7 @@ export const onboardingSkill: Skill = {
   slug: 'onboarding',
   name: 'Onboarding: New Company Setup',
   summary:
-    'Set up a company from the conversation: gather facts, preview and create with gnubok_create_company, then hand out the bank and Skatteverket connect links.',
+    'Set up a company from the conversation: ask for the orgnr, prefill facts with gnubok_lookup_company, preview and create with gnubok_create_company, then the bank and Skatteverket connect links.',
   tags: ['onboarding', 'setup', 'company', 'bank', 'skatteverket', 'agent-first'],
   body,
   tier: 'workflow',
