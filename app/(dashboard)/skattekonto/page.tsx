@@ -44,7 +44,11 @@ import {
 } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { rowsNeedingInterestDate } from '@/lib/skatteverket/interest-period'
-import { skvAuthErrorNeedsReconnect } from '@/lib/notices/predicates'
+import {
+  skvAuthErrorNeedsReconnect,
+  skvStatusNeedsReconnect,
+  type SkvStatusLike,
+} from '@/lib/notices/predicates'
 import {
   AlertCircle,
   Copy,
@@ -108,10 +112,16 @@ export default function SkattekontoPage() {
   )
   const [notConnected, setNotConnected] = useState(false)
   const [loadError, setLoadError] = useState(false)
-  // Set when a sync fails with an auth error while a connection exists
-  // (expired session, missing scope, revoked token). Rendered as a banner —
-  // the stored data below stays visible and usable.
+  // Set when the connection exists but cannot be used (expired session,
+  // missing scope, revoked token), either detected proactively by the /status
+  // probe in reload() or reported by a failed sync. Rendered as a page-level
+  // banner: the stored data below stays visible and usable.
   const [reconnectMessage, setReconnectMessage] = useState<string | null>(null)
+  // The same state reached proactively: /status says the stored token is
+  // flagged needs_reconsent (or expired past refresh) before the user has
+  // clicked anything. Kept separate from reconnectMessage so reload() stays
+  // dependency-free; the banner below renders on either.
+  const [needsReconnect, setNeedsReconnect] = useState(false)
   const [matchOpenFor, setMatchOpenFor] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
@@ -127,6 +137,27 @@ export default function SkattekontoPage() {
   const reload = useCallback(async () => {
     setLoading(true)
     setLoadError(false)
+    // Connection health, probed alongside the data. /skattekonto/saldo answers
+    // 200 for a token already flagged needs_reconsent (it keeps the stale
+    // snapshot visible on purpose), so nothing in the payload below reveals a
+    // dead session: without this probe the page looked healthy and only
+    // "Synkronisera nu" ever discovered the truth. Any failure (extension
+    // disabled, capability gate, never connected) just leaves the banner off.
+    void (async () => {
+      try {
+        const res = await fetch('/api/extensions/ext/skatteverket/status')
+        if (!res.ok) {
+          setNeedsReconnect(false)
+          return
+        }
+        const s = (await res.json()) as SkvStatusLike
+        // Shared reconnect predicate (lib/notices): the same decision the
+        // transactions page and the Hem notice make, never a local variant.
+        setNeedsReconnect(skvStatusNeedsReconnect(s))
+      } catch {
+        setNeedsReconnect(false)
+      }
+    })()
     try {
       const [saldoRes, txRes] = await Promise.all([
         fetch('/api/extensions/ext/skatteverket/skattekonto/saldo'),
@@ -220,7 +251,7 @@ export default function SkattekontoPage() {
             setReconnectMessage(
               typeof json.error === 'string' && json.error
                 ? json.error
-                : 'Anslutningen mot Skatteverket behöver förnyas. Anslut igen med BankID.',
+                : t('attn_reconnect_body'),
             )
           } else {
             setNotConnected(true)
@@ -238,6 +269,7 @@ export default function SkattekontoPage() {
         return
       }
       setReconnectMessage(null)
+      setNeedsReconnect(false)
       toast({
         title: 'Skattekonto synkroniserat',
         description: `${json.data.booked} bokförda, ${json.data.upcoming} kommande`,
@@ -479,6 +511,37 @@ export default function SkattekontoPage() {
     tx !== null &&
     tx.booked.length + tx.overdue.length + tx.upcoming.length + tx.ignored_count > 0
 
+  // A connection exists but cannot be used until the user re-consents with
+  // BankID. Either signal is enough: the /status probe (proactive) or a failed
+  // call that came back with a reconnect-shaped 401.
+  const showReconnect = needsReconnect || reconnectMessage !== null
+  const reconnectBody = reconnectMessage ?? t('attn_reconnect_body')
+
+  // A dead session is not the same as never having connected, and the
+  // onboarding StartCard ("Anslut med BankID så hämtas saldo…") reads as
+  // "you have not set this up yet" to someone who did. Give the expired case
+  // its own card that names what happened and offers the reconnect.
+  // Gated on !loading: the /status probe resolves independently of the row
+  // fetch, so without it a company that HAS rows would flash this card before
+  // its table arrived.
+  if (showReconnect && !hasLocalRows && !loading) {
+    return (
+      <div className="space-y-8">
+        <PageHeader title="Skattekonto" help={helpNode} />
+        <div className="animate-fade-in">
+          <StartCard
+            card="abacus"
+            layout="side-right"
+            title={t('reconnect_card_title')}
+            body={reconnectBody}
+            primary={{ label: t('attn_reconnect_action'), href: '/settings/tax' }}
+            secondary={{ label: t('import_statement_action'), href: '/import?mode=skattekonto' }}
+          />
+        </div>
+      </div>
+    )
+  }
+
   if (notConnected && !hasLocalRows) {
     return (
       <div className="space-y-8">
@@ -531,6 +594,13 @@ export default function SkattekontoPage() {
             >
               <Link href="/import?mode=skattekonto">{t('import_statement_action')}</Link>
             </Button>
+          ) : showReconnect ? (
+            // "Synkronisera nu" cannot succeed while the session is dead, and
+            // offering it is what made the failure look like nothing
+            // happening. The header action becomes the fix instead.
+            <Button asChild>
+              <Link href="/settings/tax">{t('attn_reconnect_action')}</Link>
+            </Button>
           ) : (
             // The span carries the tooltip: `title` is suppressed on disabled elements.
             <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
@@ -548,16 +618,26 @@ export default function SkattekontoPage() {
         }
       />
 
-      {/* File-imported rows without a connection: no saldo to show, but the
-          booking/matching flows below work on the local table. One ochre
-          sentence with the connect action, per the attn convention. */}
-      {notConnected && (
+      {/* Page level, not nested in the saldo section: the reconnect line used
+          to live inside the `data` branch below, so a company that had never
+          completed a sync (no snapshot) got NO feedback at all when the sync
+          it just clicked died on an expired session. Max one attn line per
+          page (design convention 6), so the reconnect wins over the
+          imported-rows line: it is the one that blocks everything else. */}
+      {showReconnect ? (
+        <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/tax' }}>
+          {reconnectBody}
+        </AttnLine>
+      ) : notConnected ? (
+        // File-imported rows without a connection: no saldo to show, but the
+        // booking/matching flows below work on the local table. One ochre
+        // sentence with the connect action, per the attn convention.
         <AttnLine
           action={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
         >
           {t('imported_not_connected_attn')}
         </AttnLine>
-      )}
+      ) : null}
 
       {/* Saldo as compact stat tiles (house metric-card idiom, KPIHeroCards).
           Hidden entirely for unconnected companies rendering imported rows:
@@ -571,9 +651,15 @@ export default function SkattekontoPage() {
             <Skeleton className="h-28 w-full rounded-lg" />
           </div>
         ) : !data ? (
-          <p className="py-4 text-sm text-muted-foreground">
-            Inget saldo hämtat ännu: klicka på ”Synkronisera nu”.
-          </p>
+          // Silent while a reconnect is pending: telling someone to click
+          // "Synkronisera nu" when that button is gone (and could not have
+          // worked) is the instruction that sent this case to support. The
+          // attn line above already says what to do.
+          showReconnect ? null : (
+            <p className="py-4 text-sm text-muted-foreground">
+              Inget saldo hämtat ännu: klicka på ”Synkronisera nu”.
+            </p>
+          )
         ) : (
           <>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -645,11 +731,13 @@ export default function SkattekontoPage() {
               </div>
             </div>
 
-            {reconnectMessage ? (
-              <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/tax' }}>
-                {reconnectMessage}
-              </AttnLine>
-            ) : shortfall !== null && nextCharge ? (
+            {/* The reconnect line moved to page level (see above); this slot
+                keeps the saldo-derived shortfall notice, which needs `data`
+                and therefore genuinely belongs inside this branch. It yields
+                to the reconnect line so the page still shows at most one attn
+                line (design convention 6), and because a shortfall computed
+                from a stale snapshot must not outrank "the data is stale". */}
+            {!showReconnect && shortfall !== null && nextCharge ? (
               <AttnLine
                 action={{ label: t('attn_show_payment'), onClick: () => setShowPayment(true) }}
               >
