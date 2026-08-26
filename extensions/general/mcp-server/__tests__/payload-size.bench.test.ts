@@ -226,9 +226,13 @@ describe('tools/list payload size guard', () => {
     //     tools; the onboarding skill's first instruction is to call it, and
     //     a search-only tool is uncallable on Claude.ai. Descriptions were
     //     trimmed first; the tool costs ~265 tokens against ~0 headroom.
+    //   * 61.5K to 62K with gnubok_sie_preflight (migration-first onboarding):
+    //     the scan-before-import step the skill instructs for shared SIE
+    //     files, so default-catalog for the same Claude.ai reason; ~390
+    //     tokens (schema carries the mappings-passthrough contract).
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(61_500)
+    expect(approxTokens).toBeLessThan(62_000)
   })
 })

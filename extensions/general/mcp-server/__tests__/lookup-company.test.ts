@@ -153,6 +153,19 @@ describe('gnubok_lookup_company', () => {
     expect('fiscal_year_start_month' in suggested).toBe(false)
   })
 
+  it('treats no-closed-period as first year up to 18 months after registration (extended first year)', async () => {
+    // The Arcim case: registered 13 months ago, no annual report filed, first
+    // räkenskapsår runs to 31 Dec under the BFL 3 kap 3 § 18-month cap.
+    mocks.lookupCompanyByOrgNumber.mockResolvedValue(
+      found({ fiscalYear: null, registrationDate: Date.now() - 396 * 24 * 60 * 60 * 1000 })
+    )
+    const result = await run('5560000001')
+
+    const ask = result.still_to_ask as string[]
+    expect(ask.some((q) => q.includes('first_fiscal_year'))).toBe(true)
+    expect(ask.some((q) => q.includes('calendar year or broken year'))).toBe(false)
+  })
+
   it('returns not_found with the full question list when no company matches', async () => {
     mocks.lookupCompanyByOrgNumber.mockResolvedValue(null)
     const result = await run('5560000001')

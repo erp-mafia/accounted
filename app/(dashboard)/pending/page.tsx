@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
@@ -33,7 +34,6 @@ import { ToastAction } from '@/components/ui/toast'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
-import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import {
   ClipboardCheck,
@@ -287,30 +287,15 @@ export default function PendingOperationsPage() {
   const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
   const { toast } = useToast()
-  const company = useCompanyOptional()?.company ?? null
   // Whether the "Bokför utkasten" toast CTA leads anywhere: bulk Bokför on
   // /invoices only selects drafts when the company books at issue. Under
   // kontantmetoden or deferred booking (#967) the CTA would be a dead end,
   // so it stays suppressed (false until settings load: suppressing is the
   // safe direction, the neutral hint sentence still shows).
-  const [invoiceDraftsCtaUseful, setInvoiceDraftsCtaUseful] = useState(false)
-
-  useEffect(() => {
-    if (!company) return
-    let cancelled = false
-    const supabase = createClient()
-    supabase
-      .from('company_settings')
-      .select('accounting_method, defer_invoice_booking')
-      .eq('company_id', company.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (!cancelled) setInvoiceDraftsCtaUseful(booksInvoicesOnIssue(data))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [company])
+  // Derived from the session-cached settings row (lib/reference-data); false
+  // until the row is available, suppressing being the safe direction.
+  const { settings: companySettings } = useCompanySettings()
+  const invoiceDraftsCtaUseful = companySettings ? booksInvoicesOnIssue(companySettings) : false
 
   // Read ?conversation= once on mount so deep-links from the agent context
   // strip filter the list automatically.

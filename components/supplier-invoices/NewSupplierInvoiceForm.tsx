@@ -190,7 +190,7 @@ export default function NewSupplierInvoiceForm({
 
   const {
     suppliers,
-    setSuppliers,
+    refreshSuppliers,
     suppliersLoaded,
     accounts,
     entityType,
@@ -1121,7 +1121,9 @@ export default function NewSupplierInvoiceForm({
       toast({ title: t('create_supplier_failed_title'), description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
     } else {
       const created = result.data as Supplier
-      setSuppliers((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))
+      // The shared supplier list feeds every picker: refresh it (awaited, so
+      // the pending selection below finds the new row).
+      await refreshSuppliers()
       setPendingSupplierSelect(created.id)
       setHasMatchedSupplier(true)
       setShowNewSupplier(false)
