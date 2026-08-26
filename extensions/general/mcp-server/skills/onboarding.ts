@@ -58,6 +58,9 @@ Open with exactly three questions, together:
 3. **Vilken bank har företaget?** (so the bank connect link later opens that
    bank's consent directly instead of a picker)
 
+Never re-ask a question the user already answered in this conversation
+(the opening round included): reuse the answer.
+
 Then call \`gnubok_lookup_company\` with the org number. The registry answers
 most of the form; present the facts as a SHORT summary to confirm ("Jag
 hittade Example AB, Storgatan 1 i Stockholm, godkänd för F-skatt och
@@ -151,7 +154,9 @@ reaches far enough back anyway.
 
 Call \`gnubok_connect_bank\` (pass \`bank\` from step 1 so the link opens that
 bank's consent directly) AND \`gnubok_connect_skatteverket\` in the same
-turn; on claude.ai/Desktop both render connect cards with buttons.
+turn; on claude.ai/Desktop both render connect cards with buttons. When a
+card rendered, do NOT paste the URL as text too: the card button IS the
+link, and duplicate raw URLs read as clutter.
 
 - Bank: BankID + PSD2 consent, then an **account selection dialog** in the
   browser: transactions start syncing when the user saves it. Banks cap

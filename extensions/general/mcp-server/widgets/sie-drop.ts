@@ -270,10 +270,13 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     }).then(function(res) {
       const sc = parseResult(res);
       if (sc && sc.operation_id) {
-        stagedOp = { id: sc.operation_id, risk: sc.risk_level || 'high', armed: false };
+        // Stage + arm in ONE step: the next click is already the deliberate
+        // BFL acknowledgment (three clicks was one too many, E2E #11). The
+        // irreversibility text on the button IS the surfacing.
+        stagedOp = { id: sc.operation_id, risk: sc.risk_level || 'high', armed: true };
         el('import').disabled = false;
-        el('import').textContent = 'Godkänn bokföringen';
-        note('Importen är förberedd. Godkänn här i kortet så bokförs verifikationerna, eller säg till i chatten.');
+        el('import').textContent = 'Bokför: oåterkalleligt (BFL 5 kap 5 §)';
+        note('Importen är förberedd. Bokförda verifikat kan inte raderas, endast rättas med storno. Klicka för att bokföra, eller säg till i chatten.');
       } else {
         el('import').textContent = 'Import förberedd';
         note('Importen är förberedd och väntar på godkännande i chatten eller i Accounted.');
@@ -289,12 +292,6 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
   });
 
   function approveStaged() {
-    if (stagedOp.risk === 'high' && !stagedOp.armed) {
-      stagedOp.armed = true;
-      el('import').textContent = 'Bekräfta: oåterkalleligt (BFL 5 kap 5 §)';
-      note('Bokförda verifikat kan inte raderas, endast rättas med storno. Klicka igen för att bokföra.');
-      return;
-    }
     el('import').disabled = true;
     el('import').textContent = 'Bokför…';
     const args = { operation_id: stagedOp.id };
@@ -307,8 +304,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       });
     }).catch(function(err) {
       el('import').disabled = false;
-      stagedOp.armed = false;
-      el('import').textContent = 'Godkänn bokföringen';
+      el('import').textContent = 'Bokför: oåterkalleligt (BFL 5 kap 5 §)';
       note('Godkännandet misslyckades: ' + (err && err.message ? err.message : 'okänt fel'));
     });
   }
