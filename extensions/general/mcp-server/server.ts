@@ -1518,10 +1518,14 @@ async function resolveSieToolContent(
   }
 
   if (typeof args.file_content_base64 === 'string' && args.file_content_base64.length > 0) {
-    if (args.file_content_base64.length > MAX_INLINE_SIE_CHARS) {
+    // The inline cap exists to stop a MODEL from retyping a large file with
+    // silent truncation. A caller that provides sha256 (the drop-card widget
+    // always does) has byte-exact content and the hash check below IS the
+    // truncation guard, so the cap does not apply.
+    if (!sha256 && args.file_content_base64.length > MAX_INLINE_SIE_CHARS) {
       throw Object.assign(
         new Error(
-          'File too large to pass inline safely. Use gnubok_create_sie_upload, PUT the raw bytes to its upload_url, and pass the upload_id here instead.'
+          'File too large to pass inline safely without a sha256. Use gnubok_create_sie_upload (drag-and-drop card / PUT to its upload_url) and pass the upload_id here, or include sha256 of the raw bytes.'
         ),
         { code: 'VALIDATION_ERROR' }
       )
@@ -3415,7 +3419,7 @@ export const tools: McpTool[] = [
         trial: 'A 30-day trial with every paid capability (bank sync, Skatteverket, AI, e-mail) is active from now.',
         ...(historyFirst
           ? {
-              history_note: `The fiscal period started ${daysOfHistory} days ago but bank PSD2 history reaches ~90 days: ask which system the bookkeeping lived in and run the SIE import (gnubok_sie_preflight) BEFORE connecting the bank.`,
+              history_note: `The fiscal period started ${daysOfHistory} days ago but bank PSD2 history reaches ~90 days: ask which system the bookkeeping lived in and run the SIE import BEFORE connecting the bank (call gnubok_create_sie_upload to render the drag-and-drop import card).`,
             }
           : {}),
         message: historyFirst
@@ -3434,7 +3438,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_connect_bank',
     title: 'Connect Bank',
     description:
-      'Bank connection status plus the browser link where the user connects a bank (PSD2, BankID consent; must be logged in to Accounted there). Ask WHICH bank they use first and pass it as bank: the link then starts that bank\'s consent directly instead of a picker.',
+      'Bank connection status plus the browser connect link (PSD2, BankID; user must be logged in to Accounted). When the user has NAMED their bank, pass it as bank on the FIRST call (a bare call renders a redundant generic card): the link then starts that bank\'s consent directly.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16291,7 +16295,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_sie_upload',
     title: 'Create SIE Upload',
     description:
-      'Short-lived URL for a model-free SIE upload: PUT the raw .se/.sie bytes (max 50 MB) to upload_url, then pass upload_id (+ same filename) to gnubok_sie_preflight and gnubok_import_sie. Required for files too large to pass inline; add sha256 of the bytes there to prove integrity.',
+      'The SIE-file intake: on claude.ai/Desktop this renders a DRAG-AND-DROP card that reads exact bytes, preflights and imports: call it as soon as an SIE import is next. Elsewhere: PUT raw bytes (max 50 MB) to upload_url, then pass upload_id + sha256 to preflight/import.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16315,6 +16319,7 @@ export const tools: McpTool[] = [
       },
       required: ['upload_id', 'upload_url', 'expires_at'],
     },
+    _meta: { ui: { resourceUri: 'ui://sie-drop/app.html' } },
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
@@ -16345,7 +16350,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_sie_preflight',
     title: 'SIE Preflight Scan',
     description:
-      'Scan a SIE file BEFORE import: parse, validate (balances, IB, encoding), duplicate check, orgnr match against the company, suggested account mappings. Read-only, stages nothing. Call FIRST when the user shares a SIE file; pass the returned mappings to gnubok_import_sie.',
+      'Scan a SIE file BEFORE import: parse, validate (balances, IB, encoding), duplicates, orgnr match, suggested mappings. Read-only. Call gnubok_create_sie_upload FIRST: its card/URL carries exact bytes; NEVER retype a large file. Mappings feed gnubok_import_sie.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16511,7 +16516,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_import_sie',
     title: 'Import SIE File',
-    description: 'Stage SIE-file import (types 1-4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. High-risk, always staged. Run gnubok_sie_preflight first for the scan and the mappings.',
+    description: 'Stage SIE-file import (types 1-4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. Always staged. Run gnubok_sie_preflight first; large files arrive byte-exact via gnubok_create_sie_upload (card/URL), NEVER retyped inline.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
