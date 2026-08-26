@@ -45,6 +45,17 @@ describe('raw-reference-fetch: GET-shaped API calls', () => {
   })
 })
 
+describe('raw-reference-fetch: regex safety', () => {
+  it('scans a pathological near-miss in linear time (no catastrophic backtracking)', () => {
+    // A fetch call that never closes, padded with the whitespace/comma mix
+    // the old `\s*,?\s*\)` tail was ambiguous on.
+    const source = `fetch('/api/settings'${' ,'.repeat(5000)}${' '.repeat(5000)}X`
+    const start = performance.now()
+    expect(scan(source)).toEqual([])
+    expect(performance.now() - start).toBeLessThan(200)
+  })
+})
+
 describe('raw-reference-fetch: browser-side table reads', () => {
   const clientRead = `'use client'\nimport x from 'y'\nconst { data } = await supabase.from('fiscal_periods').select('*').eq('company_id', id)`
 

@@ -63,9 +63,14 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 // fetch(`/api/settings`), fetch('/api/settings?x=1'), fetch('/api/settings', { signal })
 // The init object may nest one level ({ headers: { ... } }); its text is
 // captured so a write method can be excluded. Trailing commas (prettier's
-// multi-line call style) are tolerated before the closing paren.
+// multi-line call style) are tolerated before the closing paren. Every
+// optional whitespace run is anchored by a literal (`,` or `)`) so the
+// pattern has no ambiguous backtracking (CodeQL js/redos on the earlier
+// `\s*,?\s*\)` shape).
+const REFERENCE_URL = String.raw`[\x60'"]/api/(?:${REFERENCE_API_PATHS.map(escape).join('|')})(?:\?[^\x60'"]*)?[\x60'"]`
+const INIT_OBJECT = String.raw`\{(?:[^{}]|\{[^{}]*\})*\}`
 const API_FETCH_RE = new RegExp(
-  String.raw`fetch\(\s*[\x60'"]/api/(?:${REFERENCE_API_PATHS.map(escape).join('|')})(?:\?[^\x60'"]*)?[\x60'"]\s*(?:,?\s*\)|,\s*(\{(?:[^{}]|\{[^{}]*\})*\})\s*,?\s*\))`,
+  String.raw`fetch\(\s*${REFERENCE_URL}(?:\s*,\s*(${INIT_OBJECT}))?(?:\s*,)?\s*\)`,
   'g',
 )
 const WRITE_METHOD_RE = /method\s*:\s*[\x60'"](?!GET\b)/i
