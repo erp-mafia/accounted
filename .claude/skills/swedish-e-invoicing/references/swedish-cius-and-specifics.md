@@ -309,7 +309,7 @@ Bookkeeping uses the **monthly average ECB rate** for the previous month (Skatte
 - BAS-kontoplan: https://www.bas.se
 - SFTI Peppol BIS Billing 3: https://sfti.se/sfti/standarder/peppolbisehandel/peppolbisbilling3.49021.html
 - Swedish payment methods in BIS 3: https://support.inexchange.com/hc/en-us/articles/360001888178-Swedish-Payment-Methods-in-PEPPOL-BIS-3
-- DIGG Peppol-ID instructions: https://www.digg.se/digitala-tjanster/peppol/instruktion-for-val-av-peppol-id-
+- Peppol-ID instructions (Upphandlingsmyndigheten): https://www.upphandlingsmyndigheten.se/digitalisering-och-e-handel/peppol/instruktion-for-val-av-peppol-id/
 - SE-R-005: https://docs.peppol.eu/poacc/billing/3.0/rules/ubl-peppol/SE-R-005/
 - SE-R-011: https://docs.peppol.eu/poacc/billing/3.0/rules/ubl-peppol/SE-R-011/
 - Skatteverket ROT/RUT XML: https://www.skatteverket.se/foretag/rotochrutarbete (HUSXML schema)
