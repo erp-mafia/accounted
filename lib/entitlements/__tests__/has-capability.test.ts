@@ -37,6 +37,36 @@ function makeSupabase(byTable: Record<string, TableResult>): SupabaseClient {
   return { from: (t: string) => chainFor(t) } as unknown as SupabaseClient
 }
 
+/**
+ * Same per-table mock, but every chained call is recorded so a test can
+ * assert WHICH filters a query applied (the mock itself ignores them).
+ */
+type RecordedCall = { table: string; method: string; args: unknown[] }
+function makeRecordingSupabase(byTable: Record<string, TableResult>, calls: RecordedCall[]): SupabaseClient {
+  const chainFor = (table: string) => {
+    const result = byTable[table] ?? { data: null, error: null }
+    const chain: unknown = new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) =>
+              resolve({ data: result.data ?? null, error: result.error ?? null })
+          }
+          return (...args: unknown[]) => {
+            calls.push({ table, method: String(prop), args })
+            return chain
+          }
+        },
+      },
+    )
+    return chain
+  }
+  return { from: (t: string) => chainFor(t) } as unknown as SupabaseClient
+}
+const sourceFilters = (calls: RecordedCall[]) =>
+  calls.filter((c) => c.table === 'capability_grants' && c.method === 'eq' && c.args[0] === 'source')
+
 const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString()
 
 afterEach(() => {
@@ -456,5 +486,112 @@ describe('self-hosted connector capabilities', () => {
     )
     expect(withGrant.capabilities).toEqual(PAID_CAPABILITIES.filter((k) => localPaid.includes(k) || k === CAPABILITY.bank_sync))
     expect(withGrant.entitlementState).toBe('paid')
+  })
+
+  // The trial-seed trigger writes source='trial' rows for bank_sync and
+  // skatteverket on every company insert, self-hosts included. Only the
+  // connector sync's own rows may unlock a connector capability there.
+  it('reads only source=connector grants on a self-host, so the trial seed cannot unlock a connector', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [{ expires_at: iso(60_000) }] },
+        company_capability_config: { data: null },
+      },
+      calls,
+    )
+    expect(await hasCapability(supabase, COMPANY, CAPABILITY.bank_sync)).toBe(true)
+    expect(sourceFilters(calls).map((c) => c.args)).toEqual([['source', 'connector']])
+  })
+
+  it('bulk resolution applies the source=connector filter to both the company and the firm grant reads', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const TEAM = '55555555-5555-4555-8555-555555555555'
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        companies: { data: [{ id: COMPANY, team_id: TEAM }] },
+        company_capability_config: { data: [] },
+        capability_grants: { data: [] },
+      },
+      calls,
+    )
+    await getCompanyIdsWithCapability(supabase, [COMPANY], CAPABILITY.skatteverket)
+    expect(sourceFilters(calls).map((c) => c.args)).toEqual([
+      ['source', 'connector'],
+      ['source', 'connector'],
+    ])
+  })
+
+  it('hosted keeps reading grants of every source (trial, stripe, comp, manual): no connector filter', async () => {
+    const calls: RecordedCall[] = []
+    const supabase = makeRecordingSupabase(
+      {
+        companies: { data: { team_id: null } },
+        capability_grants: { data: [{ expires_at: iso(60_000) }] },
+        company_capability_config: { data: null },
+      },
+      calls,
+    )
+    expect(await hasCapability(supabase, COMPANY, CAPABILITY.bank_sync)).toBe(true)
+    expect(sourceFilters(calls)).toHaveLength(0)
+
+    const bulkCalls: RecordedCall[] = []
+    await getCompanyIdsWithCapability(
+      makeRecordingSupabase(
+        {
+          companies: { data: [{ id: COMPANY, team_id: null }] },
+          company_capability_config: { data: [] },
+          capability_grants: { data: [] },
+        },
+        bulkCalls,
+      ),
+      [COMPANY],
+      CAPABILITY.bank_sync,
+    )
+    expect(sourceFilters(bulkCalls)).toHaveLength(0)
+  })
+
+  it('getCompanyEntitlements ignores trial-seeded connector rows on a self-host', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const localPaid = PAID_CAPABILITIES.filter((k) => !CONNECTOR_CAPABILITIES.includes(k))
+
+    const seededOnly = await getCompanyEntitlements(
+      makeSupabase({
+        companies: { data: { team_id: null } },
+        capability_grants: {
+          data: [
+            { capability_key: 'bank_sync', expires_at: iso(60_000), source: 'trial' },
+            { capability_key: 'skatteverket', expires_at: iso(60_000), source: 'trial' },
+          ],
+        },
+        company_capability_config: { data: [] },
+      }),
+      COMPANY,
+    )
+    expect(seededOnly.capabilities).toEqual(localPaid)
+    expect(seededOnly.entitlementState).toBe('none')
+    expect(seededOnly.trialEndsAt).toBeNull()
+    expect(seededOnly.trialExpiredAt).toBeNull()
+
+    const mixed = await getCompanyEntitlements(
+      makeSupabase({
+        companies: { data: { team_id: null } },
+        capability_grants: {
+          data: [
+            { capability_key: 'bank_sync', expires_at: iso(60_000), source: 'trial' },
+            { capability_key: 'skatteverket', expires_at: iso(60_000), source: 'connector' },
+          ],
+        },
+        company_capability_config: { data: [] },
+      }),
+      COMPANY,
+    )
+    expect(mixed.capabilities).toEqual(
+      PAID_CAPABILITIES.filter((k) => localPaid.includes(k) || k === CAPABILITY.skatteverket),
+    )
+    expect(mixed.entitlementState).toBe('paid')
   })
 })

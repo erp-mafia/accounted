@@ -69,6 +69,19 @@ function isBypassedFor(key: CapabilityKey): boolean {
 }
 
 /**
+ * Whether only the connector sync's own grants may unlock a capability.
+ *
+ * The trial-seed trigger (seed_trial_capability_grants) writes 30-day
+ * source = 'trial' rows for bank_sync and skatteverket on EVERY company
+ * insert, self-hosts included, and a self-host has no trial: without this
+ * predicate a fresh self-host company would hold every connector capability
+ * for a month with no connector key. Hosted keeps reading every source.
+ */
+function connectorGrantsOnly(): boolean {
+  return isSelfHosted()
+}
+
+/**
  * Whether the gate is bypassed for EVERY capability at once (the bulk
  * entitlement shape). True on hosted dev; on a self-host only under the dev
  * bypass, since connector capabilities otherwise need the grant lookup.
@@ -150,23 +163,28 @@ export async function getCompanyIdsWithCapability(
 
   const teamIds = [...new Set(companies.map(company => company.team_id).filter((id): id is string => !!id))]
   const grants: GrantScope[] = []
+  const onlyConnectorGrants = connectorGrantsOnly()
 
   for (const chunk of chunksOf(validCompanyIds, CAPABILITY_SCOPE_CHUNK_SIZE)) {
-    const { data, error } = await supabase
+    let companyGrantsQuery = supabase
       .from('capability_grants')
       .select('company_id, team_id, expires_at')
       .eq('capability_key', key)
       .in('company_id', chunk)
+    if (onlyConnectorGrants) companyGrantsQuery = companyGrantsQuery.eq('source', 'connector')
+    const { data, error } = await companyGrantsQuery
     if (error) throw new Error(`Failed to resolve company capability grants: ${error.message}`)
     grants.push(...((data ?? []) as GrantScope[]))
   }
 
   for (const chunk of chunksOf(teamIds, CAPABILITY_SCOPE_CHUNK_SIZE)) {
-    const { data, error } = await supabase
+    let firmGrantsQuery = supabase
       .from('capability_grants')
       .select('company_id, team_id, expires_at')
       .eq('capability_key', key)
       .in('team_id', chunk)
+    if (onlyConnectorGrants) firmGrantsQuery = firmGrantsQuery.eq('source', 'connector')
+    const { data, error } = await firmGrantsQuery
     if (error) throw new Error(`Failed to resolve firm capability grants: ${error.message}`)
     grants.push(...((data ?? []) as GrantScope[]))
   }
@@ -213,11 +231,13 @@ export async function hasCapability(
   const scopeFilter = teamId
     ? `company_id.eq.${companyId},team_id.eq.${teamId}`
     : `company_id.eq.${companyId}`
-  const { data: grants, error: grantsError } = await supabase
+  let grantsQuery = supabase
     .from('capability_grants')
     .select('expires_at')
     .eq('capability_key', key)
     .or(scopeFilter)
+  if (connectorGrantsOnly()) grantsQuery = grantsQuery.eq('source', 'connector')
+  const { data: grants, error: grantsError } = await grantsQuery
 
   if (grantsError) return false // fail-closed on any read error
   const now = Date.now()
@@ -413,6 +433,9 @@ export async function getCompanyEntitlements(
   let hasActiveConnectorGrant = false
   for (const g of grants ?? []) {
     const row = g as { capability_key: string; expires_at: string | null; source: string | null }
+    // Self-host: a trial-seeded (or any non-connector) row never unlocks a
+    // connector capability; see connectorGrantsOnly().
+    if (selfHosted && row.source !== 'connector') continue
     if (
       row.source === 'trial' &&
       row.expires_at &&
