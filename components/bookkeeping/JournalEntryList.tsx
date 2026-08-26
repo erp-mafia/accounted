@@ -50,6 +50,7 @@ import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Input } from '@/components/ui/input'
 import { AccountNumber } from '@/components/ui/account-number'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import NoDocRequiredToggle from '@/components/bookkeeping/NoDocRequiredToggle'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
@@ -219,6 +220,9 @@ export default function JournalEntryList({
   const { canWrite } = useCanWrite()
   const company = useCompanyOptional()?.company ?? null
   const t = useTranslations('journal_list')
+  // Loads the BAS chart chunk after mount and re-renders once names and
+  // descriptions for non-hardcoded accounts are available.
+  useBasReference()
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [committingId, setCommittingId] = useState<string | null>(null)
   // Confirm-before-posting (convention 10): the draft the user is about to
