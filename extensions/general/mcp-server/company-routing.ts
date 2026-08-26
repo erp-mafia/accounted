@@ -12,6 +12,9 @@ const COMPANY_INDEPENDENT_TOOLS = new Set([
   'gnubok_list_companies',
   // Creates the company: by definition it runs before one exists.
   'gnubok_create_company',
+  // Public-registry lookup that feeds gnubok_create_company: same pre-company
+  // stage of onboarding, no company data touched at all.
+  'gnubok_lookup_company',
 ])
 
 /**

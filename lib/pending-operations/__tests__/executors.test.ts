@@ -1727,3 +1727,46 @@ describe('commitPendingOperation: categorize_transaction account_override', () =
     expect(opts.accountOverride).toBeUndefined()
   })
 })
+
+describe('commitPendingOperation: mark_invoice_sent honours defer_invoice_booking (#967)', () => {
+  it('marks the invoice sent WITHOUT booking when the company defers invoice booking', async () => {
+    const invoiceEntries = await import('@/lib/bookkeeping/invoice-entries')
+    const bookSpy = vi.spyOn(invoiceEntries, 'createInvoiceJournalEntry')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeInvoice({
+        id: 'invoice-1',
+        status: 'draft',
+        invoice_number: 'F-2026001',
+        credited_invoice_id: null,
+      }),
+      error: null,
+    })
+    enqueue({
+      data: {
+        accounting_method: 'accrual',
+        defer_invoice_booking: true,
+        entity_type: 'enskild_firma',
+        bankgiro: '123-4567',
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // status update
+    enqueue({ data: null, error: null }) // dispatcher update
+
+    const op = makePendingOp({
+      operation_type: 'mark_invoice_sent',
+      params: { invoice_id: 'invoice-1' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ status: 'sent', journal_entry_id: null })
+    // Same gate as the dashboard: deferred companies book via the explicit
+    // Bokför step, never at mark-sent.
+    expect(bookSpy).not.toHaveBeenCalled()
+    bookSpy.mockRestore()
+  })
+})
