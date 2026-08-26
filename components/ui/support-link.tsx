@@ -68,6 +68,10 @@ export function SupportLink({
   // see the current list instead of the empty one it closed over.
   const attachmentsRef = useRef<PendingAttachment[]>([])
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Ingestion runs one batch at a time. Re-encoding a photo takes long enough
+  // that a paste can land mid-shrink, and two overlapping runs would both
+  // start from the pre-drop list and last-write-wins away one of the batches.
+  const queueRef = useRef<Promise<void>>(Promise.resolve())
   useEffect(() => {
     attachmentsRef.current = attachments
   }, [attachments])
@@ -85,11 +89,15 @@ export function SupportLink({
    * matters most: a screenshot goes from Win+Shift+S straight into the
    * message without ever becoming a file on disk.
    */
-  async function addFiles(incoming: File[]) {
-    if (!incoming.length || isSending || isPreparing) return
-    // Re-encoding a photo takes a moment, and Send is disabled for as long as
-    // it does: submitting mid-shrink would mail the message without the file
-    // the user just watched land.
+  function addFiles(incoming: File[]) {
+    if (!incoming.length || isSending) return queueRef.current
+    queueRef.current = queueRef.current.then(() => ingestFiles(incoming))
+    return queueRef.current
+  }
+
+  async function ingestFiles(incoming: File[]) {
+    // Send stays disabled for as long as this runs: submitting mid-shrink
+    // would mail the message without the file the user just watched land.
     setIsPreparing(true)
     const next = [...attachmentsRef.current]
     let rejectedType = false
