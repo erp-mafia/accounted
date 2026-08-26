@@ -83,7 +83,9 @@ describe('gnubok_lookup_company', () => {
 
     const ask = result.still_to_ask as string[]
     expect(ask.some((q) => q.startsWith('moms_period ('))).toBe(true)
-    expect(ask.some((q) => q.startsWith('accounting_method'))).toBe(true)
+    // accounting_method defaults by form in create_company (flagged in its
+    // preview) and is deliberately not a question here.
+    expect(ask.some((q) => q.startsWith('accounting_method'))).toBe(false)
     // Registry facts are confirmed, never re-asked.
     expect(ask.some((q) => q.startsWith('entity_type'))).toBe(false)
     expect(ask.some((q) => q.startsWith('vat_registered'))).toBe(false)

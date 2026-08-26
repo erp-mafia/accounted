@@ -54,9 +54,14 @@ Rules baked into that split (same as the web onboarding):
 - **F-skatt** from the registry is a fact, both true and false.
 - **VAT** is a fact ONLY when positively registered. "No VAT registration
   found" is a question, never an assumption (ML 17 kap 24 §).
-- **Moms period** and **accounting method** are ALWAYS the user's answer.
-  Rules of thumb if unsure: under 1 MSEK turnover may report VAT yearly,
-  under 40 MSEK quarterly, above monthly; cash method only under 3 MSEK.
+- **Moms period** is ALWAYS the user's answer when VAT-registered. Rules of
+  thumb if unsure: under 1 MSEK turnover may report VAT yearly, under 40
+  MSEK quarterly, above monthly.
+- **Accounting method is NOT a question**: it defaults by form (AB =
+  faktureringsmetoden, enskild firma = kontantmetoden) and the preview
+  flags the default. Name it in the readback ("faktureringsmetoden,
+  standard för AB, säg till om du vill ha kontantmetoden") so the user can
+  override in the same "ja". Cash requires turnover under 3 MSEK.
 - **Enskild firma name**: verksamhetsnamnet is freely choosable; suggest the
   registered name but let the user pick. An AB's registered name is a fact.
 - **Fiscal year**: registry data becomes a confirm question, never an open

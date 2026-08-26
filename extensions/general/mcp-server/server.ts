@@ -3126,7 +3126,9 @@ export const tools: McpTool[] = [
       if (!vatIsFact) stillToAsk.push('vat_registered (the registry shows no VAT registration; confirm with the user)')
       if (vatIsFact) stillToAsk.push('moms_period (monthly, quarterly or yearly; never guess)')
       else stillToAsk.push('moms_period IF vat_registered turns out true')
-      stillToAsk.push('accounting_method (accrual = faktureringsmetoden, cash = kontantmetoden; never guess)')
+      // accounting_method is deliberately NOT in this list: gnubok_create_company
+      // defaults it by form (AB accrual, EF cash) and flags the default in the
+      // preview, where the user confirms or overrides it in the same "ja".
 
       const startMonth = parseStartMonthDay(lookup.fiscalYear?.startMonthDay)
       // No closed fiscal period in the registry = no annual report filed yet
@@ -3182,7 +3184,7 @@ export const tools: McpTool[] = [
         still_to_ask: stillToAsk,
         warnings,
         instructions:
-          'Present the company facts as a short summary for the user to CONFIRM (name, address, F-skatt, VAT status; do not re-ask them). Then ask ONLY the still_to_ask questions, merge the answers into suggested_create_company_input, and call gnubok_create_company (preview first, read it back, then confirm=true).',
+          'Present the company facts as a short summary for the user to CONFIRM (name, address, F-skatt, VAT status; do not re-ask them). An established company with F-skatt/VAT is the NORMAL case even when the user says "nytt bolag" (new = new to Accounted): never refuse or second-guess the orgnr because the company looks established. Ask ONLY the still_to_ask questions, merge answers into suggested_create_company_input, and call gnubok_create_company (preview, read back incl. the defaulted accounting method, then confirm=true).',
       }
     },
   },
@@ -3191,7 +3193,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_company',
     title: 'Create Company',
     description:
-      'Create a NEW company for the connected user, set up for bookkeeping (chart, settings, first fiscal period, tax deadlines; 30-day trial). Call gnubok_lookup_company FIRST to prefill facts from the orgnr. Preview (no confirm), read it back, then confirm=true. Skill: onboarding.',
+      'Create a NEW company, set up for bookkeeping (chart, settings, first fiscal period, tax deadlines; 30-day trial). Ask ONLY orgnr + moms period: gnubok_lookup_company prefills the rest, accounting_method defaults by form. Preview (no confirm), read back, then confirm=true.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3201,7 +3203,7 @@ export const tools: McpTool[] = [
         org_number: { type: 'string', description: '10 digits; required when VAT-registered' },
         vat_registered: { type: 'boolean' },
         moms_period: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'Required when vat_registered' },
-        accounting_method: { type: 'string', enum: ['accrual', 'cash'] },
+        accounting_method: { type: 'string', enum: ['accrual', 'cash'], description: 'Omit to default by form: aktiebolag accrual, enskild firma cash; the preview flags the default' },
         f_skatt: { type: 'boolean' },
         fiscal_year_start_month: { type: 'integer', minimum: 1, maximum: 12 },
         first_fiscal_year: {
@@ -3217,7 +3219,7 @@ export const tools: McpTool[] = [
         team_id: { type: 'string', format: 'uuid' },
         confirm: { type: 'boolean', description: 'true creates; omitted = preview' },
       },
-      required: ['name', 'entity_type', 'vat_registered', 'accounting_method', 'f_skatt'],
+      required: ['name', 'entity_type', 'vat_registered', 'f_skatt'],
     },
     outputSchema: {
       type: 'object',
@@ -3258,7 +3260,18 @@ export const tools: McpTool[] = [
         vat_registered: parsed.data.vat_registered,
         vat_number: (plan.input.settings.vat_number as string | null) ?? null,
         moms_period: parsed.data.vat_registered ? parsed.data.moms_period ?? null : null,
-        accounting_method: parsed.data.accounting_method,
+        accounting_method: plan.resolved.accountingMethod,
+        // Present, never silent: the readback must name the defaulted method
+        // so the user can override it before confirm. The cash default also
+        // carries its eligibility condition (BFL 4 kap 4 §): the registry
+        // cannot verify turnover, so the human must.
+        ...(plan.resolved.accountingMethodDefaulted ? { accounting_method_defaulted: true } : {}),
+        ...(plan.resolved.accountingMethodDefaulted && plan.resolved.accountingMethod === 'cash'
+          ? {
+              accounting_method_note:
+                'Kontantmetoden förutsätter en omsättning som normalt understiger 3 MSEK (BFL 4 kap 4 §); annars gäller faktureringsmetoden. Bekräfta detta med användaren.',
+            }
+          : {}),
         f_skatt: parsed.data.f_skatt,
         fiscal_period: plan.fiscalPeriod,
         team_id: teamId,
@@ -3270,7 +3283,7 @@ export const tools: McpTool[] = [
           requires_confirmation: true,
           preview,
           message:
-            'Nothing was created. Read the preview back to the user (especially the fiscal period dates and the VAT setup), then call gnubok_create_company again with the same arguments and confirm=true.',
+            'Nothing was created. Read the preview back to the user (especially the fiscal period dates, the VAT setup, and the accounting method when accounting_method_defaulted is true: name the default and let them override), then call gnubok_create_company again with the same arguments and confirm=true.',
         }
       }
 

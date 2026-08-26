@@ -29,7 +29,15 @@ export const CompanySetupSchema = z
     org_number: z.string().trim().min(1).max(20).optional(),
     vat_registered: z.boolean(),
     moms_period: z.enum(['monthly', 'quarterly', 'yearly']).nullable().optional(),
-    accounting_method: z.enum(['accrual', 'cash']),
+    /**
+     * Optional since 2026-08-26 (founder call: minimal onboarding input is
+     * orgnr + moms period). When omitted it defaults by form in
+     * planCompanySetup: aktiebolag → 'accrual' (the norm; kontantmetoden is
+     * rare for AB), enskild firma → 'cash' (the common small-EF choice;
+     * legal below 3 MSEK turnover, BFL 4 kap 4 §). The default is flagged in
+     * the plan so previews present it for confirmation, never silently.
+     */
+    accounting_method: z.enum(['accrual', 'cash']).optional(),
     /** Godkänd för F-skatt. Explicit on purpose: never assumed (SE-R-005 risk). */
     f_skatt: z.boolean(),
     /** 1-12. Ignored for enskild firma (always calendar year). */
@@ -103,6 +111,8 @@ export type CompanySetupPlan =
       input: Omit<CreateCompanyInput, 'ticLookup'>
       /** What the fiscal period resolved to, for previews. */
       fiscalPeriod: { startDate: string; endDate: string; name: string }
+      /** Values planCompanySetup filled in, so previews can flag them. */
+      resolved: { accountingMethod: 'accrual' | 'cash'; accountingMethodDefaulted: boolean }
     }
   | { ok: false; error: string }
 
@@ -114,6 +124,7 @@ export function planCompanySetup(setup: CompanySetup): CompanySetupPlan {
   const isEf = setup.entity_type === 'enskild_firma'
   const firstYear = setup.first_fiscal_year
   const startMonth = isEf ? 1 : (setup.fiscal_year_start_month ?? 1)
+  const accountingMethod = setup.accounting_method ?? (isEf ? 'cash' : 'accrual')
 
   const settings: Record<string, unknown> = {
     entity_type: setup.entity_type,
@@ -122,7 +133,7 @@ export function planCompanySetup(setup: CompanySetup): CompanySetupPlan {
     vat_registered: setup.vat_registered,
     vat_number: setup.vat_registered ? deriveSwedishVatNumber(setup.org_number ?? null) : null,
     moms_period: setup.vat_registered ? setup.moms_period ?? null : null,
-    accounting_method: setup.accounting_method,
+    accounting_method: accountingMethod,
     f_skatt: setup.f_skatt,
     // Enskild firma is calendar-year by law, with or without a first year.
     fiscal_year_start_month: isEf ? 1 : firstYear ? nextMonthAfter(firstYear.end) : startMonth,
@@ -151,6 +162,10 @@ export function planCompanySetup(setup: CompanySetup): CompanySetupPlan {
       fiscalPeriod: { startDate: period.startStr, endDate: period.endStr, name: period.periodName },
     },
     fiscalPeriod: { startDate: period.startStr, endDate: period.endStr, name: period.periodName },
+    resolved: {
+      accountingMethod,
+      accountingMethodDefaulted: setup.accounting_method === undefined,
+    },
   }
 }
 
