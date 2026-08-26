@@ -129,6 +129,12 @@ export default function SkattekontoPage() {
   const { dialogProps: ignoreConfirmProps, confirm: confirmIgnore } =
     useDestructiveConfirm()
 
+  // The /status probe is fire-and-forget, so a slow response from an earlier
+  // reload can land after a later one and overwrite the fresher banner state.
+  // Each reload bumps the sequence; a probe only applies its result while it
+  // is still the latest.
+  const statusProbeSeqRef = useRef(0)
+
   const reload = useCallback(async () => {
     setLoading(true)
     setLoadError(false)
@@ -136,14 +142,17 @@ export default function SkattekontoPage() {
     // keeps the stale snapshot visible on purpose), so nothing in the payload
     // below reveals a dead session. Probe /status for it. Any failure just
     // leaves the banner off.
+    const probeSeq = ++statusProbeSeqRef.current
     void (async () => {
       try {
         const res = await fetch('/api/extensions/ext/skatteverket/status')
+        if (probeSeq !== statusProbeSeqRef.current) return
         if (!res.ok) {
           setNeedsReconnect(false)
           return
         }
         const s = (await res.json()) as SkvStatusLike
+        if (probeSeq !== statusProbeSeqRef.current) return
         // Shared reconnect predicate (lib/notices): the same decision the
         // transactions page and the Hem notice make, never a local variant.
         const stale = skvStatusNeedsReconnect(s)
@@ -153,6 +162,7 @@ export default function SkattekontoPage() {
         // banner up until a full remount.
         if (!stale) setReconnectMessage(null)
       } catch {
+        if (probeSeq !== statusProbeSeqRef.current) return
         setNeedsReconnect(false)
       }
     })()
