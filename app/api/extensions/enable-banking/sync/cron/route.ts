@@ -399,6 +399,10 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
 
   const syncCompanyGroup = async (group: typeof connections) => {
     for (const connection of group) {
+      // Re-check inside the group too: a company with many connections would
+      // otherwise run to completion past the budget and eat the health-probe
+      // and teardown margin before the between-waves check fires.
+      if (Date.now() - startTime > TIME_BUDGET_MS) return
       await syncConnection(connection)
     }
   }
