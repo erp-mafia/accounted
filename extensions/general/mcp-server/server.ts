@@ -3218,6 +3218,16 @@ export const tools: McpTool[] = [
       // accounting_method is deliberately NOT in this list: gnubok_create_company
       // defaults it by form (AB accrual, EF cash) and flags the default in the
       // preview, where the user confirms or overrides it in the same "ja".
+      //
+      // Two flow questions the agent must ask in the SAME round (E2E #5: the
+      // agent skipped both and the user landed on a generic bank picker with
+      // no history import):
+      stillToAsk.push(
+        "bank (vilken bank har företaget? pass it to gnubok_connect_bank as bank so the connect link opens that bank's consent directly)"
+      )
+      stillToAsk.push(
+        'previous_system (har bokföringen legat i ett annat system? if yes: SIE import comes FIRST, before any bank connect: PSD2 history rarely covers the fiscal year)'
+      )
 
       const startMonth = parseStartMonthDay(lookup.fiscalYear?.startMonthDay)
       // No closed fiscal period in the registry = no annual report filed yet
@@ -3389,15 +3399,30 @@ export const tools: McpTool[] = [
         throw Object.assign(new Error(result.error), { code })
       }
 
+      // A fiscal period that started well before today means bookkeeping
+      // already happened somewhere: history import comes BEFORE the bank
+      // (PSD2 reaches ~90 days back; the rest only arrives via SIE).
+      const periodStartMs = Date.parse(plan.fiscalPeriod.startDate)
+      const daysOfHistory = Number.isFinite(periodStartMs)
+        ? Math.floor((Date.now() - periodStartMs) / 86_400_000)
+        : 0
+      const historyFirst = daysOfHistory > 90
+
       return {
         created: true,
         company_id: result.companyId,
         ...preview,
         trial: 'A 30-day trial with every paid capability (bank sync, Skatteverket, AI, e-mail) is active from now.',
-        message:
-          'Company created and ready for bookkeeping. This connection uses it automatically from the next call. Remaining setup: bank connection, Skatteverket connection, and the first transactions.',
+        ...(historyFirst
+          ? {
+              history_note: `The fiscal period started ${daysOfHistory} days ago but bank PSD2 history reaches ~90 days: ask which system the bookkeeping lived in and run the SIE import (gnubok_sie_preflight) BEFORE connecting the bank.`,
+            }
+          : {}),
+        message: historyFirst
+          ? 'Company created; this connection uses it automatically from the next call. Remaining setup IN ORDER: (1) import existing bookkeeping via SIE (see history_note), (2) bank connection (pass bank=<name>), (3) Skatteverket.'
+          : 'Company created and ready for bookkeeping. This connection uses it automatically from the next call. Remaining setup: bank connection (pass bank=<name> for a direct consent link), Skatteverket connection, and the first transactions.',
         next: {
-          description: 'Load the onboarding skill for the remaining setup steps (bank, Skatteverket, first transactions).',
+          description: 'Load the onboarding skill for the remaining setup steps (history import, bank, Skatteverket, first transactions).',
           tool: 'gnubok_load_skill',
           args: { slug: 'onboarding' },
         },
@@ -3465,7 +3490,10 @@ export const tools: McpTool[] = [
         instructions:
           active.length > 0
             ? 'At least one bank is connected and syncing. To add another bank, give the user the connect_url.'
-            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. With bank passed, the link starts that bank\'s consent directly; otherwise they pick the bank first. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.',
+            : (requestedBank
+                ? ''
+                : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank\'s consent directly instead of a picker. ') +
+              'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.',
       }
     },
   },
