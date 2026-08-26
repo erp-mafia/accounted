@@ -10852,7 +10852,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_reconciliation_items',
     title: 'Reconciliation Items',
-    description: 'Rows behind one account\'s reconciliation bridge, bucketed (proposed, unmatched_external, unmatched_ledger, matched, ignored, upcoming): side, qualified id, amount, proposal with confidence + reasons, allowed actions. Link via gnubok_reconcile_match (search).',
+    description: 'Rows behind one account\'s reconciliation bridge, bucketed (proposed, unmatched_external, unmatched_ledger, matched, ignored, upcoming): side, qualified id, amount, proposal with confidence + reasons, allowed actions. Link via gnubok_reconcile_match.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -10905,10 +10905,11 @@ export const tools: McpTool[] = [
     name: 'gnubok_reconcile_match',
     title: 'Reconcile: Link Pairs',
     description: 'Link outside rows (bank or skattekonto) to existing verifikat on one account; no new bokföring. Pass pairs, or use_proposals to apply the persisted proposals. Stages. dry_run previews.',
-    // Search-only to stay under the tools/list payload ceiling: the default
-    // catalog carries the reads (status + items); this write is reached via
-    // gnubok_search_tools, the close_period loadout and the items tool's hint.
-    catalogVisibility: 'search',
+    // Default catalog since E2E #12: the onboarding efterkontroll instructs
+    // matching SIE-covered bank rows against existing verifikat, and
+    // Claude.ai cannot call search-only tools: the agent misread the
+    // uncallable tool as a missing reconciliation:write scope and punted the
+    // whole matching step to the web app.
     inputSchema: {
       type: 'object',
       additionalProperties: false,
