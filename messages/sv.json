@@ -8194,6 +8194,7 @@
     "import_statement_action": "Importera kontoutdrag",
     "imported_not_connected_attn": "Visar importerade kontohändelser. Anslut Skatteverket för automatisk synk och saldo.",
     "attn_reconnect_action": "Anslut igen",
+    "attn_reconnect_body": "Anslutningen mot Skatteverket har gått ut. Anslut igen med BankID för att hämta saldo och händelser.",
     "attn_shortfall": "Dragningen {date} är {charge}. Saldot saknar {missing}.",
     "attn_show_payment": "Visa betalningsuppgifter",
     "band_upcoming": "Kommande",

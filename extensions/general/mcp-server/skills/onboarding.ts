@@ -16,6 +16,17 @@ continue straight into import or categorization. Staged writes still go
 through their normal approval, but that approval IS the conversation, not an
 extra pause around it.
 
+**Brevity rule: this is onboarding, not a course.** Keep every reply under
+~8 short lines. At most ONE warning per step, one line, and only when it
+changes what the user should do right now. No legal essays, no deadline
+tables, no cross-checks the user did not ask about (bolagsstämma dates,
+EU-moms edge cases, K-regelverk). The user can always ask for depth; the
+flow must never make them scroll past it.
+
+**Memory first.** Before asking the opening questions, check what you
+already know about the user (memory, earlier conversation): orgnr, company
+name, bank, previous system. Ask only for what is genuinely missing.
+
 ## When to use
 
 - "Sätt upp bokföring för mitt AB / min enskilda firma"
@@ -94,19 +105,28 @@ reaches far enough back anyway.
    Exportera data → SIE, **Björn Lundén / Briox / Wint** under Export.
    Every Swedish system exports SIE4 (.se/.sie); ask them to attach the
    file here in the chat.
-2. When the file arrives, call \`gnubok_sie_preflight\` with its content
-   (\`file_content\` as read, or \`file_content_base64\` when exact bytes are
-   available: that preserves åäö in CP437 exports). Summarize the scan:
-   source system, fiscal years, verifikat count, balance status, org-number
-   match, warnings. This is the "does it look correct" moment: surface
-   problems BEFORE anything is written.
-3. On their go-ahead: \`gnubok_import_sie\` with the same file and the
-   preflight's \`mappings\`. It stages for approval; after commit verify with
-   \`gnubok_get_trial_balance\`.
+2. When the file arrives, get its BYTES to the server without retyping
+   them. Preferred (and REQUIRED for anything beyond a small file): call
+   \`gnubok_create_sie_upload\`, PUT the raw file bytes to the returned
+   \`upload_url\` (from your code sandbox when you have one), compute the
+   file's sha256, then call \`gnubok_sie_preflight\` with \`upload_id\` +
+   \`sha256\` + the same \`filename\`. Small files may go inline
+   (\`file_content_base64\` + \`sha256\` preferred over plain
+   \`file_content\`). NEVER reproduce a large file token by token: the
+   tools refuse oversized inline content because a mid-verifikat
+   truncation imports silently incomplete bookkeeping.
+3. Summarize the preflight in a few lines: source system, fiscal years,
+   verifikat count, balance status, org-number match, the one warning that
+   matters. On the user's go-ahead: \`gnubok_import_sie\` with the same
+   source (\`upload_id\` or content) and the preflight's \`mappings\`. It
+   stages for approval; after commit verify with
+   \`gnubok_get_trial_balance\`, and explain any skipped voucher numbers
+   with \`gnubok_explain_voucher_gap\` (BFNAR 2013:2; an unexplained gap
+   blocks year-end).
 4. Multiple fiscal years = multiple files: import oldest first so IB/UB
-   chains. If the file is very large for chat, the web wizard at
-   \`/import?mode=sie\` is the fallback; Fortnox users can also run the full
-   API migration (invoices, customers, documents) at
+   chains. The web wizard at \`/import?mode=sie\` is the fallback when no
+   upload path works; Fortnox users can also run the full API migration
+   (invoices, customers, documents) at
    \`/import?mode=migration&provider=fortnox\`.
 
 ## Step 4: connect bank and Skatteverket (together, no pause)
@@ -136,6 +156,7 @@ message instead of making them ask.
 
 - \`gnubok_lookup_company\`: registry facts + prefill from the orgnr; call first
 - \`gnubok_create_company\`: preview (no confirm) then create (confirm=true)
+- \`gnubok_create_sie_upload\`: byte-exact upload URL for the SIE file
 - \`gnubok_sie_preflight\`: scan a shared SIE file, nothing written
 - \`gnubok_import_sie\`: staged import; use the preflight's mappings
 - \`gnubok_connect_bank\` / \`gnubok_connect_skatteverket\`: status + connect links

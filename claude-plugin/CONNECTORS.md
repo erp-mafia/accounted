@@ -14,14 +14,9 @@ One-click add on claude.ai (opens the Add custom connector dialog prefilled; the
 https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=Accounted&connectorUrl=https%3A%2F%2Fapp.accounted.se%2Fapi%2Fextensions%2Fext%2Fmcp-server%2Fmcp%3Ftool_namespace%3Daccounted
 ```
 
-Pair the link with a starter prompt the user pastes as their first message. The short form works because the server-side onboarding skill carries the whole flow; the long form pre-answers the three opening questions and saves a round-trip:
+Pair the link with a starter prompt the user pastes as their first message. It stays copy-paste ready for everyone because it points the agent at what it already knows (Claude memory, earlier chats) instead of containing the user's own data; the server-side onboarding skill carries the rest of the flow:
 
-> Sätt upp mitt företag i Accounted.
-
-> Sätt upp mitt företag i Accounted.
-> Organisationsnummer: `<orgnr>`
-> Tidigare bokföringssystem: `<t.ex. Fortnox, eller inget>`
-> Bank: `<t.ex. Swedbank>`
+> Sätt upp mitt företag i Accounted. Utgå från det du redan vet om mig och mitt bolag (organisationsnummer, bank, tidigare bokföringssystem) och fråga bara efter det som saknas. Håll det kort.
 
 ## How the connection works
 
