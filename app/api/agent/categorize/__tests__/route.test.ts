@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
-import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createMockRequest, createMockRouteParams, parseJsonResponse } from '@/tests/helpers'
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: () => requireAuthMock() }))
@@ -26,11 +26,12 @@ vi.mock('@/lib/agent/categorize/select-account', () => ({ selectAccount: (...a: 
 import { POST } from '../route'
 
 // supabase router: membership + transactions + companies + company_settings.
-function makeSupabase(opts: { tx?: unknown } = {}) {
+function makeSupabase(opts: { tx?: unknown; member?: boolean } = {}) {
   return {
+    auth: { getUser: vi.fn() },
     from(table: string) {
       const rows: Record<string, unknown> = {
-        company_members: { user_id: 'user-1' },
+        company_members: opts.member === false ? null : { user_id: 'user-1' },
         transactions: opts.tx === undefined ? { id: 'tx-1' } : opts.tx,
         companies: { entity_type: 'aktiebolag' },
         company_settings: { vat_registered: true },
@@ -67,23 +68,41 @@ beforeEach(() => {
 describe('POST /api/agent/categorize', () => {
   it('401 when unauthenticated', async () => {
     requireAuthMock.mockResolvedValue({ user: null, supabase, error: NextResponse.json({ error: 'x' }, { status: 401 }) })
-    expect((await POST(createMockRequest('/x', { method: 'POST', body: body() }))).status).toBe(401)
+    expect((await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))).status).toBe(401)
+    expect(selectAccount).not.toHaveBeenCalled()
+  })
+  it('resolves the session through requireAuth (withRouteContext), never a hand-rolled getUser()', async () => {
+    await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))
+    expect(requireAuthMock).toHaveBeenCalledTimes(1)
+    expect(supabase.auth.getUser).not.toHaveBeenCalled()
+  })
+  it('403 when the body names a company the caller is not a member of', async () => {
+    const other = '22222222-2222-4222-8222-222222222222'
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: makeSupabase({ member: false }), error: null })
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body({ company_id: other }) }), createMockRouteParams({}))
+    expect(res.status).toBe(403)
+    expect(selectAccount).not.toHaveBeenCalled()
+  })
+  it('uses the active company without a membership round trip when no override is given', async () => {
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))
+    expect(res.status).toBe(200)
+    expect(gatherCandidates).toHaveBeenCalledWith(expect.anything(), 'company-1', expect.anything())
   })
   it('429 when rate limited', async () => {
     checkRate.mockResolvedValue({ ok: false })
-    expect((await POST(createMockRequest('/x', { method: 'POST', body: body() }))).status).toBe(429)
+    expect((await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))).status).toBe(429)
   })
   it('400 on a missing/invalid transaction_id', async () => {
-    expect((await POST(createMockRequest('/x', { method: 'POST', body: {} }))).status).toBe(400)
-    expect((await POST(createMockRequest('/x', { method: 'POST', body: { transaction_id: 'nope' } }))).status).toBe(400)
+    expect((await POST(createMockRequest('/x', { method: 'POST', body: {} }), createMockRouteParams({}))).status).toBe(400)
+    expect((await POST(createMockRequest('/x', { method: 'POST', body: { transaction_id: 'nope' } }), createMockRouteParams({}))).status).toBe(400)
   })
   it('403 without the ai capability', async () => {
     requireCapability.mockResolvedValue(NextResponse.json({ error: 'pay' }, { status: 403 }))
-    expect((await POST(createMockRequest('/x', { method: 'POST', body: body() }))).status).toBe(403)
+    expect((await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))).status).toBe(403)
   })
   it('503 when no backend is configured', async () => {
     aiStatus.mockReturnValue({ configured: false })
-    const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))
     const { status, body: b } = await parseJsonResponse<{ code: string }>(res)
     expect(status).toBe(503)
     expect(b.code).toBe('ai_unconfigured')
@@ -91,12 +110,12 @@ describe('POST /api/agent/categorize', () => {
   })
   it('404 when the transaction is not found / not this company', async () => {
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: makeSupabase({ tx: null }), error: null })
-    const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))
     expect(res.status).toBe(404)
     expect(selectAccount).not.toHaveBeenCalled()
   })
   it('returns the selection + candidate slate on the happy path', async () => {
-    const res = await POST(createMockRequest('/x', { method: 'POST', body: body({ samples: 3, underlag: 'Biltema AB 499 kr' }) }))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body({ samples: 3, underlag: 'Biltema AB 499 kr' }) }), createMockRouteParams({}))
     const { status, body: b } = await parseJsonResponse<{
       data: { account: string; confidence: number; candidates: { account: string }[] }
     }>(res)
@@ -112,7 +131,7 @@ describe('POST /api/agent/categorize', () => {
   })
 
   it('gathers underlag server-side when the caller did not supply it', async () => {
-    await POST(createMockRequest('/x', { method: 'POST', body: body() }))
+    await POST(createMockRequest('/x', { method: 'POST', body: body() }), createMockRouteParams({}))
     expect(gatherUnderlag).toHaveBeenCalled()
     expect(selectAccount).toHaveBeenCalledWith(
       expect.objectContaining({ underlag: 'Kvitto: Biltema, totalt 499 SEK.' }),
