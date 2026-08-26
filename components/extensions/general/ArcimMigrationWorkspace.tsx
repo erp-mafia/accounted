@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
+import { useAccounts } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -2039,6 +2041,10 @@ export default function ArcimMigrationWorkspace({
   // SIE data state (held between mapping and execution steps)
   const [sieData, setSieData] = useState<SIEData | null>(null)
   const companyAccountsForVatRef = useRef<BASAccount[]>([])
+  // Chart of accounts incl. inactive, from the session cache
+  // (lib/reference-data). Re-read when the mapping step opens because the
+  // preview may have created accounts; the SIE import invalidates it too.
+  const { refresh: refreshCompanyAccounts } = useAccounts(false)
 
   // Options state
   const [migrationOptions, setMigrationOptions] = useState<MigrationOptions>(DEFAULT_OPTIONS)
@@ -2619,16 +2625,10 @@ export default function ArcimMigrationWorkspace({
       }
 
       const data = await res.json() as SIEData
-      const accountsRes = await fetch('/api/bookkeeping/accounts?active=false')
-      const accountsBody = await accountsRes.json().catch(() => ({})) as {
-        data?: BASAccount[]
-        error?: unknown
-      }
-      if (!accountsRes.ok) {
-        throw apiError(accountsBody, `HTTP ${accountsRes.status}`)
-      }
-      companyAccountsForVatRef.current = accountsBody.data ?? []
-      const enrichedMappings = enrichAccountMappingsWithVat(data.mappings, accountsBody.data ?? [])
+      // Bound SWR mutate resolves with the revalidated list.
+      const companyAccounts = ((await refreshCompanyAccounts()) ?? []) as BASAccount[]
+      companyAccountsForVatRef.current = companyAccounts
+      const enrichedMappings = enrichAccountMappingsWithVat(data.mappings, companyAccounts)
       setSieData({ ...data, mappings: enrichedMappings })
 
       // If all SIE files are already imported, disable SIE import by default
@@ -2648,7 +2648,7 @@ export default function ArcimMigrationWorkspace({
     } finally {
       setIsLoading(false)
     }
-  }, [consentId])
+  }, [consentId, refreshCompanyAccounts])
 
   const handlePreviewContinue = useCallback(() => {
     if (preview?.sieAvailable) {
@@ -2781,6 +2781,9 @@ export default function ArcimMigrationWorkspace({
 
           const result = await res.json() as ImportResult
           setSieImportResults(prev => [...prev, result])
+          // The import creates accounts and a räkenskapsår: every cached
+          // picker must see them.
+          void invalidateReferenceData(['ref:accounts', 'ref:fiscal-periods'])
 
           // The endpoint returns HTTP 200 with success:false when the import
           // itself failed (e.g. räkenskapsår mismatch). Stop here: continuing

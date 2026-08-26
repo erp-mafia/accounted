@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { useBookingTemplates } from '@/lib/reference-data/hooks'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
@@ -13,7 +14,7 @@ import {
 } from '@/components/ui/dialog'
 import { BookOpen, Search, Building2, Users, Globe } from 'lucide-react'
 import { TEMPLATE_CATEGORY_LABELS, SCOPE_LABELS, getTemplateScope, applyTemplate } from '@/lib/bookkeeping/template-library'
-import type { BookingTemplateLibrary, BookingTemplateCategory, EntityType } from '@/types'
+import type { BookingTemplateCategory, EntityType } from '@/types'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
 interface Props {
@@ -33,8 +34,10 @@ const SCOPE_ICONS = {
 export default function BookingTemplatePicker({ onApply, entityType, defaultAmount }: Props) {
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
-  const [templates, setTemplates] = useState<BookingTemplateLibrary[]>([])
-  const [isLoading, setIsLoading] = useState(false)
+  // Session-cached (lib/reference-data): the list is there on the first
+  // open and reopening costs no request; writes in the settings panel
+  // invalidate it.
+  const { templates, isLoading, error: templatesError } = useBookingTemplates()
   const [search, setSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<BookingTemplateCategory | 'all'>('all')
   const [amount, setAmount] = useState('')
@@ -49,26 +52,9 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
     }
   }, [open, defaultAmount])
 
-  const fetchTemplates = useCallback(async (signal?: AbortSignal) => {
-    setIsLoading(true)
-    try {
-      const r = await fetch('/api/settings/booking-templates', { signal })
-      const { data } = await r.json()
-      setTemplates(data || [])
-    } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') return
-      toast({ title: 'Kunde inte hämta mallar', variant: 'destructive' })
-    } finally {
-      setIsLoading(false)
-    }
-  }, [toast])
-
   useEffect(() => {
-    if (!open) return
-    const controller = new AbortController()
-    fetchTemplates(controller.signal)
-    return () => { controller.abort() }
-  }, [open, fetchTemplates])
+    if (open && templatesError) toast({ title: 'Kunde inte hämta mallar', variant: 'destructive' })
+  }, [open, templatesError, toast])
 
   const filtered = useMemo(() => {
     let result = templates

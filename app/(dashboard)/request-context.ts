@@ -55,9 +55,13 @@ export const getDashboardSettings = cache(async () => {
   ])
   if (!companyId) return { data: null, error: null }
 
+  // Full row: the layout hands it to the client reference-data cache as the
+  // seed for useCompanySettings (which reads select('*') itself), so the
+  // narrow column list this once carried would have been refetched on the
+  // first mount anyway. The other consumers read a subset of the row.
   return supabase
     .from('company_settings')
-    .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox, dimensions_enabled, mileage_enabled, ore_rounding, initial_setup_path, initial_setup_completed_at, initial_setup_dismissed_at, vat_registered, moms_period')
+    .select('*')
     .eq('company_id', companyId)
     .maybeSingle()
 })

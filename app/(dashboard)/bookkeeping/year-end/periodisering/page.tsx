@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { ArrowLeft, ArrowRight, Loader2, Lock, Plus, Trash2 } from 'lucide-react'
@@ -26,7 +27,6 @@ import type {
   PeriodiseringSuggestion,
   PeriodiseringConfidence,
 } from '@/lib/bokslut/accruals/auto-detect'
-import type { FiscalPeriod } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 type Step = 'vacation' | 'audit' | 'auto' | 'manual' | 'review'
@@ -139,36 +139,24 @@ export default function PeriodiseringWizardPage() {
   const [postError, setPostError] = useState<string | null>(null)
   const [postSummary, setPostSummary] = useState<{ created: number; skipped: number } | null>(null)
 
-  // ---- Load eligible periods ----
+  // ---- Eligible periods, from the session-cached list (lib/reference-data) ----
+  const { periods: allPeriods, isLoading: periodsLoading, error: periodsFetchError } = useFiscalPeriods()
   useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      try {
-        const res = await fetch('/api/bookkeeping/fiscal-periods')
-        if (!res.ok) {
-          if (!cancelled) setPeriodsError('Kunde inte hämta perioder')
-          return
-        }
-        const { data } = (await res.json()) as { data: FiscalPeriod[] }
-        const today = new Date().toISOString().split('T')[0]
-        const eligible = (data ?? []).filter(
-          (p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today,
-        )
-        eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
-        if (cancelled) return
-        setPeriods(eligible)
-        if (!selectedPeriodId && eligible.length > 0) {
-          setSelectedPeriodId(eligible[0].id)
-        }
-      } catch {
-        if (!cancelled) setPeriodsError('Kunde inte hämta perioder')
-      }
+    if (periodsLoading) return
+    if (periodsFetchError) {
+      setPeriodsError('Kunde inte hämta perioder')
+      return
     }
-    void load()
-    return () => {
-      cancelled = true
+    const today = new Date().toISOString().split('T')[0]
+    const eligible = allPeriods.filter(
+      (p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today,
+    )
+    eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
+    setPeriods(eligible)
+    if (!selectedPeriodId && eligible.length > 0) {
+      setSelectedPeriodId(eligible[0].id)
     }
-  }, [selectedPeriodId])
+  }, [selectedPeriodId, allPeriods, periodsLoading, periodsFetchError])
 
   // ---- Fetch accruals snapshot once period chosen ----
   useEffect(() => {

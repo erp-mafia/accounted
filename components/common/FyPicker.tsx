@@ -1,13 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import {
-  STORAGE_KEY_PREFIX,
-  ALL_YEARS_VALUE,
-} from '@/components/common/FiscalYearSelector'
+import { STORAGE_KEY_PREFIX, ALL_YEARS_VALUE } from '@/components/common/fiscal-year-storage'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { prepareFiscalPeriods, resolveInitialFiscalScope } from '@/lib/reference-data/fiscal-scope'
 import type { FiscalPeriod } from '@/types'
 
 interface FyPickerProps {
@@ -73,13 +72,6 @@ interface FyPickerProps {
   className?: string
 }
 
-function preparePeriods(periods: FiscalPeriod[], hideFuturePeriods: boolean): FiscalPeriod[] {
-  const today = new Date().toISOString().split('T')[0]
-  return periods
-    .filter((p) => !hideFuturePeriods || p.period_start <= today)
-    .sort((a, b) => b.period_start.localeCompare(a.period_start))
-}
-
 /**
  * Fiscal-year context picker (UI-migration plan PR 3): the chip-dropdown
  * "Räkenskapsår 2026" with a check on the active choice and closed/locked
@@ -103,76 +95,48 @@ export function FyPicker({
 }: FyPickerProps) {
   const { company } = useCompany()
   const t = useTranslations('fiscal_year')
+  // Session-cached and seeded by the dashboard layout, so on a normal visit
+  // the list is already here on the first render: the restore below runs in
+  // the first effect tick and onReady fires without a network round trip.
+  // initialPeriods remains an explicit override for server-rendered pages.
+  const { periods: cachedPeriods, isLoading } = useFiscalPeriods()
   const canUseInitial = initialCompanyId === company?.id && initialPeriods !== undefined
-  const [periods, setPeriods] = useState<FiscalPeriod[]>(() =>
-    canUseInitial ? preparePeriods(initialPeriods, hideFuturePeriods) : [],
+  const periods = useMemo(
+    () => prepareFiscalPeriods(canUseInitial ? initialPeriods : cachedPeriods, hideFuturePeriods),
+    [canUseInitial, initialPeriods, cachedPeriods, hideFuturePeriods],
   )
-  const [loaded, setLoaded] = useState(canUseInitial)
+  const loaded = canUseInitial || !isLoading
+  // Restore once per company load, not on every background revalidation of
+  // the cached list (which would re-fire onChange/onReady mid-session).
+  const restoredForRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!company?.id) {
       onReady?.()
       return
     }
-    let cancelled = false
-    ;(async () => {
-      let fetched: FiscalPeriod[]
-      if (initialCompanyId === company.id && initialPeriods !== undefined) {
-        fetched = preparePeriods(initialPeriods, hideFuturePeriods)
-      } else {
-        const res = await fetch('/api/bookkeeping/fiscal-periods')
-        if (!res.ok) {
-          if (!cancelled) {
-            setLoaded(true)
-            onReady?.()
-          }
-          return
-        }
-        const { data } = await res.json()
-        fetched = preparePeriods(data || [], hideFuturePeriods)
-      }
-      if (cancelled) return
+    if (!loaded || restoredForRef.current === company.id) return
+    restoredForRef.current = company.id
 
-      setPeriods(fetched)
-      setLoaded(true)
-
-      // Restore last selection (same key as FiscalYearSelector so pages keep
-      // their scope when the picker swaps in).
-      //
-      // requireExplicitChoice gates this WHOLE block, not individual branches:
-      // every path in here ends in an unprompted onChange (restore, the
-      // ALL_YEARS-stored fallback, newest-period, preferLatestEnded), and a
-      // per-branch gate already missed one of them once. Nothing auto-fires;
-      // the picker stays empty until a human picks.
-      if (value === null && !requireExplicitChoice && !suppressAutoRestore && typeof window !== 'undefined') {
-        if (preferLatestEnded) {
-          // Filing surfaces: ignore the shared scope memory and open on the
-          // most recently ended period (fetched is sorted newest-first).
-          const today = new Date().toISOString().split('T')[0]
-          const pick = fetched.find((p) => p.period_end < today) ?? fetched[0]
-          if (pick) onChange(pick.id, pick)
-        } else {
-          const stored = window.localStorage.getItem(storageKeyPrefix + company.id)
-          if (stored === ALL_YEARS_VALUE) {
-            if (includeAllOption) onChange(null, null)
-            else if (fetched.length > 0) onChange(fetched[0].id, fetched[0])
-          } else if (stored && fetched.some((p) => p.id === stored)) {
-            onChange(stored, fetched.find((p) => p.id === stored) ?? null)
-          } else if (!includeAllOption && fetched.length > 0) {
-            onChange(fetched[0].id, fetched[0])
-          }
-        }
-      }
-
-      onReady?.()
-    })()
-    return () => {
-      cancelled = true
+    // Restore last selection (same key as FiscalYearSelector so pages keep
+    // their scope when the picker swaps in).
+    //
+    // requireExplicitChoice gates this WHOLE block, not individual branches:
+    // every path in here ends in an unprompted onChange (restore, the
+    // ALL_YEARS-stored fallback, newest-period, preferLatestEnded), and a
+    // per-branch gate already missed one of them once. Nothing auto-fires;
+    // the picker stays empty until a human picks.
+    if (value === null && !requireExplicitChoice && !suppressAutoRestore && typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem(storageKeyPrefix + company.id)
+      const pick = resolveInitialFiscalScope(periods, stored, { includeAllOption, preferLatestEnded })
+      if (pick) onChange(pick.periodId, pick.period)
     }
-  // onReady is a lifecycle callback: fire once per load, not on parent
-  // re-renders that re-create it.
+
+    onReady?.()
+  // onReady/onChange are lifecycle callbacks: fire once per load, not on
+  // parent re-renders that re-create them. `value` is read once at restore.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id, hideFuturePeriods, includeAllOption, preferLatestEnded, requireExplicitChoice, suppressAutoRestore, initialCompanyId, initialPeriods, storageKeyPrefix])
+  }, [company?.id, loaded, periods])
 
   const handleChange = (id: string) => {
     const nextId = id === ALL_YEARS_VALUE ? null : id

@@ -2,7 +2,7 @@ export const CONNECT_CLAUDE_MD = `# Connect with Claude
 
 > Talk to your bookkeeping. Connect Accounted to Claude (claude.ai, Claude Desktop, or Claude Code) and ask questions, categorise transactions, and prepare a momsdeklaration in plain language: every write still stages for your approval first.
 
-Accounted ships an [MCP](https://modelcontextprotocol.io) server that exposes the full bookkeeping engine (90+ tools) to any MCP client. The endpoint is:
+Accounted ships an [MCP](https://modelcontextprotocol.io) server that exposes the full bookkeeping engine (150+ tools) to any MCP client. The endpoint is:
 
 \`\`\`
 https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted
@@ -20,8 +20,9 @@ Best for most users. No API key to manage: you authorise Accounted the same way 
    https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector
    \`\`\`
    _The "client=claude-connector" parameter is telemetry-only. Keep "tool_namespace=accounted": it selects the Accounted tool names._
-3. Claude opens the Accounted OAuth 2.1 consent screen. Sign in and pick the company you want Claude to act on.
-4. On the consent screen you grant **read-only scopes by default** (list invoices, read reports, compute VAT). Write scopes (create invoice, categorise, book vouchers, run year-end) are **listed separately and must be ticked explicitly**: leave them unchecked for a read-only review session.
+   If the dialog asks about authentication, choose **"Required when the server asks"** (not the auto-detected "None") and let Claude register an OAuth client automatically.
+3. You do not need an Accounted account yet. The connector works as soon as it is added: the server answers the handshake and the documentation tools (search tools, list and load skills) without credentials, and the first company-scoped call opens the Accounted sign-in. A new user creates the account right there (BankID or e-mail + 2FA), no visit to the website first.
+4. Sign in and pick the company you want Claude to act on. On the consent screen you grant **read-only scopes by default** (list invoices, read reports, compute VAT). Write scopes (create invoice, categorise, book vouchers, run year-end) are **listed separately and must be ticked explicitly**: leave them unchecked for a read-only review session.
 5. Approve. Claude now lists the Accounted tools and you can start asking questions.
 
 Because the consent is per-company and scoped, you can connect a read-only key for a reviewer and a separate write-enabled connection for day-to-day bookkeeping.

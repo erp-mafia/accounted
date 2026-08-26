@@ -14,6 +14,7 @@ import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
+import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import { getDashboardNavFlags } from '@/lib/dashboard/nav-flags'
 import { getBranding } from '@/lib/branding/service'
@@ -171,11 +172,13 @@ export default async function DashboardLayout({
   // (lib/hooks/use-worklist-badges). The four nav-visibility probes
   // (webshop connections/orders, mileage trips) collapsed into one RPC.
   const [
-    { data: settings },
+    { data: settings, error: settingsError },
     agentProfileIdentity,
     entitlements,
     { data: allSettingsNames },
     navFlags,
+    { data: seedFiscalPeriods },
+    { data: seedCashAccounts },
   ] = await Promise.all([
     getDashboardSettings(),
     // Agent identity, name + avatar, surfaced on the FAB and chat
@@ -190,6 +193,23 @@ export default async function DashboardLayout({
     // show company_settings.company_name instead of the frozen companies.name.
     supabase.from('company_settings').select('company_id, company_name'),
     getDashboardNavFlags(supabase, companyId),
+    // Reference-data seed (lib/reference-data/seed.ts): the two small lists
+    // that gate almost every form, fetched once here so the first picker a
+    // user opens renders populated with zero client round trips. Same
+    // ordering as period.list and listForCompany so the seed and the client
+    // refetch agree. The chart of accounts is deliberately NOT seeded: it
+    // can be hundreds of KB for large companies.
+    supabase
+      .from('fiscal_periods')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('period_start', { ascending: false }),
+    supabase
+      .from('cash_accounts')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('is_primary', { ascending: false })
+      .order('ledger_account', { ascending: true }),
   ])
   const hasWebshop = navFlags.hasWebshop
   const hasMileageTrips = navFlags.hasMileageTrips
@@ -308,6 +328,12 @@ export default async function DashboardLayout({
 
   return (
     <CompanyProvider value={companyContextValue}>
+      <ReferenceDataSeed
+        companyId={companyId}
+        fiscalPeriods={seedFiscalPeriods ?? []}
+        cashAccounts={seedCashAccounts ?? []}
+        settings={settingsError ? undefined : settings}
+      >
       <SessionTimeoutController />
       <AgentSheetProvider
         identity={{
@@ -389,6 +415,7 @@ export default async function DashboardLayout({
           />
         )}
       </AgentSheetProvider>
+      </ReferenceDataSeed>
     </CompanyProvider>
   )
 }

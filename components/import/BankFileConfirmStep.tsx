@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { useAccounts } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -18,8 +19,6 @@ import {
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
-import { createClient } from '@/lib/supabase/client'
-import { useCompany } from '@/contexts/CompanyContext'
 import type { BankFileParseResult, BankFileDuplicateInfo } from '@/lib/import/bank-file/types'
 
 interface BankAccount {
@@ -54,32 +53,26 @@ export default function BankFileConfirmStep({
   // automatically rather than promising an exact final number.
   const duplicateCount = Math.min(Math.max(duplicateInfo?.duplicate_count ?? 0, 0), stats.parsed_rows)
 
-  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
   const [selectedAccount, setSelectedAccount] = useState('1930')
-  const { company } = useCompany()
-
+  // Active 19xx accounts from the session-cached chart (lib/reference-data):
+  // the account select is populated on the first paint.
+  const { accounts } = useAccounts()
+  const bankAccounts = useMemo<BankAccount[]>(
+    () =>
+      accounts
+        .filter((a) => a.account_number >= '1900' && a.account_number <= '1999')
+        .sort((a, b) => a.account_number.localeCompare(b.account_number))
+        .map((a) => ({ account_number: a.account_number, account_name: a.account_name })),
+    [accounts],
+  )
+  // Default to 1930 if available, otherwise the first account (once).
+  const defaultedRef = useRef(false)
   useEffect(() => {
-    if (!company?.id) return
-    async function fetchBankAccounts(companyId: string) {
-      const supabase = createClient()
-      const { data } = await supabase
-        .from('chart_of_accounts')
-        .select('account_number, account_name')
-        .eq('company_id', companyId)
-        .eq('is_active', true)
-        .gte('account_number', '1900')
-        .lte('account_number', '1999')
-        .order('account_number')
-
-      if (data && data.length > 0) {
-        setBankAccounts(data)
-        // Default to 1930 if available, otherwise first account
-        const has1930 = data.some(a => a.account_number === '1930')
-        if (!has1930) setSelectedAccount(data[0].account_number)
-      }
-    }
-    fetchBankAccounts(company.id)
-  }, [company?.id])
+    if (defaultedRef.current || bankAccounts.length === 0) return
+    defaultedRef.current = true
+    const has1930 = bankAccounts.some((a) => a.account_number === '1930')
+    if (!has1930) setSelectedAccount(bankAccounts[0].account_number)
+  }, [bankAccounts])
 
   if (isLoading) {
     return (

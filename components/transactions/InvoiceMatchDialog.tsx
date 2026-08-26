@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useAccounts } from '@/lib/reference-data/hooks'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,7 +16,6 @@ import {
 } from '@/lib/invoices/matchable-statuses'
 import { CheckCircle2, AlertTriangle, Trash2, Plus, Pencil } from 'lucide-react'
 import type { TransactionWithInvoice } from './transaction-types'
-import type { BASAccount } from '@/types'
 
 interface DuplicateCandidate {
   journal_entry_id: string
@@ -180,26 +180,7 @@ export default function InvoiceMatchDialog({
   const [manualRate, setManualRate] = useState<string>('')
   // BAS accounts power the AccountCombobox suggestions in edit mode. Loaded
   // once on dialog open; same endpoint that PaymentBookingDialog uses.
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
-
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const res = await fetch('/api/bookkeeping/accounts')
-        if (!res.ok) return
-        const data = await res.json()
-        if (!cancelled) setAccounts((data?.data as BASAccount[]) ?? [])
-      } catch {
-        // Non-fatal: combobox just shows no suggestions, user can still
-        // type the number manually.
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [open])
+  const { accounts } = useAccounts()
 
   useEffect(() => {
     if (!open || !transactionId || targetBlocked) {

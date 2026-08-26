@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useCashAccounts } from '@/lib/reference-data/hooks'
 import {
   Dialog,
   DialogContent,
@@ -20,7 +21,6 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useToast } from '@/components/ui/use-toast'
 import { ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react'
 import type { TransactionWithInvoice } from './transaction-types'
-import type { CashAccount } from '@/types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 
 interface MatchVoucherDialogProps {
@@ -61,28 +61,19 @@ export function MatchVoucherDialog({
   // so several transactions can settle one verifikat (N:1: a salary run paid in
   // multiple transfers, an invoice paid in instalments).
   const [includeMatched, setIncludeMatched] = useState(false)
+  // Session-cached (lib/reference-data): resolving the settlement account no
+  // longer costs a /api/cash-accounts round trip per candidate load.
+  const { cashAccounts } = useCashAccounts()
 
   const loadCandidates = useCallback(
     async (tx: TransactionWithInvoice, wide: boolean, matched: boolean, signal: { cancelled: boolean }) => {
       setLoading(true)
       try {
-        // Resolve the settlement account from the company's cash accounts.
-        let account = '1930'
-        let fallback = true
-        try {
-          const caRes = await fetch('/api/cash-accounts')
-          if (caRes.ok) {
-            const caJson = await caRes.json()
-            if (!signal.cancelled) {
-              const accounts = (caJson.data ?? []) as CashAccount[]
-              const resolved = resolveAccount(accounts, tx.cash_account_id ?? null, tx.currency ?? 'SEK')
-              account = resolved.account
-              fallback = resolved.fallback
-            }
-          }
-        } catch {
-          // Network hiccup: fall back to 1930 and let the user see the note.
-        }
+        // Resolve the settlement account from the company's cash accounts
+        // (an empty list resolves to 1930 with the fallback note shown).
+        const resolved = resolveAccount(cashAccounts, tx.cash_account_id ?? null, tx.currency ?? 'SEK')
+        const account = resolved.account
+        const fallback = resolved.fallback
         if (!signal.cancelled) {
           setAccountNumber(account)
           setAccountFallback(fallback)
@@ -121,7 +112,7 @@ export function MatchVoucherDialog({
         if (!signal.cancelled) setLoading(false)
       }
     },
-    [],
+    [cashAccounts],
   )
 
   // (Re)load whenever the dialog opens for a transaction, the range widens, or

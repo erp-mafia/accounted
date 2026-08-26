@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -17,7 +17,6 @@ import {
   buildActiveAccountIndex,
   searchAccounts,
   type AccountSearchItem,
-  type ChartAccountLike,
 } from '@/lib/bookkeeping/account-search'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
@@ -25,6 +24,7 @@ import { convertLibraryToBookingTemplate, LIBRARY_TEMPLATE_PREFIX, isLibraryTemp
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import type { BookingTemplateLibrary, EntityType } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import { useAccounts, useBookingTemplates } from '@/lib/reference-data/hooks'
 
 // Cap on the "Konton" search-result group: enough to cover sibling accounts
 // on a number-prefix query without drowning the template results.
@@ -264,8 +264,21 @@ export default function TemplatePicker({
   const t = useTranslations('tx_template_picker')
   const [searchQuery, setSearchQuery] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [libraryRaw, setLibraryRaw] = useState<BookingTemplateLibrary[]>([])
-  const [chartAccounts, setChartAccounts] = useState<ChartAccountLike[]>([])
+  // The user's library templates (company + team scope), session-cached
+  // (lib/reference-data). Kept in their raw shape so every template renders,
+  // even ones that don't fit convertLibraryToBookingTemplate's simple
+  // 2-account contract: those get routed through the manual booking dialog
+  // instead of the QuickReview single-account path.
+  const { templates: libraryTemplates } = useBookingTemplates()
+  const libraryRaw = useMemo(
+    () => libraryTemplates.filter((tt) => !tt.is_system && tt.is_active),
+    [libraryTemplates],
+  )
+  // The company's active chart, from the session cache (lib/reference-data),
+  // so the search field can surface real accounts (issue #1877) without a
+  // request per mount. buildActiveAccountIndex re-filters is_active as
+  // defense in depth. Only consulted when the consumer routes account picks.
+  const { accounts: chartAccounts } = useAccounts()
   // Boolean gate rather than the callback itself: the parent recreates the
   // handler every render, and depending on its identity would refetch the
   // chart on each keystroke of the page underneath.
@@ -275,48 +288,6 @@ export default function TemplatePicker({
   // Direction filtering applies only to the static "Vanliga mallar" list:   // user-created library templates ignore it (inferred direction is unreliable
   // and users know what they made).
   const templateDirection = direction === 'income' ? 'income' : 'expense'
-
-  // Fetch the user's library templates (company + team scope). We keep them
-  // in their raw shape so we can render every template, even ones that don't
-  // fit convertLibraryToBookingTemplate's simple 2-account contract: those
-  // get routed through the manual booking dialog instead of the QuickReview
-  // single-account path.
-  useEffect(() => {
-    const controller = new AbortController()
-    ;(async () => {
-      try {
-        const res = await fetch('/api/settings/booking-templates', { signal: controller.signal })
-        if (!res.ok) return
-        const { data } = await res.json() as { data?: BookingTemplateLibrary[] }
-        if (!data) return
-        setLibraryRaw(data.filter((tt) => !tt.is_system && tt.is_active))
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return
-      }
-    })()
-    return () => { controller.abort() }
-  }, [])
-
-  // Fetch the company's active chart so the search field can surface real
-  // accounts (issue #1877: an active konto like 5460 was unfindable because
-  // only template metadata was searched). The endpoint returns active
-  // accounts by default; buildActiveAccountIndex re-filters as defense in
-  // depth. Gated on the consumer actually routing account picks somewhere.
-  useEffect(() => {
-    if (!accountSearchEnabled) return
-    const controller = new AbortController()
-    ;(async () => {
-      try {
-        const res = await fetch('/api/bookkeeping/accounts', { signal: controller.signal })
-        if (!res.ok) return
-        const { data } = await res.json() as { data?: ChartAccountLike[] }
-        if (data) setChartAccounts(data)
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') return
-      }
-    })()
-    return () => { controller.abort() }
-  }, [accountSearchEnabled])
 
   const accountIndex = useMemo(() => buildActiveAccountIndex(chartAccounts), [chartAccounts])
 

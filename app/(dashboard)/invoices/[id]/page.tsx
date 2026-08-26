@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, use } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -246,6 +247,25 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
   // #967: register/send without booking; ekonomi books in a separate step.
   const [deferInvoiceBooking, setDeferInvoiceBooking] = useState(false)
+  // Company settings from the session cache (lib/reference-data): applied
+  // whenever the cached row (re)loads, no request per invoice visit.
+  const { settings: companySettings } = useCompanySettings()
+  useEffect(() => {
+    const settings = companySettings
+    if (!settings) return
+    setOreRounding(settings.ore_rounding ?? true)
+    if (typeof settings.vat_registered === 'boolean') {
+      setVatRegistered(settings.vat_registered)
+    }
+    setAccountingMethod(settings.accounting_method === 'cash' ? 'cash' : 'accrual')
+    setDeferInvoiceBooking(!!settings.defer_invoice_booking)
+    setReminderDays([
+      settings.reminder_days_level_1 ?? 15,
+      settings.reminder_days_level_2 ?? 30,
+      settings.reminder_days_level_3 ?? 45,
+    ])
+    setAutoRemindersEnabled(settings.send_invoice_reminders ?? true)
+  }, [companySettings])
   const [showBookConfirm, setShowBookConfirm] = useState(false)
   const [bookVoucherPreview, setBookVoucherPreview] = useState<string | null>(null)
   const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
@@ -330,16 +350,6 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       // A different invoice: never let the previous one's mask show on it.
       setDeductionPersonnummerMasked(undefined)
     }
-
-    // Settings depend only on the active company, so start them with the main
-    // invoice batch instead of waiting for the invoice row first.
-    const settingsPromise = company?.id
-      ? supabase
-          .from('company_settings')
-          .select('ore_rounding, vat_registered, accounting_method, defer_invoice_booking, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, send_invoice_reminders')
-          .eq('company_id', company.id)
-          .maybeSingle()
-      : Promise.resolve(null)
 
     const deliveriesPromise = loadDeliveries()
 
@@ -460,25 +470,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       }),
     )
 
-    const settingsRes = await settingsPromise
     if (seq !== fetchSeqRef.current) return
-    if (settingsRes) {
-      const settings = settingsRes.data
-      setOreRounding(settings?.ore_rounding ?? true)
-      if (typeof settings?.vat_registered === 'boolean') {
-        setVatRegistered(settings.vat_registered)
-      }
-      setAccountingMethod(settings?.accounting_method === 'cash' ? 'cash' : 'accrual')
-      setDeferInvoiceBooking(!!settings?.defer_invoice_booking)
-      setReminderDays([
-        settings?.reminder_days_level_1 ?? 15,
-        settings?.reminder_days_level_2 ?? 30,
-        settings?.reminder_days_level_3 ?? 45,
-      ])
-      if (settings) {
-        setAutoRemindersEnabled(settings.send_invoice_reminders ?? true)
-      }
-    }
 
     // Related documents need the invoice row but do not gate the main detail
     // view. Resolve them together after first paint and fill their links in.

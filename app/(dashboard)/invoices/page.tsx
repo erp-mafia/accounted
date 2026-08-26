@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -194,11 +195,14 @@ export default function InvoicesPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [invoices, setInvoices] = useState<Invoice[]>([])
-  const [oreRounding, setOreRounding] = useState<boolean>(true)
-  const [rotRutEnabled, setRotRutEnabled] = useState<boolean>(false)
+  // Settings-driven gates from the session-cached settings row
+  // (lib/reference-data), derived instead of copied into state.
+  const { settings: companySettings } = useCompanySettings()
+  const oreRounding: boolean = companySettings?.ore_rounding ?? true
+  const rotRutEnabled: boolean = companySettings?.rot_rut_enabled ?? false
   // Booking mode drives which rows are bulk-bookable (kontantmetoden: none).
-  const [accountingMethod, setAccountingMethod] = useState<string>('accrual')
-  const [deferInvoiceBooking, setDeferInvoiceBooking] = useState<boolean>(false)
+  const accountingMethod: string = companySettings?.accounting_method ?? 'accrual'
+  const deferInvoiceBooking: boolean = companySettings?.defer_invoice_booking ?? false
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showBulkBookConfirm, setShowBulkBookConfirm] = useState(false)
   const [isBulkBooking, setIsBulkBooking] = useState(false)
@@ -285,7 +289,7 @@ export default function InvoicesPage() {
     // hundreds of rows to 3 skeleton stubs and replaying the stagger-enter
     // entrance for a row-scoped action was the "booking feels glitchy" jump.
     if (invoices.length === 0) setIsLoading(true)
-    const [invoicesResult, settingsResult] = await Promise.allSettled([
+    const [invoicesResult] = await Promise.allSettled([
       fetchAllRows<Invoice>(
         ({ from, to }) =>
           supabase
@@ -297,11 +301,6 @@ export default function InvoicesPage() {
             .range(from, to),
         { dedupeBy: (invoice) => invoice.id },
       ),
-      supabase
-        .from('company_settings')
-        .select('ore_rounding, rot_rut_enabled, accounting_method, defer_invoice_booking')
-        .eq('company_id', company.id)
-        .maybeSingle(),
     ])
 
     if (invoicesResult.status === 'rejected') {
@@ -313,26 +312,6 @@ export default function InvoicesPage() {
     } else {
       setInvoices(invoicesResult.value)
     }
-    setOreRounding(
-      settingsResult.status === 'fulfilled'
-        ? (settingsResult.value.data?.ore_rounding ?? true)
-        : true,
-    )
-    setRotRutEnabled(
-      settingsResult.status === 'fulfilled'
-        ? (settingsResult.value.data?.rot_rut_enabled ?? false)
-        : false,
-    )
-    setAccountingMethod(
-      settingsResult.status === 'fulfilled'
-        ? (settingsResult.value.data?.accounting_method ?? 'accrual')
-        : 'accrual',
-    )
-    setDeferInvoiceBooking(
-      settingsResult.status === 'fulfilled'
-        ? (settingsResult.value.data?.defer_invoice_booking ?? false)
-        : false,
-    )
     setIsLoading(false)
   }
 
