@@ -3758,6 +3758,7 @@
     "bank_add_now": "Lägg till nu",
     "customer_card_title": "Kund",
     "select_customer_placeholder": "Välj kund",
+    "loading_customers": "Hämtar kunder ...",
     "no_customers_yet": "Inga kunder än",
     "create_customer": "Skapa kund",
     "create_customer_dialog_title": "Lägg till kund",
