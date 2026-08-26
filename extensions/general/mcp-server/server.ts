@@ -257,8 +257,11 @@ import {
   createPendingDocumentUpload,
   uploadDocument,
   MAX_DOCUMENT_SIZE,
+  buildPendingDocumentStoragePath,
+  DOCUMENTS_BUCKET,
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
+import { createHash } from 'node:crypto'
 import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from '@/extensions/general/invoice-inbox/lib/mirror-extraction'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
@@ -1445,21 +1448,100 @@ export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'se
 }
 
 /**
- * Resolve SIE file content from tool args: plain text (the model read the
- * attachment) or base64 (exact bytes, e.g. from a code-execution sandbox).
- * The base64 path runs the same encoding detection as the HTTP upload route,
- * so CP437 exports keep their åäö instead of arriving pre-mangled through a
- * host's UTF-8 read. Returns null when neither field is usable.
+ * Inline SIE content above this length is refused: a model reproducing tens
+ * of thousands of tokens verbatim WILL eventually truncate mid-#VER, and a
+ * truncated file that still parses imports silently incomplete bookkeeping.
+ * Larger files go through gnubok_create_sie_upload (raw bytes, no model in
+ * the path). ~120k chars ≈ a few thousand verifikat rows.
  */
-async function decodeSieToolContent(args: Record<string, unknown>): Promise<string | null> {
-  if (typeof args.file_content === 'string' && args.file_content.length > 0) {
-    return args.file_content
+const MAX_INLINE_SIE_CHARS = 120_000
+
+/**
+ * Resolve SIE file content from tool args, three sources in priority order:
+ *
+ *   - upload_id: raw bytes PUT to a gnubok_create_sie_upload URL. The only
+ *     path with no model in the loop; required for large files.
+ *   - file_content_base64: exact bytes base64-encoded (e.g. from a
+ *     code-execution sandbox).
+ *   - file_content: plain text as the model read the attachment.
+ *
+ * Byte paths run the same encoding detection as the HTTP upload route, so
+ * CP437 exports keep their åäö. An optional sha256 (hex, of the RAW BYTES)
+ * is verified on the two byte-exact paths and proves the content was not
+ * truncated or altered in transit; it cannot be checked for plain text
+ * (the model's read may legitimately differ from the file's bytes).
+ * Returns null when no source is usable.
+ */
+async function resolveSieToolContent(
+  args: Record<string, unknown>,
+  companyId: string,
+  userId: string
+): Promise<string | null> {
+  const sha256 = typeof args.sha256 === 'string' ? args.sha256.trim().toLowerCase() : null
+  const verifyBytes = (buffer: Buffer, source: string) => {
+    if (!sha256) return
+    const actual = createHash('sha256').update(buffer).digest('hex')
+    if (actual !== sha256) {
+      throw Object.assign(
+        new Error(
+          `sha256 mismatch on ${source}: expected ${sha256}, got ${actual}. The content was truncated or altered; re-send it.`
+        ),
+        { code: 'VALIDATION_ERROR' }
+      )
+    }
   }
-  if (typeof args.file_content_base64 === 'string' && args.file_content_base64.length > 0) {
-    const { detectEncoding, decodeBuffer } = await import('@/lib/import/sie-parser')
-    const buffer = Buffer.from(args.file_content_base64, 'base64')
+
+  const { detectEncoding, decodeBuffer } = await import('@/lib/import/sie-parser')
+
+  if (typeof args.upload_id === 'string' && args.upload_id.length > 0) {
+    const fileName = typeof args.filename === 'string' ? args.filename : ''
+    if (!fileName) {
+      throw Object.assign(new Error('filename is required together with upload_id'), {
+        code: 'VALIDATION_ERROR',
+      })
+    }
+    const service = createServiceClientNoCookies()
+    const pendingPath = buildPendingDocumentStoragePath(companyId, userId, args.upload_id, fileName)
+    const { data, error } = await service.storage.from(DOCUMENTS_BUCKET).download(pendingPath)
+    if (error || !data) {
+      throw Object.assign(
+        new Error(
+          'No uploaded file found for this upload_id. PUT the raw file bytes to the upload_url from gnubok_create_sie_upload first (same upload_id and filename).'
+        ),
+        { code: 'NOT_FOUND' }
+      )
+    }
+    const buffer = Buffer.from(await data.arrayBuffer())
+    verifyBytes(buffer, 'the uploaded file')
     const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
     return decodeBuffer(arrayBuffer, detectEncoding(arrayBuffer))
+  }
+
+  if (typeof args.file_content_base64 === 'string' && args.file_content_base64.length > 0) {
+    if (args.file_content_base64.length > MAX_INLINE_SIE_CHARS) {
+      throw Object.assign(
+        new Error(
+          'File too large to pass inline safely. Use gnubok_create_sie_upload, PUT the raw bytes to its upload_url, and pass the upload_id here instead.'
+        ),
+        { code: 'VALIDATION_ERROR' }
+      )
+    }
+    const buffer = Buffer.from(args.file_content_base64, 'base64')
+    verifyBytes(buffer, 'file_content_base64')
+    const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+    return decodeBuffer(arrayBuffer, detectEncoding(arrayBuffer))
+  }
+
+  if (typeof args.file_content === 'string' && args.file_content.length > 0) {
+    if (args.file_content.length > MAX_INLINE_SIE_CHARS) {
+      throw Object.assign(
+        new Error(
+          'File too large to pass inline safely (silent mid-verifikat truncation risk). Use gnubok_create_sie_upload, PUT the raw bytes to its upload_url, and pass the upload_id here instead.'
+        ),
+        { code: 'VALIDATION_ERROR' }
+      )
+    }
+    return args.file_content
   }
   return null
 }
@@ -16171,6 +16253,60 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_create_sie_upload',
+    title: 'Create SIE Upload',
+    description:
+      'Short-lived URL for a model-free SIE upload: PUT the raw .se/.sie bytes (max 50 MB) to upload_url, then pass upload_id (+ same filename) to gnubok_sie_preflight and gnubok_import_sie. Required for files too large to pass inline; add sha256 of the bytes there to prove integrity.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        filename: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 255,
+          description: 'File name with extension, for example "export.se"',
+        },
+      },
+      required: ['filename'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        upload_id: { type: 'string' },
+        upload_url: { type: 'string' },
+        expires_at: { type: 'string' },
+      },
+      required: ['upload_id', 'upload_url', 'expires_at'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const fileName = args.filename as string
+      const lower = fileName.toLowerCase()
+      if (!lower.endsWith('.se') && !lower.endsWith('.sie') && !lower.endsWith('.si')) {
+        throw Object.assign(new Error('filename must end in .se, .sie or .si'), {
+          code: 'VALIDATION_ERROR',
+        })
+      }
+      const uploadId = crypto.randomUUID()
+      const reservation = await createPendingDocumentUpload(supabase, companyId, userId, uploadId, fileName)
+      // Served from the app origin: agent sandboxes only reach the MCP host,
+      // not <project>.supabase.co. See storage-proxy.ts.
+      return {
+        upload_id: reservation.uploadId,
+        upload_url: toSameOriginStorageUrl(reservation.signedUrl),
+        expires_at: reservation.expiresAt,
+      }
+    },
+  },
+
+  {
     name: 'gnubok_sie_preflight',
     title: 'SIE Preflight Scan',
     description:
@@ -16179,8 +16315,10 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        file_content: { type: 'string', description: 'Full SIE file contents as text' },
-        file_content_base64: { type: 'string', description: 'Exact file bytes base64-encoded (preferred when available: preserves CP437 åäö)' },
+        file_content: { type: 'string', description: 'Full SIE file contents as text (small files only)' },
+        file_content_base64: { type: 'string', description: 'Exact file bytes base64-encoded (preserves CP437 åäö)' },
+        upload_id: { type: 'string', description: 'From gnubok_create_sie_upload after PUTting the bytes; the only safe path for large files' },
+        sha256: { type: 'string', description: 'Hex sha256 of the raw file bytes; verified on upload_id/base64 paths to prove nothing was truncated' },
         filename: { type: 'string' },
       },
       required: ['filename'],
@@ -16205,11 +16343,13 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(args, companyId, _userId, supabase) {
-      const content = await decodeSieToolContent(args)
+    async execute(args, companyId, userId, supabase) {
+      const content = await resolveSieToolContent(args, companyId, userId)
       if (!content) {
         throw Object.assign(
-          new Error('Provide the SIE file as file_content (text) or file_content_base64 (exact bytes).'),
+          new Error(
+            'Provide the SIE file as upload_id (from gnubok_create_sie_upload), file_content_base64, or file_content.'
+          ),
           { code: 'VALIDATION_ERROR' }
         )
       }
@@ -16341,8 +16481,10 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        file_content: { type: 'string', description: 'Full SIE file contents' },
+        file_content: { type: 'string', description: 'Full SIE file contents (small files only)' },
         file_content_base64: { type: 'string', description: 'Exact file bytes base64-encoded; alternative to file_content (preserves CP437 åäö)' },
+        upload_id: { type: 'string', description: 'From gnubok_create_sie_upload after PUTting the bytes; the only safe path for large files' },
+        sha256: { type: 'string', description: 'Hex sha256 of the raw file bytes; verified on upload_id/base64 paths' },
         filename: { type: 'string', description: 'Original filename' },
         mappings: {
           type: 'array',
@@ -16363,12 +16505,12 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       // Decoded once here; the staged params carry the decoded text so
       // commitImportSie re-parses exactly what was previewed.
-      const fileContent = await decodeSieToolContent(args)
+      const fileContent = await resolveSieToolContent(args, companyId, userId)
       const filename = args.filename as string
       const mappings = args.mappings as unknown[] | undefined
 
       if (!fileContent || !filename || !Array.isArray(mappings)) {
-        throw new Error('file_content (or file_content_base64), filename, and mappings are required')
+        throw new Error('file content (upload_id, file_content_base64 or file_content), filename, and mappings are required')
       }
 
       // Parse + validate at stage time so the approver sees real content (which
