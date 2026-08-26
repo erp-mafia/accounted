@@ -8059,6 +8059,7 @@
     "import_statement_action": "Import statement",
     "imported_not_connected_attn": "Showing imported account events. Connect Skatteverket for automatic sync and balance.",
     "attn_reconnect_action": "Reconnect",
+    "attn_reconnect_body": "Your Skatteverket connection has expired. Reconnect with BankID to fetch the balance and events.",
     "attn_shortfall": "The charge on {date} is {charge}. The balance is {missing} short.",
     "attn_show_payment": "Show payment details",
     "band_upcoming": "Upcoming",

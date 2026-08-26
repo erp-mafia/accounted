@@ -44,7 +44,11 @@ import {
 } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { rowsNeedingInterestDate } from '@/lib/skatteverket/interest-period'
-import { skvAuthErrorNeedsReconnect } from '@/lib/notices/predicates'
+import {
+  skvAuthErrorNeedsReconnect,
+  skvStatusNeedsReconnect,
+  type SkvStatusLike,
+} from '@/lib/notices/predicates'
 import {
   AlertCircle,
   Copy,
@@ -108,10 +112,11 @@ export default function SkattekontoPage() {
   )
   const [notConnected, setNotConnected] = useState(false)
   const [loadError, setLoadError] = useState(false)
-  // Set when a sync fails with an auth error while a connection exists
-  // (expired session, missing scope, revoked token). Rendered as a banner —
-  // the stored data below stays visible and usable.
+  // Reason string from a failed call; the flag is the same state found
+  // proactively by the /status probe. Two pieces so reload() stays
+  // dependency-free. The banner renders on either.
   const [reconnectMessage, setReconnectMessage] = useState<string | null>(null)
+  const [needsReconnect, setNeedsReconnect] = useState(false)
   const [matchOpenFor, setMatchOpenFor] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
@@ -124,9 +129,43 @@ export default function SkattekontoPage() {
   const { dialogProps: ignoreConfirmProps, confirm: confirmIgnore } =
     useDestructiveConfirm()
 
+  // The /status probe is fire-and-forget, so a slow response from an earlier
+  // reload can land after a later one and overwrite the fresher banner state.
+  // Each reload bumps the sequence; a probe only applies its result while it
+  // is still the latest.
+  const statusProbeSeqRef = useRef(0)
+
   const reload = useCallback(async () => {
     setLoading(true)
     setLoadError(false)
+    // /skattekonto/saldo answers 200 for a token flagged needs_reconsent (it
+    // keeps the stale snapshot visible on purpose), so nothing in the payload
+    // below reveals a dead session. Probe /status for it. Any failure just
+    // leaves the banner off.
+    const probeSeq = ++statusProbeSeqRef.current
+    void (async () => {
+      try {
+        const res = await fetch('/api/extensions/ext/skatteverket/status')
+        if (probeSeq !== statusProbeSeqRef.current) return
+        if (!res.ok) {
+          setNeedsReconnect(false)
+          return
+        }
+        const s = (await res.json()) as SkvStatusLike
+        if (probeSeq !== statusProbeSeqRef.current) return
+        // Shared reconnect predicate (lib/notices): the same decision the
+        // transactions page and the Hem notice make, never a local variant.
+        const stale = skvStatusNeedsReconnect(s)
+        setNeedsReconnect(stale)
+        // Also clears a message left by an earlier failed sync: otherwise only
+        // syncNow's success path ever cleared it, so a transient 401 kept the
+        // banner up until a full remount.
+        if (!stale) setReconnectMessage(null)
+      } catch {
+        if (probeSeq !== statusProbeSeqRef.current) return
+        setNeedsReconnect(false)
+      }
+    })()
     try {
       const [saldoRes, txRes] = await Promise.all([
         fetch('/api/extensions/ext/skatteverket/skattekonto/saldo'),
@@ -178,18 +217,18 @@ export default function SkattekontoPage() {
   // Auto-recover from the "inte anslutet" empty state when the user returns
   // to this tab: the connect flow lives in Inställningar (often completed in
   // another tab or after a mobile BankID app-switch), so no in-window signal
-  // can reach this page. Only fires while notConnected is showing: a routine
-  // tab switch on a healthy page must not flash the loading state. Throttled
-  // so rapid tab toggling doesn't hammer the API.
-  const notConnectedRef = useRef(false)
+  // can reach this page. Also fires while the reconnect banner is showing:
+  // same journey, and otherwise the banner survives the consent that fixed
+  // it. Throttled so rapid tab toggling doesn't hammer the API.
+  const staleConnectionRef = useRef(false)
   useEffect(() => {
-    notConnectedRef.current = notConnected
-  }, [notConnected])
+    staleConnectionRef.current = notConnected || needsReconnect || reconnectMessage !== null
+  }, [notConnected, needsReconnect, reconnectMessage])
   const lastVisibilityReloadRef = useRef(0)
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState !== 'visible') return
-      if (!notConnectedRef.current) return
+      if (!staleConnectionRef.current) return
       const now = Date.now()
       if (now - lastVisibilityReloadRef.current < 5_000) return
       lastVisibilityReloadRef.current = now
@@ -220,7 +259,7 @@ export default function SkattekontoPage() {
             setReconnectMessage(
               typeof json.error === 'string' && json.error
                 ? json.error
-                : 'Anslutningen mot Skatteverket behöver förnyas. Anslut igen med BankID.',
+                : t('attn_reconnect_body'),
             )
           } else {
             setNotConnected(true)
@@ -238,6 +277,7 @@ export default function SkattekontoPage() {
         return
       }
       setReconnectMessage(null)
+      setNeedsReconnect(false)
       toast({
         title: 'Skattekonto synkroniserat',
         description: `${json.data.booked} bokförda, ${json.data.upcoming} kommande`,
@@ -479,6 +519,13 @@ export default function SkattekontoPage() {
     tx !== null &&
     tx.booked.length + tx.overdue.length + tx.upcoming.length + tx.ignored_count > 0
 
+  // Drives ONE ochre line and nothing else: nothing on this page is hidden or
+  // removed while it is true. needs_reconsent is the resting state for the
+  // personal-token cohort (93% of connected companies on 2026-08-26), so
+  // anything that HIDES on this flag hides from nearly everyone.
+  const showReconnect = needsReconnect || reconnectMessage !== null
+  const reconnectBody = reconnectMessage ?? t('attn_reconnect_body')
+
   if (notConnected && !hasLocalRows) {
     return (
       <div className="space-y-8">
@@ -548,16 +595,25 @@ export default function SkattekontoPage() {
         }
       />
 
-      {/* File-imported rows without a connection: no saldo to show, but the
-          booking/matching flows below work on the local table. One ochre
-          sentence with the connect action, per the attn convention. */}
-      {notConnected && (
+      {/* Page level, not nested in the saldo section: the line used to live
+          inside the `data` branch below, so a company with no snapshot got no
+          feedback at all when the sync it just clicked died. Coexists with the
+          shortfall line under convention 6's 2026-08-19 addendum (one
+          lib/notices notice plus one page-domain attn line). */}
+      {showReconnect ? (
+        <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/tax' }}>
+          {reconnectBody}
+        </AttnLine>
+      ) : notConnected ? (
+        // File-imported rows without a connection: no saldo to show, but the
+        // booking/matching flows below work on the local table. One ochre
+        // sentence with the connect action, per the attn convention.
         <AttnLine
           action={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
         >
           {t('imported_not_connected_attn')}
         </AttnLine>
-      )}
+      ) : null}
 
       {/* Saldo as compact stat tiles (house metric-card idiom, KPIHeroCards).
           Hidden entirely for unconnected companies rendering imported rows:
@@ -645,11 +701,12 @@ export default function SkattekontoPage() {
               </div>
             </div>
 
-            {reconnectMessage ? (
-              <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/tax' }}>
-                {reconnectMessage}
-              </AttnLine>
-            ) : shortfall !== null && nextCharge ? (
+            {/* The reconnect line moved to page level; this slot keeps the
+                shortfall notice, which needs `data`. Deliberately still shown
+                while a reconnect is pending: it is the warning that prevents
+                kostnadsränta, and its action is this page's only route to the
+                bankgiro and OCR. */}
+            {shortfall !== null && nextCharge ? (
               <AttnLine
                 action={{ label: t('attn_show_payment'), onClick: () => setShowPayment(true) }}
               >

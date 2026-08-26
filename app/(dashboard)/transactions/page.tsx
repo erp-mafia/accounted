@@ -3600,10 +3600,15 @@ export default function TransactionsPage() {
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
 
-      {skvNeedsReconnect && effectiveSourceFilter === 'skatteverket' ? (
-        // Only when the user is actually looking at skattekonto rows: as a
-        // permanent page-wide line it read as noise (feedback 2026-08-14).
-        // The skattekonto page keeps its own reconnect line.
+      {skvNeedsReconnect ? (
+        // Shown on every source filter, not just 'skatteverket'. The original
+        // gate (feedback 2026-08-14) predates the deletion of the
+        // connection-expired email (DECISIONS 2026-08-25), which left the
+        // banner as the ONLY proactive channel a web-only user has for a dead
+        // Skatteverket connection. A filter most users never select is not a
+        // channel, and hiding it is what let a dead connection sit unnoticed
+        // for days. The line is not noise: it renders only while the
+        // connection is actually broken and disappears the moment it works.
         <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/tax' }}>
           {t('skv_reconnect_body')}
         </AttnLine>
