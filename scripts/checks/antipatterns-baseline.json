@@ -34,7 +34,7 @@
     ]
   },
   "rawReferenceFetch": {
-    "count": 55,
+    "count": 51,
     "files": [
       "app/(dashboard)/assets/[id]/dispose/page.tsx",
       "app/(dashboard)/bookkeeping/year-end/page.tsx",
@@ -47,7 +47,6 @@
       "app/(dashboard)/salary/employees/[id]/page.tsx",
       "app/(dashboard)/salary/runs/[id]/page.tsx",
       "app/(dashboard)/supplier-invoices/[id]/page.tsx",
-      "app/(dashboard)/transactions/page.tsx",
       "components/articles/ArticleForm.tsx",
       "components/bookkeeping/BookingTemplatePicker.tsx",
       "components/bookkeeping/ChartOfAccounts.tsx",
@@ -55,12 +54,9 @@
       "components/bookkeeping/CorrectionEntryDialog.tsx",
       "components/bookkeeping/EditAccountDialog.tsx",
       "components/bookkeeping/JournalEntryForm.tsx",
-      "components/bookkeeping/JournalEntryList.tsx",
       "components/bookkeeping/StrikeLinesDialog.tsx",
       "components/bookkeeping/TemplateBookDialog.tsx",
       "components/common/CashAccountSelector.tsx",
-      "components/common/FiscalYearSelector.tsx",
-      "components/common/FyPicker.tsx",
       "components/dimensions/types.ts",
       "components/extensions/general/ArcimMigrationWorkspace.tsx",
       "components/extensions/general/BookDirectlyDialog.tsx",

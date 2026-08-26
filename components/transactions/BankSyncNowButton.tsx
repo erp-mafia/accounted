@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { createClient } from '@/lib/supabase/client'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import {
   claimConnectionsLoad,
   clearBusyConnection,
@@ -162,6 +163,9 @@ export function useBankSync() {
       // Tell the neighbouring status chip to refetch so it doesn't keep showing
       // the pre-sync "synced Nd ago" until a hard reload.
       notifyBankSyncUpdated()
+      // The account chooser reads cash accounts from the session cache
+      // (lib/reference-data); a sync can change balances, so refetch them.
+      void invalidateReferenceData('ref:cash-accounts')
       router.refresh()
     } catch (error) {
       toast({
