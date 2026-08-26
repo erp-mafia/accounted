@@ -167,6 +167,13 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     })
 
   if (insertError) {
+    // This 500 was silent while api_keys.company_id was NOT NULL and every
+    // companyless signup died here (2026-08-26): always log the DB error.
+    console.error('[mcp-oauth/token] api key insert failed', {
+      code: insertError.code,
+      message: insertError.message,
+      companyless: companyId === null,
+    })
     return NextResponse.json(
       { error: 'server_error', error_description: 'Failed to create API key' },
       { status: 500 }
@@ -214,6 +221,7 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   })
 
   if (error) {
+    console.error('[mcp-oauth/token] refresh rotation failed', { code: error.code, message: error.message })
     return NextResponse.json(
       { error: 'server_error', error_description: 'Failed to rotate refresh token' },
       { status: 500 }
