@@ -23,9 +23,13 @@ tables, no cross-checks the user did not ask about (bolagsstämma dates,
 EU-moms edge cases, K-regelverk). The user can always ask for depth; the
 flow must never make them scroll past it.
 
-**Memory first.** Before asking the opening questions, check what you
-already know about the user (memory, earlier conversation): orgnr, company
-name, bank, previous system. Ask only for what is genuinely missing.
+**Memory first, memory back.** Before asking the opening questions, check
+what you already know about the user (memory, earlier conversation):
+orgnr, company name, bank, previous system. Ask only for what is
+genuinely missing. AFTER the company is created, save the durable facts
+to memory (orgnr, company name, bank, fiscal year, moms period, previous
+system, that Accounted is set up): the user's next conversation should
+need zero of these questions.
 
 ## When to use
 
@@ -53,6 +57,9 @@ Open with exactly three questions, together:
    Björn Lundén, Briox, Wint, annat system, eller helt nytt bolag)
 3. **Vilken bank har företaget?** (so the bank connect link later opens that
    bank's consent directly instead of a picker)
+
+Never re-ask a question the user already answered in this conversation
+(the opening round included): reuse the answer.
 
 Then call \`gnubok_lookup_company\` with the org number. The registry answers
 most of the form; present the facts as a SHORT summary to confirm ("Jag
@@ -128,14 +135,15 @@ reaches far enough back anyway.
    \`sha256\`. NEVER reproduce a large file token by token: unhashed
    oversized inline content is refused because a mid-verifikat truncation
    imports silently incomplete bookkeeping.
-3. Summarize the preflight in a few lines: source system, fiscal years,
-   verifikat count, balance status, org-number match, the one warning that
-   matters. On the user's go-ahead: \`gnubok_import_sie\` with the same
-   source (\`upload_id\` or content) and the preflight's \`mappings\`. It
-   stages for approval; after commit verify with
-   \`gnubok_get_trial_balance\`, and explain any skipped voucher numbers
-   with \`gnubok_explain_voucher_gap\` (BFNAR 2013:2; an unexplained gap
-   blocks year-end).
+3. THE CARD ACTS WITHOUT YOU SEEING IT: it stages the import and can
+   approve it too. When the user writes after a card was shown, your
+   FIRST call is \`gnubok_list_pending_operations\`: an empty ledger does
+   NOT mean the file never arrived; the import may be staged (approve it
+   on the user's word) or already booked. Without the card: summarize the
+   preflight in a few lines and stage \`gnubok_import_sie\` with the
+   preflight's \`mappings\`. After commit: \`gnubok_get_trial_balance\`
+   and \`gnubok_explain_voucher_gap\` for any skipped numbers (BFNAR
+   2013:2; unexplained gaps block year-end).
 4. Multiple fiscal years = multiple files: import oldest first so IB/UB
    chains. The web wizard at \`/import?mode=sie\` is the fallback when no
    upload path works; Fortnox users can also run the full API migration
@@ -146,7 +154,9 @@ reaches far enough back anyway.
 
 Call \`gnubok_connect_bank\` (pass \`bank\` from step 1 so the link opens that
 bank's consent directly) AND \`gnubok_connect_skatteverket\` in the same
-turn; on claude.ai/Desktop both render connect cards with buttons.
+turn; on claude.ai/Desktop both render connect cards with buttons. When a
+card rendered, do NOT paste the URL as text too: the card button IS the
+link, and duplicate raw URLs read as clutter.
 
 - Bank: BankID + PSD2 consent, then an **account selection dialog** in the
   browser: transactions start syncing when the user saves it. Banks cap
@@ -156,6 +166,28 @@ turn; on claude.ai/Desktop both render connect cards with buttons.
 
 When the user says they are done (or comes back), re-call
 \`gnubok_connect_bank\` to verify \`connected\`, then go DIRECTLY to step 5.
+
+## Step 4b: after the import: efterkontroll (this is where trust is won)
+
+Run a short audit pass as soon as history + bank are in, and fix findings
+through the normal staged flow, a few lines per finding:
+
+- \`gnubok_get_trial_balance\`: does the book balance and match the SIE?
+- Skattekonto vs 1630: if Skatteverket is connected, reconcile the
+  skattekonto events against the ledger. Common finds: paid payroll taxes
+  still standing as liabilities on 2710/2731, the 1630 account missing
+  entirely, unbooked ränta/avgifter (kostnadsränta 8423, skattefri
+  intäktsränta 8314, ej avdragsgill förseningsavgift 6992: never the
+  ordinary cost accounts, or the year-end tax computation goes wrong).
+- Auto-created bank accounts (1930/1931/1935) named after the company:
+  suggest proper names.
+- Underlag coverage: verifikat over ~5 000 kr without documents (BFL 5
+  kap 6 §): list them, offer the receipt-matcher flow.
+- Voucher gaps: explain each with \`gnubok_explain_voucher_gap\`.
+
+Present findings as a short numbered list with amounts, fix in priority
+order on the user's go-ahead, and re-verify the reconciled balances match
+external truth (skattekonto saldo, bank balance) to the krona.
 
 ## Step 5: first bookkeeping, immediately
 

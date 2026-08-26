@@ -16,7 +16,7 @@ https://claude.ai/customize/connectors?modal=add-custom-connector&connectorName=
 
 Pair the link with a starter prompt the user pastes as their first message. It stays copy-paste ready for everyone because it points the agent at what it already knows (Claude memory, earlier chats) instead of containing the user's own data; the server-side onboarding skill carries the rest of the flow:
 
-> Sätt upp mitt företag i Accounted. Utgå från det du redan vet om mig och mitt bolag (organisationsnummer, bank, tidigare bokföringssystem) och fråga bara efter det som saknas. Håll det kort.
+> Sätt upp mitt företag i Accounted och följ kopplingens onboarding-guide. Utgå från det du redan vet om mig och mitt bolag och fråga bara efter det som saknas. Håll det kort.
 
 ## How the connection works
 
