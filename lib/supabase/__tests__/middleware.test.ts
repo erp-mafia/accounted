@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
   authError: null as unknown,
   aal: null as null | { currentLevel: string; nextLevel: string },
   factors: null as null | { totp: Array<{ id: string; status: string }> },
+  listFactors: vi.fn(async () => ({ data: state.factors })),
   company: {
     data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }],
     error: null as unknown,
@@ -45,7 +46,7 @@ vi.mock('@supabase/ssr', () => ({
       signOut: state.signOut,
       mfa: {
         getAuthenticatorAssuranceLevel: vi.fn(async () => ({ data: state.aal })),
-        listFactors: vi.fn(async () => ({ data: state.factors })),
+        listFactors: (...args: unknown[]) => state.listFactors(...args),
       },
     },
     rpc: vi.fn(async () => state.company),
@@ -117,6 +118,7 @@ describe('updateSession redirect destinations', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     logState.info.mockClear()
+    state.listFactors.mockClear()
     state.user = null
     state.sessionId = 'session-1'
     state.authError = null
@@ -544,6 +546,34 @@ describe('updateSession redirect destinations', () => {
       const response = await run('/select-company')
 
       expect(response.status).toBe(200)
+    })
+
+    it('still asks for the factor list at aal1/aal1 before bouncing', async () => {
+      const response = await run('/invoices/new')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/mfa/enroll')
+      expect(state.listFactors).toHaveBeenCalledTimes(1)
+    })
+
+    it('never calls listFactors once the session is at aal2 (a verified factor is implied)', async () => {
+      state.aal = { currentLevel: 'aal2', nextLevel: 'aal2' }
+      // Even a factor list that would read as "none" must not matter here:
+      // the call is skipped, not just its result ignored.
+      state.factors = { totp: [] }
+
+      const response = await run('/invoices/new')
+
+      expect(response.status).toBe(200)
+      expect(state.listFactors).not.toHaveBeenCalled()
+    })
+
+    it('does not spend an MFA lookup on RSC and prefetch requests at aal2 either', async () => {
+      state.aal = { currentLevel: 'aal2', nextLevel: 'aal2' }
+
+      await run('/invoices', { headers: { rsc: '1' } })
+      await run('/invoices', { headers: { 'next-router-prefetch': '1', rsc: '1' } })
+
+      expect(state.listFactors).not.toHaveBeenCalled()
     })
   })
 

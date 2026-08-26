@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import Link from 'next/link'
+import { NavLink } from './NavLink'
 import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -605,9 +605,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         : 'text-muted-foreground/40 cursor-not-allowed',
     )
     return enabled ? (
-      <Link key={item.href} href={item.href} className={baseClass}>
+      <NavLink key={item.href} href={item.href} className={baseClass}>
         {content}
-      </Link>
+      </NavLink>
     ) : (
       <div
         key={item.href}
@@ -683,9 +683,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         : 'opacity-40 cursor-not-allowed',
     )
     return enabled ? (
-      <Link key={item.href} href={item.href} className={baseClass} title={label} aria-label={label}>
+      <NavLink key={item.href} href={item.href} className={baseClass} title={label} aria-label={label}>
         {inner}
-      </Link>
+      </NavLink>
     ) : (
       <div key={item.href} className={baseClass} title={label} aria-disabled="true">
         {inner}
@@ -712,7 +712,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 : 'justify-between pl-5 pr-3',
             )}
           >
-            <Link
+            <NavLink
               href="/"
               aria-label={getBranding().appName}
               className="flex items-center rounded-lg"
@@ -724,7 +724,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 height={26}
                 className="h-[26px] w-[26px] rounded-lg"
               />
-            </Link>
+            </NavLink>
             <button
               type="button"
               onClick={toggleCollapsed}
@@ -767,7 +767,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   const label = labelTranslationKey ? tNav(labelTranslationKey) : item.label
                   const active = isActive(item.href)
                   return (
-                    <Link
+                    <NavLink
                       key={item.href}
                       href={item.href}
                       title={label}
@@ -783,7 +783,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                           active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
                         )}
                       />
-                    </Link>
+                    </NavLink>
                   )
                 })}
               </nav>
@@ -857,9 +857,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                               : 'text-muted-foreground/40 cursor-not-allowed',
                           )
                           return enabled ? (
-                            <Link key={item.href} href={item.href} className={baseClass}>
+                            <NavLink key={item.href} href={item.href} className={baseClass}>
                               {content}
-                            </Link>
+                            </NavLink>
                           ) : (
                             <div
                               key={item.href}
@@ -943,9 +943,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             )
 
             return enabled ? (
-              <Link key={item.href} href={item.href} className={baseClass}>
+              <NavLink key={item.href} href={item.href} className={baseClass}>
                 {content}
-              </Link>
+              </NavLink>
             ) : (
               <div key={item.href} className={baseClass} aria-disabled="true">
                 {content}
@@ -1043,14 +1043,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       : 'text-muted-foreground/40'
                   )
                   return enabled ? (
-                    <Link
+                    <NavLink
                       key={item.href}
                       href={item.href}
                       onClick={closeMobileMenu}
                       className={baseClass}
                     >
                       {content}
-                    </Link>
+                    </NavLink>
                   ) : (
                     <div key={item.href} className={baseClass} aria-disabled="true">
                       {content}
@@ -1100,14 +1100,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                           : 'text-muted-foreground/40'
                       )
                       return enabled ? (
-                        <Link
+                        <NavLink
                           key={item.href}
                           href={item.href}
                           onClick={closeMobileMenu}
                           className={baseClass}
                         >
                           {content}
-                        </Link>
+                        </NavLink>
                       ) : (
                         <div key={item.href} className={baseClass} aria-disabled="true">
                           {content}
@@ -1150,14 +1150,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                           : 'text-muted-foreground/40'
                       )
                       return enabled ? (
-                        <Link
+                        <NavLink
                           key={item.href}
                           href={item.href}
                           onClick={closeMobileMenu}
                           className={baseClass}
                         >
                           {content}
-                        </Link>
+                        </NavLink>
                       ) : (
                         <div key={item.href} className={baseClass} aria-disabled="true">
                           {content}
@@ -1204,14 +1204,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       : 'text-muted-foreground/40'
                   )
                   return enabled ? (
-                    <Link
+                    <NavLink
                       key={item.href}
                       href={item.href}
                       onClick={closeMobileMenu}
                       className={baseClass}
                     >
                       {content}
-                    </Link>
+                    </NavLink>
                   ) : (
                     <div key={item.href} className={baseClass} aria-disabled="true">
                       {content}
