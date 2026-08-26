@@ -1,49 +1,15 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { shouldEnforceMfa } from './mfa'
-import type { User, SupabaseClient, JwtPayload } from '@supabase/supabase-js'
+import type { User, SupabaseClient } from '@supabase/supabase-js'
+import { claimsPinned, userFromClaims } from './claims'
 
 type AuthResult =
   | { user: User; supabase: SupabaseClient; error: null }
   | { user: null; supabase: SupabaseClient; error: NextResponse }
 
-/**
- * Maps verified JWT claims onto the User subset routes actually consume
- * (id, email, is_anonymous, app_metadata, user_metadata, role, phone).
- *
- * Server-only fields (identities, factors, created_at timestamps) are absent
- * from the token and verified unused by any route (2026-07-23 audit);
- * created_at is set to '' only to satisfy the type.
- */
-/**
- * Defense-in-depth pinning on top of getClaims' signature/expiry verification:
- * the token must come from THIS project's auth server (iss) and be an
- * end-user access token (aud 'authenticated'; anonymous sign-ins share it).
- * A mismatch is not treated as unauthenticated: we fall back to the
- * server-side getUser() check, which is authoritative.
- */
-function claimsPinned(claims: JwtPayload): boolean {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '')
-  // Without a configured URL (unit tests) there is nothing to pin against.
-  const issOk = !supabaseUrl || claims.iss === `${supabaseUrl}/auth/v1`
-  const aud = claims.aud
-  const audOk = Array.isArray(aud) ? aud.includes('authenticated') : aud === 'authenticated'
-  return issOk && audOk
-}
-
-function userFromClaims(claims: JwtPayload): User {
-  return {
-    id: claims.sub,
-    aud: Array.isArray(claims.aud) ? (claims.aud[0] ?? 'authenticated') : (claims.aud ?? 'authenticated'),
-    role: claims.role,
-    email: claims.email,
-    phone: claims.phone,
-    app_metadata: claims.app_metadata ?? {},
-    user_metadata: claims.user_metadata ?? {},
-    is_anonymous: claims.is_anonymous ?? false,
-    created_at: '',
-  }
-}
+// claimsPinned / userFromClaims live in ./claims so the dashboard request
+// context (and later the auth proxy) share the exact same pinning + mapping.
 
 /**
  * Auth + MFA guard for API routes.
