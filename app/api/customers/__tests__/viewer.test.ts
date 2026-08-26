@@ -82,6 +82,10 @@ describe('POST /api/customers: viewer role gate', () => {
 
     await POST(request)
 
-    expect(requireWritePermissionMock).toHaveBeenCalledWith(mockSupabase, 'user-1')
+    // The wrapper hands over the company it already resolved so the guard
+    // does not repeat the resolve_active_company round trip.
+    expect(requireWritePermissionMock).toHaveBeenCalledWith(mockSupabase, 'user-1', {
+      companyId: 'company-1',
+    })
   })
 })
