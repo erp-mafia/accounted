@@ -89,6 +89,18 @@ describe('POST /api/support/contact', () => {
     expect(response.status).toBe(400)
   })
 
+  it('maps an invalid request body to a Swedish user-facing error', async () => {
+    const response = await POST(
+      new Request('http://localhost/api/support/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{',
+      })
+    )
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe('Förfrågan innehåller ogiltiga uppgifter.')
+  })
+
   it('still accepts the JSON body with no attachments', async () => {
     const response = await POST(jsonRequest({ subject: 'Moms', message: 'Jag fastnar på ruta 05' }))
     expect(response.status).toBe(200)

@@ -13,6 +13,7 @@ import { validateDocumentMagicBytes } from '@/lib/core/documents/document-servic
 import { requireCompanyId } from '@/lib/company/context'
 import { ensureInitialized } from '@/lib/init'
 import { getBranding } from '@/lib/branding/service'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -99,7 +100,10 @@ export async function POST(request: Request) {
     try {
       form = await request.formData()
     } catch {
-      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+      return NextResponse.json(
+        { error: getErrorMessage('Invalid request body', { statusCode: 400 }) },
+        { status: 400 }
+      )
     }
     const subjectField = form.get('subject')
     const messageField = form.get('message')
@@ -111,7 +115,10 @@ export async function POST(request: Request) {
     try {
       body = await request.json()
     } catch {
-      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+      return NextResponse.json(
+        { error: getErrorMessage('Invalid request body', { statusCode: 400 }) },
+        { status: 400 }
+      )
     }
     subjectRaw = body.subject
     messageRaw = body.message
@@ -129,7 +136,10 @@ export async function POST(request: Request) {
 
   const parsed = await parseAttachments(files)
   if ('error' in parsed) {
-    return NextResponse.json({ error: parsed.error }, { status: 400 })
+    return NextResponse.json(
+      { error: getErrorMessage(parsed.error, { statusCode: 400 }) },
+      { status: 400 }
+    )
   }
   const { attachments } = parsed
 
