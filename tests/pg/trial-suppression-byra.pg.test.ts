@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
 import { insertAuthUser } from '@/tests/pg/fixtures'
 
-// Tests for 20260804112000_suppress_trial_for_byra_companies.sql (WL-10):
+// Tests for 20260826130300_suppress_trial_for_byra_companies.sql (WL-10):
 // the company-creation trial trigger (trg_seed_trial_capability_grants /
 // seed_trial_capability_grants) must skip companies attached to a byrå team
 // (already entitled via the team-scoped partner grant) while personal-team

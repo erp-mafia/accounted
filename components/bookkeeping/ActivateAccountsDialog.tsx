@@ -114,7 +114,7 @@ export function ActivateAccountsDialog({
           )}
 
           {!loading && knownRows.length > 0 && (
-            <ul className="divide-y divide-border rounded-md border">
+            <ul className="divide-y divide-border rounded-lg border">
               {knownRows.map((r) => (
                 <li key={r.account_number} className="flex items-baseline gap-3 px-3 py-2">
                   <span className="font-mono text-foreground w-14 shrink-0">{r.account_number}</span>
@@ -130,10 +130,10 @@ export function ActivateAccountsDialog({
           )}
 
           {!loading && unknownRows.length > 0 && (
-            <div className="rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning-foreground">
+            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-attn">
               <p className="font-medium">Finns inte i BAS-katalogen:</p>
               <p className="mt-1 font-mono">{unknownRows.map((r) => r.account_number).join(', ')}</p>
-              <p className="mt-1 text-warning-foreground/80">
+              <p className="mt-1 text-attn/80">
                 Skapa dem som egna konton, eller kontrollera inmatningen.
               </p>
               {onCreateUnknown && (
@@ -148,7 +148,7 @@ export function ActivateAccountsDialog({
                       onClick={() => onCreateUnknown(r.account_number)}
                     >
                       <Plus className="mr-1 h-3 w-3" />
-                      Skapa {r.account_number}
+                      Skapa <span data-ph-mask="">{r.account_number}</span>
                     </Button>
                   ))}
                 </div>

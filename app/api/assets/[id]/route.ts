@@ -4,9 +4,17 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { K3ComponentSchema } from '@/lib/api/schemas'
-import { getAsset, updateAsset } from '@/lib/bokslut/assets/asset-service'
+import {
+  getAsset,
+  updateAsset,
+  defaultAccountsForCategory,
+} from '@/lib/bokslut/assets/asset-service'
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
-import type { AssetCategory, DepreciationMethod } from '@/types'
+import {
+  findK2ExcludedAccount,
+  k2ExcludedAccountMessages,
+} from '@/lib/bokslut/assets/k2-account-guard'
+import type { AssetCategory, WritableDepreciationMethod } from '@/types'
 
 const ASSET_CATEGORIES: readonly AssetCategory[] = [
   'immaterial',
@@ -19,11 +27,8 @@ const ASSET_CATEGORIES: readonly AssetCategory[] = [
   'other_tangible',
 ] as const
 
-const DEPRECIATION_METHODS: readonly DepreciationMethod[] = [
+const DEPRECIATION_METHODS: readonly WritableDepreciationMethod[] = [
   'linear',
-  'declining_balance_30',
-  'declining_balance_20',
-  'restvardesavskrivning_25',
 ] as const
 
 const UpdateAssetSchema = z
@@ -42,9 +47,12 @@ const UpdateAssetSchema = z
     salvage_value: z.number().nonnegative().optional(),
     useful_life_months: z.number().int().positive().optional(),
     depreciation_method: z
-      .enum(DEPRECIATION_METHODS as unknown as [DepreciationMethod, ...DepreciationMethod[]])
+      .enum(DEPRECIATION_METHODS as unknown as [
+        WritableDepreciationMethod,
+        ...WritableDepreciationMethod[],
+      ])
       .optional(),
-    restvarde_target: z.number().nonnegative().nullable().optional(),
+    restvarde_target: z.null().optional(),
     bas_asset_account: z.string().regex(/^\d{4}$/).optional(),
     bas_accumulated_account: z.string().regex(/^\d{4}$/).optional(),
     bas_expense_account: z.string().regex(/^\d{4}$/).optional(),
@@ -54,34 +62,6 @@ const UpdateAssetSchema = z
     // value; the cross-sum check needs the asset's acquisition_cost so it runs
     // in the PATCH handler below, which can read the existing row.
     k3_components: z.array(K3ComponentSchema).nullable().optional(),
-  })
-  .superRefine((value, ctx) => {
-    // Enforce the method/target biconditional when EITHER field is supplied.
-    // We can't see the existing row from a zod refinement, so the
-    // application-level updateAsset() carries the cross-row check; here we
-    // only catch the obviously inconsistent combinations within a single
-    // PATCH body.
-    const hasMethod = value.depreciation_method !== undefined
-    const hasTarget = value.restvarde_target !== undefined
-    if (!hasMethod && !hasTarget) return
-
-    const isRestvarde = value.depreciation_method === 'restvardesavskrivning_25'
-    const targetIsSet = value.restvarde_target !== null && value.restvarde_target !== undefined
-
-    if (hasMethod && isRestvarde && hasTarget && !targetIsSet) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['restvarde_target'],
-        message: 'restvarde_target krävs när avskrivningsmetoden är restvärdeavskrivning (25 %).',
-      })
-    }
-    if (hasMethod && !isRestvarde && hasTarget && targetIsSet) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['restvarde_target'],
-        message: 'restvarde_target får bara anges för restvärdeavskrivning (25 %).',
-      })
-    }
   })
 
 export const GET = withRouteContext(
@@ -153,6 +133,75 @@ export const PATCH = withRouteContext(
           },
           { status: 400 },
         )
+      }
+    }
+
+    // K2_EXCLUDED_ACCOUNT gate: when the patch touches the category or the
+    // asset/accumulated accounts, the asset must not END UP on an account the
+    // BAS reference flags as k2_excluded ("Ej K2") unless the company applies
+    // K3. The guard supplies the message, citing BFNAR 2016:10 punkt 10.4
+    // only for the egenupparbetade-immateriella group and staying generic for
+    // the other Ej K2 accounts (uppskjuten skatt, verkligt värde, ...), which
+    // this route can reach: UpdateAssetSchema has no BAS range refinement, so
+    // an explicit override outside the category range lands here first.
+    // The final accounts mirror updateAsset()'s resolution: a category
+    // change without explicit accounts realigns the triple to the new
+    // category's framework-aware defaults, so recategorizing to "Immateriell
+    // tillgång" lands a K2 company on the acquired pair 1090/1099 and passes.
+    // Only a deliberate override onto an Ej K2 account trips the gate.
+    // Patches that leave category and accounts alone skip the gate entirely,
+    // so legacy assets already sitting on an excluded account stay editable
+    // (name, notes, useful life, ...).
+    const touchesAccounts =
+      validation.data.category !== undefined ||
+      validation.data.bas_asset_account !== undefined ||
+      validation.data.bas_accumulated_account !== undefined
+    if (touchesAccounts) {
+      const [{ data: company }, existing] = await Promise.all([
+        supabase
+          .from('companies')
+          // entity_type rides along on the same fetch: the rejection wording
+          // must not cite BFNAR 2016:10 at an enskild firma, which prepares no
+          // årsredovisning under K2. See lib/bokslut/assets/k2-account-guard.ts.
+          .select('accounting_framework, entity_type')
+          .eq('id', companyId)
+          .single(),
+        getAsset(supabase, companyId, id),
+      ])
+      if (!company || company.accounting_framework !== 'k3') {
+        if (!existing) {
+          return NextResponse.json({ error: { code: 'ASSET_NOT_FOUND' } }, { status: 404 })
+        }
+        const finalCategory = validation.data.category ?? existing.category
+        const categoryDefaultsApply =
+          validation.data.category !== undefined &&
+          validation.data.category !== existing.category &&
+          validation.data.bas_asset_account === undefined &&
+          validation.data.bas_accumulated_account === undefined &&
+          validation.data.bas_expense_account === undefined
+        const defaults = defaultAccountsForCategory(
+          finalCategory,
+          company?.accounting_framework,
+        )
+        const excluded = findK2ExcludedAccount([
+          validation.data.bas_asset_account ??
+            (categoryDefaultsApply ? defaults.asset : existing.bas_asset_account),
+          validation.data.bas_accumulated_account ??
+            (categoryDefaultsApply ? defaults.accumulated : existing.bas_accumulated_account),
+        ])
+        if (excluded) {
+          const messages = k2ExcludedAccountMessages(excluded, company?.entity_type)
+          return NextResponse.json(
+            {
+              error: {
+                code: 'K2_EXCLUDED_ACCOUNT',
+                message: messages.message_sv,
+                message_en: messages.message_en,
+              },
+            },
+            { status: 422 },
+          )
+        }
       }
     }
 

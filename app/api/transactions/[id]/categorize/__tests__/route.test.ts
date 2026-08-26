@@ -9,7 +9,7 @@ import {
 import { eventBus } from '@/lib/events'
 import { JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -80,13 +80,10 @@ vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
   upsertCounterpartyTemplate: vi.fn().mockResolvedValue(undefined),
 }))
 
-// CAS-race compensation is centralized in lib/bookkeeping/cancel-orphaned-entry.
-// The route must delegate to it rather than hand-rolling the cancel + the
-// voucher_gap_explanations insert (BFNAR 2013:2). The exact insert payload is
-// asserted in that helper's own test.
-const mockCancelOrphanedPaymentEntry = vi.fn()
+// Posted-orphan compensation is centralized and routes through engine storno.
+const mockReverseOrphanedJournalEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
-  cancelOrphanedPaymentEntry: (...args: unknown[]) => mockCancelOrphanedPaymentEntry(...args),
+  reverseOrphanedJournalEntry: (...args: unknown[]) => mockReverseOrphanedJournalEntry(...args),
 }))
 
 const mockFindMissingActiveAccounts = vi.fn()
@@ -128,10 +125,10 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // Default: no booking-time duplicate. The dedicated guard test overrides this.
     mockDetectDup.mockResolvedValue(null)
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
-    mockCancelOrphanedPaymentEntry.mockResolvedValue(undefined)
+    mockReverseOrphanedJournalEntry.mockResolvedValue(undefined)
   })
 
-  it('delegates the CAS-race orphan to cancelOrphanedPaymentEntry (documented voucher gap)', async () => {
+  it('delegates the CAS-race orphan to engine-backed storno compensation', async () => {
     const tx = makeTransaction({
       id: 'tx-1',
       amount: -500,
@@ -141,6 +138,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null }) // fetch transaction
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
 
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
@@ -160,13 +158,13 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect((body.error as { code: string }).code).toBe('TX_CATEGORIZE_RACE')
 
     // No hand-rolled insert: the helper owns the real column set.
-    expect(mockCancelOrphanedPaymentEntry).toHaveBeenCalledTimes(1)
-    expect(mockCancelOrphanedPaymentEntry).toHaveBeenCalledWith(
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledTimes(1)
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       'user-1',
       'je-1',
-      'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
+      'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
     )
   })
 
@@ -207,7 +205,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // Fetch transaction
     enqueue({ data: tx, error: null })
     // Update transaction
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ ...tx, is_business: true, category: 'expense_software' }], error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
       method: 'POST',
@@ -225,6 +223,38 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(body.already_had_journal_entry).toBe(true)
     expect(body.journal_entry_id).toBe('je-existing')
     expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    expect(
+      findCalls('transactions', 'eq').filter(([column]) => column === 'company_id'),
+    ).toHaveLength(2)
+  })
+
+  it('returns a race conflict when the guarded update matches no row without creating an entry', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: null,
+      journal_entry_id: null,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValueOnce(null)
+    enqueue({ data: [], error: null })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: false },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
+    expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
   })
 
   it('creates journal entry for business expense', async () => {
@@ -239,6 +269,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     // Fetch company settings
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // ensureFiscalPeriod: check existing
     enqueue({ data: [{ id: 'period-1' }], error: null })
 
@@ -282,6 +313,143 @@ describe('POST /api/transactions/[id]/categorize', () => {
     )
   })
 
+  it('books a standardmall bank leg on the single enabled cash account when cash_account_id is NULL (#1722)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: 'Banken',
+      journal_entry_id: null,
+      cash_account_id: null,
+    })
+
+    // Fetch transaction
+    enqueue({ data: tx, error: null })
+    // Fetch company settings
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    // resolveSettlementAccount currency fallback: the company's ONLY enabled
+    // SEK cash account is a PlusGiro on 1920, so the template's hardcoded
+    // 1930 leg must be rewritten to 1920 before posting.
+    enqueue({ data: [{ ledger_account: '1920' }], error: null })
+    // ensureFiscalPeriod: check existing
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+
+    // Update transaction (CAS guard: returns matched row)
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+    enqueue({ data: [], error: null }) // inbox propagation: no matched items
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, template_id: 'bank_fees' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      journal_entry_created: boolean
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.journal_entry_created).toBe(true)
+    // The posted mapping carries the real settlement account, not the
+    // template's hardcoded 1930 (bank_fees is Dr 6570 / Cr 1930).
+    const mappingArg = mockCreateTransactionJournalEntry.mock.calls[0][4] as {
+      debit_account: string
+      credit_account: string
+    }
+    expect(mappingArg.debit_account).toBe('6570')
+    expect(mappingArg.credit_account).toBe('1920')
+    // The fallback listing was narrowed to enabled accounts in the
+    // transaction's currency.
+    const eqArgs = findCalls('cash_accounts', 'eq')
+    expect(eqArgs).toContainEqual(['enabled', true])
+    expect(eqArgs).toContainEqual(['currency', 'SEK'])
+  })
+
+  it('books a transaction dated before the first fiscal year without minting a period (pre-FY, issue #1825)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      date: '2026-03-10',
+      amount: 25000,
+      merchant_name: null,
+      journal_entry_id: null,
+      description: 'Insättning aktiekapital',
+    })
+
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // ensureFiscalPeriod: no covering open period
+    enqueue({ data: [{ period_start: '2026-05-12' }], error: null }) // ensureFiscalPeriod: earliest period
+
+    // The clamp inside createTransactionJournalEntry (unit-tested in
+    // lib/bookkeeping/__tests__/transaction-entries.test.ts) books into the
+    // first open period; here it is mocked to the successful outcome.
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // guarded update matched
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'income_other' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      journal_entry_created: boolean
+      journal_entry_id: string
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.journal_entry_created).toBe(true)
+    expect(body.journal_entry_id).toBe('je-1')
+    // The pre-FY guard must not upsert a calendar-year (pre-registration) period.
+    expect(findCalls('fiscal_periods', 'upsert')).toHaveLength(0)
+  })
+  it('atomically unignores an ignored transaction when categorizing it', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: null,
+      journal_entry_id: null,
+      is_ignored: true,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ ...tx, is_business: false, category: 'private', is_ignored: false, journal_entry_id: 'je-1' }], error: null })
+
+    const categorizedHandler = vi.fn()
+    eventBus.on('transaction.categorized', categorizedHandler)
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: false },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    expect(findCalls('transactions', 'update')).toContainEqual([
+      expect.objectContaining({
+        is_business: false,
+        category: 'private',
+        is_ignored: false,
+        journal_entry_id: 'je-1',
+      }),
+    ])
+    expect(categorizedHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transaction: expect.objectContaining({ is_ignored: false }),
+      }),
+    )
+  })
+
   it('passes body.dimensions onto the mapping result the engine books', async () => {
     const tx = makeTransaction({
       id: 'tx-1',
@@ -295,6 +463,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null }) // fetch transaction
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'period-1' }], error: null }) // fiscal period check
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // tx update (CAS matched)
@@ -352,6 +521,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null }) // fetch transaction
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'period-1' }], error: null }) // fiscal period check
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // tx update (CAS matched)
@@ -386,6 +556,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'period-1' }], error: null })
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // tx update
@@ -413,12 +584,13 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'period-1' }], error: null })
 
     mockCreateTransactionJournalEntry.mockRejectedValue(new Error('Period locked'))
 
     // Update transaction
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ ...tx, is_business: true, category: 'expense_software' }], error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
       method: 'POST',
@@ -449,12 +621,13 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'period-1' }], error: null })
 
     mockCreateTransactionJournalEntry.mockRejectedValue(new JournalEntryNotBalancedError(100, 80))
 
     // Update transaction
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ ...tx, is_business: true, category: 'expense_software' }], error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
       method: 'POST',
@@ -486,6 +659,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'period-1' }], error: null })
 
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
@@ -502,6 +676,55 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     expect(status).toBe(500)
     expect((body.error as unknown as { code: string }).code).toBe('INTERNAL_ERROR')
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-1',
+      expect.any(String),
+    )
+  })
+
+  it('maps an ignored-row constraint to a typed conflict and stornos the posted orphan', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      journal_entry_id: null,
+      merchant_name: null,
+      is_ignored: true,
+    })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({
+      data: null,
+      error: {
+        code: '23514',
+        message:
+          'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"',
+      },
+    })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: false },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_IGNORED_CONFLICT')
+    expect(body.error.message).not.toContain('check constraint')
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-1',
+      expect.any(String),
+    )
   })
 
   it('returns 400 when mapping result has empty debit_account', async () => {
@@ -513,6 +736,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -541,6 +765,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -587,6 +812,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -627,6 +853,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -686,6 +913,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
   it('EUR transaction: a 1 000 SEK supplier invoice is not suggested for a 1 000 EUR payment', async () => {
     enqueue({ data: eurExpenseTx(), error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -720,6 +948,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
   it('EUR transaction with a rate: the 11 500 SEK supplier invoice IS suggested', async () => {
     enqueue({ data: eurExpenseTx(), error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -750,6 +979,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
   it('EUR transaction without a rate: kronor invoices are excluded, never compared raw', async () => {
     enqueue({ data: eurExpenseTx({ exchange_rate: null }), error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -778,6 +1008,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
   it('EUR transaction: a 1 000 EUR supplier invoice still matches in its own currency', async () => {
     enqueue({ data: eurExpenseTx(), error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -823,6 +1054,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -882,6 +1114,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -936,6 +1169,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -994,6 +1228,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockBuildMappingResultFromCategory.mockReturnValue({
       ...defaultMappingResult,
@@ -1060,6 +1295,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null }) // fetch
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod existing check
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
     mockSaveUserMappingRule.mockResolvedValue(undefined)
@@ -1110,6 +1346,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'period-1' }], error: null })
 
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
@@ -1145,6 +1382,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     // Fetch company settings
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     // Mapping built from category, but the debit account is missing/inactive
     // in this company's kontoplan. findMissingActiveAccounts is mocked at the
@@ -1180,6 +1418,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     })
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     // Multiple accounts missing: covers the common "imported a template with
     // accounts that this kontoplan never enabled" case.
@@ -1213,6 +1452,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // ensureFiscalPeriod existing-period check
     enqueue({ data: [{ id: 'period-1' }], error: null })
 
@@ -1257,6 +1497,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // chart_of_accounts lookup for '5420': not in the company's chart.
     // Using a plain expense account (Programvaror) avoids the implication
     // that 4535 (Inköp av varor från annat EU-land, reverse-charge) would

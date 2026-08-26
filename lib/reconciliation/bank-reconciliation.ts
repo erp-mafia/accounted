@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { roundOre } from '@/lib/money'
 import type { Transaction, ReconciliationMethod } from '@/types'
 import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
@@ -67,6 +68,19 @@ export interface ReconciliationRunResult {
    * for human review. Always 0 on dry runs and when no threshold was given.
    */
   skippedBelowThreshold: number
+  /**
+   * Below-threshold matches persisted as suggestions on the transaction
+   * (potential_journal_entry_id + method + confidence) for the review surface.
+   * Always 0 unless persistSuggestions was set on a non-dry apply run with a
+   * confidence threshold.
+   */
+  suggested: number
+  /**
+   * Unmatched, non-ignored transactions the run considered (the candidate pool
+   * on the bank side). Lets callers report "X av Y matchade" without a second
+   * count query.
+   */
+  candidates: number
 }
 
 /**
@@ -87,7 +101,26 @@ export interface ReconciliationStatus {
    * this is a no-op and every figure below is exactly what it always was.
    */
   currency: string
+  /**
+   * Sum of the window's bank-feed transactions EXCLUDING ignored rows: the
+   * bank side of the reconciliation. Ignored rows (feed duplicates from a
+   * PSD2 reconnect, non-business noise) never get a ledger counterpart, so
+   * counting them here manufactured a permanent unfixable difference; they are
+   * surfaced separately below instead, mirroring how the opening balance is
+   * excluded-but-shown.
+   */
   bank_transaction_total: number
+  /** Gross inflow (sum of positive amounts) behind bank_transaction_total; informational, for the page's "in · ut · antal" line. */
+  bank_transaction_inflow: number
+  /** Gross outflow (sum of negative amounts, itself negative) behind bank_transaction_total. */
+  bank_transaction_outflow: number
+  /** Number of non-ignored bank transactions in the window. */
+  bank_transaction_count: number
+  /** Sum of ignored bank transactions in the window. NOT part of
+   *  bank_transaction_total or difference; informational, like the IB. */
+  ignored_transaction_total: number
+  /** Number of ignored bank transactions in the window. */
+  ignored_transaction_count: number
   /**
    * The real ledger balance on the bank account, incl. IB: computed from the
    * SAME `['posted','reversed']` lines the trial balance and balance sheet sum.
@@ -131,7 +164,52 @@ export interface ReconciliationStatus {
   is_reconciled: boolean
   matched_count: number
   unmatched_transaction_count: number
+  /**
+   * Sum of the unmatched bank transactions behind `unmatched_transaction_count`,
+   * in `currency`. Together with {@link unmatched_gl_line_total} this decomposes
+   * `difference` into the two work lists the user can actually open, instead of
+   * leaving it an unexplained scalar.
+   */
+  unmatched_transaction_total: number
   unmatched_gl_line_count: number
+  /**
+   * Sum of the unmatched ledger lines behind `unmatched_gl_line_count`, in
+   * `currency`, signed like a bank movement (+ in, - out).
+   *
+   * `null` when at least one of those lines carries no amount in `currency`:
+   * the two candidate RPCs project neither `currency` nor `amount_in_currency`,
+   * so on a foreign account every line is unconvertible and there is no honest
+   * sum to report. Reporting 0 there would claim the vouchers net to nothing.
+   * Always a number on a SEK account (see {@link ledgerLineAmountIn}).
+   */
+  unmatched_gl_line_total: number | null
+  /**
+   * What is left of `difference` once both work lists are accounted for:
+   * `difference - unmatched_transaction_total + unmatched_gl_line_total`.
+   *
+   * `difference` is merely how far apart the two sides currently stand; mid-year
+   * it is expected to be large and it is fully explained as long as every krona
+   * of it sits in one of the two lists. The residual is what does NOT.
+   *
+   * It reduces to (sum of matched transactions - sum of the ledger lines they
+   * settle), so it is non-zero when a matched pair disagrees in amount, when one
+   * voucher carries several lines on this account, or when a ledger line the
+   * candidate RPC hides has no bank counterpart. That last cause dominates:
+   * `get_account_gl_lines_for_matching` returns only `status='posted'` entries
+   * and excludes storno / correction outright, so an unlinked storno moves this
+   * account's movement while staying invisible in "Omatchade verifikationer".
+   * Measured on prod 2026-08-20 over the 206 single-1930-account companies with
+   * >=10 transactions: 136 reconcile to exactly 0,00, 63 land >=100 kr out, and
+   * the unlinked-hidden-line buckets behind that are posted/storno (127
+   * companies), reversed/bank_transaction (66) and posted/correction (49).
+   *
+   * A non-zero residual is therefore a real finding but usually NOT user error,
+   * so the UI states it factually rather than in destructive red.
+   *
+   * `null` whenever `unmatched_gl_line_total` is null: no honest residual
+   * exists then either.
+   */
+  unexplained_difference: number | null
   /** Counted ledger lines on the account that carry no amount in `currency`
    *  (see {@link ledgerLineAmountIn}). Always 0 on a SEK account. */
   unconvertible_gl_line_count: number
@@ -198,6 +276,18 @@ export interface ReconciliationOptions {
    * committed without human review.
    */
   confidenceThreshold?: number
+  /**
+   * Persist below-threshold matches (the 0.75-0.89 band: auto_fuzzy,
+   * auto_date_range) onto the transaction's potential_journal_entry_id /
+   * potential_match_method / potential_match_confidence columns instead of
+   * dropping them, so the review surface can offer them for confirmation.
+   * Only meaningful together with confidenceThreshold on a non-dry apply run;
+   * ignored otherwise. Suggestions are soft data: the same optimistic
+   * `.is('journal_entry_id', null)` guard as the apply path, plus DB triggers
+   * that clear them when the row is booked/ignored or the entry is consumed
+   * or reversed.
+   */
+  persistSuggestions?: boolean
 }
 
 /**
@@ -417,6 +507,7 @@ export async function runReconciliation(
     includeUnassigned = true,
     applyOnly,
     confidenceThreshold,
+    persistSuggestions = false,
   } = options
 
   // Fetch unlinked GL lines via RPC
@@ -451,14 +542,28 @@ export async function runReconciliation(
   })
 
   if (transactions.length === 0 || glLines.length === 0) {
-    return { matches: [], applied: 0, errors: 0, skippedBelowThreshold: 0 }
+    return {
+      matches: [],
+      applied: 0,
+      errors: 0,
+      skippedBelowThreshold: 0,
+      suggested: 0,
+      candidates: transactions.length,
+    }
   }
 
   // Run greedy matching, highest confidence first
   let matches = greedyMatch(transactions, glLines, currency)
 
   if (dryRun) {
-    return { matches, applied: 0, errors: 0, skippedBelowThreshold: 0 }
+    return {
+      matches,
+      applied: 0,
+      errors: 0,
+      skippedBelowThreshold: 0,
+      suggested: 0,
+      candidates: transactions.length,
+    }
   }
 
   // When the caller reviewed a dry-run and ticked a subset, apply ONLY pairs
@@ -477,12 +582,13 @@ export async function runReconciliation(
   // counted separately. This is the server-side guardrail for unattended
   // callers (nightly sync / cron), where nobody reviews a dry-run first.
   let toApply = matches
-  let skippedBelowThreshold = 0
+  let belowThresholdMatches: ReconciliationMatch[] = []
   if (confidenceThreshold !== undefined) {
     const floor = Math.max(0, Math.min(1, confidenceThreshold))
     toApply = matches.filter((m) => m.confidence >= floor)
-    skippedBelowThreshold = matches.length - toApply.length
+    belowThresholdMatches = matches.filter((m) => m.confidence < floor)
   }
+  const skippedBelowThreshold = belowThresholdMatches.length
 
   // Apply matches
   let applied = 0
@@ -511,6 +617,18 @@ export async function runReconciliation(
         errors++
       } else {
         applied++
+        // Behandlingshistorik (BFNAR 2013:2 kap 8, BFL 7:1): every auto-applied
+        // link is a match event and must land in the append-only log, exactly
+        // like the invoice-match and confirm-suggestion paths. The bus event
+        // below goes to event_log (30-day TTL) and is NOT an audit record.
+        await logMatchEvent(supabase, userId, match.transaction.id, 'matched', {
+          matchConfidence: match.confidence,
+          matchMethod: match.method,
+          newState: {
+            journal_entry_id: match.glLine.journal_entry_id,
+            reconciliation_method: match.method,
+          },
+        })
         try {
           eventBus.emit({
             type: 'transaction.reconciled',
@@ -531,7 +649,51 @@ export async function runReconciliation(
     }
   }
 
-  return { matches, applied, errors, skippedBelowThreshold }
+  // Persist the below-threshold band as reviewable suggestions instead of
+  // dropping it. Same optimistic-lock guard as the apply loop: a row that got
+  // booked or linked between the read and this write matches zero rows, and
+  // the DB trigger clears any suggestion the moment a link lands, so a stale
+  // suggestion can never shadow a real link.
+  let suggested = 0
+  if (persistSuggestions) {
+    for (const match of belowThresholdMatches) {
+      try {
+        const { data: suggestedRows, error } = await supabase
+          .from('transactions')
+          .update({
+            potential_journal_entry_id: match.glLine.journal_entry_id,
+            potential_match_method: match.method,
+            potential_match_confidence: match.confidence,
+          })
+          .eq('id', match.transaction.id)
+          .eq('company_id', companyId)
+          .is('journal_entry_id', null)
+          .select('id')
+
+        if (!error && suggestedRows && suggestedRows.length > 0) {
+          suggested++
+          // Awaited: an unawaited promise can be frozen on serverless when the
+          // response returns, silently dropping the audit row.
+          await logMatchEvent(supabase, userId, match.transaction.id, 'auto_suggested', {
+            matchConfidence: match.confidence,
+            matchMethod: match.method,
+            newState: { potential_journal_entry_id: match.glLine.journal_entry_id },
+          })
+        }
+      } catch {
+        // Suggestions are best-effort: never fail the run over one row.
+      }
+    }
+  }
+
+  return {
+    matches,
+    applied,
+    errors,
+    skippedBelowThreshold,
+    suggested,
+    candidates: transactions.length,
+  }
 }
 
 // ============================================================
@@ -558,16 +720,18 @@ export async function getReconciliationStatus(
   includeUnassigned: boolean = true,
 ): Promise<ReconciliationStatus> {
   // Get all transactions in range, scoped to the selected cash account. Ignored
-  // rows are pulled too so the totals card still reflects what the bank
-  // actually moved, but they're excluded from the "unmatched" count below: the
-  // user has explicitly said they don't want them surfacing as something to
-  // reconcile. Scoping by cash account (not just currency) is what stops a
+  // rows are pulled too, but only to be COUNTED AND SUMMED separately: they are
+  // excluded from the bank total, the difference and the matched/unmatched
+  // counts below, because the user has explicitly said they are not something
+  // to reconcile (duplicates, non-business noise). Scoping by cash account
+  // (not just currency) is what stops a
   // second same-currency account from inflating bankTotal here.
   // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at 1000
   // rows, which would undercount bank_transaction_total for a busy company and
   // manufacture a phantom, unexplainable difference. Ordered on id (unique) so
   // pages never duplicate or skip rows across boundaries.
   type StatusTxRow = {
+    id?: string | null
     date: string | null
     amount: number | string | null
     journal_entry_id: string | null
@@ -578,7 +742,7 @@ export async function getReconciliationStatus(
   const transactions = await fetchAllRows<StatusTxRow>(({ from, to }) => {
     let txQuery = supabase
       .from('transactions')
-      .select('date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
+      .select('id, date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
       .eq('company_id', companyId)
     txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
     if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
@@ -592,6 +756,16 @@ export async function getReconciliationStatus(
     accountNumber: bankAccount,
     currency,
   })
+
+  // Transactions anchored through transaction_voucher_links (bulk-booked
+  // samlingsverifikat, residual bookings) carry journal_entry_id = NULL on the
+  // row itself. They are settled all the same, so the matched/unmatched split
+  // below must see them; is_transaction_booked() is the SQL twin of this.
+  const junctionLinkedTxIds = await fetchJunctionLinkedTxIds(
+    supabase,
+    companyId,
+    transactions.map((tx) => tx.id).filter((id): id is string => typeof id === 'string'),
+  )
 
   // Get GL bank-account lines. We fetch posted AND reversed entries and count
   // them TOGETHER: the exact inclusion rule the trial balance and balance sheet
@@ -664,8 +838,21 @@ export async function getReconciliationStatus(
   // dateFrom and that IB date; it only ever RAISES the lower bound, so the
   // dateFrom SQL pre-filter on both queries above stays valid. In normal use the
   // UI passes dateFrom = period_start = the IB date, so this is a no-op there.
+  //
+  // Only a POSTED opening balance is an IB. A stornerad IB (status 'reversed')
+  // has been economically nulled by its storno: both lines still sit in
+  // countedLines and cancel inside glBalance, exactly as on the balansräkning,
+  // but neither may be treated as the period's IB. Counting the reversed one
+  // here (and in glOpeningBalance below) re-added the cancelled amount once
+  // more and manufactured a phantom difference equal to the IB after a
+  // perfectly correct rättelse. Same rule the canonical opening-balance RPC
+  // applies (compute_prior_opening_balances, 20260421180000).
+  const isLiveOpeningBalanceLine = (l: GlLineRow): boolean => {
+    const entry = entryOf(l)
+    return entry?.source_type === 'opening_balance' && entry?.status === 'posted'
+  }
   const ibDates = fetchedLines
-    .filter((l) => entryOf(l)?.source_type === 'opening_balance')
+    .filter(isLiveOpeningBalanceLine)
     .map((l) => entryOf(l)?.entry_date)
     .filter((d): d is string => typeof d === 'string' && d.length > 0)
   // Take the LATEST IB date. The invariant is one opening_balance entry per
@@ -689,7 +876,7 @@ export async function getReconciliationStatus(
     onOrAfterFloor((tx as { date?: string | null }).date),
   )
 
-  // Bank side: every feed transaction in the (floored) window, full stop. We
+  // Bank side: every NON-IGNORED feed transaction in the (floored) window. We
   // deliberately do NOT special-case rows linked to a reversed entry any more.
   // Because the GL side now counts the reversed original, its storno AND the
   // correction together (just like the balance sheet), a corrected bank line nets
@@ -699,7 +886,20 @@ export async function getReconciliationStatus(
   // transactions.amount is denominated in transactions.currency, and
   // scopeTransactionsToAccount pinned that to `currency`, so this total is
   // already in the account's own currency: the unit lineAmount() resolves to.
-  const bankTotal = countedTx.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
+  //
+  // Ignored rows are EXCLUDED from the total, exactly as they are excluded from
+  // the unmatched count: ignoring is the sanctioned handling for feed
+  // duplicates (a reconnect re-importing history) and non-business noise, and
+  // by definition an ignored row will never get a ledger counterpart. Counting
+  // it in the bank total manufactured a permanent difference the user could
+  // never book away: after a correct duplicate cleanup the card showed a
+  // six-figure differens over a fully booked account, and is_reconciled was
+  // unreachable forever. They are surfaced separately (count + sum) instead,
+  // the same pattern as the opening balance, so nothing is silently hidden.
+  const reconcilableTx = countedTx.filter((tx) => tx.is_ignored !== true)
+  const ignoredTx = countedTx.filter((tx) => tx.is_ignored === true)
+  const bankTotal = reconcilableTx.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
+  const ignoredTotal = ignoredTx.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
 
   // Ledger lines the account's currency cannot express: a foreign account whose
   // lines hold only SEK figures with no per-row rate (SIE imports, pre-FX
@@ -714,8 +914,10 @@ export async function getReconciliationStatus(
   const glBalance = countedLines.reduce((sum, line) => sum + lineAmount(line), 0)
   // IB is last year's closing position, not a movement with a bank-feed
   // counterpart, surfaced separately and excluded from the period movement.
+  // Posted IB lines only (see isLiveOpeningBalanceLine): a reversed IB and its
+  // storno stay in glBalance where they net to zero.
   const glOpeningBalance = countedLines
-    .filter((l) => entryOf(l)?.source_type === 'opening_balance')
+    .filter(isLiveOpeningBalanceLine)
     .reduce((sum, line) => sum + lineAmount(line), 0)
   // Net storno/correction activity on the account this period. Surfaced for
   // transparency ONLY: it is part of the ledger balance and is INCLUDED in the
@@ -732,11 +934,23 @@ export async function getReconciliationStatus(
   // a bank-feed counterpart, so it stays in.
   const glPeriodMovement = glBalance - glOpeningBalance
 
-  const matchedCount = countedTx.filter((tx) => tx.journal_entry_id !== null).length
+  // Matched/unmatched partition the RECONCILABLE (non-ignored) set, so
+  // matched_count + unmatched_transaction_count always equals the number of
+  // rows behind bank_transaction_total.
+  const isLinked = (tx: StatusTxRow): boolean =>
+    tx.journal_entry_id !== null || (typeof tx.id === 'string' && junctionLinkedTxIds.has(tx.id))
+  const matchedCount = reconcilableTx.filter(isLinked).length
+  // The gross split behind the net: what the user actually recognises as
+  // "what moved on the bank", so the page never has to explain "netto".
+  const bankInflow = reconcilableTx.reduce((sum, tx) => sum + Math.max(Number(tx.amount) || 0, 0), 0)
+  const bankOutflow = reconcilableTx.reduce((sum, tx) => sum + Math.min(Number(tx.amount) || 0, 0), 0)
 
-  const unmatchedTransactionCount = countedTx.filter(
-    (tx) => tx.journal_entry_id === null && tx.is_ignored !== true
-  ).length
+  const unmatchedTx = reconcilableTx.filter((tx) => !isLinked(tx))
+  const unmatchedTransactionCount = unmatchedTx.length
+  const unmatchedTransactionTotal = unmatchedTx.reduce(
+    (sum, tx) => sum + (Number(tx.amount) || 0),
+    0
+  )
 
   // Unmatched GL lines count (RPC excludes opening_balance, storno and correction
   // since 20260601120000_unlinked_gl_lines_exclude_storno_correction.sql).
@@ -744,9 +958,40 @@ export async function getReconciliationStatus(
   // cash account (a transfer's other leg) counts as unmatched HERE, keeping this
   // number in agreement with the "Omatchade verifikationer" table the
   // reconciliation view derives from the same RPC.
-  const unlinkedLines = await fetchGLLinesForMatching(supabase, companyId, bankAccount, dateFrom, dateTo)
+  // effectiveFrom, NOT the caller's dateFrom: countedLines and countedTx are both
+  // clamped to the IB floor above, and this list has to describe the SAME window
+  // or the card contradicts itself. With the raw dateFrom, a window that opens
+  // before the account's opening balance (the v1 endpoint's "company history"
+  // default, or any multi-year range) counted vouchers from a period whose
+  // movements the reconciliation deliberately drops: unmatched_gl_line_count was
+  // inflated by prior-period history, and the bridge below could never close.
+  const unlinkedLines = await fetchGLLinesForMatching(
+    supabase,
+    companyId,
+    bankAccount,
+    effectiveFrom ?? undefined,
+    dateTo
+  )
 
   const difference = Math.round((bankTotal - glPeriodMovement) * 100) / 100
+
+  // The candidate RPCs project neither `currency` nor `amount_in_currency`, so
+  // on a foreign account every line resolves to null and there is no sum to
+  // report. Deliberately all-or-nothing: a partial sum silently understates the
+  // side it is meant to explain. On SEK, ledgerLineAmountIn never returns null,
+  // so this is always a number for the 95% case.
+  const unmatchedGlAmounts = unlinkedLines.map((line) => ledgerLineAmountIn(line, currency))
+  const unmatchedGlLineTotal = unmatchedGlAmounts.some((a) => a === null)
+    ? null
+    : roundOre(unmatchedGlAmounts.reduce((sum: number, a) => sum + (a ?? 0), 0))
+
+  // difference - unmatched transactions + unmatched vouchers. See the field doc:
+  // zero means every krona of the difference is identified and sitting in a list
+  // the user can open.
+  const unexplainedDifference =
+    unmatchedGlLineTotal === null
+      ? null
+      : roundOre(difference - roundOre(unmatchedTransactionTotal) + unmatchedGlLineTotal)
 
   const notReconcilableReason =
     unconvertibleLines.length > 0 ? 'gl_lines_missing_currency_amount' : null
@@ -754,6 +999,11 @@ export async function getReconciliationStatus(
   return {
     currency,
     bank_transaction_total: Math.round(bankTotal * 100) / 100,
+    bank_transaction_inflow: roundOre(bankInflow),
+    bank_transaction_outflow: roundOre(bankOutflow),
+    bank_transaction_count: reconcilableTx.length,
+    ignored_transaction_total: roundOre(ignoredTotal),
+    ignored_transaction_count: ignoredTx.length,
     gl_1930_balance: Math.round(glBalance * 100) / 100,
     gl_1930_period_movement: Math.round(glPeriodMovement * 100) / 100,
     gl_1930_opening_balance: Math.round(glOpeningBalance * 100) / 100,
@@ -774,7 +1024,10 @@ export async function getReconciliationStatus(
       unmatchedTransactionCount === 0,
     matched_count: matchedCount,
     unmatched_transaction_count: unmatchedTransactionCount,
+    unmatched_transaction_total: roundOre(unmatchedTransactionTotal),
     unmatched_gl_line_count: unlinkedLines.length,
+    unmatched_gl_line_total: unmatchedGlLineTotal,
+    unexplained_difference: unexplainedDifference,
     unconvertible_gl_line_count: unconvertibleLines.length,
     not_reconcilable_reason: notReconcilableReason,
   }
@@ -966,6 +1219,14 @@ export async function unlinkReconciliation(
   if (updateError) {
     return { success: false, error: 'Failed to unlink transaction' }
   }
+
+  // A residual booking (or a bulk-book) anchors the same transaction through
+  // transaction_voucher_links as well; "koppla bort" means every anchor goes.
+  await supabase
+    .from('transaction_voucher_links')
+    .delete()
+    .eq('company_id', companyId)
+    .eq('transaction_id', transactionId)
 
   logMatchEvent(supabase, userId, transactionId, 'unmatched', {
     previousState: {
@@ -1225,6 +1486,33 @@ export async function fetchUnlinkedGLLines(
   } catch {
     return []
   }
+}
+
+/**
+ * Ids of the given transactions that are anchored to a verifikat through
+ * transaction_voucher_links (journal_entry_id NULL on the row itself). Chunked
+ * on the id list so a busy window never pushes the .in() past URL limits;
+ * a failed read returns the empty set rather than throwing, mirroring
+ * fetchUnlinkedGLLines' legacy contract.
+ */
+export async function fetchJunctionLinkedTxIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  transactionIds: string[],
+): Promise<Set<string>> {
+  const out = new Set<string>()
+  const CHUNK = 150
+  for (let i = 0; i < transactionIds.length; i += CHUNK) {
+    const chunk = transactionIds.slice(i, i + CHUNK)
+    const { data, error } = await supabase
+      .from('transaction_voucher_links')
+      .select('transaction_id')
+      .eq('company_id', companyId)
+      .in('transaction_id', chunk)
+    if (error) return out
+    for (const row of (data ?? []) as Array<{ transaction_id: string }>) out.add(row.transaction_id)
+  }
+  return out
 }
 
 /** A match candidate that carries how many transactions already point at it. */

@@ -41,6 +41,8 @@ const HEADER_KEYWORDS = [
   'amount',
   'description',
   'date',
+  'title',
+  'balance',
 ]
 
 interface BankFileColumnMappingStepProps {
@@ -186,7 +188,7 @@ export default function BankFileColumnMappingStep({
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Header row toggle */}
-          <div className="flex items-center justify-between rounded-md border p-4">
+          <div className="flex items-center justify-between rounded-lg border p-4">
             <div className="space-y-0.5">
               <Label htmlFor="has-header">Har filen rubrikrad?</Label>
               <p className="text-xs text-muted-foreground">
@@ -243,7 +245,7 @@ export default function BankFileColumnMappingStep({
 
           {/* Required column mappings */}
           <div>
-            <h3 className="text-sm font-medium mb-3">Obligatoriska kolumner</h3>
+            <h3 className="text-sm mb-3">Obligatoriska kolumner</h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label>Datum *</Label>
@@ -306,7 +308,7 @@ export default function BankFileColumnMappingStep({
 
           {/* Optional column mappings */}
           <div>
-            <h3 className="text-sm font-medium mb-3">Valfria kolumner</h3>
+            <h3 className="text-sm mb-3">Valfria kolumner</h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label>Referens/OCR</Label>
@@ -382,7 +384,7 @@ export default function BankFileColumnMappingStep({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="rounded-md border max-h-64 overflow-x-auto overflow-y-auto">
+            <div className="rounded-lg border max-h-64 overflow-x-auto overflow-y-auto">
               <Table>
                 <TableHeader>
                   <TableRow>

@@ -3,13 +3,16 @@
 import Link from 'next/link'
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { AlertTriangle, Download, Loader2, CheckCircle2, ChevronDown, Info } from 'lucide-react'
+import { DetailSection, DefRow } from '@/components/ui/detail-section'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { AttnLine } from '@/components/ui/attn-line'
+import { SettingsSelect } from '@/components/settings/SettingsRows'
+import { Download, Loader2, ChevronDown } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
+import { cn, formatDateTime } from '@/lib/utils'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 
 type PaymentFormat = 'bg_lb' | 'pain001'
@@ -22,6 +25,15 @@ interface PaymentFilePanelProps {
   defaultFormat: PaymentFormat
   /** company_settings.salary_default_bank: sorts and auto-expands the matching bank's instructions. */
   defaultBank?: string | null
+  /**
+   * company_settings.bankgiro / iban: the sender account each format requires.
+   * null means missing as of the latest settings fetch (warn up front, the
+   * download would 400); undefined means unknown (settings not loaded), so no
+   * warning is shown. The caller must refetch after detours that can fix the
+   * setting (the warning links into the settings modal over this page).
+   */
+  senderBankgiro?: string | null
+  senderIban?: string | null
   readOnly?: boolean
   onDownloaded?: () => void
 }
@@ -49,6 +61,8 @@ export function PaymentFilePanel({
   paymentFileGeneratedAt,
   defaultFormat,
   defaultBank,
+  senderBankgiro,
+  senderIban,
   readOnly,
   onDownloaded,
 }: PaymentFilePanelProps) {
@@ -74,6 +88,14 @@ export function PaymentFilePanel({
     format === 'bg_lb'
       ? `/api/salary/runs/${salaryRunId}/payment/bg-lb`
       : `/api/salary/runs/${salaryRunId}/payment/pain001`
+
+  // The sender account lives in company_settings, not in the Bolagsverket
+  // snapshot shown on the settings overview: users see a bankgiro there and
+  // reasonably believe it is configured. Say the precondition here, before
+  // the download 400s on it.
+  const senderMissing =
+    (format === 'bg_lb' && senderBankgiro === null) ||
+    (format === 'pain001' && senderIban === null)
 
   async function handleDownload() {
     // The button is disabled while a file is in flight; this guard closes the
@@ -113,115 +135,125 @@ export function PaymentFilePanel({
     }
   }
 
+  // The flow looked clean all the way until the bank said no: the file
+  // downloads fine and only fails at upload, on the pay date. Say the delivery
+  // precondition of the chosen format up front. It is one sentence per
+  // format: the pain.001 agreement caveat, or the LB sunset with its link.
+  const formatCaveat =
+    format === 'pain001' ? (
+      t('pain001_agreement_warning')
+    ) : (
+      <>
+        {t('sunset_warning')}{' '}
+        <Link href="/settings/salary" className="underline underline-offset-2 hover:text-foreground">
+          {t('sunset_link')}
+        </Link>
+      </>
+    )
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{t('title')}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <DetailSection
+      kicker={t('title')}
+      help={
+        <HelpPopover>
+          <p>
+            <span className="font-medium">{FORMAT_LABEL.pain001}</span>: {t('format_description_pain001')}
+          </p>
+          <p className="mt-2">
+            <span className="font-medium">{FORMAT_LABEL.bg_lb}</span>: {t('format_description_bg_lb')}
+          </p>
+          <p className="mt-2 text-muted-foreground">{t('open_payments_note')}</p>
+        </HelpPopover>
+      }
+    >
+      <div>
         {paymentFileFormat && paymentFileGeneratedAt && (
-          <div className="flex items-start gap-2 text-sm text-muted-foreground">
-            <CheckCircle2 className="h-4 w-4 mt-0.5 text-success" />
-            <div>
-              {t('last_generated')}{' '}
-              <span className="text-foreground">
-                {FORMAT_LABEL[paymentFileFormat as PaymentFormat] ?? paymentFileFormat}
-              </span>{' '}
-              ({new Date(paymentFileGeneratedAt).toLocaleString('sv-SE')})
-            </div>
-          </div>
+          <DefRow label={t('last_generated')}>
+            {FORMAT_LABEL[paymentFileFormat as PaymentFormat] ?? paymentFileFormat}{' '}
+            <span className="text-muted-foreground tabular-nums">
+              ({formatDateTime(paymentFileGeneratedAt)})
+            </span>
+          </DefRow>
         )}
 
         {!readOnly && (
-          <>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">{t('format_label')}</label>
-              <Select value={format} onValueChange={(v) => setFormat(v as PaymentFormat)}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="pain001">{FORMAT_LABEL.pain001}</SelectItem>
-                  <SelectItem value="bg_lb">{FORMAT_LABEL.bg_lb}</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {format === 'bg_lb' ? t('format_description_bg_lb') : t('format_description_pain001')}
-              </p>
-            </div>
+          <DefRow label={t('format_label')}>
+            <SettingsSelect
+              aria-label={t('format_label')}
+              value={format}
+              onChange={(e) => setFormat(e.target.value as PaymentFormat)}
+              wrapperClassName="-my-1"
+            >
+              <option value="pain001">{FORMAT_LABEL.pain001}</option>
+              <option value="bg_lb">{FORMAT_LABEL.bg_lb}</option>
+            </SettingsSelect>
+          </DefRow>
+        )}
+      </div>
 
-            {/* The flow looked clean all the way until the bank said no: the
-                file downloads fine and only fails at upload, on the pay date.
-                Say the delivery precondition up front instead. */}
-            {format === 'pain001' && (
-              <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
-                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <span className="text-muted-foreground">{t('pain001_agreement_warning')}</span>
-              </div>
-            )}
+      {!readOnly && (
+        <div className="mt-3 space-y-3">
+          {/* One attention sentence per section (convention 6). A missing
+              sender account outranks the format caveat: without it the
+              download fails outright. The caveat then drops to a muted line
+              so the delivery precondition is still said. */}
+          {senderMissing ? (
+            <>
+              <AttnLine action={{ label: t('missing_sender_link'), href: '/settings/invoicing' }}>
+                {format === 'bg_lb' ? t('missing_bankgiro_warning') : t('missing_iban_warning')}
+              </AttnLine>
+              <p className="text-xs text-muted-foreground">{formatCaveat}</p>
+            </>
+          ) : format === 'pain001' ? (
+            <AttnLine>{t('pain001_agreement_warning')}</AttnLine>
+          ) : (
+            <AttnLine action={{ label: t('sunset_link'), href: '/settings/salary' }}>
+              {t('sunset_warning')}
+            </AttnLine>
+          )}
 
-            {format === 'bg_lb' && (
-              <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
-                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <span className="text-muted-foreground">
-                  {t('sunset_warning')}{' '}
-                  <Link
-                    href="/settings/salary"
-                    className="underline underline-offset-2 hover:text-foreground"
-                  >
-                    {t('sunset_link')}
-                  </Link>
-                </span>
-              </div>
-            )}
-
-            <div className="flex justify-end">
-              <Button onClick={handleDownload} disabled={downloading}>
-                {downloading ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="mr-2 h-4 w-4" />
-                )}
-                {t('download')}
-              </Button>
-            </div>
-
+          {/* The one action row: the bank instructions are an appendix that
+              folds out under it, so the button stays where the section ends. */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <button
               type="button"
-              onClick={() => setShowInstructions(s => !s)}
-              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setShowInstructions((s) => !s)}
+              className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
               aria-expanded={showInstructions}
             >
-              <ChevronDown className={`h-3 w-3 transition-transform ${showInstructions ? 'rotate-180' : ''}`} />
+              <ChevronDown
+                className={cn('h-3 w-3 transition-transform duration-150', showInstructions && 'rotate-180')}
+              />
               {t('instructions_toggle')}
             </button>
+            <Button onClick={handleDownload} disabled={downloading}>
+              {downloading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="mr-2 h-4 w-4" />
+              )}
+              {t('download')}
+            </Button>
+          </div>
 
-            {showInstructions && (
-              <div className="space-y-2 rounded-md border bg-muted/30 p-3 text-xs">
+          {showInstructions && (
+            <div className="text-xs">
+              <div className="divide-y divide-border">
                 {sortedBanks.map((bank) => (
-                  <div key={bank}>
-                    <strong className="text-foreground">
+                  <p key={bank} className="py-2">
+                    <span className="text-foreground">
                       {BANK_NAME[bank]}
                       {bank === matchedBank ? ` (${t('your_bank')})` : ''}.
-                    </strong>{' '}
-                    <span className="text-muted-foreground">
-                      {t(`steps_${format}_${bank}`)}
-                    </span>
-                  </div>
+                    </span>{' '}
+                    <span className="text-muted-foreground">{t(`steps_${format}_${bank}`)}</span>
+                  </p>
                 ))}
-                <p className="pt-1 text-muted-foreground border-t mt-2">
-                  {t('instructions_footer')}
-                </p>
               </div>
-            )}
-
-            <div className="flex items-start gap-2 rounded-md border border-dashed bg-muted/20 p-3 text-xs text-muted-foreground">
-              <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-              <span>{t('open_payments_note')}</span>
+              <p className="pt-2 text-muted-foreground">{t('instructions_footer')}</p>
             </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
+          )}
+        </div>
+      )}
+    </DetailSection>
   )
 }

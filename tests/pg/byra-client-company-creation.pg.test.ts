@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 import { insertAuthUser } from '@/tests/pg/fixtures'
 
-// Tests for 20260804113000_byra_client_company_creation_admin_gate.sql
+// Tests for 20260826130400_byra_client_company_creation_admin_gate.sql
 // (cockpit slice D3, WL-15 resolution):
 //
 //   - creating a company under a BYRÅ team requires team role owner/admin

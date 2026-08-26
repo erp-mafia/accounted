@@ -6,7 +6,9 @@
  * the reversal carries `reverses_id` back to it and the original is annotated
  * with `reversed_by_id`. Both entries remain visible in the verifikationsserie.
  *
- * Optional body: `{ reversal_date?: ISO date }`. Defaults to today.
+ * Optional body: `{ reversal_date?: ISO date, allow_deep_chain?: boolean }`.
+ * reversal_date defaults to today; allow_deep_chain overrides the
+ * correction-chain depth guard (CORRECTION_CHAIN_TOO_DEEP at 3+ levels).
  *
  * Idempotent (mandatory Idempotency-Key).
  */
@@ -19,11 +21,16 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
+import { CorrectionChainTooDeepError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 
 const ReverseRequest = z
   .object({
     reversal_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'reversal_date must be ISO YYYY-MM-DD').optional(),
+    // Explicit override of the correction-chain depth guard: reversing an
+    // entry 3+ links deep in a rättelse chain returns
+    // CORRECTION_CHAIN_TOO_DEEP without it.
+    allow_deep_chain: z.boolean().optional(),
   })
   .strict()
 
@@ -51,6 +58,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'reversal_date defaults to today; the reversal is posted in the fiscal period covering that date. If today\'s period is locked the call returns PERIOD_LOCKED.',
     'You cannot reverse a draft (status must be posted). Use /correct after commit if the original needs replacing.',
+    'Reversing an entry 3+ links deep in a correction chain returns CORRECTION_CHAIN_TOO_DEEP (409). Book ONE net-effect correction instead, or pass allow_deep_chain=true to override.',
   ],
   example: {
     request: { reversal_date: '2026-05-13' },
@@ -85,6 +93,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const entryId = idParse.data
 
     let bodyReversalDate: string | undefined
+    let bodyAllowDeepChain = false
     let rawBody: unknown = null
     try {
       const text = await request.text()
@@ -104,6 +113,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         })
       }
       bodyReversalDate = parsed.data.reversal_date
+      bodyAllowDeepChain = parsed.data.allow_deep_chain === true
     }
 
     const today = new Date().toISOString().split('T')[0]
@@ -122,7 +132,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Pre-flight: confirm the original exists, is posted, and not already reversed.
     const { data: original, error: fetchErr } = await ctx.supabase
       .from('journal_entries')
-      .select('id, status, reversed_by_id, voucher_series, voucher_number')
+      .select('id, status, reversed_by_id, voucher_series, voucher_number, correction_of_id, reverses_id')
       .eq('company_id', ctx.companyId!)
       .eq('id', entryId)
       .maybeSingle()
@@ -131,7 +141,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!original) {
       return v1ErrorResponseFromCode('JOURNAL_ENTRY_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
-    const typed = original as { id: string; status: string; reversed_by_id: string | null }
+    const typed = original as {
+      id: string
+      status: string
+      reversed_by_id: string | null
+      correction_of_id: string | null
+      reverses_id: string | null
+    }
     if (typed.status !== 'posted') {
       return v1ErrorResponseFromCode('CANNOT_REVERSE_NON_POSTED', ctx.log, {
         requestId: ctx.requestId,
@@ -143,6 +159,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
         details: { existing_reversal_id: typed.reversed_by_id },
       })
+    }
+
+    // Chain-depth guard BEFORE the dry-run return: a dry run must give the
+    // same verdict the real execution would. reverseEntry re-checks on the
+    // real path.
+    if (!bodyAllowDeepChain) {
+      const chain = await correctionChainDepth(ctx.supabase, ctx.companyId!, typed)
+      if (chain.depth >= CORRECTION_CHAIN_GUARD_DEPTH) {
+        return v1ErrorResponse(
+          new CorrectionChainTooDeepError(chain.depth, chain.rootVoucher),
+          ctx.log,
+          { requestId: ctx.requestId },
+        )
+      }
     }
 
     if (ctx.dryRun) {
@@ -157,7 +187,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     try {
-      const reversal = await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entryId, reversalDate)
+      const reversal = await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entryId, reversalDate, {
+        allowDeepChain: bodyAllowDeepChain,
+      })
       return ok(
         {
           reversal_id: reversal.id,

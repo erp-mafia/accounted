@@ -49,7 +49,18 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
 })
 // category mapping is real: gives the route real BAS accounts to validate.
 
+// Underlag propagation: mocked to assert the wiring (called once per item
+// that actually booked); behavior is unit-tested in
+// lib/transactions/__tests__/inbox-underlag.test.ts.
+const { propagateUnderlagMock } = vi.hoisted(() => ({
+  propagateUnderlagMock: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/transactions/inbox-underlag', () => ({
+  propagateUnderlagForBookedTransaction: propagateUnderlagMock,
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { withUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
 import { POST } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -64,6 +75,7 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
   // Insert payloads are recorded verbatim: the proxy would happily accept a
   // phantom column, so assertions have to inspect the object itself.
   const inserts: Record<string, unknown[]> = {}
+  const updates: Record<string, unknown[]> = {}
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -76,13 +88,14 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
         }
         return (...args: unknown[]) => {
           if (prop === 'insert') (inserts[table] ??= []).push(args[0])
+          if (prop === 'update') (updates[table] ??= []).push(args[0])
           return buildChain(table)
         }
       },
     }
     return new Proxy({}, handler)
   }
-  return { supabase: { from: vi.fn((table: string) => buildChain(table)) }, inserts }
+  return { supabase: { from: vi.fn((table: string) => buildChain(table)) }, inserts, updates }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -119,6 +132,364 @@ beforeEach(() => {
 })
 
 describe('POST batch-categorize', () => {
+  it('atomically unignores ignored rows when categorizing them as private', async () => {
+    const { supabase, updates } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_A,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            cash_account_id: null,
+            journal_entry_id: null,
+            is_ignored: true,
+          },
+          error: null,
+        },
+        { data: [{ id: TX_A }], error: null },
+      ],
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [{ transaction_id: TX_A, categorization: { is_business: false } }],
+        },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.summary).toEqual({ total: 1, succeeded: 1, failed: 0 })
+    expect(updates.transactions).toContainEqual(
+      expect.objectContaining({
+        is_business: false,
+        category: 'private',
+        is_ignored: false,
+        journal_entry_id: 'je-fresh',
+      }),
+    )
+  })
+
+  it('maps the ignored-row constraint to a typed per-item error', async () => {
+    const { supabase } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_A,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            cash_account_id: null,
+            journal_entry_id: null,
+            is_ignored: true,
+          },
+          error: null,
+        },
+        {
+          data: null,
+          error: {
+            code: '23514',
+            message:
+              'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"',
+          },
+        },
+      ],
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [{ transaction_id: TX_A, categorization: { is_business: false } }],
+        },
+      ),
+      batchParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.results[0].error).toMatchObject({
+      code: 'TX_CATEGORIZE_IGNORED_CONFLICT',
+      message:
+        'Transaktionen är fortfarande markerad som ignorerad och kan därför inte kopplas till en verifikation.',
+    })
+    expect(body.data.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+    expect(reverseEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'user-1',
+      'je-fresh',
+    )
+  })
+
+  it('returns a per-item race conflict when the guarded update matches no row without creating an entry', async () => {
+    const { supabase } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_A,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [], error: null },
+      ],
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    createTxJE.mockResolvedValueOnce(null)
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [{ transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } }],
+        },
+      ),
+      batchParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.results[0].error.code).toBe('TX_CATEGORIZE_RACE')
+    expect(body.data.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('keeps unrelated transaction update errors mapped to INTERNAL_ERROR', async () => {
+    const { supabase } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_A,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            cash_account_id: null,
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        {
+          data: null,
+          error: { code: 'P0001', message: 'Invoice not found' },
+        },
+      ],
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [{ transaction_id: TX_A, categorization: { is_business: false } }],
+        },
+      ),
+      batchParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.results[0].error.code).toBe('INTERNAL_ERROR')
+    expect(reverseEntryMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses the linked cash account in validation and the posted mapping', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: {
+          data: {
+            id: TX_A,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            cash_account_id: 'cash-1',
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        cash_accounts: { data: { ledger_account: '1931' }, error: null },
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      }).supabase,
+    )
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [
+            { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+          ],
+        },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(findMissingAccountsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      expect.arrayContaining(['1931']),
+    )
+    expect(createTxJE).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'user-1',
+      expect.objectContaining({ id: TX_A, cash_account_id: 'cash-1' }),
+      expect.objectContaining({ credit_account: '1931' }),
+    )
+  })
+
+  it('propagates underlag once per item that actually booked, not for already-booked items', async () => {
+    const txRow = (id: string, journalEntryId: string | null) => ({
+      data: {
+        id,
+        company_id: COMPANY_ID,
+        date: '2026-05-12',
+        amount: -100,
+        currency: 'SEK',
+        merchant_name: 'ICA',
+        cash_account_id: null,
+        journal_entry_id: journalEntryId,
+      },
+      error: null,
+    })
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [
+          txRow(TX_A, null), // item A fetch: unbooked
+          { data: [{ id: TX_A }], error: null }, // item A CAS update: owned
+          txRow(TX_B, 'je-old'), // item B fetch: already booked
+          { data: null, error: null }, // item B flags-flip update
+        ],
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      }).supabase,
+    )
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [
+            { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+            { transaction_id: TX_B, categorization: { is_business: true, category: 'expense_office' } },
+          ],
+        },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    // Only the item whose CAS write this batch owns gets the propagation;
+    // the already-booked item was consumed by whatever booked it earlier.
+    expect(propagateUnderlagMock).toHaveBeenCalledTimes(1)
+    expect(propagateUnderlagMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      TX_A,
+      'je-fresh',
+    )
+  })
+
+  it('isolates a settlement lookup failure to its item and continues the batch', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [
+          {
+            data: {
+              id: TX_A,
+              company_id: COMPANY_ID,
+              date: '2026-05-12',
+              amount: -100,
+              currency: 'SEK',
+              cash_account_id: 'cash-broken',
+              journal_entry_id: null,
+            },
+            error: null,
+          },
+          {
+            data: {
+              id: TX_B,
+              company_id: COMPANY_ID,
+              date: '2026-05-13',
+              amount: -200,
+              currency: 'SEK',
+              cash_account_id: 'cash-ok',
+              journal_entry_id: null,
+            },
+            error: null,
+          },
+        ],
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        cash_accounts: [
+          { data: null, error: { message: 'temporary lookup failure' } },
+          { data: { ledger_account: '1931' }, error: null },
+        ],
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      }).supabase,
+    )
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [
+            { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+            { transaction_id: TX_B, categorization: { is_business: true, category: 'expense_office' } },
+          ],
+        },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.results[0].ok).toBe(false)
+    expect(body.data.results[0].error.code).toBe('INTERNAL_ERROR')
+    expect(body.data.results[1].ok).toBe(true)
+    expect(body.data.summary).toEqual({ total: 2, succeeded: 1, failed: 1 })
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+    expect(createTxJE).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'user-1',
+      expect.objectContaining({ id: TX_B }),
+      expect.objectContaining({ credit_account: '1931' }),
+    )
+  })
+
   it('returns per-item ACCOUNTS_NOT_IN_CHART for items whose mapping references inactive accounts; clean items still succeed', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -249,9 +620,15 @@ describe('POST batch-categorize', () => {
       voucher_gap_explanations: { data: null, error: null },
     })
     mockServiceClient.mockReturnValue(supabase)
-    // Storno fails: the orphan keeps its number, so the break in the
-    // verifikationsnummerserie must be documented (BFNAR 2013:2).
-    reverseEntryMock.mockRejectedValueOnce(new Error('period locked'))
+    // The reversal sequence allocation fails before a reversal row is stored,
+    // so the engine exposes the exact unused number for documentation.
+    reverseEntryMock.mockRejectedValueOnce(
+      withUnusedVoucherAllocation(new Error('account lookup failed'), {
+        fiscalPeriodId: 'period-1',
+        voucherSeries: 'B',
+        voucherNumber: 43,
+      }),
+    )
 
     const res = await POST(
       makeRequest(
@@ -277,9 +654,10 @@ describe('POST batch-categorize', () => {
       user_id: 'user-1',
       fiscal_period_id: 'period-1',
       voucher_series: 'B',
-      gap_start: 42,
-      gap_end: 42,
-      explanation: 'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',
+      gap_start: 43,
+      gap_end: 43,
+      explanation:
+        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
     })
   })
 })

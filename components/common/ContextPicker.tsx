@@ -97,7 +97,7 @@ export function ContextPicker({
         aria-haspopup="listbox"
         aria-label={ariaLabel}
         className={cn(
-          'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border px-3 py-[5px] text-[13px]',
+          'inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-border px-3 text-[13px]',
           'text-foreground transition-colors duration-150',
           disabled
             ? 'opacity-50 cursor-not-allowed'
@@ -114,7 +114,12 @@ export function ContextPicker({
           <div
             ref={listRef}
             role="listbox"
-            className="fixed z-[60] min-w-[220px] max-w-[320px] rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
+            // Portaled to document.body, so inside a modal dialog the list is
+            // DOM-wise outside DialogContent: data-dialog-companion keeps a
+            // click in it from dismissing the dialog, and pointer-events-auto
+            // undoes the modal body lock that would swallow item clicks.
+            data-dialog-companion=""
+            className="pointer-events-auto fixed z-[60] min-w-[220px] max-w-[320px] rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
             style={{ top: pos.top, left: pos.left }}
           >
             <div className="max-h-72 overflow-y-auto px-1">
@@ -130,7 +135,7 @@ export function ContextPicker({
                     setOpen(false)
                   }}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
+                    'flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
                     item.disabled
                       ? 'text-muted-foreground/40 cursor-not-allowed'
                       : item.id === value

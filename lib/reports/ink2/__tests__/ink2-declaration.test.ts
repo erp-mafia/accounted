@@ -236,7 +236,7 @@ describe('generateINK2Declaration: closed fiscal year', () => {
     // 442 000 + 60 000 + 4 000
     expect(result.ink2s['8020']).toBe(506_000)
     expect(result.ink2s['8021']).toBe(0)
-    expect(result.ink2['7113']).toBe(506_000)
+    expect(result.ink2['7104']).toBe(506_000)
   })
 
   it('does not re-add the periodiseringsfond, which is already in the result', async () => {

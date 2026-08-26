@@ -5,6 +5,7 @@
  * No DB or Supabase dependency: all inputs are plain data.
  */
 import { resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
+import { roundOre, ORE_TOLERANCE, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 import {
   getRevenueAccount,
   getOutputVatAccount,
@@ -31,6 +32,14 @@ export interface ProposePaymentLinesInput {
     /** Per-invoice öresavrundning override; null = inherit the company setting. */
     ore_rounding?: boolean | null
     /**
+     * ROT/RUT-avdrag (fakturamodellen), invoice currency. The customer pays
+     * total minus this; the rest is a receivable on Skatteverket (1513) that
+     * was debited at issue (accrual) or is debited at payment (cash method).
+     * The proposal must therefore never expect the deduction on the bank leg:
+     * doing so is what made every ROT/RUT invoice fail the overpayment guard.
+     */
+    deduction_total?: number | null
+    /**
      * Dimensions PR7: the invoice's default bag. Stamped on every proposed
      * line: the payment dialog always submits its (editable) lines, so the
      * preview IS the booked entry and must re-propagate the tag like the
@@ -38,6 +47,15 @@ export interface ProposePaymentLinesInput {
      * (the preview groups per rate); users can retag lines in the grid.
      */
     default_dimensions?: Record<string, string> | null
+    /**
+     * Prior-payment state (#1717). When a partial payment exists the proposal
+     * must clear what actually remains, not the full total: a full-total
+     * proposal is rejected server-side with MATCH_AMOUNT_EXCEEDS_REMAINING,
+     * which left invoices stuck in partially_paid with an öre remaining.
+     * Absent or fully-unpaid values keep the proposal identical to before.
+     */
+    paid_amount?: number | null
+    remaining_amount?: number | null
   }
   accountingMethod: 'accrual' | 'cash'
   entityType: EntityType
@@ -87,6 +105,11 @@ export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[]
   const paymentAccount = input.paymentAccount || '1930'
   const desc = invoice.invoice_number ? `Betalning faktura ${invoice.invoice_number}` : 'Betalning faktura'
 
+  // #1717: an invoice with a prior partial payment gets a proposal that
+  // clears the actual remaining, never the full total.
+  const remainingAware = proposeRemainingAwareLines(invoice, accountingMethod, paymentAccount, desc)
+  if (remainingAware) return withInvoiceDimensions(remainingAware, invoice)
+
   // Öresavrundning: when it applies (SEK, enabled, non-integer total) the
   // customer pays the rounded "Att betala" from the PDF, not the stored öre
   // total. Propose the bank leg at the rounded amount and let 3740 carry the
@@ -97,17 +120,112 @@ export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[]
     input.companyOreRounding === undefined ? undefined : { ore_rounding: input.companyOreRounding },
   ).roundingDelta
 
-  const lines = accountingMethod === 'accrual'
-    ? proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference, roundingDelta)
-    : proposeCashLines(invoice, paymentAccount, desc, entityType, roundingDelta)
+  // 1513 is a kronor receivable, so the deduction converts with the invoice's
+  // booking rate or not at all: same refusal as generateRotRutLines.
+  const deductionSek = resolveDeductionSek(invoice)
 
-  // Dimensions PR7: re-propagate the invoice default onto every proposed leg
-  // (matches createInvoicePaymentJournalEntry/createInvoiceCashEntry).
+  const lines = accountingMethod === 'accrual'
+    ? proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference, roundingDelta, deductionSek)
+    : proposeCashLines(invoice, paymentAccount, desc, entityType, roundingDelta, deductionSek)
+
+  return withInvoiceDimensions(lines, invoice)
+}
+
+/**
+ * Remaining-aware proposal for an invoice with a prior partial payment
+ * (#1717). Returns null whenever the legacy full-total proposal applies, so
+ * fresh unpaid invoices keep a byte-identical proposal.
+ *
+ * Scope: SEK + accrual + no ROT/RUT deduction only.
+ *   - Cash-method partial completion is refused server-side
+ *     (cashPartialBlockReason: the generated cash entry always books the full
+ *     invoice), so a remaining-based cash proposal would only book a rejected
+ *     entry with a nicer preview.
+ *   - A foreign-currency remaining needs a payment-day FX conversion this
+ *     pure function does not carry; the dialog's FX path already handles it.
+ *   - On a ROT/RUT invoice the outstanding remainder is (or includes)
+ *     Skatteverket's share, which sits on 1513 and is settled by the ROT/RUT
+ *     payout flow, not by clearing 1510 here.
+ *
+ * Two shapes:
+ *   - 0 < remaining < 1 kr (the stuck öresavrundning case): a bank-less
+ *     write-off, Dr 3740 / Cr 1510, so one click closes the invoice. Polarity
+ *     per buildInvoicePaymentClearingLines: the customer under-paid, so 3740
+ *     takes the debit (öresavrundningsförlust).
+ *   - remaining >= 1 kr: a normal clearing of the remaining, Dr bank /
+ *     Cr 1510.
+ */
+function proposeRemainingAwareLines(
+  invoice: ProposePaymentLinesInput['invoice'],
+  accountingMethod: 'accrual' | 'cash',
+  paymentAccount: string,
+  desc: string,
+): FormLine[] | null {
+  if (accountingMethod !== 'accrual') return null
+  if (invoice.currency !== 'SEK') return null
+  if ((invoice.deduction_total ?? 0) > 0) return null
+
+  const total = roundOre(invoice.total)
+  const remaining = roundOre(
+    invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0),
+  )
+  const hasPartial = remaining > ORE_TOLERANCE && total - remaining > ORE_TOLERANCE
+  if (!hasPartial) return null
+
+  if (remaining < ORE_ROUNDING_SETTLEMENT_MAX) {
+    return [
+      {
+        account_number: '3740',
+        debit_amount: toFormAmount(remaining),
+        credit_amount: '',
+        line_description: 'Öresavrundning',
+      },
+      {
+        account_number: '1510',
+        debit_amount: '',
+        credit_amount: toFormAmount(remaining),
+        line_description: desc,
+      },
+    ]
+  }
+
+  return [
+    {
+      account_number: paymentAccount,
+      debit_amount: toFormAmount(remaining),
+      credit_amount: '',
+      line_description: desc,
+    },
+    {
+      account_number: '1510',
+      debit_amount: '',
+      credit_amount: toFormAmount(remaining),
+      line_description: desc,
+    },
+  ]
+}
+
+/**
+ * Dimensions PR7: re-propagate the invoice default onto every proposed leg
+ * (matches createInvoicePaymentJournalEntry/createInvoiceCashEntry).
+ */
+function withInvoiceDimensions(
+  lines: FormLine[],
+  invoice: ProposePaymentLinesInput['invoice'],
+): FormLine[] {
   const bag = invoice.default_dimensions
   if (bag && Object.keys(bag).length > 0) {
     return lines.map((line) => ({ ...line, dimensions: { ...bag } }))
   }
   return lines
+}
+
+function resolveDeductionSek(invoice: ProposePaymentLinesInput['invoice']): number {
+  const deduction = invoice.deduction_total ?? 0
+  if (deduction <= 0) return 0
+  const sek = resolveSekAmountOrNull(deduction, null, invoice.currency, invoice.exchange_rate)
+  if (sek === null) throw new InvoiceFxRateMissingError(invoice.currency)
+  return roundOre(sek)
 }
 
 /**
@@ -129,14 +247,17 @@ function proposeAccrualLines(
   paymentAccount: string,
   desc: string,
   exchangeRateDifference?: number,
-  roundingDelta = 0
+  roundingDelta = 0,
+  deductionSek = 0
 ): FormLine[] {
-  const bookedSekAmount = resolveSekAmount(
+  // The customer's share only: 1510 was debited total minus the ROT/RUT
+  // deduction at issue (1513 took the rest), so that is what the payment clears.
+  const bookedSekAmount = Math.round((resolveSekAmount(
     invoice.total,
     invoice.total_sek,
     invoice.currency,
     invoice.exchange_rate
-  )
+  ) - deductionSek) * 100) / 100
   const lines: FormLine[] = []
 
   if (exchangeRateDifference && exchangeRateDifference !== 0) {
@@ -198,7 +319,8 @@ function proposeCashLines(
   paymentAccount: string,
   desc: string,
   entityType: EntityType,
-  roundingDelta = 0
+  roundingDelta = 0,
+  deductionSek = 0
 ): FormLine[] {
   const lines: FormLine[] = []
   const isForeign = invoice.currency !== 'SEK'
@@ -309,12 +431,25 @@ function proposeCashLines(
     ? Math.round(totalCredits * 100) / 100
     : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
 
+  // Cash method: revenue + moms on the full amount, but the bank only ever
+  // receives the customer's share; the ROT/RUT deduction is debited to 1513
+  // (Skatteverket pays it later), mirroring createInvoiceCashEntry.
   lines.push({
     account_number: paymentAccount,
-    debit_amount: toFormAmount(debitAmount + roundingDelta),
+    debit_amount: toFormAmount(debitAmount - deductionSek + roundingDelta),
     credit_amount: '',
     line_description: desc,
   })
+  if (deductionSek > 0) {
+    lines.push({
+      account_number: '1513',
+      debit_amount: toFormAmount(deductionSek),
+      credit_amount: '',
+      line_description: invoice.invoice_number
+        ? `ROT/RUT-avdrag faktura ${invoice.invoice_number}`
+        : 'ROT/RUT-avdrag faktura',
+    })
+  }
 
   lines.push(...creditLines)
 

@@ -1,0 +1,19 @@
+{
+  "id": "shopify",
+  "sector": "general",
+  "exportName": "shopifyExtension",
+  "entryPoint": "@/extensions/general/shopify",
+  "workspace": null,
+  "requiredEnvVars": ["SHOPIFY_CREDENTIALS_ENCRYPTION_KEY"],
+  "optionalEnvVars": [],
+  "npmDependencies": [],
+  "definition": {
+    "name": "Shopify",
+    "category": "import",
+    "icon": "ShoppingBag",
+    "dataPattern": "manual",
+    "hasOwnData": true,
+    "description": "Hämta betalda ordrar och återbetalningar från din Shopify-butik till Ordersidan",
+    "longDescription": "Anslut din Shopify-butik så hämtas betalda ordrar och återbetalningar automatiskt varje natt till Ordersidan, med belopp, betalsätt och moms per sats. Inget bokförs automatiskt: du bokför varje order själv från Ordersidan."
+  }
+}

@@ -4,6 +4,7 @@ import {
   hasCapability,
   requireCapability,
   capabilityBlockedResponse,
+  getCompanyIdsWithCapability,
   getCompanyEntitlements,
 } from '../has-capability'
 import { CAPABILITY, PAID_CAPABILITIES } from '../keys'
@@ -134,6 +135,68 @@ describe('hasCapability', () => {
   })
 })
 
+describe('getCompanyIdsWithCapability', () => {
+  const directCompanyId = '11111111-1111-4111-8111-111111111111'
+  const firmCompanyId = '22222222-2222-4222-8222-222222222222'
+  const expiredCompanyId = '33333333-3333-4333-8333-333333333333'
+  const disabledCompanyId = '44444444-4444-4444-8444-444444444444'
+  const teamId = '55555555-5555-4555-8555-555555555555'
+
+  it('resolves direct and firm grants before excluding expired and disabled companies', async () => {
+    const supabase = makeSupabase({
+      companies: {
+        data: [
+          { id: directCompanyId, team_id: null },
+          { id: firmCompanyId, team_id: teamId },
+          { id: expiredCompanyId, team_id: null },
+          { id: disabledCompanyId, team_id: null },
+        ],
+      },
+      capability_grants: {
+        data: [
+          { company_id: directCompanyId, team_id: null, expires_at: null },
+          { company_id: null, team_id: teamId, expires_at: iso(60_000) },
+          { company_id: expiredCompanyId, team_id: null, expires_at: iso(-60_000) },
+          { company_id: disabledCompanyId, team_id: null, expires_at: null },
+        ],
+      },
+      company_capability_config: { data: [{ company_id: disabledCompanyId }] },
+    })
+
+    const result = await getCompanyIdsWithCapability(
+      supabase,
+      [directCompanyId, firmCompanyId, expiredCompanyId, disabledCompanyId],
+      CAPABILITY.bank_sync,
+    )
+
+    expect([...result].sort()).toEqual([directCompanyId, firmCompanyId].sort())
+  })
+
+  it('returns every valid requested company when the paywall is bypassed', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const supabase = makeSupabase({})
+
+    const result = await getCompanyIdsWithCapability(
+      supabase,
+      [directCompanyId, directCompanyId, 'not-a-uuid'],
+      CAPABILITY.skatteverket,
+    )
+
+    expect([...result]).toEqual([directCompanyId])
+  })
+
+  it('throws on a database error so a cron run cannot silently skip every payer', async () => {
+    const supabase = makeSupabase({
+      companies: { data: null, error: { message: 'connection reset' } },
+      company_capability_config: { data: [] },
+    })
+
+    await expect(
+      getCompanyIdsWithCapability(supabase, [directCompanyId], CAPABILITY.bank_sync),
+    ).rejects.toThrow('Failed to resolve capability company scopes: connection reset')
+  })
+})
+
 describe('requireCapability', () => {
   it('returns null (proceed) when the company has the capability', async () => {
     const supabase = makeSupabase({
@@ -177,6 +240,8 @@ describe('getCompanyEntitlements', () => {
     expect(result.trialEndsAt).toBe(expiry)
     expect(result.capabilities).toContain(CAPABILITY.ai)
     expect(result.capabilities).toContain(CAPABILITY.bank_sync)
+    expect(result.entitlementState).toBe('trial')
+    expect(result.trialExpiredAt).toBeNull()
   })
 
   it('hides the trial once a non-trial grant is active (converted customer)', async () => {
@@ -193,17 +258,65 @@ describe('getCompanyEntitlements', () => {
     const result = await getCompanyEntitlements(supabase, companyId)
     expect(result.trialEndsAt).toBeNull()
     expect(result.capabilities).toContain(CAPABILITY.ai)
+    expect(result.entitlementState).toBe('paid')
+    expect(result.trialExpiredAt).toBeNull()
   })
 
-  it('returns no trial and no capabilities after the trial lapsed', async () => {
+  it('reports trial_expired with the lapsed expiry after the trial lapsed', async () => {
+    const expiredEarlier = iso(-120_000)
+    const expiredLatest = iso(-60_000)
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: expiredLatest, source: 'trial' },
+          { capability_key: CAPABILITY.bank_sync, expires_at: expiredEarlier, source: 'trial' },
+        ],
+      },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toEqual([])
+    expect(result.entitlementState).toBe('trial_expired')
+    // Latest expiry across the trial rows, even though all are expired.
+    expect(result.trialExpiredAt).toBe(expiredLatest)
+  })
+
+  it('reports lapsed_subscription for a churned payer (cancelled subscription, expired trial rows)', async () => {
     const supabase = makeSupabase({
       companies: { data: { team_id: null } },
       capability_grants: {
         data: [{ capability_key: CAPABILITY.ai, expires_at: iso(-60_000), source: 'trial' }],
       },
+      company_subscriptions: { data: { status: 'canceled' } },
     })
     const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.entitlementState).toBe('lapsed_subscription')
     expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toEqual([])
+  })
+
+  it('a live subscription status never marks a company lapsed', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [{ capability_key: CAPABILITY.ai, expires_at: iso(-60_000), source: 'trial' }],
+      },
+      company_subscriptions: { data: { status: 'active' } },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.entitlementState).toBe('trial_expired')
+  })
+
+  it('reports none when no grant rows exist at all', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: { data: [] },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.entitlementState).toBe('none')
+    expect(result.trialEndsAt).toBeNull()
+    expect(result.trialExpiredAt).toBeNull()
     expect(result.capabilities).toEqual([])
   })
 
@@ -213,6 +326,7 @@ describe('getCompanyEntitlements', () => {
     const result = await getCompanyEntitlements(supabase, companyId)
     expect(result.trialEndsAt).toBeNull()
     expect(result.capabilities).toEqual([...PAID_CAPABILITIES])
+    expect(result.entitlementState).toBe('paid')
   })
 })
 

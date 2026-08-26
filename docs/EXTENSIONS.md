@@ -42,12 +42,14 @@ These are configured via `extensions.config.json` and only loaded when explicitl
 
 Sector extensions are tied to a specific market sector. They're only relevant to businesses operating in that sector. A restaurant owner wants "Food Cost %" but an IT consultant does not.
 
-Examples:
+Examples of what a sector extension could be (design intent, none of these exist):
 - **Restaurant:** Food Cost %, Earnings Per Alcohol Liter, POS Z-Report Import, Tip Tracking
 - **Construction:** ROT Calculator, Project Cost Tracking
 - **Hotel:** RevPAR, Occupancy Tracking
 - **IT/Consulting:** Billable Hours Ratio, Project Billing Metrics
-- **E-commerce:** Shopify Order Import, Multi-channel Revenue Analytics
+- **E-commerce:** Multi-channel Revenue Analytics
+
+**Current state (2026-08-26):** no sector extension has been built. Every shipped extension lives under `extensions/general/`, and `SectorSlug` in `lib/extensions/types.ts` is currently just `'general'`. The sector concept, the marketplace routes (`app/(dashboard)/extensions/[sector]/...`) and the `sector/slug` extension-id format are in place for when the first one arrives. Shopify and WooCommerce order import shipped as general extensions, not e-commerce sector ones.
 
 ### The Unified Model
 
@@ -55,38 +57,29 @@ Both general and sector extensions live in the same system:
 
 ```
 extensions/
-  general/                    ← General extensions (any business)
-    receipt-ocr/
-    ai-categorization/
-    ai-chat/
-    push-notifications/
-    enable-banking/
-    invoice-inbox/
-    calendar/
-    email/
-  restaurant/                 ← Restaurant sector extensions
-    food-cost/
-    earnings-per-liter/
-    pos-import/
-    tip-tracking/
-  construction/               ← Construction sector extensions
-    rot-calculator/
-    project-cost/
-  hotel/                      ← Hotel sector extensions
-    revpar/
-    occupancy/
-  tech/                       ← IT/Consulting sector extensions
-    billable-hours/
-    project-billing/
-  ecommerce/                  ← E-commerce sector extensions
-    shopify-import/
-    multichannel-revenue/
-  export/                     ← Export & international trade extensions
-    eu-sales-list/
-    intrastat/
-    vat-monitor/
-    currency-receivables/
+  general/                    ← General extensions (any business); the only sector today
+    arcim-migration/          ← Systemmigration: import from Fortnox, Visma, Bokio, Björn Lundén, Briox
+    bolagsverket/             ← Digital årsredovisning filing to Bolagsverket (iXBRL)
+    calendar/                 ← Kalender: month/week/day views
+    cloud-backup/             ← Molnsynkronisering: sync the säkerhetsbackup to the user's own cloud storage
+    document-extraction/      ← AI-extrahering av underlag: reads receipts and invoices, fills supplier/amount/VAT/date
+    email/                    ← E-post (Resend): invoices and reminders by e-mail
+    enable-banking/           ← Bankintegration (PSD2): automatic bank transaction sync
+    invoice-inbox/            ← Dokumentinkorg: forward supplier invoices to a unique address
+    mail/                     ← Brevlådor: lets Kvittojakten (receipt hunt) search the user's mailboxes
+    mcp-server/               ← MCP-server (API): bookkeeping via Claude, Cursor or any MCP client
+    push-notifications/       ← Push-notiser: event notifications
+    shopify/                  ← Shopify: paid orders and refunds into the Ordersidan
+    skatteverket/             ← Skatteverket: VAT declaration submission via BankID, skattekonto
+    stripe/                   ← Stripe-betalningar: payment links on invoices, automatic avprickning
+    tic/                      ← Bolagsuppgifter: company data from public registers via TIC
+    whatsapp-inbox/           ← WhatsApp-inkorg: receipts as photo or PDF to Accounted's WhatsApp number
+    woocommerce/              ← WooCommerce: paid orders and refunds into the transaction inbox
+    _example-branding/        ← Whitelabel branding starter (disabled by default)
+    example-logger/           ← Minimal example extension (index.ts only, no manifest)
 ```
+
+Which of these are compiled in is decided by `extensions.config.json`; today that is everything except `bolagsverket`, `push-notifications`, `_example-branding` and `example-logger`.
 
 Each extension directory contains a `manifest.json` declaring metadata, entry point, workspace component path, required env vars, and npm dependencies.
 
@@ -283,8 +276,8 @@ type ExtensionCategory = 'accounting' | 'reports' | 'import' | 'operations'
 | Earnings Per Alcohol Liter | Restaurant | A + B (both) | Liters sold per day/week | Alcohol revenue from BAS 3001 | Calculates revenue/liter, trends over time |
 | Food Cost % | Restaurant | A (core) | None | Food purchases (4000-series), food revenue (3000-series) | Calculates food_cost/food_revenue %, trends |
 | Tip Tracking | Restaurant | B (manual) | Tip amounts per shift | Optionally reads staff cost accounts | Total tips, tips/employee, tip % of revenue |
-| POS Z-Report Import | Restaurant | B (manual) | Uploads Z-report CSV/Excel | None | Parses POS data, stores in extension, shows daily sales analytics |
-| Shopify Order Import | E-commerce | B (manual) | Uploads order export | None | Imports orders into extension, shows revenue by product, trends |
+| POS Z-Report Import (not built) | Restaurant | B (manual) | Uploads Z-report CSV/Excel | None | Parses POS data, stores in extension, shows daily sales analytics |
+| Shopify / WooCommerce (shipped, general) | General | B (manual) | Store connection | None | Pulls paid orders and refunds into `webshop_orders` for the order and transaction inboxes |
 | ROT Calculator | Construction | A + B (both) | Labor hours, material costs per job | Invoice data for customer billing | ROT deduction amounts (30% of labor, max 50k/year per customer) |
 | RevPAR | Hotel | A + B (both) | Room count and occupancy | Room revenue accounts | Revenue Per Available Room, occupancy rate |
 | Billable Hours Ratio | IT/Consulting | A + B (both) | Hours worked per project | Invoice data for billed amounts | Billable/total hours, effective hourly rate |
@@ -297,77 +290,53 @@ type ExtensionCategory = 'accounting' | 'reports' | 'import' | 'operations'
 
 ```
 extensions/                           ← Extension source code (opt-in via config)
-  general/                            ← General extensions
-    receipt-ocr/
+  general/                            ← General extensions (the only sector that exists)
+    invoice-inbox/
       manifest.json                   ← Metadata, entry point, env vars, workspace path
       index.ts                        ← Extension definition + logic (exports Extension)
       lib/
       __tests__/
-    ai-categorization/
+    document-extraction/
       manifest.json
       index.ts
-      lib/
-    ai-chat/
+    skatteverket/
       manifest.json
       index.ts
       lib/
     push-notifications/
       manifest.json
       index.ts
-      lib/
+      api-routes.ts
+      notification-scheduler.ts
+      notification-sender.ts
     enable-banking/
       manifest.json
       index.ts
       lib/
+      components/
     email/                            ← Email service extension (registers Resend impl)
       manifest.json
       index.ts
       lib/
-    invoice-inbox/
-      manifest.json
-      index.ts
     calendar/
       manifest.json
       index.ts
-  restaurant/                         ← Restaurant sector
-    food-cost/
-      manifest.json
-    earnings-per-liter/
-      manifest.json
-    pos-import/
-      manifest.json
-    tip-tracking/
-      manifest.json
-  construction/                       ← Construction sector
-    rot-calculator/
-      manifest.json
-    project-cost/
-      manifest.json
-  hotel/                              ← Hotel sector
-    revpar/
-      manifest.json
-    occupancy/
-      manifest.json
-  tech/                               ← IT/Consulting sector
-    billable-hours/
-      manifest.json
-    project-billing/
-      manifest.json
-  ecommerce/                          ← E-commerce sector
-    shopify-import/
-      manifest.json
-    multichannel-revenue/
-      manifest.json
-  export/                             ← Export & international trade sector
-    eu-sales-list/
+      components/
+    mcp-server/                       ← MCP server: server.ts, tools, prompts, resources, skills, widgets
       manifest.json
       index.ts
-    intrastat/
-      manifest.json
-    vat-monitor/
-      manifest.json
-    currency-receivables/
-      manifest.json
+      server.ts
+    arcim-migration/                  ← Provider migration (Fortnox, Visma, Bokio, BL, Briox)
+    bolagsverket/                     ← Digital årsredovisning (iXBRL)
+    cloud-backup/                     ← Cloud sync of the säkerhetsbackup
+    mail/                             ← Mailbox connections for Kvittojakten
+    shopify/                          ← Shopify order import (api-routes.ts, components/, lib/)
+    woocommerce/                      ← WooCommerce order import (api-routes.ts, components/, lib/)
+    stripe/                           ← Stripe payment links and avprickning
+    tic/                              ← Company data lookup (TIC)
+    whatsapp-inbox/                   ← WhatsApp receipt intake
+    _example-branding/                ← Whitelabel starter, disabled by default
+    example-logger/                   ← Minimal example, index.ts only
 
 extensions.config.json                ← Which extensions are enabled (empty = core-only)
 extensions.schema.json                ← JSON Schema for extensions.config.json
@@ -388,7 +357,7 @@ lib/
   email/
     service.ts                        ← EmailService interface + no-op default + getEmailService()
   reports/
-    sru-export/                       ← SRU file export (core, not an extension)
+    sru-encoding.ts                   ← SRU file encoding (core, not an extension)
     ne-bilaga/                        ← NE tax form attachment (core, not an extension)
 
 scripts/
@@ -407,22 +376,18 @@ components/
       DateRangeFilter.tsx
       EmptyExtensionState.tsx
       ExtensionLoadingSkeleton.tsx
-    general/                          ← General extension workspaces
+    general/                          ← General extension workspaces (the only ones that exist)
       ReceiptOcrWorkspace.tsx
       AiCategorizationWorkspace.tsx
-      AiChatWorkspace.tsx
-    restaurant/                       ← Restaurant extension workspaces
-      EarningsPerLiterWorkspace.tsx
-      FoodCostWorkspace.tsx
-      PosImportWorkspace.tsx
-    construction/
-      RotCalculatorWorkspace.tsx
-    hotel/
-      RevparWorkspace.tsx
-    tech/
-      BillableHoursWorkspace.tsx
-    ecommerce/
-      ShopifyImportWorkspace.tsx
+      InvoiceInboxWorkspace.tsx
+      EnableBankingWorkspace.tsx
+      CalendarWorkspace.tsx
+      CloudBackupWorkspace.tsx
+      ArcimMigrationWorkspace.tsx
+      PushNotificationsWorkspace.tsx
+      TicWorkspace.tsx
+      MailConnectionsPanel.tsx
+      WhatsAppLinkPanel.tsx
 
 app/(dashboard)/
   extensions/                         ← Marketplace
@@ -465,12 +430,10 @@ To check if an extension is compiled in at runtime (e.g. for conditional UI), us
 ```typescript
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 
-if (ENABLED_EXTENSION_IDS.has('receipt-ocr')) {
-  // Show OCR UI
+if (ENABLED_EXTENSION_IDS.has('document-extraction')) {
+  // Show AI extraction status UI
 }
 ```
-
-AI extensions (`receipt-ocr`, `ai-categorization`, `ai-chat`) additionally require per-user AI consent before making API calls. This is a separate system using the `extension_data` table, managed by `lib/extensions/ai-consent.ts`.
 
 > **Note:** The `extension_toggles` database table still exists but is no longer queried by any code. It can be dropped in a future migration.
 
@@ -536,8 +499,7 @@ The sidebar (`DashboardNav.tsx`) has a section for extensions. It shows all comp
 
 ```
 ── Your Extensions ──────────
-  📷 Receipt OCR             → /e/general/receipt-ocr
-  🤖 AI Categorization       → /e/general/ai-categorization
+  📥 Dokumentinkorg          → /e/general/invoice-inbox
   📊 Food Cost %             → /e/restaurant/food-cost
   🍷 Earnings Per Liter      → /e/restaurant/earnings-per-liter
 ```
@@ -594,9 +556,9 @@ The previous architecture had extensions "always loaded" via hardcoded static im
 
 1. **Extension opt-in system** -- Extensions are configured via `extensions.config.json`. A generator script (`npm run setup:extensions`) reads manifest files and produces `lib/extensions/_generated/` files. Core compiles and runs with an empty config (zero extensions).
 
-2. **Services pattern** -- Extensions can expose named services via `services?: Record<string, (...args: any[]) => Promise<any>>` on the Extension interface. Core code uses `extensionRegistry.get('ext-id')?.services?.methodName` for runtime lookup instead of direct imports. This is how `ai-categorization` provides template embedding functions to core booking logic.
+2. **Services pattern** -- Extensions can expose named services via `services?: Record<string, (...args: any[]) => Promise<any>>` on the Extension interface. Core code uses `extensionRegistry.get('ext-id')?.services?.methodName` for runtime lookup instead of direct imports. This is how `skatteverket` exposes declaration submission to core pending-operation commits, and how `stripe` provides invoice payment links.
 
-3. **Catch-all API dispatcher** -- Extension API routes are registered via `apiRoutes: ApiRouteDefinition[]` on the Extension object. The catch-all at `/api/extensions/ext/[...path]/route.ts` handles auth, AI consent checks, path param extraction, and dispatches to the handler. URL pattern: `/api/extensions/ext/{extensionId}/{path}`.
+3. **Catch-all API dispatcher** -- Extension API routes are registered via `apiRoutes: ApiRouteDefinition[]` on the Extension object. The catch-all at `/api/extensions/ext/[...path]/route.ts` handles auth, path param extraction, and dispatches to the handler. URL pattern: `/api/extensions/ext/{extensionId}/{path}`.
 
 4. **SRU/NE-bilaga are core** -- These tax compliance features were moved from `extensions/` into `lib/reports/sru-export/` and `lib/reports/ne-bilaga/`. They are always available regardless of extension configuration.
 
@@ -630,7 +592,7 @@ The previous architecture had extensions "always loaded" via hardcoded static im
 | Shared UI components | Done | KPICard, DataEntryForm, DateRangeFilter, etc. |
 | Extension API routes (generic CRUD) | Done | `app/api/extensions/[sector]/[slug]/` |
 | Catch-all API dispatcher | Done | `app/api/extensions/ext/[...path]/route.ts` |
-| Services pattern | Done | Used by ai-categorization for template embeddings |
+| Services pattern | Done | Used by skatteverket (declaration submission) and stripe (payment links) |
 | Email service interface | Done | `lib/email/service.ts` + email extension |
 | SRU/NE-bilaga moved to core | Done | `lib/reports/sru-export/` + `lib/reports/ne-bilaga/` |
 | Manifest files for all extensions | Done | 25 manifest.json files |
@@ -679,15 +641,16 @@ npx tsx scripts/generate-extension-registry.ts --list
 
 # 2. Edit extensions.config.json: add extension IDs
 {
-  "extensions": ["receipt-ocr", "ai-categorization", "email"]
+  "extensions": ["invoice-inbox", "document-extraction", "email"]
 }
 
 # 3. Regenerate (also runs automatically on build/dev)
 npm run setup:extensions
 
 # 4. Set extension-specific env vars (check each manifest.json for requiredEnvVars)
-export ANTHROPIC_API_KEY=...
-export OPENAI_API_KEY=...
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_REGION=eu-north-1
 export RESEND_API_KEY=...
 export RESEND_FROM_EMAIL=...
 
@@ -769,15 +732,15 @@ Extensions with `exportName: null` and `entryPoint: null` are metadata-only -- t
 Extensions can expose named services for cross-boundary calls. This avoids direct imports from extension code into core:
 
 ```typescript
-// Extension: ai-categorization/index.ts
-export const aiCategorizationExtension: Extension = {
-  id: 'ai-categorization',
-  name: 'AI Categorization',
+// Extension: stripe/index.ts
+export const stripeExtension: Extension = {
+  id: 'stripe',
+  name: 'Stripe',
   version: '1.0.0',
   services: {
-    findSimilarTemplates: async (description: string, limit?: number) => {
-      // ... embedding search logic
-      return matches
+    createInvoicePaymentLink: async (companyId: string, invoiceId: string) => {
+      // ... eligibility checks + Stripe API call
+      return { url, externalId }
     },
   },
 }
@@ -787,16 +750,18 @@ Core code calls the service via registry lookup:
 
 ```typescript
 // Core code: no direct import from extensions/
-const ext = extensionRegistry.get('ai-categorization')
-const results = await ext?.services?.findSimilarTemplates(description, 5)
-if (results) {
-  // Use results
+// (real example: lib/extensions/payment-links.ts)
+const ext = extensionRegistry.get('stripe')
+const link = await ext?.services?.createInvoicePaymentLink(companyId, invoiceId)
+if (link) {
+  // Use link
 }
 // Gracefully degrades if extension is not loaded
 ```
 
 This pattern is used for:
-- `ai-categorization` providing template embedding search to core booking suggestions
+- `stripe` providing invoice payment links to the core invoice send routes (`lib/extensions/payment-links.ts`)
+- `skatteverket` exposing declaration submission to core pending-operation commits
 - Any extension that needs to provide functionality callable by core without a direct dependency
 
 ### Event Bus Usage
@@ -861,10 +826,10 @@ This pattern can be reused for any capability that should degrade gracefully whe
 **Core functionality** is the standard accounting system: bookkeeping, invoicing, reports, tax (SRU, NE-bilaga), bank reconciliation. Every user gets this. Core compiles and runs with zero extensions.
 
 **Extensions** are everything beyond core accounting. They come in three kinds:
-- **General extensions** (receipt-ocr, ai-categorization, email, etc.) -- useful for any business, not sector-specific
+- **General extensions** (invoice-inbox, document-extraction, email, etc.) -- useful for any business, not sector-specific
 - **Sector extensions** (food cost %, earnings per liter, etc.) -- tied to a specific market sector
 - **Export extensions** (EU Sales List, Intrastat, etc.) -- for businesses with international trade
 
-All extensions live in the same system, appear in the same marketplace, and show up in the sidebar when they have a workspace + quickAction. All compiled extensions are active for all users -- the operator chooses which to include in `extensions.config.json` at build time. AI extensions additionally require per-user consent before making API calls.
+All extensions live in the same system, appear in the same marketplace, and show up in the sidebar when they have a workspace + quickAction. All compiled extensions are active for all users -- the operator chooses which to include in `extensions.config.json` at build time.
 
 Extensions are read-only with respect to the core accounting system. They can be fed accounting data, they can accept manual user input, but they never write back to the bookkeeping. They can expose services to core via the registry lookup pattern, and they can register API routes that are dispatched by the catch-all handler.

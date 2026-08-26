@@ -321,8 +321,8 @@ export default function AttachmentPreviewSheet({
 
                   {isPdfType(doc.mime_type, doc.file_name) && integrity[doc.id] === 'invalid' && (
                     <div className="flex h-[70vh] w-full flex-col items-center justify-center gap-4 rounded-lg border border-border bg-muted/30 p-6 text-center">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-warning/15">
-                        <AlertTriangle className="h-5 w-5 text-warning-foreground" />
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+                        <AlertTriangle className="h-5 w-5 text-attn" />
                       </div>
                       <div className="max-w-md space-y-2">
                         <p className="text-sm font-medium">{t('corrupt_title')}</p>
@@ -420,8 +420,8 @@ export default function AttachmentPreviewSheet({
           <DialogContent>
             <DialogHeader>
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-warning/15 shrink-0">
-                  <Lock className="h-5 w-5 text-warning-foreground" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted shrink-0">
+                  <Lock className="h-5 w-5 text-attn" />
                 </div>
                 <DialogTitle>{tj('remove_blocked_title')}</DialogTitle>
               </div>

@@ -28,24 +28,38 @@ interface SettingsSectionHeaderProps {
   intro?: React.ReactNode
   /** Right-aligned header action (e.g. "Förhandsvisa faktura", "Skapa nyckel"). */
   action?: React.ReactNode
+  /**
+   * Brand mark for a section that represents a third-party channel
+   * (WhatsApp today). Sections that are just Accounted settings leave this
+   * unset: the serif title carries them, and a decorative icon per tab
+   * would turn the settings rail into a sticker album.
+   */
+  mark?: React.ReactNode
 }
 
-export function SettingsSectionHeader({ title, intro, action }: SettingsSectionHeaderProps) {
+export function SettingsSectionHeader({ title, intro, action, mark }: SettingsSectionHeaderProps) {
   return (
     <header>
       <div className="flex items-baseline justify-between gap-4">
-        <h2 className="font-display text-xl tracking-tight">{title}</h2>
+        <div className="flex items-center gap-2.5">
+          {mark ? <span className="shrink-0 leading-none">{mark}</span> : null}
+          {/* data-ph-unmask: settings chrome (titles, labels) is static i18n
+              text in session replays; values and controls stay masked. */}
+          <h2 data-ph-unmask="" className="font-display text-xl tracking-tight">{title}</h2>
+        </div>
         {action ? <div className="flex shrink-0 items-center gap-3">{action}</div> : null}
       </div>
       {intro ? (
-        <p className="mt-1 max-w-[56ch] text-xs leading-relaxed text-muted-foreground">{intro}</p>
+        <p data-ph-unmask="" className="mt-1 max-w-[56ch] text-xs leading-relaxed text-muted-foreground">{intro}</p>
       ) : null}
     </header>
   )
 }
 
 interface SettingsGroupProps {
-  label?: string
+  /** Chrome in session replays (data-ph-unmask): wrap any user data (e.g. a
+      team name) in a data-ph-mask element. */
+  label?: React.ReactNode
   /** Group-level help ("?" right after the eyebrow) for guidance that spans the rows. */
   help?: React.ReactNode
   children: React.ReactNode
@@ -57,7 +71,7 @@ export function SettingsGroup({ label, help, children, className }: SettingsGrou
     <section className={cn('pt-8 first:pt-6', className)}>
       {label ? (
         <p className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          <span>{label}</span>
+          <span data-ph-unmask="">{label}</span>
           {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
         </p>
       ) : null}
@@ -101,11 +115,11 @@ export function SettingsRow({
     >
       <div className="flex w-full shrink-0 items-center gap-2 md:w-44">
         {htmlFor ? (
-          <label htmlFor={htmlFor} className={labelClass}>
+          <label htmlFor={htmlFor} data-ph-unmask="" className={labelClass}>
             {label}
           </label>
         ) : (
-          <span className={labelClass}>{label}</span>
+          <span data-ph-unmask="" className={labelClass}>{label}</span>
         )}
         {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
       </div>
@@ -332,8 +346,9 @@ export function SettingsSeg<T extends string>({
           disabled={disabled}
           aria-pressed={o.value === value}
           onClick={() => onChange(o.value)}
+          data-ph-unmask=""
           className={cn(
-            'rounded-md px-3 py-1 text-xs transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60',
+            'rounded-sm px-3 py-1 text-xs transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60',
             o.value === value
               ? 'border border-border bg-card font-medium text-foreground'
               : 'text-muted-foreground hover:text-foreground',
@@ -350,7 +365,7 @@ export function SettingsSeg<T extends string>({
 export function SettingsDangerZone({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <section className="mt-10 border-t border-destructive/30 pt-3">
-      <p className="px-1 text-[11px] font-medium uppercase tracking-wider text-destructive/80">
+      <p data-ph-unmask="" className="px-1 text-[11px] font-medium uppercase tracking-wider text-destructive/80">
         {label}
       </p>
       <div>{children}</div>

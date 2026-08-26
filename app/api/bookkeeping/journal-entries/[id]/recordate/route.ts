@@ -13,7 +13,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { id } = await params
     const validation = await validateBody(request, RecordateJournalEntrySchema)
     if (!validation.success) return validation.response
-    const result = await recordateEntry(supabase, companyId, user.id, id, validation.data.new_entry_date)
+    const result = await recordateEntry(supabase, companyId, user.id, id, validation.data.new_entry_date, {
+      allowDeepChain: validation.data.allow_deep_chain,
+    })
     return NextResponse.json({ data: result })
   },
   { requireWrite: true },

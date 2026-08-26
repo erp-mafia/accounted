@@ -7,12 +7,19 @@ import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { AlertTriangle, Info, XCircle } from 'lucide-react'
 import Link from 'next/link'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
+import { BokslutChecklist } from './BokslutChecklist'
 
 interface PreflightStepProps {
   report: BokslutReadinessReport | null
   isLoading: boolean
   error: string | null
   onContinue: () => void
+}
+
+/** A blocker as rendered: code is null for legacy responses without codes. */
+interface DisplayBlocker {
+  code: string | null
+  message: string
 }
 
 /** Sans eyebrow section head with a trailing hairline (house idiom). */
@@ -48,6 +55,11 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
     return null
   }
 
+  // A response cached from before blockerItems shipped only has the plain
+  // strings: fall back so blockers never disappear, just without links.
+  const blockerItems: DisplayBlocker[] =
+    report.blockerItems ?? report.blockers.map((message) => ({ code: null, message }))
+
   return (
     <div className="space-y-8">
       {/* Period line: muted text for the normal state, chip only when the
@@ -66,13 +78,13 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
         )}
       </div>
 
-      {report.blockers.length > 0 && (
+      {blockerItems.length > 0 && (
         <section>
           <SectionHead icon={<XCircle className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />}>
             Måste åtgärdas innan bokslut
           </SectionHead>
-          {report.blockers.map((blocker, i) => (
-            <BlockerRow key={i} blocker={blocker} report={report} />
+          {blockerItems.map((blocker, i) => (
+            <BlockerRow key={`${blocker.code ?? 'blocker'}-${i}`} blocker={blocker} />
           ))}
         </section>
       )}
@@ -89,6 +101,8 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
           ))}
         </section>
       )}
+
+      <BokslutChecklist periodId={report.period.id} />
 
       {report.reminders.length > 0 && (
         <section>
@@ -121,30 +135,40 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
 }
 
 /**
- * Renders a blocker with a contextual action link when we can derive one.
- * Falls back to plain text otherwise.
+ * Renders a blocker with a contextual action link derived from its stable
+ * machine code (YearEndBlockerCode). Codes without an existing remediation
+ * page (voucher gaps, sequence counter, period state) render as plain text:
+ * a link must never point at a page that does not exist. UNBOOKED_CHECK_FAILED
+ * is deliberately link-less too: the remedy is to re-run the check, not to
+ * visit a page.
  */
-function BlockerRow({ blocker, report }: { blocker: string; report: BokslutReadinessReport }) {
+function BlockerRow({ blocker }: { blocker: DisplayBlocker }) {
   let href: string | null = null
   let actionLabel: string | null = null
 
-  if (/draft journal entries/i.test(blocker) && report.draftCount > 0) {
-    href = '/bookkeeping?status=draft'
-    actionLabel = 'Visa utkast'
-  } else if (/voucher gap/i.test(blocker)) {
-    href = '/bookkeeping/voucher-gaps'
-    actionLabel = 'Hantera nummerlucka'
-  } else if (/trial balance/i.test(blocker)) {
-    href = '/reports/trial-balance'
-    actionLabel = 'Öppna balansrapport'
-  } else if (/continuity/i.test(blocker)) {
+  if (blocker.code === 'DRAFT_ENTRIES') {
+    // The verifikat list has its own Utkast tab; it does not read a status
+    // query param, so the link goes to the plain list.
     href = '/bookkeeping'
+    actionLabel = 'Visa utkast'
+  } else if (blocker.code === 'UNBOOKED_TRANSACTIONS') {
+    // Transaktionslistan is where an unbooked transaction is either booked or
+    // marked private, the two remedies the message names.
+    href = '/transactions'
+    actionLabel = 'Visa transaktioner'
+  } else if (blocker.code === 'TRIAL_BALANCE_UNBALANCED') {
+    href = '/reports/trial-balance'
+    actionLabel = 'Öppna saldobalansen'
+  } else if (blocker.code === 'CONTINUITY_MISMATCH') {
+    // Saldobalansen lists ingående och utgående saldo per konto: the closest
+    // existing surface for reviewing IB against prior-year UB.
+    href = '/reports/trial-balance'
     actionLabel = 'Granska ingående balans'
   }
 
   return (
     <div className="flex items-baseline justify-between gap-3 border-b border-border/60 px-1 py-3 text-[13px] leading-5 last:border-b-0">
-      <p className="flex-1">{blocker}</p>
+      <p className="flex-1">{blocker.message}</p>
       {href && actionLabel && (
         <Link href={href} className={QUIET_LINK_CLASS}>
           {actionLabel}

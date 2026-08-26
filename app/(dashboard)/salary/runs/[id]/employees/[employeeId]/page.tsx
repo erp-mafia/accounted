@@ -4,9 +4,11 @@ import { use, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { ArrowLeft, Calculator, Loader2 } from 'lucide-react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { DetailSection } from '@/components/ui/detail-section'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
 import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -50,8 +52,20 @@ const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
   net_deduction_union: 'li_net_deduction_union',
   net_deduction_benefit_payment: 'li_net_deduction_benefit_payment',
   net_deduction_other: 'li_net_deduction_other',
+  oresavrundning: 'li_oresavrundning',
   correction: 'li_correction',
   other: 'li_other',
+}
+
+// Same chip vocabulary as the Löner list and the run header (chips mark
+// exceptions): booked renders as muted text, everything else as a chip.
+const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
+  draft: 'secondary',
+  review: 'secondary',
+  approved: 'secondary',
+  paid: 'success',
+  booked: 'success',
+  corrected: 'outline',
 }
 
 interface DetailResponse {
@@ -65,6 +79,7 @@ export default function SalaryRunEmployeeDetailPage({
   params: Promise<{ id: string; employeeId: string }>
 }) {
   const t = useTranslations('salary_run_employee')
+  const tSalary = useTranslations('salary')
   const { id: runId, employeeId } = use(params)
   const [data, setData] = useState<DetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -158,13 +173,12 @@ export default function SalaryRunEmployeeDetailPage({
       <div className="space-y-3">
         <Link
           href={`/salary/runs/${runId}`}
-          className="inline-flex items-center text-sm text-muted-foreground hover:underline"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> {t('back_to_run')}
+          <ArrowLeft className="h-4 w-4" />
+          {t('back_to_run')}
         </Link>
-        <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-          {error ?? t('error_load_employee')}
-        </div>
+        <p className="text-sm text-destructive">{error ?? t('error_load_employee')}</p>
       </div>
     )
   }
@@ -174,63 +188,93 @@ export default function SalaryRunEmployeeDetailPage({
   const lineItems = runEmployee.line_items ?? []
   const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
   const readOnly = run.status !== 'draft' && run.status !== 'review'
+  const statusLabel = tSalary(`status_${run.status}`)
+
+  const taxValue = runEmployee.tax_withheld_override ?? runEmployee.tax_withheld
+  const taxOverridden = runEmployee.tax_withheld_override !== null
+  const avgifterOverridden = runEmployee.avgifter_amount_override !== null
+  const kpis: Array<{ label: string; value: number; accent?: boolean; overridden?: boolean }> = [
+    { label: t('gross'), value: runEmployee.gross_salary },
+    { label: t('tax'), value: taxValue, overridden: taxOverridden },
+    {
+      label: t('net'),
+      value: runEmployee.net_salary + (runEmployee.tax_withheld - taxValue),
+      accent: true,
+      overridden: taxOverridden,
+    },
+    {
+      label: t('avgifter'),
+      value: runEmployee.avgifter_amount_override ?? runEmployee.avgifter_amount,
+      overridden: avgifterOverridden,
+    },
+  ]
+  const absenceCounts = [
+    { label: t('sick_days'), days: liveCounts?.sick ?? runEmployee.sick_days },
+    { label: t('vab_days'), days: liveCounts?.vab ?? runEmployee.vab_days },
+    { label: t('parental_days'), days: liveCounts?.parental ?? runEmployee.parental_days },
+  ]
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="space-y-3">
+    <div className="space-y-8 stagger-enter">
+      {/* Back link on its own quiet row */}
+      <div>
         <Link
           href={`/salary/runs/${runId}`}
-          className="inline-flex items-center text-sm text-muted-foreground hover:underline"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> {t('back_to_run')}
+          <ArrowLeft className="h-4 w-4" />
+          {t('back_to_run')}
         </Link>
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <div>
-            <h1 className="font-display text-2xl tracking-tight">
+      </div>
+
+      {/* Header: serif name with the run's status as the one status element,
+          a quiet meta line, and the next step on the right. */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="font-display text-2xl leading-8 tracking-tight">
               {employee.first_name} {employee.last_name}
             </h1>
-            <p className="text-sm text-muted-foreground tabular-nums">
-              {employee.personnummer_masked} · {t('payslip_period', { period: periodLabel })}
-            </p>
+            {run.status === 'booked' ? (
+              <span className="text-sm text-muted-foreground">{statusLabel}</span>
+            ) : (
+              <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'}>{statusLabel}</Badge>
+            )}
           </div>
-          {run.status === 'draft' && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleCalculate}
-              disabled={calculating}
-            >
+          <p className="mt-1 text-sm text-muted-foreground">
+            <span className="tabular-nums">{employee.personnummer_masked}</span>
+            {' · '}
+            <span className="tabular-nums">{t('payslip_period', { period: periodLabel })}</span>
+          </p>
+        </div>
+        {run.status === 'draft' && (
+          <div className="flex shrink-0 items-center gap-2">
+            <Button onClick={handleCalculate} disabled={calculating}>
               {calculating ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
-                <Calculator className="mr-1.5 h-3.5 w-3.5" />
+                <Calculator className="mr-2 h-4 w-4" />
               )}
               {t('calculate')}
             </Button>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
-      {/* Summary */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <SummaryCard label={t('gross')} value={runEmployee.gross_salary} />
-        <SummaryCard
-          label={t('tax')}
-          value={runEmployee.tax_withheld_override ?? runEmployee.tax_withheld}
-          overridden={runEmployee.tax_withheld_override !== null}
-        />
-        <SummaryCard
-          label={t('net')}
-          value={runEmployee.net_salary + (runEmployee.tax_withheld - (runEmployee.tax_withheld_override ?? runEmployee.tax_withheld))}
-          accent
-          overridden={runEmployee.tax_withheld_override !== null}
-        />
-        <SummaryCard
-          label={t('avgifter')}
-          value={runEmployee.avgifter_amount_override ?? runEmployee.avgifter_amount}
-          overridden={runEmployee.avgifter_amount_override !== null}
-        />
+      {/* Summary: flat label/number pairs, no tiles. The override is the
+          exception, so it is a chip next to the label. */}
+      <div className="flex flex-wrap gap-x-10 gap-y-4">
+        {kpis.map(({ label, value, accent, overridden }) => (
+          <div key={label} className="min-w-0">
+            <p className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+              {label}
+              {overridden && <Badge variant="warning">{t('adjusted_badge')}</Badge>}
+            </p>
+            <p className={cn('mt-1 font-display text-xl tabular-nums leading-none', accent && 'text-success')}>
+              {formatCurrency(value)}
+            </p>
+          </div>
+        ))}
       </div>
 
       {/* Advanced mode: per-employee override of tax / arbetsgivaravgift */}
@@ -250,95 +294,69 @@ export default function SalaryRunEmployeeDetailPage({
         />
       )}
 
-      {/* Unified calendar: worked time (for hourly) + absence on the same grid */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('time_absence_title')}</CardTitle>
-          <p className="text-xs text-muted-foreground">
+      {/* Unified calendar: worked time (for hourly) + absence on the same grid.
+          The how-to lives behind the kicker's "?" (convention 7). */}
+      <DetailSection
+        kicker={t('time_absence_title')}
+        help={
+          <HelpPopover>
             {employee.salary_type === 'hourly'
               ? t('calendar_hint_hourly')
               : t('calendar_hint_monthly')}
-          </p>
-        </CardHeader>
-        <CardContent>
-          <SalaryCalendar
-            employeeId={employee.id}
-            salaryType={employee.salary_type}
-            periodStart={periodStart}
-            periodEnd={periodEnd}
-            salaryRunEmployeeId={runEmployee.id}
-            readOnly={readOnly}
-            onChange={load}
-            onAbsenceCountsChange={setLiveCounts}
-          />
-          <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-            <AbsenceCount label={t('sick_days')} days={liveCounts?.sick ?? runEmployee.sick_days} />
-            <AbsenceCount label={t('vab_days')} days={liveCounts?.vab ?? runEmployee.vab_days} />
-            <AbsenceCount label={t('parental_days')} days={liveCounts?.parental ?? runEmployee.parental_days} />
-          </div>
-        </CardContent>
-      </Card>
+          </HelpPopover>
+        }
+      >
+        <SalaryCalendar
+          employeeId={employee.id}
+          salaryType={employee.salary_type}
+          periodStart={periodStart}
+          periodEnd={periodEnd}
+          salaryRunEmployeeId={runEmployee.id}
+          readOnly={readOnly}
+          onChange={load}
+          onAbsenceCountsChange={setLiveCounts}
+        />
+        <div className="mt-4 flex flex-wrap gap-x-10 gap-y-3">
+          {absenceCounts.map(({ label, days }) => (
+            <div key={label} className="min-w-0">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
+              <p className="mt-1 text-sm tabular-nums">{t('days_count', { days })}</p>
+            </div>
+          ))}
+        </div>
+      </DetailSection>
 
-      {/* Line items */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('line_items_title', { count: lineItems.length })}</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          {lineItems.length === 0 ? (
-            <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-              {t('no_line_items')}
-            </p>
-          ) : (
-            <table className="w-full">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                <tr className="border-b text-left">
-                  <th className="px-4 py-2">{t('th_type')}</th>
-                  <th className="px-4 py-2">{t('th_description')}</th>
-                  <th className="px-4 py-2 text-right">{t('th_quantity')}</th>
-                  <th className="px-4 py-2 text-right">{t('th_amount')}</th>
+      {/* Line items: the list-page table idiom straight on the panel. */}
+      <DetailSection kicker={t('line_items_title', { count: lineItems.length })}>
+        {lineItems.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t('no_line_items')}</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <th className={cn(TH_CLASS, 'pl-0')}>{t('th_type')}</th>
+                  <th className={TH_CLASS}>{t('th_description')}</th>
+                  <th className={cn(TH_CLASS, 'text-right')}>{t('th_quantity')}</th>
+                  <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('th_amount')}</th>
                 </tr>
               </thead>
               <tbody>
                 {lineItems.map(li => (
-                  <tr key={li.id} className="border-b last:border-0">
-                    <td className="px-4 py-2 text-xs text-muted-foreground">{LINE_ITEM_TYPE_KEYS[li.item_type] ? t(LINE_ITEM_TYPE_KEYS[li.item_type]) : li.item_type}</td>
-                    <td className="px-4 py-2 text-sm">{li.description}</td>
-                    <td className="px-4 py-2 text-sm text-right tabular-nums">{li.quantity ?? '-'}</td>
-                    <td className="px-4 py-2 text-sm text-right tabular-nums">{formatCurrency(li.amount)}</td>
+                  <tr key={li.id}>
+                    <td className={cn(TD_CLASS, 'pl-0 text-muted-foreground')}>
+                      {LINE_ITEM_TYPE_KEYS[li.item_type] ? t(LINE_ITEM_TYPE_KEYS[li.item_type]) : li.item_type}
+                    </td>
+                    <td className={TD_CLASS}>{li.description}</td>
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{li.quantity ?? '-'}</td>
+                    <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>{formatCurrency(li.amount)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
-function SummaryCard({ label, value, accent, overridden }: { label: string; value: number; accent?: boolean; overridden?: boolean }) {
-  const t = useTranslations('salary_run_employee')
-  return (
-    <div className={cn('rounded-md border bg-card p-3', accent && 'ring-1 ring-primary/40')}>
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        {label}
-        {/* The override is an exception, so it is a chip, not a second ring:
-            two ring-1 rules on one element set the same custom property and
-            one of them silently loses (design.md conventions 5 and 12). */}
-        {overridden && <Badge variant="warning">{t('adjusted_badge')}</Badge>}
-      </div>
-      <div className="mt-0.5 text-lg font-medium tabular-nums">{formatCurrency(value)}</div>
-    </div>
-  )
-}
-
-function AbsenceCount({ label, days }: { label: string; days: number }) {
-  const t = useTranslations('salary_run_employee')
-  return (
-    <div className="rounded-md border bg-muted/30 px-3 py-2">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="text-sm font-medium tabular-nums">{t('days_count', { days })}</div>
+          </div>
+        )}
+      </DetailSection>
     </div>
   )
 }

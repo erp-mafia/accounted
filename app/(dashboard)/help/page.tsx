@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { HelpLink } from '@/components/ui/info-tooltip'
 import { PageHeader } from '@/components/ui/page-header'
+import { EmptyState } from '@/components/ui/empty-state'
 import {
   Search,
   BookOpen,
@@ -236,7 +237,7 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
               </div>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="font-medium">{term.term}</h3>
+                  <h3>{term.term}</h3>
                   {term.simpleTerm && (
                     <span className="text-sm text-muted-foreground font-normal">
                       {term.simpleTerm}
@@ -377,14 +378,11 @@ export default function HelpPage() {
       {/* Terms list */}
       <div className="space-y-4">
         {filteredTerms.length === 0 ? (
-          <Card>
-            <CardContent className="py-12 text-center">
-              <Search className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
-              <p className="text-muted-foreground">
-                {t('no_results', { query: searchQuery })}
-              </p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={Search}
+            title={t('no_results_title')}
+            description={<span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>}
+          />
         ) : (
           filteredTerms.map((term) => (
             <TermCard
@@ -408,7 +406,7 @@ export default function HelpPage() {
             <a
               href="/docs/arkivplan-mall.md"
               download
-              className="p-3 rounded-lg border border-border hover:border-primary/50 transition-colors block"
+              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
             >
               <div className="flex items-center gap-2">
                 <FileDown className="h-4 w-4" />
@@ -421,7 +419,7 @@ export default function HelpPage() {
             <a
               href="/docs/systemdokumentation-mall.md"
               download
-              className="p-3 rounded-lg border border-border hover:border-primary/50 transition-colors block"
+              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
             >
               <div className="flex items-center gap-2">
                 <FileDown className="h-4 w-4" />
@@ -444,7 +442,7 @@ export default function HelpPage() {
           <div className="grid gap-3 sm:grid-cols-2">
             <HelpLink
               href="https://www.skatteverket.se/foretag/foretagarguiden.4.361dc8c15312eff6fd1f87f.html"
-              className="p-3 rounded-lg border border-border hover:border-primary/50 transition-colors block"
+              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
             >
               <div className="flex items-center gap-2">
                 <ExternalLink className="h-4 w-4" />
@@ -456,7 +454,7 @@ export default function HelpPage() {
             </HelpLink>
             <HelpLink
               href="https://www.verksamt.se/"
-              className="p-3 rounded-lg border border-border hover:border-primary/50 transition-colors block"
+              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
             >
               <div className="flex items-center gap-2">
                 <ExternalLink className="h-4 w-4" />

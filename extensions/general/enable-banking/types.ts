@@ -16,6 +16,13 @@ export interface StoredAccount {
   // mapping engine default (1930). Lets multicurrency setups route SEK→1930,
   // EUR→1932, USD→1933, etc., so year-end FX revaluation is clean.
   ledger_account?: string
+  // The account scope used when deriving transaction external_ids at first
+  // ingest (the normalized IBAN, or the provider uid the account had then).
+  // Persisted so re-authorizations that mint a NEW uid keep producing the
+  // SAME external_ids for accounts without an IBAN, instead of re-importing
+  // the whole history. lib/sync.ts falls back to IBAN-then-uid when unset
+  // (rows that predate this field) and stamps it on the next sync.
+  dedup_scope?: string
 }
 
 // Re-export API types from the client

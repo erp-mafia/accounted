@@ -2,15 +2,17 @@
  * Unit tests for gnubok_query_journal.
  *
  * Verifies tool registration, the post-fetch amount filter, the full-match
- * aggregate pass (totals/groups over ALL matching lines via fetchAllRows,
- * totals_scope='full_match'), and the slice-scoped free-text path
- * (totals_scope='returned_slice'). The supabase query-builder chain is
- * exercised by the live MCP smoke test; here we check the result-shape
- * pipeline.
+ * aggregate pass (totals/groups over ALL matching lines via the two-step
+ * entry-lines fetch, totals_scope='full_match'), and the free-text path,
+ * which runs the same two-step fetch once per leg (entry description, line
+ * description) instead of a `journal_entries!inner` embed. The supabase
+ * query-builder chain is exercised by the live MCP smoke test; here we
+ * check the filters sent and the result-shape pipeline.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { tools } from '../server'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
 
 describe('gnubok_query_journal: registration', () => {
   it('is registered and read-only', () => {
@@ -113,62 +115,127 @@ function makeEntryLinesMock(rows: Array<Record<string, unknown>>) {
   return { supabase, tables }
 }
 
-/**
- * Richer mock for the text-search path: returns queued results across
- * successive .from() calls and records every .ilike(column, pattern) call so
- * tests can assert what was actually sent to PostgREST.
- *
- * The text branch issues TWO parallel .from('journal_entry_lines') queries:
- * one filtered by line_description, one by journal_entries.description. The
- * first .from() call gets `results[0]`, the second gets `results[1]`.
- */
-function makeQueueMock(results: Array<{ data: unknown[]; count: number }>) {
-  const ilikeCalls: Array<{ column: string; pattern: string }> = []
-  // Each entry is one leg's recorded .eq calls. Index lines up with
-  // .from() invocation order, so tests can assert per-leg tenant scoping.
-  const eqCallsByLeg: Array<Array<{ column: string; value: unknown }>> = []
-  let callIndex = 0
+type FakeFilter = { op: string; column: string; value: unknown }
+type FakeQuery = { table: string; filters: FakeFilter[] }
 
-  const buildChain = (
-    result: { data: unknown[]; error: null; count: number },
-    legEqCalls: Array<{ column: string; value: unknown }>,
-  ): unknown => {
+/** Translate a LIKE pattern (with `\`-escaped `%`, `_`, `\`) into a regex. */
+function likeToRegex(pattern: string): RegExp {
+  const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  let re = ''
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]
+    if (ch === '\\' && i + 1 < pattern.length) {
+      re += escapeRe(pattern[++i])
+    } else if (ch === '%') {
+      re += '.*'
+    } else if (ch === '_') {
+      re += '.'
+    } else {
+      re += escapeRe(ch)
+    }
+  }
+  return new RegExp(`^${re}$`, 'is')
+}
+
+/**
+ * Filter-aware fake for the free-text path. Both text legs run the two-step
+ * entry-lines fetch (journal_entries first, then journal_entry_lines by
+ * parent id) with the .ilike() on the entry side (leg A: description) or
+ * the line side (leg B: line_description). The legs run in parallel, so
+ * .from() call ORDER is not something a test should pin; instead this fake
+ * evaluates the recorded filters (eq/in/gte/lte/ilike) against embed-shaped
+ * fixtures like a tiny PostgREST, and records every query (table + filters)
+ * so tests can assert on scoping and on what was sent.
+ *
+ * `failLinesWith` makes every journal_entry_lines page fail with that raw
+ * message (the helper re-throws it as a plain Error), for the error-path
+ * tests.
+ */
+function makeTwoStepTextMock(
+  rows: Array<Record<string, unknown>>,
+  opts: { failLinesWith?: string } = {},
+) {
+  const entries = [
+    ...new Map(
+      rows.map((r) => {
+        const e = r.journal_entries as { id: string }
+        return [e.id, e as Record<string, unknown>]
+      }),
+    ).values(),
+  ]
+  const bareLines = rows.map((r) => {
+    const { journal_entries: parent, ...line } = r
+    return { ...line, journal_entry_id: (parent as { id: string }).id } as Record<string, unknown>
+  })
+  const queries: FakeQuery[] = []
+
+  const passes = (row: Record<string, unknown>, f: FakeFilter): boolean => {
+    // Columns the fixture does not carry (company_id, status defaults, ...)
+    // are unconstrained: the tests that care assert on the recorded filters.
+    if (!(f.column in row)) return true
+    const v = row[f.column]
+    switch (f.op) {
+      case 'eq':
+        return v === f.value
+      case 'in':
+        return (f.value as unknown[]).includes(v)
+      case 'gte':
+        return typeof v === typeof f.value && (v as string | number) >= (f.value as string | number)
+      case 'lte':
+        return typeof v === typeof f.value && (v as string | number) <= (f.value as string | number)
+      case 'ilike':
+        return typeof v === 'string' && likeToRegex(f.value as string).test(v)
+      default:
+        return true
+    }
+  }
+
+  const chain = (query: FakeQuery, data: Record<string, unknown>[]): unknown => {
+    const evaluate = () => {
+      if (query.table === 'journal_entry_lines' && opts.failLinesWith) {
+        return { data: null, error: { message: opts.failLinesWith }, count: null }
+      }
+      const out = data.filter((row) => query.filters.every((f) => passes(row, f)))
+      return { data: out, error: null, count: out.length }
+    }
     return new Proxy(
       {},
       {
         get(_t, prop) {
           if (prop === 'then') {
-            return (resolve: (v: unknown) => void) => resolve(result)
+            return (resolve: (v: unknown) => void) => resolve(evaluate())
           }
-          if (prop === 'ilike') {
-            return (column: string, pattern: string) => {
-              ilikeCalls.push({ column, pattern })
-              return buildChain(result, legEqCalls)
-            }
-          }
-          if (prop === 'eq') {
+          if (prop === 'range') return () => evaluate()
+          if (prop === 'eq' || prop === 'in' || prop === 'gte' || prop === 'lte' || prop === 'ilike' || prop === 'contains') {
             return (column: string, value: unknown) => {
-              legEqCalls.push({ column, value })
-              return buildChain(result, legEqCalls)
+              query.filters.push({ op: prop, column, value })
+              return chain(query, data)
             }
           }
-          return () => buildChain(result, legEqCalls)
+          return () => chain(query, data)
         },
       },
     )
   }
 
   const supabase = {
-    from: vi.fn().mockImplementation(() => {
-      const next = results[callIndex] ?? { data: [], count: 0 }
-      callIndex += 1
-      const legEqCalls: Array<{ column: string; value: unknown }> = []
-      eqCallsByLeg.push(legEqCalls)
-      return buildChain({ data: next.data, error: null, count: next.count }, legEqCalls)
+    from: vi.fn().mockImplementation((table: string) => {
+      const query: FakeQuery = { table, filters: [] }
+      queries.push(query)
+      return chain(query, table === 'journal_entries' ? entries : bareLines)
     }),
   } as never
 
-  return { supabase, ilikeCalls, eqCallsByLeg, callCount: () => callIndex }
+  const ilikeCalls = () =>
+    queries.flatMap((q) =>
+      q.filters
+        .filter((f) => f.op === 'ilike')
+        .map((f) => ({ table: q.table, column: f.column, pattern: f.value as string })),
+    )
+  const entryQueries = () => queries.filter((q) => q.table === 'journal_entries')
+  const lineQueries = () => queries.filter((q) => q.table === 'journal_entry_lines')
+
+  return { supabase, queries, ilikeCalls, entryQueries, lineQueries }
 }
 
 /** Build a LineRow fixture inline: keeps the per-test data dense and readable. */
@@ -182,6 +249,7 @@ function makeLineRow(opts: {
   entry_notes?: string | null
   voucher_number?: number
   entry_date?: string
+  entry_status?: string
 }) {
   return {
     id: opts.id,
@@ -201,7 +269,7 @@ function makeLineRow(opts: {
       description: opts.entry_description ?? '',
       notes: opts.entry_notes ?? null,
       source_type: 'bank_transaction',
-      status: 'posted',
+      status: opts.entry_status ?? 'posted',
     },
   }
 }
@@ -506,8 +574,42 @@ describe('gnubok_query_journal: execute', () => {
   })
 })
 
+describe('gnubok_query_journal: amount filter vs limit', () => {
+  it('applies the amount filter before the display slice so `limit` returns matching lines', async () => {
+    // Old behaviour sliced the first `limit` rows and THEN dropped the ones
+    // failing amount_min, so limit=1 could return zero lines while matches
+    // existed. Now the full match set is filtered first.
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const rows = [
+      makeLineRow({ id: 'l1', debit_amount: 50, voucher_number: 3 }),
+      makeLineRow({ id: 'l2', debit_amount: 5000, voucher_number: 2 }),
+      makeLineRow({ id: 'l3', debit_amount: 6000, voucher_number: 1 }),
+    ]
+    const { supabase } = makeEntryLinesMock(rows)
+
+    const result = (await tool.execute(
+      { amount_min: 1000, limit: 1 },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as {
+      lines: Array<{ line_id: string }>
+      returned_lines: number
+      total_lines: number
+      truncated: boolean
+      db_matched_pre_amount_filter: number | null
+    }
+
+    expect(result.returned_lines).toBe(1)
+    expect(result.lines[0].line_id).toBe('l2')
+    expect(result.total_lines).toBe(2)
+    expect(result.truncated).toBe(true)
+    expect(result.db_matched_pre_amount_filter).toBe(3)
+  })
+})
+
 describe('gnubok_query_journal: free-text search', () => {
-  it('merges non-overlapping results from line_description and journal_entries.description', async () => {
+  it('merges results from the entry-description leg and the line-description leg', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
     const byLineHit = makeLineRow({
       id: 'L1',
@@ -523,28 +625,36 @@ describe('gnubok_query_journal: free-text search', () => {
       entry_date: '2026-05-12',
       voucher_number: 43,
     })
+    const noise = makeLineRow({
+      id: 'L3',
+      line_description: 'Hyra maj',
+      entry_description: 'Lokalhyra',
+      entry_date: '2026-05-01',
+      voucher_number: 40,
+    })
 
-    const { supabase, callCount } = makeQueueMock([
-      { data: [byLineHit], count: 1 },
-      { data: [byEntryHit], count: 1 },
-    ])
+    const { supabase, entryQueries, lineQueries } = makeTwoStepTextMock([byLineHit, byEntryHit, noise])
 
     const result = (await tool.execute(
       { text: 'Google', limit: 50 },
       'company-1',
       'user-1',
       supabase,
-    )) as { lines: Array<{ line_id: string }>; returned_lines: number; totals_scope: string }
+    )) as { lines: Array<{ line_id: string }>; returned_lines: number; total_lines: number; totals_scope: string }
 
-    expect(callCount()).toBe(2)
+    // Two legs, each a two-step fetch: two entry-side queries, and one line
+    // chunk per leg (both legs found at least one entry in scope).
+    expect(entryQueries()).toHaveLength(2)
+    expect(lineQueries()).toHaveLength(2)
     expect(result.returned_lines).toBe(2)
-    const ids = result.lines.map((l) => l.line_id).sort()
-    expect(ids).toEqual(['L1', 'L2'])
-    // Free-text path never runs the full aggregate pass: the output says so.
-    expect(result.totals_scope).toBe('returned_slice')
+    expect(result.total_lines).toBe(2)
+    // Newest first.
+    expect(result.lines.map((l) => l.line_id)).toEqual(['L2', 'L1'])
+    // Free-text search now aggregates the full match set like every other path.
+    expect(result.totals_scope).toBe('full_match')
   })
 
-  it('deduplicates rows returned by both query legs', async () => {
+  it('deduplicates a line hit by both legs', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
     const dupHit = makeLineRow({
       id: 'LDUP',
@@ -554,58 +664,82 @@ describe('gnubok_query_journal: free-text search', () => {
       voucher_number: 100,
     })
 
-    const { supabase } = makeQueueMock([
-      { data: [dupHit], count: 1 },
-      { data: [dupHit], count: 1 },
-    ])
+    const { supabase } = makeTwoStepTextMock([dupHit])
 
     const result = (await tool.execute(
       { text: 'Google', limit: 50 },
       'company-1',
       'user-1',
       supabase,
-    )) as { lines: Array<{ line_id: string }>; returned_lines: number }
+    )) as { lines: Array<{ line_id: string }>; returned_lines: number; total_lines: number; truncated: boolean }
 
     expect(result.returned_lines).toBe(1)
+    expect(result.total_lines).toBe(1)
+    expect(result.truncated).toBe(false)
     expect(result.lines[0].line_id).toBe('LDUP')
   })
 
-  it('issues .ilike against both line_description and journal_entries.description with escaped pattern', async () => {
+  it('never queries journal_entry_lines through a journal_entries embed', async () => {
+    // The `journal_entries!inner(...)` embed compiled to a correlated LATERAL
+    // join over every tenant's lines (statement timeouts in production).
+    // Both legs must drive from journal_entries and hit lines by parent id.
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const { supabase, ilikeCalls } = makeQueueMock([
-      { data: [], count: 0 },
-      { data: [], count: 0 },
+    const { supabase, queries, lineQueries } = makeTwoStepTextMock([
+      makeLineRow({ id: 'L1', line_description: 'Google Cloud' }),
+    ])
+    const selects: string[] = []
+    const originalFrom = (supabase as { from: (t: string) => unknown }).from
+    ;(supabase as { from: unknown }).from = vi.fn().mockImplementation((table: string) => {
+      const chain = originalFrom(table) as Record<string, (...a: unknown[]) => unknown>
+      return new Proxy(chain, {
+        get(target, prop) {
+          if (prop === 'select') {
+            return (cols: string) => {
+              selects.push(cols)
+              return target.select(cols)
+            }
+          }
+          return target[prop as string]
+        },
+      })
+    })
+
+    await tool.execute({ text: 'Google', limit: 50 }, 'company-1', 'user-1', supabase)
+
+    expect(queries.length).toBeGreaterThan(0)
+    expect(selects.length).toBe(queries.length)
+    expect(selects.some((s) => s.includes('journal_entries!inner'))).toBe(false)
+    for (const q of lineQueries()) {
+      expect(q.filters.some((f) => f.op === 'in' && f.column === 'journal_entry_id')).toBe(true)
+    }
+  })
+
+  it('issues .ilike on journal_entries.description (entry side) and journal_entry_lines.line_description (line side) with the escaped pattern', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const { supabase, ilikeCalls } = makeTwoStepTextMock([
+      makeLineRow({ id: 'L1', line_description: 'x', entry_description: 'y' }),
     ])
 
-    await tool.execute(
-      { text: 'Google', limit: 50 },
-      'company-1',
-      'user-1',
-      supabase,
-    )
+    await tool.execute({ text: 'Google', limit: 50 }, 'company-1', 'user-1', supabase)
 
-    const columns = ilikeCalls.map((c) => c.column).sort()
-    expect(columns).toEqual(['journal_entries.description', 'line_description'])
-    expect(ilikeCalls.every((c) => c.pattern === '%Google%')).toBe(true)
+    const calls = ilikeCalls()
+    expect(calls.filter((c) => c.table === 'journal_entries' && c.column === 'description')).toHaveLength(1)
+    expect(calls.filter((c) => c.table === 'journal_entry_lines' && c.column === 'line_description')).toHaveLength(1)
+    expect(calls.every((c) => c.pattern === '%Google%')).toBe(true)
   })
 
   it('escapes LIKE wildcards (% and _) in the search pattern', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const { supabase, ilikeCalls } = makeQueueMock([
-      { data: [], count: 0 },
-      { data: [], count: 0 },
+    const { supabase, ilikeCalls } = makeTwoStepTextMock([
+      makeLineRow({ id: 'L1', line_description: 'x', entry_description: 'y' }),
     ])
 
-    await tool.execute(
-      { text: '2_441%foo', limit: 50 },
-      'company-1',
-      'user-1',
-      supabase,
-    )
+    await tool.execute({ text: '2_441%foo', limit: 50 }, 'company-1', 'user-1', supabase)
 
     // Both legs see the same escaped pattern.
-    expect(new Set(ilikeCalls.map((c) => c.pattern)).size).toBe(1)
-    expect(ilikeCalls[0].pattern).toBe('%2\\_441\\%foo%')
+    const patterns = new Set(ilikeCalls().map((c) => c.pattern))
+    expect(patterns.size).toBe(1)
+    expect([...patterns][0]).toBe('%2\\_441\\%foo%')
   })
 
   it('escapes a literal backslash so it does not swallow the next character', async () => {
@@ -614,15 +748,15 @@ describe('gnubok_query_journal: free-text search', () => {
     // filter silently matched rows containing `ab` and missed the ones the user
     // actually asked for. Flagged by CodeQL as js/incomplete-sanitization.
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const { supabase, ilikeCalls } = makeQueueMock([
-      { data: [], count: 0 },
-      { data: [], count: 0 },
+    const { supabase, ilikeCalls } = makeTwoStepTextMock([
+      makeLineRow({ id: 'L1', line_description: 'x', entry_description: 'y' }),
     ])
 
     await tool.execute({ text: 'a\\b', limit: 50 }, 'company-1', 'user-1', supabase)
 
-    expect(new Set(ilikeCalls.map((c) => c.pattern)).size).toBe(1)
-    expect(ilikeCalls[0].pattern).toBe('%a\\\\b%')
+    const patterns = new Set(ilikeCalls().map((c) => c.pattern))
+    expect(patterns.size).toBe(1)
+    expect([...patterns][0]).toBe('%a\\\\b%')
   })
 
   it('escapes backslash before the wildcard rules, not after', async () => {
@@ -630,101 +764,104 @@ describe('gnubok_query_journal: free-text search', () => {
     // % / _ rules just introduced, turning `50%` into `50\\%` (a literal
     // backslash followed by a wildcard) instead of `50\%` (a literal percent).
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const { supabase, ilikeCalls } = makeQueueMock([
-      { data: [], count: 0 },
-      { data: [], count: 0 },
+    const { supabase, ilikeCalls } = makeTwoStepTextMock([
+      makeLineRow({ id: 'L1', line_description: 'x', entry_description: 'y' }),
     ])
 
     await tool.execute({ text: '50%', limit: 50 }, 'company-1', 'user-1', supabase)
 
-    expect(ilikeCalls[0].pattern).toBe('%50\\%%')
+    expect(ilikeCalls()[0].pattern).toBe('%50\\%%')
   })
 
-  it('does NOT flag truncated when an overlap row is hit by both legs and merged set fits limit', async () => {
-    // Greptile / Compliance V2.3 regression: previously, dbMatched = sum of
-    // leg counts and a row matching both legs would inflate the count and
-    // force truncated=true even though every distinct match was returned.
+  it('computes totals, total_lines and truncated over the FULL text match set', async () => {
+    // The per-leg window (legLimit/legCapHit) is gone: both legs pull their
+    // whole match set, so the text path reports exact counts and totals and
+    // `truncated` is simply "more matches than returned".
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const dupHit = makeLineRow({
-      id: 'LDUP',
-      line_description: 'Google Cloud',
-      entry_description: 'Google Cloud invoice',
-    })
-
-    const { supabase } = makeQueueMock([
-      { data: [dupHit], count: 1 },
-      { data: [dupHit], count: 1 },
-    ])
-
-    const result = (await tool.execute(
-      { text: 'Google', limit: 50 },
-      'company-1',
-      'user-1',
-      supabase,
-    )) as { lines: unknown[]; truncated: boolean; total_lines: number; returned_lines: number }
-
-    expect(result.returned_lines).toBe(1)
-    expect(result.total_lines).toBe(1)
-    expect(result.truncated).toBe(false)
-  })
-
-  it('flags truncated when a leg fills its per-leg fetch window', async () => {
-    // Per-leg cap is limit*2. With limit=2 → legLimit=4. Returning 4 rows on
-    // one leg signals "this leg's window filled, more may exist DB-side".
-    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const fullLeg = [
-      makeLineRow({ id: 'L1', entry_date: '2026-05-10', voucher_number: 4 }),
-      makeLineRow({ id: 'L2', entry_date: '2026-05-09', voucher_number: 3 }),
-      makeLineRow({ id: 'L3', entry_date: '2026-05-08', voucher_number: 2 }),
-      makeLineRow({ id: 'L4', entry_date: '2026-05-07', voucher_number: 1 }),
+    const rows = [
+      makeLineRow({ id: 'L1', line_description: 'Google a', debit_amount: 100, entry_date: '2026-05-10', voucher_number: 4 }),
+      makeLineRow({ id: 'L2', line_description: 'Google b', debit_amount: 200, entry_date: '2026-05-09', voucher_number: 3 }),
+      makeLineRow({ id: 'L3', line_description: null, entry_description: 'Google c', debit_amount: 300, entry_date: '2026-05-08', voucher_number: 2 }),
+      makeLineRow({ id: 'L4', line_description: null, entry_description: 'Google d', debit_amount: 400, entry_date: '2026-05-07', voucher_number: 1 }),
+      makeLineRow({ id: 'L5', line_description: 'Hyra', entry_description: 'Hyra', debit_amount: 9999, entry_date: '2026-05-06', voucher_number: 0 }),
     ]
-
-    const { supabase } = makeQueueMock([
-      { data: fullLeg, count: 4 },
-      { data: [], count: 0 },
-    ])
+    const { supabase } = makeTwoStepTextMock(rows)
 
     const result = (await tool.execute(
       { text: 'Google', limit: 2 },
       'company-1',
       'user-1',
       supabase,
-    )) as { returned_lines: number; truncated: boolean }
+    )) as {
+      lines: Array<{ line_id: string }>
+      returned_lines: number
+      total_lines: number
+      truncated: boolean
+      totals: { debit: number; credit: number; net: number }
+      totals_scope: string
+    }
 
     expect(result.returned_lines).toBe(2)
+    expect(result.lines.map((l) => l.line_id)).toEqual(['L1', 'L2'])
+    expect(result.total_lines).toBe(4)
     expect(result.truncated).toBe(true)
+    expect(result.totals).toEqual({ debit: 1000, credit: 0, net: 1000 })
+    expect(result.totals_scope).toBe('full_match')
   })
 
-  it('scopes BOTH parallel legs to the caller company_id (tenant isolation)', async () => {
-    // Defence-in-depth against a future refactor that splits the legs and
-    // accidentally drops .eq('journal_entries.company_id', companyId) from
-    // one of them. RLS would still block cross-tenant reads, but losing the
-    // app-level filter would mean a wider scan than intended.
+  it('scopes BOTH legs to the caller company_id on the entry side (tenant isolation)', async () => {
+    // Defence-in-depth against a future refactor that drops
+    // .eq('company_id', companyId) from one leg's entry query. RLS would
+    // still block cross-tenant reads, but losing the app-level filter would
+    // mean a wider scan than intended.
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const { supabase, eqCallsByLeg, callCount } = makeQueueMock([
-      { data: [], count: 0 },
-      { data: [], count: 0 },
+    const { supabase, entryQueries } = makeTwoStepTextMock([
+      makeLineRow({ id: 'L1', line_description: 'Google' }),
     ])
 
-    await tool.execute(
-      { text: 'Google', limit: 50 },
-      'company-xyz',
+    await tool.execute({ text: 'Google', limit: 50 }, 'company-xyz', 'user-1', supabase)
+
+    const legs = entryQueries()
+    expect(legs).toHaveLength(2)
+    for (const leg of legs) {
+      expect(
+        leg.filters.some((f) => f.op === 'eq' && f.column === 'company_id' && f.value === 'company-xyz'),
+      ).toBe(true)
+    }
+  })
+
+  it('applies date_from/date_to on the entry side of both legs and excludes out-of-range matches', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const rows = [
+      makeLineRow({ id: 'IN1', line_description: 'DLE Sverige', entry_date: '2026-03-15', voucher_number: 2 }),
+      makeLineRow({ id: 'IN2', entry_description: 'DLE faktura', entry_date: '2026-03-20', voucher_number: 3 }),
+      makeLineRow({ id: 'OUT1', line_description: 'DLE Sverige', entry_date: '2025-11-02', voucher_number: 1 }),
+      makeLineRow({ id: 'OUT2', entry_description: 'DLE faktura', entry_date: '2026-07-01', voucher_number: 9 }),
+    ]
+    const { supabase, entryQueries } = makeTwoStepTextMock(rows)
+
+    const result = (await tool.execute(
+      { text: 'DLE', date_from: '2026-01-01', date_to: '2026-06-30', limit: 50 },
+      'company-1',
       'user-1',
       supabase,
-    )
+    )) as { lines: Array<{ line_id: string }>; total_lines: number }
 
-    expect(callCount()).toBe(2)
-    for (const legEqs of eqCallsByLeg) {
-      const scoped = legEqs.some(
-        (c) => c.column === 'journal_entries.company_id' && c.value === 'company-xyz',
+    for (const leg of entryQueries()) {
+      expect(leg.filters).toEqual(
+        expect.arrayContaining([
+          { op: 'gte', column: 'entry_date', value: '2026-01-01' },
+          { op: 'lte', column: 'entry_date', value: '2026-06-30' },
+        ]),
       )
-      expect(scoped).toBe(true)
     }
+    expect(result.total_lines).toBe(2)
+    expect(result.lines.map((l) => l.line_id).sort()).toEqual(['IN1', 'IN2'])
   })
 
   it('rejects text longer than 200 characters', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const { supabase } = makeQueueMock([])
+    const { supabase } = makeTwoStepTextMock([])
     const oversized = 'x'.repeat(201)
 
     await expect(
@@ -734,38 +871,238 @@ describe('gnubok_query_journal: free-text search', () => {
 
   it('does not surface raw PostgREST error text on text-search failure', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const { supabase } = makeTwoStepTextMock(
+      [makeLineRow({ id: 'L1', line_description: 'Google' })],
+      { failLinesWith: 'relation "journal_entries" does not exist in schema "private_internal"' },
+    )
 
-    // Custom mock that returns an error from the first leg.
-    const supabase = {
-      from: vi.fn().mockImplementation(() => {
-        const result = {
-          data: null,
-          error: { message: 'relation "journal_entries" does not exist in schema "private_internal"' },
-          count: null,
-        }
-        const buildChain = (): unknown =>
-          new Proxy(
-            {},
-            {
-              get(_t, prop) {
-                if (prop === 'then') {
-                  return (resolve: (v: unknown) => void) => resolve(result)
-                }
-                return () => buildChain()
-              },
-            },
-          )
-        return buildChain()
-      }),
-    } as never
+    const thrown = await tool
+      .execute({ text: 'Google', limit: 50 }, 'company-1', 'user-1', supabase)
+      .then(() => null, (e: unknown) => e as Error & { code?: string })
+    expect(thrown).toBeInstanceOf(Error)
+    expect(thrown!.message).toMatch(/Database error while running text search/)
+    // The schema-leak text never reaches the caller, and a non-transient
+    // failure carries no retry hint.
+    expect(thrown!.message).not.toMatch(/private_internal/)
+    expect(thrown!.code).toBeUndefined()
+  })
 
+  it('surfaces a statement timeout as a retryable TRANSIENT_ERROR instead of a generic failure', async () => {
+    // Production symptom: SQLSTATE 57014 on the text legs reached the agent
+    // as UNKNOWN_ERROR / "Något gick fel". The sanitised error must still
+    // carry the transient code so the structured-error layer maps it to the
+    // retryable envelope, and tell the agent how to narrow the query.
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const { supabase } = makeTwoStepTextMock(
+      [makeLineRow({ id: 'L1', line_description: 'Google' })],
+      { failLinesWith: 'canceling statement due to statement timeout' },
+    )
+
+    const thrown = await tool
+      .execute({ text: 'Google', limit: 50 }, 'company-1', 'user-1', supabase)
+      .then(() => null, (e: unknown) => e as Error & { code?: string })
+    expect(thrown).toBeInstanceOf(Error)
+    expect(thrown!.code).toBe('TRANSIENT_ERROR')
+    expect(thrown!.message).toMatch(/Database error while running text search/)
+    expect(thrown!.message).toMatch(/date_from\/date_to/)
+    expect(thrown!.message).not.toMatch(/canceling statement/)
+
+    const structured = getStructuredError(thrown)
+    expect(structured.code).toBe('TRANSIENT_ERROR')
+    expect(structured.retryable).toBe(true)
+  })
+})
+
+/**
+ * Hosts don't always enforce inputSchema, so `accounts` arrives as a bare
+ * number or string in the wild. Before the normalizer, `accounts: 1630`
+ * silently dropped the filter (a number has no `.length`) while
+ * applied_filters still echoed it, and `accounts: "1630"` was spread into its
+ * digits by `.in()`. Record every `.in()` call on journal_entry_lines so the
+ * assertion is on the actual predicate, not just the echo.
+ */
+function makeRecordingEntryLinesMock() {
+  const inCalls: Array<{ table: string; column: string; values: unknown }> = []
+  // One parent entry so the two-step fetch actually issues the lines query
+  // (fetchEntryLines short-circuits on zero entries); the lines page is empty.
+  const rowsFor = (table: string) =>
+    table === 'journal_entries'
+      ? [{ id: 'je-1', entry_date: '2026-01-15', voucher_series: 'A', voucher_number: 1, status: 'posted' }]
+      : []
+  const chain = (table: string): unknown =>
+    new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) =>
+              resolve({ data: rowsFor(table), error: null, count: rowsFor(table).length })
+          }
+          if (prop === 'range') return () => ({ data: rowsFor(table), error: null, count: rowsFor(table).length })
+          if (prop === 'in') {
+            return (column: string, values: unknown) => {
+              inCalls.push({ table, column, values })
+              return chain(table)
+            }
+          }
+          return () => chain(table)
+        },
+      },
+    )
+  const supabase = { from: vi.fn().mockImplementation((table: string) => chain(table)) } as never
+  return { supabase, inCalls }
+}
+
+describe('gnubok_query_journal: accounts argument normalization', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_query_journal')!
+  const lineAccountFilters = (calls: Array<{ table: string; column: string; values: unknown }>) =>
+    calls.filter((c) => c.table === 'journal_entry_lines' && c.column === 'account_number')
+
+  it('applies a bare number `accounts: 1630` as ["1630"] and echoes the normalized value', async () => {
+    const { supabase, inCalls } = makeRecordingEntryLinesMock()
+    const result = (await tool().execute(
+      { accounts: 1630 },
+      'company-1', 'user-1', supabase,
+    )) as { applied_filters: { accounts: unknown } }
+
+    const filters = lineAccountFilters(inCalls)
+    expect(filters.length).toBeGreaterThan(0)
+    for (const f of filters) expect(f.values).toEqual(['1630'])
+    expect(result.applied_filters.accounts).toEqual(['1630'])
+  })
+
+  it('applies a bare string `accounts: "1630"` as ["1630"], not as its digits', async () => {
+    const { supabase, inCalls } = makeRecordingEntryLinesMock()
+    await tool().execute({ accounts: '1630' }, 'company-1', 'user-1', supabase)
+    const filters = lineAccountFilters(inCalls)
+    expect(filters.length).toBeGreaterThan(0)
+    for (const f of filters) expect(f.values).toEqual(['1630'])
+  })
+
+  it('accepts a comma-separated string and integer array items', async () => {
+    const { supabase, inCalls } = makeRecordingEntryLinesMock()
+    await tool().execute({ accounts: '1930, 1940' }, 'company-1', 'user-1', supabase)
+    expect(lineAccountFilters(inCalls)[0]?.values).toEqual(['1930', '1940'])
+
+    const second = makeRecordingEntryLinesMock()
+    await tool().execute({ accounts: [1930, '1940'] }, 'company-1', 'user-1', second.supabase)
+    expect(lineAccountFilters(second.inCalls)[0]?.values).toEqual(['1930', '1940'])
+  })
+
+  it('rejects non-account values instead of dropping the filter', async () => {
+    const { supabase } = makeRecordingEntryLinesMock()
     await expect(
-      tool.execute({ text: 'Google', limit: 50 }, 'company-1', 'user-1', supabase),
-    ).rejects.toThrow(/Database error while running text search/)
-
-    // And the schema-leak text never reaches the caller.
+      tool().execute({ accounts: 'kontorsmaterial' }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/accounts must be an account number/)
     await expect(
-      tool.execute({ text: 'Google', limit: 50 }, 'company-1', 'user-1', supabase),
-    ).rejects.not.toThrow(/private_internal/)
+      tool().execute({ account_from: 4000 as unknown as string, account_to: { x: 1 } }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/account_to must be an account number/)
+  })
+
+  it('still caps accounts at 50 after normalization', async () => {
+    const { supabase } = makeRecordingEntryLinesMock()
+    const accounts = Array.from({ length: 51 }, (_, i) => 1000 + i).join(',')
+    await expect(
+      tool().execute({ accounts }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/capped at 50/)
+  })
+})
+
+describe('gnubok_query_journal: status default and balance integrity', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_query_journal')!
+
+  // A storno pair on 2614: the reversed original (credit) and its posted
+  // storno (debit). Under the ledger inclusion rule they net to zero; a
+  // posted-only view sees just the storno leg and fabricates a +940.27
+  // "balance". This is the exact shape that made a customer's agent find
+  // phantom VAT residuals and demand a revert of correct books.
+  const stornoPair = () => [
+    makeLineRow({
+      id: 'l-orig', account_number: '2614', debit_amount: 0, credit_amount: 940.27,
+      entry_status: 'reversed', entry_date: '2026-05-31',
+    }),
+    makeLineRow({
+      id: 'l-storno', account_number: '2614', debit_amount: 940.27, credit_amount: 0,
+      entry_status: 'posted', entry_date: '2026-05-31', voucher_number: 2,
+    }),
+  ]
+
+  it("declares status_filter_warning in the output schema and 'all' as the documented default", () => {
+    const t = tool()
+    const out = t.outputSchema as { properties?: Record<string, unknown> }
+    expect(out.properties?.status_filter_warning).toBeDefined()
+    const statusProp = (t.inputSchema as {
+      properties: Record<string, { description?: string }>
+    }).properties.status
+    expect(statusProp.description).toMatch(/Default 'all'/)
+  })
+
+  it('defaults to posted + reversed so a storno pair nets to zero (ledger rule)', async () => {
+    const { supabase, entryQueries } = makeTwoStepTextMock(stornoPair())
+    const result = (await tool().execute(
+      { accounts: ['2614'] },
+      'company-1', 'user-1', supabase,
+    )) as {
+      lines: unknown[]
+      totals: { net: number }
+      status_filter_warning?: string
+      applied_filters: { status: string }
+    }
+
+    expect(result.applied_filters.status).toBe('all')
+    expect(result.lines).toHaveLength(2)
+    expect(result.totals.net).toBe(0)
+    expect(result.status_filter_warning).toBeUndefined()
+    // The entry pass filters on BOTH statuses; no separate opposite-status
+    // count query runs on the default path.
+    const statusFilters = entryQueries().flatMap((q) =>
+      q.filters.filter((f) => f.column === 'status'),
+    )
+    expect(statusFilters).toEqual([
+      { op: 'in', column: 'status', value: ['posted', 'reversed'] },
+    ])
+  })
+
+  it("explicit status 'posted' returns one leg and warns that totals are not balances", async () => {
+    const { supabase, entryQueries } = makeTwoStepTextMock(stornoPair())
+    const result = (await tool().execute(
+      { accounts: ['2614'], status: 'posted' },
+      'company-1', 'user-1', supabase,
+    )) as {
+      lines: Array<{ line_id: string }>
+      totals: { net: number }
+      status_filter_warning?: string
+    }
+
+    expect(result.lines.map((l) => l.line_id)).toEqual(['l-storno'])
+    expect(result.totals.net).toBe(940.27)
+    expect(result.status_filter_warning).toMatch(/can differ from account balances/)
+    expect(result.status_filter_warning).toMatch(/status 'all'/)
+    // Singular/plural agreement: one excluded entry reads "1 entry ... is".
+    expect(result.status_filter_warning).toMatch(/1 entry with status 'reversed' in the filtered range is excluded/)
+    // The warning is grounded in a real opposite-status count query.
+    const oppositeCount = entryQueries().some((q) =>
+      q.filters.some((f) => f.op === 'eq' && f.column === 'status' && f.value === 'reversed'),
+    )
+    expect(oppositeCount).toBe(true)
+  })
+
+  it('omits the warning when the one-leg filter excluded nothing', async () => {
+    const rows = [
+      makeLineRow({ id: 'l1', account_number: '2614', debit_amount: 100, entry_status: 'posted' }),
+    ]
+    const { supabase } = makeTwoStepTextMock(rows)
+    const result = (await tool().execute(
+      { accounts: ['2614'], status: 'posted' },
+      'company-1', 'user-1', supabase,
+    )) as { status_filter_warning?: string }
+    expect(result.status_filter_warning).toBeUndefined()
+  })
+
+  it('rejects an unknown status value instead of matching nothing', async () => {
+    const { supabase } = makeTwoStepTextMock([])
+    await expect(
+      tool().execute({ status: 'draft' }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/status must be/)
   })
 })

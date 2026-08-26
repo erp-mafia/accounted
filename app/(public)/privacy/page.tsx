@@ -13,14 +13,14 @@ export function generateMetadata(): Metadata {
 export default function PrivacyPolicyPage() {
   const { appName, legalEntity, privacyEmail } = getBranding()
   return (
-    <div className="min-h-screen bg-background py-12 px-4">
+    <div className="min-h-dvh bg-background py-12 px-4">
       <div className="max-w-3xl mx-auto space-y-6">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-foreground mb-2">
+          <h1 className="text-3xl text-foreground mb-2">
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-07-22
+            Senast uppdaterad: 2026-08-21
           </p>
         </div>
 
@@ -134,8 +134,10 @@ export default function PrivacyPolicyPage() {
                     <td className="py-2 pr-4 font-medium">Amazon Web Services (AWS)</td>
                     <td className="py-2 pr-4">
                       AI-inferens (kategorisering samt dokument- och
-                      kvittotolkning) via Amazon Bedrock. Bearbetar bokföringsdata
-                      och uppladdade underlag: endast när AI-funktioner är
+                      kvittotolkning): AI-anropen skickas till Amazon Bedrock,
+                      och modellerna som används är Anthropics Claude-modeller,
+                      körda inom Bedrock. Bearbetar bokföringsdata och
+                      uppladdade underlag: endast när AI-funktioner är
                       aktiverade.
                     </td>
                     <td className="py-2 pr-4">EU (eu-north-1, Stockholm)</td>
@@ -158,10 +160,19 @@ export default function PrivacyPolicyPage() {
                       enkäter och supportärenden. Överförda uppgifter:
                       användar-ID, e-postadress, namn och företagsnamn. Om du
                       själv skriver till supporten i appen skickas även ditt
-                      meddelande dit som ett ärende, så att vi kan svara. All text i
-                      sessionsinspelningar maskeras: vi spelar in var i
-                      gränssnittet du klickar, aldrig vad som står i din
-                      bokföring. Organisationsnummer överförs aldrig.
+                      meddelande dit som ett ärende, så att vi kan svara. I
+                      sessionsinspelningar är maskering standardläget och kan
+                      inte stängas av: allt du skriver maskeras utan undantag,
+                      och all annan text maskeras om den inte är appens eget
+                      statiska gränssnitt, som rubriker, knappar, menyer och
+                      ledtexter. Ditt innehåll (namn, beskrivningar, belopp,
+                      person- och organisationsnummer) är därför aldrig
+                      läsbart, och även nytt eller omärkt gränssnitt maskeras
+                      tills det uttryckligen märkts som gränssnittstext:
+                      felläget är övermaskering, aldrig att dina uppgifter
+                      syns. Inspelningarna finns så att vi kan se var i appen
+                      du stöter på problem utan att se dina uppgifter.
+                      Organisationsnummer skickas aldrig som analysdata.
                       Identifiering sker endast för inloggade användare (ej
                       sandbox/demo). Inga kakor används, och själva analysdatan
                       lagras inte på din enhet. Två små tekniska värden sparas
@@ -180,6 +191,26 @@ export default function PrivacyPolicyPage() {
                 </tbody>
               </table>
             </div>
+
+            <p className="mt-4">
+              Utöver underbiträdena ovan använder körjournalens avståndsförslag
+              två självständiga mottagare som vi inte har biträdesavtal med.
+              Uppgifterna skickas bara när du själv klickar på
+              &quot;Föreslå sträcka&quot; i körjournalen, via vår server och
+              utan användar-ID eller andra kontouppgifter, och varje mottagare
+              får olika uppgifter: OpenStreetMap Foundation (geokodningstjänsten
+              Nominatim, Storbritannien/EU; Storbritannien omfattas av EU:s
+              adekvansbeslut) tar emot adresstexterna du angett och översätter
+              dem till kartkoordinater, och FOSSGIS e.V.
+              (ruttberäkningstjänsten, Tyskland) tar därefter emot endast
+              koordinaterna, aldrig adresstexterna. För att minska antalet
+              anrop mellanlagrar vår server adresstexter, koordinater och
+              beräknade sträckor i arbetsminnet i upp till 24 timmar; de
+              skrivs inte till databasen och kopplas inte till ditt konto.
+              Tänk på att en adress du anger, till exempel en hemadress, i sig
+              kan vara en personuppgift; skriv platsnamn i stället för exakta
+              adresser om du inte vill att de skickas.
+            </p>
 
             <p className="mt-4 text-sm text-muted-foreground">
               AI-funktioner är frivilliga och kräver separat samtycke före

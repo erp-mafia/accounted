@@ -265,7 +265,7 @@ export default function DimensionCombobox({
       {isOpen && !disabled && (
         <div
           ref={listRef}
-          className="absolute z-50 top-full left-0 mt-1 min-w-[16rem] w-[max(100%,20rem)] max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md"
+          className="absolute z-50 top-full left-0 mt-1 min-w-[16rem] w-[max(100%,20rem)] max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md"
         >
           {loadState === 'loading' && (
             <div className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">

@@ -6,7 +6,7 @@ import {
   OAUTH_REVOKE_TIMEOUT_MS,
 } from '@/lib/http/fetch-with-timeout';
 
-const DEFAULT_SCOPES = [
+const BASE_SCOPES = [
   'companyinformation',
   'invoice',
   'supplierinvoice',
@@ -14,6 +14,44 @@ const DEFAULT_SCOPES = [
   'supplier',
   'bookkeeping',
 ];
+
+/** Arkivplats + Koppla filer: what the voucher attachment import reads. */
+export const FORTNOX_DOCUMENT_SCOPES = ['archive', 'connectfile'];
+
+/**
+ * Whether the registered Fortnox app has Arkivplats and Koppla filer enabled in
+ * the Fortnox Developer Portal (integration 39254). True since 2026-08-21, when
+ * the portal registration was confirmed to carry both.
+ *
+ * Requesting a scope the app lacks makes the authorize endpoint reject with
+ * invalid_scope BEFORE login, so set this back to false the moment the portal
+ * loses them, rather than leaving the underlag reconnect pointed at a scope
+ * Fortnox will refuse (prod incident 2026-08-13, when the ordinary connect
+ * still carried these scopes and every Fortnox connection died).
+ *
+ * It gates the opt-in document consent below and the document-import error
+ * message, never the ordinary connect: a user is never told to reconnect for a
+ * permission we don't ask for (support case Klura AB, 2026-08-20).
+ */
+export const FORTNOX_DOCUMENT_SCOPES_APPROVED: boolean = true;
+
+/**
+ * The scopes a Fortnox consent is minted with. The document scopes are opt-in
+ * per authorize call, because Fortnox derives its customer licence
+ * requirements from what an integration requests: a customer who never imports
+ * receipts should not be asked to hold an Arkivplats licence to connect at all.
+ *
+ * The base scopes always ride along. The OAuth callback overwrites the
+ * consent's tokens in place, so a document consent minted from the two extra
+ * scopes alone would strip the migration's own access to the ledger.
+ */
+export function fortnoxConsentScopes(options?: { documents?: boolean }): string[] {
+  const withDocuments =
+    options?.documents === true && FORTNOX_DOCUMENT_SCOPES_APPROVED;
+  return withDocuments
+    ? [...BASE_SCOPES, ...FORTNOX_DOCUMENT_SCOPES]
+    : [...BASE_SCOPES];
+}
 
 export function buildFortnoxAuthUrl(
   config: OAuthConfig,
@@ -26,7 +64,9 @@ export function buildFortnoxAuthUrl(
     access_type: 'offline',
   });
 
-  const scopes = options?.scopes?.length ? options.scopes : DEFAULT_SCOPES;
+  const scopes = options?.scopes?.length
+    ? options.scopes
+    : fortnoxConsentScopes();
   params.set('scope', scopes.join(' '));
 
   if (options?.state) {

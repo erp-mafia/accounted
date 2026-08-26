@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -19,16 +20,42 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { formatCurrency } from '@/lib/utils'
-import type { ImportResult } from '@/lib/import/types'
+import { useCompany } from '@/contexts/CompanyContext'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import TheaterCanvas from '@/components/import/TheaterCanvas'
+import { FiscalYearGapNotice } from '@/components/import/FiscalYearGapNotice'
+import type { ImportPreview, ImportResult } from '@/lib/import/types'
+import type { TheaterModel } from '@/lib/import/theater-model'
 
 interface ImportResultStepProps {
   result: ImportResult
   onNewImport: () => void
   onUndo?: (importId: string) => Promise<void> | void
+  /** When the theater ran, the reveal replaces the plain success header:
+   *  the settled constellation beside the personalized story + the bank
+   *  bridge. Absent (failure, oversized file, parse miss) = plain header. */
+  preview?: ImportPreview | null
+  theaterModel?: TheaterModel | null
+  unresolvedVatAccountCount?: number
 }
 
-export default function ImportResultStep({ result, onNewImport, onUndo }: ImportResultStepProps) {
+export default function ImportResultStep({
+  result,
+  onNewImport,
+  onUndo,
+  preview = null,
+  theaterModel = null,
+  unresolvedVatAccountCount = 0,
+}: ImportResultStepProps) {
+  const t = useTranslations('import')
   const { dialogProps, confirm } = useDestructiveConfirm()
+  const { isSandbox } = useCompany()
+  const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
+  // The reveal only tells a story that is true: it needs the theater model,
+  // the preview, and actual imported entries (an opening-balances-only run
+  // must not claim "history in place" over an untouched constellation).
+  const showReveal =
+    result.success && !!theaterModel && !!preview && result.journalEntriesCreated > 0
 
   const handleUndoClick = async () => {
     if (!result.importId || !onUndo) return
@@ -54,31 +81,102 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
 
   return (
     <div className="space-y-6">
-      {/* Success/Failure header */}
-      <Card className={result.success ? 'border-border' : 'border-destructive/50'}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            {result.success ? (
-              <>
-                <CheckCircle className="h-6 w-6 text-success" />
-                Import genomförd
-              </>
-            ) : (
-              <>
-                <XCircle className="h-6 w-6 text-destructive" />
-                Import misslyckades
-              </>
-            )}
-          </CardTitle>
-          <CardDescription>
-            {result.success
-              ? skipped && skipped.total > 0
-                ? `Din bokföring har importerats. ${result.journalEntriesCreated} verifikationer skapades, ${skipped.total} hoppades över: se detaljer nedan.`
-                : 'Din bokföring har importerats framgångsrikt.'
-              : 'Det uppstod fel under importen. Läs felmeddelanden nedan för att förstå vad som gick snett och hur du kan åtgärda det.'}
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      {/* "Din historia" reveal (theater ran) or the plain success/failure header */}
+      {showReveal && theaterModel && preview ? (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="grid items-center gap-6 md:grid-cols-[minmax(280px,380px)_1fr]">
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  {t('reveal_eyebrow')}
+                </p>
+                <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
+                  {t('reveal_title', { years: Math.max(theaterModel.years.length, 1) })}
+                </h2>
+                <p className="mt-3 text-[13px] text-muted-foreground tabular-nums">
+                  {t('reveal_stats', {
+                    vouchers: result.journalEntriesCreated,
+                    accounts: preview.accountCount,
+                    counterparties: theaterModel.totalCounterparties,
+                  })}
+                </p>
+                {/* The balance claim comes from the pre-import file check; it
+                    stays honest only when no unbalanced voucher was skipped. */}
+                {preview.trialBalance.isBalanced && !(skipped && skipped.unbalanced > 0) && (
+                  <p className="mt-1 text-[13px] tabular-nums text-success">{t('reveal_tie_ok')}</p>
+                )}
+                {skipped && skipped.total > 0 && (
+                  <p className="mt-1 text-[13px] text-warning">
+                    {t('reveal_skipped', { count: skipped.total })}
+                  </p>
+                )}
+                <div className="mt-6 border-t border-border pt-4">
+                  {/* Sandbox strips live bank connections from /import, so the
+                      bridge quiets down to the plain way onward there. */}
+                  {!isSandbox && <p className="font-display text-base">{t('reveal_bridge')}</p>}
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    {/* Both migrator paths: PSD2 covers recent history (banks
+                        cap the window around 90 days), CSV upload reaches the
+                        older period the SIE file covers. Either way the
+                        overlap is matched against the imported verifikat.
+                        Sandbox hides only the live bank connection; file-based
+                        import works there and its CTA stays. */}
+                    {!isSandbox && hasBanking && (
+                      <Button asChild size="sm">
+                        <Link href="/import?mode=psd2">{t('reveal_cta_bank')}</Link>
+                      </Button>
+                    )}
+                    <Button
+                      asChild
+                      size="sm"
+                      variant={!isSandbox && hasBanking ? 'outline' : 'default'}
+                    >
+                      <Link href="/import?mode=bank">{t('reveal_cta_csv')}</Link>
+                    </Button>
+                    <Link
+                      href="/"
+                      className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                    >
+                      {t('reveal_cta_open')}
+                    </Link>
+                  </div>
+                </div>
+              </div>
+              <div className="relative hidden min-h-[360px] md:block">
+                <TheaterCanvas model={theaterModel} settled />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className={result.success ? 'border-border' : 'border-destructive/50'}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              {result.success ? (
+                <>
+                  <CheckCircle className="h-6 w-6 text-success" />
+                  Import genomförd
+                </>
+              ) : (
+                <>
+                  <XCircle className="h-6 w-6 text-destructive" />
+                  Import misslyckades
+                </>
+              )}
+            </CardTitle>
+            <CardDescription>
+              {result.success
+                ? skipped && skipped.total > 0
+                  ? `Din bokföring har importerats. ${result.journalEntriesCreated} verifikationer skapades, ${skipped.total} hoppades över: se detaljer nedan.`
+                  : 'Din bokföring har importerats framgångsrikt.'
+                : 'Det uppstod fel under importen. Läs felmeddelanden nedan för att förstå vad som gick snett och hur du kan åtgärda det.'}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
+      {/* A year missing between the imported ones: say so here, where the next file is one click away. */}
+      {result.success && <FiscalYearGapNotice />}
 
       {/* IB resync notice (prior-year backfill) */}
       {result.success && result.nextPeriodIBResync && (
@@ -98,7 +196,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
       )}
 
       {result.success && result.nextPeriodIBResyncSkipped && (
-        <Card className="border-warning/50">
+        <Card className="border-border">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base text-warning">
               <AlertCircle className="h-5 w-5" />
@@ -109,6 +207,23 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
               vill att ingående balanser ska uppdateras automatiskt.
             </CardDescription>
           </CardHeader>
+        </Card>
+      )}
+
+      {result.success && unresolvedVatAccountCount > 0 && (
+        <Card className="border-warning/40">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <AlertCircle className="h-5 w-5 text-warning" />
+              {t('vat_review_title', { count: unresolvedVatAccountCount })}
+            </CardTitle>
+            <CardDescription>{t('vat_review_description')}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline">
+              <Link href="/chart-of-accounts">{t('vat_review_action')}</Link>
+            </Button>
+          </CardContent>
         </Card>
       )}
 
@@ -140,7 +255,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
       )}
 
       {/* Statistics */}
-      {result.success && (
+      {result.success && !showReveal && (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
           <Card>
             <CardContent className="pt-6">
@@ -266,7 +381,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
 
       {/* Untransferred prior-year results — the year-end omföring is missing */}
       {untransferred && untransferred.length > 0 && (
-        <Card className="border-warning/50">
+        <Card className="border-border">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-warning">
               <AlertCircle className="h-5 w-5" />
@@ -295,7 +410,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
 
       {/* Other warnings (filtered) */}
       {otherWarnings.length > 0 && (
-        <Card className="border-warning/50">
+        <Card className="border-border">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-warning">
               <AlertCircle className="h-5 w-5" />
@@ -315,46 +430,34 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
         </Card>
       )}
 
-      {/* Next steps */}
-      {result.success && (
+      {/* Next steps: the migrator bridge. Not instructions to read, an action
+          to take: fetch the bank history so it can be matched against the
+          verifikat that were just imported, instead of landing as anonymous
+          "Att bokföra" rows. */}
+      {result.success && !showReveal && (
         <Card className="bg-muted/50">
           <CardHeader>
-            <CardTitle className="text-base">Nästa steg</CardTitle>
+            <CardTitle className="text-base">{t('next_steps_title')}</CardTitle>
+            <CardDescription>{t('next_steps_match_copy')}</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">
-                1
-              </div>
-              <div>
-                <p className="font-medium">Granska importerade verifikationer</p>
-                <p className="text-sm text-muted-foreground">
-                  Kontrollera att allt ser korrekt ut i bokföringslistan
-                </p>
-              </div>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Sandbox hides only the live bank connection; file-based
+                  import works there and its CTA stays. */}
+              {!isSandbox && hasBanking && (
+                <Button asChild size="sm">
+                  <Link href="/import?mode=psd2">{t('next_steps_cta_bank')}</Link>
+                </Button>
+              )}
+              <Button
+                asChild
+                size="sm"
+                variant={!isSandbox && hasBanking ? 'outline' : 'default'}
+              >
+                <Link href="/import?mode=bank">{t('next_steps_cta_csv')}</Link>
+              </Button>
             </div>
-            <div className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">
-                2
-              </div>
-              <div>
-                <p className="font-medium">Verifiera balanserna</p>
-                <p className="text-sm text-muted-foreground">
-                  Jämför huvudboken med din tidigare bokföring
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center text-sm font-medium">
-                3
-              </div>
-              <div>
-                <p className="font-medium">Fortsätt med ny bokföring</p>
-                <p className="text-sm text-muted-foreground">
-                  Nu kan du börja lägga till nya transaktioner
-                </p>
-              </div>
-            </div>
+            <p className="text-sm text-muted-foreground">{t('next_steps_window_hint')}</p>
           </CardContent>
         </Card>
       )}

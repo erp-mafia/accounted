@@ -31,6 +31,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { getPrimaryJournalEntryId } from '@/lib/transactions/is-booked'
 
 /** Integer öre: representation-agnostic amount key (mirrors the ingest dedup). */
 function toOre(amount: number | string): number {
@@ -118,9 +119,13 @@ export function resolveTransactionAmountSek(tx: TransactionAmountFields): number
 /** An already-booked transaction OR voucher that looks like the same real movement. */
 export interface BookedDuplicateCandidate {
   /**
-   * The sibling transaction that is already booked, or `null` when the duplicate
-   * is a ledger-only voucher (a payment/payout booked straight to the cash
-   * account with no transaction row behind it: see detectLedgerDuplicateVoucher).
+   * The already-booked twin TRANSACTION, or `null` when the duplicate is a
+   * ledger-only voucher (a payment/payout booked straight to the cash account
+   * with no transaction row behind it: see detectLedgerDuplicateVoucher). Set
+   * by the sibling detector, and ALSO by the ledger detector when the matched
+   * voucher's linking transaction is itself the target's twin (the
+   * date-drifted duplicate-import shape): consumers must branch on this field,
+   * not on which detector produced the candidate.
    */
   transaction_id: string | null
   /** Its verifikat. */
@@ -149,10 +154,11 @@ export interface BookedDuplicateCandidate {
   amount: number | null
   /**
    * The 19xx settlement account of the voucher leg that matched, set for
-   * ledger-only candidates so the match action can link on the exact account
-   * the voucher was booked to (a legacy transaction without cash_account_id
-   * would otherwise resolve by currency and can pick the wrong 19xx). Null for
-   * sibling-transaction candidates, whose legs are not fetched.
+   * every ledger-detected candidate (twin-linked or not) so the match action
+   * can link on the exact account the voucher was booked to (a legacy
+   * transaction without cash_account_id would otherwise resolve by currency
+   * and can pick the wrong 19xx). Null for sibling-transaction candidates,
+   * whose legs are not fetched.
    */
   account_number: string | null
   /**
@@ -229,8 +235,29 @@ export interface BookingDuplicateExclusions {
 }
 
 /**
- * Find an already-booked sibling transaction sharing (date, amount, account).
- * Returns the single best candidate, or null.
+ * ± days around the target's date an already-booked SIBLING TRANSACTION may
+ * sit and still be "the same" movement. A duplicate import of one real
+ * movement often carries a drifted date (CSV bokföringsdag vs PSD2 valutadag,
+ * a weekend in between), so an exact-date match missed exactly the twin this
+ * guard exists to catch. Deliberately tighter than the voucher window below:
+ * a sibling match additionally requires the exact öre amount in the same
+ * currency, but adjacent-day repeated payments (Swish, weekly SaaS charges)
+ * are common enough that a wide window would over-warn.
+ */
+const SIBLING_DUPLICATE_DATE_WINDOW_DAYS = 3
+
+/**
+ * Find an already-booked sibling transaction sharing (date-window, amount,
+ * account). Returns the single best candidate, or null.
+ *
+ * Booked-ness uses the full is_transaction_booked semantics
+ * (lib/transactions/is-booked.ts): a bare `transactions.journal_entry_id`
+ * check misses bulk-booked rows (anchored via transaction_voucher_links) and
+ * multi-allocated rows (anchored via invoice_payments /
+ * supplier_invoice_payments), which read as "unbooked" and made the guard
+ * blind to their twins. The anchor rows are batch-fetched for the windowed
+ * candidates and the candidate's verifikat resolves via
+ * getPrimaryJournalEntryId.
  *
  * Account guard mirrors the import dedup bridge: when BOTH sides know their
  * cash_account_id they must match; a null on either side is treated as
@@ -249,9 +276,10 @@ export interface BookingDuplicateExclusions {
  * the raw foreign number: see the resolution at the bottom.
  *
  * Fail-open: a query error returns null rather than throwing: a detection
- * failure must never block a legitimate booking. The pick is deterministic
- * (lowest id) so a re-detection under force=true returns the same candidate the
- * user reviewed.
+ * failure must never block a legitimate booking. The pick is deterministic:
+ * smallest date distance first (an exact-date sibling always outranks a
+ * drifted one), then earliest date, then lowest id, so a re-detection under
+ * force=true returns the same candidate the user reviewed.
  */
 export async function detectBookedDuplicateTransaction(
   supabase: SupabaseClient,
@@ -262,22 +290,36 @@ export async function detectBookedDuplicateTransaction(
   const targetOre = toOre(target.amount)
   if (targetOre === 0 || Number.isNaN(targetOre)) return null
   // Siblings booked earlier in this same bulk run are distinct events the user
-  // selected, not duplicates: never flag one against another.
+  // selected, not duplicates: never flag one against another. Same for
+  // vouchers minted earlier in the run: a bulk-booked sibling resolves its
+  // verifikat via transaction_voucher_links below, so the entry-id exclusion
+  // applies here too.
   const excludeTransactionIds = new Set(opts?.excludeTransactionIds ?? [])
+  const excludeJournalEntryIds = new Set(opts?.excludeJournalEntryIds ?? [])
   const targetCurrency = (target.currency || 'SEK').toUpperCase()
 
-  // Same company, same date, already booked, not the target row itself. The
-  // amount, currency and account match is applied in JS so a numeric-string
-  // amount from PostgREST ("-1616.00") collapses to the same öre as the number
-  // (-1616).
+  const targetDateMs = new Date(target.date).getTime()
+  if (Number.isNaN(targetDateMs)) return null
+  const siblingWindowMs = SIBLING_DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000
+  const siblingLowDate = new Date(targetDateMs - siblingWindowMs).toISOString().split('T')[0]
+  const siblingHighDate = new Date(targetDateMs + siblingWindowMs).toISOString().split('T')[0]
+
+  // Same company, date inside the sibling window, not the target row itself.
+  // The amount, currency and account match is applied in JS so a
+  // numeric-string amount from PostgREST ("-1616.00") collapses to the same
+  // öre as the number (-1616). Booked-ness is resolved AFTER the fetch (see
+  // below): filtering on journal_entry_id here would drop bulk-booked and
+  // multi-allocated siblings whose column is NULL. Ordered so the row set is
+  // deterministic even at the limit.
   const { data, error } = await supabase
     .from('transactions')
     .select('id, date, amount, currency, amount_sek, exchange_rate, description, cash_account_id, journal_entry_id')
     .eq('company_id', companyId)
-    .eq('date', target.date)
-    .not('journal_entry_id', 'is', null)
+    .gte('date', siblingLowDate)
+    .lte('date', siblingHighDate)
     .neq('id', target.id)
-    .limit(100)
+    .order('id', { ascending: true })
+    .limit(500)
 
   if (error || !data || data.length === 0) return null
 
@@ -290,7 +332,7 @@ export async function detectBookedDuplicateTransaction(
     exchange_rate: number | string | null
     description: string | null
     cash_account_id: string | null
-    journal_entry_id: string
+    journal_entry_id: string | null
   }
   const targetAccount = target.cash_account_id ?? null
   const matches = (data as unknown as Row[]).filter((r) => {
@@ -304,12 +346,71 @@ export async function detectBookedDuplicateTransaction(
     if (targetAccount !== null && r.cash_account_id !== null && r.cash_account_id !== targetAccount) {
       return false
     }
-    return r.journal_entry_id != null
+    // Window re-check in JS (the query already ranged on date): keeps the
+    // window authoritative in one place and drops rows with unparseable dates.
+    const rowMs = new Date(r.date).getTime()
+    return Number.isFinite(rowMs) && Math.abs(rowMs - targetDateMs) <= siblingWindowMs
   })
   if (matches.length === 0) return null
 
-  matches.sort((a, b) => a.id.localeCompare(b.id))
-  const best = matches[0]
+  // Resolve booked-ness with the full is_transaction_booked semantics: the
+  // anchor may live on the row itself (journal_entry_id), in
+  // transaction_voucher_links (bulk-book), or in invoice_payments /
+  // supplier_invoice_payments (multi-allocation). Batch-fetched only for the
+  // rows whose own column is NULL. All lookups filter by company_id (defense
+  // in depth alongside RLS).
+  const unanchoredIds = matches.filter((r) => r.journal_entry_id == null).map((r) => r.id)
+  let paymentRows: { transaction_id: string | null; journal_entry_id: string | null }[] = []
+  let voucherLinkRows: { transaction_id: string; journal_entry_id: string }[] = []
+  if (unanchoredIds.length > 0) {
+    const [vl, ip, sp] = await Promise.all([
+      supabase
+        .from('transaction_voucher_links')
+        .select('transaction_id, journal_entry_id')
+        .eq('company_id', companyId)
+        .in('transaction_id', unanchoredIds),
+      supabase
+        .from('invoice_payments')
+        .select('transaction_id, journal_entry_id')
+        .eq('company_id', companyId)
+        .in('transaction_id', unanchoredIds),
+      supabase
+        .from('supplier_invoice_payments')
+        .select('transaction_id, journal_entry_id')
+        .eq('company_id', companyId)
+        .in('transaction_id', unanchoredIds),
+    ])
+    voucherLinkRows = (vl.data ?? []) as { transaction_id: string; journal_entry_id: string }[]
+    paymentRows = [...(ip.data ?? []), ...(sp.data ?? [])] as {
+      transaction_id: string | null
+      journal_entry_id: string | null
+    }[]
+  }
+
+  const booked = matches
+    .map((r) => ({
+      row: r,
+      journalEntryId: getPrimaryJournalEntryId(r, paymentRows, voucherLinkRows),
+    }))
+    .filter(
+      (x): x is { row: Row; journalEntryId: string } =>
+        x.journalEntryId != null && !excludeJournalEntryIds.has(x.journalEntryId),
+    )
+  if (booked.length === 0) return null
+
+  // Deterministic pick, and exact-date candidates MUST outrank drifted ones:
+  // force=true re-detection is bound to the candidate the user reviewed
+  // (TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH otherwise), so the ranking has
+  // explicit total-order tiebreakers.
+  booked.sort((a, b) => {
+    const ad = Math.abs(new Date(a.row.date).getTime() - targetDateMs)
+    const bd = Math.abs(new Date(b.row.date).getTime() - targetDateMs)
+    if (ad !== bd) return ad - bd
+    if (a.row.date !== b.row.date) return a.row.date < b.row.date ? -1 : 1
+    return a.row.id.localeCompare(b.row.id)
+  })
+  const best = booked[0].row
+  const bestJournalEntryId = booked[0].journalEntryId
 
   // Resolve the voucher label for the warning (best-effort: a missing label
   // still yields a usable candidate the UI can render by date/amount).
@@ -318,7 +419,7 @@ export async function detectBookedDuplicateTransaction(
   const { data: je } = await supabase
     .from('journal_entries')
     .select('voucher_series, voucher_number, entry_date')
-    .eq('id', best.journal_entry_id)
+    .eq('id', bestJournalEntryId)
     .maybeSingle()
   if (je) {
     const j = je as { voucher_series: string | null; voucher_number: number | null; entry_date: string | null }
@@ -351,7 +452,7 @@ export async function detectBookedDuplicateTransaction(
 
   return {
     transaction_id: best.id,
-    journal_entry_id: best.journal_entry_id,
+    journal_entry_id: bestJournalEntryId,
     voucher_label: voucherLabel,
     entry_date: entryDate,
     description: best.description,
@@ -422,11 +523,15 @@ const BANK_ACCOUNT_HIGH = 1949
  * must be on that account's ledger account; otherwise any 19xx leg matches
  * (single-account companies, legacy rows with no cash_account_id).
  *
- * Excludes vouchers already linked to a transaction or an invoice_payment (those
- * are reconciled, not orphans) and storno/correction entries (valid second
- * vouchers, not duplicates). Fail-open: a query error returns null so a
- * detection failure never blocks a legitimate booking. The pick is deterministic
- * (closest date, then lowest journal_entry id) so a force re-detect is stable.
+ * Excludes vouchers already linked to a transaction or an invoice_payment
+ * (those are reconciled, not orphans) and storno/correction entries (valid
+ * second vouchers, not duplicates): EXCEPT a voucher whose linking transaction
+ * itself matches the target (same öre in the same currency, compatible
+ * account, date in the window), which is returned as the twin with
+ * `transaction_id` set. Fail-open: a query error returns null so a detection
+ * failure never blocks a legitimate booking. The pick is deterministic
+ * (closest date, then lowest journal_entry id, then account) so a force
+ * re-detect is stable.
  */
 export async function detectLedgerDuplicateVoucher(
   supabase: SupabaseClient,
@@ -443,6 +548,12 @@ export async function detectLedgerDuplicateVoucher(
   // be compared at all, which is handled below rather than swept under a pass.
   const targetSek = resolveTransactionAmountSek(target)
   const inbound = targetOre > 0
+  // For the linked-transaction twin test in the exclusion block below: the
+  // linking transaction's `amount` is denominated in ITS OWN currency, so the
+  // öre comparison is only like-with-like when the labels agree (same guard
+  // as the sibling detector).
+  const targetCurrency = (target.currency || 'SEK').toUpperCase()
+  const targetAccount = target.cash_account_id ?? null
 
   const dateMs = new Date(target.date).getTime()
   if (Number.isNaN(dateMs)) return null
@@ -556,32 +667,93 @@ export async function detectLedgerDuplicateVoucher(
   // Drop vouchers already reconciled to a transaction or an invoice payment:
   // those aren't orphans. Both lookups are filtered by company_id (defense in
   // depth alongside RLS).
+  //
+  // EXCEPTION: a voucher whose linking transaction ITSELF looks like the
+  // target's twin (same öre in the same currency, compatible cash account,
+  // date inside the window) is NOT "reconciled to something else": that shape
+  // is a date-drifted duplicate import row whose copy is already booked.
+  // Excluding it made the guard blind to exactly that double-booking (the
+  // sibling scan missed on date, this scan dropped the voucher as linked).
+  // Such a voucher is returned as the twin WITH transaction_id set so the UI
+  // can offer match/ignore instead of a blind second booking.
   const entryIds = candidates.map((l) => l.journal_entry.id)
   const [{ data: txLinks }, { data: payLinks }] = await Promise.all([
-    supabase.from('transactions').select('journal_entry_id').eq('company_id', companyId).in('journal_entry_id', entryIds),
+    supabase
+      .from('transactions')
+      .select('id, date, amount, currency, cash_account_id, journal_entry_id')
+      .eq('company_id', companyId)
+      .in('journal_entry_id', entryIds),
     supabase.from('invoice_payments').select('journal_entry_id').eq('company_id', companyId).in('journal_entry_id', entryIds),
   ])
-  const linked = new Set<string>()
-  for (const r of (txLinks ?? []) as { journal_entry_id: string | null }[]) {
-    if (r.journal_entry_id) linked.add(r.journal_entry_id)
+
+  type LinkedTxRow = {
+    id: string
+    date: string
+    amount: number | string
+    currency: string | null
+    cash_account_id: string | null
+    journal_entry_id: string | null
   }
+  const linkedTxMatchesTarget = (r: LinkedTxRow): boolean => {
+    if (r.id === target.id) return false
+    if ((r.currency || 'SEK').toUpperCase() !== targetCurrency) return false
+    if (toOre(r.amount) !== targetOre) return false
+    if (targetAccount !== null && r.cash_account_id !== null && r.cash_account_id !== targetAccount) {
+      return false
+    }
+    const linkedMs = new Date(r.date).getTime()
+    return Number.isFinite(linkedMs) && Math.abs(linkedMs - dateMs) <= windowMs
+  }
+
+  const linkedTxByEntry = new Map<string, LinkedTxRow[]>()
+  for (const r of (txLinks ?? []) as LinkedTxRow[]) {
+    if (!r.journal_entry_id) continue
+    const arr = linkedTxByEntry.get(r.journal_entry_id) ?? []
+    arr.push(r)
+    linkedTxByEntry.set(r.journal_entry_id, arr)
+  }
+  const paymentLinked = new Set<string>()
   for (const r of (payLinks ?? []) as { journal_entry_id: string | null }[]) {
-    if (r.journal_entry_id) linked.add(r.journal_entry_id)
+    if (r.journal_entry_id) paymentLinked.add(r.journal_entry_id)
   }
 
-  const unlinked = candidates.filter((l) => !linked.has(l.journal_entry.id))
-  if (unlinked.length === 0) return null
+  const survivors: { line: (typeof candidates)[number]; twinTransactionId: string | null }[] = []
+  for (const l of candidates) {
+    const entryId = l.journal_entry.id
+    const links = linkedTxByEntry.get(entryId) ?? []
+    // Deterministic twin pick within one voucher: lowest matching tx id.
+    const matchingTwinIds = links
+      .filter(linkedTxMatchesTarget)
+      .map((r) => r.id)
+      .sort((a, b) => a.localeCompare(b))
+    if (matchingTwinIds.length > 0) {
+      survivors.push({ line: l, twinTransactionId: matchingTwinIds[0] })
+      continue
+    }
+    // Linked to a non-matching transaction or to an invoice payment: genuinely
+    // reconciled to something else, not an orphan. Excluded as before.
+    if (links.length > 0 || paymentLinked.has(entryId)) continue
+    survivors.push({ line: l, twinTransactionId: null })
+  }
+  if (survivors.length === 0) return null
 
-  unlinked.sort((a, b) => {
-    const ad = Math.abs(new Date(a.journal_entry.entry_date).getTime() - dateMs)
-    const bd = Math.abs(new Date(b.journal_entry.entry_date).getTime() - dateMs)
+  survivors.sort((a, b) => {
+    const ad = Math.abs(new Date(a.line.journal_entry.entry_date).getTime() - dateMs)
+    const bd = Math.abs(new Date(b.line.journal_entry.entry_date).getTime() - dateMs)
     if (ad !== bd) return ad - bd
-    return a.journal_entry.id.localeCompare(b.journal_entry.id)
+    if (a.line.journal_entry.id !== b.line.journal_entry.id) {
+      return a.line.journal_entry.id.localeCompare(b.line.journal_entry.id)
+    }
+    // Same entry can expose two 19xx legs (own-account transfer): total order
+    // keeps the force re-detect stable.
+    return a.line.account_number.localeCompare(b.line.account_number)
   })
-  const best = unlinked[0]
+  const best = survivors[0].line
 
   return {
-    transaction_id: null,
+    // Set when the voucher's linking transaction is itself the target's twin
+    // (the de-excluded shape above); null for a true ledger-only orphan.
+    transaction_id: survivors[0].twinTransactionId,
     journal_entry_id: best.journal_entry.id,
     voucher_label: `${best.journal_entry.voucher_series ?? 'A'}${best.journal_entry.voucher_number ?? ''}`,
     entry_date: best.journal_entry.entry_date,

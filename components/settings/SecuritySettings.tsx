@@ -10,6 +10,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2, ShieldCheck, ShieldOff } from 'lucide-react'
 import { isMfaRequired } from '@/lib/auth/mfa'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
+import { isSelfHosted as readSelfHostedFlag } from '@/lib/env/public-flags'
+import { AutoLogoutToggle } from '@/components/settings/AutoLogoutToggle'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -21,7 +23,7 @@ import {
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
 
-const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
+const isSelfHosted = readSelfHostedFlag()
 const mfaRequired = isMfaRequired()
 const bankIdEnabled = isBankIdEnabled()
 
@@ -327,6 +329,9 @@ export function SecuritySettings() {
           )}
         </SettingsRow>
       )}
+
+      {/* Automatic logout: per-user opt-in, renders nothing on self-hosted */}
+      <AutoLogoutToggle />
     </SettingsGroup>
   )
 }

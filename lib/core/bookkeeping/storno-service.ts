@@ -10,9 +10,14 @@ import { normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
+  correctionChainDepth,
+  CORRECTION_CHAIN_GUARD_DEPTH,
+} from '@/lib/core/bookkeeping/correction-chain'
+import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotCorrectNonPostedError,
+  CorrectionChainTooDeepError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   FiscalPeriodNotFoundError,
@@ -137,6 +142,14 @@ export async function correctEntry(
      * stale label echoing in the correction header (issue #1031).
      */
     description?: string
+    /**
+     * Bypass the correction-chain depth guard. Correcting an entry that is
+     * already CORRECTION_CHAIN_GUARD_DEPTH+ links deep in a rättelse chain
+     * throws CorrectionChainTooDeepError unless this is set: the sanctioned
+     * fix is one correction expressing the chain's net effect, not another
+     * layer of storno+rättelse.
+     */
+    allowDeepChain?: boolean
   }
 ): Promise<{ reversal: JournalEntry; corrected: JournalEntry; documentRelinkError?: string }> {
   // Validate the corrected lines are balanced
@@ -170,6 +183,17 @@ export async function correctEntry(
 
   if (original.status !== 'posted') {
     throw new CannotCorrectNonPostedError(original.status)
+  }
+
+  // Chain-depth guard: stop corrections stacking on corrections. Agents have
+  // looped storno+rättelse on their own rättelser 10 deep (Christoffer case
+  // 2026-08-11), turning a third of the journal into noise vouchers. Depth is
+  // walked over the DB links, so a custom verifikationstext cannot dodge it.
+  if (!options?.allowDeepChain) {
+    const chain = await correctionChainDepth(supabase, companyId, original)
+    if (chain.depth >= CORRECTION_CHAIN_GUARD_DEPTH) {
+      throw new CorrectionChainTooDeepError(chain.depth, chain.rootVoucher)
+    }
   }
 
   const originalLines = (original.lines as JournalEntryLine[]) || []
@@ -497,7 +521,15 @@ export async function recordateEntry(
   companyId: string,
   userId: string,
   originalEntryId: string,
-  newDate: string
+  newDate: string,
+  options?: {
+    /**
+     * Bypass the correction-chain depth guard (see correctEntry): a date
+     * move IS another storno+rättelse layer, so moving an entry already
+     * 3+ links deep needs the same explicit confirmation.
+     */
+    allowDeepChain?: boolean
+  }
 ): Promise<{ reversal: JournalEntry; corrected: JournalEntry }> {
   // Fetch original with lines
   const { data: original, error: fetchError } = await supabase
@@ -565,6 +597,7 @@ export async function recordateEntry(
       // Hand the entry we already fetched (with lines) to correctEntry so it
       // doesn't re-read the same row.
       preloadedOriginal: original as OriginalWithLines,
+      allowDeepChain: options?.allowDeepChain,
     }
   )
 

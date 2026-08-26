@@ -91,6 +91,25 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+describe('invoice item VAT-rate units', () => {
+  it('keeps customer items in percent and supplier items in decimal fractions', () => {
+    const sales = mapSalesInvoice(salesDto(), 'user-1', 'company-1', 'customer-1')
+    const supplier = mapSupplierInvoice(supplierDto(), 'user-1', 'company-1', 'supplier-1')
+
+    expect(sales.items[0]?.vat_rate).toBe(25)
+    expect(supplier.items[0]?.vat_rate).toBe(0.25)
+  })
+
+  it('preserves a foreign supplier rate while converting its unit', () => {
+    const dto = supplierDto()
+    dto.lines[0]!.taxPercent = 19
+
+    const supplier = mapSupplierInvoice(dto, 'user-1', 'company-1', 'supplier-1')
+
+    expect(supplier.items[0]?.vat_rate).toBe(0.19)
+  })
+})
+
 describe('buildFxRateIndex', () => {
   it('fetches the rate for each document DATE, not today, and caches per pair', async () => {
     ;(fetchExchangeRate as Mock).mockImplementation(async (currency: string, date: Date) => ({

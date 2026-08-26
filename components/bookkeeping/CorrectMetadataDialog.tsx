@@ -6,9 +6,11 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
@@ -88,18 +90,30 @@ export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCor
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Ändra text eller datum</DialogTitle>
+          {/* Convention 7: the how-it-works copy lives behind the "?", not in
+              the dialog flow. */}
+          <div className="flex items-center gap-2">
+            <DialogTitle>Ändra text eller datum</DialogTitle>
+            <RattelseExplainer>
+              <p>
+                Verifikationstexten och datumet kan rättas här utan
+                ändringsverifikation.
+              </p>
+              <p>
+                Varje rättelse loggas med vem och när, och det ursprungliga
+                innehållet förblir synligt i verifikatets rättelsehistorik.
+              </p>
+              <p>
+                Om månaden redan är momsdeklarerad kan en datumflytt påverka
+                den inlämnade deklarationen.
+              </p>
+            </RattelseExplainer>
+          </div>
+          <DialogDescription>
+            Datumet kan bara flyttas inom samma bokföringsperiod: använd
+            &quot;Flytta till annat datum&quot; för att byta period.
+          </DialogDescription>
         </DialogHeader>
-
-        <div className="rounded-lg bg-muted/50 border p-3 text-sm text-muted-foreground">
-          <p>
-            Verifikationstexten och datumet kan rättas utan ändringsverifikation. Rättelsen loggas
-            med vem och när, och det gamla värdet förblir synligt i rättelsehistoriken. Datumet kan
-            bara flyttas inom samma bokföringsperiod: använd &quot;Flytta till annat datum&quot; för att
-            byta period. Om månaden redan är momsdeklarerad kan en datumflytt påverka den inlämnade
-            deklarationen.
-          </p>
-        </div>
 
         <div className="space-y-4">
           <div className="space-y-1">

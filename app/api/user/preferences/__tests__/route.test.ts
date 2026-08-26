@@ -21,7 +21,9 @@ function unauthed() {
   })
 }
 
-function authedForGet(row: { hide_assistant_fab: boolean } | null) {
+function authedForGet(
+  row: { hide_assistant_fab?: boolean; auto_logout?: boolean } | null,
+) {
   const maybeSingle = vi.fn().mockResolvedValue({ data: row, error: null })
   const supabase = {
     from: vi.fn(() => ({
@@ -56,19 +58,19 @@ describe('GET /api/user/preferences', () => {
     expect(res.status).toBe(401)
   })
 
-  it('returns the stored preference', async () => {
-    authedForGet({ hide_assistant_fab: true })
+  it('returns the stored preferences', async () => {
+    authedForGet({ hide_assistant_fab: true, auto_logout: true })
     const res = await GET()
     const { status, body } = await parseJsonResponse<{ data: unknown }>(res)
     expect(status).toBe(200)
-    expect(body.data).toEqual({ hide_assistant_fab: true })
+    expect(body.data).toEqual({ hide_assistant_fab: true, auto_logout: true })
   })
 
   it('defaults to false when no preferences row exists', async () => {
     authedForGet(null)
     const res = await GET()
     const { body } = await parseJsonResponse<{ data: unknown }>(res)
-    expect(body.data).toEqual({ hide_assistant_fab: false })
+    expect(body.data).toEqual({ hide_assistant_fab: false, auto_logout: false })
   })
 })
 
@@ -101,6 +103,48 @@ describe('PATCH /api/user/preferences', () => {
       { user_id: 'user-1', hide_assistant_fab: true },
       { onConflict: 'user_id' }
     )
+  })
+
+  it('writes a multi-field request as one atomic upsert', async () => {
+    const { upsert } = authedForPatch()
+    const res = await PATCH(
+      patchRequest({ hide_assistant_fab: true, auto_logout: false })
+    )
+    expect(res.status).toBe(200)
+    expect(upsert).toHaveBeenCalledTimes(1)
+    expect(upsert).toHaveBeenCalledWith(
+      { user_id: 'user-1', hide_assistant_fab: true, auto_logout: false },
+      { onConflict: 'user_id' }
+    )
+  })
+
+  it('rejects an empty body with 400', async () => {
+    authedForPatch()
+    const res = await PATCH(patchRequest({}))
+    expect(res.status).toBe(400)
+  })
+
+  it('upserts auto_logout and resets the session timeout cookie', async () => {
+    const { upsert } = authedForPatch()
+    const res = await PATCH(patchRequest({ auto_logout: true }))
+    const { status, body } = await parseJsonResponse<{ data: unknown }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ auto_logout: true })
+    expect(upsert).toHaveBeenCalledWith(
+      { user_id: 'user-1', auto_logout: true },
+      { onConflict: 'user_id' }
+    )
+    // The signed timeout cookie caches the opt-in; a change must clear it so
+    // the middleware re-mints with the new preference on the next request.
+    const setCookie = res.headers.get('set-cookie') ?? ''
+    expect(setCookie).toContain('gnubok-session-timeout=;')
+  })
+
+  it('does not touch the session timeout cookie for unrelated preferences', async () => {
+    authedForPatch()
+    const res = await PATCH(patchRequest({ hide_assistant_fab: true }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('set-cookie')).toBeNull()
   })
 
   it('returns 500 when the upsert fails', async () => {

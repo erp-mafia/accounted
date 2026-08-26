@@ -10,15 +10,19 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 
 /**
  * Map the endpoint's 0-1 match confidence (attached only when candidates are
- * ranked for a specific transaction) to a labelled strength badge, so the user
- * can tell an exact-amount hit from a fuzzy guess before vouching for an
- * immutable verifikat. Returns null when no confidence was attached.
+ * ranked for a specific transaction) to a strength label, so the user can tell
+ * an exact-amount hit from a fuzzy guess before vouching for an immutable
+ * verifikat. Returns null when no confidence was attached.
+ *
+ * Chips mark exceptions (convention 5): a strong hit is the normal,
+ * auto-selected case and renders as muted text; only the fuzzy guesses that
+ * deserve a second look get a chip.
  */
-function confidenceBadge(
+function confidenceMark(
   confidence: number | undefined,
-): { label: string; variant: 'success' | 'secondary' | 'outline' } | null {
+): { label: string; variant: 'secondary' | 'outline' | null } | null {
   if (confidence == null) return null
-  if (confidence >= 0.85) return { label: 'Stark träff', variant: 'success' }
+  if (confidence >= 0.85) return { label: 'Stark träff', variant: null }
   if (confidence >= 0.6) return { label: 'Trolig träff', variant: 'secondary' }
   return { label: 'Svag träff', variant: 'outline' }
 }
@@ -132,7 +136,7 @@ export function MatchVerifikationPicker({
     // green "Stark träff" can't visually encourage an accidental double-match:
     // "Redan matchad" is the signal that matters there (N:1 stays opt-in).
     const strength =
-      (selected.linked_transaction_count ?? 0) > 0 ? null : confidenceBadge(selected.confidence)
+      (selected.linked_transaction_count ?? 0) > 0 ? null : confidenceMark(selected.confidence)
     return (
       <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm">
         <span className="font-mono text-xs shrink-0">{formatVoucher(selected)}</span>
@@ -140,9 +144,13 @@ export function MatchVerifikationPicker({
         <span className="tabular-nums shrink-0">{formatCurrency(amount)}</span>
         <span className="truncate text-muted-foreground flex-1 min-w-0">{selected.entry_description}</span>
         {strength && (
-          <Badge variant={strength.variant} className="shrink-0 text-[10px]">
-            {strength.label}
-          </Badge>
+          strength.variant ? (
+            <Badge variant={strength.variant} className="shrink-0 text-[10px]">
+              {strength.label}
+            </Badge>
+          ) : (
+            <span className="shrink-0 text-[11px] text-muted-foreground">{strength.label}</span>
+          )
         )}
         {(selected.linked_transaction_count ?? 0) > 0 && (
           <Badge variant="secondary" className="shrink-0 text-[10px]">
@@ -175,7 +183,7 @@ export function MatchVerifikationPicker({
         {filtered.map((line) => {
           const amount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
           const strength =
-            (line.linked_transaction_count ?? 0) > 0 ? null : confidenceBadge(line.confidence)
+            (line.linked_transaction_count ?? 0) > 0 ? null : confidenceMark(line.confidence)
           return (
             <button
               key={line.line_id}
@@ -200,9 +208,13 @@ export function MatchVerifikationPicker({
                 {line.line_description || line.entry_description}
               </span>
               {strength && (
-                <Badge variant={strength.variant} className="shrink-0 text-[10px]">
-                  {strength.label}
-                </Badge>
+                strength.variant ? (
+                  <Badge variant={strength.variant} className="shrink-0 text-[10px]">
+                    {strength.label}
+                  </Badge>
+                ) : (
+                  <span className="shrink-0 text-[11px] text-muted-foreground">{strength.label}</span>
+                )
               )}
               {(line.linked_transaction_count ?? 0) > 0 && (
                 <Badge variant="secondary" className="shrink-0 text-[10px]">

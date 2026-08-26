@@ -1,11 +1,11 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
-import { currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { currentSkvEnvironment, findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
 import { reconcileAgiDeclaration } from '@/extensions/general/skatteverket/lib/agi-kvittens-reconcile'
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
@@ -68,7 +68,7 @@ export async function GET(request: Request) {
     )
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   const { data: pending, error: pendingError } = await supabase
     .from('agi_declarations')
@@ -166,13 +166,12 @@ export async function GET(request: Request) {
       ) {
         // Persist the health flag so both crons stop retrying this
         // connection and the UI can prompt for re-consent proactively.
-        const { data: tokenRow } = await supabase
-          .from('skatteverket_tokens')
-          .select('user_id')
-          .eq('company_id', companyId)
-          .maybeSingle()
-        if (tokenRow?.user_id) {
-          await markNeedsReconsent(supabase, tokenRow.user_id as string, err.code)
+        // Same pick as the reconciler's resolveReadAuth (a company can hold
+        // one row per connected member), so the flag lands on the row that
+        // just failed.
+        const tokenRow = await findCompanyTokenUser(supabase, companyId)
+        if (tokenRow) {
+          await markNeedsReconsent(supabase, tokenRow.userId, companyId, err.code)
         }
         results.push({ declarationId, period, status: 'expired_token', error: err.code })
         continue

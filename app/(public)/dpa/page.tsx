@@ -13,7 +13,7 @@ export function generateMetadata(): Metadata {
 export default function DPAPage() {
   const { appName, legalEntity, privacyEmail } = getBranding()
   return (
-    <div className="min-h-screen bg-background py-12 px-4">
+    <div className="min-h-dvh bg-background py-12 px-4">
       <div className="max-w-3xl mx-auto space-y-8">
         <div className="text-center space-y-2">
           <h1 className="font-display text-3xl md:text-4xl tracking-tight text-foreground">

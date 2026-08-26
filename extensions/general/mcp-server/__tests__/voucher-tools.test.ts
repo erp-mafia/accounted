@@ -142,7 +142,7 @@ describe('gnubok_create_voucher: staging gates', () => {
     ).rejects.toThrow(/utanför/i)
   })
 
-  it('rejects when a referenced account is missing from the chart', async () => {
+  it('rejects an account that is neither in the chart nor in BAS 2026', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: {
@@ -154,22 +154,81 @@ describe('gnubok_create_voucher: staging gates', () => {
       },
       error: null,
     })
-    // chart_of_accounts returns nothing: both accounts unknown
-    enqueue({ data: [], error: null })
+    // chart_of_accounts knows only 1930: 4020 is a custom number the company
+    // never created, and it is absent from the BAS 2026 catalog, so the
+    // engine could not seed it either.
+    enqueue({
+      data: [{ account_number: '1930', account_name: 'Företagskonto', is_active: true }],
+      error: null,
+    })
 
     await expect(
       createVoucher.execute(
         {
           entry_date: '2026-05-12',
-          description: 'unknown accounts',
+          description: 'custom account never created',
           fiscal_period_id: 'fp-1',
-          lines: balancedLines,
+          lines: [
+            { account_number: '4020', debit_amount: 250, credit_amount: 0 },
+            { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+          ],
         },
         'company-1',
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/saknas i kontoplanen/i)
+    ).rejects.toThrow(/saknas i kontoplanen och finns inte i BAS 2026: 4020/i)
+  })
+
+  it('stages when a BAS 2026 account is merely absent from the chart (engine seeds it)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'fp-1',
+        is_closed: false,
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        name: '2026',
+      },
+      error: null,
+    })
+    // 7690 (Övriga personalkostnader) is in BAS 2026 but not in this chart:
+    // the old gate rejected it even though createDraftEntry backfills it.
+    enqueue({
+      data: [{ account_number: '1930', account_name: 'Företagskonto', is_active: true }],
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+    enqueue({ data: { id: 'op-seedable' }, error: null }) // pending_operations insert
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-05-12',
+        description: 'Friskvård badhus',
+        fiscal_period_id: 'fp-1',
+        lines: [
+          { account_number: '7690', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      preview: {
+        will_activate_accounts?: string[]
+        lines: Array<{ account_number: string; account_name: string | null }>
+      }
+    }
+
+    expect(result.staged).toBe(true)
+    // The approver must see the activation side-effect and a named line
+    // (name from the BAS catalog, not a bare number).
+    expect(result.preview.will_activate_accounts).toEqual(['7690'])
+    const line7690 = result.preview.lines.find((l) => l.account_number === '7690')
+    expect(line7690?.account_name).toMatch(/personalkostnader/i)
   })
 
   it('rejects when a referenced account exists but is inactive', async () => {
@@ -241,12 +300,20 @@ describe('gnubok_create_voucher: staging gates', () => {
       'company-1',
       'user-1',
       supabase as never,
-    )) as { staged: boolean; operation_id?: string; preview: Record<string, unknown> }
+    )) as { staged: boolean; operation_id?: string; message: string; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
     expect(result.operation_id).toBe('op-staged')
     expect(result.preview.total_debit).toBe(250)
     expect(result.preview.total_credit).toBe(250)
+
+    // No document attached: the advisory BFL 5 kap 6§ warning must reach both
+    // the agent (message) and the /pending approval card (preview) without
+    // blocking the staging itself.
+    expect(result.preview.document_attached).toBe(false)
+    expect(result.preview.compliance_warning).toMatch(/BFL 5 kap 6§/)
+    expect(result.preview.compliance_warning).toMatch(/underlag/i)
+    expect(result.message).toMatch(/WARNING:.*underlag/i)
 
     // Critical: the staged pending_operations row must NOT carry source_type.
     // The executor always hardcodes 'manual'. Look at the insert call.
@@ -317,6 +384,112 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(result.preview.inbox_item_id).toBe('inbox-1')
     expect(result.preview.document_attached).toBe(true)
     expect(result.preview.will).toMatch(/link the inbox item/i)
+    // Document attached: the missing-underlag warning must NOT appear.
+    expect(result.preview.compliance_warning).toBeUndefined()
+  })
+
+  it('inbox item without a stored document: no attach claim, inbox-variant warning', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'fp-1',
+        is_closed: false,
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        name: '2026',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: true },
+        { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: 'inbox-nodoc',
+        document_id: null, // ingested without attachment, or ON DELETE SET NULL
+        created_journal_entry_id: null,
+        created_supplier_invoice_id: null,
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+    enqueue({ data: { id: 'op-nodoc' }, error: null }) // pending_operations insert
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-05-12',
+        description: 'Inbox item utan dokument',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-nodoc',
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.document_attached).toBe(false)
+    // The envelope must not contradict itself: no "attach the OCR document"
+    // claim, and the warning must not tell the agent to restage with the
+    // inbox_item_id it already supplied.
+    expect(result.preview.will).toMatch(/link the inbox item/i)
+    expect(result.preview.will).not.toMatch(/attach the OCR document/i)
+    expect(result.preview.compliance_warning).toMatch(/no stored document/i)
+    expect(result.preview.compliance_warning).not.toMatch(/restage with inbox_item_id/i)
+  })
+
+  it('is_opening_balance: no underlag warning (IB legitimately lacks a kvitto)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: 'fp-1',
+        is_closed: false,
+        period_start: '2026-01-01',
+        period_end: '2026-12-31',
+        name: '2026',
+      },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+        { account_number: '2081', account_name: 'Aktiekapital', is_active: true },
+      ],
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 1
+    enqueue({ data: null, error: null }) // resolvePeriodStatusForDate layer 2
+    enqueue({ data: { id: 'op-ib' }, error: null }) // pending_operations insert
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-01-01',
+        description: 'Ingående balans',
+        fiscal_period_id: 'fp-1',
+        is_opening_balance: true,
+        lines: [
+          { account_number: '1930', debit_amount: 25000, credit_amount: 0 },
+          { account_number: '2081', debit_amount: 0, credit_amount: 25000 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; message: string; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.document_attached).toBe(false)
+    expect(result.preview.compliance_warning).toBeUndefined()
+    expect(result.message).not.toMatch(/WARNING/)
   })
 
   it('rejects when inbox_item_id is already booked as a journal entry', async () => {
@@ -481,6 +654,198 @@ describe('gnubok_correct_entry: registration', () => {
       ),
     ).rejects.toThrow(/not balanced/i)
   })
+
+  it('shows preserved currency, tax, and dimension metadata in the correction preview', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: false }, error: null })
+    enqueue({
+      data: {
+        id: '11111111-1111-4111-8111-111111111111',
+        status: 'posted',
+        entry_date: '2026-05-12',
+        description: 'Foreign purchase',
+        voucher_number: 12,
+        voucher_series: 'A',
+        fiscal_period_id: 'fp-1',
+        fiscal_periods: { name: '2026', is_closed: false, locked_at: null },
+        lines: [
+          {
+            account_number: '5420',
+            debit_amount: 1000,
+            credit_amount: 0,
+            line_description: 'Software',
+            currency: 'EUR',
+            amount_in_currency: 90,
+            exchange_rate: 11.111111,
+            tax_code: 'EU_SERVICE',
+            dimensions: { '6': 'P001' },
+            cost_center: null,
+            project: 'P001',
+          },
+          {
+            account_number: '1930',
+            debit_amount: 0,
+            credit_amount: 1000,
+            line_description: 'Settlement',
+            currency: 'EUR',
+            amount_in_currency: 90,
+            exchange_rate: 11.111111,
+            tax_code: null,
+            dimensions: {},
+            cost_center: null,
+            project: null,
+          },
+        ],
+      },
+      error: null,
+    })
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+    enqueue({ data: { id: 'op-correct-1' }, error: null })
+
+    const replacementLines = [
+      {
+        account_number: '5420',
+        debit_amount: 1000,
+        credit_amount: 0,
+        line_description: 'Software',
+        currency: 'EUR',
+        amount_in_currency: 90,
+        exchange_rate: 11.111111,
+        tax_code: 'EU_SERVICE',
+        dimensions: { '6': 'P001' },
+      },
+      {
+        account_number: '1931',
+        debit_amount: 0,
+        credit_amount: 1000,
+        line_description: 'Settlement',
+        currency: 'EUR',
+        amount_in_currency: 90,
+        exchange_rate: 11.111111,
+        dimensions: {},
+      },
+    ]
+
+    const result = (await correctEntry.execute(
+      {
+        entry_id: '11111111-1111-4111-8111-111111111111',
+        lines: replacementLines,
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      preview: {
+        original: { lines: Array<Record<string, unknown>> }
+        correction: { lines: Array<Record<string, unknown>> }
+      }
+    }
+
+    expect(result.preview.original.lines[0]).toMatchObject({
+      currency: 'EUR',
+      amount_in_currency: 90,
+      exchange_rate: 11.111111,
+      tax_code: 'EU_SERVICE',
+      dimensions: { '6': 'P001' },
+      project: 'P001',
+    })
+    expect(result.preview.correction.lines[0]).toMatchObject({
+      currency: 'EUR',
+      amount_in_currency: 90,
+      exchange_rate: 11.111111,
+      tax_code: 'EU_SERVICE',
+      dimensions: { '6': 'P001' },
+    })
+  })
+})
+
+describe('gnubok_correct_entry / gnubok_reverse_journal_entry: chain-depth guard', () => {
+  // Base row for a posted correction that already sits 3 links deep:
+  // c3 → c2 → c1 → orig-0 (root, voucher A7).
+  const deepTarget = {
+    id: '22222222-2222-4222-8222-222222222222',
+    status: 'posted',
+    entry_date: '2026-05-12',
+    description: 'Rättelse: Rättelse: Rättelse: Köp',
+    voucher_number: 15,
+    voucher_series: 'A',
+    fiscal_period_id: 'fp-1',
+    correction_of_id: 'c2',
+    reverses_id: null,
+    fiscal_periods: { name: '2026', is_closed: false, locked_at: null },
+    lines: [
+      { account_number: '5420', debit_amount: 1000, credit_amount: 0, line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000, line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null },
+    ],
+  }
+  const walkerRows = [
+    { data: { id: 'c2', correction_of_id: 'c1', reverses_id: null, voucher_series: 'A', voucher_number: 12 }, error: null },
+    { data: { id: 'c1', correction_of_id: 'orig-0', reverses_id: null, voucher_series: 'A', voucher_number: 9 }, error: null },
+    { data: { id: 'orig-0', correction_of_id: null, reverses_id: null, voucher_series: 'A', voucher_number: 7 }, error: null },
+  ]
+
+  const replacementLines = [
+    { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+  ]
+
+  it('refuses to stage a correction on a chain 3 levels deep with an agent-actionable error', async () => {
+    const { supabase, enqueue, enqueueMany } = createQueuedMockSupabase()
+    // Lines carry no dimensions, so no dimension-registry query precedes the
+    // entry fetch.
+    enqueue({ data: deepTarget, error: null })
+    enqueueMany(walkerRows)
+
+    await expect(
+      correctEntry.execute(
+        { entry_id: deepTarget.id, lines: replacementLines },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({
+      code: 'CORRECTION_CHAIN_TOO_DEEP',
+      depth: 3,
+      chainRootVoucher: 'A7',
+    })
+  })
+
+  it('stages when allow_deep_chain=true and forwards the flag to the executor params', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: deepTarget, error: null })
+    // No walker queries: the guard is skipped entirely on explicit override.
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+    enqueue({ data: { id: 'op-deep-1' }, error: null })
+
+    await correctEntry.execute(
+      { entry_id: deepTarget.id, lines: replacementLines, allow_deep_chain: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    const insertArgs = findCall('pending_operations', 'insert')
+    expect(insertArgs).toBeDefined()
+    const payload = (insertArgs as unknown[])[0] as { params?: { allow_deep_chain?: boolean } }
+    expect(payload.params?.allow_deep_chain).toBe(true)
+  })
+
+  it('refuses to stage a storno on a chain 3 levels deep', async () => {
+    const { supabase, enqueue, enqueueMany } = createQueuedMockSupabase()
+    enqueue({ data: deepTarget, error: null })
+    enqueueMany(walkerRows)
+
+    await expect(
+      reverseEntry.execute(
+        { entry_id: deepTarget.id },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({ code: 'CORRECTION_CHAIN_TOO_DEEP', depth: 3 })
+  })
 })
 
 describe('gnubok_reverse_journal_entry: staging gates', () => {
@@ -496,6 +861,29 @@ describe('gnubok_reverse_journal_entry: staging gates', () => {
     await expect(
       reverseEntry.execute({}, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/entry_id is required/i)
+  })
+
+  it('rejects a reason over 500 characters with a VALIDATION_ERROR code and a Swedish message', async () => {
+    // Customer report: the envelope said "Något gick fel. Försök igen." in
+    // Swedish while the cause was only in the English field.
+    const { supabase } = createQueuedMockSupabase()
+    const { getStructuredError } = await import('@/lib/errors/get-structured-error')
+    let thrown: unknown
+    try {
+      await reverseEntry.execute(
+        { entry_id: '11111111-1111-1111-1111-111111111111', reason: 'x'.repeat(501) },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    const envelope = getStructuredError(thrown)
+    expect(envelope.code).toBe('VALIDATION_ERROR')
+    expect(envelope.message_sv).toBe('Motiveringen får vara högst 500 tecken.')
+    expect(envelope.message_en).toMatch(/500 characters or fewer/)
   })
 
   it('rejects when the original entry is not posted', async () => {

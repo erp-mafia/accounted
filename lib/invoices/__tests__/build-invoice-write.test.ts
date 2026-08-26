@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase, makeCustomer } from '@/tests/helpers'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
+import { encryptPersonnummer, decryptPersonnummer } from '@/lib/salary/personnummer'
 import type { Customer, InvoiceDocumentType } from '@/types'
 
 // Uses the REAL getVatRules / rot-rut-rules / personnummer helpers (only the
@@ -300,6 +301,7 @@ describe('buildInvoiceWriteData stored ROT/RUT personnummer (edit path)', () => 
     unit_price: 500,
     vat_rate: 25,
     deduction_type: 'rut' as const,
+    work_type: 'STAD',
     labor_hours: 10,
   }
 
@@ -359,5 +361,169 @@ describe('buildInvoiceWriteData stored ROT/RUT personnummer (edit path)', () => 
     if (!result.ok) return
     expect(result.invoiceFields.deduction_personnummer_encrypted).toBeNull()
     expect(result.invoiceFields.deduction_personnummer_last4).toBeNull()
+  })
+})
+
+describe('buildInvoiceWriteData kundkort personnummer fallback', () => {
+  const rutItem = {
+    description: 'Städning',
+    quantity: 10,
+    unit: 'tim',
+    unit_price: 500,
+    vat_rate: 25,
+    deduction_type: 'rut' as const,
+    work_type: 'STAD',
+    labor_hours: 10,
+  }
+
+  it('falls back to the customer card personal_number when the field is empty', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({
+      customer_type: 'individual',
+      personal_number: encryptPersonnummer('199001019802'),
+    })
+    const result = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: { ...baseHeader, items: [rutItem] },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.deduction_personnummer_last4).toBe('9802')
+    expect(decryptPersonnummer(result.invoiceFields.deduction_personnummer_encrypted as string)).toBe('199001019802')
+  })
+
+  it('expands a 10-digit legacy plaintext kundkort value to 12 digits', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({
+      customer_type: 'individual',
+      personal_number: '900101-9802',
+    })
+    const result = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: { ...baseHeader, items: [rutItem] },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.deduction_personnummer_last4).toBe('9802')
+    expect(decryptPersonnummer(result.invoiceFields.deduction_personnummer_encrypted as string)).toBe('199001019802')
+  })
+
+  it('lets a typed personnummer win over the customer card', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({
+      customer_type: 'individual',
+      personal_number: '250101-0025',
+    })
+    const result = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: { ...baseHeader, deduction_personnummer: '199001019802', items: [rutItem] },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.deduction_personnummer_last4).toBe('9802')
+    expect(decryptPersonnummer(result.invoiceFields.deduction_personnummer_encrypted as string)).toBe('199001019802')
+  })
+
+  it('lets the stored draft personnummer outrank the customer card (edit path)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({
+      customer_type: 'individual',
+      personal_number: '900101-9802',
+    })
+    const result = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: { ...baseHeader, items: [rutItem] },
+      existingPersonnummer: { encrypted: 'stored-ciphertext', last4: '1234' },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.deduction_personnummer_encrypted).toBe('stored-ciphertext')
+    expect(result.invoiceFields.deduction_personnummer_last4).toBe('1234')
+  })
+
+  it('treats an invalid kundkort value as absent and still requires a typed one', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({
+      customer_type: 'individual',
+      // Bad Luhn: must fall through to the "Personnummer krävs" error, never
+      // to a confusing "invalid personnummer" for a value the user never typed.
+      personal_number: '900101-9803',
+    })
+    const result = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: { ...baseHeader, items: [rutItem] },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect('code' in result && result.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
+  })
+})
+
+describe('buildInvoiceWriteData kundkort fallback customer-type gate', () => {
+  it('never claims on a stray personal_number of a non-individual customer', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    // personal_number is individual-only in the Zod schemas but not in the
+    // DB: a legacy/business row carrying one must not be claimed on
+    // implicitly, so the fallback stays off and validation asks for a typed
+    // personnummer.
+    const customer = makeCustomer({
+      customer_type: 'swedish_business',
+      personal_number: '900101-9802',
+    })
+    const result = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: {
+        ...baseHeader,
+        items: [{
+          description: 'Städning',
+          quantity: 10,
+          unit: 'tim',
+          unit_price: 500,
+          vat_rate: 25,
+          deduction_type: 'rut' as const,
+          work_type: 'STAD',
+          labor_hours: 10,
+        }],
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect('code' in result && result.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
   })
 })

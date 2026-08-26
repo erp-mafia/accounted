@@ -83,3 +83,62 @@ describe('DuplicateBookingDialog rateless-sibling warning', () => {
     }
   })
 })
+
+describe('DuplicateBookingDialog sibling candidates', () => {
+  it('no longer gates the match action on transaction_id being null', () => {
+    // manualLink explicitly allows N:1 (a second bank line on one voucher), so
+    // sibling-transaction candidates must get "Matcha mot verifikatet" too:
+    // hiding it dead-ended the user in "Bokför ändå".
+    expect(BOOKING_DIALOG_SRC).toMatch(
+      /const canMatch = candidate !== null && !!matchTransaction && !!onMatched/,
+    )
+    expect(BOOKING_DIALOG_SRC).not.toMatch(/canMatch =[\s\S]{0,120}transaction_id === null/)
+  })
+
+  it('offers Ignorera for sibling candidates via the existing ignore endpoint', () => {
+    // The sibling shape is very often a duplicate IMPORT of one real movement;
+    // ignoring the row is then the correct resolution (matching would
+    // double-count the bank side, booking would double-count the ledger side).
+    expect(BOOKING_DIALOG_SRC).toMatch(/\/api\/transactions\/\$\{matchTransaction\.id\}\/ignore/)
+    expect(BOOKING_DIALOG_SRC).toContain("t('dialog_duplicate_ignore')")
+    // Gated on a sibling candidate: never shown for ledger-only vouchers.
+    expect(BOOKING_DIALOG_SRC).toMatch(
+      /canIgnore = isSiblingCandidate && !!matchTransaction && !!onIgnored/,
+    )
+  })
+
+  it('switches the body copy to the "matcha i stället" question for sibling candidates', () => {
+    expect(BOOKING_DIALOG_SRC).toContain("t('dialog_duplicate_body_sibling')")
+    expect(BOOKING_DIALOG_SRC).toMatch(
+      /isSiblingCandidate \? t\('dialog_duplicate_body_sibling'\) : t\('dialog_duplicate_body'\)/,
+    )
+  })
+
+  it('ships the sibling strings in both locales, without dashes', () => {
+    for (const locale of ['sv', 'en'] as const) {
+      const messages = readMessages(locale, 'transactions')
+      for (const key of [
+        'dialog_duplicate_body_sibling',
+        'dialog_duplicate_ignore',
+        'dialog_duplicate_ignore_hint',
+        'dialog_duplicate_ignore_failed',
+      ]) {
+        expect(messages[key], `${locale}.transactions.${key}`).toBeTruthy()
+        expect(messages[key]).not.toMatch(/–|—/)
+      }
+      // The ignore guidance lives in the gated hint, never in the body: two
+      // render sites (manual booking form, bulk dialog) show sibling
+      // candidates without the ignore action, and body copy must not point at
+      // a button that is not there.
+      expect(messages.dialog_duplicate_body_sibling).not.toMatch(/ignorera|ignore it/i)
+    }
+    // The requested copy pattern: an offer to match instead, in question form.
+    expect(readMessages('sv', 'transactions').dialog_duplicate_body_sibling).toMatch(
+      /matcha[\s\S]*i stället/i,
+    )
+  })
+
+  it('renders the ignore hint only when the ignore action is offered', () => {
+    expect(BOOKING_DIALOG_SRC).toMatch(/canIgnore && <> \{t\('dialog_duplicate_ignore_hint'\)\}<\/>/)
+  })
+})

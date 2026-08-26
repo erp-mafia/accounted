@@ -7,6 +7,7 @@ import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-sch
 import {
   computeInitialRunDate,
   computeNextRunDate,
+  rollNextRunDateForward,
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
 
@@ -120,7 +121,7 @@ export const PATCH = withRouteContext(
     if (input.status === 'active' || input.day_of_month !== undefined) {
       const { data: existing } = await supabase
         .from('recurring_invoice_schedules')
-        .select('next_run_date, day_of_month')
+        .select('next_run_date, day_of_month, interval_months')
         .eq('id', id)
         .eq('company_id', companyId)
         .single()
@@ -136,6 +137,7 @@ export const PATCH = withRouteContext(
       const dayChanged =
         input.day_of_month !== undefined && input.day_of_month !== existing.day_of_month
       const effectiveDay = input.day_of_month ?? existing.day_of_month
+      const effectiveInterval = input.interval_months ?? existing.interval_months ?? 1
       const { date: todayStockholm } = getStockholmDateHour(new Date())
       const stockholmToday = new Date(`${todayStockholm}T00:00:00Z`)
 
@@ -145,15 +147,30 @@ export const PATCH = withRouteContext(
       //   - reactivating a schedule whose date already passed (e.g. the safety
       //     pause when the send-hour cron shipped), or
       //   - the day-of-month changed, so "Nästa körning" follows the new day.
-      // Editing other fields (name, items, time) leaves next_run_date alone,
-      // so an unrelated edit never skips an imminent send.
+      // Editing other fields (name, items, time, interval) leaves
+      // next_run_date alone, so an unrelated edit never skips an imminent
+      // send; a changed interval applies from the next run onward.
       const staleOnReactivate = reactivating && existing.next_run_date <= todayStockholm
       if (staleOnReactivate || dayChanged) {
-        const rolled = computeInitialRunDate(stockholmToday, effectiveDay)
-        updateRow.next_run_date =
-          rolled === todayStockholm
-            ? computeNextRunDate(stockholmToday, effectiveDay)
-            : rolled
+        if (effectiveInterval === 1) {
+          // Monthly keeps its long-standing semantics: re-anchor on today so
+          // a day edit lands on the new day's nearest future occurrence.
+          const rolled = computeInitialRunDate(stockholmToday, effectiveDay)
+          updateRow.next_run_date =
+            rolled === todayStockholm
+              ? computeNextRunDate(stockholmToday, effectiveDay)
+              : rolled
+        } else {
+          // Interval schedules roll on their own month grid so a day edit or
+          // reactivation cannot shift a quarterly schedule off its
+          // Jan/Apr/Jul/Oct phase (or bill a quarter early).
+          updateRow.next_run_date = rollNextRunDateForward(
+            existing.next_run_date,
+            stockholmToday,
+            effectiveDay,
+            effectiveInterval,
+          )
+        }
       }
 
       // A conscious reactivation invalidates any lingering warning (the

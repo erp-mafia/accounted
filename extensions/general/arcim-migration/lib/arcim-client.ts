@@ -233,24 +233,8 @@ export async function fetchSupplierInvoices(
   return fetchAllPages<SupplierInvoiceDto>(consentId, 'supplierinvoices', params)
 }
 
-// ── SIE export ────────────────────────────────────────────────────
-
-export interface SIEExportFile {
-  fiscalYear: number
-  sieType: number
-  rawContent: string
-  accountCount: number
-  transactionCount: number
-}
-
-export async function fetchSIEExport(
-  consentId: string,
-  sieType?: number
-): Promise<{ files: SIEExportFile[] }> {
-  const params = new URLSearchParams()
-  if (sieType) params.set('sieType', String(sieType))
-  const qs = params.toString()
-  return request<{ files: SIEExportFile[] }>(
-    `/api/v1/consents/${consentId}/sie/export${qs ? `?${qs}` : ''}`
-  )
-}
+// The gateway SIE export path (fetchSIEExport/SIEExportFile) was deliberately
+// removed: it returned SIE as a pre-decoded string, and the gateway's decode of
+// CP437 bytes as windows-1252 caused the 2026-03-17 mojibake incident. Provider
+// SIE now travels as raw bytes through lib/sie-fetcher.ts and the repo's own
+// encoding detection. Do not re-add a string-typed SIE fetch here.

@@ -84,11 +84,19 @@ interface TableResp {
 /** Payload handed to `.insert()`, recorded per table so writes can be asserted. */
 type InsertRecord = { table: string; payload: Record<string, unknown> }
 
+/** Column string handed to `.select()`, recorded per table. The Proxy mock
+ * returns fixture rows regardless of projection, so a column dropped from a
+ * SELECT never fails these tests by itself: capturing the projection is the
+ * only way to regression-test "this route must fetch column X". */
+type SelectRecord = { table: string; columns: string }
+
 function makeFlexibleSupabase(
   byTable: Record<string, TableResp | TableResp[]>,
   // Opt-in sink for insert payloads: the Proxy chain is otherwise write-only,
   // and the route echoes back the fixture row rather than what it wrote.
   insertSink?: InsertRecord[],
+  // Opt-in sink for select projections (see SelectRecord).
+  selectSink?: SelectRecord[],
 ) {
   // Per-table queue: TableResp[] consumes one entry per await, then sticks
   // on the last entry. Plain TableResp is treated as a constant.
@@ -115,6 +123,9 @@ function makeFlexibleSupabase(
             !Array.isArray(args[0])
           ) {
             insertSink.push({ table, payload: args[0] as Record<string, unknown> })
+          }
+          if (selectSink && prop === 'select' && typeof args[0] === 'string') {
+            selectSink.push({ table, columns: args[0] })
           }
           return buildChain(table)
         }
@@ -285,6 +296,28 @@ describe('GET /api/v1/companies/:companyId/supplier-invoices/:id', () => {
     expect(res.status).toBe(404)
     const body = await res.json()
     expect(body.error.code).toBe('SI_NOT_FOUND')
+  })
+
+  it('?expand=items projects apply_slp so the flag is readable back', async () => {
+    const selects: Array<{ table: string; columns: string }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          supplier_invoices: { data: { ...SAMPLE_SI, items: [] }, error: null },
+        },
+        undefined,
+        selects,
+      ),
+    )
+    const res = await getSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}?expand=items`),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(200)
+    const siSelect = selects.find((s) => s.table === 'supplier_invoices')
+    expect(siSelect).toBeDefined()
+    expect(siSelect!.columns).toMatch(/items:supplier_invoice_items\([^)]*apply_slp/)
   })
 })
 
@@ -1443,6 +1476,69 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     expect(mockedPayment).not.toHaveBeenCalled()
   })
 
+  it('kontantmetod: fetches apply_slp on the items and hands them to the cash entry builder', async () => {
+    // Regression: the items sub-select omitted apply_slp, so a kontantmetoden
+    // payment via v1 booked the cash entry WITHOUT the 7533/2514 SLP pair
+    // while the web mark-paid (select *) booked it. The projection is the
+    // bug surface: the Proxy mock returns fixture rows regardless, so the
+    // select string itself is asserted alongside the pass-through.
+    const slpItem = {
+      id: 'item-slp-1',
+      sort_order: 0,
+      description: 'Tjänstepension',
+      quantity: 1,
+      unit: 'st',
+      unit_price: 1250,
+      line_total: 1250,
+      account_number: '7412',
+      vat_code: null,
+      vat_rate: 0,
+      vat_amount: 0,
+      reverse_charge_rate: null,
+      apply_slp: true,
+      dimensions: {},
+    }
+    const cashSI = {
+      ...SAMPLE_SI,
+      status: 'approved',
+      vat_amount: 0,
+      subtotal: 1250,
+      supplier: { id: SUPPLIER_ID, name: 'Avanza Pension', supplier_type: 'swedish_business' },
+      items: [slpItem],
+    }
+    const selects: Array<{ table: string; columns: string }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          supplier_invoices: { data: cashSI, error: null },
+          company_settings: { data: { accounting_method: 'cash' }, error: null },
+          fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+          supplier_invoice_payments: { data: null, error: null },
+          idempotency_keys: { data: null, error: null },
+        },
+        undefined,
+        selects,
+      ),
+    )
+    const res = await markPaidSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(200)
+    expect(mockedCash).toHaveBeenCalledTimes(1)
+    // The projection must carry the flag: without it the engine can never
+    // see apply_slp and silently skips the SLP pair.
+    const siSelect = selects.find((s) => s.table === 'supplier_invoices')
+    expect(siSelect).toBeDefined()
+    expect(siSelect!.columns).toMatch(/items:supplier_invoice_items\([^)]*apply_slp/)
+    // And the fetched items flow to createSupplierInvoiceCashEntry intact.
+    const passedItems = mockedCash.mock.calls[0]?.[4] as Array<{ apply_slp?: boolean }>
+    expect(passedItems[0]?.apply_slp).toBe(true)
+  })
+
   it('rejects payment amount exceeding remaining_amount', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -1486,7 +1582,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
         line_total: 1000,
         account_number: '5410',
         vat_code: null,
-        vat_rate: 0.25,
+        vat_rate: 25,
         vat_amount: 250,
       },
     ],
@@ -1502,6 +1598,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
       credited_invoice_id: SI_ID,
     }
     let siReadCount = 0
+    let insertedItems: Array<{ vat_rate: number }> = []
     mockServiceClient.mockReturnValue({
       from: (table: string) => {
         return new Proxy({}, {
@@ -1528,7 +1625,12 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
                 }
               }
             }
-            return () => new Proxy({}, this!)
+            return (...args: unknown[]) => {
+              if (table === 'supplier_invoice_items' && prop === 'insert') {
+                insertedItems = args[0] as Array<{ vat_rate: number }>
+              }
+              return new Proxy({}, this!)
+            }
           },
         })
       },
@@ -1544,9 +1646,110 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
 
     expect(res.status).toBe(200)
     expect(mockedCredit).toHaveBeenCalledTimes(1)
+    expect(insertedItems[0]?.vat_rate).toBe(0.25)
+    expect(mockedCredit.mock.calls[0]?.[4]).toBe(registeredSI.items)
+    expect((mockedCredit.mock.calls[0]?.[4] as typeof registeredSI.items)[0]?.vat_rate).toBe(25)
     const body = await res.json()
     expect(body.data.credit_note_id).toBe(creditNoteRow.id)
     expect(body.data.original_id).toBe(SI_ID)
+  })
+
+  it('reverses the SLP pair: fetches apply_slp, hands the flagged originals to the engine, copies the flag', async () => {
+    // Regression (blocker): SI_FULL_COLUMNS omitted apply_slp, so the credit
+    // path passed items without the flag to createSupplierCreditNoteEntry and
+    // the 7533/2514 pair booked at registration was never reversed: the
+    // pension cost and the 2514 liability stood forever, and the year-end
+    // netting then under-provisioned.
+    const slpSI = {
+      ...registeredSI,
+      subtotal: 10000,
+      vat_amount: 0,
+      total: 10000,
+      remaining_amount: 10000,
+      items: [
+        {
+          sort_order: 0,
+          description: 'Tjänstepension',
+          quantity: 1,
+          unit: 'st',
+          unit_price: 10000,
+          line_total: 10000,
+          account_number: '7412',
+          vat_code: null,
+          vat_rate: 0,
+          vat_amount: 0,
+          reverse_charge_rate: null,
+          apply_slp: true,
+          dimensions: {},
+        },
+      ],
+    }
+    const creditNoteRow = {
+      ...SAMPLE_SI,
+      id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      arrival_number: 43,
+      supplier_invoice_number: 'KREDIT-2026-1234',
+      is_credit_note: true,
+      credited_invoice_id: SI_ID,
+    }
+    let siReadCount = 0
+    let insertedItems: Array<{ apply_slp?: boolean }> = []
+    const siSelects: string[] = []
+    mockServiceClient.mockReturnValue({
+      from: (table: string) => {
+        return new Proxy({}, {
+          get(_t, prop) {
+            if (prop === 'then') {
+              return (resolve: (v: unknown) => void) => {
+                if (table === 'company_members') {
+                  resolve({ data: { company_id: COMPANY_ID, role: 'owner' }, error: null })
+                } else if (table === 'supplier_invoices') {
+                  const n = siReadCount++
+                  if (n === 0) resolve({ data: slpSI, error: null })
+                  else if (n === 1) resolve({ data: creditNoteRow, error: null })
+                  else resolve({ data: { id: SI_ID, status: 'credited' }, error: null })
+                } else if (table === 'company_settings') {
+                  resolve({ data: { accounting_method: 'accrual' }, error: null })
+                } else if (table === 'fiscal_periods') {
+                  resolve({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+                } else {
+                  resolve({ data: null, error: null })
+                }
+              }
+            }
+            return (...args: unknown[]) => {
+              if (table === 'supplier_invoices' && prop === 'select' && typeof args[0] === 'string') {
+                siSelects.push(args[0])
+              }
+              if (table === 'supplier_invoice_items' && prop === 'insert') {
+                insertedItems = args[0] as Array<{ apply_slp?: boolean }>
+              }
+              return new Proxy({}, this!)
+            }
+          },
+        })
+      },
+      rpc: vi.fn(() => Promise.resolve({ data: 43, error: null })),
+    })
+
+    const res = await creditSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/credit`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+
+    expect(res.status).toBe(200)
+    // The original fetch must project apply_slp: the Proxy returns the
+    // fixture regardless, so the select string is the regression surface.
+    expect(siSelects[0]).toMatch(/items:supplier_invoice_items\([^)]*apply_slp/)
+    // The ORIGINAL flagged items reach the engine so it can reverse the pair.
+    expect(mockedCredit).toHaveBeenCalledTimes(1)
+    const passedItems = mockedCredit.mock.calls[0]?.[4] as Array<{ apply_slp?: boolean }>
+    expect(passedItems[0]?.apply_slp).toBe(true)
+    // Parity with the web credit route: the flag is copied onto the new
+    // credit-note items for display.
+    expect(insertedItems[0]?.apply_slp).toBe(true)
   })
 
   it('returns 409 SI_CREDIT_ALREADY_CREDITED when status=credited', async () => {
@@ -1608,5 +1811,44 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     expect(mockedCredit).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/v1/companies/:companyId/supplier-invoices honours defer_invoice_booking (#967)', () => {
+  it('registers the SI WITHOUT the registration JE when the company defers booking', async () => {
+    mockedReg.mockClear()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: { data: SAMPLE_SUPPLIER, error: null },
+        company_settings: {
+          data: { accounting_method: 'accrual', defer_invoice_booking: true },
+          error: null,
+        },
+        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        supplier_invoices: { data: SAMPLE_SI, error: null },
+        supplier_invoice_items: { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await createSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
+        method: 'POST',
+        body: JSON.stringify({
+          supplier_id: SUPPLIER_ID,
+          supplier_invoice_number: '2026-1234',
+          invoice_date: '2026-05-10',
+          due_date: '2026-06-09',
+          items: [
+            { description: 'Office supplies', amount: 1000, account_number: '5410', vat_rate: 0.25 },
+          ],
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(mockedReg).not.toHaveBeenCalled()
   })
 })

@@ -121,6 +121,25 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
     expect(res.status).toBe(400)
   })
 
+  it('returns 400 for a personnummer-shaped parent company org number', async () => {
+    setupSupabase()
+    const res = await POST(postReq({ parent_company_org_number: '19850101-1234' }), idParams)
+    expect(res.status).toBe(400)
+  })
+
+  it('accepts a foreign parent company registration identifier', async () => {
+    const { enqueue } = setupSupabase()
+    enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
+    enqueue({ data: null }) // no registrerad submission
+    enqueue({ data: { ...narrativeRow, parent_company_org_number: 'CHE-123.456.789' } }) // upsert
+    enqueue({ data: null }) // clear narrative confirmation
+    const { status, body } = await parseJsonResponse<{ data: typeof narrativeRow }>(
+      await POST(postReq({ parent_company_org_number: 'CHE-123.456.789' }), idParams),
+    )
+    expect(status).toBe(200)
+    expect(body.data.parent_company_org_number).toBe('CHE-123.456.789')
+  })
+
   it('returns 400 when the payload contains an unknown field', async () => {
     setupSupabase()
     const res = await POST(

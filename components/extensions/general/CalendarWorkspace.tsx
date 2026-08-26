@@ -40,6 +40,7 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
       const { data: customersData, error: customersError } = await supabase
         .from('customers')
         .select('id, name')
+        .is('archived_at', null)
         .order('name', { ascending: true })
 
       if (customersError) throw customersError

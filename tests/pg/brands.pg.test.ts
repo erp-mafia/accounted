@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 import { insertAuthUser } from '@/tests/pg/fixtures'
 
-// Tests for 20260804111000_brands.sql (white-label foundation, WL-01/WL-02):
+// Tests for 20260826130200_brands.sql (white-label foundation, WL-01/WL-02):
 // one brand per team, one unique domain per brand, hex/hostname/status CHECK
 // gates, read-only visibility for the owning team's members, and no write
 // policies for user sessions (brand rows are ops-managed via service role).

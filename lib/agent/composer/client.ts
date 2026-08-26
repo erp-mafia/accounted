@@ -1,75 +1,76 @@
-import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
+import {
+  createAiClient,
+  aiCredentialPrefix,
+  hasAiCredentials,
+  resolveAiProvider,
+  toProviderModelId,
+  type AiClient,
+} from '@/lib/ai/provider'
 import { createLogger } from '@/lib/logger'
 
-const log = createLogger('agent-bedrock-client')
+const log = createLogger('agent-ai-client')
 
-let cached: AnthropicBedrock | null = null
+let cached: AiClient | null = null
 
-// Single AnthropicBedrock client for the agent composer + chat loop. Matches
-// the credential surface the rest of the codebase already uses (see
-// extensions/general/invoice-inbox/lib/extract-invoice-fields.ts) so:
+// Single Claude client for the agent composer + chat loop. Which backend it
+// talks to is resolved from the environment by lib/ai/provider.ts:
 //
-//   1. There's no separate ANTHROPIC_API_KEY to provision and rotate.
-//   2. All Claude traffic stays in eu-north-1: important for Swedish
-//      accounting data under BFL retention.
-//   3. Failures and quotas show up in one AWS surface, not two.
+//   - Hosted runs on AWS Bedrock. All Claude traffic stays in eu-north-1,
+//     which matters for Swedish accounting data under BFL retention, and
+//     failures and quotas show up in one AWS surface rather than two.
+//   - Self-hosted deployments with no AWS account run against the direct
+//     Anthropic API with a plain ANTHROPIC_API_KEY.
 //
-// Trade-off vs. the direct Anthropic API: Bedrock's prompt-cache TTL is
-// 5 minutes (default) rather than the 1h the plan §10 specifies. We still
-// pass `cache_control: { type: 'ephemeral', ttl: '1h' }` in the system
-// prompt assembly: Bedrock currently ignores the explicit TTL and uses 5m.
-// Cache effectiveness drops on multi-minute gaps but the loop still works.
-// Revisit if/when Bedrock exposes longer TTLs or if cost forces the direct
-// API.
-export function getAnthropic(): AnthropicBedrock {
+// The two SDKs expose the same `messages.create` / `messages.stream` surface,
+// which is all this loop uses, so the split is confined to the factory.
+//
+// Prompt-cache TTL differs between them. We pass
+// `cache_control: { type: 'ephemeral', ttl: '1h' }` in the system prompt
+// assembly (plan §10); Bedrock ignores the explicit TTL and uses its 5 minute
+// default, while the direct API honours the hour. Cache effectiveness on
+// multi-minute gaps is therefore better on the direct path; the loop works
+// either way.
+export function getAnthropic(): AiClient {
   if (cached) return cached
-  const awsRegion = process.env.AWS_REGION || 'eu-north-1'
-  const awsAccessKey = process.env.AWS_ACCESS_KEY_ID
-  const awsSecretKey = process.env.AWS_SECRET_ACCESS_KEY
 
-  // Startup diagnostic: make a hosted misconfiguration visible in the logs
-  // instead of it surfacing only as an opaque "request ended without sending
-  // any chunks" at stream time. Runs once per cold start (the client is cached).
-  // Never logs a secret: only the region, presence booleans, and the 4-char
-  // access-key-id PREFIX (AKIA = long-term IAM user key; ASIA = STS/temporary
-  // role credential, i.e. a platform-injected one rather than ours).
-  if (!awsAccessKey || !awsSecretKey) {
-    log.error('agent Bedrock credentials not loaded from env', undefined, {
-      region: awsRegion,
-      hasAccessKeyId: !!awsAccessKey,
-      hasSecretAccessKey: !!awsSecretKey,
+  // Startup diagnostic: make a misconfiguration visible in the logs instead of
+  // it surfacing only as an opaque "request ended without sending any chunks"
+  // at stream time. Runs once per cold start (the client is cached). Never
+  // logs a secret: only the provider, a presence boolean, and the credential's
+  // non-secret prefix (see aiCredentialPrefix).
+  const provider = resolveAiProvider()
+  if (!hasAiCredentials()) {
+    log.error('agent AI credentials not loaded from env', undefined, {
+      provider,
+      hasCredentials: false,
       regionFromEnv: !!process.env.AWS_REGION,
     })
   } else {
-    log.info('agent Bedrock client init', {
-      region: awsRegion,
-      keyPrefix: awsAccessKey.slice(0, 4),
+    log.info('agent AI client init', {
+      provider,
+      keyPrefix: aiCredentialPrefix(),
       hasSessionToken: !!process.env.AWS_SESSION_TOKEN,
       regionFromEnv: !!process.env.AWS_REGION,
     })
   }
 
-  // When both static keys are present, pass them. Otherwise omit them so the
-  // SDK falls back to the AWS credential provider chain (instance profile,
-  // IRSA, EKS pod identity, ...). The two-overload SDK refuses a mix.
-  cached =
-    awsAccessKey && awsSecretKey
-      ? new AnthropicBedrock({ awsRegion, awsAccessKey, awsSecretKey })
-      : new AnthropicBedrock({ awsRegion })
+  cached = createAiClient()
   return cached
 }
 
-// Bedrock model IDs. Region prefix `eu.` keeps inference inside eu-north-1
-// (a bare `anthropic.claude-sonnet-5` is rejected: on-demand throughput needs
-// the cross-region inference profile). Both are env-overridable so ops can
-// swap models without a code deploy.
+// Model ids, written bare and adapted to the resolved provider: Bedrock needs
+// the `eu.` inference-profile prefix, the direct API needs it absent. Both stay
+// env-overridable so ops can swap models without a code deploy; an override is
+// used verbatim, in whichever form the provider it was written for expects.
 //
-// Both point at Sonnet 5, verified enabled on this Bedrock account. The two
-// names are kept because the intents split on them: OPUS_MODEL marks the
+// Both point at Sonnet 5, verified enabled on the hosted Bedrock account. The
+// two names are kept because the intents split on them: OPUS_MODEL marks the
 // heavy-reasoning intents (supplier-invoice review, VAT review, bokslut) so
 // that split survives if a genuinely larger model is enabled here later.
-export const OPUS_MODEL = process.env.BEDROCK_OPUS_MODEL_ID || 'eu.anthropic.claude-sonnet-5'
-export const SONNET_MODEL = process.env.BEDROCK_SONNET_MODEL_ID || 'eu.anthropic.claude-sonnet-5'
+export const OPUS_MODEL =
+  toProviderModelId(process.env.BEDROCK_OPUS_MODEL_ID || 'claude-sonnet-5')
+export const SONNET_MODEL =
+  toProviderModelId(process.env.BEDROCK_SONNET_MODEL_ID || 'claude-sonnet-5')
 
 // Reasoning depth for the chat intents.
 //

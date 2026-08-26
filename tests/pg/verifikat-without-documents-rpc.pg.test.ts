@@ -5,6 +5,7 @@ import {
   seedCompany,
   insertAuthUser,
   insertDraftJournalEntry,
+  insertPostedJournalEntry,
   insertBalancedLines,
 } from './fixtures'
 
@@ -84,30 +85,34 @@ describe('verifikat_without_documents RPC', () => {
 
     // 6 posted entries without documents: amounts 100..600, dates ascending
     for (let i = 1; i <= 6; i++) {
-      const id = await insertDraftJournalEntry({
+      const id = await insertPostedJournalEntry({
         userId,
         companyId,
         fiscalPeriodId,
-        status: 'posted',
         voucherNumber: i,
         entryDate: `2026-06-0${i}`,
         description: `no-doc ${i}`,
+        lines: [
+          { accountNumber: '1930', debitAmount: i * 100, creditAmount: 0 },
+          { accountNumber: '3001', debitAmount: 0, creditAmount: i * 100 },
+        ],
       })
-      await insertBalancedLines(id, i * 100)
       seeded.set(i, { id, amount: i * 100 })
     }
 
     // Posted entry WITH a document: must never appear
-    const withDoc = await insertDraftJournalEntry({
+    const withDoc = await insertPostedJournalEntry({
       userId,
       companyId,
       fiscalPeriodId,
-      status: 'posted',
       voucherNumber: 7,
       entryDate: '2026-06-07',
       description: 'has doc',
+      lines: [
+        { accountNumber: '1930', debitAmount: 700, creditAmount: 0 },
+        { accountNumber: '3001', debitAmount: 0, creditAmount: 700 },
+      ],
     })
-    await insertBalancedLines(withDoc, 700)
     await attachDocument({ userId, companyId, journalEntryId: withDoc })
 
     // Draft entry: must never appear

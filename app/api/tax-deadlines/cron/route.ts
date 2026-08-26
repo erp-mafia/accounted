@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import {
   backfillMissingTaxDeadlines,
@@ -21,7 +21,7 @@ export const GET = withCronContext('cron.tax_deadlines', async (_request, ctx) =
     })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
   const now = new Date()
   const isAnnualRun = now.getUTCMonth() === 0 && now.getUTCDate() === 2
 

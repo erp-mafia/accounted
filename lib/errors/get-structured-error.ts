@@ -28,6 +28,7 @@ import {
   CannotCorrectNonPostedError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
+  CorrectionChainTooDeepError,
   DimensionValidationError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
@@ -157,6 +158,7 @@ function inferCode(message: string): string | null {
   if (/Bokföringen är låst/i.test(message)) return 'PERIOD_LOCKED'
   if (/Transaction not found/i.test(message)) return 'NOT_FOUND'
   if (/Invoice not found/i.test(message)) return 'NOT_FOUND'
+  if (/must be \d+ characters or fewer/i.test(message)) return 'VALIDATION_ERROR'
   return null
 }
 
@@ -188,7 +190,9 @@ export function getStructuredError(
   const message_sv = getErrorMessage(error)
 
   const transient = isTransientFailure(error, message_en)
-  let code = extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
+  let code = isIgnoredTransactionJournalConstraint(error)
+    ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
+    : extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
   // Nothing more specific matched but the failure is transient: surface the
   // stable TRANSIENT_ERROR code so agents can dispatch on it.
   if (code === 'UNKNOWN_ERROR' && transient) code = 'TRANSIENT_ERROR'
@@ -289,6 +293,7 @@ function postgresCodeToStructured(code: string): string | null {
     case '42501':
       return 'FORBIDDEN'
     case '42P01':
+    case 'P0002':
       return 'NOT_FOUND'
     case '40001':
     case '40P01':
@@ -308,6 +313,13 @@ function isPostgresError(err: unknown): err is { code: string; message: string }
     err !== null &&
     typeof (err as { code?: unknown }).code === 'string' &&
     /^[0-9A-Z]{5}$/.test((err as { code: string }).code)
+  )
+}
+
+export function isIgnoredTransactionJournalConstraint(error: unknown): boolean {
+  return (
+    isPostgresError(error) &&
+    /transactions_is_ignored_no_journal_entry/i.test(error.message)
   )
 }
 
@@ -356,7 +368,9 @@ export function errorResponse(
 
   // 3. Postgres errors
   if (isPostgresError(err)) {
-    const mapped = postgresCodeToStructured(err.code)
+    const mapped = isIgnoredTransactionJournalConstraint(err)
+      ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
+      : postgresCodeToStructured(err.code)
     if (mapped) {
       const entry = entryFor(mapped)
       logAtLevel(log, entry.httpStatus, 'database error', err as unknown as Error, {
@@ -441,6 +455,12 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   }
   if (err instanceof MeaninglessCorrectionError) {
     return { code: err.code, details: { reason: err.reason } }
+  }
+  if (err instanceof CorrectionChainTooDeepError) {
+    return {
+      code: err.code,
+      details: { depth: err.depth, chainRootVoucher: err.chainRootVoucher },
+    }
   }
   if (err instanceof DimensionValidationError) {
     return { code: err.code, details: { issues: err.issues } }

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { parseBankFile, generateFileHash, detectFileFormat } from '@/lib/import/bank-file/parser'
+import { detectSkattekontoFile } from '@/lib/import/skattekonto-file/parser'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -57,24 +58,26 @@ export const POST = withRouteContext(
         })
       }
 
+      // A skattekontoutdrag is not a bank statement: its rows belong on the
+      // skattekonto (1630), not on a bank account. Redirect the user to the
+      // dedicated importer. An explicit format override still forces a bank
+      // parse as the escape hatch.
+      if (!formatOverride && detectSkattekontoFile(content, file.name)) {
+        return errorResponseFromCode('BANK_FILE_SKATTEKONTO_DETECTED', opLog, { requestId })
+      }
+
       const detectedFormat = formatOverride
         ? null
         : detectFileFormat(content, file.name)
 
       const parseResult = parseBankFile(content, file.name, formatOverride || undefined)
 
-      let existingCount = 0
-      if (parseResult.transactions.length > 0) {
-        const { count } = await supabase
-          .from('transactions')
-          .select('*', { count: 'exact', head: true })
-          .eq('company_id', companyId)
-          .gte('date', parseResult.date_from || '1970-01-01')
-          .lte('date', parseResult.date_to || '2099-12-31')
-
-        existingCount = count || 0
-      }
-
+      // Per-row duplicate detection deliberately does NOT live here: the
+      // wizard calls POST /api/import/bank-file/check-duplicates after every
+      // (re-)parse, including the client-side generic_csv re-parse that never
+      // hits this route. The old existing_transaction_count field (a raw count
+      // of ALL transactions in the date range) was consumed by nothing and has
+      // been removed.
       return NextResponse.json({
         data: {
           parse_result: parseResult,
@@ -82,7 +85,6 @@ export const POST = withRouteContext(
           detected_format_name: detectedFormat?.name || parseResult.format_name,
           file_hash: fileHash,
           filename: file.name,
-          existing_transaction_count: existingCount,
           headers: parseResult.format === 'generic_csv'
             ? content.split('\n')[0]?.split(',').map((h) => h.trim()) || []
             : null,

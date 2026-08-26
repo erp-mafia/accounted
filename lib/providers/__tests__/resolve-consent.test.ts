@@ -13,9 +13,14 @@ vi.mock('@/lib/providers/fortnox/oauth', () => ({
   refreshFortnoxToken: vi.fn(),
 }));
 
+vi.mock('@/lib/providers/wint/oauth', () => ({
+  refreshWintToken: vi.fn(),
+}));
+
 import { createServiceClient } from '@/lib/supabase/server';
 import { refreshBrioxToken } from '@/lib/providers/briox/oauth';
 import { refreshFortnoxToken } from '@/lib/providers/fortnox/oauth';
+import { refreshWintToken } from '@/lib/providers/wint/oauth';
 import { resolveConsent } from '../resolve-consent';
 import { ProviderCallError } from '../with-provider-call';
 
@@ -162,5 +167,48 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     expect(err).toBeInstanceOf(ProviderCallError);
     expect(err.code).toBe('PROVIDER_AUTH_EXPIRED');
     expect(err.provider).toBe('fortnox');
+  });
+
+  it('refreshes an expired WINT consent via refreshWintToken and persists the rotated pair', async () => {
+    const wintConsent = { id: 'c3', company_id: 'co1', provider: 'wint', status: 1 };
+    mock.enqueue({ data: [wintConsent] }); // consent lookup
+    mock.enqueue({ data: [{ ...expiredTokens, provider_company_id: '4711' }] }); // expired token row
+    mock.enqueue({ data: [{ consent_id: 'c3' }] }); // guarded update matched 1 row
+
+    vi.mocked(refreshWintToken).mockResolvedValueOnce({
+      access_token: 'wint-new-access',
+      refresh_token: 'wint-new-refresh',
+      token_type: 'Bearer',
+      expires_in: 900,
+    });
+
+    const result = await resolveConsent('co1', 'c3');
+
+    // WINT refresh takes only the refresh token (the body is the bare string)
+    expect(refreshWintToken).toHaveBeenCalledWith('old-refresh');
+    expect(result.accessToken).toBe('wint-new-access');
+    expect(result.providerCompanyId).toBe('4711');
+    // The rotated pair went through the guarded update, both tokens included
+    const updateArgs = mock.findCall('provider_consent_tokens', 'update');
+    expect(updateArgs?.[0]).toMatchObject({
+      access_token: 'wint-new-access',
+      refresh_token: 'wint-new-refresh',
+    });
+  });
+
+  it('maps a failed WINT refresh to PROVIDER_AUTH_EXPIRED so callers prompt reconnect', async () => {
+    const wintConsent = { id: 'c3', company_id: 'co1', provider: 'wint', status: 1 };
+    mock.enqueue({ data: [wintConsent] }); // consent lookup
+    mock.enqueue({ data: [expiredTokens] }); // expired token row
+
+    vi.mocked(refreshWintToken).mockRejectedValueOnce(
+      new Error('WINT token refresh failed: 401'),
+    );
+
+    const err = await resolveConsent('co1', 'c3').catch((e) => e);
+
+    expect(err).toBeInstanceOf(ProviderCallError);
+    expect(err.code).toBe('PROVIDER_AUTH_EXPIRED');
+    expect(err.provider).toBe('wint');
   });
 });

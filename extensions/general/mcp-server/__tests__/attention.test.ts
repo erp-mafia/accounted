@@ -330,3 +330,30 @@ describe('Accounted://attention', () => {
     expect(result.summary.total_items).toBe(3)
   })
 })
+
+describe('Accounted://attention: reconciliation_due', () => {
+  it('adds the category when signed-off accounts have fallen behind the previous month end', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+    // countReconciliationDue: sign-offs (adoption + coverage), cash accounts, skattekonto rows.
+    enqueue({
+      data: [{ account_key: 'skattekonto', through_date: '2020-01-31', reopened_at: null }],
+    })
+    enqueue({ data: [{ id: '11111111-1111-4111-8111-111111111111', iban: null, currency: 'SEK', updated_at: null }] })
+    enqueue({ count: 3 })
+    const out = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+    const cat = out.categories.find((c) => c.key === 'reconciliation_due')
+    expect(cat).toBeDefined()
+    // The bank account and the skattekonto are both due.
+    expect(cat?.count).toBe(2)
+    expect(cat?.next?.resource).toBe('Accounted://reconciliation/summary')
+  })
+
+  it('stays silent for a company that never signed anything off', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueEmpty(enqueue)
+    enqueue({ data: [] })
+    const out = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+    expect(out.categories.find((c) => c.key === 'reconciliation_due')).toBeUndefined()
+  })
+})

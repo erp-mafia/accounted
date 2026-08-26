@@ -5,6 +5,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 // Statuses where the registration entry can still be created afterwards.
@@ -121,6 +122,14 @@ export const POST = withRouteContext(
       )
       return errorResponseFromCode('SI_BOOK_CONFLICT', log, { requestId })
     }
+
+    // The invoice's retained source document (attached at registration) has
+    // been floating until now: the deferred flow books later, and every
+    // missing-underlag surface only accepts an ANCHORED doc
+    // (document_attachments.journal_entry_id set). Anchor it to the fresh
+    // registration verifikat, same as the create route does when it books
+    // immediately. Never throws; a no-op when the invoice has no document.
+    await anchorSupplierInvoiceDocument(supabase, companyId!, id)
 
     // Periodiseringar ride on the registration entry, so they can only be
     // created now. Non-blocking: the entry is committed (immutable); a

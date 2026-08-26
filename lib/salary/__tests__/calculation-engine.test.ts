@@ -152,7 +152,7 @@ describe('calculateSalary', () => {
     expect(result.taxWithheld).toBe(12000) // 30% of 40000
   })
 
-  it('applies f-skatt with 0% withholding', () => {
+  it('exempts F-skatt compensation from withholding and employer contributions', () => {
     const result = calculateSalary(
       makeBasicInput({ fSkattStatus: 'f_skatt' }),
       config2026,
@@ -161,6 +161,12 @@ describe('calculateSalary', () => {
 
     expect(result.taxWithheld).toBe(0)
     expect(result.netSalary).toBe(40000)
+    expect(result.avgifterRate).toBe(0)
+    expect(result.avgifterAmount).toBe(0)
+    expect(result.avgifterBasis).toBe(0)
+    expect(result.avgifterCategory).toBe('exempt')
+    expect(result.vacationAccrualAvgifter).toBe(0)
+    expect(result.totalEmployerCost).toBe(result.grossSalary + result.vacationAccrual)
   })
 
   it('applies unverified flat 30%', () => {
@@ -917,9 +923,10 @@ describe('hardening: invariants', () => {
 
 describe('hardening: tax table lookup (not just flat fallback)', () => {
   const taxRates: TaxTableRate[] = [
-    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 0, incomeTo: 20000, taxAmount: 3000 },
-    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 20001, incomeTo: 30000, taxAmount: 5500 },
-    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 30001, incomeTo: 50000, taxAmount: 10000 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 0, incomeTo: 20000, kind: 'amount', taxAmount: 3000 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 20001, incomeTo: 30000, kind: 'amount', taxAmount: 5500 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 30001, incomeTo: 80000, kind: 'amount', taxAmount: 10000 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 80001, incomeTo: 9999999, kind: 'percent', taxPercent: 35 },
   ]
 
   it('uses table lookup when taxTableNumber is set', () => {
@@ -928,6 +935,14 @@ describe('hardening: tax table lookup (not just flat fallback)', () => {
       config2026, taxRates
     )
     expect(r.taxWithheld).toBe(5500)
+  })
+
+  it('applies percent-of-income brackets for salaries above the krona section (over 80 000 kr)', () => {
+    const r = calculateSalary(
+      makeBasicInput({ taxTableNumber: 32, taxColumn: 1, monthlySalary: 100000, lineItems: [baseLineItem(100000)] }),
+      config2026, taxRates
+    )
+    expect(r.taxWithheld).toBe(35000)
   })
 
   it('semesterersättning pushes brutto into a higher tax bracket', () => {
@@ -1050,6 +1065,25 @@ describe('calculateSjuklon', () => {
 })
 
 describe('calculateAvgifterRate', () => {
+  it('returns the exempt rate for F-skatt before age-based rules', () => {
+    const result = calculateAvgifterRate(
+      makeBasicInput({ fSkattStatus: 'f_skatt', personnummer: 'mock_senior_person' }),
+      config2026,
+      2026
+    )
+
+    expect(result.rate).toBe(0)
+    expect(result.amount).toBe(0)
+    expect(result.basis).toBe(0)
+    expect(result.category).toBe('exempt')
+    expect(result.steps).toEqual([
+      expect.objectContaining({
+        label: 'Avgiftskategori',
+        output: null,
+      }),
+    ])
+  })
+
   it('returns standard rate for normal employee', () => {
     const result = calculateAvgifterRate(
       makeBasicInput(),
@@ -1295,5 +1329,135 @@ describe('calculateSalary: shift premiums (OB-tillägg och övertid)', () => {
     const additionStep = result.steps.find((s) => s.label.includes('Tillägg'))
     expect(additionStep).toBeDefined()
     expect(additionStep?.output).toBe(2400)
+  })
+})
+
+describe('öresavrundning (roundNetToWholeKrona)', () => {
+  const r2 = (x: number) => Math.round(x * 100) / 100
+
+  const bonus = (amount: number) => ({
+    itemType: 'bonus' as const,
+    amount,
+    isTaxable: true,
+    isAvgiftBasis: true,
+    isVacationBasis: false,
+    isGrossDeduction: false,
+    isNetDeduction: false,
+  })
+
+  const netDeduction = (amount: number) => ({
+    itemType: 'net_deduction_other' as const,
+    amount,
+    isTaxable: false,
+    isAvgiftBasis: false,
+    isVacationBasis: false,
+    isGrossDeduction: false,
+    isNetDeduction: true,
+  })
+
+  it('is off by default: net keeps its öre and netRounding is 0', () => {
+    const result = calculateSalary(
+      makeBasicInput({ fSkattStatus: 'f_skatt', lineItems: [bonus(0.63)] }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.netSalary).toBe(40000.63)
+    expect(result.netRounding).toBe(0)
+    expect(result.steps.find((s) => s.label.includes('Öresavrundning'))).toBeUndefined()
+  })
+
+  it('rounds a .01 net up to the next whole krona (rounding 0.99)', () => {
+    const result = calculateSalary(
+      makeBasicInput({ fSkattStatus: 'f_skatt', lineItems: [bonus(0.01)], roundNetToWholeKrona: true }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.netSalary).toBe(40001)
+    expect(result.netRounding).toBe(0.99)
+  })
+
+  it('rounds a .99 net up by a single öre', () => {
+    const result = calculateSalary(
+      makeBasicInput({ fSkattStatus: 'f_skatt', lineItems: [bonus(0.99)], roundNetToWholeKrona: true }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.netSalary).toBe(40001)
+    expect(result.netRounding).toBe(0.01)
+  })
+
+  it('leaves a whole-krona net untouched (no rounding step)', () => {
+    const result = calculateSalary(
+      makeBasicInput({ roundNetToWholeKrona: true }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.netSalary).toBe(28000)
+    expect(result.netRounding).toBe(0)
+    expect(result.steps.find((s) => s.label.includes('Öresavrundning'))).toBeUndefined()
+  })
+
+  it('rounds only the net: gross, tax and avgifter stay exact', () => {
+    // Tax withholding is always whole kronor (SFF 22 kap. 1 §), so the öre
+    // comes from the gross: 40000.30 − 12000 = 28000.30 → 28001.
+    const result = calculateSalary(
+      makeBasicInput({ lineItems: [bonus(0.3)], roundNetToWholeKrona: true }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.grossSalary).toBe(40000.3)
+    expect(result.taxWithheld).toBe(12000)
+    expect(result.netSalary).toBe(28001)
+    expect(result.netRounding).toBe(0.7)
+    expect(result.avgifterAmount).toBe(r2(40000.3 * 0.3142))
+    const step = result.steps.find((s) => s.label.includes('Öresavrundning'))
+    expect(step).toBeDefined()
+    expect(step?.output).toBe(28001)
+  })
+
+  it('applies after nettolöneavdrag', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        fSkattStatus: 'f_skatt',
+        lineItems: [netDeduction(-100.75)],
+        roundNetToWholeKrona: true,
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+    // 40000 - 100.75 = 39899.25 → up to 39900
+    expect(result.netSalary).toBe(39900)
+    expect(result.netRounding).toBe(0.75)
+  })
+
+  it('never rounds a zero payout', () => {
+    const result = calculateSalary(
+      makeBasicInput({ monthlySalary: 0, roundNetToWholeKrona: true }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.netSalary).toBe(0)
+    expect(result.netRounding).toBe(0)
+  })
+
+  it('keeps total employer cost on the shared definition (rounding excluded)', () => {
+    // Payslip summary, KPI cards and lönejournal all recompute employer cost
+    // as gross + avgifter + semester + avgifter-på-semester; the engine must
+    // match or the same payslip would print two different totals. The öre
+    // cost is carried by the 3740 ledger line instead.
+    const result = calculateSalary(
+      makeBasicInput({ lineItems: [bonus(0.3)], roundNetToWholeKrona: true }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.netRounding).toBeGreaterThan(0)
+    expect(result.totalEmployerCost).toBe(
+      r2(
+        result.grossSalary +
+          result.avgifterAmount +
+          result.vacationAccrual +
+          result.vacationAccrualAvgifter,
+      ),
+    )
   })
 })

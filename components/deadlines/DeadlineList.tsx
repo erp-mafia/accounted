@@ -6,6 +6,7 @@ import { Deadline, DeadlineType } from '@/types'
 import { DeadlineRow, deadlineDateLabel } from './DeadlineRow'
 import { DeadlineGroupCard, isSkattekontoDeadline } from './DeadlineGroupCard'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { isDeadlineOverdue, parseDate, startOfDay } from '@/lib/calendar/utils'
 
 type TypeSegment = 'all' | 'tax' | 'invoicing' | 'own'
@@ -136,31 +137,16 @@ export function DeadlineList({
   return (
     <div className="space-y-6">
       {/* Toolbar: the type seg (concept: Alla / Skatt / Fakturering / Egna) */}
-      <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-        {(
-          [
-            { key: 'all', label: t('seg_all') },
-            { key: 'tax', label: t('seg_tax') },
-            { key: 'invoicing', label: t('seg_invoicing') },
-            { key: 'own', label: t('seg_own') },
-          ] as const
-        ).map(({ key, label }) => (
-          <button
-            key={key}
-            type="button"
-            role="tab"
-            aria-selected={segment === key}
-            onClick={() => setSegment(key)}
-            className={`rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
-              segment === key
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        value={segment}
+        onChange={setSegment}
+        options={[
+          { value: 'all', label: t('seg_all') },
+          { value: 'tax', label: t('seg_tax') },
+          { value: 'invoicing', label: t('seg_invoicing') },
+          { value: 'own', label: t('seg_own') },
+        ]}
+      />
 
       <div className="gap-8 lg:grid lg:grid-cols-[minmax(0,1fr)_240px] lg:items-start">
         {/* The thread */}
@@ -173,7 +159,7 @@ export function DeadlineList({
             {sections.map(({ key, label, items }) => (
               <section key={key}>
                 <div className="mb-1 flex items-center gap-3 px-1">
-                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <h2 className="text-xs uppercase tracking-wider text-muted-foreground">
                     {label}
                   </h2>
                   <span className="text-xs tabular-nums text-muted-foreground/50">

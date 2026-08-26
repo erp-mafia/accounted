@@ -16,6 +16,31 @@ const BodySchema = z
       .strict()
       .optional(),
     create_mode: z.record(z.string(), z.string().max(64)).optional(),
+    // Assistant panel geometry. Bounds are deliberately looser than the
+    // client's viewport clamps: a size saved on a large screen must round-trip
+    // even when later read on a small one (the client re-clamps on use).
+    agent_panel: z
+      .object({
+        mode: z.enum(['docked', 'floating']).optional(),
+        dock_width: z.number().int().min(320).max(1600).optional(),
+        float: z
+          .object({
+            x: z.number().int().min(-8000).max(16000),
+            y: z.number().int().min(-8000).max(16000),
+            w: z.number().int().min(280).max(4000),
+            h: z.number().int().min(280).max(4000),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    // One-time expired-trial dialog acknowledgement: companyId -> ISO
+    // timestamp of the ack. Merged per key like create_mode, so acking one
+    // company never clears another's.
+    trial_expired_ack: z
+      .record(z.string().uuid(), z.string().datetime())
+      .optional(),
   })
   .strict()
 
@@ -56,6 +81,12 @@ export async function POST(request: Request) {
       : {}),
     ...(patch.create_mode
       ? { create_mode: { ...current.create_mode, ...patch.create_mode } }
+      : {}),
+    ...(patch.agent_panel
+      ? { agent_panel: { ...current.agent_panel, ...patch.agent_panel } }
+      : {}),
+    ...(patch.trial_expired_ack
+      ? { trial_expired_ack: { ...current.trial_expired_ack, ...patch.trial_expired_ack } }
       : {}),
   }
 

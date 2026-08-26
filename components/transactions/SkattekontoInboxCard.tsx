@@ -3,11 +3,13 @@
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AlertCircle, Landmark, Link2, Loader2 } from 'lucide-react'
 import type {
+  SkattekontoBookingSuggestion,
   SkattekontoMatchSuggestion,
   StoredSkattekontoTransaction,
 } from '@/types/skatteverket'
@@ -21,15 +23,32 @@ import type {
 export default function SkattekontoInboxCard({
   row,
   matchSuggestion,
+  bookingSuggestion,
+  isExiting = false,
   processing,
+  selectable,
+  isSelected,
+  onToggleSelect,
   onBokfor,
   onMatch,
+  onIgnore,
 }: {
   row: StoredSkattekontoTransaction
   matchSuggestion?: SkattekontoMatchSuggestion | null
+  bookingSuggestion?: SkattekontoBookingSuggestion | null
+  /** The row was just booked and is animating out during the page's 350ms
+   *  removal window (.row-exit collapse; instant under reduced motion). */
+  isExiting?: boolean
   processing: boolean
+  selectable?: boolean
+  isSelected?: boolean
+  onToggleSelect?: (id: string) => void
   onBokfor: (row: StoredSkattekontoTransaction) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
+  /** Optional "Ignorera" affordance: hides the row from the work list without
+   *  booking it (skattekonto rows are never deleted). The parent owns the
+   *  confirm dialog and the PATCH. */
+  onIgnore?: (row: StoredSkattekontoTransaction) => void
 }) {
   const t = useTranslations('tx_skattekonto_card')
   const amount = Number(row.belopp_skatteverket)
@@ -46,13 +65,40 @@ export default function SkattekontoInboxCard({
       : t('duplicate_title_draft')
 
   return (
-    <tr className="group transition-colors duration-150 hover:bg-secondary/35">
-      <td className={cn(TD_CLASS, 'w-0 !p-0')} aria-hidden="true"></td>
+    <tr
+      className={cn(
+        'group transition-colors duration-150 hover:bg-secondary/35',
+        isSelected && 'bg-secondary/40',
+        isExiting && 'row-exit',
+      )}
+      // .row-exit only blocks pointer input; `inert` also drops keyboard
+      // focus and activation (booking/matching controls) during the 350ms
+      // removal window.
+      inert={isExiting || undefined}
+    >
+      {/* Hover-revealed selection checkbox (concept .cb) */}
+      {/* Zero-width cell: the checkbox hangs in the left page margin so
+          the date column can sit flush with the page edge. */}
+      <td className={cn(TD_CLASS, 'relative w-0 !p-0')}>
+        {selectable && (
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={() => onToggleSelect?.(row.id)}
+            aria-label={t('select_row')}
+            className={cn(
+              'absolute -left-5 top-1/2 -translate-y-1/2 transition-opacity duration-150 md:-left-6',
+              isSelected
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            )}
+          />
+        )}
+      </td>
       <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(row.transaktionsdatum)}
       </td>
       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="row-collapsible flex min-w-0 items-center gap-2">
           <span className="truncate">{row.transaktionstext}</span>
           <Badge variant="outline" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal">
             <Landmark className="h-3 w-3" />
@@ -63,6 +109,18 @@ export default function SkattekontoInboxCard({
               <AlertCircle className="h-3 w-3" />
               {duplicateLabel}
             </Badge>
+          )}
+          {/* What "Bokför" will do: the deterministic rule match, muted so it
+              reads as information, not state. Suppressed on likely duplicates
+              where linking (not booking) is the recommended action. */}
+          {bookingSuggestion && !matchSuggestion && (
+            <span className="hidden shrink-0 whitespace-nowrap text-xs text-muted-foreground md:inline">
+              {t('suggestion_line', {
+                account: bookingSuggestion.account_name
+                  ? `${bookingSuggestion.account} ${bookingSuggestion.account_name}`
+                  : bookingSuggestion.account,
+              })}
+            </span>
           )}
         </span>
       </td>
@@ -77,7 +135,7 @@ export default function SkattekontoInboxCard({
         {formatCurrency(amount)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
-        <span className="inline-flex items-center justify-end gap-3">
+        <span className="row-collapsible inline-flex items-center justify-end gap-3">
           {matchSuggestion ? (
             <>
               {/* Likely duplicate: linking beats re-booking, so it leads. */}
@@ -121,6 +179,16 @@ export default function SkattekontoInboxCard({
                 {t('match_to_voucher')}
               </button>
             </>
+          )}
+          {onIgnore && (
+            <button
+              type="button"
+              className={QUIET_LINK_CLASS}
+              onClick={() => onIgnore(row)}
+              disabled={processing}
+            >
+              {t('ignore')}
+            </button>
           )}
         </span>
       </td>

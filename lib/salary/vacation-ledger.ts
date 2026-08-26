@@ -89,7 +89,7 @@ export async function syncVacationLedgerForEmployees(
 
     const { data: openings, error: openErr } = await supabase
       .from('employee_opening_balances')
-      .select('employee_id, cutover_date, vacation_paid_days_remaining, vacation_saved_days_by_year')
+      .select('employee_id, cutover_date, vacation_paid_days_remaining, vacation_days_taken_this_year, vacation_saved_days_by_year')
       .eq('company_id', companyId)
       .in('employee_id', employeeIds)
     if (openErr) return { ok: false, message: openErr.message }
@@ -98,6 +98,7 @@ export async function syncVacationLedgerForEmployees(
         employee_id: string
         cutover_date: string
         vacation_paid_days_remaining: number
+        vacation_days_taken_this_year: number | null
         vacation_saved_days_by_year: Record<string, number> | null
       }>).map((o) => [o.employee_id, o]),
     )
@@ -145,20 +146,43 @@ export async function syncVacationLedgerForEmployees(
       const employee = employeeById.get(employeeId)
       if (!employee) continue
 
+      const opening = openingByEmployee.get(employeeId)
+      const cutoverInYear = (yearStart: string): boolean =>
+        !!opening &&
+        opening.cutover_date >= yearStart &&
+        opening.cutover_date < getVacationYearBounds(yearStart).end
+
       const rowsForEmployee = openRows.filter((r) => r.employee_id === employeeId)
       const hasCurrentYearRow = rowsForEmployee.some(
         (r) => r.vacation_year_start === currentYearStart,
       )
 
-      // Recompute every open year the employee has.
+      // Recompute every open year the employee has. entitled_days is
+      // re-derived like the seed path (a stale stored value would otherwise
+      // survive forever): the cutover opening balance is the migrated truth
+      // from the previous system and outranks recomputation for the year
+      // containing cutover_date; every other year gets Semesterlagen 7 §
+      // via computeEntitledDays.
       for (const row of rowsForEmployee) {
+        const cutoverRow = cutoverInYear(row.vacation_year_start)
+        const openingTaken = cutoverRow && opening
+          ? (opening.vacation_days_taken_this_year || 0)
+          : 0
         upserts.push({
           company_id: companyId,
           employee_id: employeeId,
           vacation_year_start: row.vacation_year_start,
-          entitled_days: row.entitled_days,
+          entitled_days:
+            cutoverRow && opening
+              ? (opening.vacation_paid_days_remaining || 0) + openingTaken
+              : computeEntitledDays(
+                  basis,
+                  row.vacation_year_start,
+                  employee.vacation_days_per_year,
+                  employee.employment_start,
+                ),
           accrued_days: computeAccruedDays(basis, row.vacation_year_start, asOfDate, employee.vacation_days_per_year, employee.employment_start),
-          taken_days: takenInYear(employeeId, row.vacation_year_start),
+          taken_days: takenInYear(employeeId, row.vacation_year_start) + openingTaken,
           saved_days: row.saved_days ?? {},
           forced_payout_days: row.forced_payout_days ?? 0,
           status: 'open',
@@ -167,11 +191,7 @@ export async function syncVacationLedgerForEmployees(
 
       // Lazy-seed the current year on first touch.
       if (!hasCurrentYearRow) {
-        const opening = openingByEmployee.get(employeeId)
-        const cutoverInThisYear =
-          !!opening &&
-          opening.cutover_date >= currentYearStart &&
-          opening.cutover_date < getVacationYearBounds(currentYearStart).end
+        const cutoverInThisYear = cutoverInYear(currentYearStart)
 
         let savedDays: Record<string, number>
         if (cutoverInThisYear && opening) {
@@ -186,6 +206,12 @@ export async function syncVacationLedgerForEmployees(
           savedDays = {}
         }
 
+        // Days already taken pre-cutover under the previous system: folded
+        // into BOTH entitled and taken so remaining (entitled - taken) still
+        // equals the imported vacation_paid_days_remaining.
+        const seedOpeningTaken = cutoverInThisYear && opening
+          ? (opening.vacation_days_taken_this_year || 0)
+          : 0
         upserts.push({
           company_id: companyId,
           employee_id: employeeId,
@@ -194,7 +220,7 @@ export async function syncVacationLedgerForEmployees(
           // system and outranks any recomputation.
           entitled_days:
             cutoverInThisYear && opening
-              ? opening.vacation_paid_days_remaining
+              ? (opening.vacation_paid_days_remaining || 0) + seedOpeningTaken
               : computeEntitledDays(
                   basis,
                   currentYearStart,
@@ -202,7 +228,7 @@ export async function syncVacationLedgerForEmployees(
                   employee.employment_start,
                 ),
           accrued_days: computeAccruedDays(basis, currentYearStart, asOfDate, employee.vacation_days_per_year, employee.employment_start),
-          taken_days: takenInYear(employeeId, currentYearStart),
+          taken_days: takenInYear(employeeId, currentYearStart) + seedOpeningTaken,
           saved_days: savedDays,
           forced_payout_days: 0,
           status: 'open',

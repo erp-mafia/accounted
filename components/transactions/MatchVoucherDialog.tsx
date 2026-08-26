@@ -6,11 +6,10 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
+import { HelpPopover } from '@/components/ui/help-popover'
 import {
   MatchVerifikationPicker,
   type UnlinkedGLLine,
@@ -188,11 +187,23 @@ export function MatchVoucherDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Matcha mot befintlig verifikation</DialogTitle>
-          <DialogDescription>
-            Koppla bankhändelsen till en verifikation som redan är bokförd (t.ex. en
-            lön eller en post importerad från Fortnox). Ingen ny bokföring skapas.
-          </DialogDescription>
+          {/* Convention 7: the how-it-works copy lives behind the "?", not in
+              the dialog flow. */}
+          <div className="flex items-center gap-2">
+            <DialogTitle>Matcha mot befintlig verifikation</DialogTitle>
+            <HelpPopover>
+              <p>
+                Kopplar bankhändelsen till en verifikation som redan är bokförd,
+                t.ex. en lön eller en post importerad från Fortnox. Ingen ny
+                bokföring skapas.
+              </p>
+              <p className="mt-2">
+                Med &quot;Visa även matchade&quot; kan flera bankhändelser kopplas
+                till samma verifikation, t.ex. en lön utbetald i flera
+                överföringar.
+              </p>
+            </HelpPopover>
+          </div>
         </DialogHeader>
 
         {/* Transaction summary */}
@@ -240,26 +251,26 @@ export function MatchVoucherDialog({
               <MatchVerifikationPicker glLines={glLines} value={selected} onChange={setSelected} inline />
               {(selectedLine?.linked_transaction_count ?? 0) > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Verifikationen är redan matchad mot {selectedLine?.linked_transaction_count}{' '}
-                  transaktion{(selectedLine?.linked_transaction_count ?? 0) === 1 ? '' : 'er'}.
-                  Kopplingen lägger till den här transaktionen också: t.ex. en lön utbetald i
-                  flera överföringar.
+                  Redan matchad mot {selectedLine?.linked_transaction_count}{' '}
+                  transaktion{(selectedLine?.linked_transaction_count ?? 0) === 1 ? '' : 'er'};
+                  den här läggs till.
                 </p>
               )}
             </>
           )}
 
           {/* Discovery affordances: widen the date window, and surface vouchers
-              already matched so another transaction can be attached (N:1). */}
+              already matched so another transaction can be attached (N:1).
+              Quiet links, not switches: these are list filters, and the switch
+              idiom belongs to settings (convention 15). */}
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pt-1">
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-              <Switch
-                checked={includeMatched}
-                onCheckedChange={setIncludeMatched}
-                aria-label="Visa även matchade verifikationer"
-              />
-              Visa även matchade verifikationer
-            </label>
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              onClick={() => setIncludeMatched((v) => !v)}
+            >
+              {includeMatched ? 'Dölj matchade' : 'Visa även matchade'}
+            </button>
             {!wideRange && (
               <button
                 type="button"

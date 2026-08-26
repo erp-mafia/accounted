@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   LEGAL_VAT_RATES,
   isLegalVatRate,
+  normalizeVatRateToFraction,
   normalizeVatRateToDecimal,
   findIllegalVatRateRow,
   findReverseChargeAccountWarningRows,
@@ -57,6 +58,37 @@ describe('normalizeVatRateToDecimal', () => {
     expect(normalizeVatRateToDecimal(undefined)).toBe(0)
     expect(normalizeVatRateToDecimal(Number.NaN)).toBe(0)
     expect(normalizeVatRateToDecimal(Number.POSITIVE_INFINITY)).toBe(0)
+  })
+})
+
+describe('normalizeVatRateToFraction', () => {
+  it.each([
+    [25, 0.25],
+    [19, 0.19],
+    [12, 0.12],
+    [6, 0.06],
+    [100, 1],
+  ])('converts percent-shaped %s to fraction %s', (percent, fraction) => {
+    expect(normalizeVatRateToFraction(percent)).toBe(fraction)
+  })
+
+  it.each([0, 0.06, 0.12, 0.19, 0.24995, 0.25, 1])(
+    'preserves already-fractional %s',
+    (rate) => {
+      expect(normalizeVatRateToFraction(rate)).toBe(rate)
+    },
+  )
+
+  it.each([-25, -0.25, 101, Number.NaN, Number.POSITIVE_INFINITY])(
+    'maps out-of-range value %s to 0',
+    (rate) => {
+      expect(normalizeVatRateToFraction(rate)).toBe(0)
+    },
+  )
+
+  it('maps missing input to 0', () => {
+    expect(normalizeVatRateToFraction(null)).toBe(0)
+    expect(normalizeVatRateToFraction(undefined)).toBe(0)
   })
 })
 

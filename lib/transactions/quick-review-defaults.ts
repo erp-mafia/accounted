@@ -29,6 +29,10 @@ export interface ReviewTemplate {
   name_sv: string
   debit_account?: string
   credit_account?: string
+  /** AB-specific account overrides (static catalog templates carry these;
+   *  the booking engine substitutes them for aktiebolag). */
+  debit_account_ab?: string
+  credit_account_ab?: string
   vat_treatment?: VatTreatment | null
   vat_rate?: number
   special_rules_sv?: string
@@ -69,4 +73,32 @@ export function resolveQuickReviewDefaults(
     : (category ? (getDefaultVatTreatmentForCategory(category) ?? 'none') : 'none')
 
   return { account, vat }
+}
+
+/**
+ * Resolve the VAT treatment the review dialog should put on the wire.
+ *
+ * 'none' is a UI-only sentinel with two meanings that must not be conflated:
+ *
+ *  - As the SEEDED default (exempt categories like bank fees, or a template
+ *    without a treatment): send nothing and let the server derive, exactly as
+ *    before. The derivation yields no VAT line for those categories, and
+ *    keeping the wire empty preserves byte-identical bookings for the common
+ *    untouched case.
+ *  - As a DEVIATION (the user explicitly picked "Ingen moms" on a category
+ *    whose default carries VAT, or the dialog auto-set 'none' for a class-2
+ *    account override): send 'exempt'. The old collapse to undefined made the
+ *    server re-derive the default, silently booking 25% moms against an
+ *    explicit no-VAT choice, while the preview showed no VAT line. An explicit
+ *    'exempt' books no VAT line and records the classification the
+ *    momsdeklaration should see (see buildMappingResultFromCategory's note);
+ *    for income it also lands revenue on 3004 instead of a rate-bearing
+ *    account.
+ */
+export function resolveExplicitVat(
+  selected: VatTreatment | 'none',
+  seededDefault: VatTreatment | 'none',
+): VatTreatment | undefined {
+  if (selected !== 'none') return selected
+  return seededDefault === 'none' ? undefined : 'exempt'
 }

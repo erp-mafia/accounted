@@ -1,10 +1,18 @@
-import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { formatRedovisare } from '@/lib/skatteverket/format'
+import { computeDedupKey, contentSignature } from '@/lib/skatteverket/skattekonto-dedup'
+import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
+import { refreshSkattekontoProposals } from './skattekonto-proposals'
+import { getSkattekontoReconciliationStatus } from '@/lib/reconciliation/skattekonto-reconciliation'
+import {
+  SKATTEKONTO_RECONCILIATION_LATEST_KEY,
+  type SkattekontoReconciliationLatest,
+} from '@/lib/reconciliation/skattekonto-latest'
 import { getSaldo, getTransaktioner } from './skattekonto-client'
 import { SkatteverketAuthError, type SkvAuth } from './api-client'
 import type {
@@ -19,12 +27,46 @@ const log = createLogger('skattekonto-sync')
 
 const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
 const LAST_SYNCED_AT_KEY = 'skattekonto_last_synced_at'
+const SKIPPED_ROWS_KEY = 'skattekonto_skipped_rows'
+
+/**
+ * Cap the retained skipped-row trace: it mirrors the CURRENT sync response
+ * (overwritten every run), so the cap only guards against a pathological
+ * payload, not against growth over time.
+ */
+const MAX_SKIPPED_ROWS_RETAINED = 50
+
+/** SKV's default lookback for tidigare transaktioner when no datumFrom is sent. */
+const SKV_DEFAULT_WINDOW_DAYS = 555
+
+function isoDateDaysAgo(days: number): string {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * Clamp the bookkeeping-start lower bound to SKV's own window.
+ *
+ * Sending a datumFrom OLDER than the 555-day default would silently widen
+ * the fetch past what an unbounded call returns, and anything older than
+ * ~915 days is rejected outright (felkod 2). In both cases omitting the
+ * parameter is identical to what we actually want (the default window), so
+ * a bound is only sent when it is strictly inside the default window.
+ */
+function clampDatumFrom(earliestPeriodStart: string | null): string | undefined {
+  if (!earliestPeriodStart) return undefined
+  const defaultFrom = isoDateDaysAgo(SKV_DEFAULT_WINDOW_DAYS)
+  return earliestPeriodStart > defaultFrom ? earliestPeriodStart : undefined
+}
 
 export interface SkattekontoSyncResult {
   /** Number of new or status-promoted booked rows */
   booked: number
   /** Number of new or updated upcoming rows */
   upcoming: number
+  /** Rows dropped because SKV omitted a field the table requires */
+  skipped: number
   /** Saldo at end of sync (mirrors snapshot) */
   saldoSkatteverket: number
   saldoKronofogden: number
@@ -33,28 +75,84 @@ export interface SkattekontoSyncResult {
 }
 
 /**
- * Compute the dedup key for a transaction.
- *
- * - When `transaktionsidentitet` is present (always on tidigare, sometimes
- *   on kommande), use it directly. It's stable across syncs.
- * - Otherwise compute a sha256 hex over (date|amount|text): stable enough
- *   for kommande, which graduate to tidigare with the same content.
- *
- * The point of this function is reproducibility: the same logical
- * transaction must always produce the same dedup_key.
+ * A transaktioner row is usable only when it can satisfy the table's NOT NULL
+ * columns (transaktionsdatum, transaktionstext, belopp_skatteverket). SKV has
+ * been observed returning rows without beloppSkatteverket despite the spec
+ * typing it as required; a single such row used to fail the whole batch
+ * upsert (23502) and with it every sync for the company, permanently.
+ * Skipping is deliberate: coalescing to 0 kr would make the row renderable,
+ * matchable and bookable with an invented amount. A skipped row returns on a
+ * later sync if SKV completes it.
  */
-export function computeDedupKey(tx: {
-  transaktionsidentitet?: number | null
-  transaktionsdatum: string
-  beloppSkatteverket: number
-  transaktionstext: string
-}): string {
-  if (tx.transaktionsidentitet != null) {
-    return `id:${tx.transaktionsidentitet}`
+type IncomingTransaction =
+  | SkatteverketBookedTransaction
+  | SkatteverketUpcomingTransaction
+
+function missingRequiredFields(tx: IncomingTransaction): string[] {
+  const missing: string[] = []
+  if (!(typeof tx.transaktionsdatum === 'string' && tx.transaktionsdatum.length > 0)) {
+    missing.push('transaktionsdatum')
   }
-  const material = `${tx.transaktionsdatum}|${tx.beloppSkatteverket}|${tx.transaktionstext}`
-  return `h:${crypto.createHash('sha256').update(material).digest('hex')}`
+  if (!(typeof tx.transaktionstext === 'string' && tx.transaktionstext.length > 0)) {
+    missing.push('transaktionstext')
+  }
+  if (!(typeof tx.beloppSkatteverket === 'number' && Number.isFinite(tx.beloppSkatteverket))) {
+    missing.push('beloppSkatteverket')
+  }
+  return missing
 }
+
+function isUsableTransaction(tx: IncomingTransaction): boolean {
+  return missingRequiredFields(tx).length === 0
+}
+
+/**
+ * Durable, company-scoped trace of the rows the sync could not store, kept in
+ * extension_data and overwritten on every sync (an empty rows list means the
+ * latest response had none). The raw payload lives HERE, in the tenant's own
+ * storage, so the omission stays reconcilable and re-processable (BFL 5 kap
+ * fullständighet, BFNAR 2013:2 kap 8 behandlingshistorik); the application
+ * log deliberately carries only minimized descriptors without free text or
+ * amounts (GDPR data minimization: an enskild firma's skattekonto is the
+ * owner's personal tax account).
+ */
+export interface SkattekontoSkippedRowEntry {
+  status: 'booked' | 'upcoming'
+  missing: string[]
+  row: IncomingTransaction
+  firstSeenAt: string
+  lastSeenAt: string
+}
+
+export interface SkattekontoSkippedRowsRecord {
+  updatedAt: string
+  /**
+   * True when a pathological payload exceeded MAX_SKIPPED_ROWS_RETAINED and
+   * entries had to be dropped from this trace (never from the skipped count).
+   */
+  truncated?: boolean
+  rows: SkattekontoSkippedRowEntry[]
+}
+
+/**
+ * Identity for a skipped row inside the trace: SKV's stable id when present,
+ * otherwise the raw material an id-less row can offer. Only used to merge
+ * trace entries across syncs; never fed to the table's dedup_key.
+ */
+function skippedRowKey(status: 'booked' | 'upcoming', row: IncomingTransaction): string {
+  if (row.transaktionsidentitet != null) return `id:${row.transaktionsidentitet}`
+  return `raw:${status}:${JSON.stringify([
+    row.transaktionsdatum ?? null,
+    row.transaktionstext ?? null,
+    'forfallodatum' in row ? (row.forfallodatum ?? null) : null,
+  ])}`
+}
+
+// Dedup key computation moved to core (lib/skatteverket/skattekonto-dedup):
+// the skattekontoutdrag file importer is a second producer of this table and
+// must compute byte-identical keys. Re-exported so existing extension-side
+// imports keep working.
+export { computeDedupKey }
 
 /**
  * Resolve the org/personnummer to send to Skatteverket as `omfragad`.
@@ -81,10 +179,17 @@ async function resolveOmfragad(
 /**
  * Build the row to insert/upsert into skattekonto_transactions.
  */
-function bookedToRow(
-  companyId: string,
-  tx: SkatteverketBookedTransaction,
-): Omit<StoredSkattekontoTransaction, 'id' | 'imported_at' | 'updated_at' | 'journal_entry_id'> {
+// file_import_id is excluded from the upsert payload on purpose: when the
+// sync takes over a file-imported row (see below) the provenance link back
+// to the uploaded file should survive the conflict-update. is_ignored is
+// likewise excluded: it is a user decision, and a nightly sync must never
+// silently un-ignore a row via the conflict-update.
+type SyncRow = Omit<
+  StoredSkattekontoTransaction,
+  'id' | 'imported_at' | 'updated_at' | 'journal_entry_id' | 'file_import_id' | 'is_ignored'
+>
+
+function bookedToRow(companyId: string, tx: SkatteverketBookedTransaction): SyncRow {
   return {
     company_id: companyId,
     transaktionsidentitet: tx.transaktionsidentitet,
@@ -96,13 +201,11 @@ function bookedToRow(
     belopp_skatteverket: tx.beloppSkatteverket,
     belopp_kronofogden: tx.beloppKronofogden,
     status: 'booked',
+    source: 'api',
   }
 }
 
-function upcomingToRow(
-  companyId: string,
-  tx: SkatteverketUpcomingTransaction,
-): Omit<StoredSkattekontoTransaction, 'id' | 'imported_at' | 'updated_at' | 'journal_entry_id'> {
+function upcomingToRow(companyId: string, tx: SkatteverketUpcomingTransaction): SyncRow {
   return {
     company_id: companyId,
     transaktionsidentitet: tx.transaktionsidentitet ?? null,
@@ -114,6 +217,7 @@ function upcomingToRow(
     belopp_skatteverket: tx.beloppSkatteverket,
     belopp_kronofogden: tx.beloppKronofogden,
     status: 'upcoming',
+    source: 'api',
   }
 }
 
@@ -133,19 +237,35 @@ function upcomingToRow(
  */
 export async function syncSkattekonto(
   ctx: ExtensionContext,
-  // Defaults to the ctx user's personal token: the interactive manual-sync
-  // route keeps its exact pre-hybrid behavior. The cron passes system auth
-  // for companies with a verified lasombud grant.
-  auth: SkvAuth = { mode: 'user', supabase: ctx.supabase, userId: ctx.userId },
+  // Defaults to the ctx user's personal token (the post-connect refresh, where
+  // the ctx user just consented). The manual-sync route and the cron pass
+  // resolved auth: system credentials for companies with a verified lasombud
+  // grant, otherwise the token of whichever member connected the company.
+  auth: SkvAuth = { mode: 'user', supabase: ctx.supabase, userId: ctx.userId, companyId: ctx.companyId },
 ): Promise<SkattekontoSyncResult> {
   const omfragad = await resolveOmfragad(ctx.supabase, ctx.companyId)
+
+  // Lower-bound the transaction fetch at the company's bookkeeping start.
+  // Without datumFrom, SKV defaults to ~555 days back, which for an enskild
+  // firma (whose skattekonto is the owner's PERSONAL account) imports private
+  // pre-company rows that can never be booked (no fiscal period covers them).
+  // Applied uniformly to EF and AB, but clamped to SKV's window (see
+  // clampDatumFrom): a company whose bookkeeping started more than 555 days
+  // ago gets no datumFrom at all, because sending one would either widen the
+  // window past the default or (past ~915 days) fail the whole sync with
+  // felkod 2. No fiscal period yet (brand-new company) -> no bound either.
+  const earliestPeriodStart = await getEarliestFiscalPeriodStart(
+    ctx.supabase,
+    ctx.companyId,
+  )
+  const datumFrom = clampDatumFrom(earliestPeriodStart)
 
   let saldo: SkatteverketSaldoResponse
   let transaktioner: Awaited<ReturnType<typeof getTransaktioner>>
   try {
     ;[saldo, transaktioner] = await Promise.all([
       getSaldo(auth, omfragad),
-      getTransaktioner(auth, omfragad),
+      getTransaktioner(auth, omfragad, datumFrom),
     ])
   } catch (err) {
     if (err instanceof SkatteverketAuthError) {
@@ -154,11 +274,14 @@ export async function syncSkattekonto(
         err.code === 'SESSION_EXPIRED' ||
         err.code === 'TOKEN_CORRUPTED'
       ) {
+        // Notify the token OWNER, not whoever triggered the sync: only the
+        // owner can redo the BankID consent, and the notification handler
+        // keys its dedup on the owner's token row.
         await eventBus.emit({
           type: 'skattekonto.connection.expired',
           payload: {
             reason: err.code,
-            userId: ctx.userId,
+            userId: auth.mode === 'user' ? auth.userId : ctx.userId,
             companyId: ctx.companyId,
           },
         })
@@ -172,12 +295,73 @@ export async function syncSkattekonto(
   )
   const previousBalance = previousSnapshot?.saldo.saldoSkatteverket ?? null
 
-  const bookedRows = transaktioner.tidigareTransaktioner.map(tx =>
-    bookedToRow(ctx.companyId, tx),
+  const tidigare = transaktioner.tidigareTransaktioner.filter(isUsableTransaction)
+  const kommande = transaktioner.kommandeTransaktioner.filter(isUsableTransaction)
+  const currentSkipped = [
+    ...transaktioner.tidigareTransaktioner
+      .filter(tx => !isUsableTransaction(tx))
+      .map(row => ({ status: 'booked' as const, missing: missingRequiredFields(row), row })),
+    ...transaktioner.kommandeTransaktioner
+      .filter(tx => !isUsableTransaction(tx))
+      .map(row => ({ status: 'upcoming' as const, missing: missingRequiredFields(row), row })),
+  ]
+  // The count reflects THIS sync's payload in full, independent of the
+  // trace cap below.
+  const skipped = currentSkipped.length
+
+  // Merge with the previously retained trace instead of overwriting it: a
+  // skipped row that ages out of SKV's ~555-day window would otherwise
+  // vanish from every later payload and take its only record with it
+  // (BFNAR 2013:2 kap 8 behandlingshistorik). An entry leaves the trace only
+  // when its transaktionsidentitet shows up among the valid rows: the data
+  // then lives in skattekonto_transactions itself, which is the better
+  // record.
+  const previousTrace = await ctx.settings.get<SkattekontoSkippedRowsRecord>(SKIPPED_ROWS_KEY)
+  const now = new Date().toISOString()
+  const byKey = new Map<string, SkattekontoSkippedRowEntry>()
+  for (const entry of previousTrace?.rows ?? []) {
+    byKey.set(skippedRowKey(entry.status, entry.row), entry)
+  }
+  for (const cur of currentSkipped) {
+    const key = skippedRowKey(cur.status, cur.row)
+    const prior = byKey.get(key)
+    byKey.set(key, {
+      ...cur,
+      firstSeenAt: prior?.firstSeenAt ?? now,
+      lastSeenAt: now,
+    })
+  }
+  const resolvedIds = new Set(
+    [...tidigare, ...kommande]
+      .map(tx => tx.transaktionsidentitet)
+      .filter((id): id is number => id != null),
   )
-  const upcomingRows = transaktioner.kommandeTransaktioner.map(tx =>
-    upcomingToRow(ctx.companyId, tx),
+  const mergedEntries = [...byKey.values()].filter(
+    e => e.row.transaktionsidentitet == null || !resolvedIds.has(e.row.transaktionsidentitet),
   )
+  const skippedRecord: SkattekontoSkippedRowsRecord = {
+    updatedAt: now,
+    truncated: mergedEntries.length > MAX_SKIPPED_ROWS_RETAINED || undefined,
+    rows: mergedEntries.slice(0, MAX_SKIPPED_ROWS_RETAINED),
+  }
+  await ctx.settings.set(SKIPPED_ROWS_KEY, skippedRecord)
+  if (skipped > 0) {
+    log.warn('skipped transaktioner rows missing required fields', {
+      companyId: ctx.companyId,
+      skipped,
+      traceTruncated: skippedRecord.truncated === true,
+      rows: skippedRecord.rows.map(r => ({
+        status: r.status,
+        missing: r.missing,
+        transaktionsidentitet: r.row.transaktionsidentitet ?? null,
+        transaktionsdatum:
+          typeof r.row.transaktionsdatum === 'string' ? r.row.transaktionsdatum : null,
+      })),
+    })
+  }
+
+  const bookedRows = tidigare.map(tx => bookedToRow(ctx.companyId, tx))
+  const upcomingRows = kommande.map(tx => upcomingToRow(ctx.companyId, tx))
 
   // Upsert in two steps to keep the conflict target consistent. We rely on
   // the (company_id, dedup_key) unique constraint defined in the migration.
@@ -202,10 +386,117 @@ export async function syncSkattekonto(
     })
   }
 
-  if (allRows.length > 0) {
+  // Take over hash-keyed rows for transactions the API now identifies.
+  //
+  // The skattekontoutdrag file importer writes booked rows with `h:` keys
+  // (statement exports carry no transaktionsidentitet); the API keys the
+  // same logical transactions `id:`. Without this step, connecting the API
+  // after a file import would duplicate every imported row. Pair each
+  // incoming id-keyed booked row that is NOT yet in the table against an
+  // unconsumed existing `h:` row with equal content and rewrite that row's
+  // identity in place: the row (and any journal_entry_id link on it)
+  // survives, and the upsert below then resolves onto the new key.
+  const newIdBooked = bookedRows.filter(
+    r => r.transaktionsidentitet != null && !existingMap.has(r.dedup_key),
+  )
+  if (newIdBooked.length > 0) {
+    const dates = newIdBooked.map(r => r.transaktionsdatum).sort()
+    // Paged: PostgREST silently caps unpaged reads at 1000 rows, and a file
+    // import covering several years can leave more hash rows than that in
+    // the window; unadopted candidates would duplicate on the upsert below.
+    const hashRows = await fetchAllRows<{
+      id: string
+      dedup_key: string
+      status: string
+      transaktionsdatum: string
+      transaktionstext: string
+      belopp_skatteverket: number
+    }>(({ from, to }) =>
+      ctx.supabase
+        .from('skattekonto_transactions')
+        .select('id, dedup_key, status, transaktionsdatum, transaktionstext, belopp_skatteverket')
+        .eq('company_id', ctx.companyId)
+        .like('dedup_key', 'h:%')
+        .gte('transaktionsdatum', dates[0])
+        .lte('transaktionsdatum', dates[dates.length - 1])
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+
+    if (hashRows.length > 0) {
+      // Multiset pairing by content signature; booked (imported) rows are
+      // preferred over stale upcoming rows with identical content.
+      const bySig = new Map<string, { id: string; status: string }[]>()
+      for (const row of hashRows) {
+        const sig = contentSignature(
+          row.transaktionsdatum,
+          row.belopp_skatteverket,
+          row.transaktionstext,
+        )
+        const queue = bySig.get(sig)
+        if (queue) queue.push({ id: row.id, status: row.status })
+        else bySig.set(sig, [{ id: row.id, status: row.status }])
+      }
+      // A proper two-argument comparator: the earlier `sort(a => ...)` form
+      // is an inconsistent relation and could leave an upcoming row at the
+      // head of a 3+ candidate queue, adopting the wrong row.
+      for (const queue of bySig.values()) {
+        queue.sort((a, b) =>
+          a.status === b.status ? 0 : a.status === 'booked' ? -1 : 1,
+        )
+      }
+
+      let takenOver = 0
+      for (const incoming of newIdBooked) {
+        const sig = contentSignature(
+          incoming.transaktionsdatum,
+          incoming.belopp_skatteverket,
+          incoming.transaktionstext,
+        )
+        const queue = bySig.get(sig)
+        const match = queue?.shift()
+        if (!match) continue
+        const { error } = await ctx.supabase
+          .from('skattekonto_transactions')
+          .update({
+            dedup_key: incoming.dedup_key,
+            transaktionsidentitet: incoming.transaktionsidentitet,
+            source: 'api',
+          })
+          .eq('id', match.id)
+          .eq('company_id', ctx.companyId)
+        if (error) {
+          // Non-fatal: the upsert below will then insert a fresh row, which
+          // is the pre-takeover behavior (a duplicate, but never data loss).
+          log.warn('hash-row takeover failed', {
+            companyId: ctx.companyId,
+            rowId: match.id,
+            message: error.message,
+          })
+          continue
+        }
+        existingMap.set(incoming.dedup_key, { status: 'booked' })
+        takenOver++
+      }
+      if (takenOver > 0) {
+        log.info('took over file-imported rows', { companyId: ctx.companyId, takenOver })
+      }
+    }
+  }
+
+  // A booked row must never be flipped back to upcoming. The API's booked
+  // rows always carry transaktionsidentitet, but a file-imported booked row
+  // hash-keys on the same material an id-less kommande row would, so an
+  // upcoming row colliding with an existing booked row is dropped rather
+  // than upserted.
+  const safeRows = allRows.filter(
+    r => r.status !== 'upcoming' || existingMap.get(r.dedup_key)?.status !== 'booked',
+  )
+
+  if (safeRows.length > 0) {
     const { error } = await ctx.supabase
       .from('skattekonto_transactions')
-      .upsert(allRows, {
+      .upsert(safeRows, {
         onConflict: 'company_id,dedup_key',
         // Don't return rows: we already know what we wrote.
         ignoreDuplicates: false,
@@ -228,6 +519,14 @@ export async function syncSkattekonto(
     saldo.saldoSkatteverket,
   )
 
+  // Exact-twin proposals for the open rows (migration 20260823120000): the
+  // reconciliation page, the worklist and agents read them from the row
+  // instead of recomputing per request. Best-effort inside (never throws).
+  const proposals = await refreshSkattekontoProposals(ctx.supabase, ctx.companyId)
+  if (proposals.proposed > 0 || proposals.cleared > 0) {
+    log.info('proposals refreshed', { companyId: ctx.companyId, ...proposals })
+  }
+
   // Cache balance snapshot.
   const snapshot: SkattekontoBalanceSnapshot = {
     saldo,
@@ -235,6 +534,33 @@ export async function syncSkattekonto(
   }
   await ctx.settings.set(BALANCE_SNAPSHOT_KEY, snapshot)
   await ctx.settings.set(LAST_SYNCED_AT_KEY, new Date().toISOString())
+
+  // Persist the reconciliation summary so the Hem notice and the attention
+  // resource can read "skattekontot stämmer inte med bokföringen" cheaply
+  // instead of recomputing the bridge on every render. Best effort.
+  try {
+    const status = await getSkattekontoReconciliationStatus(ctx.supabase, ctx.companyId)
+    if (status) {
+      const latest: SkattekontoReconciliationLatest = {
+        as_of: status.as_of,
+        computed_at: new Date().toISOString(),
+        external_balance: status.external_balance,
+        ledger_balance: status.ledger_balance,
+        unexplained_difference: status.unexplained_difference,
+        counts: {
+          proposed: status.counts.proposed,
+          unmatched_external: status.counts.unmatched_external,
+          unmatched_ledger: status.counts.unmatched_ledger,
+        },
+      }
+      await ctx.settings.set(SKATTEKONTO_RECONCILIATION_LATEST_KEY, latest)
+    }
+  } catch (err) {
+    log.warn('reconciliation summary not persisted', {
+      companyId: ctx.companyId,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
 
   // Emit events.
   await ctx.emit({
@@ -266,7 +592,7 @@ export async function syncSkattekonto(
   }
 
   // First-appearance upcoming transactions.
-  for (const tx of transaktioner.kommandeTransaktioner) {
+  for (const tx of kommande) {
     const key = computeDedupKey(tx)
     if (existingMap.has(key)) continue
     await ctx.emit({
@@ -285,6 +611,7 @@ export async function syncSkattekonto(
   return {
     booked: bookedRows.length,
     upcoming: upcomingRows.length,
+    skipped,
     saldoSkatteverket: saldo.saldoSkatteverket,
     saldoKronofogden: saldo.saldoKronofogden,
     syncedAt: new Date().toISOString(),
@@ -293,3 +620,4 @@ export async function syncSkattekonto(
 
 export const SKATTEKONTO_BALANCE_SNAPSHOT_KEY = BALANCE_SNAPSHOT_KEY
 export const SKATTEKONTO_LAST_SYNCED_AT_KEY = LAST_SYNCED_AT_KEY
+export const SKATTEKONTO_SKIPPED_ROWS_KEY = SKIPPED_ROWS_KEY

@@ -4,6 +4,8 @@ import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
 export interface SubmitFeedbackInput {
   message: string
   subject?: string
+  /** Screenshots or PDFs relayed on the support email only. */
+  files?: File[]
 }
 
 /**
@@ -27,15 +29,34 @@ export interface SubmitFeedbackResult {
   error?: string
 }
 
-async function submitViaEmail(
-  { message, subject }: SubmitFeedbackInput
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const res = await fetch('/api/support/contact', {
+/**
+ * JSON when there is nothing to attach, multipart when there is. The JSON path
+ * is kept byte-identical rather than always sending multipart: it is the shape
+ * every existing message uses, and a plain body is the one that still works if
+ * multipart parsing is ever the thing that broke.
+ */
+function buildEmailRequest({ message, subject, files }: SubmitFeedbackInput): RequestInit {
+  if (!files?.length) {
+    return {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject, message }),
-    })
+    }
+  }
+
+  const form = new FormData()
+  if (subject) form.append('subject', subject)
+  form.append('message', message)
+  for (const file of files) form.append('files', file, file.name)
+  // No Content-Type header: the browser has to set the multipart boundary.
+  return { method: 'POST', body: form }
+}
+
+async function submitViaEmail(
+  input: SubmitFeedbackInput
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch('/api/support/contact', buildEmailRequest(input))
     if (!res.ok) {
       const data = await res.json().catch(() => ({}))
       return { ok: false, error: data.error || 'Kunde inte skicka meddelandet' }

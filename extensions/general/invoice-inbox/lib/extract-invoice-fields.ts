@@ -1,45 +1,46 @@
 // AI-driven invoice/receipt field extraction.
 //
-// Sends the uploaded document directly to Claude Sonnet 4.6 via AWS
-// Bedrock and asks for a structured InvoiceExtractionResult JSON. Sonnet
-// reads PDFs, images, and scans natively, which the previous regex
-// extractor couldn't: that's why English receipts (Anthropic, AWS,
-// Stripe, …) and image-only PDFs came back empty.
+// Sends the uploaded document to the configured AI backend through the
+// job-shaped service in lib/ai (Claude on Bedrock or the direct API on
+// hosted; any OpenAI-compatible endpoint, e.g. a Swedish inference provider,
+// on a sovereign self-host) and asks for a structured InvoiceExtractionResult
+// JSON. Vision models read PDFs, images and scans, which the previous regex
+// extractor couldn't: that's why English receipts (Anthropic, AWS, Stripe, …)
+// and image-only PDFs came back empty.
 //
 // The AI output is validated against a Zod schema; anything that doesn't
 // parse falls back to an empty result so the inbox row still lands and
 // the user can fill the fields in manually.
 
 import { createHash } from 'node:crypto'
-import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
 import { z } from 'zod'
 import type { InvoiceExtractionResult } from '@/types'
+import { getAiService, readAiConfig, extractJsonObject } from '@/lib/ai'
+import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
+
+// Re-exported for callers and tests that import it from here.
+export { extractJsonObject }
 
 const log = createLogger('invoice-inbox-extract')
 
-// Both overridable via env vars so ops can swap models / raise token caps
-// without a code deploy. Defaults match what's expected to be set in
-// production (eu.anthropic.claude-sonnet-5 in eu-north-1, 8192 tokens:
-// enough headroom for invoices with 20+ line items).
-const MODEL = process.env.BEDROCK_MODEL_ID || 'eu.anthropic.claude-sonnet-5'
-const MAX_TOKENS = (() => {
-  const parsed = Number(process.env.BEDROCK_MAX_TOKENS)
-  // Use the env value only if it's a positive number: `||` would also
-  // fall back on a deliberate `0`, masking what is really an invalid
-  // configuration rather than the intent to disable.
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8192
-})()
+// Output cap: AI_EXTRACTION_MAX_TOKENS (legacy BEDROCK_MAX_TOKENS) or 8192,
+// enough headroom for invoices with 20+ line items. The model id per tier is
+// resolved by lib/ai/config.ts (AI_EXTRACTION_MODEL, legacy BEDROCK_MODEL_ID,
+// AI_MODEL, then the Claude default on the Anthropic family).
 
-// Bedrock supports these document/image media types directly. HEIC/HEIF
-// are not on the list, so we skip AI for those: the inbox row still
-// lands and the user can edit fields manually or replace the file.
+// Media types the extraction accepts. HEIC/HEIF are not on the list, so we
+// skip AI for those: the inbox row still lands and the user can edit fields
+// manually or replace the file. text/html (mail-body invoices from the
+// inbound pipeline) is not sent as a document block: it is converted to plain
+// text via htmlToText() first, which also makes it work on text-only models.
 const SUPPORTED_MEDIA_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
   'image/png',
   'image/webp',
   'image/gif',
+  'text/html',
 ])
 
 export interface ExtractionInput {
@@ -48,13 +49,60 @@ export interface ExtractionInput {
   fileName: string
 }
 
+export type ExtractionSkipped = ExtractionSkipReason | 'unsupported_media'
+
 export interface ExtractionOutput {
   data: InvoiceExtractionResult
-  /** The raw JSON string returned by the model, or null on failure. */
+  /** The raw JSON string returned by the model, or null on failure/skip. */
   rawText: string | null
+  /** Provider-form id of the model that answered, when a call was made. */
+  model?: string | null
+  /** Set when no model call was made at all (and why). */
+  skipped?: ExtractionSkipped | null
 }
 
+// Classification fields are nullable AND .catch(null): a hallucinated enum
+// value must degrade to "unknown", never fail the whole document parse. The
+// amount/date fields keep strict parsing on purpose: a malformed amount
+// SHOULD reject the output rather than store garbage.
+const DocumentKind = z
+  .enum(['receipt', 'supplier_invoice', 'government_letter', 'other'])
+  .nullable()
+  .catch(null)
+const PaymentMethod = z
+  .enum(['card', 'swish', 'cash', 'invoice', 'other'])
+  .nullable()
+  .catch(null)
+const MerchantCategory = z
+  .enum(['restaurant', 'cafe', 'taxi', 'parking', 'fuel', 'grocery', 'hotel', 'other'])
+  .nullable()
+  .catch(null)
+const Legibility = z.enum(['good', 'partial', 'unreadable']).nullable().catch(null)
+
 export const ExtractionSchema = z.object({
+  // All optional: raw model outputs cached before these fields existed must
+  // still validate (same convention as servicePeriodStart/End below). These
+  // route UI emphasis and clarifying questions only; they never book anything.
+  documentKind: DocumentKind.optional(),
+  merchantCategory: MerchantCategory.optional(),
+  legibility: Legibility.optional(),
+  purchaseTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .nullable()
+    .catch(null)
+    .optional(),
+  payment: z
+    .object({
+      method: PaymentMethod,
+      // Length + digits-only, deliberately not the shared four-digit
+      // invariant from @/lib/invariants: this is the tail of a masked card
+      // number, not a BAS account and not a fiscal year.
+      cardLast4: z.string().length(4).regex(/^\d+$/).nullable().catch(null),
+    })
+    .nullable()
+    .catch(null)
+    .optional(),
   supplier: z.object({
     name: z.string().nullable(),
     orgNumber: z.string().nullable(),
@@ -100,6 +148,9 @@ export const ExtractionSchema = z.object({
     subtotal: z.number().nullable(),
     vatAmount: z.number().nullable(),
     total: z.number().nullable(),
+    // Öresavrundning line on Swedish receipts (can be negative). Optional so
+    // cached raw outputs from before the field still validate.
+    roundingAmount: z.number().nullable().catch(null).optional(),
   }),
   vatBreakdown: z.array(
     z.object({
@@ -131,6 +182,11 @@ const SYSTEM_PROMPT = `You extract invoice and receipt fields from a single docu
 Return ONLY a single JSON object that matches this schema exactly. No prose, no markdown fences, no commentary.
 
 {
+  "documentKind": "receipt" | "supplier_invoice" | "government_letter" | "other" | null,
+  "merchantCategory": "restaurant" | "cafe" | "taxi" | "parking" | "fuel" | "grocery" | "hotel" | "other" | null,
+  "legibility": "good" | "partial" | "unreadable",
+  "purchaseTime": string | null,   // "HH:MM" 24h, receipts only
+  "payment": { "method": "card" | "swish" | "cash" | "invoice" | "other" | null, "cardLast4": string | null } | null,
   "supplier": {
     "name": string | null,
     "orgNumber": string | null,    // 10 digits, no hyphen, only when issued by a Swedish entity
@@ -161,7 +217,8 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
   "totals": {
     "subtotal": number | null,    // amount excluding VAT
     "vatAmount": number | null,   // total VAT
-    "total": number | null        // amount including VAT: what the buyer pays
+    "total": number | null,       // amount including VAT: what the buyer actually pays
+    "roundingAmount": number | null  // öresavrundning line, may be negative, e.g. -0.37
   },
   "vatBreakdown": [
     { "rate": number, "base": number, "amount": number }   // rate as percent integer, e.g. 25 for 25%
@@ -172,6 +229,12 @@ VAT rate convention: BOTH lineItems[].vatRate AND vatBreakdown[].rate use the sa
 
 Rules:
 - Output JSON only. The first character must be '{' and the last must be '}'.
+- documentKind: "receipt" = point-of-sale proof of a COMPLETED payment (kassakvitto, kortkvitto, taxi/parking slip, webshop order confirmation marked paid). "supplier_invoice" = a request for payment (has due date, OCR/payment reference, bankgiro, "Att betala senast"). "government_letter" = correspondence from a myndighet (Skatteverket, Bolagsverket, Försäkringskassan...). "other" = contracts, statements, reports. null only when truly indeterminate.
+- merchantCategory: judge from the merchant name and line items (a receipt from "Prinsen" listing food and wine is "restaurant" even without the word). Use "other" when unsure. null for non-receipts.
+- legibility: "good" = all key amounts and the merchant are readable. "partial" = some key fields are cut off, blurry, or unreadable. "unreadable" = the document is mostly illegible (too blurry/dark/small). Judge the IMAGE quality, not whether fields exist on the document.
+- payment: only for documents that show how payment was made. "card" for kort/VISA/Mastercard; cardLast4 only when a masked card number like ****1234 is printed. "invoice" means the document says it will be billed separately.
+- purchaseTime: the HH:MM time printed on a receipt. null when absent.
+- Öresavrundning: Swedish receipts often show an "Avrundning"/"Öresavrundning" line. "total" is ALWAYS the amount actually paid AFTER rounding; put the rounding line in totals.roundingAmount (negative when rounded down). When present: subtotal + vatAmount + roundingAmount = total.
 - Currency: detect from the document (symbol $/€/kr or explicit code). Use the ISO 4217 code. Do NOT default to SEK if the document clearly shows another currency.
 - "total" is the amount the buyer must pay (look for "Att betala", "Total", "Amount paid", "Amount due", "Balance"). Prefer this over Subtotal.
 - Dates: convert any format to YYYY-MM-DD. If the document only shows month/year, leave null.
@@ -186,6 +249,11 @@ Rules:
 
 export function emptyResult(): InvoiceExtractionResult {
   return {
+    documentKind: null,
+    merchantCategory: null,
+    legibility: null,
+    purchaseTime: null,
+    payment: null,
     supplier: {
       name: null,
       orgNumber: null,
@@ -204,108 +272,293 @@ export function emptyResult(): InvoiceExtractionResult {
       servicePeriodEnd: null,
     },
     lineItems: [],
-    totals: { subtotal: null, vatAmount: null, total: null },
+    totals: { subtotal: null, vatAmount: null, total: null, roundingAmount: null },
     vatBreakdown: [],
     confidence: 0,
   }
 }
 
-function buildContent(input: ExtractionInput) {
-  const base64 = input.buffer.toString('base64')
-  if (input.mimeType === 'application/pdf') {
-    return [
-      {
-        type: 'document' as const,
-        source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: base64 },
-      },
-      { type: 'text' as const, text: 'Extract the fields per the schema. JSON only.' },
-    ]
+// Anthropic rejects images above 5 MB (decoded bytes), and 12 MP phone photos
+// routinely exceed that: before this step they errored out to an empty
+// extraction. Downscaling to ≤2000px JPEG also cuts input tokens on every
+// large image. HEIC/HEIF (iPhone default) is transcoded to JPEG when the
+// local sharp/libvips build can decode it; prebuilt binaries usually cannot
+// (patent licensing), in which case the caller falls through to the
+// unsupported-type path exactly as before.
+const IMAGE_DOWNSCALE_THRESHOLD_BYTES = 4 * 1024 * 1024
+const IMAGE_MAX_DIMENSION = 2000
+
+async function normalizeImageForExtraction(
+  input: ExtractionInput
+): Promise<ExtractionInput> {
+  const isHeic = input.mimeType === 'image/heic' || input.mimeType === 'image/heif'
+  const isLargeSupportedImage =
+    input.mimeType.startsWith('image/') &&
+    SUPPORTED_MEDIA_TYPES.has(input.mimeType) &&
+    input.buffer.byteLength > IMAGE_DOWNSCALE_THRESHOLD_BYTES
+  if (!isHeic && !isLargeSupportedImage) return input
+
+  try {
+    // Lazy import: sharp is a native module and only a fraction of
+    // extractions need it; loading it at module scope would tax every
+    // cold start of the extension route bundle.
+    const sharp = (await import('sharp')).default
+    const converted = await sharp(input.buffer)
+      // Apply the EXIF orientation before it is lost in re-encoding:
+      // phone photos are routinely stored rotated.
+      .rotate()
+      .resize({
+        width: IMAGE_MAX_DIMENSION,
+        height: IMAGE_MAX_DIMENSION,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: 80 })
+      .toBuffer()
+    return { buffer: converted, mimeType: 'image/jpeg', fileName: input.fileName }
+  } catch (err) {
+    // HEIC without libheif lands here → caller hits the unsupported-type
+    // guard, same net behavior as before this step existed. For oversized
+    // JPEG/PNG the original buffer is still worth attempting.
+    log.warn('image normalization failed', {
+      file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
+      mime_type: input.mimeType,
+      byte_length: input.buffer.byteLength,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return input
   }
-  return [
-    {
-      type: 'image' as const,
-      source: {
-        type: 'base64' as const,
-        media_type: input.mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
-        data: base64,
+}
+
+// Cap the text handed to the model. HTML mails can carry hundreds of KB of
+// framework markup; the invoice fields sit in the first fraction of the
+// visible text, and MAX_TOKENS bounds the output side anyway.
+const MAX_EXTRACTION_TEXT_LENGTH = 50_000
+
+/**
+ * Best-effort HTML-to-text for mail-body invoices. Not a sanitiser (the
+ * output is only ever sent to the model as plain text, never rendered):
+ * drops script/style/head blocks and comments, keeps block boundaries as
+ * newlines so amounts and labels stay line-separated, decodes the entities
+ * that occur in practice, and collapses whitespace.
+ */
+export function htmlToText(html: string): string {
+  const withoutBlocks = html
+    .replace(/<(script|style|head|title)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+  const withBreaks = withoutBlocks
+    .replace(/<\/(p|div|tr|li|h[1-6]|table|thead|tbody|section|article|blockquote|pre)\s*>/gi, '\n')
+    .replace(/<(br|hr)\b[^>]*\/?>/gi, '\n')
+  const stripped = withBreaks.replace(/<[^>]+>/g, ' ')
+  const decoded = stripped
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, n: string) => {
+      const code = Number(n)
+      return code > 31 && code <= 0x10ffff ? String.fromCodePoint(code) : ' '
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => {
+      const code = parseInt(n, 16)
+      return code > 31 && code <= 0x10ffff ? String.fromCodePoint(code) : ' '
+    })
+    // &amp; strictly last: decoding it earlier would double-decode
+    // "&amp;lt;" into "<" instead of the literal "&lt;".
+    .replace(/&amp;/gi, '&')
+  return decoded
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\s*\n\s*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, MAX_EXTRACTION_TEXT_LENGTH)
+}
+
+const EXTRACTION_INSTRUCTION = 'Extract the fields per the schema. JSON only.'
+
+/** Map an upload to the service's document input. HTML becomes plain text. */
+function toDocumentInput(input: ExtractionInput): AiDocumentInput {
+  if (input.mimeType === 'text/html') {
+    const text = htmlToText(input.buffer.toString('utf8'))
+    return {
+      kind: 'text',
+      text: `The document is an HTML email invoice, converted to plain text:\n\n${text}`,
+    }
+  }
+  if (input.mimeType === 'application/pdf') {
+    return { kind: 'pdf', data: input.buffer, fileName: input.fileName }
+  }
+  return { kind: 'image', data: input.buffer, mediaType: input.mimeType as AiImageMediaType }
+}
+
+// Hand-maintained JSON-schema mirror of ExtractionSchema, used ONLY when the
+// operator opts into strict JSON mode on an OpenAI-compatible endpoint
+// (AI_STRICT_JSON=true). Deliberately not auto-converted from the Zod schema:
+// .catch()/.transform() have no JSON-schema equivalent and the conversion
+// would drift silently. Permissive on purpose (types + nullability only):
+// Zod stays the validator, this just keeps the model inside the shape.
+const nullable = (type: string) => ({ type: [type, 'null'] })
+const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    documentKind: nullable('string'),
+    merchantCategory: nullable('string'),
+    legibility: nullable('string'),
+    purchaseTime: nullable('string'),
+    payment: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: { method: nullable('string'), cardLast4: nullable('string') },
+      required: ['method', 'cardLast4'],
+    },
+    supplier: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: nullable('string'),
+        orgNumber: nullable('string'),
+        vatNumber: nullable('string'),
+        address: nullable('string'),
+        bankgiro: nullable('string'),
+        plusgiro: nullable('string'),
+      },
+      required: ['name', 'orgNumber', 'vatNumber', 'address', 'bankgiro', 'plusgiro'],
+    },
+    invoice: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        invoiceNumber: nullable('string'),
+        invoiceDate: nullable('string'),
+        dueDate: nullable('string'),
+        paymentReference: nullable('string'),
+        currency: { type: 'string' },
+        servicePeriodStart: nullable('string'),
+        servicePeriodEnd: nullable('string'),
+      },
+      required: [
+        'invoiceNumber',
+        'invoiceDate',
+        'dueDate',
+        'paymentReference',
+        'currency',
+        'servicePeriodStart',
+        'servicePeriodEnd',
+      ],
+    },
+    lineItems: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          description: { type: 'string' },
+          quantity: { type: 'number' },
+          unitPrice: nullable('number'),
+          lineTotal: { type: 'number' },
+          vatRate: nullable('number'),
+          accountSuggestion: { type: 'null' },
+        },
+        required: ['description', 'quantity', 'unitPrice', 'lineTotal', 'vatRate', 'accountSuggestion'],
       },
     },
-    { type: 'text' as const, text: 'Extract the fields per the schema. JSON only.' },
-  ]
+    totals: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        subtotal: nullable('number'),
+        vatAmount: nullable('number'),
+        total: nullable('number'),
+        roundingAmount: nullable('number'),
+      },
+      required: ['subtotal', 'vatAmount', 'total', 'roundingAmount'],
+    },
+    vatBreakdown: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { rate: { type: 'number' }, base: { type: 'number' }, amount: { type: 'number' } },
+        required: ['rate', 'base', 'amount'],
+      },
+    },
+  },
+  required: [
+    'documentKind',
+    'merchantCategory',
+    'legibility',
+    'purchaseTime',
+    'payment',
+    'supplier',
+    'invoice',
+    'lineItems',
+    'totals',
+    'vatBreakdown',
+  ],
 }
 
 /**
- * Extract invoice fields by sending the document directly to Claude
- * Sonnet 4.6 via AWS Bedrock. Never throws on extraction failure:
- * always returns an InvoiceExtractionResult. Empty fields are null.
+ * Extract invoice fields by sending the document to the configured AI
+ * backend. Never throws on extraction failure: always returns an
+ * InvoiceExtractionResult. Empty fields are null. `skipped` is set when no
+ * model call was made (unsupported file type, AI not configured, no vision
+ * on this backend, PDF rasterizer missing), so callers can tell "nothing to
+ * read" from "read and found nothing".
  */
 export async function extractInvoiceFields(
-  input: ExtractionInput
+  rawInput: ExtractionInput
 ): Promise<ExtractionOutput> {
+  // Transcodes HEIC when possible and downscales oversized images; a no-op
+  // for PDFs and normal-sized supported images.
+  const input = await normalizeImageForExtraction(rawInput)
+
   if (!SUPPORTED_MEDIA_TYPES.has(input.mimeType)) {
-    return { data: emptyResult(), rawText: null }
+    return { data: emptyResult(), rawText: null, skipped: 'unsupported_media' }
   }
 
-  if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-    log.warn('AWS Bedrock credentials missing: returning empty extraction', {
-      file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
-    })
-    return { data: emptyResult(), rawText: null }
-  }
-
-  const client = new AnthropicBedrock({
-    awsRegion: process.env.AWS_REGION || 'eu-north-1',
-    awsAccessKey: process.env.AWS_ACCESS_KEY_ID,
-    awsSecretKey: process.env.AWS_SECRET_ACCESS_KEY,
-  })
+  const fileNameHash = createHash('sha256').update(input.fileName).digest('hex').slice(0, 12)
+  const service = getAiService()
 
   let rawText: string | null = null
+  let model: string | null = null
   try {
-    // SYSTEM_PROMPT is byte-stable per deploy and ~3.5 KB: marking it as
-    // ephemeral lets Bedrock reuse the prompt-cache on rapid sequential
-    // extractions (e.g. a user uploading a stack of receipts within minutes).
-    // Bedrock supports `{ type: 'ephemeral' }` with the default short TTL;
-    // the 1h TTL from the agent-native API plan (item 10) requires the direct
-    // Anthropic API rather than Bedrock and is out of scope here.
-    const resp = await client.messages.create({
-      model: MODEL,
-      max_tokens: MAX_TOKENS,
-      system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-      messages: [{ role: 'user', content: buildContent(input) }],
+    const result = await service.extractFromDocument({
+      document: toDocumentInput(input),
+      system: SYSTEM_PROMPT,
+      instruction: EXTRACTION_INSTRUCTION,
+      maxTokens: readAiConfig().extractionMaxTokens,
+      jsonSchema: EXTRACTION_JSON_SCHEMA,
     })
-
-    rawText = resp.content
-      .flatMap((b) => (b.type === 'text' ? [b.text] : []))
-      .join('')
-      .trim()
+    if (!result.ok) {
+      // Not a failure: the deployment cannot read this document at all.
+      // `ai_unconfigured` is the self-host "no key yet" case the 30 s
+      // upload hang used to hide; the others are honest capability gaps.
+      log.warn('AI extraction skipped', { file_name_hash: fileNameHash, reason: result.skipped })
+      return { data: emptyResult(), rawText: null, skipped: result.skipped }
+    }
+    rawText = result.text
+    model = result.model
 
     // Observability for the prompt-cache hit ratio. The agent-native plan
     // targets cache_read_input_tokens / total_input_tokens ≥ 0.85 in steady
     // state; logging here makes that measurable without a separate dashboard.
-    const usage = resp.usage as
-      | {
-          input_tokens?: number
-          output_tokens?: number
-          cache_creation_input_tokens?: number
-          cache_read_input_tokens?: number
-        }
-      | undefined
-    if (usage) {
-      // Raw fileName can constitute personal data (e.g. "faktura_Sven_Andersson.pdf").
-      // Log a short hash so the operator can correlate without exposing PII
-      // to the log destination (GDPR Art. 5(1)(f)).
-      const fileNameHash = createHash('sha256').update(input.fileName).digest('hex').slice(0, 12)
-      log.info('ai_extraction_usage', {
-        file_name_hash: fileNameHash,
-        mime_type: input.mimeType,
-        input_tokens: usage.input_tokens ?? null,
-        output_tokens: usage.output_tokens ?? null,
-        cache_creation_input_tokens: usage.cache_creation_input_tokens ?? null,
-        cache_read_input_tokens: usage.cache_read_input_tokens ?? null,
-      })
-    }
+    // Raw fileName can constitute personal data (e.g. "faktura_Sven_Andersson.pdf").
+    // Log a short hash so the operator can correlate without exposing PII
+    // to the log destination (GDPR Art. 5(1)(f)).
+    log.info('ai_extraction_usage', {
+      file_name_hash: fileNameHash,
+      mime_type: input.mimeType,
+      model,
+      input_tokens: result.usage.inputTokens,
+      output_tokens: result.usage.outputTokens,
+      cache_creation_input_tokens: result.usage.cacheCreationInputTokens,
+      cache_read_input_tokens: result.usage.cacheReadInputTokens,
+      ...(result.pagesRasterized ? { pages_rasterized: result.pagesRasterized } : {}),
+    })
 
-    const parsed = JSON.parse(rawText)
+    const parsed = JSON.parse(extractJsonObject(rawText))
     const validated = ExtractionSchema.parse(parsed)
 
     return {
@@ -313,14 +566,15 @@ export async function extractInvoiceFields(
       // .transform, so no post-validation coercion is needed.
       data: { ...validated, confidence: 1 },
       rawText,
+      model,
     }
   } catch (err) {
     log.warn('AI extraction failed', {
-      file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
+      file_name_hash: fileNameHash,
       mimeType: input.mimeType,
       error: err instanceof Error ? err.message : String(err),
       hasRawText: rawText != null,
     })
-    return { data: emptyResult(), rawText }
+    return { data: emptyResult(), rawText, model }
   }
 }

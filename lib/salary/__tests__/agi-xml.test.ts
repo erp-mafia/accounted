@@ -137,9 +137,37 @@ describe('generateAGIXml: Huvuduppgift (HU)', () => {
     expect(xml).not.toMatch(/<gem:HU>[\s\S]*<AvdragenSkatt[\s\S]*<\/gem:HU>/)
   })
 
-  it('emits total employer contributions as SummaArbAvgSlf FK487', () => {
+  it('emits total employer contributions as SummaArbAvgSlf FK487 with öre truncated', () => {
     const xml = generateAGIXml(company, employees, totals)
-    expect(xml).toContain('<gem:SummaArbAvgSlf faltkod="487">24076</gem:SummaArbAvgSlf>')
+    // 24 075,50 declares as 24 075: öretal bortfaller (SFF 2011:1261
+    // 22 kap. 1 §), truncation, never rounding. Math.round would declare
+    // 1 kr more than Skatteverket draws from the skattekonto.
+    expect(xml).toContain('<gem:SummaArbAvgSlf faltkod="487">24075</gem:SummaArbAvgSlf>')
+  })
+
+  it('truncates öre on every HU amount, even at ,99', () => {
+    const oreTotals: AGITotals = {
+      ...totals,
+      totalTax: 12268,
+      totalAvgifterAmount: 16073.84,
+      totalSjuklonekostnad: 1234.99,
+    }
+    const xml = generateAGIXml(company, employees, oreTotals)
+    expect(xml).toContain('<gem:SummaSkatteavdr faltkod="497">12268</gem:SummaSkatteavdr>')
+    expect(xml).toContain('<gem:SummaArbAvgSlf faltkod="487">16073</gem:SummaArbAvgSlf>')
+    expect(xml).toContain('<gem:TotalSjuklonekostnad faltkod="499">1234</gem:TotalSjuklonekostnad>')
+  })
+
+  it('does not let IEEE drift under an exact krona lose it in truncation', () => {
+    // 51 158 × 0,3142 = 16 073.843600000001 in floats; a raw Math.trunc of
+    // a value like 16 074 stored as 16 073.999999999 would drop a whole
+    // krona. truncateToWholeKronor rounds to öre first.
+    const driftTotals: AGITotals = {
+      ...totals,
+      totalAvgifterAmount: 16073.999999999998,
+    }
+    const xml = generateAGIXml(company, employees, driftTotals)
+    expect(xml).toContain('<gem:SummaArbAvgSlf faltkod="487">16074</gem:SummaArbAvgSlf>')
   })
 
   it('does NOT emit FK060/061/062: those field codes do not exist in HU', () => {
@@ -240,6 +268,33 @@ describe('generateAGIXml: Individuppgift (IU)', () => {
     const xml = generateAGIXml(specialCompany, employees, totals)
     expect(xml).not.toContain('A&B <Admin>')
     expect(xml).toContain('A&amp;B &lt;Admin&gt;')
+  })
+})
+
+describe('generateAGIXml: F-skatt payee IU (FK131)', () => {
+  // Data layer (generate-declaration.ts) zeroes grossSalary for F-skatt
+  // payees and routes the cash to fSkattPayment: the same payment must
+  // never appear as both FK011 (underlag AG) and FK131 (ej underlag SA).
+  const fSkattEmployee: AGIEmployeeData = {
+    personnummer: 'emp2_encrypted',
+    specificationNumber: 3,
+    grossSalary: 0,
+    taxWithheld: 0,
+    avgifterBasis: 0,
+    fSkattPayment: 15000,
+  }
+
+  it('emits KontantErsattningEjUlagSA FK131 with the payment amount', () => {
+    const xml = generateAGIXml(company, [fSkattEmployee], totals)
+    expect(xml).toContain(
+      '<gem:KontantErsattningEjUlagSA faltkod="131">15000</gem:KontantErsattningEjUlagSA>'
+    )
+  })
+
+  it('does not emit FK011 or FK001 for the F-skatt payment', () => {
+    const xml = generateAGIXml(company, [fSkattEmployee], totals)
+    expect(xml).not.toContain('faltkod="011"')
+    expect(xml).not.toContain('faltkod="001"')
   })
 })
 

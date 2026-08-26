@@ -9,6 +9,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import type { Customer } from '@/types'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -22,6 +23,10 @@ export const GET = withRouteContext(
     // hand the roster page a silently truncated customer list. Ordered on the
     // PK because paging is only stable under a unique total order; the
     // name sort callers expect is re-applied below.
+    //
+    // Archived rows (soft-deleted via the v1 API) stay in the table for BFL
+    // retention but are not part of the roster: same canonical
+    // `archived_at IS NULL` filter as the v1 list route.
     let rows: Customer[]
     try {
       rows = await fetchAllRows<Customer>(
@@ -30,6 +35,7 @@ export const GET = withRouteContext(
             .from('customers')
             .select('*')
             .eq('company_id', companyId)
+            .is('archived_at', null)
             .order('id', { ascending: true })
             .range(from, to),
         { dedupeBy: (row) => row.id },
@@ -57,6 +63,13 @@ export const POST = withRouteContext(
     if (!result.success) return result.response
     const body = result.data
 
+    // Unset payment terms follow the company's own default, not a hardcoded 30.
+    const defaultPaymentTerms = await resolveDefaultPaymentTerms(
+      supabase,
+      companyId!,
+      body.default_payment_terms,
+    )
+
     const { data, error } = await supabase
       .from('customers')
       .insert({
@@ -65,8 +78,11 @@ export const POST = withRouteContext(
         name: body.name,
         customer_type: body.customer_type,
         customer_number: body.customer_number || null,
+        contact_person: body.contact_person ?? null,
         email: body.email,
         phone: body.phone,
+        invoice_email_cc_addresses: body.invoice_email_cc_addresses ?? null,
+        invoice_email_bcc_addresses: body.invoice_email_bcc_addresses ?? null,
         address_line1: body.address_line1,
         address_line2: body.address_line2,
         postal_code: body.postal_code,
@@ -76,7 +92,7 @@ export const POST = withRouteContext(
         vat_number: body.vat_number,
         personal_number: encryptCustomerPersonalNumber(body.personal_number),
         language: body.language || 'sv',
-        default_payment_terms: body.default_payment_terms || 30,
+        default_payment_terms: defaultPaymentTerms,
         notes: body.notes,
       })
       .select()

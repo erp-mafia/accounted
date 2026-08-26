@@ -38,12 +38,14 @@ import {
   createInvoicePaymentJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
@@ -240,6 +242,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const today = new Date().toISOString().split('T')[0]
     const paymentDate = bodyPaymentDate || today
+    const paidAt = paidAtFromDate(paymentDate)
 
     // Fetch settings for accounting method + entity type.
     const { data: settings } = await ctx.supabase
@@ -330,6 +333,30 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const { newPaidAmount, newRemaining, newStatus, isFullyPaid } = payment.plan
     const isPartial = customLines !== undefined && !isFullyPaid
 
+    // The generated cash entry books the FULL invoice and takes no payment
+    // amount: reject partials and part-paid completions for never-booked
+    // kontantmetoden invoices (mirrors the v1 match-invoice guard;
+    // bokslutsmetoden reports moms at payment, so each installment's moms
+    // belongs to its own receipt period). Custom lines are not exempt: they would book
+    // the same full-invoice shape under a user-shaped label.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: typed.paid_amount,
+      paysRemainingInFull: isFullyPaid,
+    })
+    if ((!typed.document_type || typed.document_type === 'invoice') && cashBlock) {
+      return v1ErrorResponseFromCode('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          reason: cashBlock,
+          payment_amount: paymentAmountInInvoiceCurrency,
+          paid_amount: typed.paid_amount ?? 0,
+          invoice_total: typed.total,
+        },
+      })
+    }
+
     // Duplicate-payment guard: surface a likely-matching unlinked inbound
     // bank transaction before booking (or before dry-run preview, so a
     // successful dry-run can't mask the warning). Skipped on partial
@@ -388,7 +415,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: paymentDate,
+          paid_at: paidAt,
           would_create_journal_entry: !typed.document_type || typed.document_type === 'invoice',
           accounting_method: accountingMethod,
           would_use_custom_lines: customLines !== undefined,
@@ -503,7 +530,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       updated_at: new Date().toISOString(),
     }
     if (newStatus === 'paid') {
-      updatePayload.paid_at = paymentDate
+      updatePayload.paid_at = paidAt
     }
     // Deliberately NOT writing journal_entry_id here: that column means "the
     // registration entry that booked this invoice at issuance" and drives the

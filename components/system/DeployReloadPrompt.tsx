@@ -53,8 +53,13 @@ export function DeployReloadPrompt() {
   if (!stale) return null
 
   return (
-    <div className="fixed inset-x-0 bottom-4 z-[60] flex justify-center px-4">
-      <div className="flex items-center gap-3 rounded-lg border border-border bg-popover px-4 py-3 text-sm shadow-md">
+    // The wrapper spans the full width at the same z-index as the docked
+    // assistant panel and mounts after it, so without pointer-events-none it
+    // swallowed every click and tap in the strip behind it: the panel's
+    // composer sits exactly there, and "a new version is available" turned
+    // into "I can't type any more". Only the card itself takes input.
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[60] flex justify-center px-4">
+      <div className="pointer-events-auto flex items-center gap-3 rounded-lg border border-border bg-popover px-4 py-3 text-sm shadow-md">
         <span className="text-foreground">{t('update_available')}</span>
         <Button size="sm" onClick={() => window.location.reload()}>
           {t('reload')}

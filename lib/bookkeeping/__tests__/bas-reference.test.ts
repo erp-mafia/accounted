@@ -165,6 +165,7 @@ describe('Contra accounts have opposite normal_balance', () => {
 describe('K2-excluded accounts', () => {
   const k2Excluded = [
     '1010', '1011', '1012', '1018', '1019',
+    '1081',
     '1370', '1518',
     '2089', '2092', '2096', '2240', '2448',
     '3940', '7940',
@@ -192,9 +193,9 @@ describe('K2-excluded accounts', () => {
     }
   })
 
-  it('total K2-excluded count matches expected (26)', () => {
+  it('total K2-excluded count matches expected (27)', () => {
     const k2Count = BAS_REFERENCE.filter((a) => a.k2_excluded).length
-    expect(k2Count).toBe(26)
+    expect(k2Count).toBe(27)
   })
 })
 

@@ -38,7 +38,25 @@ const DEFAULT_OAUTH_BASE_URL = 'https://peroauth2.test.skatteverket.se/oauth2/v1
 //   - `skattekonto` is NOT a real SKV scope name: SKV silently drops it
 //                   from every grant. Kept only so a future SKV rename in
 //                   our favor costs nothing.
-const DEFAULT_SCOPES = 'momsdeklaration inkforetag skahmst skattekonto ska agd'
+//
+// AGI needs TWO scopes, one per backing API, and missing the second one is
+// invisible until the very last step of a filing:
+//   - `agd`                  = arbetsgivardeklaration/inlamning (POST underlag,
+//                              kontrollresultat, spara, skapaGranskningsunderlag).
+//   - `agdredovisningperiod` = arbetsgivardeklaration/hanteraredovisningsperiod
+//                              (kvittenser, las, lasUpp). Note the spelling:
+//                              "redovisningperiod", no genitive s, exactly as
+//                              SKV registers it. Added 2026-08-13 after a real
+//                              prod filing signed fine and then failed on
+//                              "Hämta kvittens" with 403 {"error": "The
+//                              required scopes are not authorized"}: the token
+//                              carried `agd` only, so the hantera API refused
+//                              while inlämning kept working. Same body as the
+//                              APIGW subscription gap (#973), which is why the
+//                              gateway/token distinction has to be made with
+//                              the APIGW client, not from this string alone.
+const DEFAULT_SCOPES =
+  'momsdeklaration inkforetag skahmst skattekonto ska agd agdredovisningperiod'
 
 function getOAuthBaseUrl(): string {
   return process.env.SKATTEVERKET_OAUTH_BASE_URL || DEFAULT_OAUTH_BASE_URL

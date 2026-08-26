@@ -188,8 +188,19 @@ describe('INK2R Account Mappings', () => {
       expect(findSRUCodeForAccount('7899')).toBe('7515')
     })
 
-    it('7700-7799 -> 7516 (Nedskrivningar OT)', () => {
-      expect(findSRUCodeForAccount('7700')).toBe('7516')
+    it('7700-7739, 7750-7789 -> 7515 (nedskrivningar AT + återföringar)', () => {
+      expect(findSRUCodeForAccount('7700')).toBe('7515')
+      expect(findSRUCodeForAccount('7710')).toBe('7515')
+      expect(findSRUCodeForAccount('7733')).toBe('7515')
+      expect(findSRUCodeForAccount('7750')).toBe('7515')
+      expect(findSRUCodeForAccount('7770')).toBe('7515')
+      expect(findSRUCodeForAccount('7789')).toBe('7515')
+    })
+
+    it('7740-7749, 7790-7799 -> 7516 (Nedskrivningar OT)', () => {
+      expect(findSRUCodeForAccount('7740')).toBe('7516')
+      expect(findSRUCodeForAccount('7749')).toBe('7516')
+      expect(findSRUCodeForAccount('7790')).toBe('7516')
       expect(findSRUCodeForAccount('7799')).toBe('7516')
     })
 

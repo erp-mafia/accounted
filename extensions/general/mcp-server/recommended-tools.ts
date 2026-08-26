@@ -45,6 +45,10 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       'gnubok_suggest_categories',
       'gnubok_categorize_transaction',
       'gnubok_match_transaction_to_invoice',
+      // For transactions whose affärshändelse is already booked on an existing
+      // verifikat: links without creating new bookkeeping. Categorizing such a
+      // transaction would double-book it.
+      'gnubok_link_transaction_to_journal_entry',
       // Tagging: check the registry before writing dimensions bags on
       // categorize calls (resolve-don't-select needs real codes/names).
       'gnubok_list_dimensions',
@@ -60,9 +64,35 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       'gnubok_list_fiscal_periods',
       'gnubok_list_uncategorized_transactions',
       'gnubok_get_reconciliation_status',
+      // Account-keyed reconciliation: the rows behind the bridge and the
+      // staged link (bank accounts and skattekonto alike).
+      'gnubok_list_reconciliation_items',
+      'gnubok_reconcile_match',
+      'gnubok_reconcile_residual',
+      'gnubok_reconcile_signoff',
       'gnubok_list_voucher_gaps',
       'gnubok_explain_voucher_gap',
       'gnubok_lock_period',
+      'gnubok_approve_pending_operation',
+    ],
+  },
+  {
+    workflow: 'reconcile_month',
+    description: 'Reconcile every account with an outside truth (bank accounts, skattekonto) for a month and sign it off.',
+    skill: 'reconcile-month',
+    tools: [
+      'gnubok_get_reconciliation_status',
+      'gnubok_list_reconciliation_items',
+      'gnubok_reconcile_match',
+      'gnubok_reconcile_unmatch',
+      // Near-miss on a bank account (fee, interest, rounding): link and book
+      // the difference in one staged step.
+      'gnubok_reconcile_residual',
+      // Rows with no counterpart: book them (bank side) or link to the
+      // verifikat that already holds the affärshändelse.
+      'gnubok_categorize_transaction',
+      'gnubok_link_transaction_to_journal_entry',
+      'gnubok_reconcile_signoff',
       'gnubok_approve_pending_operation',
     ],
   },

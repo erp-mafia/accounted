@@ -13,6 +13,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { cn } from '@/lib/utils'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import {
   FileText,
@@ -40,6 +41,7 @@ interface DocumentRecord {
   mime_type: string | null
   storage_path: string
   created_at: string
+  sha256_hash?: string | null
   download_url?: string
   referenced?: boolean
 }
@@ -47,6 +49,14 @@ interface DocumentRecord {
 interface JournalEntryAttachmentsProps {
   journalEntryId: string
   onCountChange?: (count: number) => void
+  /**
+   * 'section': embedded under a DetailSection kicker that already names the
+   * group and states the empty case (verifikat detail page). Drops the own
+   * border, heading and empty line so nothing is said twice; the action
+   * buttons and the document list stay. Default keeps the self-contained
+   * foldout look used by JournalEntryList.
+   */
+  variant?: 'default' | 'section'
 }
 
 function formatFileSize(bytes: number): string {
@@ -70,7 +80,9 @@ function isPreviewable(type: string | null): boolean {
 export default function JournalEntryAttachments({
   journalEntryId,
   onCountChange,
+  variant = 'default',
 }: JournalEntryAttachmentsProps) {
+  const embedded = variant === 'section'
   const t = useTranslations('journal_attachments')
   const tCommon = useTranslations('common')
   const { appName } = useBranding()
@@ -88,6 +100,7 @@ export default function JournalEntryAttachments({
   // so the original stays in the version chain.
   const [blockedDoc, setBlockedDoc] = useState<DocumentRecord | null>(null)
   const [replacingDocId, setReplacingDocId] = useState<string | null>(null)
+  const [detachingDocId, setDetachingDocId] = useState<string | null>(null)
   const replaceFileInputRef = useRef<HTMLInputElement | null>(null)
   const replaceTargetIdRef = useRef<string | null>(null)
 
@@ -205,6 +218,39 @@ export default function JournalEntryAttachments({
     setBlockedDoc(doc)
   }
 
+  // A duplicate may be detached (not deleted) only when another directly
+  // anchored doc with the SAME content hash remains on the verifikat: the
+  // detach_underlag_duplicate RPC enforces sha256 equality, so the button is
+  // gated on the same condition. Referenced docs (via a supplier invoice)
+  // don't count: they are not anchored to this entry.
+  const hasDuplicateSibling = (doc: DocumentRecord) =>
+    Boolean(doc.sha256_hash) &&
+    documents.some(
+      (d) => !d.referenced && d.id !== doc.id && d.sha256_hash === doc.sha256_hash,
+    )
+
+  const handleDetach = async (doc: DocumentRecord) => {
+    setDetachingDocId(doc.id)
+    try {
+      const res = await fetch(`/api/documents/${doc.id}/detach`, { method: 'POST' })
+      if (!res.ok) {
+        const { error } = await res.json().catch(() => ({ error: undefined }))
+        toast({
+          title: t('detach_failed'),
+          description: typeof error === 'string' ? error : undefined,
+          variant: 'destructive',
+        })
+      } else {
+        await fetchDocuments()
+        setBlockedDoc(null)
+      }
+    } catch {
+      toast({ title: t('detach_failed'), variant: 'destructive' })
+    } finally {
+      setDetachingDocId(null)
+    }
+  }
+
   const handleOpenReplacePicker = (docId: string) => {
     replaceTargetIdRef.current = docId
     replaceFileInputRef.current?.click()
@@ -253,7 +299,7 @@ export default function JournalEntryAttachments({
   }
 
   return (
-    <div className="border-t pt-3 mt-3">
+    <div className={embedded ? undefined : 'border-t pt-3 mt-3'}>
       <input
         ref={replaceFileInputRef}
         type="file"
@@ -262,10 +308,12 @@ export default function JournalEntryAttachments({
         onChange={(e) => handleReplaceFileSelected(e.target.files?.[0] ?? null)}
       />
 
-      <div className="flex items-center justify-between mb-2">
-        <h4 className="text-sm font-medium">
-          {t('title')} {documents.length > 0 && `(${documents.length})`}
-        </h4>
+      <div className={cn('mb-2 flex items-center gap-2', embedded ? 'justify-end' : 'justify-between')}>
+        {!embedded && (
+          <h4 className="text-sm font-medium">
+            {t('title')} {documents.length > 0 && `(${documents.length})`}
+          </h4>
+        )}
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
@@ -300,16 +348,18 @@ export default function JournalEntryAttachments({
       )}
 
       {documents.length === 0 && !showUpload ? (
-        <p className="text-sm text-muted-foreground py-1">
-          {t('empty')}
-        </p>
+        !embedded && (
+          <p className="text-sm text-muted-foreground py-1">
+            {t('empty')}
+          </p>
+        )
       ) : (
         <div className="space-y-1">
           {documents.map((doc) => {
             const isReplacing = replacingDocId === doc.id
             return (
               <div key={doc.id}>
-                <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50">
+                <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
                   {isPreviewable(doc.mime_type) ? (
                     <button
                       onClick={() => handlePreviewToggle(doc)}
@@ -434,8 +484,8 @@ export default function JournalEntryAttachments({
         <DialogContent>
           <DialogHeader>
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-warning/15 shrink-0">
-                <Lock className="h-5 w-5 text-warning-foreground" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted shrink-0">
+                <Lock className="h-5 w-5 text-attn" />
               </div>
               <DialogTitle>{t('remove_blocked_title')}</DialogTitle>
             </div>
@@ -447,7 +497,11 @@ export default function JournalEntryAttachments({
           <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
             <div className="flex items-start gap-2">
               <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-              <p className="text-muted-foreground">{t('remove_blocked_hint')}</p>
+              <p className="text-muted-foreground">
+                {blockedDoc !== null && hasDuplicateSibling(blockedDoc)
+                  ? t('detach_hint')
+                  : t('remove_blocked_hint')}
+              </p>
             </div>
           </div>
 
@@ -455,6 +509,24 @@ export default function JournalEntryAttachments({
             <Button variant="outline" onClick={() => setBlockedDoc(null)}>
               {t('remove_blocked_cancel_cta')}
             </Button>
+            {blockedDoc !== null && hasDuplicateSibling(blockedDoc) && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (blockedDoc) handleDetach(blockedDoc)
+                }}
+                disabled={blockedDoc !== null && detachingDocId === blockedDoc.id}
+              >
+                {blockedDoc !== null && detachingDocId === blockedDoc.id ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {t('detaching')}
+                  </>
+                ) : (
+                  t('detach_cta')
+                )}
+              </Button>
+            )}
             <Button
               onClick={() => {
                 if (blockedDoc) handleOpenReplacePicker(blockedDoc.id)

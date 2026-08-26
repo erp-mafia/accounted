@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
@@ -38,7 +38,7 @@ export const GET = withCronContext('cron.stripe_sync', async (_request, ctx) => 
     return NextResponse.json({ message: 'Stripe Connect not configured', processed: 0 })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   const { data: connections, error: connError } = await supabase
     .from('stripe_connections')

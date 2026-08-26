@@ -15,6 +15,7 @@ import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
 import {
   ArrowLeftRight,
   ArrowRight,
+  BookOpen,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
@@ -24,6 +25,7 @@ import {
   Landmark,
   Loader2,
   ReceiptText,
+  Scale,
   ShieldCheck,
   Stamp,
 } from 'lucide-react'
@@ -52,6 +54,12 @@ interface AttGoraSectionProps {
   worklist: WorklistCounts
   suggestedMatches: SuggestedMatch[]
   expiringBankConnections?: ExpiringBankConnection[]
+  /**
+   * True while the setup checklist is open and the company has zero posted
+   * journal entries. An empty ledger is not an achievement: the all-clear
+   * state then says "nothing here yet" instead of a false "all caught up".
+   */
+  emptyLedger?: boolean
 }
 
 interface WorklistRowProps {
@@ -99,6 +107,7 @@ export default function AttGoraSection({
   worklist,
   suggestedMatches,
   expiringBankConnections = [],
+  emptyLedger = false,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
   const { toast } = useToast()
@@ -112,6 +121,9 @@ export default function AttGoraSection({
   const [matches, setMatches] = useState(suggestedMatches)
   const [leavingIds, setLeavingIds] = useState<Set<string>>(new Set())
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  // A confirmed match books a journal entry, so the server-derived
+  // emptyLedger flag goes stale the moment one succeeds in this session.
+  const [postedSinceLoad, setPostedSinceLoad] = useState(false)
 
   async function refetchCounts() {
     try {
@@ -158,6 +170,7 @@ export default function AttGoraSection({
         return
       }
       toast({ title: t('suggested_confirmed_toast') })
+      setPostedSinceLoad(true)
       // Fade the row out, drop it, then re-sync every count from the source
       // of truth (the match also booked a transaction, so several numbers move).
       setLeavingIds((prev) => new Set(prev).add(match.transaction_id))
@@ -186,6 +199,7 @@ export default function AttGoraSection({
   const bevakaRows =
     counts.overdue_invoice > 0 ||
     counts.deadline_action > 0 ||
+    counts.reconciliation_due > 0 ||
     expiringBankConnections.length > 0
   const allClear = !bokforRows && !granskaRows && !bevakaRows
 
@@ -206,18 +220,31 @@ export default function AttGoraSection({
       <div className="flex items-baseline justify-between border-b border-border px-1 pb-2.5">
         <h2 className="font-sans text-sm font-medium">{t('att_gora_title')}</h2>
         <p className="text-xs text-muted-foreground tabular-nums" role="status" aria-live="polite">
-          {allClear ? t('all_done') : t('att_gora_left', { count: displayTotal })}
+          {allClear
+            ? emptyLedger && !postedSinceLoad
+              ? t('att_gora_new_status')
+              : t('all_done')
+            : t('att_gora_left', { count: displayTotal })}
         </p>
       </div>
 
       <div>
           {allClear ? (
-            <EmptyState
-              icon={CheckCircle2}
-              title={t('att_gora_empty_title')}
-              description={t('att_gora_empty_body')}
-              className="py-10"
-            />
+            emptyLedger && !postedSinceLoad ? (
+              <EmptyState
+                icon={BookOpen}
+                title={t('att_gora_new_title')}
+                description={t('att_gora_new_body')}
+                className="py-10"
+              />
+            ) : (
+              <EmptyState
+                icon={CheckCircle2}
+                title={t('att_gora_empty_title')}
+                description={t('att_gora_empty_body')}
+                className="py-10"
+              />
+            )
           ) : (
             <div className="pb-2">
               {bokforRows && (
@@ -250,7 +277,7 @@ export default function AttGoraSection({
                                 )}
                               >
                                 <div className="overflow-hidden pb-1">
-                                  <div className="flex items-center gap-3 rounded bg-secondary/40 px-3 py-2">
+                                  <div className="flex items-center gap-3 rounded-sm bg-secondary/40 px-3 py-2">
                                 <div className="flex-1 min-w-0">
                                   <p className="text-sm truncate">
                                     {match.transaction_description}
@@ -277,7 +304,7 @@ export default function AttGoraSection({
                                   href={`/transactions?highlight=${match.transaction_id}`}
                                   aria-label={t('suggested_view')}
                                   title={t('suggested_view')}
-                                  className="shrink-0 h-10 w-10 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
+                                  className="shrink-0 h-10 w-10 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
                                 >
                                   <Eye className="h-4 w-4" />
                                 </Link>
@@ -367,6 +394,15 @@ export default function AttGoraSection({
                         icon={CalendarClock}
                         label={t('row_deadlines')}
                         count={counts.deadline_action}
+                      />
+                    )}
+                    {counts.reconciliation_due > 0 && (
+                      <WorklistRow
+                        href="/reconciliation"
+                        icon={Scale}
+                        label={t('row_reconciliation_due')}
+                        detail={t('row_reconciliation_due_detail')}
+                        count={counts.reconciliation_due}
                       />
                     )}
                     {expiringBankConnections.length > 0 && (

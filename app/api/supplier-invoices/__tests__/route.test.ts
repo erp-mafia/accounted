@@ -7,7 +7,7 @@ import {
   makeSupplier,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -221,6 +221,7 @@ describe('POST /api/supplier-invoices', () => {
     const createdInvoice = makeSupplierInvoice({ id: 'si-1' })
 
     // Fetch supplier
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     // RPC get_next_arrival_number
     enqueue({ data: 5 })
@@ -269,6 +270,7 @@ describe('POST /api/supplier-invoices', () => {
     const createdInvoice = makeSupplierInvoice({ id: 'si-deferred' })
 
     // Fetch supplier
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     // RPC get_next_arrival_number
     enqueue({ data: 5 })
@@ -315,6 +317,7 @@ describe('POST /api/supplier-invoices', () => {
 
     enqueue({ data: { id: DOCUMENT_UUID, journal_entry_id: null }, error: null })
     enqueue({ data: null, error: null })
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     enqueue({ data: 6 })
     enqueue({ data: createdInvoice, error: null })
@@ -384,6 +387,7 @@ describe('POST /api/supplier-invoices', () => {
     const supplier = makeSupplier({ id: VALID_UUID })
     const createdInvoice = makeSupplierInvoice({ id: 'si-1' })
 
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     enqueue({ data: 5 })
     enqueue({ data: createdInvoice, error: null })
@@ -423,6 +427,7 @@ describe('POST /api/supplier-invoices', () => {
     const supplier = makeSupplier({ id: VALID_UUID })
     const createdInvoice = makeSupplierInvoice({ id: 'si-1' })
 
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     enqueue({ data: 6 })
     enqueue({ data: createdInvoice, error: null })
@@ -453,6 +458,7 @@ describe('POST /api/supplier-invoices', () => {
     const supplier = makeSupplier({ id: VALID_UUID })
     const createdInvoice = makeSupplierInvoice({ id: 'si-1' })
 
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     enqueue({ data: 7 })
     enqueue({ data: createdInvoice, error: null })
@@ -483,6 +489,7 @@ describe('POST /api/supplier-invoices', () => {
     const createdInvoice = makeSupplierInvoice({ id: 'si-1', invoice_date: '2099-06-01' })
 
     // Fetch supplier
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     // RPC get_next_arrival_number
     enqueue({ data: 9 })
@@ -521,6 +528,7 @@ describe('POST /api/supplier-invoices', () => {
     const supplier = makeSupplier({ id: VALID_UUID })
 
     // Fetch supplier
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     // RPC get_next_arrival_number
     enqueue({ data: 8 })
@@ -573,6 +581,7 @@ describe('POST /api/supplier-invoices', () => {
   it('returns 409 without credit_note_id when existing invoice is not credited', async () => {
     const supplier = makeSupplier({ id: VALID_UUID })
 
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     enqueue({ data: 9 })
     enqueue({
@@ -616,6 +625,7 @@ describe('POST /api/supplier-invoices', () => {
   it('returns generic 409 when existing row lookup races to nothing', async () => {
     const supplier = makeSupplier({ id: VALID_UUID })
 
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     enqueue({ data: 10 })
     enqueue({
@@ -652,6 +662,7 @@ describe('POST /api/supplier-invoices', () => {
   it('falls through to 500 for non-23505 insert errors', async () => {
     const supplier = makeSupplier({ id: VALID_UUID })
 
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     enqueue({ data: 11 })
     enqueue({ data: null, error: { code: '23502', message: 'NOT NULL violation' } })
@@ -678,6 +689,7 @@ describe('POST /api/supplier-invoices', () => {
     const createdInvoice = makeSupplierInvoice({ id: 'si-priv-1', status: 'paid' })
 
     // Fetch supplier
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     // Fetch company.entity_type (paidPrivately branch)
     enqueue({ data: { entity_type: 'aktiebolag' }, error: null })
@@ -734,6 +746,7 @@ describe('POST /api/supplier-invoices', () => {
     const supplier = makeSupplier({ id: VALID_UUID })
     const createdInvoice = makeSupplierInvoice({ id: 'si-priv-2', status: 'paid' })
 
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     enqueue({ data: { entity_type: 'enskild_firma' }, error: null })
     enqueue({ data: 13 })
@@ -779,6 +792,7 @@ describe('POST /api/supplier-invoices', () => {
     const supplier = makeSupplier({ id: VALID_UUID })
     const createdInvoice = makeSupplierInvoice({ id: 'si-1' })
 
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     enqueue({ data: 7 })
     enqueue({ data: createdInvoice, error: null })
@@ -825,6 +839,7 @@ describe('POST /api/supplier-invoices', () => {
     const supplier = makeSupplier({ id: VALID_UUID })
     const createdInvoice = makeSupplierInvoice({ id: 'si-1' })
 
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: supplier, error: null })
     enqueue({ data: 8 })
     enqueue({ data: createdInvoice, error: null })
@@ -954,6 +969,7 @@ describe('POST /api/supplier-invoices: exchange rate + SEK amounts', () => {
     captured.find((c) => c.table === 'supplier_invoices')?.payload
 
   function enqueueHappyPath() {
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null }) // supplier lookup
     enqueue({ data: 7 }) // get_next_arrival_number
     enqueue({ data: makeSupplierInvoice({ id: 'si-fx' }), error: null }) // insert invoice
@@ -1064,6 +1080,7 @@ describe('POST /api/supplier-invoices: exchange rate + SEK amounts', () => {
   })
 
   it('refuses the create with SI_FX_RATE_MISSING when no rate can be resolved', async () => {
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
     enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null })
     mockFetchExchangeRate.mockResolvedValue(null)
 
@@ -1140,5 +1157,209 @@ describe('POST /api/supplier-invoices: exchange rate + SEK amounts', () => {
 
     expect(status).toBe(200)
     expect(supplierInvoiceInsert()!.exchange_rate).toBe(99999.99)
+  })
+})
+
+// ── Särskild löneskatt (SLP, apply_slp) ─────────────────────────────────────
+
+describe('POST /api/supplier-invoices: särskild löneskatt (apply_slp)', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+  function slpBody(items: Record<string, unknown>[]) {
+    return {
+      supplier_id: VALID_UUID,
+      supplier_invoice_number: 'LF-SLP',
+      invoice_date: '2024-06-01',
+      due_date: '2024-07-01',
+      items,
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  })
+
+  it('rejects apply_slp on a non-741x account with SI_CREATE_SLP_INVALID_ACCOUNT', async () => {
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: slpBody([
+          { description: 'Konsult', amount: 10000, account_number: '6200', vat_rate: 0.25, apply_slp: true },
+        ]),
+      }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_SLP_INVALID_ACCOUNT')
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects apply_slp combined with periodisering on the same item', async () => {
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: slpBody([
+          {
+            description: 'Tjänstepension',
+            amount: 10000,
+            account_number: '7412',
+            vat_rate: 0,
+            apply_slp: true,
+            accrual_period_start: '2024-06-01',
+            accrual_period_end: '2024-12-31',
+          },
+        ]),
+      }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_SLP_ACCRUAL')
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  it('happy path: apply_slp on a 7412 line is stored on the item and reaches the generator', async () => {
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
+    enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null }) // supplier lookup
+    enqueue({ data: 9 }) // get_next_arrival_number
+    enqueue({ data: makeSupplierInvoice({ id: 'si-slp' }), error: null }) // insert invoice
+    enqueue({ data: [], error: null }) // insert items
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // settings
+    mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-slp' })
+    enqueue({ data: null, error: null }) // update registration_journal_entry_id
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: slpBody([
+          { description: 'Avanza tjänstepension', amount: 10000, account_number: '7412', vat_rate: 0, apply_slp: true },
+        ]),
+      }),
+    )
+    const { status } = await parseJsonResponse(response)
+    expect(status).toBe(200)
+
+    // The DB insert carries the flag...
+    const itemsInsert = findCall('supplier_invoice_items', 'insert')
+    expect(itemsInsert).toBeDefined()
+    const rows = itemsInsert![0] as Array<Record<string, unknown>>
+    expect(rows[0].apply_slp).toBe(true)
+    expect(rows[0].account_number).toBe('7412')
+
+    // ...and the same items array reaches the registration generator, which
+    // injects the 7533/2514 pair from it.
+    const generatorItems = mockCreateSupplierInvoiceRegistrationEntry.mock
+      .calls[0][4] as Array<Record<string, unknown>>
+    expect(generatorItems[0].apply_slp).toBe(true)
+  })
+
+  it('defaults apply_slp to false when omitted', async () => {
+    enqueue({ data: { vat_registered: true }, error: null }) // vat_registered guard
+    enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null })
+    enqueue({ data: 10 })
+    enqueue({ data: makeSupplierInvoice({ id: 'si-noslp' }), error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'cash' }, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: slpBody([
+          { description: 'Pensionspremie utan SLP-flagga', amount: 5000, account_number: '7412', vat_rate: 0 },
+        ]),
+      }),
+    )
+    const { status } = await parseJsonResponse(response)
+    expect(status).toBe(200)
+
+    const itemsInsert = findCall('supplier_invoice_items', 'insert')
+    const rows = itemsInsert![0] as Array<Record<string, unknown>>
+    expect(rows[0].apply_slp).toBe(false)
+  })
+})
+
+describe('POST /api/supplier-invoices: icke momsregistrerad (vat_registered=false)', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+  function vrBody(items: Record<string, unknown>[], overrides: Record<string, unknown> = {}) {
+    return {
+      supplier_id: VALID_UUID,
+      supplier_invoice_number: 'LF-VR',
+      invoice_date: '2024-06-01',
+      due_date: '2024-07-01',
+      items,
+      ...overrides,
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  })
+
+  it('rejects a line carrying moms with SI_CREATE_INVALID_INPUT', async () => {
+    enqueue({ data: { vat_registered: false }, error: null }) // vat_registered guard
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: vrBody([
+        { description: 'Material', amount: 1000, account_number: '4010', vat_rate: 0.25 },
+      ]),
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  it('lets reverse charge pass the guard (self-assessment is separate from deduction)', async () => {
+    enqueue({ data: { vat_registered: false }, error: null }) // vat_registered guard
+    enqueue({ data: null, error: { message: 'Not found' } }) // supplier lookup fails
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: vrBody(
+        [{ description: 'EU-tjänst', amount: 1000, account_number: '4531', vat_rate: 0 }],
+        { reverse_charge: true },
+      ),
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    // Reaching SUPPLIER_NOT_FOUND proves the moms guard did not fire.
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('SUPPLIER_NOT_FOUND')
+  })
+
+  it('defaults an omitted vat_rate to 0 instead of 25 %', async () => {
+    enqueue({ data: { vat_registered: false }, error: null }) // vat_registered guard
+    enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null }) // supplier lookup
+    enqueue({ data: 5 }) // get_next_arrival_number
+    enqueue({ data: makeSupplierInvoice({ id: 'si-vr' }), error: null }) // insert invoice
+    enqueue({ data: [], error: null }) // insert items
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company settings
+    mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-vr' })
+    enqueue({ data: null, error: null }) // update registration_journal_entry_id
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: vrBody([{ description: 'Material', amount: 1000, account_number: '4010' }]),
+    })
+    const response = await POST(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const itemsInsert = findCall('supplier_invoice_items', 'insert')
+    const rows = itemsInsert![0] as Array<Record<string, unknown>>
+    expect(rows[0].vat_rate).toBe(0)
+    expect(rows[0].vat_amount).toBe(0)
   })
 })

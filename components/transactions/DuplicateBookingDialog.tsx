@@ -41,9 +41,17 @@ export interface DuplicateMatchTransaction {
  * when the caller supplies `matchTransaction` + `onMatched`: it links the bank
  * line to the existing voucher via /api/reconciliation/bank/link (the same path
  * MatchVoucherDialog uses) instead of double-booking the affärshändelse.
- * "Bokför ändå" stays available but demoted. Sibling-transaction candidates
- * keep booking as the primary action: matching a second bank line onto a
- * voucher that already has one is the N:1 edge case, not the default.
+ * "Bokför ändå" stays available but demoted.
+ *
+ * Sibling-transaction candidates (candidate.transaction_id set: the verifikat
+ * is already linked to ANOTHER bank transaction) get the match action too:
+ * manualLink (lib/reconciliation/bank-reconciliation.ts) explicitly allows a
+ * second transaction on one voucher (split settlements), so hiding the action
+ * dead-ended the user in "Bokför ändå". Their body copy asks "vill du matcha i
+ * stället?" and, because that shape is very often a duplicate IMPORT of one
+ * real movement (where matching would double-count the bank side), they
+ * additionally get "Ignorera transaktionen" via /api/transactions/[id]/ignore
+ * when the caller supplies `onIgnored`.
  */
 export default function DuplicateBookingDialog({
   candidate,
@@ -52,6 +60,7 @@ export default function DuplicateBookingDialog({
   onCancel,
   matchTransaction,
   onMatched,
+  onIgnored,
 }: {
   /** The already-booked sibling, or null to keep the dialog closed. */
   candidate: BookedDuplicateCandidate | null
@@ -66,17 +75,29 @@ export default function DuplicateBookingDialog({
    *  caller owns the success toast and state refresh (and closes the dialog by
    *  clearing `candidate`). */
   onMatched?: (transactionId: string, journalEntryId: string, voucherLabel: string) => void
+  /** Called after POST /api/transactions/[id]/ignore succeeds for a
+   *  sibling-transaction candidate (the row is likely a duplicate import).
+   *  The caller owns the refresh and closes the dialog by clearing
+   *  `candidate`. Omit to hide the ignore action. */
+  onIgnored?: (transactionId: string) => void
 }) {
   const t = useTranslations('transactions')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [matching, setMatching] = useState(false)
+  const [ignoring, setIgnoring] = useState(false)
 
-  // The match action is offered only for ledger-only voucher candidates: the
-  // voucher has no bank transaction linked yet, so linking THIS one to it is
-  // the right default (one affärshändelse, one verifikat).
-  const canMatch =
-    candidate !== null && candidate.transaction_id === null && !!matchTransaction && !!onMatched
+  // A sibling-transaction candidate: the twin bank row is already booked, so
+  // the target is either a duplicate import (ignore), the second leg of an
+  // N:1 settlement (match), or a genuinely separate identical event (book).
+  const isSiblingCandidate = candidate !== null && candidate.transaction_id !== null
+
+  // Matching links THIS bank line to the existing voucher instead of minting a
+  // second verifikat (one affärshändelse, one verifikat). Offered for both
+  // candidate kinds: for ledger-only vouchers it is the right default, and for
+  // sibling candidates manualLink explicitly permits N:1 links.
+  const canMatch = candidate !== null && !!matchTransaction && !!onMatched
+  const canIgnore = isSiblingCandidate && !!matchTransaction && !!onIgnored
 
   async function handleMatch() {
     if (!candidate || !matchTransaction || !onMatched || matching) return
@@ -137,7 +158,35 @@ export default function DuplicateBookingDialog({
     }
   }
 
-  const busy = processing || matching
+  async function handleIgnore() {
+    if (!candidate || !matchTransaction || !onIgnored || ignoring) return
+    setIgnoring(true)
+    try {
+      const res = await fetch(`/api/transactions/${matchTransaction.id}/ignore`, {
+        method: 'POST',
+      })
+      const result = await res.json().catch(() => null)
+      if (!res.ok || result?.error) {
+        toast({
+          title: t('dialog_duplicate_ignore_failed'),
+          description: getErrorMessage(result, { context: 'transaction', statusCode: res.status, locale }),
+          variant: 'destructive',
+        })
+        return
+      }
+      onIgnored(matchTransaction.id)
+    } catch {
+      toast({
+        title: t('dialog_duplicate_ignore_failed'),
+        description: getErrorMessage(null, { context: 'transaction', locale }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIgnoring(false)
+    }
+  }
+
+  const busy = processing || matching || ignoring
 
   return (
     <Dialog
@@ -151,9 +200,19 @@ export default function DuplicateBookingDialog({
           <DialogTitle>{t('dialog_duplicate_title')}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground">{t('dialog_duplicate_body')}</p>
+          {/* Sibling candidates get the "vill du matcha i stället?" copy: the
+              generic body's "en annan transaktion eller en befintlig
+              verifikation" hedge reads as noise once the twin is known. The
+              ignore hint renders only when the action itself does (callers
+              without onIgnored, e.g. the manual booking form and the bulk
+              dialog, must not have copy pointing at a button that is not
+              there). */}
+          <p className="text-sm text-muted-foreground">
+            {isSiblingCandidate ? t('dialog_duplicate_body_sibling') : t('dialog_duplicate_body')}
+            {canIgnore && <> {t('dialog_duplicate_ignore_hint')}</>}
+          </p>
           {candidate && (
-            <div className="space-y-1 rounded-md border bg-muted/30 p-3">
+            <div className="space-y-1 rounded-lg border bg-muted/30 p-3">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="font-medium">
                   {candidate.voucher_label
@@ -199,8 +258,8 @@ export default function DuplicateBookingDialog({
                   null amount already shows dialog_duplicate_amount_unknown. */}
               {candidate.amount == null && candidate.currency && (
                 <div className="flex items-start gap-2 pt-1">
-                  <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-warning-foreground leading-snug">
+                  <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-attn leading-snug">
                     {t('dialog_duplicate_sek_unavailable', { currency: candidate.currency })}
                   </p>
                 </div>
@@ -211,8 +270,8 @@ export default function DuplicateBookingDialog({
                   match rests on date + account + direction alone. */}
               {candidate.amount != null && !candidate.amount_verified && (
                 <div className="flex items-start gap-2 pt-1">
-                  <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-warning-foreground leading-snug">
+                  <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-attn leading-snug">
                     {t('dialog_duplicate_amount_unverified')}
                   </p>
                 </div>
@@ -240,6 +299,16 @@ export default function DuplicateBookingDialog({
                   <Button variant="outline" onClick={onBookAnyway} disabled={busy}>
                     {t('dialog_duplicate_book_anyway')}
                   </Button>
+                  {/* Sibling candidates only: when the row is a duplicate
+                      import of the already-booked twin, ignoring it is the
+                      correct resolution (matching would double-count the bank
+                      side, booking would double-count the ledger side). */}
+                  {canIgnore && (
+                    <Button variant="outline" onClick={handleIgnore} disabled={busy}>
+                      {ignoring && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      {t('dialog_duplicate_ignore')}
+                    </Button>
+                  )}
                   <Button onClick={handleMatch} disabled={busy}>
                     {matching && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                     {t('dialog_duplicate_match')}

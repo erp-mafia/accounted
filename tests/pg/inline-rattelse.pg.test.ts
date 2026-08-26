@@ -6,6 +6,7 @@ import {
   insertAuthUser,
   insertCompanyMember,
   insertDraftJournalEntry,
+  insertCashAccount,
 } from '@/tests/pg/fixtures'
 
 // Migration 20260723210000_verifikat_inline_rattelse.sql: the founder-approved
@@ -546,6 +547,132 @@ describe('inline rättelse: lines (correct_entry_lines_inline)', () => {
     const res2 = await callStrike(companyId, entryId, [creditLineId],
       [{ account_number: '1930', debit_amount: 0, credit_amount: 1000, line_description: 'Rättad text' }], userId)
     expect(res2.rows[0].result.struck_count).toBe(1)
+  })
+
+  // 20260819092408_inline_rattelse_bank_anchor.sql: the bank-side guard is
+  // anchored to the linked bank amount, not to the pre-state. The Discord
+  // case (Sebastian, 2026-08-19): a +10 874,81 deposit booked as 1930 D /
+  // 1930 K (the credit should have been 2970), so the 1930 net was 0 and the
+  // only rättelse that makes the entry match the feed was refused.
+  it('allows a bank-side strike that makes the 19xx net equal the linked bank amount', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    await insertChartAccount(companyId, userId, '1930')
+    await insertChartAccount(companyId, userId, '2970')
+    const entryId = await insertDraftJournalEntry({
+      userId, companyId, fiscalPeriodId, sourceType: 'bank_transaction', status: 'draft', voucherNumber: 21,
+    })
+    await getPool().query(
+      `INSERT INTO public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount, sort_order)
+       VALUES ($1, '1930', 10874.81, 0, 1)`,
+      [entryId],
+    )
+    const { rows: wrongRows } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount, sort_order, line_description)
+       VALUES ($1, '1930', 0, 10874.81, 2, 'Förutbetalda intäkter') RETURNING id`,
+      [entryId],
+    )
+    await getPool().query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [entryId])
+    await getPool().query(
+      `INSERT INTO public.transactions (user_id, company_id, date, description, amount, journal_entry_id, is_business)
+       VALUES ($1, $2, '2026-02-10', 'BOKADIREKT X', 10874.81, $3, true)`,
+      [userId, companyId, entryId],
+    )
+
+    // Moving the 1930 net somewhere that is NOT the bank amount is still
+    // refused, and the message now carries both amounts.
+    await expect(
+      callStrike(companyId, entryId, [wrongRows[0].id],
+        [
+          { account_number: '1930', debit_amount: 0, credit_amount: 5000 },
+          { account_number: '2970', debit_amount: 0, credit_amount: 5874.81 },
+        ], userId),
+    ).rejects.toThrow(/kopplad till en banktransaktion på 10874\.81 kr.*5874\.81 kr/)
+
+    // Striking the wrong 1930 K line and re-adding it on 2970 takes the 1930
+    // net from 0 to +10 874,81 = the deposit. Allowed.
+    const res = await callStrike(companyId, entryId, [wrongRows[0].id],
+      [{ account_number: '2970', debit_amount: 0, credit_amount: 10874.81, line_description: 'Förutbetalda intäkter' }], userId)
+    expect(res.rows[0].result.struck_count).toBe(1)
+    expect(res.rows[0].result.added_count).toBe(1)
+
+    const { rows: after } = await getPool().query<{ account_number: string; debit_amount: string; credit_amount: string }>(
+      `SELECT account_number, debit_amount::text, credit_amount::text FROM public.journal_entry_lines
+        WHERE journal_entry_id = $1 ORDER BY sort_order`,
+      [entryId],
+    )
+    expect(after.map((l) => [l.account_number, Number(l.debit_amount), Number(l.credit_amount)])).toEqual([
+      ['1930', 10874.81, 0],
+      ['2970', 0, 10874.81],
+    ])
+
+    // Now that the bank side matches the feed, moving it again is refused:
+    // the anchor is the feed, not the pre-state.
+    const { rows: bankRows } = await getPool().query<{ id: string }>(
+      `SELECT id FROM public.journal_entry_lines WHERE journal_entry_id = $1 AND account_number = '1930'`,
+      [entryId],
+    )
+    await expect(
+      callStrike(companyId, entryId, [bankRows[0].id],
+        [
+          { account_number: '1930', debit_amount: 10000, credit_amount: 0 },
+          { account_number: '2970', debit_amount: 874.81, credit_amount: 0 },
+        ], userId),
+    ).rejects.toThrow(/kopplad till en banktransaktion/)
+  })
+
+  it('anchors split-linked entries by allocated_amount on the transaction cash account, once per transaction', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    await insertChartAccount(companyId, userId, '1940')
+    await insertChartAccount(companyId, userId, '3010')
+    const cashAccountId = await insertCashAccount({ companyId, ledgerAccount: '1940' })
+    const entryId = await insertDraftJournalEntry({
+      userId, companyId, fiscalPeriodId, sourceType: 'bank_transaction', status: 'draft', voucherNumber: 22,
+    })
+    // Two deposits (600 + 400) on the 1940 cash account, booked as
+    // 1940 D 1000 / 1940 K 1000: the contra line landed on the bank account.
+    await getPool().query(
+      `INSERT INTO public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount, sort_order)
+       VALUES ($1, '1940', 1000, 0, 1)`,
+      [entryId],
+    )
+    const { rows: wrongRows } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.journal_entry_lines (journal_entry_id, account_number, debit_amount, credit_amount, sort_order)
+       VALUES ($1, '1940', 0, 1000, 2) RETURNING id`,
+      [entryId],
+    )
+    await getPool().query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [entryId])
+    const { rows: txRows } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.transactions (user_id, company_id, date, description, amount, cash_account_id, is_business, journal_entry_id)
+       VALUES ($1, $2, '2026-02-10', 'Swish 1', 600, $3, true, NULL),
+              ($1, $2, '2026-02-10', 'Swish 2', 400, $3, true, $4)
+       RETURNING id`,
+      [userId, companyId, cashAccountId, entryId],
+    )
+    // Both transactions carry split links; the second ALSO has the direct FK
+    // (the 1:1 bulk-book shape). Double counting it would make the anchor
+    // 1 400 and wrongly refuse the fix below.
+    for (const tx of txRows) {
+      await getPool().query(
+        `INSERT INTO public.transaction_voucher_links
+           (user_id, company_id, transaction_id, journal_entry_id, allocated_amount, role)
+         VALUES ($1, $2, $3, $4, (SELECT amount FROM public.transactions WHERE id = $3), 'bank_line')`,
+        [userId, companyId, tx.id, entryId],
+      )
+    }
+
+    // Partial move: 1940 would end at 400 ≠ 1 000. Refused with the amounts.
+    await expect(
+      callStrike(companyId, entryId, [wrongRows[0].id],
+        [
+          { account_number: '1940', debit_amount: 0, credit_amount: 600 },
+          { account_number: '3010', debit_amount: 0, credit_amount: 400 },
+        ], userId),
+    ).rejects.toThrow(/banktransaktion på 1000\.00 kr.*400\.00 kr/)
+
+    // Full move: 1940 net 0 -> 1 000 = 600 + 400. Allowed.
+    const res = await callStrike(companyId, entryId, [wrongRows[0].id],
+      [{ account_number: '3010', debit_amount: 0, credit_amount: 1000 }], userId)
+    expect(res.rows[0].result.struck_count).toBe(1)
   })
 
   it('keeps the journal_entry_rattelse_log immutable', async () => {

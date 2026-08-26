@@ -1,11 +1,7 @@
 'use client'
 
 import { useTranslations, useLocale } from 'next-intl'
-import { Button } from '@/components/ui/button'
-import { ArrowLeftCircle, Eye, FileDown, Loader2, Send } from 'lucide-react'
 import { formatDateLong } from '@/lib/utils'
-import { useCapability } from '@/contexts/CompanyContext'
-import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { AgiFilingState } from '@/lib/salary/agi-submission-state'
 import type { RunDetail } from './types'
 
@@ -23,19 +19,6 @@ interface RunProgressBarProps {
   agiState: AgiFilingState
   // Shown on the AGI step once signed: the kvittens is the filing receipt.
   agiKvittensnummer?: string | null
-  canWrite: boolean
-  actionLoading: string | null
-  // The single "forward" step for the current status (Beräkna → Skicka till
-  // granskning → Godkänn → Markera utbetald → Bokför). Rendered as the large
-  // primary target in the control zone, right next to the secondary actions.
-  primaryAction?: { key: string; label: string; onClick: () => void } | null
-  // Secondary actions for the stage: preview, revert, and the parallel payslip
-  // obligation. (Recalculate lives with the employee rows.)
-  onPreview: () => void
-  onRevert: () => void
-  onUnapprove: () => void
-  onSendPayslips: () => void
-  onDownloadPayslips: () => void
 }
 
 const STATUS_RANK: Record<string, number> = {
@@ -47,20 +30,19 @@ const STATUS_RANK: Record<string, number> = {
   corrected: 4,
 }
 
+/**
+ * The month's steps as a flat segmented rail: no box, no buttons. The actions
+ * for the current stage live in the header (primary button + ⋯ menu); the
+ * rail only says where the run stands and what the stage means.
+ */
 export function RunProgressBar(props: RunProgressBarProps) {
   const t = useTranslations('salary_run')
   const locale = useLocale()
-  const { run, isCalculated, noPayout, canWrite, actionLoading, primaryAction, agiState, agiKvittensnummer } = props
+  const { run, isCalculated, noPayout, agiState, agiKvittensnummer } = props
   const rank = STATUS_RANK[run.status] ?? 0
-  const busy = !!actionLoading
   const deliveries = run.payslip_deliveries_summary
-  const hasEmailSend = useCapability(CAPABILITY.email_send)
 
-  function spinnerOr(icon: React.ReactNode, key: string) {
-    return actionLoading === key ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : icon
-  }
-
-  // Payslips are a parallel obligation from `approved` onwards — never gate
+  // Payslips are a parallel obligation from `approved` onwards: never gate
   // progression, so their "done" is simply having reached every employee.
   const payslipsAvailable = rank >= 2
   const payslipsDone =
@@ -144,82 +126,6 @@ export function RunProgressBar(props: RunProgressBarProps) {
   const doneCount = steps.filter(s => s.state === 'done').length
   const activeStep = steps.find(s => s.state === 'active')
 
-  // Payslip send/download — shared by the mobile summary and the desktop bar.
-  // Email send is a paid capability (server 403s without it); the PDF
-  // download alternative right next to it stays free.
-  const payslipActions = payslipsAvailable && canWrite && (
-    <>
-      {/* The span carries the tooltip: browsers suppress `title` on
-          disabled elements, and hover events don't fire on them. */}
-      <span title={!hasEmailSend ? t('payslips_send_requires_subscription') : undefined}>
-        <Button
-          size="sm"
-          variant={deliveries && deliveries.sent > 0 ? 'outline' : 'default'}
-          onClick={props.onSendPayslips}
-          disabled={busy || !hasEmailSend}
-        >
-          {spinnerOr(<Send className="mr-2 h-4 w-4" />, 'payslips-send')}
-          {deliveries && deliveries.sent > 0
-            ? t('action_send_payslips_again')
-            : t('action_send_payslips')}
-        </Button>
-      </span>
-      <Button variant="ghost" size="sm" onClick={props.onDownloadPayslips} disabled={busy}>
-        {spinnerOr(<FileDown className="mr-2 h-4 w-4" />, 'bulk_payslip')}
-        {t('action_download_payslips')}
-      </Button>
-    </>
-  )
-
-  // Secondary actions for the current status. The forward/primary action is
-  // the header CTA, so this is deliberately the "everything else" set.
-  let secondaryActions: React.ReactNode = null
-  if (canWrite) {
-    if (run.status === 'draft') {
-      // Recalculate ("Beräkna om") lives with the employee rows it recalculates,
-      // not here. This band keeps only the preview toggle.
-      secondaryActions = (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={props.onPreview}
-          disabled={busy || !isCalculated}
-        >
-          {spinnerOr(<Eye className="mr-2 h-4 w-4" />, 'preview')}
-          {t('action_preview')}
-        </Button>
-      )
-    } else if (run.status === 'review') {
-      secondaryActions = (
-        <>
-          <Button variant="outline" size="sm" onClick={props.onPreview} disabled={busy}>
-            {spinnerOr(<Eye className="mr-2 h-4 w-4" />, 'preview')}
-            {t('action_preview')}
-          </Button>
-          <Button variant="ghost" size="sm" onClick={props.onRevert} disabled={busy}>
-            <ArrowLeftCircle className="mr-2 h-4 w-4" />
-            {t('action_revert')}
-          </Button>
-        </>
-      )
-    } else if (run.status === 'approved') {
-      // Approval is an internal control point, not a legal event — the run can
-      // be unlocked again as long as nothing has been paid, booked, or filed.
-      // The API refuses once the AGI has reached Skatteverket.
-      secondaryActions = (
-        <>
-          {payslipActions}
-          <Button variant="ghost" size="sm" onClick={props.onUnapprove} disabled={busy}>
-            <ArrowLeftCircle className="mr-2 h-4 w-4" />
-            {t('action_unapprove')}
-          </Button>
-        </>
-      )
-    } else if (payslipsAvailable) {
-      secondaryActions = payslipActions
-    }
-  }
-
   function segClass(state: StepState) {
     return state === 'done'
       ? 'bg-primary'
@@ -228,19 +134,12 @@ export function RunProgressBar(props: RunProgressBarProps) {
         : 'bg-border'
   }
 
-  // The stage line + its detail — a single sentence that sits under the track.
+  // The stage line + its detail: a single sentence that sits under the track.
   const currentLine = activeStep?.detail ?? (activeStep ? activeStep.label : t('rail_all_done'))
 
-  const primaryButton = primaryAction && (
-    <Button size="sm" onClick={primaryAction.onClick} disabled={busy}>
-      {actionLoading === primaryAction.key && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-      {primaryAction.label}
-    </Button>
-  )
-
   return (
-    <div className="rounded-lg border border-border p-4">
-      {/* Mobile: segmented track + current step + a full-width primary button. */}
+    <div>
+      {/* Mobile: segmented track + current step + counter. */}
       <div className="md:hidden space-y-3">
         <div className="flex gap-1">
           {steps.map(step => (
@@ -258,20 +157,11 @@ export function RunProgressBar(props: RunProgressBarProps) {
         {activeStep?.detail && (
           <p className="text-[11px] text-muted-foreground">{activeStep.detail}</p>
         )}
-        {primaryAction && (
-          <Button className="w-full" onClick={primaryAction.onClick} disabled={busy}>
-            {actionLoading === primaryAction.key && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
-            {primaryAction.label}
-          </Button>
-        )}
-        {secondaryActions && <div className="flex flex-wrap gap-2">{secondaryActions}</div>}
       </div>
 
-      {/* Desktop: segmented track with per-segment labels, then a single action
-          row — the stage sentence on the left, secondary + primary on the right. */}
-      <div className="hidden md:block space-y-4">
+      {/* Desktop: segmented track with per-segment labels, then the stage
+          sentence. */}
+      <div className="hidden md:block space-y-3">
         <ol className="flex gap-2">
           {steps.map(step => (
             <li key={step.key} className="flex-1 min-w-0 space-y-2">
@@ -291,16 +181,7 @@ export function RunProgressBar(props: RunProgressBarProps) {
             </li>
           ))}
         </ol>
-
-        {(secondaryActions || primaryButton) && (
-          <div className="flex items-center justify-between gap-4">
-            <p className="text-xs text-muted-foreground">{currentLine}</p>
-            <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
-              {secondaryActions}
-              {primaryButton}
-            </div>
-          </div>
-        )}
+        <p className="text-xs text-muted-foreground">{currentLine}</p>
       </div>
     </div>
   )

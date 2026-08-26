@@ -5,7 +5,8 @@ import type {
   VatPeriodType,
 } from '@/types'
 import type { VatCheckAccountTotals } from './vat-declaration-checks'
-import { fetchDynamicRuta05Accounts } from './vat-revenue-accounts'
+import { rcBasisTotalsByRate } from './vat-filing-gate'
+import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-accounts'
 
 /**
  * Calculate VAT declaration (Momsdeklaration) for a given period.
@@ -83,6 +84,7 @@ export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side
   '2645': { box: 'ruta48', side: 'debit' },   // Förvärv utlandet (EU/non-EU RC)
   '2646': { box: 'ruta48', side: 'debit' },   // Uthyrning
   '2647': { box: 'ruta48', side: 'debit' },   // Omvänd skattskyldighet i Sverige
+  '2648': { box: 'ruta48', side: 'debit' },   // Vilande ingående moms vid bokslut
   '2649': { box: 'ruta48', side: 'debit' },   // Blandad verksamhet
   // Import VAT (since 2015, via momsdeklaration) → ruta 60/61/62
   '2615': { box: 'ruta60', side: 'credit' },  // Import 25%
@@ -108,6 +110,12 @@ export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side
   '3404': { box: 'ruta42', side: 'credit' },  // Momsfria uttag
   '3980': { box: 'ruta42', side: 'credit' },  // Erhållna offentliga stöd m.m.
   '3994': { box: 'ruta42', side: 'credit' },  // Övriga rörelseintäkter momsfria
+  // Revenue: omvänd skattskyldighet inom Sverige → ruta 41. The seller books
+  // NO output VAT (the buyer accounts for it via rutor 23-24/30-32), so these
+  // deliberately stay OUT of the ruta 05-08 vs 10-12 pairing checks.
+  '3231': { box: 'ruta41', side: 'credit' },  // Försäljning byggsektorn, omvänd betalningsskyldighet
+  '3232': { box: 'ruta41', side: 'credit' },  // Omvänd betalningsskyldighet, övriga (skrot m.m.)
+  '3233': { box: 'ruta41', side: 'credit' },  // Omvänd betalningsskyldighet, övriga
   // Reverse-charge purchase bases (debit on cost accounts) → ruta 20-24, 50
   '4515': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 25%
   '4516': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 12%
@@ -406,8 +414,16 @@ export async function fetchVatAccountTotals(
  */
 export function rutorFromTotals(
   totals: Map<string, { debit: number; credit: number }>,
-  dynamicRuta05Accounts: string[] = []
+  dynamicVatAccounts?: Pick<DynamicVatAccounts, 'mappingByAccount' | 'explicitAccounts'> | string[],
 ): VatDeclarationRutor {
+  const dynamic = Array.isArray(dynamicVatAccounts)
+    ? {
+        mappingByAccount: new Map(dynamicVatAccounts.map((account) => [
+          account, { box: 'ruta05' as const, side: 'credit' as const },
+        ])),
+        explicitAccounts: new Set<string>(),
+      }
+    : dynamicVatAccounts
   const rutor: VatDeclarationRutor = {
     ruta05: 0, ruta06: 0, ruta07: 0, ruta08: 0,
     ruta10: 0, ruta11: 0, ruta12: 0,
@@ -420,6 +436,7 @@ export function rutorFromTotals(
   }
 
   for (const [account, mapping] of Object.entries(ACCOUNT_RUTA)) {
+    if (dynamic?.explicitAccounts.has(account)) continue
     const t = totals.get(account)
     if (!t) continue
     const balance = mapping.side === 'credit'
@@ -428,12 +445,11 @@ export function rutorFromTotals(
     rutor[mapping.box] = round(rutor[mapping.box] + balance)
   }
 
-  // The company's own momspliktiga intäktskonton. Always credit-side: these are
-  // revenue accounts by construction (account_class 3).
-  for (const account of dynamicRuta05Accounts) {
+  for (const [account, mapping] of dynamic?.mappingByAccount ?? []) {
     const t = totals.get(account)
     if (!t) continue
-    rutor.ruta05 = round(rutor.ruta05 + (t.credit - t.debit))
+    const balance = mapping.side === 'credit' ? t.credit - t.debit : t.debit - t.credit
+    rutor[mapping.box] = round(rutor[mapping.box] + balance)
   }
 
   // FK009: summaMoms = (10 + 11 + 12 + 30 + 31 + 32 + 60 + 61 + 62) - 48
@@ -517,16 +533,16 @@ export async function calculateVatDeclaration(
   // försäljning. Resolved from their "Standard moms" rather than a fixed BAS
   // list, because Accounted seeds no varugrupp accounts: every 3011/3013-style
   // konto is user-added and would otherwise never be fetched at all (#1261).
-  const dynamicRuta05 = await fetchDynamicRuta05Accounts(supabase, companyId)
+  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
 
   // Fetch and aggregate posted VAT-account activity for the period. The same
   // RPC round trip carries the per-source_type entry counts for the metadata.
   const { totals, sourceTypeCounts } = await fetchVatAccountTotals(
-    supabase, companyId, start, end, dynamicRuta05.accounts
+    supabase, companyId, start, end, dynamicVatAccounts.accounts
   )
 
   // Map account balances to momsdeklaration boxes
-  const rutor = rutorFromTotals(totals, dynamicRuta05.accounts)
+  const rutor = rutorFromTotals(totals, dynamicVatAccounts)
 
   // Compute per-rate base amounts from individual revenue accounts. The
   // company's own accounts carry their rate on the konto itself, so they land
@@ -545,10 +561,11 @@ export async function calculateVatDeclaration(
   }
   const RATE_BUCKET = { 0.25: 'base25', 0.12: 'base12', 0.06: 'base6' } as const
   for (const [account, rate] of [['3001', 'base25'], ['3002', 'base12'], ['3003', 'base6']] as const) {
+    if (dynamicVatAccounts.explicitAccounts.has(account)) continue
     const t = totals.get(account)
     if (t) revenueByRate[rate] = round(t.credit - t.debit)
   }
-  for (const [account, rate] of dynamicRuta05.rateByAccount) {
+  for (const [account, rate] of dynamicVatAccounts.rateByAccount) {
     const t = totals.get(account)
     if (!t) continue
     const bucket = RATE_BUCKET[rate as keyof typeof RATE_BUCKET]
@@ -559,7 +576,7 @@ export async function calculateVatDeclaration(
   // gruppkonto) but whose rate only exists as the konto's "Standard moms".
   // Rate-only on purpose: their balance is in ruta 05 either way, so adding
   // them to dynamicRuta05.accounts would double the filed figure.
-  for (const [account, rate] of dynamicRuta05.staticRateByAccount) {
+  for (const [account, rate] of dynamicVatAccounts.staticRateByAccount) {
     const t = totals.get(account)
     if (!t) continue
     const bucket = RATE_BUCKET[rate as keyof typeof RATE_BUCKET]
@@ -587,6 +604,9 @@ export async function calculateVatDeclaration(
     // the sharp RC_INPUT_VAT_MISMATCH comparison instead of the ruta 48
     // fallback: see VatDeclaration.rcInputAccountTotals.
     rcInputAccountTotals: rcInputTotals(totals),
+    // Per-momssats RC basis balances (44xx/45xx), the downgrade evidence for
+    // the per-voucher gap tiering: see VatDeclaration.rcBasisByRate.
+    rcBasisByRate: rcBasisTotalsByRate(totals, dynamicVatAccounts),
     invoiceCount,
     transactionCount,
     breakdown: {

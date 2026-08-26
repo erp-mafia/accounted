@@ -3,7 +3,7 @@
  *
  * Full send pipeline. Renders the invoice PDF, emails it to the customer
  * (with a copy to the company), allocates the F-series number, posts the
- * journal entry under accrual basis, archives the PDF as underlag, and
+ * journal entry when the company books at issue, archives the PDF as underlag, and
  * emits invoice.sent. This is :mark-sent + PDF + email + archival.
  *
  * Failure ordering (matches the dashboard's internal /api/invoices/[id]/send
@@ -31,7 +31,7 @@
  *      same orphan-window as :mark-sent (architecturally tracked).
  *   9. POINT OF NO RETURN. Steps below are best-effort; failures surface
  *      as `warnings` on the response. Status flip → 'sent', journal entry
- *      (accrual + real invoice), PDF archival via uploadDocument,
+ *      (book-at-issue + real invoice), PDF archival via uploadDocument,
  *      invoice.sent event emission.
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable: dry-run goes
@@ -50,12 +50,14 @@ import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
+import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailSubject,
   generateInvoiceEmailText,
 } from '@/lib/email/invoice-templates'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
@@ -121,7 +123,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/send',
   summary: 'Send a draft invoice to the customer by email.',
   description:
-    'The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via Resend (PDF attachment, copy to company) → flip status to sent → post journal entry (accrual + real invoice) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.',
+    'The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via Resend (PDF attachment, copy to company) → flip status to sent → post journal entry (real invoice, unless kontantmetoden or defer_invoice_booking) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.',
   useWhen:
     'You want Accounted to deliver the invoice to the customer via email. For invoices delivered through another channel (Peppol, postal, own SMTP) use :mark-sent instead.',
   doNotUseFor:
@@ -225,7 +227,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_FULL_COLUMNS}, customer:customers(id, name, customer_number, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number), items:invoice_items(${INVOICE_ITEM_FULL_COLUMNS})`,
+        // deduction_personnummer_encrypted rides along for the render only:
+        // the PDF template derives the masked personnummer (YYYYMMDD-XXXX)
+        // from it. It stays out of INVOICE_FULL_COLUMNS (the API projection)
+        // and this route never echoes the row.
+        `${INVOICE_FULL_COLUMNS}, deduction_personnummer_encrypted, customer:customers(id, name, customer_number, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number, invoice_email_cc_addresses, invoice_email_bcc_addresses), items:invoice_items(${INVOICE_ITEM_FULL_COLUMNS})`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -382,6 +388,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       to: customer.email,
       configuredCc: settings.invoice_email_cc_addresses,
       configuredBcc: settings.invoice_email_bcc_addresses,
+      customerCc: customer.invoice_email_cc_addresses,
+      customerBcc: customer.invoice_email_bcc_addresses,
       // The company email is fixed routing, not an arbitrary
       // request-controlled recipient.
       legacyCc: settings.email,
@@ -456,7 +464,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           would_cc_addresses: recipients.cc,
           would_create_journal_entry:
             (!typed.document_type || typed.document_type === 'invoice') &&
-            (settings.accounting_method ?? 'accrual') === 'accrual',
+            booksInvoicesOnIssue(settings),
           accounting_method: settings.accounting_method ?? 'accrual',
           preflight_pdf_render: 'ok',
         },
@@ -616,6 +624,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         text,
         replyTo: settings.email ?? undefined,
         fromName: settings.company_name ?? undefined,
+        from: await resolveInvoiceSender(ctx.supabase, ctx.companyId!, settings.company_name),
         filename,
         pdfBuffer,
       })
@@ -700,11 +709,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Step 9b: journal entry (accrual + real invoices).
+    // Step 9b: journal entry for real invoices when the company books at
+    // issue. Kontantmetoden books at payment; defer_invoice_booking (#967)
+    // books via the explicit Bokför step. Same gate as the dashboard.
     let journalEntryId: string | null = null
     const isRealInvoice = !typed.document_type || typed.document_type === 'invoice'
-    const accountingMethod = settings.accounting_method ?? 'accrual'
-    if (isRealInvoice && accountingMethod === 'accrual') {
+    if (isRealInvoice && booksInvoicesOnIssue(settings)) {
       try {
         const entry = await createInvoiceJournalEntry(
           ctx.supabase,

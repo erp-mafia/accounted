@@ -10,6 +10,10 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ParsedBankTransaction, BankFileFormatId } from '@/lib/import/bank-file/types'
 import type { Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  runUnattendedReconciliationSweep,
+  toSweepSummary,
+} from '@/lib/reconciliation/unattended-sweep'
 
 ensureInitialized()
 
@@ -102,9 +106,34 @@ export const POST = withRouteContext(
         import_source: format === 'camt053' ? 'camt053' : `csv_${format}`,
       }))
 
-      const ingestOptions: IngestOptions = {}
+      // Detect SIE overlap, mirroring the enable-banking sync paths: a bank
+      // file covering a period a completed SIE import already booked must be
+      // matched against the imported verifikat, not re-booked. CSV is the only
+      // way a migrator gets deep history (PSD2 windows stop at ~90 days), so
+      // this path is the primary one for the Fortnox/SIE migrator journey.
+      const fileDateFrom = transactions.map((t) => t.date).sort()[0] || undefined
+      const fileDateTo = transactions.map((t) => t.date).sort().reverse()[0] || undefined
+      let sieOverlap: { id: string } | null = null
+      if (fileDateFrom) {
+        const { data } = await supabase
+          .from('sie_imports')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('status', 'completed')
+          .gte('fiscal_year_end', fileDateFrom)
+          .limit(1)
+          .maybeSingle()
+        sieOverlap = data ?? null
+      }
+
+      const ingestOptions: IngestOptions = {
+        // Stamp every inserted row with this batch so the owner/admin
+        // "undo this import" action can scope its bulk delete exactly.
+        bankFileImportId: importRecord.id,
+      }
       if (settlement_account) ingestOptions.settlementAccount = settlement_account
       if (role === 'viewer') ingestOptions.rawInsertOnly = true
+      if (sieOverlap) ingestOptions.skipAutoCategorization = true
       const ingestResult = await ingestTransactions(supabase, companyId, user.id, rawTransactions, ingestOptions)
 
       if (ingestResult.errors > 0 && ingestResult.first_error) {
@@ -132,6 +161,44 @@ export const POST = withRouteContext(
           error_message: errorMessage,
         })
         .eq('id', importRecord.id)
+
+      // SIE-overlap-gated reconciliation sweep (issue: no sweep fired after a
+      // bank CSV import, yet CSV is how a migrator gets pre-PSD2 history). One
+      // scoped run per enabled cash account; >= 0.9 auto-links, the 0.75-0.89
+      // band persists as reviewable suggestions. Viewers skip it: the sweep
+      // updates transactions, which viewers cannot do.
+      if (sieOverlap && ingestResult.imported > 0 && role !== 'viewer') {
+        try {
+          const sweepResult = await runUnattendedReconciliationSweep(supabase, companyId, user.id, {
+            dateFrom: fileDateFrom,
+            dateTo: fileDateTo,
+          })
+          const { error: stampError } = await supabase
+            .from('bank_file_imports')
+            .update({
+              sie_sweep: toSweepSummary(sweepResult, {
+                dateFrom: fileDateFrom,
+                dateTo: fileDateTo,
+              }),
+            })
+            .eq('id', importRecord.id)
+          if (stampError) {
+            // The links/suggestions are already written; only the UI summary
+            // is missing. Say so instead of letting the sweep look unrun.
+            opLog.warn('failed to stamp sie_sweep summary on bank_file_imports', stampError)
+          }
+          if (sweepResult.applied > 0 || sweepResult.suggested > 0) {
+            opLog.info('post-import SIE reconciliation sweep', {
+              applied: sweepResult.applied,
+              suggested: sweepResult.suggested,
+              unmatched: sweepResult.unmatched,
+            })
+          }
+        } catch (err) {
+          // Non-critical: rows stay in "Att bokföra" for manual matching.
+          opLog.warn('post-import SIE reconciliation sweep failed', err as Error)
+        }
+      }
 
       if (ingestResult.imported > 0 && ingestResult.transaction_ids.length > 0) {
         try {

@@ -147,7 +147,7 @@ function makeSupabaseStub(tables: Record<string, { data: unknown; error?: unknow
 function stubHappyTables() {
   return makeSupabaseStub({
     agi_declarations: { data: [PENDING_DECLARATION] },
-    skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+    skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
     company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
   })
 }
@@ -363,7 +363,7 @@ describe('AGI kvittenser cron', () => {
             { ...PENDING_DECLARATION, id: 'decl-3', company_id: 'comp-3' },
           ],
         },
-        skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
         company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
       }),
     )
@@ -410,7 +410,7 @@ describe('AGI kvittenser cron', () => {
     expect(body.expired).toBe(1)
     expect(body.apigwConfig).toBe(0)
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'SESSION_EXPIRED' })
-    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'SESSION_EXPIRED')
+    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'comp-1', 'SESSION_EXPIRED')
     expect(errorSpy).not.toHaveBeenCalled()
     expect(errorRecorder).not.toHaveBeenCalled()
     expect(warnSpy).not.toHaveBeenCalled()

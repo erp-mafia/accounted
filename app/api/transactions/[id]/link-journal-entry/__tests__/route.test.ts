@@ -8,7 +8,7 @@ import {
   makeInvoice,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -43,6 +43,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 import { POST } from '../route'
+import { eventBus } from '@/lib/events/bus'
 
 const TX_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const JE_UUID = '550e8400-e29b-41d4-a716-446655440001'
@@ -258,6 +259,25 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     expect(body.invoice_status).toBe('paid')
     expect(body.paid_amount).toBe(1000)
     expect(body.remaining_amount).toBe(0)
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({ paid_at: '2026-05-15T12:00:00Z' })
+    expect(vi.mocked(eventBus.emit)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'invoice.match_confirmed',
+        payload: expect.objectContaining({
+          invoice: expect.objectContaining({
+            status: 'paid',
+            paid_at: '2026-05-15T12:00:00Z',
+            paid_amount: 1000,
+            remaining_amount: 0,
+          }),
+          transaction: expect.objectContaining({
+            invoice_id: INV_UUID,
+            journal_entry_id: JE_UUID,
+          }),
+        }),
+      }),
+    )
     // Issue #1259: the invoice is settled, so no other transaction may keep
     // pointing at it as a match suggestion.
     expect(mockClearSuggestions).toHaveBeenCalledTimes(1)

@@ -10,6 +10,13 @@ export interface ExpenseWarning {
   legalBasis?: string
 }
 
+/**
+ * Meal/representation keyword pattern. Exported so channel intake (the
+ * WhatsApp representation-question trigger) reuses the exact same base
+ * heuristic instead of drifting its own copy.
+ */
+export const MEAL_PATTERN = /restaurang|lunch|middag|dinner|café|fika/i
+
 const warningPatterns: {
   pattern: RegExp
   warning: ExpenseWarning
@@ -50,7 +57,7 @@ const warningPatterns: {
     },
   },
   {
-    pattern: /restaurang|lunch|middag|dinner|café|fika/i,
+    pattern: MEAL_PATTERN,
     warning: {
       category: 'Representation',
       warningLevel: 'warning',

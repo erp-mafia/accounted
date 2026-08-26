@@ -27,9 +27,11 @@ import {
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -145,6 +147,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const today = new Date().toISOString().split('T')[0]
     const paymentDate = bodyPaymentDate || today
+    const paidAt = paidAtFromDate(paymentDate)
 
     // Reject future payment_date at the schema layer. BFL 5 kap 2 §
     // requires bokföring to follow real cash movement; a payment booked
@@ -172,7 +175,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         subtotal, subtotal_sek, vat_amount, vat_amount_sek, total_sek, due_date, received_date,
         is_credit_note, credited_invoice_id, payment_journal_entry_id, default_dimensions,
         supplier:suppliers(id, name, supplier_type),
-        items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, dimensions)
+        items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, apply_slp, dimensions)
       `)
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -289,6 +292,28 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const siAlreadyBooked = !!(typed as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
 
+    // createSupplierInvoiceCashEntry books the FULL invoice and takes no
+    // payment amount: reject partials and part-paid completions for
+    // never-booked kontantmetoden invoices instead of over-booking the
+    // expense. Fires in dry-run too, so a preview cannot mask the rejection.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked: siAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: typed.paid_amount,
+      paysRemainingInFull: newStatus === 'paid',
+    })
+    if (cashBlock) {
+      return v1ErrorResponseFromCode('SI_CASH_PARTIAL_UNSUPPORTED', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          reason: cashBlock,
+          payment_amount: paymentAmount,
+          paid_amount: typed.paid_amount,
+          remaining_amount: typed.remaining_amount,
+        },
+      })
+    }
+
     // FX-required validation. Whenever the registration JE used the invoice's
     // exchange rate to compute subtotal_sek (i.e. the SI was booked under
     // accrual or migrated from accrual), the payment JE has to book any rate
@@ -313,17 +338,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     if (ctx.dryRun) {
-      // paid_at: the live UPDATE writes `new Date().toISOString()` (a full UTC
-      // timestamp). Mirror that shape here so callers validating dry-run vs
-      // live against the same regex don't see surprises. payment_date stays
-      // ISO date because it represents the user-supplied calendar date.
+      // Keep the preview aligned with the live date-only payment timestamp.
       return dryRunPreview(
         {
           ...typed,
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? new Date().toISOString() : null,
+          paid_at: newStatus === 'paid' ? paidAt : null,
           payment_date: paymentDate,
           payment_amount: paymentAmount,
           would_create_payment_journal_entry: true,
@@ -425,7 +447,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         status: newStatus,
         remaining_amount: newRemaining,
         paid_amount: newPaidAmount,
-        paid_at: newStatus === 'paid' ? new Date().toISOString() : null,
+        paid_at: newStatus === 'paid' ? paidAt : null,
         payment_journal_entry_id: journalEntryId,
       })
       .eq('company_id', ctx.companyId!)
@@ -532,7 +554,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       await eventBus.emit({
         type: 'supplier_invoice.paid',
         payload: {
-          supplierInvoice: typed as unknown as SupplierInvoice,
+          supplierInvoice: {
+            ...typed,
+            paid_at: newStatus === 'paid' ? paidAt : (typed.paid_at ?? null),
+          } as unknown as SupplierInvoice,
           paymentAmount,
           companyId: ctx.companyId!,
           userId: ctx.userId,

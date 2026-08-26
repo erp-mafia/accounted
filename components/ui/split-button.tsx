@@ -168,7 +168,7 @@ export function SplitButton({
                     runOption(option)
                   }}
                   className={cn(
-                    'flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors',
+                    'flex w-full items-start gap-2.5 rounded-sm px-2.5 py-2 text-left transition-colors',
                     option.disabled
                       ? 'cursor-not-allowed text-muted-foreground/40'
                       : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',

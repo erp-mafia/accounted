@@ -76,34 +76,48 @@ async function insertEntry(params: {
   lines: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
   const id = randomUUID()
+  const status = params.status ?? 'posted'
+  const client = await getPool().connect()
   // Inserted directly, bypassing commit_journal_entry's voucher sequencing:
   // this is a read-side aggregate that only reads lines and account numbers.
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status, reverses_id)
-     VALUES ($1, $2, $3, $4, $5, 'A', $6, 'VAT closing-entry test', $7, $8, $9)`,
-    [
-      id,
-      params.userId,
-      params.companyId,
-      params.fiscalPeriodId,
-      params.voucherNumber,
-      params.entryDate,
-      params.sourceType ?? 'manual',
-      params.status ?? 'posted',
-      params.reversesId ?? null,
-    ],
-  )
-  for (const line of params.lines) {
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount)
-       VALUES ($1, $2, $3, $4)`,
-      [id, line.account, line.debit, line.credit],
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status, reverses_id)
+       VALUES ($1, $2, $3, $4, $5, 'A', $6, 'VAT closing-entry test', $7, $8, $9)`,
+      [
+        id,
+        params.userId,
+        params.companyId,
+        params.fiscalPeriodId,
+        params.voucherNumber,
+        params.entryDate,
+        params.sourceType ?? 'manual',
+        status,
+        params.reversesId ?? null,
+      ],
     )
+    for (const line of params.lines) {
+      await client.query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount)
+         VALUES ($1, $2, $3, $4)`,
+        [id, line.account, line.debit, line.credit],
+      )
+    }
+    if (status === 'posted') {
+      await client.query('SET CONSTRAINTS check_balance_on_posted_insert IMMEDIATE')
+    }
+    await client.query('COMMIT')
+    return id
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
   }
-  return id
 }
 
 /**

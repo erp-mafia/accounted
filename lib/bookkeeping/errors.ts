@@ -43,6 +43,7 @@ export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
 export const BOOKKEEPING_DATABASE_ERROR = 'BOOKKEEPING_DATABASE_ERROR' as const
 export const MEANINGLESS_CORRECTION = 'MEANINGLESS_CORRECTION' as const
+export const CORRECTION_CHAIN_TOO_DEEP = 'CORRECTION_CHAIN_TOO_DEEP' as const
 export const NO_OPEN_PERIOD_FOR_DATE = 'NO_OPEN_PERIOD_FOR_DATE' as const
 export const TARGET_PERIOD_CLOSED = 'TARGET_PERIOD_CLOSED' as const
 export const TARGET_PERIOD_LOCKED = 'TARGET_PERIOD_LOCKED' as const
@@ -221,6 +222,32 @@ export class MeaninglessCorrectionError extends Error {
 }
 
 /**
+ * Raised when a correction/reversal targets an entry that already sits
+ * CORRECTION_CHAIN_GUARD_DEPTH or more links deep in a rättelse chain
+ * (correction_of_id/reverses_id walked backwards). Stacking yet another
+ * storno+rättelse on top buries the journal in noise vouchers; the sanctioned
+ * fix is ONE correction expressing the net effect of the whole chain. The
+ * guard is advisory: callers bypass it with an explicit allowDeepChain flag
+ * (allow_deep_chain on the API/MCP surfaces), so it never dead-ends a
+ * legitimate deep fix.
+ */
+export class CorrectionChainTooDeepError extends Error {
+  readonly code = CORRECTION_CHAIN_TOO_DEEP
+  constructor(
+    public readonly depth: number,
+    public readonly chainRootVoucher: string | null
+  ) {
+    super(
+      `Correction chain is already ${depth} levels deep` +
+        (chainRootVoucher ? ` (chain root: ${chainRootVoucher})` : '') +
+        '. Compute the net effect of the whole chain and book ONE correction instead, ' +
+        'or pass allow_deep_chain=true to override.'
+    )
+    this.name = 'CorrectionChainTooDeepError'
+  }
+}
+
+/**
  * Raised when a verifikation is moved (recordate) to a date that no fiscal
  * period covers. We do not auto-create periods on a correction.
  */
@@ -289,9 +316,12 @@ export type BookkeepingOperation =
   | 'create_draft_entry'
   | 'create_entry_lines'
   | 'commit_entry'
+  | 'commit_asset_disposal'
+  | 'fetch_asset_disposal_entry'
   | 'create_reversal_entry'
   | 'create_reversal_lines'
   | 'post_reversal_entry'
+  | 'replace_opening_balance'
   | 'create_corrected_entry'
   | 'create_corrected_lines'
   | 'post_corrected_entry'
@@ -309,6 +339,39 @@ export class BookkeepingDatabaseError extends Error {
     super(cause ? `Database operation "${operation}" failed: ${cause}` : `Database operation "${operation}" failed`)
     this.name = 'BookkeepingDatabaseError'
   }
+}
+
+export interface UnusedVoucherAllocation {
+  fiscalPeriodId: string
+  voucherSeries: string
+  voucherNumber: number
+}
+
+const UNUSED_VOUCHER_ALLOCATION = Symbol('unused-voucher-allocation')
+
+/**
+ * Preserve the exact durable sequence allocation when an engine operation
+ * fails before any journal-entry row uses the number. The original error type
+ * is retained so existing API mappings remain unchanged.
+ */
+export function withUnusedVoucherAllocation<T>(
+  error: T,
+  allocation: UnusedVoucherAllocation,
+): T {
+  if (error instanceof Error) {
+    Object.defineProperty(error, UNUSED_VOUCHER_ALLOCATION, {
+      value: allocation,
+      enumerable: false,
+    })
+  }
+  return error
+}
+
+export function getUnusedVoucherAllocation(error: unknown): UnusedVoucherAllocation | null {
+  if (!(error instanceof Error)) return null
+  return (
+    error as Error & { [UNUSED_VOUCHER_ALLOCATION]?: UnusedVoucherAllocation }
+  )[UNUSED_VOUCHER_ALLOCATION] ?? null
 }
 
 // ============================================================================
@@ -336,6 +399,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof InvalidMappingResultError ||
     err instanceof BookkeepingDatabaseError ||
     err instanceof MeaninglessCorrectionError ||
+    err instanceof CorrectionChainTooDeepError ||
     err instanceof NoOpenPeriodForDateError ||
     err instanceof TargetPeriodClosedError ||
     err instanceof TargetPeriodLockedError ||
@@ -526,6 +590,19 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
         },
       },
       { status: 400 }
+    )
+  }
+
+  if (err instanceof CorrectionChainTooDeepError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { depth: err.depth, chainRootVoucher: err.chainRootVoucher },
+        },
+      },
+      { status: 409 }
     )
   }
 

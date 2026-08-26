@@ -16,6 +16,7 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip-provider";
 import { DeployReloadPrompt } from "@/components/system/DeployReloadPrompt";
+import { ThemeColorSync } from "@/components/system/ThemeColorSync";
 import { ThemeProvider } from "@/components/theme-provider";
 import { PaletteProvider } from "@/components/providers/PaletteProvider";
 import { SWRProvider } from "@/components/providers/SWRProvider";
@@ -206,6 +207,7 @@ export default async function RootLayout({
                     {children}
                     <Toaster />
                     <DeployReloadPrompt />
+                    <ThemeColorSync />
                     <ScrollbarReveal />
                   </TooltipProvider>
                 </SWRProvider>

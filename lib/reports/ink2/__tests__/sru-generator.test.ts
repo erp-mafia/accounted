@@ -39,7 +39,7 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
     ink2: {
       '7011': '20250101',
       '7012': '20251231',
-      '7113': 302000,
+      '7104': 302000,
       '7114': 0,
     },
     ink2r: defaultInk2r,
@@ -271,7 +271,7 @@ describe('INK2 SRU Generator', () => {
       const submission = generateSRUSubmission(declaration)
 
       const ink2Block = extractBlock(submission.blanketterSru, 'INK2-')
-      expect(ink2Block).toContain('#UPPGIFT 7113 302000')
+      expect(ink2Block).toContain('#UPPGIFT 7104 302000')
       // 7114 (underskott) is 0, should not appear
       expect(ink2Block).not.toContain('#UPPGIFT 7114')
     })

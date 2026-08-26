@@ -274,7 +274,10 @@ export const CLASS_1_ACCOUNTS: BASReferenceAccount[] = [
     normal_balance: 'debit',
     description: 'Pågående projekt för immateriella anläggningstillgångar',
     sru_code: '7201',
-    k2_excluded: false,
+    // Ej K2: pagaende egenupparbetade immateriella projekt ar forbjudna under
+    // BFNAR 2016:10 punkt 10.4 (egenupparbetade immateriella far inte aktiveras).
+    // Saknades i 20260225103139-backfillen; DB-raderna rattas i 20260805112000.
+    k2_excluded: true,
   },
   {
     account_number: '1088',

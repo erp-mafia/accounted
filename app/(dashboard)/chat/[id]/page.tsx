@@ -42,7 +42,7 @@ export default async function ChatConversationPage({ params }: PageProps) {
     // its expiry in Granskning with nothing here pointing at it.
     supabase
       .from('pending_operations')
-      .select('id, operation_type, title, risk_level, preview_data, created_at')
+      .select('id, operation_type, title, risk_level, preview_data, params, created_at')
       .eq('company_id', companyId)
       .eq('status', 'pending')
       .eq('agent_metadata->>conversation_id', id)

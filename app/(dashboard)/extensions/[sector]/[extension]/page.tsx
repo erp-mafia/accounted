@@ -76,8 +76,8 @@ export default async function ExtensionDetailPage({
       {/* Header */}
       <div className="flex items-start justify-between gap-4 mb-8">
         <div className="flex items-start gap-4">
-          <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary/10 flex-shrink-0">
-            <Icon className="h-7 w-7 text-primary" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary flex-shrink-0">
+            <Icon className="h-6 w-6 text-foreground" />
           </div>
           <div>
             <h1 className="font-display text-2xl leading-8 tracking-tight">{extensionName}</h1>
@@ -99,14 +99,14 @@ export default async function ExtensionDetailPage({
       {/* Details */}
       <div className="space-y-6">
         <div>
-          <h2 className="text-sm font-semibold mb-2">{t('description_heading')}</h2>
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-2">{t('description_heading')}</h2>
           <p className="text-sm text-muted-foreground leading-relaxed">
             {extensionLongDescription}
           </p>
         </div>
 
         <div>
-          <h2 className="text-sm font-semibold mb-2">{t('data_source_heading')}</h2>
+          <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-2">{t('data_source_heading')}</h2>
           <p className="text-sm text-muted-foreground">
             {dataPatternLabels[definition.dataPattern]}
           </p>

@@ -5,7 +5,7 @@ import { ingestTransactions } from '@/lib/transactions/ingest'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
 import { createLogger, type Logger } from '@/lib/logger'
-import type { RawTransaction } from '@/types'
+import type { RawTransaction, TransactionMethod } from '@/types'
 import { connectedAccountOptions, isRevokedConnectionError } from './connect'
 import type { StripeConnection } from '../types'
 
@@ -157,6 +157,37 @@ function describeBalanceTxn(txn: BalanceTxnLike): string {
 }
 
 /**
+ * Payment rail per balance-transaction type: Stripe's `type` is a structured
+ * discriminator, so the feed sets transaction_method explicitly instead of
+ * letting the ingest boundary guess from the description string. Charges and
+ * their refunds travel the card rail; payouts are transfers to the bank
+ * account; Stripe's own billing/tax deductions are fees; disputes surface as
+ * adjustments. Unknown types return null (unclassified).
+ */
+function methodForBalanceTxn(txn: BalanceTxnLike): TransactionMethod | null {
+  // Widened to string: live Stripe sends types the SDK union doesn't model
+  // (e.g. 'tax' for automatic-tax deductions).
+  switch (txn.type as string) {
+    case 'charge':
+    case 'payment':
+    case 'refund':
+    case 'payment_refund':
+    case 'payment_failure_refund':
+      return 'card'
+    case 'payout':
+      return 'transfer'
+    case 'stripe_fee':
+    case 'stripe_fx_fee':
+    case 'tax':
+      return 'fee'
+    case 'adjustment':
+      return 'adjustment'
+    default:
+      return null
+  }
+}
+
+/**
  * Map one balance transaction to its feed row(s): a main row for the gross
  * amount and, when Stripe deducted a fee, a separate negative fee row. Dates
  * use `created` (when the money moved: the economic event), NOT
@@ -179,6 +210,7 @@ export function mapBalanceTransaction(
       currency,
       external_id: stripeExternalId(stripeAccountId, txn.id),
       import_source: STRIPE_IMPORT_SOURCE,
+      transaction_method: methodForBalanceTxn(txn),
     },
   ]
   if (txn.fee) {
@@ -189,6 +221,7 @@ export function mapBalanceTransaction(
       currency,
       external_id: stripeFeeExternalId(stripeAccountId, txn.id),
       import_source: STRIPE_IMPORT_SOURCE,
+      transaction_method: 'fee',
     })
   }
   return rows

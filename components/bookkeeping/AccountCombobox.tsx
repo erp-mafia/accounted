@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useRef, useEffect, useMemo, useCallback, useId } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useId } from 'react'
+import { createPortal } from 'react-dom'
 import { Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -11,7 +12,18 @@ import {
   type SearchableAccount,
   type AccountSearchItem,
 } from '@/lib/bookkeeping/account-search'
+import {
+  computeDropdownPosition,
+  isSameDropdownPosition,
+  type DropdownPosition,
+} from '@/components/bookkeeping/account-combobox-position'
 import type { BASAccount } from '@/types'
+
+// Shared by every portaled panel instance: only stops propagation so the
+// browser's default scrolling still runs on the panel itself.
+function stopScrollPropagation(e: Event) {
+  e.stopPropagation()
+}
 
 interface AccountComboboxProps {
   value: string
@@ -59,7 +71,11 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   const [highlightedIndex, setHighlightedIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const internalInputRef = useRef<HTMLInputElement>(null)
-  const listRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
+  // The portaled (non-flat) dropdown panel. It is not a DOM descendant of
+  // containerRef, so outside-click detection must check it separately.
+  const portalPanelRef = useRef<HTMLDivElement | null>(null)
+  const [dropdownPos, setDropdownPos] = useState<DropdownPosition | null>(null)
   const selectedNameId = useId()
   // Whether the user has typed or arrow-navigated since the field was focused.
   // Enter only selects the highlighted item after an actual interaction: a
@@ -129,10 +145,74 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     }
   }, [highlightedIndex, isOpen])
 
+  // Keep the portaled (non-flat) dropdown glued to the trigger: measure off
+  // containerRef when it opens, and re-measure while anything scrolls or the
+  // window resizes underneath it. The capture-phase scroll listener also
+  // catches scrolling ancestors such as DialogContent's overflow-y-auto body.
+  const updateDropdownPosition = useCallback(() => {
+    if (flat || !containerRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    const next = computeDropdownPosition(
+      { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
+      { width: window.innerWidth, height: window.innerHeight },
+    )
+    // Bail out when nothing moved (e.g. scroll ticks that did not shift the
+    // anchor): returning the previous reference lets React skip the re-render.
+    setDropdownPos((prev) => (isSameDropdownPosition(prev, next) ? prev : next))
+  }, [flat])
+
+  useLayoutEffect(() => {
+    if (!isOpen || flat) return
+    updateDropdownPosition()
+    const handleScroll = (e: Event) => {
+      // Scrolling the portaled panel's own list never moves the anchor (the
+      // panel is position: fixed): repositioning on it would just churn state
+      // while the user scrolls the account list.
+      if (e.target instanceof Node && portalPanelRef.current?.contains(e.target)) return
+      updateDropdownPosition()
+    }
+    window.addEventListener('scroll', handleScroll, true)
+    window.addEventListener('resize', updateDropdownPosition)
+    return () => {
+      window.removeEventListener('scroll', handleScroll, true)
+      window.removeEventListener('resize', updateDropdownPosition)
+    }
+  }, [isOpen, flat, updateDropdownPosition])
+
+  // react-remove-scroll (active inside every modal dialog) preventDefaults
+  // wheel/touchmove events that reach document from outside the dialog's DOM
+  // tree, and the portaled panel lives outside that tree. Stopping the events
+  // at the panel lets the browser scroll it natively; overscroll-contain on
+  // the panel stops chained page scrolling at the list's edges.
+  const attachPortalPanel = useCallback((el: HTMLDivElement | null) => {
+    const prev = portalPanelRef.current
+    if (prev) {
+      prev.removeEventListener('wheel', stopScrollPropagation)
+      prev.removeEventListener('touchmove', stopScrollPropagation)
+    }
+    portalPanelRef.current = el
+    if (el) {
+      el.addEventListener('wheel', stopScrollPropagation)
+      el.addEventListener('touchmove', stopScrollPropagation)
+    }
+  }, [])
+
+  const attachPortalListPanel = useCallback((el: HTMLDivElement | null) => {
+    listRef.current = el
+    attachPortalPanel(el)
+  }, [attachPortalPanel])
+
   // Close dropdown when clicking/tapping outside
   useEffect(() => {
     function handleClickOutside(e: MouseEvent | TouchEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node
+      // The non-flat dropdown is portaled to document.body, so it is not a
+      // DOM descendant of containerRef: check the portaled panel too.
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(target) &&
+        !(portalPanelRef.current && portalPanelRef.current.contains(target))
+      ) {
         setIsOpen(false)
       }
     }
@@ -260,9 +340,96 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
 
   const showSelectedName = Boolean(selectedName && value && search === value)
 
-  // In flat mode the dropdown follows the trigger's width instead of forcing
-  // 34rem: inside a SettingsRow that fixed width would overflow the dialog.
-  const listWidthClass = flat ? 'w-full min-w-0' : 'min-w-[24rem] w-[max(100%,34rem)]'
+  // Flat mode keeps the dropdown as an absolute child that follows the
+  // trigger's width: inside a SettingsRow a fixed width would overflow the
+  // dialog. The non-flat dropdown is portaled to document.body with an
+  // explicit viewport-clamped geometry (computeDropdownPosition) instead, so
+  // a scrollable DialogContent can never clip it or grow a horizontal
+  // scrollbar around it (the fix info-tooltip.tsx already applies to
+  // TooltipContent, extended to this dropdown).
+  const flatListWidthClass = 'w-full min-w-0'
+
+  const portalPanelStyle: React.CSSProperties | undefined = dropdownPos
+    ? {
+        left: dropdownPos.left,
+        width: dropdownPos.width,
+        maxHeight: dropdownPos.maxHeight,
+        ...(dropdownPos.top !== undefined
+          ? { top: dropdownPos.top }
+          : { bottom: dropdownPos.bottom }),
+      }
+    : undefined
+
+  // data-dialog-companion: DialogContent/SheetContent treat a pointerdown
+  // inside a node carrying this attribute as an inside interaction, so
+  // clicking the portaled panel never dismisses the dialog hosting it.
+  const listPanelContent = groupedAccounts.map((group) => (
+    <div key={group.className}>
+      <div className="sticky top-0 px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted border-b border-input">
+        {group.className}
+      </div>
+      {group.accounts.map((item) => {
+        const flatIndex = flatList.indexOf(item)
+        const isHighlighted = flatIndex === highlightedIndex
+        return (
+          <button
+            key={item.account_number}
+            type="button"
+            data-highlighted={isHighlighted}
+            className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer flex items-baseline gap-2 ${
+              isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
+            }`}
+            onMouseDown={(e) => {
+              e.preventDefault()
+              selectAccount(item.account_number)
+            }}
+            onMouseEnter={() => setHighlightedIndex(flatIndex)}
+          >
+            <span className={`font-mono shrink-0 ${item.isActive ? '' : 'text-muted-foreground'}`}>
+              {item.account_number}
+            </span>
+            <span className="flex-1 min-w-0 break-words">{item.account_name}</span>
+            {!item.isActive && (
+              <span className="shrink-0 self-center text-[11px] text-muted-foreground whitespace-nowrap">
+                {notActivatedLabel}
+              </span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  ))
+
+  const emptyPanelContent = (
+    <>
+      <p className="text-sm text-muted-foreground">
+        Hittade inget konto som matchar.
+      </p>
+      {/^\d{4}$/.test(search.trim()) ? (
+        <p className="text-xs text-muted-foreground mt-1">
+          Om det är ett giltigt BAS-konto aktiveras det när du bokför.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground mt-1">
+          Kontot kan behöva aktiveras i din kontoplan.
+        </p>
+      )}
+      {onCreateAccount && (
+        <button
+          type="button"
+          className="mt-2 flex w-full items-center gap-2 rounded-sm border border-input bg-card px-2 py-1.5 text-left text-sm hover:bg-muted/50"
+          onMouseDown={(e) => {
+            e.preventDefault()
+            setIsOpen(false)
+            onCreateAccount(search.trim())
+          }}
+        >
+          <Plus className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">Skapa konto &quot;{search.trim()}&quot;</span>
+        </button>
+      )}
+    </>
+  )
 
   const triggerProps = {
     ref: setInputRef,
@@ -297,89 +464,55 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
       ) : null}
 
       {/* Dropdown */}
-      {isOpen && !disabled && flatList.length > 0 && (
+      {isOpen && !disabled && flatList.length > 0 && (flat ? (
         <div
           ref={listRef}
           className={cn(
-            'absolute z-50 top-full left-0 mt-1 max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md',
-            listWidthClass,
+            'absolute z-50 top-full left-0 mt-1 max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md',
+            flatListWidthClass,
           )}
         >
-          {groupedAccounts.map((group) => (
-            <div key={group.className}>
-              <div className="sticky top-0 px-2 py-1.5 text-xs font-semibold text-muted-foreground bg-muted border-b border-input">
-                {group.className}
-              </div>
-              {group.accounts.map((item) => {
-                const flatIndex = flatList.indexOf(item)
-                const isHighlighted = flatIndex === highlightedIndex
-                return (
-                  <button
-                    key={item.account_number}
-                    type="button"
-                    data-highlighted={isHighlighted}
-                    className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer flex items-baseline gap-2 ${
-                      isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
-                    }`}
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      selectAccount(item.account_number)
-                    }}
-                    onMouseEnter={() => setHighlightedIndex(flatIndex)}
-                  >
-                    <span className={`font-mono shrink-0 ${item.isActive ? '' : 'text-muted-foreground'}`}>
-                      {item.account_number}
-                    </span>
-                    <span className="flex-1 min-w-0 break-words">{item.account_name}</span>
-                    {!item.isActive && (
-                      <span className="shrink-0 self-center text-[11px] text-muted-foreground whitespace-nowrap">
-                        {notActivatedLabel}
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          ))}
+          {listPanelContent}
         </div>
-      )}
+      ) : (
+        dropdownPos &&
+        createPortal(
+          <div
+            ref={attachPortalListPanel}
+            data-dialog-companion=""
+            className="fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto rounded-lg border border-input bg-card shadow-md"
+            style={portalPanelStyle}
+          >
+            {listPanelContent}
+          </div>,
+          document.body,
+        )
+      ))}
 
       {/* Empty state */}
-      {isOpen && !disabled && search.trim() && flatList.length === 0 && (
+      {isOpen && !disabled && search.trim() && flatList.length === 0 && (flat ? (
         <div
           className={cn(
-            'absolute z-50 top-full left-0 mt-1 rounded-md border border-input bg-card shadow-md p-3',
-            listWidthClass,
+            'absolute z-50 top-full left-0 mt-1 rounded-lg border border-input bg-card shadow-md p-3',
+            flatListWidthClass,
           )}
         >
-          <p className="text-sm text-muted-foreground">
-            Hittade inget konto som matchar.
-          </p>
-          {/^\d{4}$/.test(search.trim()) ? (
-            <p className="text-xs text-muted-foreground mt-1">
-              Om det är ett giltigt BAS-konto aktiveras det när du bokför.
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground mt-1">
-              Kontot kan behöva aktiveras i din kontoplan.
-            </p>
-          )}
-          {onCreateAccount && (
-            <button
-              type="button"
-              className="mt-2 flex w-full items-center gap-2 rounded-md border border-input bg-card px-2 py-1.5 text-left text-sm hover:bg-muted/50"
-              onMouseDown={(e) => {
-                e.preventDefault()
-                setIsOpen(false)
-                onCreateAccount(search.trim())
-              }}
-            >
-              <Plus className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">Skapa konto &quot;{search.trim()}&quot;</span>
-            </button>
-          )}
+          {emptyPanelContent}
         </div>
-      )}
+      ) : (
+        dropdownPos &&
+        createPortal(
+          <div
+            ref={attachPortalPanel}
+            data-dialog-companion=""
+            className="fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto rounded-lg border border-input bg-card p-3 shadow-md"
+            style={portalPanelStyle}
+          >
+            {emptyPanelContent}
+          </div>,
+          document.body,
+        )
+      ))}
     </div>
   )
 }

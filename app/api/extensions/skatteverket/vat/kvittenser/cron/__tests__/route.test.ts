@@ -121,7 +121,7 @@ function stubHappyTables(state: Record<string, unknown> = LOCKED_STATE) {
     extension_data: {
       data: [{ company_id: 'comp-1', key: 'submission_202606', value: JSON.stringify(state) }],
     },
-    skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+    skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
   })
 }
 
@@ -287,7 +287,7 @@ describe('VAT kvittenser cron', () => {
 
     expect(body.expired).toBe(1)
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'SESSION_EXPIRED' })
-    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'SESSION_EXPIRED')
+    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'comp-1', 'SESSION_EXPIRED')
   })
 
   it('records error for generic failures without aborting the run', async () => {
@@ -312,7 +312,7 @@ describe('VAT kvittenser cron', () => {
           data: [{ company_id: 'comp-1', key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) }],
           updateError: { message: 'connection reset', code: '08006' },
         },
-        skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
       }),
     )
     mockSkvRequest.mockResolvedValueOnce({
@@ -345,7 +345,7 @@ describe('VAT kvittenser cron', () => {
           { company_id: 'comp-2', key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) },
         ],
       },
-      skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+      skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
     })
   }
 

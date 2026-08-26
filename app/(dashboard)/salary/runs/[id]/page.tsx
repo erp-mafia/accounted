@@ -1,11 +1,11 @@
 'use client'
 
-import { use, useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { use, useEffect, useRef, useState } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { AttnLine } from '@/components/ui/attn-line'
 import {
   Dialog,
   DialogContent,
@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { AlertTriangle, Download, Loader2 } from 'lucide-react'
+import { AlertTriangle, Loader2 } from 'lucide-react'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -47,6 +47,7 @@ import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
 export default function SalaryRunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
+  const pathname = usePathname()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('salary_run')
@@ -62,10 +63,17 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const [approveOverride, setApproveOverride] = useState<string[] | null>(null)
   const [preferredPaymentFormat, setPreferredPaymentFormat] = useState<'bg_lb' | 'pain001'>('pain001')
   const [defaultBank, setDefaultBank] = useState<string | null>(null)
+  // undefined = settings not loaded yet, null = confirmed missing. The panel
+  // only warns on null, so a failed settings fetch never shows a false alarm.
+  const [senderBankgiro, setSenderBankgiro] = useState<string | null | undefined>(undefined)
+  const [senderIban, setSenderIban] = useState<string | null | undefined>(undefined)
   // Gates the default-dimensions chips on the employee rows: same
   // company_settings.dimensions_enabled UI gate as the voucher form.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
   const [taxPayment, setTaxPayment] = useState<{
+    total_tax: number
+    total_avgifter: number
+    tax_payment_file_format: string | null
     tax_payment_file_generated_at: string | null
     tax_paid_at: string | null
   } | null>(null)
@@ -92,7 +100,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         void fetch(`/api/skatteverket/tax-payments/${period}`)
           .then(async (txRes) => (txRes.ok ? txRes.json() : null))
           .then((tx) => {
-            if (tx) setTaxPayment(tx.data)
+            // Clear on failure too: a stale record from a prior period must
+            // not keep feeding the panel outdated declared totals.
+            setTaxPayment(tx?.data ?? null)
           })
           .catch(() => setTaxPayment(null))
           .finally(() => setTaxPaymentLoading(false))
@@ -100,32 +110,52 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  async function loadSettings() {
+    const settingsRes = await fetch('/api/settings')
+    if (!settingsRes.ok) return
+    const { data } = await settingsRes.json()
+    if (data?.preferred_payment_format === 'pain001' || data?.preferred_payment_format === 'bg_lb') {
+      setPreferredPaymentFormat(data.preferred_payment_format)
+    }
+    setDefaultBank(typeof data?.salary_default_bank === 'string' ? data.salary_default_bank : null)
+    setSenderBankgiro(
+      typeof data?.bankgiro === 'string' && data.bankgiro.trim() ? data.bankgiro : null,
+    )
+    setSenderIban(typeof data?.iban === 'string' && data.iban.trim() ? data.iban : null)
+    setDimensionsEnabled(data?.dimensions_enabled === true)
+  }
+
   useEffect(() => {
     async function load() {
       // Employees and settings don't depend on the run - load all three in
       // parallel instead of serially.
-      const [, empRes, settingsRes] = await Promise.all([
+      const [, empRes] = await Promise.all([
         loadRun(),
         fetch('/api/salary/employees'),
-        fetch('/api/settings'),
+        loadSettings(),
       ])
       if (empRes.ok) {
         const { data } = await empRes.json()
         setAvailableEmployees(data || [])
-      }
-      if (settingsRes.ok) {
-        const { data } = await settingsRes.json()
-        if (data?.preferred_payment_format === 'pain001' || data?.preferred_payment_format === 'bg_lb') {
-          setPreferredPaymentFormat(data.preferred_payment_format)
-        }
-        setDefaultBank(typeof data?.salary_default_bank === 'string' ? data.salary_default_bank : null)
-        setDimensionsEnabled(data?.dimensions_enabled === true)
       }
       setLoading(false)
     }
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
+
+  // The payment-file warning links to settings, which opens as an intercepting
+  // modal over this still-mounted page. When the URL returns here after that
+  // detour, refetch settings so a bankgiro/IBAN saved in the modal clears the
+  // warning instead of leaving it asserting a stale "file cannot be created".
+  const pathnameSeen = useRef(false)
+  useEffect(() => {
+    if (!pathnameSeen.current) {
+      pathnameSeen.current = true
+      return
+    }
+    if (pathname === `/salary/runs/${id}`) loadSettings()
+  }, [pathname, id])
 
   // Refetch when the tab regains focus. AGI can be generated out-of-band (via
   // the MCP server, the public API, or another browser tab) and this page
@@ -142,11 +172,13 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  // Auto-load the journal preview once the run is calculated, so the
-  // "Bokföring (förhandsgranskning)" box renders beside Beräkningsdetaljer
-  // without a manual Förhandsgranska click. Re-runs when the calculated totals
-  // change (e.g. after Beräkna om) so the preview stays in sync; clears while
-  // the run isn't calculated yet.
+  // Auto-load the journal view once the run is calculated, so the voucher box
+  // renders beside Beräkningsdetaljer without a manual Förhandsgranska click.
+  // Re-runs when the calculated totals change (e.g. after Beräkna om) so the
+  // preview stays in sync; clears while the run isn't calculated yet. For
+  // booked/corrected runs the route returns the ACTUAL posted verifikat
+  // (voucher numbers included) instead of a recomputed projection, which
+  // could contradict vouchers booked under earlier rules.
   const isCalculatedForPreview = run?.calculation_params != null
   useEffect(() => {
     if (!isCalculatedForPreview) {
@@ -163,7 +195,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     return () => {
       cancelled = true
     }
-  }, [id, isCalculatedForPreview, run?.total_gross, run?.total_tax, run?.total_avgifter])
+    // run?.status: after Bokför, the box must swap the projection for the
+    // posted verifikat (voucher numbers included) without a manual reload.
+  }, [id, isCalculatedForPreview, run?.status, run?.total_gross, run?.total_tax, run?.total_avgifter])
 
   // Every handler below releases actionLoading in a finally: the flag gates the
   // header button, the progress rail and the employee table, so a rejected
@@ -735,46 +769,46 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             : null
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 stagger-enter">
+      {/* Back row + header: serif title with one status chip, the quiet meta
+          line, the next step as the one default button and everything else
+          behind the ⋯ menu. */}
       <RunHeader
         run={run}
         canWrite={canWrite}
         actionLoading={actionLoading}
         employeeCount={employees.length}
-        onDelete={handleDelete}
-        onCorrect={handleCorrect}
-      />
-
-      {/* Control zone: the wizard line and every action for the current stage,
-          grouped in one place with a large primary target. */}
-      <RunProgressBar
-        run={run}
         isCalculated={isCalculated}
-        noPayout={noPayout}
-        agiState={agiState}
-        agiKvittensnummer={agiKvittensnummer}
-        canWrite={canWrite}
-        actionLoading={actionLoading}
         primaryAction={primaryAction}
         onPreview={handlePreview}
         onRevert={() => handleAction('revert')}
         onUnapprove={handleUnapprove}
         onSendPayslips={handleSendPayslips}
         onDownloadPayslips={handleBulkPayslipDownload}
+        onDownloadAgi={handleDownloadAgi}
+        onDelete={handleDelete}
+        onCorrect={handleCorrect}
+      />
+
+      {/* The one attention sentence on the page: an empty declaration will be
+          filed for the period, which should be deliberate. */}
+      {isNollkorning && (
+        <AttnLine>
+          {t('nollkorning_title')}: {t('nollkorning_body', { period: periodLabel })}
+        </AttnLine>
+      )}
+
+      {/* The month's steps as a flat rail: where the run stands and what the
+          stage means. Actions live in the header. */}
+      <RunProgressBar
+        run={run}
+        isCalculated={isCalculated}
+        noPayout={noPayout}
+        agiState={agiState}
+        agiKvittensnummer={agiKvittensnummer}
       />
 
       <RunKpiCards run={run} employees={employees} />
-
-      {isNollkorning && (
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-sm font-medium">{t('nollkorning_title')}</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              {t('nollkorning_body', { period: periodLabel })}
-            </p>
-          </CardContent>
-        </Card>
-      )}
 
       <RunEmployeesTable
         run={run}
@@ -792,7 +826,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
       {/* Calculation detail and the journal preview read best side by side on
           the wide canvas; they stack on smaller viewports. */}
-      <div className="lg:grid lg:grid-cols-2 lg:gap-6 space-y-6 lg:space-y-0 items-start">
+      <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2 items-start">
         <RunCalculationDetails periodYear={run.period_year} employees={employees} />
         {preview && (
           <RunJournalPreview
@@ -813,6 +847,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           paymentFileGeneratedAt={run.payment_file_generated_at}
           defaultFormat={preferredPaymentFormat}
           defaultBank={defaultBank}
+          senderBankgiro={senderBankgiro}
+          senderIban={senderIban}
           readOnly={!canWrite}
           onDownloaded={loadRun}
         />
@@ -821,57 +857,44 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       {/* Tax payment (skatt + arbetsgivaravgifter): once AGI has been generated */}
       {run.status === 'booked' && run.agi_generated_at && (
         taxPaymentLoading ? (
-          <Card>
-            <CardContent className="space-y-4 p-6">
-              <Skeleton className="h-5 w-40" />
-              <Skeleton className="h-20 w-full" />
-            </CardContent>
-          </Card>
+          <div className="space-y-4">
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-20 w-full" />
+          </div>
         ) : (
           <TaxPaymentPanel
             period={periodLabel}
-            totalTax={run.total_tax}
-            totalAvgifter={run.total_avgifter}
+            // Prefer the AGI declaration's stored totals (whole kronor, and
+            // they honor review overrides/corrections); the run totals are
+            // the pre-AGI fallback and get truncated inside the panel.
+            totalTax={taxPayment?.total_tax ?? run.total_tax}
+            totalAvgifter={taxPayment?.total_avgifter ?? run.total_avgifter}
+            paymentFileFormat={taxPayment?.tax_payment_file_format ?? null}
             paymentFileGeneratedAt={taxPayment?.tax_payment_file_generated_at ?? null}
             taxPaidAt={taxPayment?.tax_paid_at ?? null}
+            defaultFormat={preferredPaymentFormat}
+            senderBankgiro={senderBankgiro}
+            senderIban={senderIban}
             readOnly={!canWrite}
             onChange={loadRun}
           />
         )
       )}
 
-      {/* AGI (Arbetsgivardeklaration): available once the run is booked */}
+      {/* AGI (Arbetsgivardeklaration): available once the run is booked. The
+          XML download for manual filing lives in the header's ⋯ menu. */}
       {run.status === 'booked' && (
-        <div className="space-y-3">
-          <AGIPanel
-            salaryRunId={id}
-            arbetsgivare={run.arbetsgivare ?? ''}
-            period={`${run.period_year}${String(run.period_month).padStart(2, '0')}`}
-            agiGeneratedAt={run.agi_generated_at}
-            agiSubmittedAt={run.agi_submitted_at}
-            submission={agiSubmission}
-            onRefreshSubmission={refreshAgiSubmission}
-            readOnly={!canWrite}
-            onChange={loadRun}
-          />
-          {canWrite && (
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleDownloadAgi}
-                disabled={!!actionLoading}
-              >
-                {actionLoading === 'agi-download' ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="mr-2 h-4 w-4" />
-                )}
-                {t('action_download_agi')}
-              </Button>
-            </div>
-          )}
-        </div>
+        <AGIPanel
+          salaryRunId={id}
+          arbetsgivare={run.arbetsgivare ?? ''}
+          period={`${run.period_year}${String(run.period_month).padStart(2, '0')}`}
+          agiGeneratedAt={run.agi_generated_at}
+          agiSubmittedAt={run.agi_submitted_at}
+          submission={agiSubmission}
+          onRefreshSubmission={refreshAgiSubmission}
+          readOnly={!canWrite}
+          onChange={loadRun}
+        />
       )}
 
       {/* Overridable approval guard: missing bank details don't dead-end -
@@ -885,7 +908,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             </DialogDescription>
           </DialogHeader>
           {approveOverride && approveOverride.length > 0 && (
-            <div className="flex items-start gap-2 rounded-md border border-border p-3 text-xs">
+            <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
               <ul className="space-y-1">
                 {approveOverride.map((reason, i) => (

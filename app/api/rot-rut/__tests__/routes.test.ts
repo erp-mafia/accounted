@@ -124,7 +124,8 @@ describe('GET /api/rot-rut/eligible', () => {
       invoice_number: 'F-BAD',
       items: [makeRotItem({ labor_hours: null })],
     })
-    enqueue({ data: [good, missingHours] })
+    enqueue({ data: [good, missingHours] }) // by header total
+    enqueue({ data: [] }) // by deduction lines
     enqueue({ data: [] }) // no active request items
 
     const response = await eligibleGET(
@@ -142,9 +143,26 @@ describe('GET /api/rot-rut/eligible', () => {
     expect(body.data.blocked[0].code).toBe('MISSING_HOURS')
   })
 
-  it('hides invoices already in an active request', async () => {
+  it('surfaces invoices held by an in-flight request as ALREADY_REQUESTED', async () => {
     enqueue({ data: [makePaidRotInvoice()] })
-    enqueue({ data: [{ invoice_id: INVOICE_ID, request: { id: 'r', status: 'submitted', company_id: 'company-1' } }] })
+    enqueue({ data: [] })
+    enqueue({ data: [{ invoice_id: INVOICE_ID, request: { id: 'r', name: 'ROT juli', status: 'submitted', company_id: 'company-1' } }] })
+
+    const response = await eligibleGET(createMockRequest('/api/rot-rut/eligible'))
+    const { body } = await parseJsonResponse<{
+      data: { eligible: unknown[]; blocked: Array<{ code: string; message: string }> }
+    }>(response)
+
+    expect(body.data.eligible).toHaveLength(0)
+    expect(body.data.blocked).toHaveLength(1)
+    expect(body.data.blocked[0].code).toBe('ALREADY_REQUESTED')
+    expect(body.data.blocked[0].message).toContain('ROT juli')
+  })
+
+  it('hides invoices whose request is already decided', async () => {
+    enqueue({ data: [makePaidRotInvoice()] })
+    enqueue({ data: [] })
+    enqueue({ data: [{ invoice_id: INVOICE_ID, request: { id: 'r', name: 'ROT juli', status: 'paid', company_id: 'company-1' } }] })
 
     const response = await eligibleGET(createMockRequest('/api/rot-rut/eligible'))
     const { body } = await parseJsonResponse<{
@@ -230,6 +248,36 @@ describe('POST /api/rot-rut/payout-file', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('ROT_RUT_INVOICES_BLOCKED')
+  })
+
+  it('rejects a file that mixes payment years', async () => {
+    const otherInvoiceId = '33333333-3333-4333-8333-333333333333'
+    enqueue({
+      data: [
+        makePaidRotInvoice(),
+        makePaidRotInvoice({
+          id: otherInvoiceId,
+          invoice_number: 'F-2025',
+          paid_at: '2025-12-30T10:00:00Z',
+        }),
+      ],
+    })
+
+    const response = await payoutFilePOST(
+      createMockRequest('/api/rot-rut/payout-file', {
+        method: 'POST',
+        body: { deduction_type: 'rot', invoice_ids: [INVOICE_ID, otherInvoiceId] },
+      }),
+    )
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { blockers: Array<{ code: string }> } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ROT_RUT_INVOICES_BLOCKED')
+    expect(body.error.details?.blockers).toEqual([
+      expect.objectContaining({ invoice_id: otherInvoiceId, code: 'MIXED_PAYMENT_YEARS' }),
+    ])
   })
 
   it('returns 404 when an invoice id does not belong to the company', async () => {

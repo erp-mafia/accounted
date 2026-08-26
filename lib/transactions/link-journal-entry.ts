@@ -16,7 +16,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { createLogger } from '@/lib/logger'
 import type { Invoice, Transaction } from '@/types'
 
@@ -332,14 +334,14 @@ export async function linkTransactionToJournalEntry(
     }
   }
 
-  const now = new Date().toISOString()
+  const paidAt = invoice && isFullyPaid ? paidAtFromDate(transaction.date) : null
 
   if (invoice && invoiceId) {
     const { data: updatedRows, error: updateInvError } = await supabase
       .from('invoices')
       .update({
         status: newStatus,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: paidAt,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
       })
@@ -414,6 +416,11 @@ export async function linkTransactionToJournalEntry(
     }
   }
 
+  // The transaction is now anchored to an existing verifikat: complete any
+  // matched inbox items against it (underlag link + consumed stamp) so they
+  // leave the active inbox. Best-effort, logged inside.
+  await propagateUnderlagForBookedTransaction(supabase, companyId, transactionId, journalEntryId)
+
   logMatchEvent(supabase, userId, transactionId, 'linked_to_existing_voucher', {
     invoiceId,
     newState: {
@@ -428,8 +435,21 @@ export async function linkTransactionToJournalEntry(
       eventBus.emit({
         type: 'invoice.match_confirmed',
         payload: {
-          invoice: invoice as Invoice,
-          transaction: transaction as Transaction,
+          invoice: {
+            ...invoice,
+            status: newStatus,
+            paid_at: paidAt,
+            paid_amount: newPaidAmount,
+            remaining_amount: newRemaining,
+          } as Invoice,
+          transaction: {
+            ...transaction,
+            journal_entry_id: journalEntryId,
+            invoice_id: invoiceId,
+            potential_invoice_id: null,
+            potential_supplier_invoice_id: null,
+            is_business: true,
+          } as Transaction,
           userId,
           companyId,
         },

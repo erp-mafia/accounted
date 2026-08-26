@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
@@ -20,6 +21,7 @@ export default function BankFileResultStep({
   result,
   onNewImport,
 }: BankFileResultStepProps) {
+  const t = useTranslations('transactions')
   const isSuccess = result.imported > 0 || result.duplicates > 0
 
   return (
@@ -45,10 +47,18 @@ export default function BankFileResultStep({
               ? `${result.imported} transaktioner importerades framgångsrikt.`
               : `${result.errors} fel uppstod under importen.`}
           </CardDescription>
+          {/* Close the silent-dedup loop: without this line, skipped rows just
+              look like they vanished (fewer imported than parsed, no
+              explanation). */}
+          {result.duplicates > 0 && (
+            <CardDescription>
+              {t('import_duplicate_result', { count: result.duplicates })}
+            </CardDescription>
+          )}
         </CardHeader>
         {!isSuccess && result.first_error && (
           <CardContent>
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
               <p className="font-medium text-destructive">Databasfel</p>
               <p className="mt-1 font-mono text-xs text-muted-foreground break-all">
                 {result.first_error.message}

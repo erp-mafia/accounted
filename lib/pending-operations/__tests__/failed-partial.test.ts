@@ -30,6 +30,8 @@ vi.mock('@/lib/bookkeeping/invoice-entries', async () => {
 })
 
 const mockReverseEntry = vi.fn()
+const mockFindFiscalPeriod = vi.fn()
+const mockCreateJournalEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', async () => {
   const actual = await vi.importActual<typeof import('@/lib/bookkeeping/engine')>(
     '@/lib/bookkeeping/engine',
@@ -37,6 +39,8 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
   return {
     ...actual,
     reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
+    findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
+    createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
   }
 })
 
@@ -125,6 +129,10 @@ beforeEach(() => {
   mockCreateCashEntry.mockResolvedValue({ id: 'je-pay' })
   mockCreateCreditNoteEntry.mockResolvedValue({ id: 'je-credit' })
   mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
+  // The accrual match path builds its clearing entry via findFiscalPeriod +
+  // createJournalEntry (shared-builder parity with the dashboard/v1 routes).
+  mockFindFiscalPeriod.mockResolvedValue('fp-1')
+  mockCreateJournalEntry.mockResolvedValue({ id: 'je-pay' })
 })
 
 describe('match_transaction_invoice: partial commit after the storno', () => {
@@ -138,7 +146,7 @@ describe('match_transaction_invoice: partial commit after the storno', () => {
     enqueue({ data: null, error: null }) // transactions unlink after storno
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
 
-    mockCreatePaymentEntry.mockRejectedValue(new JournalEntryNotBalancedError(500, 400))
+    mockCreateJournalEntry.mockRejectedValue(new JournalEntryNotBalancedError(500, 400))
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
@@ -235,7 +243,7 @@ describe('match_transaction_invoice: partial commit after the storno', () => {
 
     // JE creation "succeeded" with null (e.g. no open fiscal period):
     // nothing was posted, so today's auto-reject semantics must survive.
-    mockCreatePaymentEntry.mockResolvedValue(null)
+    mockCreateJournalEntry.mockResolvedValue(null)
 
     const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)

@@ -152,7 +152,17 @@ export async function syncAccountTransactions(
   // formatting variants from the ASPSP ("SE45 5000 …" vs "SE455000…") don't
   // change the scope and orphan every prior external_id. Falls back to the
   // provider account uid.
-  const accountScope = account.iban?.replace(/\s+/g, '').toUpperCase() || account.uid
+  //
+  // account.dedup_scope, when present, wins outright: it pins the scope the
+  // account was FIRST ingested under, so a re-authorization that mints a new
+  // uid (common for no-IBAN accounts) keeps producing byte-identical ids
+  // instead of re-importing the whole history. The id FORMAT itself is frozen
+  // (see lib/transactions/external-id.ts); only the scope input is stabilized.
+  // Stamped back onto the account here for legacy rows so the caller's
+  // accounts_data write-back persists it.
+  const accountScope =
+    account.dedup_scope || account.iban?.replace(/\s+/g, '').toUpperCase() || account.uid
+  if (!account.dedup_scope) account.dedup_scope = accountScope
   const externalIds = buildStableExternalIds(
     'eb',
     accountScope,
@@ -184,6 +194,10 @@ export async function syncAccountTransactions(
       import_source: 'enable_banking',
       counterparty_iban: looksLikeIban ? cpAccount!.replace(/\s+/g, '') : null,
       counterparty_account: !looksLikeIban ? cpAccount : null,
+      // Verbatim transaction-type codes: the ingest boundary classifies them
+      // into transaction_method and persists them as evidence columns.
+      bank_transaction_code: tx.bank_transaction_code || null,
+      proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code || null,
     }
   })
 

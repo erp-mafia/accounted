@@ -89,6 +89,48 @@ export interface VatSettlementProposal {
 }
 
 /**
+ * Posted settlement that gates re-booking. Same rule as VatBookingCard:
+ * tagged `vat_settlement` and shape-detected momsomföring both land in
+ * `existing_entries`; the first posted row is the one the UI links to.
+ */
+export function findPostedVatSettlement(
+  entries: VatSettlementExistingEntry[] | undefined,
+): VatSettlementExistingEntry | undefined {
+  return entries?.find((e) => e.status === 'posted')
+}
+
+/** Draft settlement, ignored when a posted one already exists. */
+export function findDraftVatSettlement(
+  entries: VatSettlementExistingEntry[] | undefined,
+): VatSettlementExistingEntry | undefined {
+  if (findPostedVatSettlement(entries)) return undefined
+  return entries?.find((e) => e.status === 'draft')
+}
+
+export function vatSettlementBookingStatus(
+  entries: VatSettlementExistingEntry[] | undefined,
+): 'booked' | 'draft' | 'none' {
+  if (findPostedVatSettlement(entries)) return 'booked'
+  if (findDraftVatSettlement(entries)) return 'draft'
+  return 'none'
+}
+
+/**
+ * `deadlines.tax_period` key for a VAT picker. Yearly (helårsmoms) is omitted:
+ * that row uses a fiscal-year label that needs company settings, and guessing
+ * calendar `YYYY` would mis-label broken räkenskapsår.
+ */
+export function vatDeadlineTaxPeriod(
+  periodType: VatPeriodType,
+  year: number,
+  period: number,
+): string | null {
+  if (periodType === 'monthly') return `${year}-${String(period).padStart(2, '0')}`
+  if (periodType === 'quarterly') return `${year}-Q${period}`
+  return null
+}
+
+/**
  * Build the settlement verifikat proposal for a VAT period. Reads the same
  * aggregated ledger totals as the momsrapport (fetchVatAccountTotals), so the
  * proposal always ties out with the report on screen and the filed eSKD/PDF

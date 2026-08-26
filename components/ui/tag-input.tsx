@@ -77,7 +77,7 @@ const TagInput = React.forwardRef<HTMLInputElement, TagInputProps>(
     return (
       <div
         className={cn(
-          'flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border border-input bg-transparent px-3 py-1.5 text-sm transition-colors',
+          'flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-lg border border-input bg-transparent px-3 py-1.5 text-sm transition-colors',
           'focus-within:ring-1 focus-within:ring-ring',
           disabled && 'cursor-not-allowed opacity-50',
           className
@@ -87,7 +87,7 @@ const TagInput = React.forwardRef<HTMLInputElement, TagInputProps>(
         {tags.map((tag, i) => (
           <span
             key={`${tag}-${i}`}
-            className="inline-flex items-center gap-1 rounded-md bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
+            className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
           >
             {tag}
             {!disabled && (
@@ -97,7 +97,7 @@ const TagInput = React.forwardRef<HTMLInputElement, TagInputProps>(
                   e.stopPropagation()
                   removeTag(i)
                 }}
-                className="rounded-sm opacity-60 hover:opacity-100 focus:outline-none"
+                className="rounded-full opacity-60 hover:opacity-100 focus:outline-none"
               >
                 <X className="h-3 w-3" />
               </button>

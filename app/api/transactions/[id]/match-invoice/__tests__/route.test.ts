@@ -9,7 +9,7 @@ import {
   makeCustomer,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -69,6 +69,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 import { POST } from '../route'
+import { eventBus } from '@/lib/events/bus'
 // Mocked above: imported here as a spy handle to assert FX rate provenance
 // lands in the audit trail (PR #615 review).
 import { logMatchEvent } from '@/lib/invoices/match-log'
@@ -293,6 +294,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockFetchExchangeRate.mockResolvedValue({
       currency: 'USD',
@@ -396,6 +398,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockFetchExchangeRate.mockResolvedValue(null) // Riksbanken down: manual rate used instead
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-fx-manual' })
@@ -455,6 +458,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null })
     // Fetch company settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
@@ -478,6 +482,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       paid_amount: number
       remaining_amount: number
       journal_entry_id: string
+      paid_at: string | null
     }>(response)
 
     expect(status).toBe(200)
@@ -486,6 +491,26 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.paid_amount).toBe(12500)
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
+    expect(body.paid_at).toBe('2024-06-15T12:00:00Z')
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({ paid_at: '2024-06-15T12:00:00Z' })
+    expect(vi.mocked(eventBus.emit)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'invoice.match_confirmed',
+        payload: expect.objectContaining({
+          invoice: expect.objectContaining({
+            status: 'paid',
+            paid_at: '2024-06-15T12:00:00Z',
+            paid_amount: 12500,
+            remaining_amount: 0,
+          }),
+          transaction: expect.objectContaining({
+            invoice_id: VALID_UUID,
+            journal_entry_id: 'je-1',
+          }),
+        }),
+      }),
+    )
 
     // Clearing path now builds lines via buildInvoicePaymentClearingLines and
     // posts via createJournalEntry directly (FX fix PR #614 round 6). For a
@@ -533,11 +558,11 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
     // Clear journal_entry_id on transaction
     enqueue({ data: null, error: null })
-    // logMatchEvent for storno
-    enqueue({ data: null, error: null })
+    // (logMatchEvent does not consume a from() on the mocked route client)
 
     // Fetch company settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
 
     // Update invoice (optimistic lock)
@@ -607,6 +632,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial' })
 
@@ -656,6 +682,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: null, error: null }) // insert invoice_payments
@@ -678,6 +705,74 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       VALID_UUID,
       { exceptTransactionId: 'tx-1' },
     )
+  })
+
+  it('rejects a cash-method partial match on a never-booked invoice (no negative 1510, no silent moms)', async () => {
+    // Regression: the old fallback booked an accrual-style clearing entry
+    // against an EMPTY 1510 (negative receivable, no revenue, no moms), and
+    // the final payment then booked the FULL total via createInvoiceCashEntry,
+    // double-debiting the bank account.
+    const tx = makeTransaction({ id: 'tx-1', amount: 5000, invoice_id: null, date: '2024-06-15' })
+    const invoice = {
+      ...makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+        paid_amount: 0,
+      }),
+      journal_entry_id: null,
+    }
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects completing a previously part-paid never-booked cash invoice (cash entry books the full total)', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 7500, invoice_id: null, date: '2024-06-15' })
+    const invoice = {
+      ...makeInvoice({
+        id: VALID_UUID,
+        status: 'partially_paid',
+        total: 12500,
+        remaining_amount: 7500,
+        paid_amount: 5000,
+      }),
+      journal_entry_id: null,
+    }
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    // No hard-duplicate check here: it only runs for 'sent'/'overdue', so the
+    // next query is the settings fetch.
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+    expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
   it('cash method ignores cash entry when invoice was already booked (accrual→cash migration)', async () => {
@@ -705,6 +800,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
@@ -863,8 +959,10 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       enqueue({ data: invoice, error: null })
       enqueue({ data: [], error: null }) // hard-duplicate check
       enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
-      // No cash_accounts enqueue: resolveSettlementAccount short-circuits to
-      // '1930' when cash_account_id is null, with no DB call.
+      // With cash_account_id null, resolveSettlementAccount lists the
+      // company's enabled cash accounts for the currency (issue #1722); no
+      // rows here, so it keeps the 1930 fallback.
+      enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts
 
       mockCreateJournalEntry.mockResolvedValue({ id: 'je-default' })
 
@@ -965,23 +1063,33 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(details.excess).toBe(7000)
   })
 
-  it('cash method partial payment uses clearing entry with note', async () => {
+  it('cash setting still allows a partial on an accrual-booked invoice (clearing entry)', async () => {
+    // Pure kontantmetoden partials are rejected (see the rejection tests
+    // above), but an invoice booked at send under accrual keeps its normal
+    // partial clearing path even after the company switches to cash: 1510
+    // has a real balance to clear.
     const tx = makeTransaction({ id: 'tx-1', amount: 5000, invoice_id: null, date: '2024-06-15' })
-    const invoice = makeInvoice({
-      id: VALID_UUID,
-      status: 'sent',
-      total: 12500,
-      remaining_amount: 12500,
-      paid_amount: 0,
-    })
+    const invoice = {
+      ...makeInvoice({
+        id: VALID_UUID,
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+        paid_amount: 0,
+      }),
+      journal_entry_id: 'je-send-on-accrual',
+    }
 
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
+    // PDF re-attach lookup (invoice.journal_entry_id set; null result skips)
+    enqueue({ data: null, error: null })
     // Update invoice
     enqueue({ data: [{ id: VALID_UUID }], error: null })
     // Insert invoice_payments
@@ -1000,8 +1108,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     expect(status).toBe(200)
     expect(body.invoice_status).toBe('partially_paid')
-    // Cash partial uses accrual-style clearing entry (now via the shared
-    // helper + createJournalEntry), NOT createInvoiceCashEntry.
+    // Accrual-booked partial uses the clearing entry (via the shared helper +
+    // createJournalEntry), NOT createInvoiceCashEntry.
     expect(mockCreateJournalEntry).toHaveBeenCalled()
     expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
   })
@@ -1019,6 +1127,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Optimistic lock returns 0 rows (another request fully paid it)
@@ -1048,6 +1157,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Optimistic lock succeeds
@@ -1079,6 +1189,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // Nothing else enqueued on purpose: the route must return before the
     // invoice update, payment insert, or transaction link ever run.
 
@@ -1098,9 +1209,10 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // The raw English message never reaches the user (issue #337): the reason
     // detail carries the Swedish invoice-context fallback.
     expect(body.error.details?.reason).toBe('Kunde inte hantera fakturan. Försök igen.')
-    // Exactly the four reads happened (tx, invoice, hard-dup, settings):
-    // no invoice update, no invoice_payments insert, no transaction link.
-    expect(mockSupabase.from).toHaveBeenCalledTimes(4)
+    // Exactly the five reads happened (tx, invoice, hard-dup, settings,
+    // settlement-account listing): no invoice update, no invoice_payments
+    // insert, no transaction link.
+    expect(mockSupabase.from).toHaveBeenCalledTimes(5)
   })
 
   it('aborts the match when createJournalEntry resolves without an id (no half-state)', async () => {
@@ -1111,6 +1223,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue(null)
 
@@ -1123,7 +1236,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     expect(status).toBe(500)
     expect(body.error.code).toBe('MATCH_INVOICE_RECORD_PAYMENT_FAILED')
-    expect(mockSupabase.from).toHaveBeenCalledTimes(4)
+    expect(mockSupabase.from).toHaveBeenCalledTimes(5)
   })
 
   // ────────────────────────────────────────────────────────────────
@@ -1171,6 +1284,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     // Hard-duplicate check is skipped for partially_paid; jump straight to settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial-extra' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
@@ -1250,6 +1364,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     })
 
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
 
     mockCreateJournalEntry.mockResolvedValue({ id: 'je-forced' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice

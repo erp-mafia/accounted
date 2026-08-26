@@ -147,6 +147,59 @@ describe('postDueInstallments', () => {
     ])
   })
 
+  it('carries the schedule dimensions bag onto both dissolution lines', async () => {
+    const tagged = makeSchedule({ dimensions: { '1': 'KS01', '6': 'P001' } })
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment({ schedule: tagged })] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: [{ id: 'inst-1' }] },
+      { count: 0 },
+      { data: null },
+    ])
+
+    await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-01-20',
+    })
+
+    const input = mockCreateJournalEntry.mock.calls[0][3]
+    // Both lines: the origin entry tags its interim 17xx/29xx line too, so
+    // per-dimension views of the interim account must net to zero.
+    expect(input.lines).toEqual([
+      expect.objectContaining({
+        account_number: '6310',
+        dimensions: { '1': 'KS01', '6': 'P001' },
+      }),
+      expect.objectContaining({
+        account_number: '1730',
+        dimensions: { '1': 'KS01', '6': 'P001' },
+      }),
+    ])
+  })
+
+  it('adds no dimensions key when the schedule bag is empty', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment({ schedule: makeSchedule({ dimensions: {} }) })] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: [{ id: 'inst-1' }] },
+      { count: 0 },
+      { data: null },
+    ])
+
+    await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-01-20',
+    })
+
+    const input = mockCreateJournalEntry.mock.calls[0][3]
+    expect(input.lines).toHaveLength(2)
+    for (const line of input.lines) {
+      expect(line).not.toHaveProperty('dimensions')
+    }
+  })
+
   it('shifts the entry date past the company lock date', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
@@ -367,6 +420,44 @@ describe('createAccrualSchedule', () => {
 
     expect(schedule.id).toBe('sched-1')
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('persists the spec dimensions bag on the schedule row', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeSchedule({ dimensions: { '6': 'P001' } }) },
+      { data: null },
+    ])
+
+    await createAccrualSchedule(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      { ...spec, dimensions: { '6': 'P001' } },
+      { postingFloorDate: '2026-01-15', postCatchUp: false },
+    )
+
+    const insert = findCall('accrual_schedules', 'insert')?.[0]
+    expect(insert).toMatchObject({ dimensions: { '6': 'P001' } })
+  })
+
+  it('defaults the schedule dimensions to an empty bag', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeSchedule() },
+      { data: null },
+    ])
+
+    await createAccrualSchedule(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      spec,
+      { postingFloorDate: '2026-01-15', postCatchUp: false },
+    )
+
+    const insert = findCall('accrual_schedules', 'insert')?.[0]
+    expect(insert).toMatchObject({ dimensions: {} })
   })
 
   it('cleans up the schedule when installment insert fails', async () => {

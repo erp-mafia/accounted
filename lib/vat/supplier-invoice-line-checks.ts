@@ -2,6 +2,7 @@
 // Kept free of React so the rules can be unit-tested and reused.
 
 import { roundOre } from '@/lib/money'
+import { normalizeVatRateToFraction } from './vat-rate-unit'
 
 // Only 25/12/6/0 % are legal Swedish VAT rates (ML 2023:200). The supplier
 // invoice form stores rates as decimal fractions (0.25 = 25 %); this list is
@@ -17,6 +18,12 @@ export function isLegalVatRate(rate: number): boolean {
   return LEGAL_VAT_RATES.includes(rate)
 }
 
+// normalizeVatRateToFraction lives in the import-free leaf module
+// vat-rate-unit.ts so extension entry graphs can use it without pulling in
+// this file's lib/money dependency; re-exported here so existing callers
+// keep their import path.
+export { normalizeVatRateToFraction }
+
 /**
  * Normalize a VAT rate that may arrive percent-shaped (25, 12, 6: the AI
  * extraction contract and stale staged pending_operations params) to the
@@ -28,11 +35,9 @@ export function isLegalVatRate(rate: number): boolean {
  * to a supplier invoice.
  */
 export function normalizeVatRateToDecimal(rate: unknown): number {
-  const n = Number(rate)
-  if (!Number.isFinite(n)) return 0
   // roundOre is 2-decimal rounding: exactly the snap a decimal fraction of an
   // integer percent needs (25 / 100 must land on the legal-set double).
-  const decimal = roundOre(n > 1 ? n / 100 : n)
+  const decimal = roundOre(normalizeVatRateToFraction(rate))
   return isLegalVatRate(decimal) ? decimal : 0
 }
 

@@ -11,50 +11,74 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { DataList, DataListEmpty } from '@/components/ui/data-list'
-import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { Loader2, Search } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
+import { FyPicker } from '@/components/common/FyPicker'
+import { ALL_YEARS_VALUE } from '@/components/common/FiscalYearSelector'
 import { AttnLine } from '@/components/ui/attn-line'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
+import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
 import InboxZeroState from '@/components/transactions/InboxZeroState'
 import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import { mapWithConcurrency } from '@/lib/concurrency'
 
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { resolveQuickReviewDefaults, type ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
 import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
 import { isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
+import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type {
   TransactionWithInvoice,
   ViewMode,
+  SourceFilter,
   CategorizeHandler,
+  PotentialVoucher,
 } from '@/components/transactions/transaction-types'
+import { SuggestionReviewList } from '@/components/transactions/SuggestionReviewList'
+import {
+  isSourceFilter,
+  readStoredSourceFilter,
+  resolveEffectiveSourceFilter,
+  writeStoredSourceFilter,
+} from '@/components/transactions/source-filter-storage'
 import type {
+  SkattekontoBatchResult,
+  SkattekontoBatchRowResult,
   SkattekontoTransactionWithSuggestion,
   StoredSkattekontoTransaction,
 } from '@/types/skatteverket'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
+import { skvStatusNeedsReconnect, type SkvStatusLike } from '@/lib/notices/predicates'
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/invoices/matchable-statuses'
 import { useCompany } from '@/contexts/CompanyContext'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary, CashAccount } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
+import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
+import type { FiscalPeriod } from '@/types'
 
 function InlineDialogContentLoading() {
   return (
@@ -87,8 +111,16 @@ const EditTransactionTitleDialog = dynamic(
   () => import('@/components/transactions/EditTransactionTitleDialog'),
   { loading: DialogLoadingSkeleton },
 )
+const MoveTransactionCashAccountDialog = dynamic(
+  () => import('@/components/transactions/MoveTransactionCashAccountDialog'),
+  { loading: DialogLoadingSkeleton },
+)
 const SkattekontoMatchDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoMatchDialog').then((module) => module.SkattekontoMatchDialog),
+  { loading: DialogLoadingSkeleton },
+)
+const SkattekontoBookDialog = dynamic(
+  () => import('@/components/skattekonto/SkattekontoBookDialog'),
   { loading: DialogLoadingSkeleton },
 )
 const DuplicateBookingDialog = dynamic(
@@ -100,13 +132,10 @@ const TemplatePicker = dynamic(() => import('@/components/transactions/TemplateP
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
 
-// Source filter for the merged inbox (concept scene 10 account chooser):
-// everything, one cash account ('acct:<id>'), bank rows not yet tied to a
-// registered cash account ('bank:other'), all bank rows ('bank': the fallback
-// split when no cash accounts are registered), or the skattekonto side.
-type SourceFilter = 'all' | 'bank' | 'bank:other' | 'skatteverket' | `acct:${string}`
-
-const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
+// Page-local fiscal-year scope (FyPicker appends the company id). Deliberately
+// NOT the shared report scope (Accounted:fiscal-year:): a year picked on a
+// report page must never silently hide pending inbox rows here, and vice versa.
+const PERIOD_FILTER_STORAGE_PREFIX = 'Accounted:transactions-fy-scope:v1:'
 
 // Journal-entry ids get interpolated into the supplier-invoice .or() filter
 // string in the underlag-badge effect below. They come from journal_entries.id
@@ -114,15 +143,16 @@ const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
 // /api/documents/counts.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-// Validates a persisted value. Stale acct:<id> entries (account removed or
-// disabled) are caught later by the sourceItems stale-filter guard.
-function isSourceFilter(value: string | null): value is SourceFilter {
+// A skattekonto row qualifies for bulk booking when the outcome is fully
+// deterministic: a rule matched (booking_suggestion), it is not a likely
+// duplicate (match_suggestion), it is unbooked, and it has actually happened
+// (kommande rows have nothing to book yet).
+function isSkvBulkEligible(row: SkattekontoTransactionWithSuggestion): boolean {
   return (
-    value === 'all' ||
-    value === 'bank' ||
-    value === 'bank:other' ||
-    value === 'skatteverket' ||
-    (value?.startsWith('acct:') ?? false)
+    row.booking_suggestion != null &&
+    row.match_suggestion == null &&
+    !row.journal_entry_id &&
+    row.status !== 'upcoming'
   )
 }
 
@@ -150,51 +180,106 @@ function buildSupplierInvoiceMap(
 // prod schema cache (see DECISIONS.md 2026-07-06).
 async function fetchPotentialMatches(
   supabase: SupabaseClient,
-  rows: { potential_invoice_id: string | null; potential_supplier_invoice_id: string | null }[],
+  rows: {
+    potential_invoice_id: string | null
+    potential_supplier_invoice_id: string | null
+    potential_journal_entry_id?: string | null
+  }[],
 ) {
-  const potentialInvoiceIds = rows
-    .filter((t) => t.potential_invoice_id)
-    .map((t) => t.potential_invoice_id)
-  const potentialSupplierInvoiceIds = rows
-    .filter((t) => t.potential_supplier_invoice_id)
-    .map((t) => t.potential_supplier_invoice_id)
+  const potentialInvoiceIds = Array.from(
+    new Set(rows.flatMap((t) => (t.potential_invoice_id ? [t.potential_invoice_id] : []))),
+  )
+  const potentialSupplierInvoiceIds = Array.from(
+    new Set(rows.flatMap((t) => (t.potential_supplier_invoice_id ? [t.potential_supplier_invoice_id] : []))),
+  )
+  const potentialJournalEntryIds = Array.from(
+    new Set(rows.flatMap((t) => (t.potential_journal_entry_id ? [t.potential_journal_entry_id] : []))),
+  )
+
+  // Chunked .in() lists (PostgREST .in() URL-length convention, same 150 as
+  // the underlag-status effect below): the caller may pass the full pending
+  // backlog, not just one page.
+  const IN_CLAUSE_CHUNK = 150
+  const chunks = <T,>(ids: T[]) => {
+    const out: T[][] = []
+    for (let i = 0; i < ids.length; i += IN_CLAUSE_CHUNK) out.push(ids.slice(i, i + IN_CLAUSE_CHUNK))
+    return out
+  }
 
   // The hint columns are never revisited once written, so an invoice settled
   // by a different transaction leaves a stale pointer behind. Revalidate here:
   // an unmatchable candidate must not reach the row or the match dialog, which
   // would otherwise compare the transaction against a 0 kr remaining balance
   // and call it a partial payment.
-  const [invoiceResult, supplierInvoiceResult] = await Promise.all([
-    potentialInvoiceIds.length > 0
-      ? supabase
+  const [invoiceResults, supplierInvoiceResults, voucherResults] = await Promise.all([
+    Promise.all(
+      chunks(potentialInvoiceIds).map((ids) =>
+        supabase
           .from('invoices')
           .select('*, customer:customers(*)')
-          .in('id', potentialInvoiceIds)
+          .in('id', ids)
           .in('status', [...MATCHABLE_INVOICE_STATUSES])
-          .gt('remaining_amount', 0)
-      : Promise.resolve({ data: null, error: null }),
-    potentialSupplierInvoiceIds.length > 0
-      ? supabase
+          .gt('remaining_amount', 0),
+      ),
+    ),
+    Promise.all(
+      chunks(potentialSupplierInvoiceIds).map((ids) =>
+        supabase
           .from('supplier_invoices')
           .select('*, supplier:suppliers(*)')
-          .in('id', potentialSupplierInvoiceIds)
+          .in('id', ids)
           .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
-          .gt('remaining_amount', 0)
-      : Promise.resolve({ data: null, error: null }),
+          .gt('remaining_amount', 0),
+      ),
+    ),
+    // Journal-entry match suggestions (the sweep's 0.75-0.89 band). DB
+    // triggers clear the pointer when the entry is consumed or reversed, but
+    // the posted-status filter revalidates anyway: a suggestion that no
+    // longer resolves to a live verifikat must not reach the review surface.
+    Promise.all(
+      chunks(potentialJournalEntryIds).map((ids) =>
+        supabase
+          .from('journal_entries')
+          .select('id, voucher_series, voucher_number, entry_date, description')
+          .in('id', ids)
+          .eq('status', 'posted'),
+      ),
+    ),
   ])
 
   // Non-fatal: the transaction list still renders without match hints, but
   // log so a DB failure isn't mistaken for "no potential match".
-  if (invoiceResult.error) {
-    console.error('[fetchPotentialMatches] invoices query failed', invoiceResult.error)
+  for (const r of invoiceResults) {
+    if (r.error) console.error('[fetchPotentialMatches] invoices query failed', r.error)
   }
-  if (supplierInvoiceResult.error) {
-    console.error('[fetchPotentialMatches] supplier_invoices query failed', supplierInvoiceResult.error)
+  for (const r of supplierInvoiceResults) {
+    if (r.error) console.error('[fetchPotentialMatches] supplier_invoices query failed', r.error)
+  }
+  for (const r of voucherResults) {
+    if (r.error) console.error('[fetchPotentialMatches] journal_entries query failed', r.error)
+  }
+
+  const voucherMap: Record<string, PotentialVoucher> = {}
+  for (const je of voucherResults.flatMap((r) => (r.data ?? []) as Array<{
+    id: string
+    voucher_series: string
+    voucher_number: number
+    entry_date: string
+    description: string | null
+  }>)) {
+    voucherMap[je.id] = {
+      journal_entry_id: je.id,
+      voucher_series: je.voucher_series,
+      voucher_number: je.voucher_number,
+      entry_date: je.entry_date,
+      description: je.description,
+    }
   }
 
   return {
-    invoiceMap: buildInvoiceMap(invoiceResult.data),
-    supplierInvoiceMap: buildSupplierInvoiceMap(supplierInvoiceResult.data),
+    invoiceMap: buildInvoiceMap(invoiceResults.flatMap((r) => r.data ?? [])),
+    supplierInvoiceMap: buildSupplierInvoiceMap(supplierInvoiceResults.flatMap((r) => r.data ?? [])),
+    voucherMap,
   }
 }
 
@@ -214,6 +299,7 @@ interface QuickReviewState {
 export default function TransactionsPage() {
   const { company } = useCompany()
   const companyId = company?.id ?? null
+  const searchParams = useSearchParams()
   const t = useTranslations('transactions')
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -241,6 +327,12 @@ export default function TransactionsPage() {
   const [bookingDialogOpen, setBookingDialogOpen] = useState(false)
   const [bookingDialogTransaction, setBookingDialogTransaction] = useState<TransactionWithInvoice | null>(null)
   const [bookingDialogTemplate, setBookingDialogTemplate] = useState<BookingTemplateLibrary | null>(null)
+  // "Andra rader" hand-off: the computed proposal lines from QuickReviewDialog,
+  // prefilled into TransactionBookingDialog for per-line editing.
+  const [bookingDialogProposalLines, setBookingDialogProposalLines] = useState<ProposalLine[] | null>(null)
+  // Account picked from the template picker's "Konton" search results:
+  // prefills the counter line when the manual booking dialog opens.
+  const [bookingDialogAccount, setBookingDialogAccount] = useState<string | null>(null)
 
   // Attach-underlag dialog (tx→doc mirror of the Documents view's matcher)
   const [attachDocTx, setAttachDocTx] = useState<TransactionWithInvoice | null>(null)
@@ -280,7 +372,9 @@ export default function TransactionsPage() {
   // categorizing direct to 2440. Triggered by a 409 TX_CATEGORIZE_SUGGEST_SI_MATCH.
   const [siMatchSuggestion, setSiMatchSuggestion] = useState<{
     transactionId: string
-    retry: () => Promise<string | null>
+    // Resolved value unused: callers only await completion. runCategorize
+    // resolves its outcome object, the counterparty path a journal-entry id.
+    retry: () => Promise<unknown>
     candidates: Array<{
       supplier_invoice_id: string
       invoice_number: string
@@ -297,7 +391,9 @@ export default function TransactionsPage() {
   // Triggered by a 409 TX_CATEGORIZE_SUGGEST_CI_MATCH.
   const [ciMatchSuggestion, setCiMatchSuggestion] = useState<{
     transactionId: string
-    retry: () => Promise<string | null>
+    // Resolved value unused: callers only await completion. runCategorize
+    // resolves its outcome object, the counterparty path a journal-entry id.
+    retry: () => Promise<unknown>
     candidates: Array<{
       invoice_id: string
       invoice_number: string | null
@@ -321,7 +417,9 @@ export default function TransactionsPage() {
   // candidate kinds), which the server re-detects so a stale id can't wave it.
   const [duplicateWarning, setDuplicateWarning] = useState<{
     transactionId: string
-    retry: () => Promise<string | null>
+    // Resolved value unused: callers only await completion. runCategorize
+    // resolves its outcome object, the counterparty path a journal-entry id.
+    retry: () => Promise<unknown>
     candidate: BookedDuplicateCandidate
   } | null>(null)
   const [duplicateProcessing, setDuplicateProcessing] = useState(false)
@@ -333,6 +431,23 @@ export default function TransactionsPage() {
   const [hasMore, setHasMore] = useState(false)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
 
+  // The history view pages through ALL transactions newest-first, while the
+  // inbox needs every pending row regardless of age. Both live in the single
+  // `transactions` array (so row mutations stay one code path), which means
+  // the array holds a contiguous newest-first window PLUS older pending rows
+  // merged in. These two track the contiguous window: `pagedCountRef` is the
+  // offset for the next history page (state length would overcount the merged
+  // extras), and `pagedThroughDate` is the window's oldest date so the history
+  // view can hide the sparse older pending rows (null = everything fetched).
+  const pagedCountRef = useRef(0)
+  const [pagedThroughDate, setPagedThroughDate] = useState<string | null>(null)
+
+  // Monotonic token for list fetches: a response applies only if no newer
+  // fetch (scope change, realtime refresh, load-more) started after it.
+  // Without it, a slow pre-filter request resolving late would overwrite the
+  // active period scope's window and paging state with stale rows.
+  const fetchGenerationRef = useRef(0)
+
   // True uncategorized count from DB (not limited by pagination)
   const [totalUncategorizedCount, setTotalUncategorizedCount] = useState<number | null>(null)
 
@@ -343,38 +458,80 @@ export default function TransactionsPage() {
   // Skatteverket extension is enabled and connected. 503/401 → silently
   // hidden (extension disabled or user not connected).
   const [skvRows, setSkvRows] = useState<SkattekontoTransactionWithSuggestion[]>([])
-  const [skvProcessingId, setSkvProcessingId] = useState<string | null>(null)
   const [skvMatchTarget, setSkvMatchTarget] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
+  // Inline single-row booking dialog (replaces the old draft-then-navigate
+  // flow that dumped the user in /bookkeeping and lost all list state).
+  const [skvBookTarget, setSkvBookTarget] = useState<SkattekontoTransactionWithSuggestion | null>(
+    null,
+  )
+  // SKV bulk selection: deliberately a SEPARATE set from the bank
+  // `selectedIds`: every bank batch handler POSTs /api/transactions/* and
+  // would 404 on skattekonto ids.
+  const [skvSelectedIds, setSkvSelectedIds] = useState<Set<string>>(new Set())
+  const [skvBulkConfirmOpen, setSkvBulkConfirmOpen] = useState(false)
+  const [skvBulkSubmitting, setSkvBulkSubmitting] = useState(false)
   // True when an SKV connection exists but is dead (needs_reconsent, or
   // expired with no refresh left). Drives the reconnect banner: without it
   // a user whose token died sees an empty skattekonto and has no reason to
   // ever visit the settings panel where the reconnect prompt lives.
   const [skvNeedsReconnect, setSkvNeedsReconnect] = useState(false)
 
-  // One browser-wide source filter, persisted (#1105) so the choice
-  // survives reloads. Defaults to 'all'.
+  // The user's WANTED source filter, persisted per company (#1105, per-company
+  // since v2). What the page actually filters by is the derived
+  // effectiveSourceFilter below, which falls back to 'all' while the wanted
+  // source's items are still loading or when the source went stale.
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(SOURCE_FILTER_STORAGE_KEY)
-      if (isSourceFilter(stored)) setSourceFilter(stored)
-    } catch {
-      // localStorage may be unavailable. Keep the default in-memory state.
-    }
+    if (!companyId) return
+    // A valid ?source= deep link overrides the remembered choice for this
+    // visit only: it is applied to state, never written to storage.
+    const urlSource = searchParams.get('source')
+    setSourceFilter(isSourceFilter(urlSource) ? urlSource : readStoredSourceFilter(companyId))
+  }, [companyId, searchParams])
+
+  const handleSourceFilterChange = useCallback(
+    (next: SourceFilter) => {
+      setSourceFilter(next)
+      if (companyId) writeStoredSourceFilter(companyId, next)
+    },
+    [companyId],
+  )
+
+  // Period filter (rakenskapsar). FyPicker owns the persistence under the
+  // page-local key. Quarter chips existed briefly (#1545) but were dropped:
+  // they crowded the filter row, and on a brutet rakenskapsar they were not
+  // momsdeklaration quarters, which made them misleading rather than useful.
+  const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
+  const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
+  const periodBounds = useMemo(() => resolvePeriodBounds(fyPeriod, null), [fyPeriod])
+
+  const handlePeriodChange = useCallback((periodId: string | null, period?: FiscalPeriod | null) => {
+    setFyPeriodId(periodId)
+    setFyPeriod(period ?? null)
+    // Batch selections may reference rows the new scope hides; every batch
+    // action operates on "what you see", so drop them.
+    setSelectedIds(new Set())
+    setSkvSelectedIds(new Set())
   }, [])
 
-  const handleSourceFilterChange = useCallback((next: SourceFilter) => {
-    setSourceFilter(next)
-
-    try {
-      window.localStorage.setItem(SOURCE_FILTER_STORAGE_KEY, next)
-    } catch {
-      // localStorage may be unavailable. The in-memory filter still works.
+  // Footer "Visa alla" escape hatch: clears the period scope AND its
+  // persisted value (FyPicker only writes storage from its own dropdown).
+  const clearPeriodFilter = useCallback(() => {
+    setFyPeriodId(null)
+    setFyPeriod(null)
+    setSelectedIds(new Set())
+    setSkvSelectedIds(new Set())
+    if (companyId) {
+      try {
+        window.localStorage.setItem(PERIOD_FILTER_STORAGE_PREFIX + companyId, ALL_YEARS_VALUE)
+      } catch {
+        // localStorage may be unavailable; the in-memory state is cleared.
+      }
     }
-  }, [])
+  }, [companyId])
   // Registered cash accounts (cash_accounts): the account chooser's rows,
   // with PSD2 balances when the bank reports them.
   const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
@@ -383,8 +540,9 @@ export default function TransactionsPage() {
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
   // Bank transaction whose title is being edited (null = dialog closed).
   const [editTitleTarget, setEditTitleTarget] = useState<TransactionWithInvoice | null>(null)
+  // Bank transaction being moved to another cash account (null = dialog closed).
+  const [moveAccountTarget, setMoveAccountTarget] = useState<TransactionWithInvoice | null>(null)
   const supabase = useRealtimeSupabase()
-  const searchParams = useSearchParams()
   const highlightId = searchParams.get('highlight')
   // Tracks the last highlight target we acted on so re-renders don't re-trigger
   // the auto-open every time the user closes the categorize panel.
@@ -392,16 +550,69 @@ export default function TransactionsPage() {
   const refreshTransactionsInFlightRef = useRef(false)
   const refreshTransactionsQueuedRef = useRef(false)
 
-  // Computed lists
+  // "Kör matchning igen" in the review surface.
+  const [rerunningMatch, setRerunningMatch] = useState(false)
+
+  // End of the company's completed SIE-import coverage (latest
+  // fiscal_year_end). Drives the quiet "från perioden före din migrering"
+  // marker on inbox rows: period-based on purpose, it labels which period a
+  // row belongs to, it never suggests a sync skip date (that was #917).
+  const [sieCoverageEnd, setSieCoverageEnd] = useState<string | null>(null)
+  useEffect(() => {
+    if (!companyId) {
+      setSieCoverageEnd(null)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('sie_imports')
+        .select('fiscal_year_end')
+        .eq('company_id', companyId)
+        .eq('status', 'completed')
+        .not('fiscal_year_end', 'is', null)
+        .order('fiscal_year_end', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (!cancelled) {
+        setSieCoverageEnd((data as { fiscal_year_end?: string } | null)?.fiscal_year_end || null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [companyId, supabase])
+
+  // Computed lists. Exiting rows (just booked/ignored/deleted) stay IN this
+  // list on purpose: they render for the 350ms exit window with the .row-exit
+  // collapse animation instead of popping out the same frame, and the delayed
+  // state patch (finishBooking et al.) is what actually drops them. Logic
+  // surfaces that must not act on a leaving row (batch select) exclude
+  // exitingIds themselves.
   const uncategorizedTransactions = useMemo(
     () => transactions
-      .filter((t) => t.is_business === null && !t.is_ignored && !exitingIds.has(t.id))
+      // The exitingIds clause pins a leaving row even when a realtime-echo
+      // refetch replaces its state with the booked shape mid-window: the
+      // animation still finishes instead of being cut to a jump.
+      .filter((t) => (t.is_business === null && !t.is_ignored) || exitingIds.has(t.id))
       .sort((a, b) => {
         const aHasMatch = a.potential_invoice || a.potential_supplier_invoice ? 1 : 0
         const bHasMatch = b.potential_invoice || b.potential_supplier_invoice ? 1 : 0
         if (aHasMatch !== bHasMatch) return bHasMatch - aHasMatch
         return b.date.localeCompare(a.date)
       }),
+    [exitingIds, transactions],
+  )
+
+  // Journal-entry match suggestions awaiting review (the migrator surface).
+  // potential_voucher is already revalidated (posted-only) at enrichment time,
+  // and DB triggers clear consumed/reversed suggestions, so this list is
+  // honest without extra queries.
+  const suggestionItems = useMemo(
+    () =>
+      transactions.filter(
+        (t) => t.potential_voucher && !t.journal_entry_id && !t.is_ignored && !exitingIds.has(t.id),
+      ),
     [exitingIds, transactions],
   )
 
@@ -414,7 +625,7 @@ export default function TransactionsPage() {
     | { source: 'skatteverket'; date: string; data: SkattekontoTransactionWithSuggestion }
 
   const skvUnmatched = useMemo(
-    () => skvRows.filter((row) => !row.journal_entry_id),
+    () => skvRows.filter((row) => !row.journal_entry_id && !row.is_ignored),
     [skvRows],
   )
 
@@ -430,52 +641,54 @@ export default function TransactionsPage() {
     [skvUnmatched, uncategorizedTransactions],
   )
 
-  const inboxItems = useMemo<InboxItem[]>(() => {
-    const items: InboxItem[] = []
-    const query = searchTerm.trim().toLowerCase()
-    if (sourceFilter !== 'skatteverket') {
-      for (const tx of uncategorizedTransactions) {
-        if (
-          sourceFilter.startsWith('acct:') &&
-          tx.cash_account_id !== sourceFilter.slice('acct:'.length)
-        ) {
-          continue
-        }
-        if (sourceFilter === 'bank:other' && tx.cash_account_id != null) continue
-        if (
-          query &&
-          !tx.description?.toLowerCase().includes(query) &&
-          !tx.date.includes(query) &&
-          !String(tx.amount).includes(query)
-        ) {
-          continue
-        }
-        items.push({ source: 'bank', date: tx.date, data: tx })
-      }
-    }
-    if (sourceFilter === 'all' || sourceFilter === 'skatteverket') {
-      // Inbox only shows SKV rows that need action (no verifikat yet).
-      for (const r of skvRows) {
-        if (r.journal_entry_id) continue
-        if (exitingIds.has(r.id)) continue
-        if (
-          query &&
-          !r.transaktionstext?.toLowerCase().includes(query) &&
-          !r.transaktionsdatum.includes(query) &&
-          !String(r.belopp_skatteverket).includes(query)
-        ) {
-          continue
-        }
-        items.push({ source: 'skatteverket', date: r.transaktionsdatum, data: r })
-      }
-    }
-    return items.sort((a, b) => {
-      if (a.date !== b.date) return b.date.localeCompare(a.date)
-      // Same date → bank first so invoice-match cards lead.
-      if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
-      return 0
-    })
-  }, [exitingIds, searchTerm, skvRows, sourceFilter, uncategorizedTransactions])
+  // History shows only the contiguous newest-first window: the older pending
+  // rows merged in for the inbox would otherwise render as sparse, gap-ridden
+  // months below the window and read as missing bookkeeping. Same-date rows at
+  // the boundary may slip in; they are real rows of that date, so harmless.
+  const historyTransactions = useMemo(
+    () =>
+      transactions.filter(
+        (t) =>
+          (!pagedThroughDate || t.date >= pagedThroughDate) &&
+          // Server-side scope catches up on refetch; this keeps the view
+          // correct in the transition frame after a filter change.
+          isWithinBounds(t.date, periodBounds),
+      ),
+    [transactions, pagedThroughDate, periodBounds],
+  )
+
+  // SKV rows shown in the history view, narrowed to the active period. The
+  // list component filters by search/source itself but knows nothing about
+  // period bounds.
+  const skvRowsInScope = useMemo(
+    () => skvRows.filter((r) => isWithinBounds(r.transaktionsdatum, periodBounds)),
+    [skvRows, periodBounds],
+  )
+
+  // Tab badge: DB-true pending count normally; with a period filter active,
+  // the pending rows inside the scope (complete, since the pending backlog
+  // fetch is unscoped and fully in state).
+  const inboxBadgeCount = useMemo(() => {
+    if (!periodBounds) return totalUncategorizedCount ?? uncategorizedTransactions.length
+    return uncategorizedTransactions.filter((tx) => isWithinBounds(tx.date, periodBounds)).length
+  }, [periodBounds, totalUncategorizedCount, uncategorizedTransactions])
+
+  // Pending work the active period filter hides (bank + skattekonto). BFL
+  // 5 kap: pending affarshandelser must never disappear silently, so the
+  // footer names this count and offers a one-click way back to everything.
+  const pendingOutsideCount = useMemo(() => {
+    if (!periodBounds) return 0
+    const bankOutside = uncategorizedTransactions.filter(
+      (tx) => !isWithinBounds(tx.date, periodBounds),
+    ).length
+    const skvOutside = skvRows.filter(
+      (r) =>
+        !r.journal_entry_id &&
+        !r.is_ignored &&
+        !isWithinBounds(r.transaktionsdatum, periodBounds),
+    ).length
+    return bankOutside + skvOutside
+  }, [periodBounds, skvRows, uncategorizedTransactions])
 
   // Account chooser (concept scene 10): the source picker doubles as a
   // balance readout. The total sums only SEK ledgers (mixing currencies into
@@ -486,13 +699,22 @@ export default function TransactionsPage() {
     return sekBalances.reduce((sum, a) => sum + (a.balance ?? 0), 0)
   }, [cashAccounts])
 
+  // The picker is shared by both view modes (convention 8), so 'bank:other'
+  // must surface when EITHER dataset holds unassigned rows: history can hold
+  // older null-account rows after every pending row got assigned.
   const hasUnassignedBankRows = useMemo(
-    () => uncategorizedTransactions.some((tx) => tx.cash_account_id == null),
-    [uncategorizedTransactions],
+    () =>
+      uncategorizedTransactions.some((tx) => tx.cash_account_id == null) ||
+      historyTransactions.some((tx) => tx.cash_account_id == null),
+    [uncategorizedTransactions, historyTransactions],
   )
 
   const sourceItems = useMemo<ContextPickerItem[]>(() => {
-    const showSkvSource = skvRows.length > 0
+    // Keep the Skatteverket source pickable while reconnect is needed even
+    // though the rows fetch fails then (401 -> skvRows []): the reconnect
+    // attn line only renders under this source, so dropping the option would
+    // hide the reconnect path exactly when it applies.
+    const showSkvSource = skvRows.length > 0 || skvNeedsReconnect
     const items: ContextPickerItem[] = [
       {
         id: 'all',
@@ -518,21 +740,143 @@ export default function TransactionsPage() {
       items.push({ id: 'skatteverket', label: t('source_skatteverket_label') })
     }
     return items
-  }, [cashAccounts, hasUnassignedBankRows, skvRows.length, t, totalSourceBalance])
+  }, [cashAccounts, hasUnassignedBankRows, skvNeedsReconnect, skvRows.length, t, totalSourceBalance])
 
-  // A narrowed filter can go stale (account disabled, skv rows drained,
-  // "övriga" bucket emptied): fall back to everything rather than filtering
-  // the inbox down to an invisible source.
-  useEffect(() => {
-    if (sourceFilter === 'all') return
-    if (!sourceItems.some((item) => item.id === sourceFilter)) setSourceFilter('all')
-  }, [sourceFilter, sourceItems])
+  // What the page actually filters by. A narrowed filter whose source is not
+  // (yet) among the items, because cash accounts / skv rows / transactions
+  // are still loading, or because the source went stale (account disabled,
+  // skv rows drained, "övriga" bucket emptied), resolves to 'all' instead of
+  // filtering the inbox down to an invisible source. Deriving this (rather
+  // than resetting state, as the old guard effect did) removes the mount-time
+  // race that wiped the persisted choice before the async sources arrived.
+  const effectiveSourceFilter = useMemo(
+    () =>
+      resolveEffectiveSourceFilter(
+        sourceFilter,
+        sourceItems.map((item) => item.id),
+      ),
+    [sourceFilter, sourceItems],
+  )
+
+  // Declared after sourceItems/effectiveSourceFilter because the inbox must
+  // filter by the EFFECTIVE source, never the raw wanted one.
+  const inboxItems = useMemo<InboxItem[]>(() => {
+    const items: InboxItem[] = []
+    const query = searchTerm.trim().toLowerCase()
+    if (effectiveSourceFilter !== 'skatteverket') {
+      for (const tx of uncategorizedTransactions) {
+        // The refetch already narrows state server-side; this check makes the
+        // filter correct immediately on change, before the refetch lands.
+        if (!isWithinBounds(tx.date, periodBounds)) continue
+        if (
+          effectiveSourceFilter.startsWith('acct:') &&
+          tx.cash_account_id !== effectiveSourceFilter.slice('acct:'.length)
+        ) {
+          continue
+        }
+        if (effectiveSourceFilter === 'bank:other' && tx.cash_account_id != null) continue
+        if (
+          query &&
+          !tx.description?.toLowerCase().includes(query) &&
+          !tx.date.includes(query) &&
+          !String(tx.amount).includes(query)
+        ) {
+          continue
+        }
+        items.push({ source: 'bank', date: tx.date, data: tx })
+      }
+    }
+    if (effectiveSourceFilter === 'all' || effectiveSourceFilter === 'skatteverket') {
+      // Inbox only shows SKV rows that need action (no verifikat yet).
+      for (const r of skvRows) {
+        // Exiting rows stay rendered for the exit animation, even if a
+        // refetch already gave them a journal_entry_id (or an ignore) mid-
+        // window (see above).
+        if ((r.journal_entry_id || r.is_ignored) && !exitingIds.has(r.id)) continue
+        // SKV rows live client-side only, so the period filter applies here.
+        if (!isWithinBounds(r.transaktionsdatum, periodBounds)) continue
+        if (
+          query &&
+          !r.transaktionstext?.toLowerCase().includes(query) &&
+          !r.transaktionsdatum.includes(query) &&
+          !String(r.belopp_skatteverket).includes(query)
+        ) {
+          continue
+        }
+        items.push({ source: 'skatteverket', date: r.transaktionsdatum, data: r })
+      }
+    }
+    return items.sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date)
+      // Same date → bank first so invoice-match cards lead.
+      if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
+      return 0
+    })
+  }, [effectiveSourceFilter, exitingIds, periodBounds, searchTerm, skvRows, uncategorizedTransactions])
 
   // Rows the bulkbar's "Markera alla" can select: the visible bank rows
-  // (skattekonto rows aren't batch-bookable).
+  // (they feed the /api/transactions/* batch handlers) ...
   const selectableInboxIds = useMemo(
-    () => inboxItems.filter((item) => item.source === 'bank').map((item) => item.data.id),
-    [inboxItems],
+    () =>
+      inboxItems
+        // Rows mid-exit still render (for the animation) but must not be
+        // selectable: they are already booked/deleted server-side.
+        .filter((item) => item.source === 'bank' && !exitingIds.has(item.data.id))
+        .map((item) => item.data.id),
+    [exitingIds, inboxItems],
+  )
+
+  // ... plus the visible skattekonto rows whose booking is deterministic
+  // (rule matched, no duplicate hint, unbooked, genomförd). These go through
+  // the skatteverket extension's bokfor-batch endpoint instead.
+  const selectableSkvIds = useMemo(
+    () =>
+      inboxItems
+        .filter(
+          (item) =>
+            item.source === 'skatteverket' &&
+            isSkvBulkEligible(item.data) &&
+            !exitingIds.has(item.data.id),
+        )
+        .map((item) => item.data.id),
+    [exitingIds, inboxItems],
+  )
+
+  const skvSelectedRows = useMemo(
+    () => skvRows.filter((r) => skvSelectedIds.has(r.id)),
+    [skvRows, skvSelectedIds],
+  )
+
+  // Bulk confirmation summary: selected rows grouped by their deterministic
+  // suggestion ("3 × Intäktsränta skattekonto → 8314") with per-group sums.
+  // Count-based on purpose: voucher numbers are assigned atomically at
+  // commit, so predicting them here would lie under concurrency.
+  const skvBulkGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      { label: string; account: string; count: number; sum: number }
+    >()
+    for (const row of skvSelectedRows) {
+      const suggestion = row.booking_suggestion
+      if (!suggestion) continue
+      const label = suggestion.label ?? suggestion.account_name ?? row.transaktionstext
+      const key = `${suggestion.account}|${label}`
+      const group = groups.get(key) ?? {
+        label,
+        account: suggestion.account,
+        count: 0,
+        sum: 0,
+      }
+      group.count += 1
+      group.sum = roundOre(group.sum + Number(row.belopp_skatteverket))
+      groups.set(key, group)
+    }
+    return Array.from(groups.values())
+  }, [skvSelectedRows])
+
+  const skvBulkTotal = useMemo(
+    () => roundOre(skvBulkGroups.reduce((sum, g) => sum + g.sum, 0)),
+    [skvBulkGroups],
   )
 
 
@@ -557,63 +901,96 @@ export default function TransactionsPage() {
     }
   }, [companyId])
 
+  // Same sequence-guard pattern as fetchGenerationRef: only the newest
+  // skattekonto fetch may write rows. A company switch bumps the sequence so a
+  // response started under the previous company can never land its rows in
+  // the new company's inbox, and overlapping refreshes resolve last-write-
+  // correct instead of last-resolved-wins.
+  const skvFetchSeqRef = useRef(0)
   const loadSkvRows = useCallback(async () => {
+    const seq = ++skvFetchSeqRef.current
     // Connection health, fetched alongside the rows: any failure (extension
     // disabled, capability gate, not connected) just hides the banner.
     void (async () => {
       try {
         const res = await fetch('/api/extensions/ext/skatteverket/status')
+        // Same guard as the rows below: a status response started under the
+        // previous company must not set or clear the reconnect banner for
+        // the new one.
+        if (skvFetchSeqRef.current !== seq) return
         if (!res.ok) {
           setSkvNeedsReconnect(false)
           return
         }
-        const s = (await res.json()) as {
-          connected?: boolean
-          disabled?: boolean
-          needsReconsent?: boolean
-          expired?: boolean
-          canRefresh?: boolean
-        }
-        setSkvNeedsReconnect(
-          Boolean(
-            s.connected &&
-              !s.disabled &&
-              (s.needsReconsent || (s.expired && !s.canRefresh)),
-          ),
-        )
+        const s = (await res.json()) as SkvStatusLike
+        if (skvFetchSeqRef.current !== seq) return
+        // Shared reconnect predicate (lib/notices): the same decision the
+        // skattekonto page and the Hem notice make, never a local variant.
+        setSkvNeedsReconnect(skvStatusNeedsReconnect(s))
       } catch {
+        if (skvFetchSeqRef.current !== seq) return
         setSkvNeedsReconnect(false)
       }
     })()
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/skattekonto/transaktioner')
+      if (skvFetchSeqRef.current !== seq) return
       if (!res.ok) {
         setSkvRows([])
         return
       }
       const json = await res.json()
+      if (skvFetchSeqRef.current !== seq) return
       const booked = (json.data?.booked ?? []) as SkattekontoTransactionWithSuggestion[]
       // Keep all booked SKV rows in state: inbox view filters to obokförda
       // (journal_entry_id null), history view shows all of them (matched
       // and unmatched) interleaved with bank tx by date.
       setSkvRows(booked)
     } catch {
+      if (skvFetchSeqRef.current !== seq) return
       setSkvRows([])
     }
   }, [])
 
-  const fetchTransactions = useCallback(async (showLoading = false, includeSkvRows = false) => {
+  const fetchTransactions = useCallback(async (
+    showLoading = false,
+    includeSkvRows = false,
+    // Background refreshes (realtime echo) re-fetch the window the user has
+    // already paged through instead of resetting to the first PAGE_SIZE rows:
+    // an action after "Visa fler" must not collapse the loaded pages and
+    // yank the scroll position.
+    preserveWindow = false,
+  ) => {
     if (!companyId) return
+    const generation = ++fetchGenerationRef.current
+    const windowSize = preserveWindow
+      ? Math.max(pagedCountRef.current, PAGE_SIZE)
+      : PAGE_SIZE
     if (showLoading) setIsLoading(true)
     if (includeSkvRows) void loadSkvRows()
     try {
-      const [{ data: txData, error: txError }, { count: uncatCount }] = await Promise.all([
-        supabase
-          .from('transactions')
-          .select('*')
-          .eq('company_id', companyId)
+      // Only the history window is narrowed server-side by the period filter.
+      // The pending-backlog fetch and the pending count below stay UNSCOPED on
+      // purpose (Swedish accounting review, PR #1545): BFL 5 kap requires
+      // pending affarshandelser to be booked promptly, so every pending row
+      // must stay in state regardless of the filter. The inbox applies the
+      // period client-side and the footer surfaces what falls outside it.
+      let windowQuery = supabase
+        .from('transactions')
+        .select('*')
+        .eq('company_id', companyId)
+      if (periodBounds) {
+        windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+      }
+
+      const [{ data: txData, error: txError }, { count: uncatCount }, pendingRows] = await Promise.all([
+        // The id tie-breaker keeps offset paging deterministic when many
+        // rows share a date; without it .range() pages can skip or repeat
+        // same-date rows.
+        windowQuery
           .order('date', { ascending: false })
-          .limit(PAGE_SIZE),
+          .order('id', { ascending: true })
+          .range(0, windowSize - 1),
         supabase
           .from('transactions')
           .select('*', { count: 'exact', head: true })
@@ -622,32 +999,78 @@ export default function TransactionsPage() {
           // Same predicate as lib/worklist countUnbookedTransactions: ignored
           // rows are handled, not pending.
           .eq('is_ignored', false),
+        // The inbox is a worklist: it must contain every pending row, even ones
+        // older than the newest-first window above. Falls back to null so the
+        // page still renders the windowed rows if this fetch dies; the failure
+        // is surfaced below, never silently absorbed (an inbox that renders as
+        // complete while missing older pending rows would be a lie).
+        fetchAllRows<TransactionWithInvoice>(({ from, to }) =>
+          supabase
+            .from('transactions')
+            .select('*')
+            .eq('company_id', companyId)
+            .is('is_business', null)
+            .eq('is_ignored', false)
+            .order('date', { ascending: false })
+            .order('id', { ascending: true })
+            .range(from, to),
+        ).catch((error: unknown) => {
+          console.error('[transactions] pending backlog fetch failed; inbox may be missing older rows', error)
+          return null
+        }),
       ])
+
+      // A newer fetch (scope change, refresh) started while this one was in
+      // flight: its results own the state now, so this response must not
+      // apply. Toasts are skipped too; the newer request reports its own fate.
+      if (fetchGenerationRef.current !== generation) return
 
       if (txError) {
         toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
         return
       }
 
-      const rows = txData || []
-      const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, rows)
+      if (pendingRows === null) {
+        // Partial load: the windowed rows render, but older pending rows are
+        // absent. Say so instead of presenting a complete-looking inbox.
+        toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
+      }
 
-      const transactionsWithInvoices: TransactionWithInvoice[] = rows.map((t) => ({
+      const rows = txData || []
+      const windowIds = new Set(rows.map((r) => r.id))
+      const olderPending = (pendingRows ?? []).filter((r) => !windowIds.has(r.id))
+      const allRows = [...rows, ...olderPending].sort((a, b) => b.date.localeCompare(a.date))
+      const { invoiceMap, supplierInvoiceMap, voucherMap } = await fetchPotentialMatches(supabase, allRows)
+
+      // Re-check after the second await: a scope change during the match
+      // enrichment must also discard this response.
+      if (fetchGenerationRef.current !== generation) return
+
+      const transactionsWithInvoices: TransactionWithInvoice[] = allRows.map((t) => ({
         ...t,
         potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
         potential_supplier_invoice: t.potential_supplier_invoice_id
           ? supplierInvoiceMap[t.potential_supplier_invoice_id]
           : undefined,
+        potential_voucher: t.potential_journal_entry_id
+          ? voucherMap[t.potential_journal_entry_id]
+          : undefined,
       }))
 
       setTransactions(transactionsWithInvoices)
       setTotalUncategorizedCount(uncatCount ?? 0)
-      setHasMore(rows.length >= PAGE_SIZE)
+      pagedCountRef.current = rows.length
+      setPagedThroughDate(rows.length >= windowSize ? rows[rows.length - 1].date : null)
+      setHasMore(rows.length >= windowSize)
 
     } finally {
-      if (showLoading) setIsLoading(false)
+      // Only the newest request may touch the skeleton: a stale one must not
+      // clear what a newer showLoading request just put up. The newest always
+      // clears it (even non-showLoading refreshes, whose superseded
+      // predecessor may have left it up).
+      if (fetchGenerationRef.current === generation) setIsLoading(false)
     }
-  }, [companyId, loadSkvRows, supabase, t, toast])
+  }, [companyId, loadSkvRows, periodBounds, supabase, t, toast])
 
   const refreshTransactions = useCallback(async () => {
     if (!companyId) return
@@ -660,7 +1083,7 @@ export default function TransactionsPage() {
     try {
       do {
         refreshTransactionsQueuedRef.current = false
-        await fetchTransactions(false, false)
+        await fetchTransactions(false, false, true)
       } while (refreshTransactionsQueuedRef.current)
     } finally {
       refreshTransactionsInFlightRef.current = false
@@ -670,23 +1093,46 @@ export default function TransactionsPage() {
 
   async function loadMoreTransactions() {
     if (!companyId) return
+    // Claims the generation: a scope change mid-request discards this page
+    // instead of appending old-scope rows and corrupting the paging offsets.
+    const generation = ++fetchGenerationRef.current
     setIsLoadingMore(true)
-    const offset = transactions.length
-    const { data: txData, error: txError } = await supabase
+    // Offset counts only the contiguous newest-first window, not the older
+    // pending rows merged into state for the inbox.
+    const offset = pagedCountRef.current
+    let pageQuery = supabase
       .from('transactions')
       .select('*')
       .eq('company_id', companyId)
+    // Same period scope as the initial window fetch: mixed-scope pages would
+    // corrupt the offset bookkeeping.
+    if (periodBounds) {
+      pageQuery = pageQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+    }
+    const { data: txData, error: txError } = await pageQuery
+      // Same stable order as the initial window fetch: offset paging over a
+      // date-only order can skip or repeat same-date rows between pages.
       .order('date', { ascending: false })
+      .order('id', { ascending: true })
       .range(offset, offset + PAGE_SIZE - 1)
 
-    if (txError || !txData) {
+    if (fetchGenerationRef.current !== generation || txError || !txData) {
       setIsLoadingMore(false)
       return
     }
 
+    pagedCountRef.current += txData.length
+    setPagedThroughDate(txData.length >= PAGE_SIZE ? txData[txData.length - 1].date : null)
     setHasMore(txData.length >= PAGE_SIZE)
 
-    const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, txData)
+    const { invoiceMap, supplierInvoiceMap, voucherMap } = await fetchPotentialMatches(supabase, txData)
+
+    // Same staleness rule after the enrichment await: the offsets above were
+    // written under this generation, but a newer fetch has already reset them.
+    if (fetchGenerationRef.current !== generation) {
+      setIsLoadingMore(false)
+      return
+    }
 
     const newTransactions: TransactionWithInvoice[] = txData.map((t) => ({
       ...t,
@@ -694,9 +1140,17 @@ export default function TransactionsPage() {
       potential_supplier_invoice: t.potential_supplier_invoice_id
         ? supplierInvoiceMap[t.potential_supplier_invoice_id]
         : undefined,
+      potential_voucher: t.potential_journal_entry_id
+        ? voucherMap[t.potential_journal_entry_id]
+        : undefined,
     }))
 
-    setTransactions((prev) => [...prev, ...newTransactions])
+    // The page may overlap pending rows already merged into state: keep the
+    // existing row (it may carry local edits) and drop the duplicate.
+    setTransactions((prev) => {
+      const prevIds = new Set(prev.map((t) => t.id))
+      return [...prev, ...newTransactions.filter((t) => !prevIds.has(t.id))]
+    })
     setIsLoadingMore(false)
   }
 
@@ -837,10 +1291,79 @@ export default function TransactionsPage() {
     }
   }
 
-  // Fetch the initial page. Entity type is already available from CompanyContext.
+  // The initial fetch waits for FyPicker to finish restoring the persisted
+  // period scope (onReady fires after its restore onChange). Fetching at
+  // mount used to race the restore: an unscoped fetch painted the list, the
+  // restore re-created fetchTransactions and re-ran this effect with a second
+  // skeleton takeover, so every visit flashed list → skeleton → list.
+  const [fyReady, setFyReady] = useState(false)
+  const handleFyReady = useCallback(() => setFyReady(true), [])
+  // Whether anything is on screen, readable from the effect without making
+  // row state a dependency (which would refetch on every row patch).
+  const hasRowsRef = useRef(false)
   useEffect(() => {
-    void fetchTransactions(true, true)
-  }, [fetchTransactions])
+    hasRowsRef.current = transactions.length > 0 || skvRows.length > 0
+  }, [transactions, skvRows])
+  const lastFetchCompanyRef = useRef<string | null>(null)
+  // Subtle "refreshing" cue next to the period chip while a scope change
+  // refetches behind the rendered list. Sequence-guarded so overlapping
+  // scope changes can't clear the cue early.
+  const [isScopeRefreshing, setIsScopeRefreshing] = useState(false)
+  const scopeRefreshSeqRef = useRef(0)
+
+  // Fiscal scope must not survive a company switch: periodBounds from the
+  // previous company would scope the first fetch for the new one, and a
+  // non-null fyPeriodId makes FyPicker skip its persisted-scope restore
+  // (it only restores when value === null). Resetting during render (React's
+  // adjust-state-on-prop-change pattern) rather than in an effect guarantees
+  // FyPicker's restore effect observes the cleared value: its effect captures
+  // `value` at commit time, and child effects run before a parent effect
+  // could reset it. fyReady = false holds the fetch effect until the new
+  // company's restore completes via onReady.
+  const [scopeCompanyId, setScopeCompanyId] = useState<string | null>(companyId)
+  if (scopeCompanyId !== companyId) {
+    setScopeCompanyId(companyId)
+    setFyReady(false)
+    setFyPeriodId(null)
+    setFyPeriod(null)
+    // A scope refresh in flight belongs to the old company: invalidate its
+    // finally-guard and drop the cue.
+    scopeRefreshSeqRef.current++
+    setIsScopeRefreshing(false)
+    // Data boundary: the previous company's rows must neither render for the
+    // new one (the takeover fetch is async; until it resolves the old rows
+    // would sit under the new company's header) nor land later from a fetch
+    // still in flight. Clearing rows + bumping both fetch sequences closes
+    // both holes; the counts and paging state describe the cleared rows, so
+    // they reset with them.
+    setTransactions([])
+    setSkvRows([])
+    setTotalUncategorizedCount(null)
+    setPagedThroughDate(null)
+    setHasMore(false)
+    pagedCountRef.current = 0
+    fetchGenerationRef.current++
+    skvFetchSeqRef.current++
+  }
+
+  // Fetch the page whenever the scope changes (mount, company switch, period
+  // change). The skeleton takeover is reserved for an empty or foreign list:
+  // a period change refetches BEHIND the rendered rows, whose client-side
+  // isWithinBounds filters already show the new scope correctly.
+  useEffect(() => {
+    if (!fyReady) return
+    const companySwitched = lastFetchCompanyRef.current !== companyId
+    lastFetchCompanyRef.current = companyId
+    if (companySwitched || !hasRowsRef.current) {
+      void fetchTransactions(true, true)
+      return
+    }
+    const seq = ++scopeRefreshSeqRef.current
+    setIsScopeRefreshing(true)
+    void fetchTransactions(false, true).finally(() => {
+      if (scopeRefreshSeqRef.current === seq) setIsScopeRefreshing(false)
+    })
+  }, [companyId, fetchTransactions, fyReady])
 
   useEffect(() => {
     if (!companyId) return
@@ -889,6 +1412,21 @@ export default function TransactionsPage() {
     if (!tx) return
     handledHighlightRef.current = highlightId
 
+    // A deep link must land on a visible row: when the remembered source
+    // filter would hide the highlighted transaction, widen to 'all' in
+    // memory only (storage keeps the user's choice for the next visit).
+    // Checked against the WANTED filter, not the effective one: transactions
+    // can load before cash accounts, when the effective filter is still 'all'
+    // but the wanted one would hide the row the moment the accounts arrive.
+    // 'all' rather than acct:<id> because it also covers rows with a null
+    // cash_account_id.
+    const hiddenByFilter =
+      sourceFilter === 'skatteverket' ||
+      (sourceFilter.startsWith('acct:') &&
+        tx.cash_account_id !== sourceFilter.slice('acct:'.length)) ||
+      (sourceFilter === 'bank:other' && tx.cash_account_id != null)
+    if (hiddenByFilter) setSourceFilter('all')
+
     // Defer the scroll until React has committed the list to the DOM.
     // Without rAF the data-tx-id node may not exist yet when this fires
     // immediately after fetchTransactions resolves.
@@ -900,7 +1438,7 @@ export default function TransactionsPage() {
         }
       })
     })
-  }, [highlightId, transactions])
+  }, [highlightId, sourceFilter, transactions])
 
   // Auto-fetch suggestions when transactions load
   useEffect(() => {
@@ -915,7 +1453,8 @@ export default function TransactionsPage() {
   }, [transactions.length])
 
   const handleCategorize: CategorizeHandler = async (id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions) => {
-    return runCategorize({ id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch: false })
+    const outcome = await runCategorize({ id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch: false })
+    return outcome.journalEntryId
   }
 
   /**
@@ -929,6 +1468,21 @@ export default function TransactionsPage() {
    * from exitingIds again: an undo would have restored the row's data while
    * leaving it filtered out of the inbox.
    */
+  // The one place that calls the storno endpoint (pinned by
+  // booking-feedback-parity.test.ts): the per-row Ångra action and the batch
+  // "Ångra alla" both route through it.
+  const undoCategorize = (id: string) =>
+    fetch(`/api/transactions/${id}/uncategorize`, { method: 'POST' })
+
+  // Rows whose booking was undone while finishBooking's 350ms patch was still
+  // pending. The per-row Ångra covers this with a closure-local flag, but
+  // "Ångra alla" (undoBatchCategorize) cannot reach those closures: without a
+  // shared record its undo patch could land first and the timer then re-apply
+  // the booked shape, pointing journal_entry_id at a storno-reversed entry.
+  // Ids are removed again when a new booking for the row starts, so a
+  // re-booked row still gets its delayed patch.
+  const undoneIdsRef = useRef<Set<string>>(new Set())
+
   function finishBooking(args: {
     id: string
     isBusiness: boolean
@@ -936,26 +1490,36 @@ export default function TransactionsPage() {
     journalEntryId?: string | null
     journalEntryCreated?: boolean
     journalEntryError?: string | null
+    // Batch rows: keep the exit animation, count decrement and state patch,
+    // but leave the narration to the caller's single aggregate toast instead
+    // of stacking one toast per row.
+    silent?: boolean
   }) {
-    const { id, isBusiness, category, journalEntryId, journalEntryCreated, journalEntryError } = args
+    const { id, isBusiness, category, journalEntryId, journalEntryCreated, journalEntryError, silent } = args
     // A completed Ångra must win over the delayed patch below. The undo has
     // already storno-reversed the verifikat server-side, so re-applying the
     // booked shape afterwards would show a journal_entry_id that no longer
     // represents a live entry.
     let undone = false
+    // A fresh booking supersedes any earlier undo of the same row: without
+    // this, a row booked again after an Ångra would skip its delayed patch.
+    undoneIdsRef.current.delete(id)
 
     setExitingIds((prev) => new Set(prev).add(id))
     setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
 
-    if (journalEntryCreated) {
+    if (silent) {
+      // No per-row toast: fall through to the delayed state patch below.
+    } else if (journalEntryCreated) {
       toast({
         title: 'Bokförd',
         action: (
           <ToastAction altText="Ångra kategorisering" onClick={async () => {
             try {
-              const undoRes = await fetch(`/api/transactions/${id}/uncategorize`, { method: 'POST' })
+              const undoRes = await undoCategorize(id)
               if (undoRes.ok) {
                 undone = true
+                undoneIdsRef.current.add(id)
                 setTransactions((prev) =>
                   prev.map((t) =>
                     t.id === id
@@ -991,7 +1555,10 @@ export default function TransactionsPage() {
     // the id from exitingIds is what makes an Ångra later put the row back in
     // the inbox instead of leaving it invisible.
     setTimeout(() => {
-      if (!undone) {
+      // Both undo records gate the patch: the closure-local flag (per-row
+      // Ångra) and the shared ref ("Ångra alla", which runs outside this
+      // closure). The exitingIds/processingId cleanup below always runs.
+      if (!undone && !undoneIdsRef.current.has(id)) {
         setTransactions((prev) =>
           prev.map((tx) =>
             tx.id === id
@@ -1032,8 +1599,19 @@ export default function TransactionsPage() {
     // ledger-only voucher candidate.
     force?: boolean
     expectedDuplicateJournalEntryId?: string
-  }): Promise<string | null> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch, force, expectedDuplicateJournalEntryId } = args
+    // Batch rows: the caller narrates the outcome once for the whole batch,
+    // so the per-row success toast (finishBooking) and the generic per-row
+    // failure toast stay quiet. Interactive escalations (match suggestions,
+    // duplicate warning, activate-account) keep their dialogs/actions: they
+    // are the only way forward for those rows.
+    silent?: boolean
+    // ok distinguishes "the server accepted the categorization" from "nothing
+    // happened". A 2xx with a null journal_entry_id is a real success (e.g. an
+    // already-categorized flag flip), so the id alone cannot carry that signal:
+    // the batch aggregate would count the row as failed after finishBooking
+    // already animated it out of the inbox.
+  }): Promise<{ ok: boolean; journalEntryId: string | null }> {
+    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, dimensions, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -1069,7 +1647,7 @@ export default function TransactionsPage() {
             candidates: result.error.details.candidates,
           })
           setProcessingId(null)
-          return null
+          return { ok: false, journalEntryId: null }
         }
         if (
           result?.error?.code === 'TX_CATEGORIZE_SUGGEST_CI_MATCH' &&
@@ -1084,7 +1662,7 @@ export default function TransactionsPage() {
             candidates: result.error.details.candidates,
           })
           setProcessingId(null)
-          return null
+          return { ok: false, journalEntryId: null }
         }
         if (result?.error?.code === 'TX_CATEGORIZE_INVALID_ACCOUNT') {
           // The user picked a library template (or typed an account
@@ -1156,7 +1734,7 @@ export default function TransactionsPage() {
             ) : undefined,
           })
           setProcessingId(null)
-          return null
+          return { ok: false, journalEntryId: null }
         }
         if (result?.error?.code === 'ACCOUNTS_NOT_IN_CHART') {
           // The mapped template/category references one or more accounts
@@ -1216,7 +1794,7 @@ export default function TransactionsPage() {
             ) : undefined,
           })
           setProcessingId(null)
-          return null
+          return { ok: false, journalEntryId: null }
         }
         if (
           result?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' &&
@@ -1238,15 +1816,17 @@ export default function TransactionsPage() {
             candidate,
           })
           setProcessingId(null)
-          return null
+          return { ok: false, journalEntryId: null }
         }
-        toast({
-          title: 'Kategorisering misslyckades',
-          description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
-          variant: 'destructive',
-        })
+        if (!silent) {
+          toast({
+            title: 'Kategorisering misslyckades',
+            description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
+            variant: 'destructive',
+          })
+        }
         setProcessingId(null)
-        return null
+        return { ok: false, journalEntryId: null }
       }
 
       finishBooking({
@@ -1256,13 +1836,16 @@ export default function TransactionsPage() {
         journalEntryId: result.journal_entry_id,
         journalEntryCreated: result.journal_entry_created,
         journalEntryError: result.journal_entry_error,
+        silent,
       })
 
-      return result.journal_entry_id || null
+      return { ok: true, journalEntryId: result.journal_entry_id || null }
     } catch {
-      toast({ title: t('booking_failed_title'), description: t('booking_failed_description'), variant: 'destructive' })
+      if (!silent) {
+        toast({ title: t('booking_failed_title'), description: t('booking_failed_description'), variant: 'destructive' })
+      }
       setProcessingId(null)
-      return null
+      return { ok: false, journalEntryId: null }
     }
   }
 
@@ -1640,6 +2223,132 @@ export default function TransactionsPage() {
     }, 350)
   }
 
+  // "Granska migrerad historik": confirm/reject persisted journal-entry match
+  // suggestions through the server-side revalidating bulk endpoint. Stale
+  // pairs come back as skipped, never as a failed batch: the toast reports
+  // both numbers honestly and the refresh re-derives the list from DB truth.
+  // Chunked at the schema's 500-id cap (same as BankReconciliationView's
+  // apply): a migrator's review list can exceed it, and one unchunked POST
+  // would 400 with zero progress on exactly the flagship bulk action.
+  const SUGGESTION_CHUNK_SIZE = 500
+
+  const confirmSuggestions = useCallback(
+    async (transactionIds: string[]) => {
+      let confirmed = 0
+      let skipped = 0
+      try {
+        for (let i = 0; i < transactionIds.length; i += SUGGESTION_CHUNK_SIZE) {
+          const chunk = transactionIds.slice(i, i + SUGGESTION_CHUNK_SIZE)
+          const response = await fetch('/api/reconciliation/bank/confirm-suggestions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transaction_ids: chunk, action: 'confirm' }),
+          })
+          const payload = await response.json()
+          if (!response.ok) {
+            // Report the partial progress alongside the failure: chunks that
+            // already committed stay committed.
+            toast({
+              title: t('review_confirm_failed'),
+              description: getErrorMessage(payload, { context: 'transaction' }),
+              variant: 'destructive',
+            })
+            return
+          }
+          confirmed += (payload.data?.confirmed ?? []).length
+          skipped += (payload.data?.skipped ?? []).length
+        }
+        toast({
+          title: t('review_confirm_done_title', { count: confirmed }),
+          description:
+            skipped > 0
+              ? t('review_confirm_done_skipped', { count: skipped })
+              : t('review_confirm_done_description'),
+        })
+      } catch (error) {
+        toast({
+          title: t('review_confirm_failed'),
+          description: getErrorMessage(error, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+      } finally {
+        await refreshTransactions()
+      }
+    },
+    [refreshTransactions, t, toast],
+  )
+
+  const rejectSuggestions = useCallback(
+    async (transactionIds: string[]) => {
+      try {
+        for (let i = 0; i < transactionIds.length; i += SUGGESTION_CHUNK_SIZE) {
+          const chunk = transactionIds.slice(i, i + SUGGESTION_CHUNK_SIZE)
+          const response = await fetch('/api/reconciliation/bank/confirm-suggestions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transaction_ids: chunk, action: 'reject' }),
+          })
+          if (!response.ok) {
+            const payload = await response.json()
+            toast({
+              title: t('review_reject_failed'),
+              description: getErrorMessage(payload, { context: 'transaction' }),
+              variant: 'destructive',
+            })
+            return
+          }
+        }
+      } catch (error) {
+        toast({
+          title: t('review_reject_failed'),
+          description: getErrorMessage(error, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+      } finally {
+        await refreshTransactions()
+      }
+    },
+    [refreshTransactions, t, toast],
+  )
+
+  // "Kör matchning igen": full per-account sweep over all history. New >= 0.9
+  // matches auto-link; the review band lands back here as fresh suggestions.
+  const rerunMatching = useCallback(async () => {
+    setRerunningMatch(true)
+    try {
+      const response = await fetch('/api/reconciliation/bank/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all_accounts: true }),
+      })
+      const payload = await response.json()
+      if (!response.ok) {
+        toast({
+          title: t('review_rerun_failed'),
+          description: getErrorMessage(payload, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({
+        title: t('review_rerun_done_title'),
+        description: t('review_rerun_done_description', {
+          applied: payload.data?.applied ?? 0,
+          suggested: payload.data?.suggested ?? 0,
+        }),
+      })
+    } catch (error) {
+      toast({
+        title: t('review_rerun_failed'),
+        description: getErrorMessage(error, { context: 'transaction' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setRerunningMatch(false)
+      await refreshTransactions()
+    }
+  }, [refreshTransactions, t, toast])
+
   async function handleMatchInvoice(transactionId: string, invoiceId: string): Promise<boolean> {
     try {
       const response = await fetch(`/api/transactions/${transactionId}/match-invoice`, {
@@ -1816,38 +2525,113 @@ export default function TransactionsPage() {
     const transaction = transactions.find((t) => t.id === id)
     if (!transaction) return
 
-    const ok = await confirm({
+    // The DELETE runs as the confirm's action: the dialog stays open with its
+    // pending spinner until the operation settles (confirm-then-fetch used to
+    // close the dialog synchronously and leave the fetch with no visible
+    // state), then the row plays the same exit path as booking.
+    await confirm({
       title: 'Ta bort transaktion',
       description: `Är du säker på att du vill ta bort "${transaction.description}"? Åtgärden kan inte ångras.`,
       confirmLabel: 'Ta bort',
       variant: 'destructive',
-    })
-    if (!ok) return
-
-    try {
-      const response = await fetch(`/api/transactions/${id}`, { method: 'DELETE' })
-      if (!response.ok) {
-        const result = await response.json()
+    }, async () => {
+      try {
+        // Row-level pending state while the DELETE runs (the card renders a
+        // spinner for processingId): covers the exit window after the dialog
+        // closes.
+        setProcessingId(id)
+        const response = await fetch(`/api/transactions/${id}`, { method: 'DELETE' })
+        if (!response.ok) {
+          const result = await response.json()
+          setProcessingId((prev) => (prev === id ? null : prev))
+          toast({
+            title: 'Kunde inte ta bort',
+            description: getErrorMessage(result, { context: 'transaction' }),
+            variant: 'destructive',
+          })
+          return
+        }
+        // Same exit path as booking/ignore: the row animates out over the
+        // 350ms window instead of vanishing with a hard jump, then the delayed
+        // filter actually removes it.
+        setExitingIds((prev) => new Set(prev).add(id))
+        // Drop the row from the batch selection immediately: leaving it there
+        // keeps the bulk bar counting (and acting on) a row that no longer
+        // exists once the timer removes it.
+        setSelectedIds((prev) => {
+          if (!prev.has(id)) return prev
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+        // The realtime echo is not guaranteed for DELETE on a filtered
+        // subscription, so the pending badge must decrement locally.
+        if (transaction.is_business === null && !transaction.is_ignored) {
+          setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+        }
+        toast({ title: t('deleted_title'), description: t('deleted_description') })
+        setTimeout(() => {
+          setTransactions((prev) => prev.filter((t) => t.id !== id))
+          setExitingIds((prev) => {
+            const next = new Set(prev)
+            next.delete(id)
+            return next
+          })
+          setProcessingId((prev) => (prev === id ? null : prev))
+        }, 350)
+      } catch {
+        setProcessingId((prev) => (prev === id ? null : prev))
         toast({
           title: 'Kunde inte ta bort',
-          description: getErrorMessage(result, { context: 'transaction' }),
+          description: t('delete_failed_description'),
           variant: 'destructive',
         })
-        return
       }
-      setTransactions((prev) => prev.filter((t) => t.id !== id))
-      toast({ title: t('deleted_title'), description: t('deleted_description') })
-    } catch {
-      toast({
-        title: 'Kunde inte ta bort',
-        description: t('delete_failed_description'),
-        variant: 'destructive',
-      })
-    }
+    })
   }
 
   function openEditTitleDialog(transaction: TransactionWithInvoice) {
     setEditTitleTarget(transaction)
+  }
+
+  function openMoveAccountDialog(transaction: TransactionWithInvoice) {
+    setMoveAccountTarget(transaction)
+  }
+
+  // Persist a cash-account move via PATCH. Returns true on success so the
+  // dialog can close; refetches the list because the account chooser and the
+  // per-account scoping key off cash_account_id.
+  async function handleMoveCashAccount(accountNumber: string): Promise<boolean> {
+    const target = moveAccountTarget
+    if (!target) return false
+    try {
+      const response = await fetch(`/api/transactions/${target.id}/cash-account`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_number: accountNumber }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: t('move_account_failed'),
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        return false
+      }
+      const moved = result.data as { cash_account_id: string }
+      setTransactions((prev) =>
+        prev.map((tx) =>
+          tx.id === target.id ? { ...tx, cash_account_id: moved.cash_account_id } : tx,
+        ),
+      )
+      toast({ title: t('move_account_saved') })
+      void refreshTransactions()
+      return true
+    } catch {
+      toast({ title: t('move_account_failed'), variant: 'destructive' })
+      return false
+    }
   }
 
   // Persist a new title via PATCH. Returns true on success so the dialog can
@@ -1886,38 +2670,276 @@ export default function TransactionsPage() {
     }
   }
 
-  async function handleSkvBokfor(row: StoredSkattekontoTransaction) {
-    setSkvProcessingId(row.id)
+  function handleSkvBokfor(row: StoredSkattekontoTransaction) {
+    // Prefer the enriched row (booking_suggestion) when it's in state:
+    // history-view callers only hold the stored shape.
+    setSkvBookTarget(skvRows.find((r) => r.id === row.id) ?? row)
+  }
+
+  /**
+   * Single-row booking succeeded (inline dialog): exit animation, local
+   * journal_entry_id patch (no refetch), and one toast linking the verifikat.
+   */
+  function handleSkvBooked(rowId: string, result: SkattekontoBatchRowResult) {
+    setSkvBookTarget(null)
+    setSkvSelectedIds((prev) => {
+      if (!prev.has(rowId)) return prev
+      const next = new Set(prev)
+      next.delete(rowId)
+      return next
+    })
+    setExitingIds((prev) => new Set(prev).add(rowId))
+    setTimeout(() => {
+      setSkvRows((prev) =>
+        prev.map((r) =>
+          r.id === rowId && result.journal_entry_id
+            ? { ...r, journal_entry_id: result.journal_entry_id }
+            : r,
+        ),
+      )
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(rowId)
+        return next
+      })
+    }, 350)
+
+    const voucherLabel =
+      result.voucher_series && result.voucher_number != null
+        ? formatVoucher({
+            voucher_series: result.voucher_series,
+            voucher_number: result.voucher_number,
+          })
+        : null
+    toast({
+      title: t('skv_booked_title'),
+      description: voucherLabel
+        ? t('skv_booked_description', { voucher: voucherLabel })
+        : undefined,
+      action: result.journal_entry_id ? (
+        <ToastAction altText={t('skv_booked_show')} asChild>
+          <Link href={`/bookkeeping/${result.journal_entry_id}`}>
+            {t('skv_booked_show')}
+          </Link>
+        </ToastAction>
+      ) : undefined,
+    })
+  }
+
+  function toggleSkvSelect(id: string) {
+    setSkvSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  async function handleSkvUnignore(id: string) {
     try {
       const res = await fetch(
-        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/bokfor`,
-        { method: 'POST' },
+        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${id}/ignore`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_ignored: false }),
+        },
       )
-      const json = await res.json()
       if (!res.ok) {
-        // Map the parsed body plus the status, never `new Error(json.error)`:
-        // the Error constructor stringifies a non-string body field, and the
-        // mapper would discard the route's own Swedish reason.
-        toast({
-          title: 'Kunde inte bokföra',
-          description: getErrorMessage(json, { statusCode: res.status }),
-          variant: 'destructive',
-        })
+        toast({ title: t('skv_ignore_undo_failed'), variant: 'destructive' })
         return
       }
-      toast({
-        title: 'Utkast skapat',
-        description: t('review_in_bookkeeping_description'),
+      setSkvRows((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, is_ignored: false } : r)),
+      )
+    } catch {
+      toast({ title: t('skv_ignore_undo_failed'), variant: 'destructive' })
+    }
+  }
+
+  /**
+   * Ignorera a skattekonto row: hides it from the work list without booking
+   * (mirrors handleIgnoreTransaction for bank rows; skattekonto rows are
+   * never deleted). Confirm up front + Ångra toast; the standing recovery
+   * surface is the "Ignorerade" band on the Skattekonto page.
+   */
+  async function handleSkvIgnore(row: StoredSkattekontoTransaction) {
+    const ok = await confirm(
+      {
+        title: t('skv_ignore_confirm_title'),
+        description: t('skv_ignore_confirm_body', {
+          text: row.transaktionstext,
+          amount: formatCurrency(Number(row.belopp_skatteverket)),
+          date: formatDate(row.transaktionsdatum),
+        }),
+        confirmLabel: t('skv_ignore_confirm_cta'),
+        cancelLabel: t('skv_ignore_confirm_cancel'),
+        variant: 'warning',
+      },
+      async () => {
+        const res = await fetch(
+          `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/ignore`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ is_ignored: true }),
+          },
+        )
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}))
+          toast({
+            title: t('skv_ignore_failed'),
+            description: getErrorMessage(json, { statusCode: res.status }),
+            variant: 'destructive',
+          })
+          throw new Error('skv ignore failed')
+        }
+      },
+    )
+    if (!ok) return
+
+    setSkvSelectedIds((prev) => {
+      if (!prev.has(row.id)) return prev
+      const next = new Set(prev)
+      next.delete(row.id)
+      return next
+    })
+    setExitingIds((prev) => new Set(prev).add(row.id))
+    setTimeout(() => {
+      setSkvRows((prev) =>
+        prev.map((r) => (r.id === row.id ? { ...r, is_ignored: true } : r)),
+      )
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(row.id)
+        return next
       })
-      window.location.href = `/bookkeeping/${json.data.entry.id}`
-    } catch (err) {
+    }, 350)
+    toast({
+      title: t('skv_ignored_title'),
+      action: (
+        <ToastAction
+          altText={t('skv_ignore_undo')}
+          onClick={() => void handleSkvUnignore(row.id)}
+        >
+          {t('skv_ignore_undo')}
+        </ToastAction>
+      ),
+    })
+  }
+
+  /**
+   * Bulk "Bokför valda": one confirmed summary → server-side draft+commit
+   * per row via bokfor-batch (chunked so batchProgress moves), then ONE
+   * aggregate toast and a local state patch with the exit animation.
+   */
+  async function handleSkvBulkConfirm() {
+    // Re-check eligibility at submit time: a refetch may have attached a
+    // duplicate hint or booked a row while the selection sat idle.
+    const ids = skvSelectedRows.filter(isSkvBulkEligible).map((r) => r.id)
+    if (ids.length === 0) {
+      setSkvBulkConfirmOpen(false)
+      setSkvSelectedIds(new Set())
+      return
+    }
+    setSkvBulkConfirmOpen(false)
+    setSkvBulkSubmitting(true)
+    setBatchProgress({ done: 0, total: ids.length })
+
+    const results: SkattekontoBatchRowResult[] = []
+    const CHUNK = 25
+    try {
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK)
+        try {
+          const res = await fetch(
+            '/api/extensions/ext/skatteverket/skattekonto/transaktioner/bokfor-batch',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ids: chunk }),
+            },
+          )
+          const json = await res.json()
+          if (res.ok) {
+            results.push(...(json.data as SkattekontoBatchResult).results)
+          } else {
+            const message = getErrorMessage(json, { statusCode: res.status })
+            for (const id of chunk) {
+              results.push({ id, ok: false, error_code: 'UNKNOWN', error_message: message })
+            }
+          }
+        } catch {
+          for (const id of chunk) {
+            results.push({ id, ok: false, error_code: 'UNKNOWN' })
+          }
+        }
+        setBatchProgress({ done: Math.min(i + CHUNK, ids.length), total: ids.length })
+      }
+    } finally {
+      setBatchProgress(null)
+      setSkvBulkSubmitting(false)
+    }
+
+    // Rows that got a journal entry (posted, or a kept draft on
+    // COMMIT_FAILED) leave the inbox: patch locally instead of refetching.
+    const patched = new Map<string, string>()
+    for (const r of results) {
+      if (r.journal_entry_id) patched.set(r.id, r.journal_entry_id)
+    }
+    if (patched.size > 0) {
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        for (const id of patched.keys()) next.add(id)
+        return next
+      })
+      setTimeout(() => {
+        setSkvRows((prev) =>
+          prev.map((r) =>
+            patched.has(r.id) ? { ...r, journal_entry_id: patched.get(r.id)! } : r,
+          ),
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          for (const id of patched.keys()) next.delete(id)
+          return next
+        })
+      }, 350)
+    }
+    setSkvSelectedIds(new Set())
+
+    const succeeded = results.filter((r) => r.ok).length
+    const failures = results.filter((r) => !r.ok)
+    if (failures.length === 0) {
       toast({
-        title: 'Kunde inte bokföra',
-        description: err instanceof Error ? getErrorMessage(err) : undefined,
+        title: t('skv_bulk_done_title'),
+        description: t('skv_bulk_done_description', { count: succeeded }),
+      })
+    } else {
+      const codeCounts = new Map<string, number>()
+      for (const f of failures) {
+        const code = f.error_code ?? 'UNKNOWN'
+        codeCounts.set(code, (codeCounts.get(code) ?? 0) + 1)
+      }
+      const codeLabel = (code: string) =>
+        code === 'PERIOD_LOCKED'
+          ? t('skv_err_period_locked')
+          : code === 'NO_COUNTER_ACCOUNT'
+            ? t('skv_err_no_counter_account')
+            : code === 'ALREADY_BOOKED'
+              ? t('skv_err_already_booked')
+              : code === 'NOT_SETTLED'
+                ? t('skv_err_not_settled')
+                : code === 'COMMIT_FAILED'
+                  ? t('skv_err_commit_failed')
+                  : t('skv_err_other')
+      const parts = [t('skv_bulk_partial_ok', { count: succeeded })]
+      for (const [code, n] of codeCounts) parts.push(`${n} ${codeLabel(code)}`)
+      toast({
+        title: t('skv_bulk_partial_title'),
+        description: parts.join(', '),
         variant: 'destructive',
       })
-    } finally {
-      setSkvProcessingId(null)
     }
   }
 
@@ -1975,6 +2997,7 @@ export default function TransactionsPage() {
     setBookingDialogOpen(false)
     setBookingDialogTransaction(null)
     setBookingDialogTemplate(null)
+    setBookingDialogProposalLines(null)
     if (matched) {
       toast({ title: 'Bankhändelsen kopplad', description: 'Ingen ny bokföring skapad.' })
     } else {
@@ -2003,6 +3026,13 @@ export default function TransactionsPage() {
   }
 
   // Batch mode handlers
+
+  // Bounded pool for the per-row batch requests: parallel enough that a
+  // 20-row batch finishes in a few round trips instead of 20 serialized ones,
+  // bounded so 100 selected rows never fan out as 100 concurrent requests.
+  // The bulkbar counter ticks per completed row.
+  const BATCH_CONCURRENCY = 5
+
   function toggleBatchSelect(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev)
@@ -2014,6 +3044,7 @@ export default function TransactionsPage() {
 
   function exitBatchMode() {
     setSelectedIds(new Set())
+    setSkvSelectedIds(new Set())
   }
 
   async function handleBatchDelete() {
@@ -2052,23 +3083,30 @@ export default function TransactionsPage() {
 
     const deletedIds = new Set<string>()
     setBatchProgress({ done: 0, total: ids.length })
+    let completed = 0
+    const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
+      let deleted = false
+      try {
+        const response = await fetch(`/api/transactions/${id}`, { method: 'DELETE' })
+        deleted = response.ok
+      } catch {
+        deleted = false
+      }
+      completed++
+      setBatchProgress({ done: completed, total: ids.length })
+      return deleted
+    })
     let successes = 0
     const failures: string[] = []
-    for (let i = 0; i < ids.length; i++) {
-      try {
-        const response = await fetch(`/api/transactions/${ids[i]}`, { method: 'DELETE' })
-        if (response.ok) {
-          successes++
-          deletedIds.add(ids[i])
-        } else {
-          const tx = transactions.find((t) => t.id === ids[i])
-          failures.push(tx?.description || ids[i])
-        }
-      } catch {
-        failures.push(ids[i])
+    ids.forEach((id, i) => {
+      if (results[i]) {
+        successes++
+        deletedIds.add(id)
+      } else {
+        const tx = transactions.find((t) => t.id === id)
+        failures.push(tx?.description || id)
       }
-      setBatchProgress({ done: i + 1, total: ids.length })
-    }
+    })
     if (deletedIds.size > 0) {
       setTransactions((prev) => prev.filter((t) => !deletedIds.has(t.id)))
     }
@@ -2101,23 +3139,30 @@ export default function TransactionsPage() {
 
     const ignoredIds = new Set<string>()
     setBatchProgress({ done: 0, total: ids.length })
+    let completed = 0
+    const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
+      let ignored = false
+      try {
+        const res = await fetch(`/api/transactions/${id}/ignore`, { method: 'POST' })
+        ignored = res.ok
+      } catch {
+        ignored = false
+      }
+      completed++
+      setBatchProgress({ done: completed, total: ids.length })
+      return ignored
+    })
     let successes = 0
     const failures: string[] = []
-    for (let i = 0; i < ids.length; i++) {
-      try {
-        const res = await fetch(`/api/transactions/${ids[i]}/ignore`, { method: 'POST' })
-        if (res.ok) {
-          successes++
-          ignoredIds.add(ids[i])
-        } else {
-          const tx = transactions.find((t) => t.id === ids[i])
-          failures.push(tx?.description || ids[i])
-        }
-      } catch {
-        failures.push(ids[i])
+    ids.forEach((id, i) => {
+      if (results[i]) {
+        successes++
+        ignoredIds.add(id)
+      } else {
+        const tx = transactions.find((t) => t.id === id)
+        failures.push(tx?.description || id)
       }
-      setBatchProgress({ done: i + 1, total: ids.length })
-    }
+    })
     if (ignoredIds.size > 0) {
       setExitingIds((prev) => {
         const next = new Set(prev)
@@ -2143,7 +3188,7 @@ export default function TransactionsPage() {
         description: `${successes} transaktioner ignorerade`,
         action: (
           <ToastAction altText="Öppna Bankavstämning" asChild>
-            <Link href="/reports/bank-reconciliation">Bankavstämning</Link>
+            <Link href="/reconciliation">Avstämning</Link>
           </ToastAction>
         ),
       })
@@ -2160,30 +3205,112 @@ export default function TransactionsPage() {
   async function handleBatchCategorize(category: TransactionCategory, vatTreatment?: VatTreatment) {
     const ids = Array.from(selectedIds)
     setBatchProgress({ done: 0, total: ids.length })
-    let successes = 0
-    const failures: string[] = []
-    for (let i = 0; i < ids.length; i++) {
-      const result = await handleCategorize(ids[i], true, category, vatTreatment)
-      if (result) {
-        successes++
-      } else {
-        const tx = transactions.find((t) => t.id === ids[i])
-        failures.push(tx?.description || ids[i])
-      }
-      setBatchProgress({ done: i + 1, total: ids.length })
-    }
+    let completed = 0
+    const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
+      // silent: rows still animate out and decrement the count through
+      // finishBooking, but the narration is the single aggregate toast below
+      // instead of one "Bokförd" toast per row stacking over the list.
+      const outcome = await runCategorize({
+        id,
+        isBusiness: true,
+        category,
+        vatTreatment,
+        confirmNoMatch: false,
+        silent: true,
+      })
+      completed++
+      setBatchProgress({ done: completed, total: ids.length })
+      return outcome
+    })
     setBatchProgress(null)
     setShowBatchSelector(false)
-    if (failures.length === 0) {
-      toast({ title: 'Klart', description: `${successes} transaktioner bokförda` })
+    // Success is the server's 2xx (outcome.ok), not a non-null journal entry
+    // id: a flag-flip booking returns 200 with a null id and must not be
+    // narrated as "misslyckades" after finishBooking already animated it out.
+    const successCount = results.filter((r) => r.ok).length
+    const failedCount = ids.length - successCount
+    // One Ångra-alla for the whole batch: it runs the same storno endpoint as
+    // the per-row toast's Ångra, which requires a posted journal entry, so
+    // only rows that actually got one are undoable. A successful flag-flip
+    // row (ok, null id) has no verifikat to reverse.
+    const undoableIds = ids.filter((_, i) => results[i].ok && results[i].journalEntryId)
+    const undoAllAction =
+      undoableIds.length > 0 ? (
+        <ToastAction
+          altText={t('batch_undo_all_alt')}
+          onClick={() => void undoBatchCategorize(undoableIds)}
+        >
+          {t('batch_undo_all')}
+        </ToastAction>
+      ) : undefined
+    if (failedCount === 0) {
+      toast({
+        title: t('batch_done_title'),
+        description: t('batch_categorize_done_description', { count: successCount }),
+        action: undoAllAction,
+      })
     } else {
       toast({
-        title: 'Delvis klart',
-        description: `${successes} lyckades, ${failures.length} misslyckades: ${failures.slice(0, 3).join(', ')}${failures.length > 3 ? '...' : ''}`,
+        title: t('batch_partial_title'),
+        description: t('batch_categorize_partial_description', {
+          success: successCount,
+          failed: failedCount,
+        }),
         variant: 'destructive',
+        action: undoAllAction,
       })
     }
     exitBatchMode()
+  }
+
+  /**
+   * Ångra alla for a batch booking: storno-reverses every booked row through
+   * the same single undo endpoint as the per-row Ångra (undoCategorize), with
+   * the same bounded pool, then restores the rows into the inbox in one state
+   * patch and reports the outcome once.
+   */
+  async function undoBatchCategorize(ids: string[]) {
+    const results = await mapWithConcurrency(ids, BATCH_CONCURRENCY, async (id) => {
+      try {
+        const res = await undoCategorize(id)
+        return res.ok
+      } catch {
+        return false
+      }
+    })
+    const undoneIds = new Set(ids.filter((_, i) => results[i]))
+    // Record the undos BEFORE patching state: any finishBooking timer still
+    // pending for these rows must see them as undone, or it would re-apply
+    // the booked shape over the restore below.
+    for (const undoneId of undoneIds) undoneIdsRef.current.add(undoneId)
+    if (undoneIds.size > 0) {
+      setTransactions((prev) =>
+        prev.map((tx) =>
+          undoneIds.has(tx.id)
+            ? {
+                ...tx,
+                is_business: null,
+                category: null as unknown as TransactionCategory,
+                journal_entry_id: null,
+              }
+            : tx,
+        ),
+      )
+      setTotalUncategorizedCount((prev) => (prev ?? 0) + undoneIds.size)
+    }
+    const failed = ids.length - undoneIds.size
+    if (failed === 0) {
+      toast({
+        title: t('undone_title'),
+        description: t('batch_undo_done_description', { count: undoneIds.size }),
+      })
+    } else {
+      toast({
+        title: t('batch_undo_partial_title'),
+        description: t('batch_undo_partial_description', { success: undoneIds.size, failed }),
+        variant: 'destructive',
+      })
+    }
   }
 
   function openMatchDialog(transaction: TransactionWithInvoice) {
@@ -2270,8 +3397,38 @@ export default function TransactionsPage() {
     if (templatePickerTransaction) {
       setBookingDialogTransaction(templatePickerTransaction)
       setBookingDialogTemplate(null)
+      setBookingDialogProposalLines(null)
+      setBookingDialogAccount(null)
       setBookingDialogOpen(true)
     }
+  }
+
+  // "Andra rader" on the proposal view: close the review and reopen the
+  // manual booking dialog prefilled with the exact lines the preview showed.
+  // The transaction comes from the dialog itself (its enriched mirror), not
+  // from quickReview state: an in-dialog SEK-rate backfill lives only on the
+  // enriched row, and the booking dialog stamps the settlement leg's FX
+  // metadata from that row's exchange_rate.
+  function handleEditProposedLines(lines: ProposalLine[], transaction: TransactionWithInvoice) {
+    setQuickReviewOpen(false)
+    setBookingDialogTransaction(transaction)
+    setBookingDialogTemplate(null)
+    setBookingDialogAccount(null)
+    setBookingDialogProposalLines(lines)
+    setBookingDialogOpen(true)
+  }
+
+  // Account picked from the template picker's "Konton" search group
+  // (issue #1877): same route as "Bokför manuellt", with the picked account
+  // prefilled on the counter line of the journal entry form.
+  function handlePickAccount(accountNumber: string) {
+    if (!templatePickerTransaction) return
+    setBookingDialogTransaction(templatePickerTransaction)
+    setBookingDialogTemplate(null)
+    setBookingDialogProposalLines(null)
+    setBookingDialogAccount(accountNumber)
+    setTemplatePickerOpen(false)
+    setBookingDialogOpen(true)
   }
 
   // Complex (multi-leg or otherwise non-convertible) library template picked
@@ -2281,6 +3438,8 @@ export default function TransactionsPage() {
     if (!templatePickerTransaction) return
     setBookingDialogTransaction(templatePickerTransaction)
     setBookingDialogTemplate(raw)
+    setBookingDialogProposalLines(null)
+    setBookingDialogAccount(null)
     setTemplatePickerOpen(false)
     setBookingDialogOpen(true)
   }
@@ -2296,7 +3455,11 @@ export default function TransactionsPage() {
     let journalEntryId: string | null
     if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
       const cpTemplateId = extractCounterpartyId(quickReview.template.id)
-      const cpCategorize = async (): Promise<{ ok: boolean; journalEntryId: string | null; result: { error?: { code?: string; account_numbers?: string[]; details?: { account_numbers?: string[] } }; journal_entry_id?: string | null; journal_entry_created?: boolean; journal_entry_error?: string | null; category?: TransactionCategory }; status: number }> => {
+      const cpCategorize = async (
+        // Set after the user confirmed the duplicate warning: force is bound
+        // to the reviewed candidate's voucher, same contract as runCategorize.
+        forceOpts?: { expectedDuplicateJournalEntryId: string },
+      ): Promise<{ ok: boolean; journalEntryId: string | null; result: { error?: { code?: string; account_numbers?: string[]; details?: { account_numbers?: string[]; candidate?: BookedDuplicateCandidate } }; journal_entry_id?: string | null; journal_entry_created?: boolean; journal_entry_error?: string | null; category?: TransactionCategory }; status: number }> => {
         const r = await fetch(`/api/transactions/${id}/categorize`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2304,6 +3467,9 @@ export default function TransactionsPage() {
             is_business: true,
             counterparty_template_id: cpTemplateId,
             ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
+            ...(forceOpts
+              ? { force: true, expected_duplicate_journal_entry_id: forceOpts.expectedDuplicateJournalEntryId }
+              : {}),
           }),
         })
         const b = await r.json()
@@ -2372,11 +3538,42 @@ export default function TransactionsPage() {
               </ToastAction>
             ) : undefined,
           })
+        } else if (
+          result?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' &&
+          result.error.details?.candidate
+        ) {
+          // Booking-feedback parity with runCategorize: route the duplicate
+          // guard into the dialog (match / ignore / book anyway) instead of
+          // dead-ending it in a destructive toast that offers no way forward.
+          const candidate = result.error.details.candidate
+          setDuplicateWarning({
+            transactionId: id,
+            retry: async () => {
+              const retry = await cpCategorize({
+                expectedDuplicateJournalEntryId: candidate.journal_entry_id,
+              })
+              if (retry.ok) {
+                finishBooking({
+                  id,
+                  isBusiness: true,
+                  category: retry.result?.category,
+                  journalEntryId: retry.journalEntryId,
+                  journalEntryCreated: retry.result?.journal_entry_created,
+                  journalEntryError: retry.result?.journal_entry_error,
+                })
+                return retry.journalEntryId
+              }
+              toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
+              return null
+            },
+            candidate,
+          })
         } else {
           toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(result, { context: 'transaction', statusCode: cpStatus }), variant: 'destructive' })
         }
         // Close the review dialog on hard errors: the toast (with action if
         // ACCOUNTS_NOT_IN_CHART) carries the message and the recovery path.
+        // The duplicate branch closes it too: the duplicate dialog takes over.
         setQuickReviewOpen(false)
         setQuickReview(null)
         return null
@@ -2417,74 +3614,81 @@ export default function TransactionsPage() {
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
 
-      {skvNeedsReconnect && (
+      {skvNeedsReconnect && effectiveSourceFilter === 'skatteverket' ? (
+        // Only when the user is actually looking at skattekonto rows: as a
+        // permanent page-wide line it read as noise (feedback 2026-08-14).
+        // The skattekonto page keeps its own reconnect line.
         <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/tax' }}>
           {t('skv_reconnect_body')}
         </AttnLine>
-      )}
+      ) : suggestionItems.length > 0 && mode !== 'review' ? (
+        // Migrated-history review nudge. Max one attn line per page
+        // (convention 6): the SKV reconnect line wins when both apply.
+        <AttnLine
+          action={{ label: t('review_attn_cta'), onClick: () => setMode('review') }}
+        >
+          {t('review_attn_body', { count: suggestionItems.length })}
+        </AttnLine>
+      ) : null}
 
       {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök] [Välj flera]
           ... [source ContextPicker far right] */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'inbox'}
-            onClick={() => setMode('inbox')}
-            className={`inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
-              mode === 'inbox'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {t('mode_inbox')}
-            {(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 && (
-              <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                {totalUncategorizedCount ?? uncategorizedTransactions.length}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'history'}
-            onClick={() => setMode('history')}
-            className={`rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
-              mode === 'history'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {t('mode_all')}
-          </button>
-        </div>
-        <div className="relative min-w-[220px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Sök transaktioner…"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="h-9 pl-10"
+        <SegmentedControl
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'inbox', label: t('mode_inbox'), count: inboxBadgeCount },
+            { value: 'history', label: t('mode_all') },
+            // Review tab exists only while suggestions do (or while the user is
+            // standing in it after emptying the list): a permanent third tab
+            // would advertise a migrator surface most companies never need.
+            ...(suggestionItems.length > 0 || mode === 'review'
+              ? [{ value: 'review' as const, label: t('mode_review'), count: suggestionItems.length }]
+              : []),
+          ]}
+        />
+        <ToolbarSearch
+          placeholder="Sök transaktioner…"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
+        {/* Far-right context group, shared by both view modes: period scope
+            (rakenskapsar chip) and the account chooser (concept scene 10).
+            Approved deviation from convention 8's single chip: booking is
+            period work, so the period scope earns the second chip (user
+            request 2026-08-12). The Q1-Q4 chips that briefly rendered here
+            (#1545) were removed: they crowded the row into a second line,
+            and on a brutet rakenskapsar they were not momsdeklaration
+            quarters, so they misled more than they scoped. */}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {/* Quiet cue that a scope change is reconciling behind the rendered
+              list (the list itself never swaps to a skeleton for it). */}
+          {isScopeRefreshing && (
+            <Loader2
+              className="h-3.5 w-3.5 animate-spin text-muted-foreground"
+              aria-label={t('refreshing')}
+            />
+          )}
+          <FyPicker
+            value={fyPeriodId}
+            onChange={handlePeriodChange}
+            onReady={handleFyReady}
+            storageKeyPrefix={PERIOD_FILTER_STORAGE_PREFIX}
           />
-        </div>
-        {/* Account chooser (convention 8): the one context chip, far right.
-            Per-cash-account rows with balances (concept scene 10); hidden
-            only when there is nothing beyond "Alla källor" to choose. */}
-        {mode === 'inbox' && sourceItems.length > 1 && (
-          <div className="ml-auto">
+          {sourceItems.length > 1 && (
             <ContextPicker
-              value={sourceFilter}
+              value={effectiveSourceFilter}
               onChange={(id) => handleSourceFilterChange(id as SourceFilter)}
               triggerLabel={(() => {
                 const active =
-                  sourceItems.find((item) => item.id === sourceFilter) ?? sourceItems[0]
+                  sourceItems.find((item) => item.id === effectiveSourceFilter) ?? sourceItems[0]
                 return active.annotation ? `${active.label} · ${active.annotation}` : active.label
               })()}
               items={sourceItems}
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Content based on mode */}
@@ -2492,21 +3696,36 @@ export default function TransactionsPage() {
         <DataList className="stagger-enter">
           {[1, 2, 3].map((i) => (
             <div key={i} className="flex items-center gap-3 px-4 py-3">
-              <Skeleton className="h-5 w-5 rounded" />
+              <Skeleton className="h-5 w-5" />
               <div className="flex-1 space-y-2">
-                <Skeleton className="h-4 w-48 rounded" />
-                <Skeleton className="h-3 w-24 rounded" />
+                <Skeleton className="h-4 w-48" />
+                <Skeleton className="h-3 w-24" />
               </div>
-              <Skeleton className="h-5 w-20 rounded" />
+              <Skeleton className="h-5 w-20" />
             </div>
           ))}
         </DataList>
+      ) : mode === 'review' ? (
+        <SuggestionReviewList
+          items={suggestionItems}
+          onConfirm={confirmSuggestions}
+          onReject={rejectSuggestions}
+          onOpenMatchVoucher={openMatchVoucherDialog}
+          onRerunMatching={rerunMatching}
+          rerunning={rerunningMatch}
+        />
       ) : mode === 'inbox' ? (
         inboxItems.length === 0 ? (
-          searchTerm || sourceFilter !== 'all' ? (
+          searchTerm || effectiveSourceFilter !== 'all' || periodBounds ? (
             <DataListEmpty
               title="Inga träffar"
-              description={searchTerm ? t('no_search_results') : t('source_empty')}
+              description={
+                searchTerm
+                  ? t('no_search_results')
+                  : effectiveSourceFilter !== 'all'
+                    ? t('source_empty')
+                    : t('period_empty')
+              }
             />
           ) : (
             <InboxZeroState
@@ -2519,7 +3738,7 @@ export default function TransactionsPage() {
             {/* Bulkbar (concept): hidden until at least one transaction is
                 selected via the hover checkboxes, then it pops in with the
                 count and the batch actions. */}
-            {selectedIds.size > 0 && (
+            {(selectedIds.size > 0 || skvSelectedIds.size > 0) && (
               <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
                 {batchProgress ? (
                   <span className="flex items-center gap-2 text-muted-foreground">
@@ -2529,41 +3748,60 @@ export default function TransactionsPage() {
                 ) : (
                   <>
                     <span className="whitespace-nowrap">
-                      <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
-                      {t('bulkbar_selected', { count: selectedIds.size })}
+                      <strong className="font-semibold tabular-nums">
+                        {selectedIds.size + skvSelectedIds.size}
+                      </strong>{' '}
+                      {t('bulkbar_selected', { count: selectedIds.size + skvSelectedIds.size })}
                     </span>
-                    <Button size="sm" onClick={() => setShowBatchSelector(true)}>
-                      {t('batch_book')}
-                    </Button>
-                    {/* Bulk-book (samlingsverifikation): only when ≥2 selected
-                        on the same date + same direction. Disabled state
-                        explains why via title. */}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setBulkBookOpen(true)}
-                      disabled={!bulkBookEligible}
-                      title={!bulkBookEligible ? t('batch_bulk_book_hint') : undefined}
-                    >
-                      {t('batch_bulk_book')}
-                    </Button>
-                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore}>
-                      {t('batch_ignore')}
-                    </button>
-                    <button
-                      type="button"
-                      className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
-                      onClick={handleBatchDelete}
-                    >
-                      {t('batch_delete')}
-                    </button>
-                    {selectedIds.size < selectableInboxIds.length && (
+                    {selectedIds.size > 0 && (
+                      <>
+                        <Button size="sm" onClick={() => setShowBatchSelector(true)}>
+                          {t('batch_book')}
+                        </Button>
+                        {/* Bulk-book (samlingsverifikation): only when ≥2 selected
+                            on the same date + same direction. Disabled state
+                            explains why via title. */}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setBulkBookOpen(true)}
+                          disabled={!bulkBookEligible}
+                          title={!bulkBookEligible ? t('batch_bulk_book_hint') : undefined}
+                        >
+                          {t('batch_bulk_book')}
+                        </Button>
+                        <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore}>
+                          {t('batch_ignore')}
+                        </button>
+                        <button
+                          type="button"
+                          className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
+                          onClick={handleBatchDelete}
+                        >
+                          {t('batch_delete')}
+                        </button>
+                      </>
+                    )}
+                    {/* SKV rows book through the skatteverket extension: one
+                        summary confirmation, then draft+commit per row. */}
+                    {skvSelectedIds.size > 0 && (
+                      <Button size="sm" onClick={() => setSkvBulkConfirmOpen(true)}>
+                        {t('batch_skv_book', { count: skvSelectedIds.size })}
+                      </Button>
+                    )}
+                    {(selectedIds.size < selectableInboxIds.length ||
+                      skvSelectedIds.size < selectableSkvIds.length) && (
                       <button
                         type="button"
                         className={QUIET_LINK_CLASS}
-                        onClick={() => setSelectedIds(new Set(selectableInboxIds))}
+                        onClick={() => {
+                          setSelectedIds(new Set(selectableInboxIds))
+                          setSkvSelectedIds(new Set(selectableSkvIds))
+                        }}
                       >
-                        {t('batch_select_all', { count: selectableInboxIds.length })}
+                        {t('batch_select_all', {
+                          count: selectableInboxIds.length + selectableSkvIds.length,
+                        })}
                       </button>
                     )}
                     <button type="button" className={QUIET_LINK_CLASS} onClick={exitBatchMode}>
@@ -2596,6 +3834,7 @@ export default function TransactionsPage() {
                         key={`bank-${item.data.id}`}
                         transaction={item.data}
                         skvCounterpartDate={bankToSkvHints.get(item.data.id)}
+                        isExiting={exitingIds.has(item.data.id)}
                         processingId={processingId}
                         isSelected={selectedIds.has(item.data.id)}
                         isExpanded={expandedTxId === item.data.id}
@@ -2613,33 +3852,61 @@ export default function TransactionsPage() {
                         onDelete={handleDeleteTransaction}
                         onIgnore={handleIgnoreTransaction}
                         onEditTitle={openEditTitleDialog}
+                        onMoveCashAccount={openMoveAccountDialog}
+                        cashAccounts={cashAccounts}
                         onToggleSelect={toggleBatchSelect}
+                        preMigrationCutoff={sieCoverageEnd}
                       />
                     ) : (
                       <SkattekontoInboxCard
                         key={`skv-${item.data.id}`}
                         row={item.data}
                         matchSuggestion={item.data.match_suggestion}
-                        processing={skvProcessingId === item.data.id}
+                        bookingSuggestion={item.data.booking_suggestion}
+                        isExiting={exitingIds.has(item.data.id)}
+                        processing={skvBulkSubmitting}
+                        selectable={isSkvBulkEligible(item.data)}
+                        isSelected={skvSelectedIds.has(item.data.id)}
+                        onToggleSelect={toggleSkvSelect}
                         onBokfor={handleSkvBokfor}
                         onMatch={r => setSkvMatchTarget(r)}
+                        onIgnore={handleSkvIgnore}
                       />
                     ),
                   )}
                 </tbody>
               </table>
             </div>
+            {/* Bridge to the bulk-match flow: a backlog of unbooked bank rows
+                is usually a migration/import whose counterpart vouchers
+                already exist, and the only match affordance here is per-row.
+                Static text + count (no probe): the reconciliation preview is
+                the honest source of how many actually match. Sits below the
+                list so the rows themselves stay first, and yields to the
+                review-suggestions attn at the top of the page (max one ochre
+                sentence per page): when the sweep has already persisted
+                suggestions, "Granska förslagen" is the more precise
+                destination for the same backlog. */}
+            {selectableInboxIds.length >= 5 && suggestionItems.length === 0 && (
+              <AttnLine
+                className="px-1 pt-3"
+                action={{
+                  label: t('recon_attn_action'),
+                  href: '/reconciliation?autorun=1',
+                }}
+              >
+                {t('recon_attn', { count: selectableInboxIds.length })}
+              </AttnLine>
+            )}
           </div>
         )
       ) : (
         <TransactionHistoryList
-          transactions={transactions}
-          skvRows={skvRows}
+          transactions={historyTransactions}
+          skvRows={skvRowsInScope}
+          exitingIds={exitingIds}
           searchTerm={searchTerm}
-          sourceFilter={
-            sourceFilter === 'all' || sourceFilter === 'skatteverket' ? sourceFilter : 'bank'
-          }
-          onSourceFilterChange={handleSourceFilterChange}
+          sourceFilter={effectiveSourceFilter}
           jeUnderlagStatus={jeUnderlagStatus}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
@@ -2661,10 +3928,19 @@ export default function TransactionsPage() {
         {mode === 'inbox' && (
           <span className="tabular-nums">{t('footer_to_handle', { count: inboxItems.length })}</span>
         )}
+        {mode === 'inbox' && pendingOutsideCount > 0 && (
+          <span className="tabular-nums">
+            {t('period_pending_outside', { count: pendingOutsideCount })}{' '}
+            <button type="button" className={QUIET_LINK_CLASS} onClick={clearPeriodFilter}>
+              {t('period_show_all')}
+            </button>
+          </span>
+        )}
         <BankSyncStatusChip />
         <BankSyncNowButton />
+        <BankSyncSinceLastVisit />
         <Link
-          href="/reports/bank-reconciliation"
+          href="/reconciliation"
           className="ml-auto transition-colors duration-150 hover:text-foreground"
         >
           Bankavstämning →
@@ -2728,10 +4004,16 @@ export default function TransactionsPage() {
           open
           onOpenChange={(o) => {
             setBookingDialogOpen(o)
-            if (!o) setBookingDialogTemplate(null)
+            if (!o) {
+              setBookingDialogTemplate(null)
+              setBookingDialogProposalLines(null)
+              setBookingDialogAccount(null)
+            }
           }}
           transaction={bookingDialogTransaction}
           preselectedTemplate={bookingDialogTemplate}
+          proposalLines={bookingDialogProposalLines}
+          preselectedAccount={bookingDialogAccount}
           onBooked={handleTransactionBooked}
         />
       )}
@@ -2801,6 +4083,7 @@ export default function TransactionsPage() {
               handleOpenTemplateReview(templatePickerTransaction, templateId)
             }}
             onPickLibraryTemplate={handlePickLibraryTemplate}
+            onSelectAccount={handlePickAccount}
           />
         </DialogContent>
       </Dialog>}
@@ -2882,6 +4165,7 @@ export default function TransactionsPage() {
           counterpartyDefaultDimensions={quickReview?.defaultDimensions ?? null}
           onConfirm={handleQuickReviewConfirm}
           onChangeTemplate={handleChangeTemplate}
+          onEditLines={handleEditProposedLines}
         />
       )}
 
@@ -2908,6 +4192,19 @@ export default function TransactionsPage() {
         />
       )}
 
+      {moveAccountTarget && (
+        <MoveTransactionCashAccountDialog
+          open
+          onOpenChange={(v) => {
+            if (!v) setMoveAccountTarget(null)
+          }}
+          cashAccounts={cashAccounts}
+          currentCashAccountId={moveAccountTarget.cash_account_id}
+          currency={moveAccountTarget.currency}
+          onMove={handleMoveCashAccount}
+        />
+      )}
+
       {skvMatchTarget && (
         <SkattekontoMatchDialog
           row={skvMatchTarget}
@@ -2915,6 +4212,64 @@ export default function TransactionsPage() {
           onClose={() => setSkvMatchTarget(null)}
           onMatched={handleSkvMatched}
         />
+      )}
+
+      {skvBookTarget && (
+        <SkattekontoBookDialog
+          row={skvBookTarget}
+          open
+          onOpenChange={(o) => {
+            if (!o) setSkvBookTarget(null)
+          }}
+          onBooked={handleSkvBooked}
+          onMatch={() => {
+            setSkvMatchTarget(skvBookTarget)
+            setSkvBookTarget(null)
+          }}
+        />
+      )}
+
+      {/* SKV bulk booking: one summary confirmation for the whole selection,
+          grouped by deterministic suggestion. Count-based: voucher numbers
+          are assigned atomically at commit. */}
+      {skvBulkConfirmOpen && (
+        <ConfirmationDialog
+          open
+          onOpenChange={setSkvBulkConfirmOpen}
+          title={t('skv_bulk_title', { count: skvSelectedIds.size })}
+          isSubmitting={skvBulkSubmitting}
+          confirmLabel={t('skv_bulk_confirm')}
+          warningText={t('skv_bulk_warning', { count: skvSelectedIds.size })}
+          onConfirm={handleSkvBulkConfirm}
+        >
+          <div className="space-y-2 py-2 text-sm">
+            {skvBulkGroups.map((group) => (
+              <div
+                key={`${group.account}|${group.label}`}
+                className="flex items-baseline justify-between gap-4"
+              >
+                <span className="min-w-0 truncate">
+                  {t('skv_bulk_group', {
+                    count: group.count,
+                    label: group.label,
+                    account: group.account,
+                  })}
+                </span>
+                <span className={cn('shrink-0 tabular-nums', group.sum > 0 && 'text-success')}>
+                  {group.sum > 0 ? '+' : ''}
+                  {formatCurrency(group.sum)}
+                </span>
+              </div>
+            ))}
+            <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2 font-medium">
+              <span>{t('skv_bulk_total', { count: skvSelectedIds.size })}</span>
+              <span className="tabular-nums">
+                {skvBulkTotal > 0 ? '+' : ''}
+                {formatCurrency(skvBulkTotal)}
+              </span>
+            </div>
+          </div>
+        </ConfirmationDialog>
       )}
 
       {/* Prong B: match-against-supplier-invoice suggestion */}
@@ -2934,7 +4289,7 @@ export default function TransactionsPage() {
               fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars skapas en
               dubblerad verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
-            <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
               {siMatchSuggestion?.candidates.map((c) => (
                 <div key={c.supplier_invoice_id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
@@ -2992,7 +4347,7 @@ export default function TransactionsPage() {
               istället för att bokföra direkt mot kundfordringskontot, annars skapas en dubblerad
               verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
-            <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
               {ciMatchSuggestion?.candidates.map((c) => (
                 <div key={c.invoice_id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
@@ -3054,6 +4409,37 @@ export default function TransactionsPage() {
         onMatched={(transactionId, journalEntryId, voucherLabel) => {
           setDuplicateWarning(null)
           handleVoucherLinked(transactionId, journalEntryId, voucherLabel)
+        }}
+        // Sibling candidate resolved as a duplicate import: the dialog already
+        // ran POST /ignore; this is the same success tail as
+        // handleIgnoreTransaction (which additionally owns a pre-confirm the
+        // dialog context replaces).
+        onIgnored={(transactionId) => {
+          setDuplicateWarning(null)
+          const ignoredTx = transactions.find((t) => t.id === transactionId)
+          setExitingIds((prev) => new Set(prev).add(transactionId))
+          setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+          setTimeout(() => {
+            setTransactions((prev) =>
+              prev.map((t) => (t.id === transactionId ? { ...t, is_ignored: true } : t))
+            )
+            setExitingIds((prev) => {
+              const next = new Set(prev)
+              next.delete(transactionId)
+              return next
+            })
+          }, 350)
+          toast({
+            title: 'Transaktionen ignorerad',
+            description: ignoredTx
+              ? `${ignoredTx.description}, ${formatCurrency(ignoredTx.amount, ignoredTx.currency)}`
+              : undefined,
+            action: (
+              <ToastAction altText="Ångra ignorera" onClick={() => void handleUnignoreTransaction(transactionId)}>
+                Ångra
+              </ToastAction>
+            ),
+          })
         }}
         onBookAnyway={async () => {
           const retry = duplicateWarning?.retry

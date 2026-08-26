@@ -73,10 +73,10 @@ describe('commitSubmitVatDeclaration', () => {
     expect(result).toMatchObject({ ok: true, signing_url: 'https://skv.test/sign/abc' })
     expect(mockSkvRequest).toHaveBeenCalledTimes(2)
     // call order: utkast (POST) before las (PUT)
-    expect(mockSkvRequest.mock.calls[0][2]).toBe('POST')
-    expect(mockSkvRequest.mock.calls[0][3]).toMatch(/^\/utkast\/165560000000\/202503$/)
-    expect(mockSkvRequest.mock.calls[1][2]).toBe('PUT')
-    expect(mockSkvRequest.mock.calls[1][3]).toMatch(/^\/las\/165560000000\/202503$/)
+    expect(mockSkvRequest.mock.calls[0][3]).toBe('POST')
+    expect(mockSkvRequest.mock.calls[0][4]).toMatch(/^\/utkast\/165560000000\/202503$/)
+    expect(mockSkvRequest.mock.calls[1][3]).toBe('PUT')
+    expect(mockSkvRequest.mock.calls[1][4]).toMatch(/^\/las\/165560000000\/202503$/)
   })
 
   it('utkast rejected by SKV → non-recoverable, no /las call', async () => {

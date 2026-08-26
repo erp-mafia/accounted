@@ -1,5 +1,6 @@
 import type { McpResource } from './types'
 import { ACTION_NEEDED_THRESHOLD_DAYS } from '@/lib/deadlines/status-engine'
+import { countReconciliationDue } from '@/lib/worklist/categories'
 
 type Severity = 'critical' | 'warning' | 'info'
 
@@ -337,6 +338,25 @@ export const attentionResource: McpResource = {
         })),
         next: {
           description: 'Be användaren förnya bank-samtycket innan det löper ut.',
+        },
+      })
+    }
+
+    // ── Accounts not signed off through the previous month end ──────
+    // Cheap by construction (lib/worklist countReconciliationDue: no bridge
+    // computation) and zero until the company has signed anything off.
+    const reconciliationDue = await countReconciliationDue(supabase, companyId, now)
+    if (reconciliationDue > 0) {
+      categories.push({
+        key: 'reconciliation_due',
+        label_sv: 'Konton som inte är avstämda t.o.m. förra månadsskiftet',
+        severity: 'warning',
+        count: reconciliationDue,
+        samples: [],
+        next: {
+          description:
+            'Läs Accounted://reconciliation/summary för bryggan per konto; koppla föreslagna par, bokför det som saknas och signera med gnubok_reconcile_signoff när oförklarat är 0.',
+          resource: 'Accounted://reconciliation/summary',
         },
       })
     }

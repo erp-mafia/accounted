@@ -3,6 +3,7 @@
 import { createContext, useContext } from 'react'
 import type { Company, CompanyRole, Team } from '@/types'
 import type { CapabilityKey } from '@/lib/entitlements/keys'
+import type { EntitlementState } from '@/lib/entitlements/has-capability'
 
 /** The user's byrå team membership (teams.kind = 'byra'), when any (WL-08). */
 export interface ByraTeamRef {
@@ -44,6 +45,14 @@ interface CompanyContextValue {
    * touchpoint in the sidebar.
    */
   trialEndsAt: string | null
+  /**
+   * Paid-lifecycle state (trial / trial_expired / lapsed_subscription /
+   * paid / none). 'none' in the company:null shells. Drives the expired-trial
+   * touchpoint and dialog.
+   */
+  entitlementState: EntitlementState
+  /** When the lapsed trial ran out; set only while entitlementState is 'trial_expired'. */
+  trialExpiredAt: string | null
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)

@@ -83,8 +83,48 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * 2026-08-01: 361 after the white-label build (WL-17: brands, teams.kind,
  * cockpit, brand mail). The growth is spread across ordinary feature queries;
  * ceiling raised 360 -> 370 to restore headroom.
+ *
+ * Raised 2026-08-06 for the sandbox seed's payroll + ledger-history builders.
+ * app/api/sandbox/seed/ follows the pure-row-builder pattern the existing
+ * customers.ts / pending-operations.ts modules established: the builder returns
+ * complete row objects and route.ts spreads them, adding only the ids it had to
+ * insert first (voucher_number, journal_entry_id, account_id). The scanner
+ * cannot see through that spread. Writing the columns out again in route.ts to
+ * satisfy the scanner would duplicate every builder's shape at the call site,
+ * which is the thing the builders exist to prevent, and the row shapes are
+ * covered by their own unit tests instead.
+ *
+ * Baseline 2026-08-06: 370 (158 dynamic-payload, 120 dynamic-select,
+ * 47 dynamic-logical, 38 spread-payload, 5 dynamic-column, 2 computed key).
+ *
+ * 2026-08-12 +3: lib/webshop-orders/ingest.ts builds partial UPDATE payloads
+ * at runtime (frozen rows get safe fields only; unfrozen rows get optional
+ * parent/legacy links). Writing the shapes as inline literals would need one
+ * variant per key combination; the row shapes are covered by ingest.test.ts.
+ *
+ * 2026-08-26 +2: the customer pickers in InvoiceEditor and
+ * NewRecurringScheduleDialog hide archived customers but must keep the one the
+ * draft already points at, which is a PostgREST logical filter
+ * `.or('archived_at.is.null,id.eq.<uuid>')`. The id is a runtime value, so the
+ * expression cannot be a literal; both columns are real and the filter is
+ * covered by the archived-counterparty tests.
+ *
+ * 2026-08-17 +1: lib/import/skattekonto-file/import-service.ts inserts parsed
+ * statement rows via a mapped batch (same shape as every other file importer);
+ * the row shape is covered by the execute route tests and the pg-real suite.
+ *
+ * 2026-08-21 +1: lib/invoices/peppol-inbound.ts updates the processing state
+ * of an inbound Peppol document through one helper (five literal shapes:
+ * routed / unrouted / converted / failed, all partial); the column set is
+ * pinned by peppol-inbound.test.ts and the pg-real immutability test.
+ *
+ * 2026-08-26 merge of add/white-label-infra with main: both sides' growth
+ * lands at once (WL queries + everything above). Count on the merged tree:
+ * 383 (162 dynamic-payload, 125 dynamic-select, 50 dynamic-logical,
+ * 39 spread-payload, 5 dynamic-column, 2 computed key); ceiling re-baselined
+ * with the usual headroom.
  */
-const UNRESOLVED_CEILING = 370
+const UNRESOLVED_CEILING = 385
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

@@ -28,7 +28,10 @@ export function loadBasCatalog(): Promise<CatalogAccount[]> {
         return res.json()
       })
       .then((body) => (body?.data as CatalogAccount[]) ?? [])
-      .catch(() => {
+      .catch((err) => {
+        // Callers degrade gracefully (search falls back to the active chart),
+        // so this log is the only trace a catalog fetch failure leaves.
+        console.error('[bas-catalog] fetch failed:', err)
         cache = null // allow a retry on the next call
         return []
       })

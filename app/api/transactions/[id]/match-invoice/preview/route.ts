@@ -22,6 +22,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { roundOre, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 import { getRevenueAccount, getOutputVatAccount } from '@/lib/bookkeeping/invoice-entries'
@@ -229,6 +230,25 @@ export const GET = withRouteContext(
 
     const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
+
+    // The POST handler rejects cash-method partials and part-paid completions
+    // for never-booked invoices, so refuse to preview lines it will never
+    // book. Skipped while the FX rate is unresolved: the dialog must still
+    // render to collect a manual rate, and the POST recomputes the real check.
+    if (!fxRateUnavailable) {
+      const cashBlock = cashPartialBlockReason({
+        invoiceAlreadyBooked,
+        accountingMethod,
+        priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
+        paysRemainingInFull: isFullyPaid,
+      })
+      if (cashBlock) {
+        return errorResponseFromCode('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED', log, {
+          requestId,
+          details: { reason: cashBlock },
+        })
+      }
+    }
 
     const lines: PreviewLine[] = []
     let entryType: 'clearing' | 'cash' = 'clearing'

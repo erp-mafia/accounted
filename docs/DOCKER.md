@@ -17,15 +17,15 @@ You do **not** need Node.js, npm, or anything else installed locally. The pre-bu
 mkdir Accounted && cd Accounted
 
 # Compose file + env template
-curl -fsSLO https://raw.githubusercontent.com/gnubok/gnubok/main/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/gnubok/gnubok/main/.env.docker.example
+curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/.env.docker.example
 
 # Cron sidecar (Dockerfile + schedule)
 mkdir -p docker
 curl -fsSL -o docker/cron.Dockerfile \
-  https://raw.githubusercontent.com/gnubok/gnubok/main/docker/cron.Dockerfile
+  https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/cron.Dockerfile
 curl -fsSL -o docker/crontab.self-hosted \
-  https://raw.githubusercontent.com/gnubok/gnubok/main/docker/crontab.self-hosted
+  https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/crontab.self-hosted
 ```
 
 ### 2. Configure your environment
@@ -146,10 +146,10 @@ NEXT_PUBLIC_APP_URL=https://gnubok.example.com
 ### 3. Download the overlay + Caddyfile
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/gnubok/gnubok/main/docker-compose.caddy.yml
+curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.caddy.yml
 mkdir -p docker
 curl -fsSL -o docker/Caddyfile \
-  https://raw.githubusercontent.com/gnubok/gnubok/main/docker/Caddyfile
+  https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/Caddyfile
 ```
 
 ### 4. Start with the overlay
@@ -166,21 +166,36 @@ If you already have nginx / a managed load balancer / Cloudflare in front, skip 
 
 ## Optional Extensions
 
-The self-hosted image ships with all extensions enabled (except Enable Banking, which requires private PSD2 credentials). Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
+The self-hosted image ships with a curated set of general extensions, including email, invoice inbox, document extraction, push notifications, calendar, and the MCP server. Enable Banking is excluded because it requires private PSD2 credentials. Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
 
-### AI Features (ai-categorization, ai-chat, receipt-ocr, invoice-inbox)
+### AI Features (document-extraction, invoice-inbox, AI assistant)
+
+All AI runs Claude. Provide either a direct Anthropic API key:
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
 ```
+
+or AWS credentials with Bedrock model access to Claude, which keeps inference in eu-north-1:
+
+```env
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=eu-north-1
+```
+
+If both are set, Bedrock is used; `AI_PROVIDER=bedrock|anthropic` forces the choice. `OPENAI_API_KEY` from earlier versions is not read by any code path. See [SELF-HOSTING.md](./SELF-HOSTING.md#ai-features) for optional model overrides.
+
+The stock self-hosted image includes both `invoice-inbox` and
+`document-extraction`, so the same provider credentials cover emailed invoices
+and documents uploaded in the app.
 
 ### Email (invoice sending, reminders)
 
 ```env
 RESEND_API_KEY=re_...
 RESEND_FROM_EMAIL=faktura@your-domain.com
-RESEND_WEBHOOK_SECRET=whsec_...
+RESEND_DELIVERY_WEBHOOK_SECRET=whsec_...
 ```
 
 ### Push Notifications
@@ -201,18 +216,20 @@ No env vars needed: always available.
 
 ## Updating
 
-The default `IMAGE_TAG=latest` follows `main` and updates on every `docker compose pull`. For production, **pin to a specific release** so updates are deliberate:
+The default `IMAGE_TAG=latest` follows `main` and updates on every `docker compose pull`. For production, **pin to a specific build** so updates are deliberate. Every merge to `main` publishes the image under two tags: `latest` and the bare 7-character commit SHA (for example `3e4b5dd`), so a pin looks like:
 
 ```env
 # .env
-IMAGE_TAG=1.2.3
+IMAGE_TAG=3e4b5dd
 ```
 
-Browse available tags at https://github.com/erp-mafia/gnubok/pkgs/container/gnubok. For maximum integrity, pin by digest:
+Browse available tags at https://github.com/erp-mafia/accounted/pkgs/container/gnubok (the image name keeps the historical `gnubok` package name on purpose). For maximum integrity, pin by digest; the digest is printed in the `docker-publish` workflow run and by `docker buildx imagetools inspect ghcr.io/erp-mafia/gnubok:<sha>`:
 
 ```env
-IMAGE_TAG=1.2.3@sha256:abcdef...
+IMAGE_TAG=3e4b5dd@sha256:abcdef...
 ```
+
+Semver tags (`1.2.3`, `1.2`, `1`) are published only when a `v*.*.*` git tag is cut. No such tag exists yet, so until the first tagged release the commit SHA is the only immutable pin.
 
 Apply updates:
 
@@ -231,8 +248,8 @@ If you prefer to build locally instead of pulling the pre-built image:
 
 ```bash
 # Clone the repo
-git clone https://github.com/gnubok/gnubok.git
-cd Accounted
+git clone https://github.com/erp-mafia/accounted.git
+cd accounted
 cp .env.docker.example .env
 # Fill in .env
 

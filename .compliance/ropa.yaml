@@ -228,6 +228,47 @@ processing_activities:
       - bankid_signing_required_for_filing
       - immutable_audit_log
 
+  - id: moms.declaration_status_read
+    name: Avläsning av inlämnad momsdeklaration och beslut från Skatteverket
+    purpose: >-
+      Läsa tillbaka en redan inlämnad momsdeklaration (inlamnat) och
+      Skatteverkets beslut (beslutat) för en period, på begäran av en
+      medlem i företaget via v1 REST-API:t eller MCP, så att bokföringen
+      kan stämmas av mot faktiskt inlämnade uppgifter. Läsning sker live
+      mot Skatteverket; deklarationsinnehållet lagras inte hos oss, endast
+      en audit-rad om att anropet gjordes.
+    lawful_basis: art_6_1_b   # service provision: read-back requested by the customer
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.government_id          # orgnummer (juridiska personer) eller pnr
+      - user.financial.tax          # rutor 05-62 i det inlämnade underlaget/beslutet
+    recipients:
+      - name: Skatteverket
+        country: SE
+        role: legal_recipient
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: Sweden-to-Sweden flow; no third-country transfer.
+    retention:
+      # Response bodies are returned to the caller and never persisted.
+      # Only the outbound call metadata lands in the audit log.
+      duration: 7y
+      basis: bfl_7_kap
+      stored_in:
+        - skatteverket_api_audit_log
+    security_measures:
+      - rls_company_scoped
+      - rbac_company_member_role_check
+      - tls_1_3_to_skatteverket
+      - immutable_audit_log
+      - no_payload_body_persisted
+      - upstream_error_bodies_logged_server_side_only
+
   - id: psd2.cash_account_mirror
     name: PSD2-konton speglas till cash_accounts
     purpose: >-
@@ -605,6 +646,9 @@ processing_activities:
     data_categories:
       - user.contact.email    # person property via identify(), aldrig i event-properties
       - user.name             # profiles.full_name
+      # Sessionsinspelningen är maskerad som standard: all tangentbords-
+      # inmatning och all text maskeras, utom appens eget statiska gränssnitt
+      # (rubriker, navigering, knappar, etiketter), se security_measures.
       - user.behavior         # sidvisningar, klick, händelser, sessionsinspelning
       - user.device           # user agent, skärmstorlek, IP (trunkeras av PostHog)
       # Supportärenden: fritext som användaren SJÄLV skriver till supporten via
@@ -634,9 +678,20 @@ processing_activities:
       stored_in:
         - posthog_eu   # externt hos biträdet; inget lagras i vår databas
     security_measures:
-      - session_replay_masks_all_text        # maskTextSelector '*' utöver maskAllInputs
-      - session_replay_masks_all_inputs
-      - org_number_never_transmitted         # låst av test i lib/analytics/__tests__
+      # Maskerat-som-standard (2026-08-17, ersätter det mönsterbaserade läget
+      # från 2026-08-06): ALL tangentbordsinmatning maskeras (rrweb
+      # maskAllInputs utan undantagsfunktion) och ALL text maskeras utom
+      # element taggade data-ph-unmask (statiskt i18n-gränssnitt: rubriker,
+      # navigering, etiketter, knappar) samt tabellkolumnrubriker. Även
+      # otaggat gränssnitt maskeras, så felmoden för ny UI är övermaskering,
+      # aldrig läckage. Taggat gränssnitt mönsterskrubbas dessutom på belopp
+      # och person-/organisationsnummer. data-ph-mask tvingar maskering och
+      # vinner över data-ph-unmask; låst av test i lib/analytics/__tests__.
+      - session_replay_masked_by_default                   # lib/analytics/replay-masking.ts
+      - session_replay_masks_all_input_values
+      - session_replay_masks_amounts_and_identity_numbers_in_chrome
+      - session_replay_masks_password_inputs
+      - org_number_never_transmitted_as_group_property     # låst av test i lib/analytics/__tests__
       - no_pii_in_event_properties           # PII endast som person properties via identify()
       # persistence: 'memory' -> ingen analysdata och inga kakor på enheten.
       # TVÅ undantag, båda funktionell UI-state utan personuppgifter, båda
@@ -662,3 +717,101 @@ processing_activities:
       - support_ticket_identity_hmac_signed        # POSTHOG_SECRET_API_KEY, serverside
       - support_message_body_never_in_event_properties  # breadcrumb bär endast subject
       - email_remains_the_delivery_guarantee       # ärendet är ett komplement, ej leveransväg
+
+  - id: whatsapp.receipt_intake
+    name: Kvittoinlämning och klargörande dialog via WhatsApp
+    purpose: >-
+      Ta emot kvitton som foto eller PDF skickade till Accounteds delade
+      WhatsApp-nummer och landa dem i dokumentinkorgen (Underlag) som
+      räkenskapsinformation, samt föra en kort klargörande dialog i samma
+      chatt: bekräfta mottagning, fråga vilket företag underlaget tillhör och
+      samla in de representationsuppgifter Skatteverket kräver (deltagarnas
+      namn och företag samt syfte). Avsändare är enbart befintliga
+      Accounted-användare som själva knutit sitt nummer med en engångskod;
+      okända nummer får ett enda begränsat standardsvar och behandlas aldrig
+      vidare (ingen AI, ingen mediahämtning, inget innehåll sparas).
+      Deltagarnamn i representationssvar är tredjepartsuppgifter som samlas
+      in från användaren, inte från de registrerade själva; individuell
+      information till varje deltagare vore oproportionerlig i förhållande
+      till den lagstadgade dokumentationsplikten och undantaget i art.
+      14.5 b tillämpas (uppgifterna framgår av verifikationen, som bevaras
+      enligt BFL).
+    # art 6.1 b: tjänsten (mottagning, dialog, inkorgsleverans).
+    # art 6.1 c: BFL 7 kap: kvittot bevaras 7 år som räkenskapsinformation.
+    # art 6.1 f: tredjeparts deltagarnamn i representationssvar (med
+    #            art 14.5 b-undantaget dokumenterat i purpose ovan).
+    lawful_basis: art_6_1_b_c_and_f
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase_and_meta
+    data_subjects:
+      - business_owner
+      - company_member
+      - representation_attendee   # tredjepart: namn + företag i representationssvar
+    data_categories:
+      - user.contact.phone_number   # HMAC-hash med peppar + AES-256-GCM + mask; aldrig i klartext i DB
+      - user.communication_content  # chattext och webhook-payload utan avsändarnummer, 90 dagars retention
+      - user.document               # kvittofiler, 7 år WORM enligt BFL 7 kap
+      - user.name                   # deltagarnamn i representationssvar (tredjepart)
+      - user.activity_timestamp
+    recipients:
+      - name: Meta Platforms Ireland Ltd (WhatsApp Business Platform, Cloud API)
+        country: IE
+        role: processor
+      - name: Supabase
+        country: EU
+        role: processor
+      # AI-tolkningen av kvittobilder och fritextsvar sker via Amazon Bedrock
+      # och täcks av den befintliga aktiviteten ai.inference ovan.
+    international_transfers:
+      applicable: true
+      mechanism: scc_2021_c2p
+      note: >-
+        Meta Platforms Ireland behandlar meddelandena under WhatsApp Business
+        dataskyddsvillkor med EU SCC-addendum (Module 2) för vidareöverföring
+        till Meta Platforms Inc. (US). Cloud API Local Storage är aktiverat
+        med region DE, så meddelandeinnehåll lagras i vila inom EU hos Meta.
+    retention:
+      # Differentierad per datakategori; verkställs dagligen av
+      # /api/extensions/whatsapp-inbox/retention/cron:
+      #   chattranskript (body_text, raw_payload)  90 dagar, sedan rensas
+      #     innehållet men radskelettet (wamid, riktning, tidsstämplar,
+      #     status, inbox-koppling) bevaras som behandlingsspår
+      #   okända avsändares rader                  30 dagar, sedan radering
+      #   engångskoder                             24 h efter utgång, radering
+      #   telefonkoppling (phone_enc)              tills användaren återkallar,
+      #     därefter kryptoshredning 90 dagar efter revokering (phone_hash och
+      #     phone_masked bevaras för unikhetshistorik respektive visning)
+      #   kvittofilen                              7 år, WORM (BFL 7 kap),
+      #     hanteras av dokumentarkivet, ej av denna cron
+      #   kontoradering (art 17)                   omedelbart, inte via cron:
+      #     anonymize_user_account revokerar och kryptoshreddar kopplingen,
+      #     nollställer body_text/raw_payload på kopplingens meddelanden och
+      #     raderar engångskoder (migration 20260803090000). auth.users
+      #     gravsätts i stället för att raderas, så tabellens ON DELETE
+      #     CASCADE utlöses aldrig av sig själv
+      duration: differentiated_per_data_category
+      basis: gdpr_storage_limitation_and_bfl_7_kap
+      stored_in:
+        - whatsapp_messages
+        - whatsapp_phone_links
+        - whatsapp_link_codes
+        - whatsapp_sender_rate_counters
+        - whatsapp_conversations
+        - invoice_inbox_items.channel_context
+        - document_attachments   # kvittofilen, WORM
+    security_measures:
+      - phone_number_hmac_peppered_hash_lookup_only
+      - phone_number_aes_256_gcm_at_rest
+      - phone_number_masked_in_ui
+      - dedicated_whatsapp_key_material_not_bankid_keys
+      - webhook_signature_verified_over_raw_body
+      - service_role_only_tables_rls_no_policies
+      - unknown_senders_no_content_persistence_no_llm
+      - pre_binding_sender_rate_limits
+      - daily_retention_cron_with_crypto_shred
+      - llm_reads_answers_as_untrusted_data_no_tools
+      - receipt_files_worm_protected_bfl
+      - opt_out_stop_keyword_honored
+      - muted_senders_no_content_persistence
+      - account_deletion_revokes_and_shreds_whatsapp_link

@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: insattning-skattekonto
+  order: 17
+  name: 'Insättning skattekonto'
+  category: tax_account
+  entity_type: all
+  description: >-
+    Betalning från företagskonto till skattekontot hos Skatteverket.
+lines:
+  - account: '1630'
+    label: 'Skattekonto'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '1930'
+    label: 'Företagskonto'
+    side: credit
+    type: settlement
+    ratio: 1.0

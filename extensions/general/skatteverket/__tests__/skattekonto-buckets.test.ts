@@ -18,6 +18,9 @@ function makeRow(
     belopp_kronofogden: 0,
     status: 'upcoming',
     journal_entry_id: null,
+    is_ignored: false,
+    source: 'api',
+    file_import_id: null,
     imported_at: '2026-05-15T10:00:00Z',
     updated_at: '2026-05-15T10:00:00Z',
     ...overrides,
@@ -98,5 +101,17 @@ describe('splitTransactions', () => {
     expect(out.booked.map(r => r.id)).toEqual(['b1'])
     expect(out.overdue.map(r => r.id)).toEqual(['o1', 'o2'])
     expect(out.upcoming.map(r => r.id)).toEqual(['u1'])
+  })
+  it('routes ignored rows to the ignored bucket regardless of status', () => {
+    const rows = [
+      makeRow({ id: 'a', status: 'booked', is_ignored: true }),
+      makeRow({ id: 'b', status: 'upcoming', forfallodatum: '2026-05-01', is_ignored: true }),
+      makeRow({ id: 'c', status: 'booked' }),
+    ]
+    const out = splitTransactions(rows, today)
+    expect(out.ignored.map(r => r.id)).toEqual(['a', 'b'])
+    expect(out.booked.map(r => r.id)).toEqual(['c'])
+    expect(out.overdue).toEqual([])
+    expect(out.upcoming).toEqual([])
   })
 })

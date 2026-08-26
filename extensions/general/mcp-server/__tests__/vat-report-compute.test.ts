@@ -17,7 +17,10 @@ interface MockLine {
   journal_entries?: { source_type: string | null }
 }
 
-function mockSupabaseWithLines(lines: MockLine[]) {
+function mockSupabaseWithLines(
+  lines: MockLine[],
+  fiscalPeriod?: { period_start: string; period_end: string },
+) {
   // computeVatReport uses the two-step entry-lines fetch
   // (lib/bookkeeping/entry-lines.ts): journal_entries is queried first, then
   // journal_entry_lines by parent id, and the parent is reattached under
@@ -46,6 +49,7 @@ function mockSupabaseWithLines(lines: MockLine[]) {
   const makeChain = (rows: unknown[]) => {
     const chain: Record<string, () => unknown> = {}
     chain.range = () => ({ data: rows, error: null })
+    chain.maybeSingle = async () => ({ data: rows[0] ?? null, error: null })
     for (const m of ['order', 'lte', 'gte', 'neq', 'in', 'not', 'eq', 'select', 'limit', 'contains', 'filter']) {
       chain[m] = () => chain
     }
@@ -59,6 +63,7 @@ function mockSupabaseWithLines(lines: MockLine[]) {
     from: (table: string) => {
       if (table === 'journal_entries') return makeChain(entries)
       if (table === 'chart_of_accounts') return makeChain([])
+      if (table === 'fiscal_periods') return makeChain(fiscalPeriod ? [fiscalPeriod] : [])
       return makeChain(bareLines)
     },
   } as never
@@ -175,10 +180,15 @@ describe('computeVatReport', () => {
     const result = await computeVatReport(
       { period_type: 'yearly', year: 2026, period: 1 },
       'company-1',
-      mockSupabaseWithLines(lines)
+      mockSupabaseWithLines(lines, {
+        period_start: '2025-07-01',
+        period_end: '2026-06-30',
+      })
     )
 
     expect(result.rutor.ruta05).toBe(2100)
+    expect(result.period.start).toBe('2025-07-01')
+    expect(result.period.end).toBe('2026-06-30')
   })
 
   it('excludes 3004 (momsfri) from ruta05: exempt sales must NOT be in the taxable base', async () => {

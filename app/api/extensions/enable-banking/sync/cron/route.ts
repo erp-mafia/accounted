@@ -1,10 +1,11 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { type SupabaseClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { syncAccountTransactions } from '@/extensions/general/enable-banking/lib/sync'
 import {
-  runReconciliation,
-  DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
-} from '@/lib/reconciliation/bank-reconciliation'
+  runUnattendedReconciliationSweep,
+  toSweepSummary,
+} from '@/lib/reconciliation/unattended-sweep'
 import {
   isConsentExpiringSoon,
   getDaysUntilExpiry,
@@ -20,14 +21,17 @@ import {
   generateConsentExpiryEmailSubject,
 } from '@/lib/email/consent-notification-templates'
 import { ensureInitialized } from '@/lib/init'
-import { hasCapability } from '@/lib/entitlements/has-capability'
+import { getCompanyIdsWithCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getBranding } from '@/lib/branding/service'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 
 ensureInitialized()
+
+const MAX_CONNECTIONS_PER_RUN = 50
 
 /**
  * GET /api/extensions/enable-banking/sync/cron
@@ -49,7 +53,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   // Clean up stale pending connections (older than 1 hour)
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
@@ -64,20 +68,41 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     ctx.log.info('cleaned up stale pending connections', { count: stalePending.length })
   }
 
-  const { data: connections, error: connError } = await supabase
-    .from('bank_connections')
-    .select('*')
-    .eq('status', 'active')
-    .order('last_synced_at', { ascending: true, nullsFirst: true })
-    .limit(50)
-
-  if (connError) {
-    ctx.log.error('failed to fetch bank connections', connError, {
-      message: connError.message,
-      code: connError.code,
-    })
-    return errorResponse(connError, ctx.log, { requestId: ctx.requestId })
+  let candidateConnections
+  let entitledCompanyIds
+  try {
+    candidateConnections = await fetchAllRows(
+      ({ from, to }) => supabase
+        .from('bank_connections')
+        .select('*')
+        .eq('status', 'active')
+        .order('last_synced_at', { ascending: true, nullsFirst: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+      { dedupeBy: connection => connection.id },
+    )
+    entitledCompanyIds = await getCompanyIdsWithCapability(
+      supabase,
+      candidateConnections.map(connection => connection.company_id),
+      CAPABILITY.bank_sync,
+    )
+  } catch (error) {
+    ctx.log.error('failed to build entitled bank sync work list', error as Error)
+    return errorResponse(error, ctx.log, { requestId: ctx.requestId })
   }
+
+  // Apply the batch limit only after entitlement filtering. Otherwise old
+  // free-tier rows can permanently occupy the first 50 queue positions and
+  // prevent every paying connection behind them from syncing.
+  const connections = candidateConnections
+    .filter(connection => entitledCompanyIds.has(connection.company_id))
+    .slice(0, MAX_CONNECTIONS_PER_RUN)
+
+  ctx.log.info('bank sync work list built', {
+    candidates: candidateConnections.length,
+    entitledCompanies: entitledCompanyIds.size,
+    selected: connections.length,
+  })
 
   // No early return on an empty set: the health probe below still has work to
   // do (a company whose only connection is parked in 'pending_selection' has
@@ -107,15 +132,10 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   const notifyKey = (c: { user_id: string; session_id: string | null }) =>
     `${c.user_id}:${c.session_id ?? 'none'}`
 
-  for (const connection of connections ?? []) {
+  for (const connection of connections) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
       ctx.log.info('time budget reached', { processedSoFar: results.length })
       break
-    }
-
-    if (!(await hasCapability(supabase, connection.company_id, CAPABILITY.bank_sync))) {
-      ctx.log.info('skip: capability not entitled', { companyId: connection.company_id })
-      continue
     }
 
     try {
@@ -242,22 +262,36 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       const totalDuplicates = syncResults.reduce((sum, r) => sum + r.duplicates, 0)
       const totalErrors = syncResults.reduce((sum, r) => sum + r.errors, 0)
 
-      // Batch reconciliation sweep when SIE overlap detected
+      // Batch reconciliation sweep when SIE overlap detected. One scoped run
+      // per enabled cash account (issue #1298): a pooled run matched every
+      // same-currency account's transactions against 1930's GL lines and could
+      // persist a cross-account journal_entry_id.
       if (sieOverlap && totalImported > 0) {
         try {
-          const reconResult = await runReconciliation(supabase, connection.company_id, connection.user_id, {
-            dateFrom: fromDate,
-            dateTo: toDate,
-            // Unattended run: nobody reviews a dry-run first, so never commit
-            // low-confidence (fuzzy / date-range) matches automatically.
-            confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
-          })
+          const reconResult = await runUnattendedReconciliationSweep(
+            supabase,
+            connection.company_id,
+            connection.user_id,
+            { dateFrom: fromDate, dateTo: toDate },
+          )
+          // Stamp the outcome so the UI can render "Vi matchade X av Y" and the
+          // review surface knows there is something to granska.
+          await supabase
+            .from('bank_connections')
+            .update({
+              last_sie_sweep: toSweepSummary(reconResult, { dateFrom: fromDate, dateTo: toDate }),
+            })
+            .eq('id', connection.id)
           if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {
             ctx.log.info('batch reconciliation after sync', {
               companyId: connection.company_id,
               applied: reconResult.applied,
               skippedBelowThreshold: reconResult.skippedBelowThreshold,
-              total: reconResult.matches.length,
+              accounts: reconResult.accounts.map((a) => ({
+                accountNumber: a.accountNumber,
+                applied: a.applied,
+                skippedBelowThreshold: a.skippedBelowThreshold,
+              })),
             })
           }
         } catch {

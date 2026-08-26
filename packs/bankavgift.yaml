@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: bankavgift
+  order: 5
+  name: 'Bankavgift'
+  category: financial
+  entity_type: all
+  description: >-
+    Månadsavgift eller transaktionsavgift från banken.
+lines:
+  - account: '6570'
+    label: 'Bankkostnader'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '1930'
+    label: 'Företagskonto'
+    side: credit
+    type: settlement
+    ratio: 1.0

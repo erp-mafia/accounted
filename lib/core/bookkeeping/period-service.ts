@@ -137,6 +137,30 @@ export async function countUnbookedInPeriod(
 }
 
 /**
+ * The company's earliest fiscal_periods.period_start (ISO date), or null when
+ * no fiscal period exists yet (brand-new company before onboarding created
+ * one). This is the company's "bookkeeping starts here" boundary: external
+ * mirrors (e.g. the skattekonto sync) use it as a lower fetch bound, and
+ * booking flows use it to tell "row predates the first rakenskapsar" apart
+ * from an ordinary locked period.
+ */
+export async function getEarliestFiscalPeriodStart(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('period_start')
+    .eq('company_id', companyId)
+    .order('period_start', { ascending: true })
+    .limit(1)
+
+  if (error || !data || data.length === 0) return null
+  const start = (data[0] as { period_start?: unknown }).period_start
+  return typeof start === 'string' ? start : null
+}
+
+/**
  * Lock a fiscal period: prevents new journal entries from being posted.
  * Requires: period exists, belongs to company, not already locked/closed.
  */
@@ -375,6 +399,175 @@ export async function closePeriod(
 }
 
 /**
+ * Mark a fiscal period as closed in a previous bookkeeping system
+ * ("klarmarkera"). Imported historical years (SIE) arrive with
+ * is_closed = false and no closing entry, so the year-end page lists them as
+ * pending bokslut even though the bokslut was already done in the old
+ * software.
+ *
+ * Deliberately bypasses closePeriod's locked_at/closing_entry_id
+ * preconditions: the closing entry lives in the previous system. Everything
+ * else stays strict:
+ * - the period must have ended (a running year cannot be done elsewhere)
+ * - a period with its own closing entry goes through the normal close
+ * - already-closed periods are refused
+ * - the same unbooked-bank-transactions guard as lockPeriod applies, because
+ *   closing strands them exactly the way locking would (BFL 5 kap 2 §)
+ *
+ * Sets locked_at too (when missing) so the period carries the full
+ * closed+locked state the enforcement triggers and readers expect, and writes
+ * the immutable audit_log entry (BFNAR 2013:2 kap. 8: this is a control
+ * decision made by a person, not a year-end run).
+ */
+export async function markPeriodClosedExternally(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  fiscalPeriodId: string
+): Promise<FiscalPeriod> {
+  const { data: period, error: fetchError } = await supabase
+    .from('fiscal_periods')
+    .select('*')
+    .eq('id', fiscalPeriodId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (fetchError || !period) {
+    throw new Error('Fiscal period not found')
+  }
+
+  if (period.is_closed) {
+    throw new Error('Period is already closed')
+  }
+
+  if (period.closing_entry_id) {
+    throw new Error(
+      'Period has a closing entry in Accounted: use the normal year-end close instead'
+    )
+  }
+
+  const today = new Date().toISOString().slice(0, 10)
+  if (period.period_end > today) {
+    throw new Error('Cannot mark a period that has not ended yet as closed')
+  }
+
+  // Klarmarkera exists for MIGRATED years. A period bookkept natively in
+  // Accounted must go through the real year-end: closing it without a
+  // bokslutsverifikat leaves 3xxx-8xxx untransferred (BFL 5-6 kap) with no
+  // clean way back once locked. "Migrated" is read from the ledger itself:
+  // the period either contains SIE-imported verifikat (source_type='import')
+  // or no verifikat at all (year closed elsewhere and never imported here).
+  const { count: importedCount, error: importedError } = await supabase
+    .from('journal_entries')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('source_type', 'import')
+    .gte('entry_date', period.period_start)
+    .lte('entry_date', period.period_end)
+  if (importedError) {
+    throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
+  }
+  if ((importedCount ?? 0) === 0) {
+    const { count: totalCount, error: totalError } = await supabase
+      .from('journal_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .gte('entry_date', period.period_start)
+      .lte('entry_date', period.period_end)
+    if (totalError) {
+      throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
+    }
+    if ((totalCount ?? 0) > 0) {
+      throw new Error(
+        'Perioden innehåller bokföring skapad i Accounted och inga importerade verifikat. Använd det vanliga årsbokslutet i stället.'
+      )
+    }
+  }
+
+  // Same stranding guard as lockPeriod: closing makes unbooked
+  // affärshändelser in the period unbookable in place. Fail closed if the
+  // guard cannot run.
+  let unbooked: UnbookedInPeriod
+  try {
+    unbooked = await countUnbookedInPeriod(
+      supabase,
+      companyId,
+      period.period_start,
+      period.period_end,
+    )
+  } catch (err) {
+    log.error('unbooked-transaction guard failed, refusing to close externally', {
+      companyId,
+      fiscalPeriodId,
+      reason: err instanceof Error ? err.message : String(err),
+    })
+    throw new Error(
+      'Kunde inte kontrollera obokförda banktransaktioner i perioden. Perioden lämnas öppen. Försök igen.'
+    )
+  }
+
+  const blockingCount = unbooked.untriaged + unbooked.businessUnbooked
+  if (blockingCount > 0) {
+    const breakdown = [
+      unbooked.untriaged > 0 ? `${unbooked.untriaged} ej hanterade` : null,
+      unbooked.businessUnbooked > 0
+        ? `${unbooked.businessUnbooked} markerade som affärshändelse men utan verifikat`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(', ')
+    throw new Error(
+      `Kan inte klarmarkera period: ${blockingCount} banktransaktion(er) i perioden saknar bokföring ` +
+        `(${breakdown}). Alla affärstransaktioner måste vara bokförda innan perioden stängs. ` +
+        `Gå till Transaktioner, bokför dem eller markera dem som privata eller ignorerade, och klarmarkera därefter.`
+    )
+  }
+
+  const now = new Date().toISOString()
+  const { data: updated, error: updateError } = await supabase
+    .from('fiscal_periods')
+    .update({
+      is_closed: true,
+      closed_at: now,
+      closed_externally: true,
+      locked_at: period.locked_at ?? now,
+    })
+    .eq('id', fiscalPeriodId)
+    .eq('company_id', companyId)
+    // TOCTOU guard: a concurrent normal close between the fetch above and
+    // this update must not be overwritten with closed_externally=true (and a
+    // clobbered closed_at). The predicate makes that race a 0-row update,
+    // which .single() surfaces as an error.
+    .eq('is_closed', false)
+    .select()
+    .single()
+
+  if (updateError || !updated) {
+    throw new Error(`Failed to mark period as externally closed: ${updateError?.message}`)
+  }
+
+  const result = updated as FiscalPeriod
+
+  await supabase.from('audit_log').insert({
+    user_id: userId,
+    company_id: companyId,
+    action: 'UPDATE',
+    table_name: 'fiscal_periods',
+    record_id: fiscalPeriodId,
+    description: `Period marked as closed in previous system: ${result.name} (${result.period_start} to ${result.period_end})`,
+    old_state: { is_closed: false, closed_at: null, locked_at: period.locked_at },
+    new_state: {
+      is_closed: true,
+      closed_at: result.closed_at,
+      closed_externally: true,
+      locked_at: result.locked_at,
+    },
+  })
+
+  return result
+}
+
+/**
  * Create the next fiscal period following the current one.
  * Computes dates based on the current period's length (handles brutet räkenskapsår).
  * Sets previous_period_id for chain validation.
@@ -455,6 +648,35 @@ export async function createNextPeriod(
     throw new Error(`Failed to create next period: ${insertError?.message}`)
   }
 
+  // Heal a chain wired across the gap this period fills: a later period that
+  // claims the CURRENT period as predecessor but actually starts the day
+  // after the new one now follows the new period (findNextPeriod explains
+  // how such links arise). The new period's own row cannot match: it starts
+  // the day after current, not the day after itself. Best-effort: the period
+  // is created either way, and findNextPeriod no longer trusts a
+  // non-adjacent link.
+  const { data: mischained } = await supabase
+    .from('fiscal_periods')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('previous_period_id', currentPeriodId)
+    .eq('period_start', addDaysUTC(nextEndStr, 1))
+  if (mischained && mischained.length > 0) {
+    const successorIds = mischained.map((row: { id: string }) => row.id)
+    const { error: relinkError } = await supabase
+      .from('fiscal_periods')
+      .update({ previous_period_id: newPeriod.id })
+      .in('id', successorIds)
+      .eq('company_id', companyId)
+    if (relinkError) {
+      log.error('failed to relink successor onto the newly created period', relinkError, {
+        companyId,
+        newPeriodId: newPeriod.id,
+        successorIds,
+      })
+    }
+  }
+
   return newPeriod as FiscalPeriod
 }
 
@@ -492,16 +714,33 @@ export async function findNextPeriod(
     .eq('previous_period_id', currentPeriodId)
     .maybeSingle()
 
-  if (chained) {
-    return chained as FiscalPeriod
-  }
-
   // UTC-only arithmetic: anchor the date string at UTC midnight, then
   // advance via setUTCDate. Using Date(string) + setDate/getDate causes an
   // off-by-one on servers in TZ+ when the day after period_end crosses a
   // DST spring-forward, because setDate(local) writes local-time fields
   // and toISOString() converts back through the shifted offset.
   const expectedStartStr = addDaysUTC(current.period_end, 1)
+
+  // The chain is only trusted when it is date-adjacent. SIE import used to
+  // point previous_period_id at the NEAREST later period regardless of the
+  // gap (40 such rows on prod as of 2026-08-24), and year-end then seeded a
+  // whole missing year's opening balances into a period two years out
+  // because this returned the chained row unchecked (feedback seq 249297).
+  // A non-adjacent link means the true next period is missing or unlinked:
+  // fall through to the date lookup and let the caller create it.
+  if (chained) {
+    const chainedPeriod = chained as FiscalPeriod
+    if (chainedPeriod.period_start === expectedStartStr) {
+      return chainedPeriod
+    }
+    log.warn('fiscal period chain is not date-adjacent: ignoring previous_period_id link', {
+      companyId,
+      currentPeriodId,
+      chainedPeriodId: chainedPeriod.id,
+      expectedStart: expectedStartStr,
+      chainedStart: chainedPeriod.period_start,
+    })
+  }
 
   const { data: byDate } = await supabase
     .from('fiscal_periods')

@@ -6,6 +6,7 @@
  * sort_order: agents can render the BAS hierarchy directly from this.
  */
 import { z } from 'zod'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -22,6 +23,8 @@ const Account = z.object({
   is_active: z.boolean(),
   description: z.string().nullable(),
   default_vat_code: z.string().nullable(),
+  default_vat_rate: z.number().nullable(),
+  default_vat_treatment: z.string().nullable(),
   sru_code: z.string().nullable(),
   sort_order: z.number().int(),
 })
@@ -31,7 +34,7 @@ const AccountsResponse = dataEnvelope(z.object({ accounts: z.array(Account) }))
 const ACCOUNT_COLUMNS =
   'account_number, account_name, account_class, account_group, account_type, ' +
   'normal_balance, is_system_account, is_active, description, default_vat_code, ' +
-  'sru_code, sort_order'
+  'default_vat_rate, default_vat_treatment, sru_code, sort_order'
 
 registerEndpoint({
   operation: 'accounts.list',
@@ -103,17 +106,43 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const f = parsed.data
     const activeOnly = f.active !== 'false'
 
-    let query = ctx.supabase
-      .from('chart_of_accounts')
-      .select(ACCOUNT_COLUMNS)
-      .eq('company_id', ctx.companyId!)
-      .order('sort_order', { ascending: true })
+    // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
+    // 1000 rows and a full BAS 2026 chart holds ~1290 accounts. Paging is on
+    // the unique account_number (fetchAllRows ordering invariant); the rows
+    // are re-sorted by sort_order afterwards to keep the documented response
+    // order (the BAS canonical sequence).
+    type AccountRow = {
+      account_number: string
+      sort_order: number | null
+      [key: string]: unknown
+    }
+    let accounts: AccountRow[]
+    try {
+      accounts = await fetchAllRows<AccountRow>(({ from, to }) => {
+        let query = ctx.supabase
+          .from('chart_of_accounts')
+          .select(ACCOUNT_COLUMNS)
+          .eq('company_id', ctx.companyId!)
+        if (activeOnly) query = query.eq('is_active', true)
+        if (f.class) query = query.eq('account_class', parseInt(f.class, 10))
+        // The concatenated ACCOUNT_COLUMNS string defeats supabase-js's
+        // template-literal column parser, so the row type is asserted here.
+        return query.order('account_number', { ascending: true }).range(from, to) as unknown as PromiseLike<{
+          data: AccountRow[] | null
+          error: { message: string } | null
+        }>
+      })
+    } catch (error) {
+      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
+    }
 
-    if (activeOnly) query = query.eq('is_active', true)
-    if (f.class) query = query.eq('account_class', parseInt(f.class, 10))
-
-    const { data, error } = await query
-    if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    return ok({ accounts: data ?? [] }, { requestId: ctx.requestId })
+    // Postgres ordered by sort_order ascending with nulls last; keep that
+    // visible order, tie-breaking on account_number for determinism.
+    accounts.sort(
+      (a, b) =>
+        (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER) ||
+        a.account_number.localeCompare(b.account_number),
+    )
+    return ok({ accounts }, { requestId: ctx.requestId })
   },
 )

@@ -103,6 +103,13 @@ interface Props {
   /** The bank transaction being booked (set by TransactionBookingDialog).
    *  Enables the duplicate guard's "Matcha mot verifikatet" action for
    *  ledger-only voucher candidates. */
+  /**
+   * Extra keys for the submit body, for endpoints that need something this
+   * form does not model. The invoice-inbox book-direct route needs
+   * transaction_id to book the underlag against its bank line; without it the
+   * entry posts standalone and the match is cleared.
+   */
+  extraBody?: Record<string, unknown>
   duplicateMatchTransaction?: DuplicateMatchTransaction
   /** Fired after the duplicate guard's match action links the transaction to
    *  the existing voucher (no new entry was created). */
@@ -129,6 +136,7 @@ export default function JournalEntryForm({
   initialExchangeRate,
   initialForeignAmount,
   onUpdated,
+  extraBody,
   duplicateMatchTransaction,
   onDuplicateMatched,
 }: Props) {
@@ -196,6 +204,10 @@ export default function JournalEntryForm({
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const saveAsDraftRef = useRef(false)
   const [showNoDocWarning, setShowNoDocWarning] = useState(false)
+  // The what's-missing lines render only after a submit attempt (error-on-
+  // submit), never as standing chrome on an empty form. The buttons stay
+  // enabled so the attempt can happen; the handlers gate on validity.
+  const [showValidationHints, setShowValidationHints] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [accounts, setAccounts] = useState<BASAccount[]>([])
   // Full BAS catalogue (static reference data, fetched once per session). Lets
@@ -315,6 +327,23 @@ export default function JournalEntryForm({
       setPeriodMismatch('no_period')
     }
   }, [entryDate, periods])
+
+  // Earliest fiscal period, for the pre-FY affordance in the no_period block:
+  // a date before the company's first rakenskapsar (e.g. the aktiekapital
+  // deposit paid in before the Bolagsverket registration) must not lead to
+  // creating a pre-registration year. The correct remedy per BFL is to book
+  // the event on the first fiscal year's first day, so we offer exactly that
+  // when the earliest period is open and unlocked (issue #1825).
+  const preFyClampTarget = useMemo(() => {
+    const earliest = periods.reduce<FiscalPeriod | null>(
+      (min, p) => (min === null || p.period_start < min.period_start ? p : min),
+      null,
+    )
+    if (!earliest) return null
+    if (entryDate >= earliest.period_start) return null
+    if (earliest.is_closed || earliest.locked_at) return null
+    return earliest
+  }, [periods, entryDate])
 
   // Preview the upcoming voucher number for the selected period + series.
   // Read-only hint; the actual number is reserved atomically at commit time,
@@ -801,7 +830,11 @@ export default function JournalEntryForm({
   }
 
   const handleReview = () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) return
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+      setShowValidationHints(true)
+      return
+    }
+    setShowValidationHints(false)
     const hasDocuments = uploadedFiles.some((f) => f.status === 'uploaded')
     if (!embedded && !bare && !hasDocuments) {
       setShowNoDocWarning(true)
@@ -810,17 +843,24 @@ export default function JournalEntryForm({
     setShowReview(true)
   }
 
-  // Whether an Enter should open the review: mirrors the review button's
-  // enable gate exactly, so Enter never submits something the button wouldn't.
+  // Nothing in flight and the user may write: the buttons' enable gate.
+  // Validity is deliberately NOT part of it; an attempt on an incomplete
+  // form is what surfaces the validation hints.
+  const processReady = () =>
+    !isUploading &&
+    canWrite &&
+    !isSubmitting &&
+    !isSavingDraft
+
+  // Whether the entry is actually submittable. The Enter-to-advance handlers
+  // below key off this: navigation fires while the entry is incomplete, and
+  // once it balances Enter falls through to the review instead.
   const canSubmitReview = () =>
     isBalanced &&
     !!description &&
     !!selectedPeriod &&
     !periodMismatch &&
-    !isUploading &&
-    canWrite &&
-    !isSubmitting &&
-    !isSavingDraft
+    processReady()
 
   // Enter anywhere in the form = "Granska & skapa": opens the review exactly as
   // the button does, from any field. Navigation is Tab's job. Two Enter
@@ -832,7 +872,7 @@ export default function JournalEntryForm({
     if (e.defaultPrevented || showReview) return
     if ((e.target as HTMLElement).tagName === 'TEXTAREA') return
     e.preventDefault()
-    if (canSubmitReview()) handleReview()
+    if (processReady()) handleReview()
   }
 
   // Enter-to-advance inside the konteringsrader: konto → debet → kredit →
@@ -974,10 +1014,14 @@ export default function JournalEntryForm({
         // handleBookAnyway). Stripped by schemas that don't declare it, so a
         // stray value never reaches the manual journal-entry endpoint.
         ...(forceDuplicateRef.current ?? {}),
+        // Fields only the caller's endpoint knows about. Same safety as above:
+        // a schema that does not declare a key strips it, so this cannot leak
+        // into the manual journal-entry route.
+        ...(extraBody ?? {}),
       }),
     })
     return (await throwOnStructuredError(res)) as { data?: { id?: string; voucher_series?: string; voucher_number?: number }; journal_entry_id?: string }
-  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, notes])
+  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, notes, extraBody])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
     useSubmitWithAccountActivation(postJournalEntry)
@@ -1120,7 +1164,11 @@ export default function JournalEntryForm({
   }
 
   const handleSaveDraft = async () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) return
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+      setShowValidationHints(true)
+      return
+    }
+    setShowValidationHints(false)
     setIsSavingDraft(true)
     saveAsDraftRef.current = true
     try {
@@ -1186,7 +1234,11 @@ export default function JournalEntryForm({
   // editEntryId URL) and keep it a draft. No field reset: the host dialog
   // closes on success via onUpdated.
   const handleSaveEdit = async () => {
-    if (!selectedPeriod || !description || !isBalanced || periodMismatch) return
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch) {
+      setShowValidationHints(true)
+      return
+    }
+    setShowValidationHints(false)
     setIsSavingDraft(true)
     try {
       await runSubmit()
@@ -1242,9 +1294,9 @@ export default function JournalEntryForm({
       </div>
 
       {(monthChanged || selectedPeriodLocked) && (
-        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
-          <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
-          <div className="flex-1 text-sm text-warning-foreground space-y-0.5">
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
+          <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
+          <div className="flex-1 text-sm text-attn space-y-0.5">
             {monthChanged && (
               <p className="font-medium">
                 {t('review_month_changed', { prev: monthLabel(lastPostedMonth as string), current: monthLabel(entryMonth) })}
@@ -1256,7 +1308,7 @@ export default function JournalEntryForm({
       )}
 
       {uploadedFiles.filter((f) => f.status === 'uploaded').length === 0 && (
-        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm text-attn">
           <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
           <p>{t('no_doc_body')}</p>
         </div>
@@ -1347,32 +1399,21 @@ export default function JournalEntryForm({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-          {embedded ? (
-            <div className="flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground">{t('fiscal_year')}</Label>
-              <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
-                <SelectTrigger className="h-7 w-auto text-xs">
-                  <SelectValue placeholder={t('fiscal_year_placeholder')} />
-                </SelectTrigger>
-                <SelectContent>
-                  {periods.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : (
-            selectedPeriodObj && (
-              <span className="text-muted-foreground">
-                {t('fiscal_year')}:{' '}
-                <span className="text-foreground">{selectedPeriodObj.name}</span>
-                {nextVoucherNumber != null && (
-                  <span className="ml-2 font-mono text-foreground">
-                    {voucherSeries}{nextVoucherNumber}
-                  </span>
-                )}
-              </span>
-            )
+          {/* The period is a total function of the entry date (Swedish fiscal
+              periods never overlap), so it renders as derived text in both
+              variants. The embedded Select this replaces allowed hand-picking
+              a period that disagreed with the date, which only the DB period
+              trigger would catch. */}
+          {selectedPeriodObj && (
+            <span className="text-muted-foreground">
+              {t('fiscal_year')}:{' '}
+              <span className="text-foreground">{selectedPeriodObj.name}</span>
+              {nextVoucherNumber != null && (
+                <span className="ml-2 font-mono text-foreground">
+                  {voucherSeries}{nextVoucherNumber}
+                </span>
+              )}
+            </span>
           )}
           <div className="flex items-center gap-2">
             <Label className="text-xs text-muted-foreground">{t('currency')}</Label>
@@ -1482,26 +1523,45 @@ export default function JournalEntryForm({
               onChange={setHeaderDimension}
               inputClassName="h-8"
             />
-            <p className="text-xs text-muted-foreground">{t('dimensions_apply_all_hint')}</p>
           </div>
         )}
 
         {periodMismatch === 'no_period' && (
-          <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
-            <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
-            <div className="flex-1 text-sm text-warning-foreground">
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
+            <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
+            <div className="flex-1 text-sm text-attn">
               <p className="font-medium">{t('no_period_warning', { date: entryDate })}</p>
-              <p className="mt-0.5">{t('no_period_help')}</p>
+              <p className="mt-0.5">
+                {preFyClampTarget ? t('pre_fy_help') : t('no_period_help')}
+              </p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowCreatePeriod(true)}
-              className="shrink-0"
-            >
-              <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
-              {t('create_period')}
-            </Button>
+            {/* Pre-FY: the date predates the first rakenskapsar. Offering
+                "Skapa räkenskapsår" here would propose a pre-registration year
+                (legally wrong); the correct remedy is booking on the first
+                fiscal year's first day, so offer that instead. Setting the
+                entry date state drives the /book payload even in embedded mode
+                where the date input is hidden. */}
+            {preFyClampTarget ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEntryDate(preFyClampTarget.period_start)}
+                className="shrink-0"
+              >
+                <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
+                {t('pre_fy_book_on_first_day', { date: preFyClampTarget.period_start })}
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowCreatePeriod(true)}
+                className="shrink-0"
+              >
+                <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
+                {t('create_period')}
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -1690,7 +1750,7 @@ export default function JournalEntryForm({
                   {line.dimensions &&
                     Object.keys(line.dimensions).length > 0 &&
                     (line.account_number || line.debit_amount || line.credit_amount) && (
-                      <Badge variant="outline" className="mt-1 font-mono text-[11px] font-normal">
+                      <Badge data-ph-mask="" variant="outline" className="mt-1 font-mono text-[11px] font-normal">
                         {compactDims(line.dimensions)}
                       </Badge>
                     )}
@@ -1769,7 +1829,7 @@ export default function JournalEntryForm({
                         </Button>
                         {dimPopoverRow === index && (
                           <div
-                            className="absolute right-0 top-full z-50 mt-1 w-64 rounded-md border bg-card p-3 shadow-md"
+                            className="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border bg-card p-3 shadow-md"
                             onKeyDown={(e) => {
                               // The comboboxes preventDefault their own Escape
                               // (closing their dropdown): only an unhandled
@@ -1854,9 +1914,6 @@ export default function JournalEntryForm({
             {t('save_as_template')}
           </Button>
         </div>
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          {t('fill_balance_hint')} {t('keyboard_hint')}
-        </p>
       </div>
 
       {/* Document attachments: hidden when editing a draft; underlag is
@@ -1882,7 +1939,7 @@ export default function JournalEntryForm({
           {editEntryId ? (
             <Button
               onClick={handleSaveEdit}
-              disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
+              disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
               title={!canWrite ? t('read_only_tooltip') : undefined}
             >
               {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -1909,7 +1966,7 @@ export default function JournalEntryForm({
                 <Button
                   variant="outline"
                   onClick={handleSaveDraft}
-                  disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
+                  disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
                   title={!canWrite ? t('read_only_tooltip') : t('save_draft_tooltip')}
                 >
                   {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -1918,7 +1975,7 @@ export default function JournalEntryForm({
               )}
               <Button
                 onClick={handleReview}
-                disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
+                disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
                 title={!canWrite ? t('read_only_tooltip') : undefined}
               >
                 {!canWrite && <Lock className="mr-2 h-4 w-4" />}
@@ -1927,11 +1984,13 @@ export default function JournalEntryForm({
             </>
           )}
         </div>
-        {(!description || !selectedPeriod || isUploading || periodMismatch || incompleteLineCount > 0 || (!isBalanced && submittableLines.length < 2)) && (
-          <div className="text-xs text-muted-foreground space-y-0.5 text-right">
+        {showValidationHints && (!description || !selectedPeriod || isUploading || periodMismatch || incompleteLineCount > 0 || (!isBalanced && submittableLines.length < 2)) && (
+          <div className="text-xs text-destructive space-y-0.5 text-right">
             {!description && <p>{t('validation_description')}</p>}
             {!selectedPeriod && <p>{t('validation_period')}</p>}
-            {periodMismatch === 'no_period' && <p>{t('validation_no_matching_period')}</p>}
+            {periodMismatch === 'no_period' && (
+              <p>{preFyClampTarget ? t('validation_pre_fy') : t('validation_no_matching_period')}</p>
+            )}
             {isUploading && <p>{t('validation_uploading')}</p>}
             {incompleteLineCount > 0 && (
               <p>{t('validation_incomplete_lines')}</p>
@@ -2023,9 +2082,9 @@ export default function JournalEntryForm({
         warningText={embedded ? '' : t('review_warning')}
       >
         {(monthChanged || selectedPeriodLocked) && (
-          <div className="mb-4 flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
-            <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
-            <div className="flex-1 text-sm text-warning-foreground space-y-0.5">
+          <div className="mb-4 flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
+            <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
+            <div className="flex-1 text-sm text-attn space-y-0.5">
               {monthChanged && (
                 <p className="font-medium">
                   {t('review_month_changed', {

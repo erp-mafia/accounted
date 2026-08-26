@@ -437,6 +437,29 @@ function applyStatement(
     return
   }
 
+  // PostgREST computed column: a function whose only argument is a table's row
+  // type is exposed as a virtual column on that table (selectable and
+  // orderable), so it joins the table's column set. Multi-argument functions,
+  // SETOF/TABLE/trigger returns and non-table argument types all fall through
+  // untouched. An argument-less `DROP FUNCTION name` cannot be resolved to a
+  // table and is skipped: a missed retraction loses strictness, it never
+  // invents an accusation (same trade as unnamed UNIQUE constraints).
+  const createFn = /^CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?"?([A-Za-z_][A-Za-z0-9_$]*)"?\s*\(\s*(?:"?[A-Za-z_][A-Za-z0-9_$]*"?\s+)?(?:public\.)?"?([A-Za-z_][A-Za-z0-9_$]*)"?\s*\)\s*RETURNS\s+(?!SETOF\b|TABLE\s*\(|trigger\b)/i.exec(
+    flat
+  )
+  if (createFn) {
+    model.tables.get(createFn[2])?.columns.add(createFn[1])
+    return
+  }
+
+  const dropFn = /^DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?"?([A-Za-z_][A-Za-z0-9_$]*)"?\s*\(\s*(?:"?[A-Za-z_][A-Za-z0-9_$]*"?\s+)?(?:public\.)?"?([A-Za-z_][A-Za-z0-9_$]*)"?\s*\)$/i.exec(
+    flat
+  )
+  if (dropFn) {
+    model.tables.get(dropFn[2])?.columns.delete(dropFn[1])
+    return
+  }
+
   const createTable = /^CREATE\s+(?:UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?"?([A-Za-z_][A-Za-z0-9_$]*)"?/i.exec(
     flat
   )

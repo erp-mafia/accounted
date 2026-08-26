@@ -268,7 +268,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'vehicle',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '5614',
+    debit_account: '5619',  // 5614 does not exist in BAS 2026 (the 561x run skips it), so every
+    // booking through this template failed with AccountsNotInChartError.
+    // 5619 is the sibling 'Övriga kostnader för personbilar och mc'.
     credit_account: '1930',
     vat_treatment: 'standard_25',
     vat_rate: 0.25,
@@ -341,7 +343,8 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'it_software',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '5421',
+    debit_account: '5420',  // 5421 does not exist in BAS 2026. 5420 Programvaror is what the two
+    // sibling SaaS templates already use.
     credit_account: '1930',
     vat_treatment: 'reverse_charge',
     vat_rate: 0,
@@ -538,7 +541,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'travel',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '5820',
+    debit_account: '5830',  // 5820 is Hyrbilskostnader (rental car). This template is Hotell, so it
+    // posted hotel nights into car hire: it balanced and was silently wrong.
+    // 5830 is 'Kost och logi'.
     credit_account: '1930',
     vat_treatment: 'reduced_12',
     vat_rate: 0.12,
@@ -1276,14 +1281,20 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_rate: 0.06,
     deductibility: 'full',
     mcc_codes: [],
-    keywords: ['bok', 'böcker', 'tidning', 'tidskrift', 'e-bok', 'persontransport', 'taxi', 'buss', 'tåg', 'kultur', 'konsert', 'teater', 'museum', 'bio', 'idrott', 'books', 'culture', 'transport'],
+    // Dance keywords: tillträde till danstillställningar dropped from 25% to
+    // 6% on 2026-07-01 (2025/26:SkU25, aligned with other cultural events).
+    // Admission sold and paid before that stays 25%; the descriptor reflects
+    // current law only. Deliberately admission-specific terms only: bare
+    // 'dans' or 'entré' would also match dance courses, artist fees and
+    // generic entrance charges, which are not all reduced-rate. (#1483)
+    keywords: ['bok', 'böcker', 'tidning', 'tidskrift', 'e-bok', 'persontransport', 'taxi', 'buss', 'tåg', 'kultur', 'konsert', 'teater', 'museum', 'bio', 'idrott', 'danstillställning', 'dansband', 'danskväll', 'books', 'culture', 'transport'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 5,
     auto_match_confidence: 0.75,
     default_private: false,
     fallback_category: 'income_services',
-    description_sv: 'Intäkter med 6% moms (böcker, persontransport, kultur, idrott)',
+    description_sv: 'Intäkter med 6% moms (böcker, persontransport, kultur, idrott, danstillställningar fr.o.m. 2026-07-01)',
     common: true,
   },
   {
@@ -1638,6 +1649,26 @@ export function getTemplateGroups(): TemplateGroupInfo[] {
  * Fuzzy search templates by name, keywords, or description.
  * Optionally filter by entity type.
  */
+/**
+ * Account-number matching for template search: an all-digit token prefix-
+ * matches the template's BUSINESS account(s), i.e. the cost/revenue side,
+ * not the settlement side. Matching the settlement leg too would make "1930"
+ * (the default bank account) light up nearly every template, which is noise,
+ * not search. Transfers have no business/settlement split, so both legs
+ * match. AB-variant accounts are included so the search works for both
+ * entity types. Account numbers are identifiers (strings): prefix match only.
+ */
+function templateAccountMatches(t: BookingTemplate, token: string): boolean {
+  if (!/^\d+$/.test(token)) return false
+  const candidates =
+    t.direction === 'expense'
+      ? [t.debit_account, t.debit_account_ab]
+      : t.direction === 'income'
+        ? [t.credit_account, t.credit_account_ab]
+        : [t.debit_account, t.credit_account, t.debit_account_ab, t.credit_account_ab]
+  return candidates.some((acc) => !!acc && acc.startsWith(token))
+}
+
 export function searchTemplates(query: string, entityType?: EntityType): BookingTemplate[] {
   if (!query.trim()) return []
   const q = query.toLowerCase()
@@ -1655,7 +1686,8 @@ export function searchTemplates(query: string, entityType?: EntityType): Booking
       t.name_en.toLowerCase().includes(token) ||
       t.description_sv.toLowerCase().includes(token) ||
       t.keywords.some((kw) => kw.toLowerCase().includes(token)) ||
-      t.id.includes(token)
+      t.id.includes(token) ||
+      templateAccountMatches(t, token)
     )
   })
 }

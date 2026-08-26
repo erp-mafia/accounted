@@ -18,6 +18,7 @@ import { skandiaFormat } from './formats/skandia'
 import { lunarFormat } from './formats/lunar'
 import { northmillFormat } from './formats/northmill'
 import { wiseFormat } from './formats/wise'
+import { wiseStatementFormat } from './formats/wise-statement'
 import { camt053Format } from './formats/camt053'
 import { genericCSVFormat } from './formats/generic-csv'
 
@@ -40,6 +41,7 @@ const FORMATS: BankFileFormat[] = [
   lunarFormat,
   northmillFormat,
   wiseFormat,
+  wiseStatementFormat,
   genericCSVFormat,
 ]
 
@@ -95,10 +97,42 @@ export function parseBankFile(
         transactions: [],
         date_from: null,
         date_to: null,
-        issues: [{ row: 0, message: `Unknown format: ${formatId}`, severity: 'error' }],
+        issues: [{ row: 0, message: `Okänt format: ${formatId}`, severity: 'error' }],
         stats: { total_rows: 0, parsed_rows: 0, skipped_rows: 0, total_income: 0, total_expenses: 0 },
       }
     }
+
+    const explicitResult = format.parse(content)
+    if (explicitResult.transactions.length > 0 || formatId === 'generic_csv') {
+      // A working explicit parse is never overridden. generic_csv is also
+      // exempt: it is the manual column-mapping escape hatch and its default
+      // mapping legitimately parses 0 rows before the user maps columns.
+      return explicitResult
+    }
+
+    // The explicit choice parsed nothing: fall back to auto-detection so an
+    // explicitly selected bank is never WORSE than "Automatisk identifiering".
+    // detectFileFormat can never return generic_csv (its detect() is always
+    // false), so this cannot reroute the UI into the mapping flow.
+    const detected = detectFileFormat(content, filename)
+    if (detected && detected.id !== formatId) {
+      const detectedResult = detected.parse(content)
+      if (detectedResult.transactions.length > 0) {
+        return {
+          ...detectedResult,
+          issues: [
+            {
+              row: 0,
+              message: `Filen matchade inte det valda formatet (${format.name}) och tolkades istället som ${detected.name}.`,
+              severity: 'info',
+            },
+            ...detectedResult.issues,
+          ],
+        }
+      }
+    }
+
+    return explicitResult
   } else {
     format = detectFileFormat(content, filename) || undefined
     if (!format) {
@@ -148,6 +182,10 @@ export function generateExternalId(
   // `-fee` suffix for fee rows) in raw_line: use it so re-importing the same
   // statement dedups exactly instead of relying on the row hash.
   if (formatId === 'wise' && tx.raw_line) {
+    return `wise_${tx.raw_line}`
+  }
+
+  if (formatId === 'wise_statement' && tx.raw_line) {
     return `wise_${tx.raw_line}`
   }
 

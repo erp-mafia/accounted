@@ -186,7 +186,7 @@ export function EfDeclarationSection({
       {noPostedEntries && (
         <Card className="border-border">
           <CardContent className="p-4 flex items-start gap-3">
-            <AlertTriangle className="h-4 w-4 mt-0.5 text-warning-foreground shrink-0" />
+            <AlertTriangle className="h-4 w-4 mt-0.5 text-attn shrink-0" />
             <p className="text-sm">
               <span className="font-medium">Inga verifikat bokförda i perioden.</span>{' '}
               Värdena nedan baseras enbart på NE-bilagans räkenskapsschema (intäkter och
@@ -213,7 +213,7 @@ export function EfDeclarationSection({
             <div className="space-y-1">
               <Label className="text-xs">Egenavgifter: kategori</Label>
               <select
-                className="border border-border rounded-md h-9 text-sm px-2 w-full bg-background"
+                className="border border-border rounded-lg h-9 text-sm px-2 w-full bg-background"
                 value={overrides.category}
                 onChange={(e) => update('category', e.target.value as EgenavgiftCategory)}
               >
@@ -298,7 +298,7 @@ export function EfDeclarationSection({
       {inputWarnings.map((w, i) => (
         <Card key={i} className="border-border">
           <CardContent className="p-4 flex items-start gap-3">
-            <AlertTriangle className="h-4 w-4 mt-0.5 text-warning-foreground shrink-0" />
+            <AlertTriangle className="h-4 w-4 mt-0.5 text-attn shrink-0" />
             <p className="text-sm">{w}</p>
           </CardContent>
         </Card>
@@ -335,7 +335,7 @@ export function EfDeclarationSection({
             </div>
           </CardHeader>
           {item.warnings.length > 0 && (
-            <CardContent className="text-sm text-warning-foreground space-y-1">
+            <CardContent className="text-sm text-attn space-y-1">
               {item.warnings.map((w, i) => (
                 <p key={i}>{w}</p>
               ))}

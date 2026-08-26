@@ -301,6 +301,17 @@ async function createCreditNote(
     })
   }
 
+  // Self-billed originals have invoice_number null by design (the DB
+  // constraint invoices_self_billed_numbering enforces it); their number
+  // lives in external_invoice_number. Without this fallback the credit note
+  // would be numbered the literal string 'KR-null' (issue #1820). Both null
+  // is impossible for an issued invoice, but refuse defensively rather than
+  // mint a garbage number.
+  const originalRef = originalInvoice.invoice_number ?? originalInvoice.external_invoice_number
+  if (!originalRef) {
+    return errorResponseFromCode('INVOICE_CREDIT_NO_NUMBER', log, { requestId })
+  }
+
   // Returning the existing credit note makes the action idempotent. A
   // cancelled, unissued draft is reopened so the deterministic KR number can
   // be reused without colliding with the company-wide invoice-number key.
@@ -325,7 +336,7 @@ async function createCreditNote(
           status: 'draft',
           invoice_date: today,
           due_date: today,
-          notes: input.reason || `Krediterar faktura ${originalInvoice.invoice_number}`,
+          notes: input.reason || `Krediterar faktura ${originalRef}`,
           updated_at: new Date().toISOString(),
         })
         .eq('id', existingCreditNote.id)
@@ -354,7 +365,7 @@ async function createCreditNote(
     return NextResponse.json({ data: maskEmbeddedCustomer(existingCreditNote) })
   }
 
-  const creditNoteNumber = `KR-${originalInvoice.invoice_number}`
+  const creditNoteNumber = `KR-${originalRef}`
 
   const { data: creditNote, error: creditNoteError } = await supabase
     .from('invoices')
@@ -381,12 +392,15 @@ async function createCreditNote(
       reverse_charge_text: originalInvoice.reverse_charge_text,
       your_reference: originalInvoice.your_reference,
       our_reference: originalInvoice.our_reference,
+      // Positive magnitude, unlike the negated amounts above: the DB has
+      // CHECK (deduction_total >= 0), and every reader either recomputes the
+      // ROT/RUT amount from the items or skips credit notes entirely.
       deduction_total: originalInvoice.deduction_total
-        ? -Math.abs(originalInvoice.deduction_total)
+        ? Math.abs(originalInvoice.deduction_total)
         : 0,
       deduction_personnummer_encrypted: originalInvoice.deduction_personnummer_encrypted ?? null,
       deduction_personnummer_last4: originalInvoice.deduction_personnummer_last4 ?? null,
-      notes: input.reason || `Krediterar faktura ${originalInvoice.invoice_number}`,
+      notes: input.reason || `Krediterar faktura ${originalRef}`,
       credited_invoice_id: input.credited_invoice_id,
       // Copy the original's dimension bag so the credit-note verifikat nets
       // against the same dimension cells in reports (dimensions PR7).

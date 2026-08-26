@@ -51,8 +51,12 @@ const INK2DeclarationView = dynamic(() =>
   import('./INK2DeclarationView').then((module) => ({ default: module.INK2DeclarationView })),
   { loading: ReportViewLoading },
 )
-const BankReconciliationView = dynamic(() =>
-  import('./BankReconciliationView').then((module) => ({ default: module.BankReconciliationView })),
+const BehandlingshistorikView = dynamic(() =>
+  import('./BehandlingshistorikView').then((module) => ({ default: module.BehandlingshistorikView })),
+  { loading: ReportViewLoading },
+)
+const BokslutsbilagorView = dynamic(() =>
+  import('./BokslutsbilagorView').then((module) => ({ default: module.BokslutsbilagorView })),
   { loading: ReportViewLoading },
 )
 
@@ -119,6 +123,11 @@ function FocusedReportInner({
       {!isStandalone && (
         <PageHeader
           title={reportName}
+          // Page help behind a "?" (UI-migration convention 7): the report
+          // bodies carry no instructional copy in the page flow.
+          help={
+            undefined
+          }
           action={
             <FyPicker
               value={selectedPeriod || null}
@@ -164,7 +173,6 @@ function FocusedReportInner({
           slug={slug}
           reportName={reportName}
           periodId={selectedPeriod}
-          periodBounds={selectedPeriodBounds}
           dateRange={dateRange}
           dimensionFilter={dimensionFilter}
           accountFilter={accountFilter}
@@ -188,7 +196,6 @@ function FocusedView({
   slug,
   reportName,
   periodId,
-  periodBounds,
   dateRange,
   dimensionFilter,
   accountFilter,
@@ -199,7 +206,6 @@ function FocusedView({
   slug: string
   reportName: string
   periodId: string
-  periodBounds: { start: string; end: string } | null
   dateRange: DateRangeValue
   dimensionFilter: DimensionFilterValue | null
   accountFilter: string | null
@@ -236,8 +242,10 @@ function FocusedView({
       return <ARLedgerView periodId={periodId} />
     case 'supplier-ledger':
       return <SupplierLedgerView periodId={periodId} />
-    case 'bank-reconciliation':
-      return <BankReconciliationView periodId={periodId} periodBounds={periodBounds} />
+    case 'behandlingshistorik':
+      return <BehandlingshistorikView periodId={periodId} dateRange={dateRange} />
+    case 'bokslutsbilagor':
+      return <BokslutsbilagorView key={periodId} periodId={periodId} />
     default:
       return null
   }

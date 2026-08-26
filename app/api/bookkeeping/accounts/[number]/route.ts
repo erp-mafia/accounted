@@ -4,6 +4,10 @@ import { validateBody } from '@/lib/api/validate'
 import { sparsePatchBody } from '@/lib/api/sparse-patch'
 import { UpdateAccountSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  defaultRateForVatTreatment,
+  isVatTreatmentAllowedForAccountClass,
+} from '@/lib/vat/account-vat-treatment'
 
 // DELETE hard-deletes an unused, non-system account; accounts referenced by
 // this company's journal entries must be deactivated instead (PUT is_active).
@@ -95,7 +99,7 @@ export const PUT = withRouteContext(
     // .default() today, so sparsePatchBody is a no-op here: it is the
     // structural guarantee that adding one later cannot make a PUT that
     // renames an account also rewrite its VAT code or SRU mapping. An
-    // explicit null (clearing sru_code, default_vat_code, default_vat_rate)
+    // explicit null (clearing sru_code, VAT defaults, or descriptions)
     // still survives.
     const validation = await validateBody(request, sparsePatchBody(UpdateAccountSchema), {
       log,
@@ -103,6 +107,44 @@ export const PUT = withRouteContext(
     })
     if (!validation.success) return validation.response
     const body = validation.data
+    const accountClass = parseInt(number[0])
+
+    if (
+      body.default_vat_treatment &&
+      !isVatTreatmentAllowedForAccountClass(body.default_vat_treatment, accountClass)
+    ) {
+      return NextResponse.json(
+        { error: 'Momskoden kan inte användas för den här kontoklassen.' },
+        { status: 400 },
+      )
+    }
+    if (body.default_vat_treatment && body.default_vat_rate === undefined) {
+      const { data: current, error: currentError } = await supabase
+        .from('chart_of_accounts')
+        .select('default_vat_rate')
+        .eq('company_id', companyId)
+        .eq('account_number', number)
+        .single()
+
+      if (currentError) {
+        if (currentError.code === 'PGRST116') {
+          return NextResponse.json({ error: 'Kontot hittades inte' }, { status: 404 })
+        }
+        return NextResponse.json({ error: getUserErrorMessage(currentError) }, { status: 500 })
+      }
+
+      if (current.default_vat_rate == null) {
+        body.default_vat_rate = defaultRateForVatTreatment(
+          body.default_vat_treatment,
+          accountClass,
+        )
+      }
+    } else if (body.default_vat_treatment && body.default_vat_rate === null) {
+      body.default_vat_rate = defaultRateForVatTreatment(
+        body.default_vat_treatment,
+        accountClass,
+      )
+    }
 
     if (Object.keys(body).length === 0) {
       return NextResponse.json({ error: 'Inget att uppdatera' }, { status: 400 })

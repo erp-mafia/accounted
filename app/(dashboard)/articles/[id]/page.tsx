@@ -4,9 +4,9 @@ import { useState, useEffect, useCallback, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import ArticleForm from '@/components/articles/ArticleForm'
@@ -17,29 +17,15 @@ import {
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import {
-  Archive,
-  ArchiveRestore,
-  ArrowLeft,
-  Package,
-  Wrench,
-  Edit2,
-  Trash2,
-  Loader2,
-  Lock,
-} from 'lucide-react'
+import { ArrowLeft, Loader2, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
+import { parseArticleHouseworkType, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
 
 const ARTICLE_TYPE_KEY: Record<ArticleType, string> = {
   vara: 'type_vara',
   tjanst: 'type_tjanst',
-}
-
-const articleTypeIcons: Record<ArticleType, React.ElementType> = {
-  vara: Package,
-  tjanst: Wrench,
 }
 
 export default function ArticleDetailPage({
@@ -221,178 +207,139 @@ export default function ArticleDetailPage({
 
   if (!article) return null
 
-  const Icon = articleTypeIcons[article.type]
+  // "RUT · Städning" for a work-type code, "RUT" for a legacy kind-only row,
+  // nothing for values that are not a housework flag (mis-mapped imports).
+  const houseworkDisplay = (() => {
+    const { deductionType, workType } = parseArticleHouseworkType(article.housework_type)
+    if (!deductionType) return null
+    const label = workTypeLabel(workType)
+    return label ? `${deductionType.toUpperCase()} · ${label}` : deductionType.toUpperCase()
+  })()
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
-        <div>
-          <Link
-            href="/articles"
-            className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            {t('back')}
-          </Link>
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-              <Icon className="h-6 w-6 text-primary" />
-            </div>
-            <div>
-              <h1 className="font-display text-2xl leading-8 tracking-tight">{article.name}</h1>
-              <div className="flex items-center gap-2 mt-1">
-                {article.active ? (
-                  <span className="text-sm text-muted-foreground">{t('status_active')}</span>
-                ) : (
-                  <Badge variant="outline" className="font-normal">
-                    {t('status_inactive')}
-                  </Badge>
-                )}
-                <span className="text-sm text-muted-foreground tabular-nums">
-                  {t(ARTICLE_TYPE_KEY[article.type])}
-                  {article.article_number ? ` · #${article.article_number}` : ''}
-                </span>
-              </div>
-            </div>
+    <div className="max-w-2xl space-y-8 stagger-enter">
+      {/* Header: serif name over a quiet type/status kicker, quiet actions right */}
+      <div>
+        <Link
+          href="/articles"
+          className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('back')}
+        </Link>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h1 className="font-display text-2xl leading-8 tracking-tight">{article.name}</h1>
+            <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <span className="tabular-nums">
+                {t(ARTICLE_TYPE_KEY[article.type])}
+                {article.article_number ? ` · #${article.article_number}` : ''}
+                {article.active ? ` · ${t('status_active')}` : ''}
+              </span>
+              {!article.active && (
+                <Badge variant="outline" className="font-normal">
+                  {t('status_inactive')}
+                </Badge>
+              )}
+            </p>
+          </div>
+
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsEditOpen(true)}
+              className="min-h-10 text-muted-foreground hover:text-foreground"
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {t('edit')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleToggleActive}
+              className="min-h-10 text-muted-foreground hover:text-foreground"
+              disabled={isTogglingActive || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {isTogglingActive ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : !canWrite ? (
+                <Lock className="h-4 w-4 mr-1" />
+              ) : null}
+              {article.active ? t('deactivate') : t('activate')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDelete}
+              className="min-h-10 text-muted-foreground hover:text-destructive"
+              disabled={isDeleting || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {isDeleting ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : !canWrite ? (
+                <Lock className="h-4 w-4 mr-1" />
+              ) : null}
+              {t('delete')}
+            </Button>
           </div>
         </div>
-
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setIsEditOpen(true)}
-            disabled={!canWrite}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            {canWrite ? <Edit2 className="h-4 w-4 mr-1" /> : <Lock className="h-4 w-4 mr-1" />}
-            {t('edit')}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleToggleActive}
-            className="min-h-10"
-            disabled={isTogglingActive || !canWrite}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            {isTogglingActive ? (
-              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-            ) : !canWrite ? (
-              <Lock className="h-4 w-4 mr-1" />
-            ) : article.active ? (
-              <Archive className="h-4 w-4 mr-1" />
-            ) : (
-              <ArchiveRestore className="h-4 w-4 mr-1" />
-            )}
-            {article.active ? t('deactivate') : t('activate')}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDelete}
-            className="min-h-10 text-destructive hover:text-destructive"
-            disabled={isDeleting || !canWrite}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            {isDeleting ? (
-              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-            ) : canWrite ? (
-              <Trash2 className="h-4 w-4 mr-1" />
-            ) : (
-              <Lock className="h-4 w-4 mr-1" />
-            )}
-            {t('delete')}
-          </Button>
-        </div>
       </div>
 
-      {/* Info cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {/* Pricing */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('section_pricing')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-sm flex items-center justify-between">
-              <span className="text-muted-foreground">{t('label_price')}</span>
-              <span className="tabular-nums">{formatCurrency(article.price_excl_vat, article.currency)}</span>
-            </div>
-            <div className="text-sm flex items-center justify-between">
-              <span className="text-muted-foreground">{t('label_vat')}</span>
-              <span className="tabular-nums">{article.vat_rate} %</span>
-            </div>
-            <div className="text-sm flex items-center justify-between">
-              <span className="text-muted-foreground">{t('label_unit')}</span>
-              <span>{article.unit}</span>
-            </div>
-            {article.cost_price != null && (
-              <div className="text-sm flex items-center justify-between">
-                <span className="text-muted-foreground">{t('label_cost_price')}</span>
-                <span className="tabular-nums">{formatCurrency(article.cost_price, article.currency)}</span>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      <DetailSection kicker={t('section_pricing')}>
+        <DefRow label={t('label_price')}>
+          <span className="tabular-nums">
+            {formatCurrency(article.price_excl_vat, article.currency)}
+          </span>
+        </DefRow>
+        <DefRow label={t('label_vat')}>
+          <span className="tabular-nums">{article.vat_rate} %</span>
+        </DefRow>
+        <DefRow label={t('label_unit')}>{article.unit}</DefRow>
+        {article.cost_price != null && (
+          <DefRow label={t('label_cost_price')}>
+            <span className="tabular-nums">
+              {formatCurrency(article.cost_price, article.currency)}
+            </span>
+          </DefRow>
+        )}
+      </DetailSection>
 
-        {/* Accounting */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('section_accounting')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="text-sm flex items-center justify-between">
-              <span className="text-muted-foreground">{t('label_revenue_account')}</span>
-              <span className="tabular-nums">
-                {article.revenue_account || t('revenue_account_auto')}
-              </span>
-            </div>
-            {article.type === 'tjanst' && article.housework_type && (
-              <div className="text-sm flex items-center justify-between">
-                <span className="text-muted-foreground">{t('label_housework')}</span>
-                <span>{article.housework_type}</span>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      <DetailSection kicker={t('section_accounting')}>
+        <DefRow label={t('label_revenue_account')}>
+          {article.revenue_account ? (
+            <span className="tabular-nums">{article.revenue_account}</span>
+          ) : (
+            <span className="text-muted-foreground">{t('revenue_account_auto')}</span>
+          )}
+        </DefRow>
+        {article.type === 'tjanst' && houseworkDisplay && (
+          <DefRow label={t('label_housework')}>{houseworkDisplay}</DefRow>
+        )}
+      </DetailSection>
 
-        {/* Details */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('section_details')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {article.name_en && (
-              <div className="text-sm flex items-center justify-between">
-                <span className="text-muted-foreground">{t('label_name_en')}</span>
-                <span className="truncate ml-2">{article.name_en}</span>
-              </div>
-            )}
-            {article.ean && (
-              <div className="text-sm flex items-center justify-between">
-                <span className="text-muted-foreground">{t('label_ean')}</span>
-                <span className="tabular-nums">{article.ean}</span>
-              </div>
-            )}
-            {!article.name_en && !article.ean && (
-              <p className="text-sm text-muted-foreground">{t('no_details')}</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      {/* Optional facts (English name, EAN) are omitted row-wise; when none
+          exist the whole section goes, so the document never pads itself
+          with placeholders for facts nobody entered. */}
+      {(article.name_en || article.ean) && (
+        <DetailSection kicker={t('section_details')}>
+          {article.name_en && <DefRow label={t('label_name_en')}>{article.name_en}</DefRow>}
+          {article.ean && (
+            <DefRow label={t('label_ean')}>
+              <span className="tabular-nums">{article.ean}</span>
+            </DefRow>
+          )}
+        </DetailSection>
+      )}
 
-      {/* Notes */}
       {article.notes && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('section_notes')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{article.notes}</p>
-          </CardContent>
-        </Card>
+        <DetailSection kicker={t('section_notes')}>
+          <p className="text-sm text-muted-foreground whitespace-pre-wrap">{article.notes}</p>
+        </DetailSection>
       )}
 
       <DestructiveConfirmDialog {...confirmDialogProps} />

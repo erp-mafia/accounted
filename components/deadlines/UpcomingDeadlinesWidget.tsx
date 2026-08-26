@@ -146,7 +146,7 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
                 {deadline.status === 'overdue' ? (
                   <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0" />
                 ) : deadline.status === 'action_needed' ? (
-                  <Clock className="h-4 w-4 text-warning-foreground flex-shrink-0" />
+                  <Clock className="h-4 w-4 text-attn flex-shrink-0" />
                 ) : (
                   <Clock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 )}

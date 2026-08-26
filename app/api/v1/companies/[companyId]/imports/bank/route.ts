@@ -3,10 +3,11 @@
  *
  * Bank-file import. Multipart upload: the file is the request body. The
  * route:
- *   1. Decodes the file (UTF-8 / Windows-1252 auto-detected).
+ *   1. Decodes the file (UTF-8 / UTF-16 / Windows-1252 auto-detected;
+ *      BOMs handled at the byte level).
  *   2. Detects the bank file format (SEB / Swedbank / Nordea / Handelsbanken
  *      / Lansforsakringar / Lunar / ICA Banken / Skandia / CAMT053 /
- *      Nordea Business / generic CSV), or honors the optional `format`
+ *      Nordea Business / Wise / generic CSV), or honors the optional `format`
  *      override.
  *   3. Parses transactions.
  *   4. Records a `bank_file_imports` row and ingests transactions via
@@ -36,6 +37,7 @@ import {
   generateExternalId,
 } from '@/lib/import/bank-file/parser'
 import { ingestTransactions, type RawTransaction } from '@/lib/transactions/ingest'
+import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -54,14 +56,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/imports/bank',
   summary: 'Import a bank-file (CSV / XML / CAMT053).',
   description:
-    'Accepts a bank statement file (UTF-8 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
+    'Accepts a bank statement file (UTF-8 / UTF-16 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, Wise transaction history, Wise balance statement, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
   useWhen:
     'Importing a bank statement export for a period. Common with PSD2 bank connections that don\'t auto-sync, or for legacy bank accounts.',
   doNotUseFor:
     'SIE bookkeeping import (use /imports/sie). Auto-bank sync (use the enable-banking extension). Single-transaction creation (use POST /transactions/ingest with a 1-element array).',
   pitfalls: [
     'File size cap: 10 MB. Larger files require splitting client-side.',
-    '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, generic_csv, camt053.',
+    '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, wise_statement, generic_csv, camt053.',
+    'Wise transaction-history rows with refunded or unknown statuses, unknown directions, or different source and target currencies are rejected instead of guessed. Import the matching per-currency Wise balance statements.',
     'Duplicate detection is by external_id (composed from format + date + description + amount + row index, or the camt.053 entry reference / Wise transfer id where the file carries one); a re-import of the same file typically deduplicates rather than creating doubles.',
     'BFL 5 kap 6-7 §§ note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The verifikation content requirements are in BFL 5 kap 6-7 §§; until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), the bookkeeping obligation isn\'t discharged. A successful import here means the data is ingested: not booked.',
     'A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts.',
@@ -137,6 +140,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       'lunar',
       'northmill',
       'wise',
+      'wise_statement',
       'generic_csv',
       'camt053',
     ])
@@ -156,13 +160,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       formatOverride = parsed.data
     }
 
-    // Decode the file. Bank files are typically Windows-1252 or UTF-8; we
-    // try UTF-8 first and fall back if invalid replacement chars appear.
+    // Decode the file with the shared importer decode (BOM-aware UTF-8 /
+    // UTF-16 / Windows-1252): one decode implementation for every path.
     const buffer = await file.arrayBuffer()
-    const utf8 = new TextDecoder('utf-8').decode(buffer)
-    const content = utf8.includes('�')
-      ? new TextDecoder('windows-1252').decode(buffer)
-      : utf8
+    const content = decodeFileContent(buffer)
 
     const fileHash = await generateFileHash(content)
 
@@ -176,10 +177,29 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     const parseResult = parseBankFile(content, file.name, format)
+    // parseBankFile may fall back to a detected sibling format when an
+    // explicit override parses 0 transactions. Everything downstream (external
+    // ids, import_source, stored file_format) must use the format the result
+    // actually carries so ids equal what the auto-detect path would produce.
+    const effectiveFormat = parseResult.format
+    const blockingIssues = parseResult.issues.filter((issue) => issue.severity === 'error')
+    if (blockingIssues.length > 0) {
+      // Cap the reported rows so a large malformed file cannot balloon the
+      // error payload or the log sink; issue_count carries the full total.
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'file',
+          message: 'The bank file contains rows that cannot be imported safely.',
+          issues: blockingIssues.slice(0, 20),
+          issue_count: blockingIssues.length,
+        },
+      })
+    }
     if (parseResult.transactions.length === 0) {
       return v1ErrorResponseFromCode('BANK_FILE_NO_TRANSACTIONS', ctx.log, {
         requestId: ctx.requestId,
-        details: { format, filename: file.name },
+        details: { format: effectiveFormat, filename: file.name },
       })
     }
 
@@ -192,7 +212,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         params: {
           filename: file.name,
           file_size: file.size,
-          format,
+          format: effectiveFormat,
           file_hash: fileHash,
           transaction_count: parseResult.transactions.length,
         },
@@ -208,7 +228,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // upsert gives duplicate-rerun protection within one company. The
       // old (user_id, file_hash) key and its cross-company pre-check
       // (BANK_IMPORT_DUPLICATE_OTHER_COMPANY) are gone.
-      await ctx.supabase
+      // `.select('id')` so the inserted transactions can be stamped with the
+      // batch id (transactions.bank_file_import_id): the scope key for the
+      // owner/admin "undo this import" action. A missing id (upsert error) is
+      // non-fatal BY DESIGN: the import proceeds, its rows just stay
+      // unlinked, exactly like a pre-20260820071500 import. Without the row
+      // the batch never appears in the undo history, so nothing falsely
+      // advertises undo for it — but the failure is logged loudly, since an
+      // unattributed batch is permanently exempt from bulk undo.
+      const { data: importRow, error: importRowError } = await ctx.supabase
         .from('bank_file_imports')
         .upsert(
           {
@@ -216,7 +244,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
             company_id: ctx.companyId!,
             filename: file.name,
             file_hash: fileHash,
-            file_format: format,
+            file_format: effectiveFormat,
             transaction_count: parseResult.transactions.length,
             status: 'processing',
             date_from: parseResult.date_from,
@@ -224,6 +252,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           },
           { onConflict: 'company_id,file_hash' },
         )
+        .select('id')
+        .maybeSingle()
+
+      if (importRowError || !importRow?.id) {
+        ctx.log.warn('bank_file_imports upsert failed: batch will import without undo attribution', {
+          filename: file.name,
+          fileHash,
+          error: importRowError?.message ?? 'no row returned',
+        })
+      }
 
       // Convert parsed transactions to the RawTransaction shape that
       // ingestTransactions expects. external_id stays stable so re-imports
@@ -255,13 +293,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // shared ingest contract, not in this route alone.
       const raw: RawTransaction[] = parseResult.transactions.map(
         (t, idx): RawTransaction => ({
-          external_id: generateExternalId(t, format, idx),
+          external_id: generateExternalId(t, effectiveFormat, idx),
           date: t.date,
           amount: t.amount,
           currency: t.currency || 'SEK',
           description: t.description,
           reference: t.reference ?? null,
-          import_source: format === 'camt053' ? 'camt053' : `csv_${format}`,
+          import_source: effectiveFormat === 'camt053' ? 'camt053' : `csv_${effectiveFormat}`,
         }),
       )
 
@@ -270,6 +308,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         ctx.companyId!,
         ctx.userId,
         raw,
+        importRow?.id ? { bankFileImportId: importRow.id as string } : undefined,
       )
 
       // Mark the bank_file_imports row complete. The unique constraint is
@@ -313,7 +352,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         {
           id: op.id,
           result: {
-            format,
+            format: effectiveFormat,
             file_hash: fileHash,
             transactions_imported: ingestResult.imported,
             transactions_duplicates: ingestResult.duplicates,

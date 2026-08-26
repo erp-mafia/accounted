@@ -78,7 +78,22 @@ export class TokenBucketRateLimiter {
     }
   }
 
-  private async acquireLocal(): Promise<void> {
+  // Local waiters are served in arrival order. Two callers that both find the
+  // bucket empty would otherwise race on timer tie-breaking: their timeouts
+  // expire at the same instant from different timer lists, and which wakes
+  // first is platform-dependent. Callers rely on "started first, requested
+  // first" (hydrateInvoices serves open invoices before paid ones), so the
+  // queue makes that guarantee hold without changing the rate.
+  private localQueue: Promise<void> = Promise.resolve();
+
+  private acquireLocal(): Promise<void> {
+    const turn = this.localQueue.then(() => this.acquireLocalInOrder());
+    // Keep the chain alive even if a turn rejects (nothing throws today).
+    this.localQueue = turn.catch(() => undefined);
+    return turn;
+  }
+
+  private async acquireLocalInOrder(): Promise<void> {
     this.refill();
     if (this.tokens > 0) {
       this.tokens--;

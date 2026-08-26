@@ -15,10 +15,16 @@ import {
 } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
-import { validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
+import { createClient } from '@/lib/supabase/client'
+import { formatIbanGroups, uniqueConnectionIban } from '@/lib/company/connection-iban'
+import { bankgiroFromTicSnapshot } from '@/lib/company/snapshot-bank'
+import { formatBankgiroNumber, validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
   INVOICE_PAYMENT_ACCOUNT_CURRENCIES,
+  bankCodeLabelKey,
+  hasNonIbanForeignRouting,
+  isNonIbanCurrency,
   legacySekInvoicePaymentAccount,
   normalizeInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
@@ -44,6 +50,8 @@ const EMPTY_ACCOUNT: InvoicePaymentAccount = {
   swish: null,
   iban: null,
   bic: null,
+  bank_code: null,
+  foreign_account_number: null,
 }
 
 function initialAccounts(
@@ -78,7 +86,19 @@ export function InvoicePaymentAccountsSettings({
 }: InvoicePaymentAccountsSettingsProps) {
   const t = useTranslations('settings_invoice_payment_accounts')
   const { toast } = useToast()
-  const { role } = useCompany()
+  const { role, company } = useCompany()
+  // Bolagsverket knows most companies' bankgiro (companies.tic_snapshot), but
+  // the payment files read this form's field. Offer the registry number as a
+  // one-click prefill when the SEK field is empty; the user still saves. The
+  // helper only suggests when the snapshot's orgNumber matches the company's
+  // org_number: stale fuzzy-matched snapshots can describe another entity.
+  const [snapshotBankgiro, setSnapshotBankgiro] = useState<string | null>(null)
+  // Same offer for IBAN, sourced from the bank connection instead. Only rows
+  // that still belong to a live connection count: disconnect keeps cash_accounts
+  // rows (bank_connection_id nulled) and the connect picker mirrors deselected
+  // accounts with enabled=false, so an unfiltered read could offer a closed or
+  // third-party account. Only offered when the remaining rows agree on one IBAN.
+  const [connectionIban, setConnectionIban] = useState<string | null>(null)
   const legacySekAccount = useMemo(
     () => legacySekInvoicePaymentAccount({
       bank_name: settings.bank_name,
@@ -132,6 +152,36 @@ export function InvoicePaymentAccountsSettings({
     }
     previousServerAccountsKey.current = serverAccountsKey
   }, [serverAccounts, serverAccountsKey])
+
+  useEffect(() => {
+    if (!company?.id) return
+    const supabase = createClient()
+    let cancelled = false
+    supabase
+      .from('companies')
+      .select('tic_snapshot, org_number')
+      .eq('id', company.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return
+        setSnapshotBankgiro(bankgiroFromTicSnapshot(data?.tic_snapshot, data?.org_number))
+      })
+    supabase
+      .from('cash_accounts')
+      .select('iban')
+      .eq('company_id', company.id)
+      .eq('enabled', true)
+      .eq('currency', 'SEK')
+      .not('bank_connection_id', 'is', null)
+      .not('iban', 'is', null)
+      .then(({ data }) => {
+        if (cancelled) return
+        setConnectionIban(uniqueConnectionIban(data))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [company?.id])
 
   const configuredCurrencies = useMemo(
     () => INVOICE_PAYMENT_ACCOUNT_CURRENCIES.filter((currency) => !!accounts[currency]),
@@ -207,8 +257,25 @@ export function InvoicePaymentAccountsSettings({
       if (account.bic && !/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(account.bic)) {
         return t('validation_bic', { currency })
       }
+      if (account.bank_code && !/^\d{2,3}(-?\d{2,3}){1,2}$|^\d{6,9}$/.test(account.bank_code)) {
+        return t('validation_bank_code', { currency })
+      }
+      if (
+        account.foreign_account_number
+        && !/^[A-Za-z0-9-]{4,34}$/.test(account.foreign_account_number)
+      ) {
+        return t('validation_foreign_account_number', { currency })
+      }
+      // Foreign account: IBAN, or (non-IBAN banking system) bank code +
+      // account number + BIC. Same rule as InvoicePaymentAccountsSchema.
       if (currency !== 'SEK' && !account.iban) {
-        return t('validation_foreign_iban', { currency })
+        if (isNonIbanCurrency(currency)) {
+          if (!hasNonIbanForeignRouting(account)) {
+            return t('validation_foreign_non_iban', { currency })
+          }
+        } else {
+          return t('validation_foreign_iban', { currency })
+        }
       }
     }
     return null
@@ -397,6 +464,15 @@ export function InvoicePaymentAccountsSettings({
           onChange={(event) => updateField('bankgiro', event.target.value)}
           className="max-w-40 flex-none tabular-nums"
         />
+        {activeCurrency === 'SEK' && !value(activeAccount, 'bankgiro') && snapshotBankgiro && (
+          <button
+            type="button"
+            onClick={() => updateField('bankgiro', formatBankgiroNumber(snapshotBankgiro))}
+            className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+          >
+            {t('bankgiro_prefill', { value: formatBankgiroNumber(snapshotBankgiro) })}
+          </button>
+        )}
       </SettingsRow>
       <SettingsRow
         label={t('plusgiro_label')}
@@ -422,9 +498,42 @@ export function InvoicePaymentAccountsSettings({
           className="max-w-40 flex-none tabular-nums"
         />
       </SettingsRow>
+      {isNonIbanCurrency(activeCurrency) && (
+        <>
+          <SettingsRow
+            label={t(bankCodeLabelKey(activeCurrency))}
+            htmlFor={`payment-bank-code-${activeCurrency}`}
+            align="baseline"
+          >
+            <SettingsInput
+              id={`payment-bank-code-${activeCurrency}`}
+              inputMode="numeric"
+              maxLength={11}
+              value={value(activeAccount, 'bank_code')}
+              onChange={(event) => updateField('bank_code', event.target.value.replace(/[^\d-]/g, ''))}
+              placeholder={activeCurrency === 'USD' ? '021000021' : '12-34-56'}
+              className="max-w-40 flex-none tabular-nums"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label={t('foreign_account_number_label')}
+            htmlFor={`payment-foreign-account-${activeCurrency}`}
+            align="baseline"
+          >
+            <SettingsInput
+              id={`payment-foreign-account-${activeCurrency}`}
+              maxLength={34}
+              value={value(activeAccount, 'foreign_account_number')}
+              onChange={(event) => updateField('foreign_account_number', event.target.value.replace(/\s/g, ''))}
+              className="max-w-56 flex-none tabular-nums"
+            />
+          </SettingsRow>
+          <SettingsRowNote>{t('non_iban_hint', { currency: activeCurrency })}</SettingsRowNote>
+        </>
+      )}
       <SettingsRow
         label={
-          activeCurrency !== 'SEK'
+          activeCurrency !== 'SEK' && !isNonIbanCurrency(activeCurrency)
             ? `${t('iban_label')} ${t('required_suffix')}`
             : t('iban_label')
         }
@@ -438,6 +547,15 @@ export function InvoicePaymentAccountsSettings({
           placeholder="SE00 0000 0000 0000 0000 0000"
           className="tabular-nums"
         />
+        {activeCurrency === 'SEK' && !value(activeAccount, 'iban') && connectionIban && (
+          <button
+            type="button"
+            onClick={() => updateField('iban', connectionIban)}
+            className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+          >
+            {t('iban_prefill', { value: formatIbanGroups(connectionIban) })}
+          </button>
+        )}
       </SettingsRow>
       <SettingsRow
         label={t('bic_label')}

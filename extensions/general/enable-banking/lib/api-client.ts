@@ -374,28 +374,53 @@ export async function getASPSPs(country: string = 'SE', psuType?: 'personal' | '
 }
 
 /**
- * Resolve the auth_method we should request for a given bank, or undefined to
- * let Enable Banking use the ASPSP's visible default.
+ * Pick the DECOUPLED auth method worth pinning explicitly, or undefined to let
+ * Enable Banking run the ASPSP's default flow.
  *
- * Why: several Swedish ASPSPs (notably Handelsbanken) expose Mobile BankID only
- * as a DECOUPLED method flagged hidden_method=true. When we send no auth_method,
- * Enable Banking falls back to the visible REDIRECT method, which for
- * Handelsbanken *corporate* PSUs does not support Mobile BankID, so the consent
- * fails right after the user approves in the BankID app ("fel efter BankID").
- * Pinning the decoupled (Mobile BankID) method makes the flow work for both
- * business and personal PSUs. We return undefined when the bank exposes no
- * decoupled method or the lookup fails, so banks that already work are untouched.
+ * A method is only pinned when pinning is both NECESSARY and APPLICABLE:
+ *
+ * - hidden_method === true: a hidden method is never used unless requested
+ *   explicitly via auth_method, so pinning is the only way to reach it. That
+ *   is the Handelsbanken case: its Mobile BankID (DECOUPLED) is hidden, and
+ *   without pinning it corporate PSUs fail right after approving in the
+ *   BankID app ("fel efter BankID"). A VISIBLE decoupled method is already
+ *   part of the bank's own default flow; force-pinning it overrides a working
+ *   default. That regression (from PR #854) broke Lunar-class banks: the user
+ *   typed their personnummer on Enable Banking's page, was told to approve in
+ *   the bank's app, and no approval request ever arrived.
+ * - psu_types, when present and non-empty, must include the PSU type we are
+ *   authorizing as: a method scoped to 'personal' must never be pinned for a
+ *   'business' consent (and vice versa). A missing or empty psu_types means
+ *   the method applies to all PSU types.
  */
-export async function getPreferredAuthMethod(
+export function selectPreferredAuthMethod(
+  authMethods: AuthMethod[] | undefined,
+  psuType: 'personal' | 'business'
+): AuthMethod | undefined {
+  return authMethods?.find(
+    (m) =>
+      m.approach === 'DECOUPLED' &&
+      m.hidden_method === true &&
+      (!m.psu_types || m.psu_types.length === 0 || m.psu_types.includes(psuType))
+  )
+}
+
+/**
+ * Resolve the auth method to pin for a given bank, with full metadata so the
+ * caller can log approach/hidden_method/psu_types, or undefined to let Enable
+ * Banking use the ASPSP's default flow. Selection rules live in
+ * selectPreferredAuthMethod. Returns undefined on lookup failure so banks
+ * that already work are untouched.
+ */
+export async function getPreferredAuthMethodDetails(
   aspspName: string,
   country: string,
   psuType: 'personal' | 'business'
-): Promise<string | undefined> {
+): Promise<AuthMethod | undefined> {
   try {
     const aspsps = await getASPSPs(country, psuType)
     const aspsp = aspsps.find((a) => a.name === aspspName)
-    const decoupled = aspsp?.auth_methods?.find((m) => m.approach === 'DECOUPLED')
-    return decoupled?.name
+    return selectPreferredAuthMethod(aspsp?.auth_methods, psuType)
   } catch (error) {
     console.error('[enable-banking] getPreferredAuthMethod failed; using ASPSP default', {
       aspspName,
@@ -405,6 +430,20 @@ export async function getPreferredAuthMethod(
     })
     return undefined
   }
+}
+
+/**
+ * Name-only convenience wrapper around getPreferredAuthMethodDetails: the
+ * value to send as auth_method on POST /auth, or undefined for the ASPSP
+ * default.
+ */
+export async function getPreferredAuthMethod(
+  aspspName: string,
+  country: string,
+  psuType: 'personal' | 'business'
+): Promise<string | undefined> {
+  const method = await getPreferredAuthMethodDetails(aspspName, country, psuType)
+  return method?.name
 }
 
 /**

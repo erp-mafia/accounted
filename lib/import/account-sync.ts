@@ -14,6 +14,12 @@ import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { AccountMapping } from './types'
+import {
+  defaultRateForVatTreatment,
+  isAccountVatTreatment,
+  isVatTreatmentAllowedForAccountClass,
+  type AccountVatTreatment,
+} from '@/lib/vat/account-vat-treatment'
 
 export interface AccountSyncResult {
   /** Accounts inserted into chart_of_accounts */
@@ -43,6 +49,7 @@ function buildInsertRow(
   basRef: BASReferenceAccount | undefined,
   companyId: string,
   userId: string,
+  vatDefaults?: { treatment: AccountVatTreatment | null; rate: number | null },
 ) {
   const sortOrder = /^\d+$/.test(accountNumber) ? parseInt(accountNumber, 10) : null
 
@@ -63,6 +70,8 @@ function buildInsertRow(
       is_system_account: false,
       description: basRef.description,
       sort_order: sortOrder,
+      default_vat_treatment: vatDefaults?.treatment ?? null,
+      default_vat_rate: vatDefaults?.rate ?? null,
     }
   }
 
@@ -84,6 +93,8 @@ function buildInsertRow(
     is_system_account: false,
     description: accountName,
     sort_order: sortOrder,
+    default_vat_treatment: vatDefaults?.treatment ?? null,
+    default_vat_rate: vatDefaults?.rate ?? null,
   }
 }
 
@@ -143,6 +154,37 @@ export async function syncMappedAccounts(
     if (m.targetAccount && fallback) fallbackNames.set(m.targetAccount, fallback)
   }
 
+  const vatDefaults = new Map<string, { treatment: AccountVatTreatment | null; rate: number | null }>()
+  for (const mapping of mappings) {
+    if (
+      !mapping.vatTreatmentReviewed ||
+      !mapping.targetAccount ||
+      mapping.sourceAccount !== mapping.targetAccount
+    ) continue
+    if (
+      mapping.defaultVatTreatment !== null &&
+      mapping.defaultVatTreatment !== undefined &&
+      !isAccountVatTreatment(mapping.defaultVatTreatment)
+    ) {
+      result.error = `Invalid VAT treatment for account ${mapping.sourceAccount}`
+      return result
+    }
+    const accountClass = Number(mapping.targetAccount.charAt(0))
+    if (
+      mapping.defaultVatTreatment &&
+      !isVatTreatmentAllowedForAccountClass(mapping.defaultVatTreatment, accountClass)
+    ) {
+      result.error = `VAT treatment is not valid for account ${mapping.sourceAccount}`
+      return result
+    }
+    vatDefaults.set(mapping.targetAccount, {
+      treatment: mapping.defaultVatTreatment ?? null,
+      rate: mapping.defaultVatTreatment && mapping.defaultVatRate == null
+        ? defaultRateForVatTreatment(mapping.defaultVatTreatment, accountClass)
+        : mapping.defaultVatRate ?? null,
+    })
+  }
+
   // Fetch the company's chart once (paged) and filter in JS: avoids a huge
   // .in() URL for full-chart imports and the silent 1000-row PostgREST cap.
   let existingByNumber: Map<string, string>
@@ -181,7 +223,7 @@ export async function syncMappedAccounts(
         basRef?.account_name ??
         fallbackNames.get(num) ??
         `Konto ${num}`
-      return buildInsertRow(num, name, basRef, companyId, userId)
+      return buildInsertRow(num, name, basRef, companyId, userId, vatDefaults.get(num))
     })
 
     const { error: insertError } = await supabase.from('chart_of_accounts').insert(inserts)
@@ -193,6 +235,23 @@ export async function syncMappedAccounts(
       return result
     }
     result.created = missing.length
+  }
+
+  const existingVatUpdates = [...vatDefaults]
+    .filter(([account]) => existingByNumber.has(account))
+  for (const [account, defaults] of existingVatUpdates) {
+    const { error: vatUpdateError } = await supabase
+      .from('chart_of_accounts')
+      .update({
+        default_vat_treatment: defaults.treatment,
+        default_vat_rate: defaults.rate,
+      })
+      .eq('company_id', companyId)
+      .eq('account_number', account)
+    if (vatUpdateError) {
+      result.error = vatUpdateError.message
+      return result
+    }
   }
 
   // Rename pass: carry the file's names into existing accounts. The diff set

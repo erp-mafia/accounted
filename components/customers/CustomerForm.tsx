@@ -16,10 +16,16 @@ import { Loader2, CheckCircle, XCircle, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
+  EMAIL_PATTERN,
+  MAX_INVOICE_EMAIL_COPY_RECIPIENTS,
+  parseInvoiceRecipientText,
+} from '@/lib/invoices/email-recipients'
+import {
   PERSONAL_NUMBER_INPUT_RE,
   UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
   isMaskedPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
+import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
 import type { CreateCustomerInput } from '@/types'
 
 interface CustomerFormProps {
@@ -46,8 +52,11 @@ export default function CustomerForm({
     name: z.string().min(1, t('name_required')),
     customer_type: z.enum(['individual', 'swedish_business', 'eu_business', 'non_eu_business']),
     customer_number: z.string().trim().max(32, t('customer_number_too_long')).optional(),
+    contact_person: z.string().max(200, t('contact_person_too_long')).optional(),
     email: z.string().email(t('email_invalid')).optional().or(z.literal('')),
     phone: z.string().optional(),
+    invoice_email_cc_addresses: z.string().optional(),
+    invoice_email_bcc_addresses: z.string().optional(),
     address_line1: z.string().optional(),
     address_line2: z.string().optional(),
     postal_code: z.string().optional(),
@@ -68,6 +77,42 @@ export default function CustomerForm({
     language: z.enum(['sv', 'en']).optional(),
     default_payment_terms: z.number().min(1).optional(),
     notes: z.string().optional(),
+  }).superRefine((customer, ctx) => {
+    // A personnummer entered as a business org number would be shown
+    // unmasked in every list (only individual customers are masked).
+    if (
+      customer.org_number &&
+      customer.customer_type !== 'individual' &&
+      looksLikeSwedishPersonalNumber(customer.org_number)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['org_number'],
+        message: t('org_number_looks_personal'),
+      })
+    }
+    const cc = parseInvoiceRecipientText(customer.invoice_email_cc_addresses ?? '')
+    const bcc = parseInvoiceRecipientText(customer.invoice_email_bcc_addresses ?? '')
+    for (const [field, addresses] of [
+      ['invoice_email_cc_addresses', cc],
+      ['invoice_email_bcc_addresses', bcc],
+    ] as const) {
+      const invalid = addresses.find((address) => !EMAIL_PATTERN.test(address))
+      if (invalid) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: t('invoice_email_invalid', { address: invalid }),
+        })
+      }
+    }
+    if (cc.length + bcc.length > MAX_INVOICE_EMAIL_COPY_RECIPIENTS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['invoice_email_cc_addresses'],
+        message: t('invoice_email_too_many', { count: MAX_INVOICE_EMAIL_COPY_RECIPIENTS }),
+      })
+    }
   }), [t])
 
   type FormData = z.infer<typeof schema>
@@ -84,8 +129,11 @@ export default function CustomerForm({
       name: initialData?.name || '',
       customer_type: initialData?.customer_type || 'swedish_business',
       customer_number: initialData?.customer_number || '',
+      contact_person: initialData?.contact_person ?? '',
       email: initialData?.email || '',
       phone: initialData?.phone || '',
+      invoice_email_cc_addresses: initialData?.invoice_email_cc_addresses?.join('\n') ?? '',
+      invoice_email_bcc_addresses: initialData?.invoice_email_bcc_addresses?.join('\n') ?? '',
       address_line1: initialData?.address_line1 || '',
       postal_code: initialData?.postal_code || '',
       city: initialData?.city || '',
@@ -161,10 +209,25 @@ export default function CustomerForm({
   }
 
   const onFormSubmit = (data: FormData) => {
+    const {
+      invoice_email_cc_addresses: ccText,
+      invoice_email_bcc_addresses: bccText,
+      ...customerData
+    } = data
+    const isEditing = initialData !== undefined
     const payload: CreateCustomerInput = {
-      ...data,
+      ...customerData,
+      // NULL means never configured and lets a migration enrich the row.
+      // Empty values on an existing row are explicit clears and survive sync.
+      contact_person: data.contact_person?.trim() || (isEditing ? '' : null),
       email: data.email || undefined,
       personal_number: data.personal_number || null,
+      invoice_email_cc_addresses: ccText
+        ? parseInvoiceRecipientText(ccText)
+        : isEditing ? [] : null,
+      invoice_email_bcc_addresses: bccText
+        ? parseInvoiceRecipientText(bccText)
+        : isEditing ? [] : null,
     }
     // A mask means "unchanged", whichever form it is. Sending it would be
     // harmless (the route ignores masks too) but omitting it keeps the intent
@@ -231,32 +294,77 @@ export default function CustomerForm({
       </div>
 
       {/* Contact */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="email">{t('email_label')}</Label>
+          <Label htmlFor="contact_person">{t('contact_person_label')}</Label>
           <Input
-            id="email"
-            type="email"
-            placeholder={t('email_placeholder')}
-            {...register('email')}
+            id="contact_person"
+            placeholder={t('contact_person_placeholder')}
+            {...register('contact_person')}
           />
-          {errors.email && (
-            <p className="text-sm text-destructive">{errors.email.message}</p>
+          {errors.contact_person && (
+            <p className="text-sm text-destructive">{errors.contact_person.message}</p>
           )}
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="phone">{t('phone_label')}</Label>
-          <Input
-            id="phone"
-            placeholder={t('phone_placeholder')}
-            {...register('phone')}
-          />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="email">{t('email_label')}</Label>
+            <Input
+              id="email"
+              type="email"
+              placeholder={t('email_placeholder')}
+              {...register('email')}
+            />
+            {errors.email && (
+              <p className="text-sm text-destructive">{errors.email.message}</p>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="phone">{t('phone_label')}</Label>
+            <Input
+              id="phone"
+              placeholder={t('phone_placeholder')}
+              {...register('phone')}
+            />
+          </div>
         </div>
+      </div>
+
+      {/* Customer-specific invoice recipients */}
+      <div className="space-y-4">
+        <h3 className="text-sm">{t('invoice_email_section')}</h3>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="invoice_email_cc_addresses">{t('invoice_email_cc_label')}</Label>
+            <Textarea
+              id="invoice_email_cc_addresses"
+              rows={3}
+              placeholder={t('invoice_email_placeholder')}
+              {...register('invoice_email_cc_addresses')}
+            />
+            {errors.invoice_email_cc_addresses && (
+              <p className="text-sm text-destructive">{errors.invoice_email_cc_addresses.message}</p>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="invoice_email_bcc_addresses">{t('invoice_email_bcc_label')}</Label>
+            <Textarea
+              id="invoice_email_bcc_addresses"
+              rows={3}
+              placeholder={t('invoice_email_placeholder')}
+              {...register('invoice_email_bcc_addresses')}
+            />
+            {errors.invoice_email_bcc_addresses && (
+              <p className="text-sm text-destructive">{errors.invoice_email_bcc_addresses.message}</p>
+            )}
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">{t('invoice_email_hint')}</p>
       </div>
 
       {/* Address */}
       <div className="space-y-4">
-        <h3 className="font-medium">{t('address_section')}</h3>
+        <h3>{t('address_section')}</h3>
         <div className="space-y-2">
           <Label htmlFor="address_line1">{t('street_label')}</Label>
           <Input
@@ -296,7 +404,7 @@ export default function CustomerForm({
       {/* Identification: depends on customer type */}
       {customerType === 'individual' ? (
         <div className="space-y-4 pt-4 border-t">
-          <h3 className="font-medium">{t('individual_section')}</h3>
+          <h3>{t('individual_section')}</h3>
 
           <div className="space-y-2">
             <Label htmlFor="personal_number">{t('personal_number_label')}</Label>
@@ -314,7 +422,7 @@ export default function CustomerForm({
         </div>
       ) : (
         <div className="space-y-4 pt-4 border-t">
-          <h3 className="font-medium">{t('business_section')}</h3>
+          <h3>{t('business_section')}</h3>
 
           <div className="space-y-2">
             <Label htmlFor="org_number">{t('org_number_label')}</Label>
@@ -323,6 +431,9 @@ export default function CustomerForm({
               placeholder={t('org_number_placeholder')}
               {...register('org_number')}
             />
+            {errors.org_number && (
+              <p className="text-sm text-destructive">{errors.org_number.message}</p>
+            )}
           </div>
 
           {(customerType === 'eu_business' || customerType === 'non_eu_business') && (

@@ -32,8 +32,11 @@ const CardTitle = React.forwardRef<
   HTMLParagraphElement,
   React.HTMLAttributes<HTMLHeadingElement>
 >(({ className, ...props }, ref) => (
+  // data-ph-unmask: card titles are static i18n chrome in session replays;
+  // a title carrying user data adds data-ph-mask at the call site.
   <h3
     ref={ref}
+    data-ph-unmask=""
     className={cn(
       "font-display text-xl leading-none tracking-tight",
       className
@@ -49,6 +52,7 @@ const CardDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <p
     ref={ref}
+    data-ph-unmask=""
     className={cn("text-sm text-muted-foreground", className)}
     {...props}
   />

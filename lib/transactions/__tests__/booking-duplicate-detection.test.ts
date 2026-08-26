@@ -23,9 +23,17 @@ type TxRow = {
   exchange_rate?: number | string | null
   description: string | null
   cash_account_id: string | null
-  journal_entry_id: string
+  /** NULL = no 1:1 anchor; booked-ness may still come from links/payments. */
+  journal_entry_id: string | null
 }
 type JeRow = { voucher_series: string | null; voucher_number: number | null; entry_date: string | null }
+
+/** Anchor rows for the is_transaction_booked resolution (batch-fetched). */
+type SiblingAnchors = {
+  voucherLinks?: { transaction_id: string; journal_entry_id: string }[]
+  invoicePayments?: { transaction_id: string | null; journal_entry_id: string | null }[]
+  supplierPayments?: { transaction_id: string | null; journal_entry_id: string | null }[]
+}
 
 function txChain(data: TxRow[]) {
   const c: Record<string, unknown> = {}
@@ -33,6 +41,9 @@ function txChain(data: TxRow[]) {
   c.eq = () => c
   c.not = () => c
   c.neq = () => c
+  c.gte = () => c
+  c.lte = () => c
+  c.order = () => c
   c.limit = () => Promise.resolve({ data, error: null })
   return c
 }
@@ -43,9 +54,34 @@ function jeChain(data: JeRow | null) {
   c.maybeSingle = () => Promise.resolve({ data, error: null })
   return c
 }
-function makeSupabase(txData: TxRow[], jeData: JeRow | null = { voucher_series: 'A', voucher_number: 142, entry_date: '2025-12-19' }) {
+/** Chain for the anchor lookups, terminal on `.in()`. */
+function anchorChain(data: unknown[]) {
+  const c: Record<string, unknown> = {}
+  c.select = () => c
+  c.eq = () => c
+  c.in = () => Promise.resolve({ data, error: null })
+  return c
+}
+function makeSupabase(
+  txData: TxRow[],
+  jeData: JeRow | null = { voucher_series: 'A', voucher_number: 142, entry_date: '2025-12-19' },
+  anchors: SiblingAnchors = {},
+) {
   return {
-    from: (table: string) => (table === 'transactions' ? txChain(txData) : jeChain(jeData)),
+    from: (table: string) => {
+      switch (table) {
+        case 'transactions':
+          return txChain(txData)
+        case 'transaction_voucher_links':
+          return anchorChain(anchors.voucherLinks ?? [])
+        case 'invoice_payments':
+          return anchorChain(anchors.invoicePayments ?? [])
+        case 'supplier_invoice_payments':
+          return anchorChain(anchors.supplierPayments ?? [])
+        default:
+          return jeChain(jeData)
+      }
+    },
   } as never
 }
 
@@ -138,6 +174,94 @@ describe('detectBookedDuplicateTransaction', () => {
       id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
     })
     expect(result?.transaction_id).toBe('sib-2')
+  })
+
+  // ── Date window (a duplicate import often drifts: bokföringsdag vs valutadag) ──
+  it('flags a booked sibling one day earlier (window recall, gap G1)', async () => {
+    const supabase = makeSupabase([sibling({ date: '2025-12-18' })])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result?.transaction_id).toBe('sib-1')
+  })
+
+  it('does NOT flag a booked sibling outside the ±3 day window', async () => {
+    // 5 days out: repeated monthly/weekly charges must not warn.
+    const supabase = makeSupabase([sibling({ date: '2025-12-14' })])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  it('prefers the exact-date sibling over a drifted one regardless of id order', async () => {
+    // The drifted sibling carries the LOWER id: a bare lowest-id pick would
+    // choose it, so this pins the date-distance-first ranking (force=true is
+    // bound to the reviewed candidate and re-detection must return the same
+    // one).
+    const supabase = makeSupabase([
+      sibling({ id: 'sib-0-drifted', date: '2025-12-17' }),
+      sibling({ id: 'sib-9-exact', date: '2025-12-19' }),
+    ])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result?.transaction_id).toBe('sib-9-exact')
+  })
+
+  // ── Booked-ness via is_transaction_booked semantics (gap G2) ────────────
+  it('detects a bulk-booked sibling anchored only via transaction_voucher_links', async () => {
+    // journal_entry_id NULL is the documented shape for N-tx-to-1-JE bulk
+    // bookings (lib/transactions/is-booked.ts); the old bare-column filter
+    // made these twins invisible.
+    const supabase = makeSupabase(
+      [sibling({ journal_entry_id: null })],
+      { voucher_series: 'A', voucher_number: 142, entry_date: '2025-12-19' },
+      { voucherLinks: [{ transaction_id: 'sib-1', journal_entry_id: 'je-bulk' }] },
+    )
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result?.transaction_id).toBe('sib-1')
+    expect(result?.journal_entry_id).toBe('je-bulk')
+  })
+
+  it('detects a multi-allocated sibling anchored only via invoice_payments', async () => {
+    const supabase = makeSupabase(
+      [sibling({ journal_entry_id: null })],
+      { voucher_series: 'A', voucher_number: 142, entry_date: '2025-12-19' },
+      { invoicePayments: [{ transaction_id: 'sib-1', journal_entry_id: 'je-alloc' }] },
+    )
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result?.transaction_id).toBe('sib-1')
+    expect(result?.journal_entry_id).toBe('je-alloc')
+  })
+
+  it('does NOT flag an unbooked sibling (no anchor in any of the three sources)', async () => {
+    const supabase = makeSupabase([sibling({ journal_entry_id: null })])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  it('excludes a voucher-link-anchored sibling whose entry is in excludeJournalEntryIds', async () => {
+    // A sibling anchored to a JE minted THIS batch is the batch's own fresh
+    // booking, mirroring the ledger half's entry-id exclusion.
+    const supabase = makeSupabase(
+      [sibling({ journal_entry_id: null })],
+      { voucher_series: 'A', voucher_number: 142, entry_date: '2025-12-19' },
+      { voucherLinks: [{ transaction_id: 'sib-1', journal_entry_id: 'je-batch' }] },
+    )
+    const result = await detectBookedDuplicateTransaction(
+      supabase,
+      COMPANY,
+      { id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null },
+      { excludeJournalEntryIds: ['je-batch'] },
+    )
+    expect(result).toBeNull()
   })
 
   // ── Intra-batch exclusion (bulk-book false-positive fix) ────────────────
@@ -276,6 +400,7 @@ function ledgerChain(result: { data: unknown; error: unknown }) {
   c.gt = () => c
   c.gte = () => c
   c.lte = () => c
+  c.order = () => c
   c.limit = () => Promise.resolve(result)
   c.maybeSingle = () => Promise.resolve(result)
   c.single = () => Promise.resolve(result)
@@ -303,10 +428,25 @@ function entryLinesChain(rows: unknown[], singleRow: unknown = null) {
 /** Tables the ledger scan touches, in call order. */
 const tablesTouched: string[] = []
 
+/**
+ * A row from the ledger scan's link-exclusion lookup on `transactions`. The
+ * bare `{ journal_entry_id }` shape (legacy fixtures) reads as a linking
+ * transaction with no amount, which never matches the target: exactly the
+ * "reconciled to something else" exclusion behaviour the old tests pinned.
+ */
+type LedgerTxLink = {
+  journal_entry_id: string
+  id?: string
+  date?: string
+  amount?: number | string
+  currency?: string | null
+  cash_account_id?: string | null
+}
+
 function makeLedgerSupabase(opts: {
   ledgerAccount?: string | null
   lines?: Jel[]
-  txLinks?: { journal_entry_id: string }[]
+  txLinks?: LedgerTxLink[]
   payLinks?: { journal_entry_id: string }[]
   transactionRows?: TxRow[] // siblings for the orchestrator fall-through
 }) {
@@ -461,6 +601,73 @@ describe('detectLedgerDuplicateVoucher', () => {
     const supabase = makeLedgerSupabase({ lines: [jel()], payLinks: [{ journal_entry_id: 'je-2' }] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
       id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  // ── De-exclusion (gap G3): the linking transaction is itself the twin ─────
+  it('returns a voucher whose linking transaction itself matches the target, with transaction_id set', async () => {
+    // The date-drifted duplicate-import shape: one copy of the bank fee is
+    // booked (tx 'twin-1' → je-2), the target is a re-imported copy with a
+    // drifted date. The old exclusion dropped je-2 as "reconciled" and BOTH
+    // guard halves stayed silent.
+    const supabase = makeLedgerSupabase({
+      lines: [jel()],
+      txLinks: [{
+        id: 'twin-1', date: '2026-03-30', amount: 98565, currency: null,
+        cash_account_id: null, journal_entry_id: 'je-2',
+      }],
+    })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result?.journal_entry_id).toBe('je-2')
+    expect(result?.transaction_id).toBe('twin-1')
+    expect(result?.account_number).toBe('1930')
+  })
+
+  it('still excludes a voucher whose linking transaction differs in amount', async () => {
+    // Regression for the exclusion invariant: a voucher reconciled to a
+    // NON-matching transaction is genuinely settled by something else.
+    const supabase = makeLedgerSupabase({
+      lines: [jel()],
+      txLinks: [{
+        id: 'other-1', date: '2026-03-30', amount: 50000, currency: null,
+        cash_account_id: null, journal_entry_id: 'je-2',
+      }],
+    })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  it('still excludes a voucher whose matching-amount linking transaction is far outside the window', async () => {
+    // Same öre but weeks away: a recurring same-amount fee, not this movement.
+    const supabase = makeLedgerSupabase({
+      lines: [jel()],
+      txLinks: [{
+        id: 'far-1', date: '2026-04-20', amount: 98565, currency: null,
+        cash_account_id: null, journal_entry_id: 'je-2',
+      }],
+    })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  it('still excludes a voucher whose linking transaction sits on a different known cash account', async () => {
+    const supabase = makeLedgerSupabase({
+      ledgerAccount: '1930',
+      lines: [jel()],
+      txLinks: [{
+        id: 'acct-1', date: '2026-03-30', amount: 98565, currency: null,
+        cash_account_id: 'ca-other', journal_entry_id: 'je-2',
+      }],
+    })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: 'ca-self',
     })
     expect(result).toBeNull()
   })

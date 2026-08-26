@@ -1,8 +1,19 @@
-import { describe, it, expect, vi } from 'vitest'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+
+const { reverseEntryMock } = vi.hoisted(() => ({
+  reverseEntryMock: vi.fn(),
+}))
+
+vi.mock('@/lib/bookkeeping/engine', () => ({
+  reverseEntry: reverseEntryMock,
+}))
+
 import {
   cancelOrphanedPaymentEntry,
   recordVoucherGapExplanation,
+  reverseOrphanedJournalEntry,
 } from '../cancel-orphaned-entry'
+import { withUnusedVoucherAllocation } from '../errors'
 
 // The real voucher_gap_explanations column set (supabase/migrations/
 // 20260402100100_voucher_gap_explanations.sql). company_id, user_id,
@@ -54,6 +65,11 @@ function createMockSupabase(opts: {
   }
   return { supabase, updates, inserts }
 }
+
+beforeEach(() => {
+  reverseEntryMock.mockReset()
+  reverseEntryMock.mockResolvedValue(undefined)
+})
 
 describe('recordVoucherGapExplanation', () => {
   it('writes exactly the real NOT NULL columns, with the single voucher as a closed gap range', async () => {
@@ -140,6 +156,77 @@ describe('recordVoucherGapExplanation', () => {
         explanation: 'x',
       }),
     ).resolves.toBe(false)
+  })
+})
+
+describe('reverseOrphanedJournalEntry', () => {
+  it('routes posted-orphan compensation through engine storno', async () => {
+    const { supabase, inserts, updates } = createMockSupabase({})
+
+    await reverseOrphanedJournalEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      'je-1',
+      'Manuell avstämning krävs.',
+    )
+
+    expect(reverseEntryMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      'je-1',
+    )
+    expect(updates).toEqual([])
+    expect(inserts['voucher_gap_explanations']).toBeUndefined()
+  })
+
+  it('documents only the exact unused reversal voucher exposed by the engine', async () => {
+    const { supabase, inserts } = createMockSupabase({})
+    reverseEntryMock.mockRejectedValueOnce(
+      withUnusedVoucherAllocation(new Error('account lookup failed'), {
+        fiscalPeriodId: 'fp-1',
+        voucherSeries: 'B',
+        voucherNumber: 67,
+      }),
+    )
+
+    await reverseOrphanedJournalEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      'je-1',
+      'Manuell avstämning krävs.',
+    )
+
+    expect(inserts['voucher_gap_explanations']).toEqual([
+      {
+        company_id: 'company-1',
+        user_id: 'user-1',
+        fiscal_period_id: 'fp-1',
+        voucher_series: 'B',
+        gap_start: 67,
+        gap_end: 67,
+        explanation: 'Manuell avstämning krävs.',
+      },
+    ])
+  })
+
+  it('does not mislabel the original posted voucher when storno failure has no unused allocation', async () => {
+    const { supabase, inserts } = createMockSupabase({
+      orphan: { fiscal_period_id: 'fp-1', voucher_series: 'B', voucher_number: 66 },
+    })
+    reverseEntryMock.mockRejectedValueOnce(new Error('period locked'))
+
+    await reverseOrphanedJournalEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      'je-1',
+      'Manuell avstämning krävs.',
+    )
+
+    expect(inserts['voucher_gap_explanations']).toBeUndefined()
   })
 })
 

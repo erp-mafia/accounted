@@ -103,6 +103,62 @@ describe('settleInvoicePayment', () => {
     )
   })
 
+  it('rejects a cash-method partial payment on a never-booked invoice before booking anything', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const invoice = payableInvoice({ journal_entry_id: null } as Partial<Invoice>)
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      {
+        ...BASE_PARAMS,
+        invoice,
+        accountingMethod: 'cash',
+        paymentAmountInInvoiceCurrency: 500,
+      },
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED',
+      details: { reason: 'partial_payment' },
+    })
+    // The full-invoice cash entry must never book against a partial receipt,
+    // and no invoice state may change.
+    expect(vi.mocked(createInvoiceCashEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(createInvoicePaymentJournalEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('rejects completing a previously part-paid never-booked cash invoice (would double-book the total)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const invoice = payableInvoice({
+      status: 'partially_paid',
+      journal_entry_id: null,
+      remaining_amount: 750,
+      paid_amount: 500,
+    } as Partial<Invoice>)
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      {
+        ...BASE_PARAMS,
+        invoice,
+        accountingMethod: 'cash',
+        paymentAmountInInvoiceCurrency: 750,
+      },
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED',
+      details: { reason: 'previously_partially_paid' },
+    })
+    expect(vi.mocked(createInvoiceCashEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(createInvoicePaymentJournalEntry)).not.toHaveBeenCalled()
+  })
+
   it('uses the cash entry for unbooked kontantmetoden invoices', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'inv-1' }] })
@@ -365,7 +421,7 @@ describe('settleInvoicePayment', () => {
   it('emits invoice.paid with the settled state', async () => {
     const handler = vi.fn()
     eventBus.on('invoice.paid', handler)
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'inv-1' }] })
 
     await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
@@ -377,8 +433,14 @@ describe('settleInvoicePayment', () => {
       expect.objectContaining({
         companyId: 'company-1',
         paymentAmount: 1250,
-        invoice: expect.objectContaining({ id: 'inv-1', status: 'paid' }),
+        invoice: expect.objectContaining({
+          id: 'inv-1',
+          status: 'paid',
+          paid_at: '2026-07-12T12:00:00Z',
+        }),
       }),
     )
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({ paid_at: '2026-07-12T12:00:00Z' })
   })
 })

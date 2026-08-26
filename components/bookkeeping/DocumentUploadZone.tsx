@@ -288,7 +288,7 @@ export default function DocumentUploadZone({
           {files.map((file, index) => (
             <div
               key={file.uploadKey}
-              className="flex min-w-0 items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50"
+              className="flex min-w-0 items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50"
             >
               {isImageType(file.file.type) ? (
                 <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />

@@ -61,7 +61,7 @@ export async function submitVatDeclarationChain(
   params: VatSubmitChainParams,
   options: { validate?: boolean } = {}
 ): Promise<VatSubmitChainResult> {
-  const { supabase, userId } = ctx
+  const { supabase, userId, companyId } = ctx
   const { redovisare, redovisningsperiod, momsuppgift } =
     await buildMomsuppgift(supabase, ctx.companyId, params)
 
@@ -70,7 +70,7 @@ export async function submitVatDeclarationChain(
   //    any state exists at Skatteverket.
   if (options.validate) {
     const kontrollera = await skvRequest(
-      supabase, userId, 'POST', `/kontrollera/${redovisare}/${redovisningsperiod}`, momsuppgift,
+      supabase, userId, companyId, 'POST', `/kontrollera/${redovisare}/${redovisningsperiod}`, momsuppgift,
     )
     await writeSkatteverketAudit(ctx, {
       endpoint: 'declaration/validate', agRegistreradId: redovisare, redovisningsperiod,
@@ -99,7 +99,7 @@ export async function submitVatDeclarationChain(
   // 1. POST /utkast: save the draft to Eget utrymme. Overwrites any prior
   //    draft for the period, so retry after a mid-chain failure is safe.
   const utkast = await skvRequest(
-    supabase, userId, 'POST', `/utkast/${redovisare}/${redovisningsperiod}`, momsuppgift,
+    supabase, userId, companyId, 'POST', `/utkast/${redovisare}/${redovisningsperiod}`, momsuppgift,
   )
   await writeSkatteverketAudit(ctx, {
     endpoint: 'declaration/draft', agRegistreradId: redovisare, redovisningsperiod,
@@ -128,7 +128,7 @@ export async function submitVatDeclarationChain(
 
   // 2. PUT /las: lock for signing; returns the BankID signeringslänk.
   const las = await skvRequest(
-    supabase, userId, 'PUT', `/las/${redovisare}/${redovisningsperiod}`,
+    supabase, userId, companyId, 'PUT', `/las/${redovisare}/${redovisningsperiod}`,
   )
   await writeSkatteverketAudit(ctx, {
     endpoint: 'declaration/lock', agRegistreradId: redovisare, redovisningsperiod,

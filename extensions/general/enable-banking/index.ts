@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import {
   startAuthorization,
   getASPSPs,
-  getPreferredAuthMethod,
+  getPreferredAuthMethodDetails,
   deleteSession,
   isSandboxMode,
   SessionExpiredError,
@@ -14,9 +14,14 @@ import {
 import { syncAccountTransactions } from './lib/sync'
 import { findReusableSessions, countLiveSiblings } from './lib/session-sharing'
 import {
+  runUnattendedReconciliationSweep,
+  toSweepSummary,
+} from '@/lib/reconciliation/unattended-sweep'
+import {
   runReconciliation,
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
 } from '@/lib/reconciliation/bank-reconciliation'
+import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -289,7 +294,7 @@ export const enableBankingExtension: Extension = {
         const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
         if (blocked) return blocked
 
-        const { aspsp_name, aspsp_country, psu_type: explicitPsuType, connection_id: reconnectId } = await request.json()
+        const { aspsp_name, aspsp_country, psu_type: explicitPsuType, connection_id: reconnectId, force_new: forceNew } = await request.json()
 
         // Reconnect mode: re-authorize an EXISTING connection in place (no
         // disconnect required). The aspsp identity falls back to the stored row
@@ -366,15 +371,18 @@ export const enableBankingExtension: Extension = {
 
           // Resolve the bank's preferred auth method. Handelsbanken (and some
           // other Swedish banks) expose Mobile BankID only as a hidden DECOUPLED
-          // method; without this, Enable Banking defaults to the REDIRECT method,
-          // which for Handelsbanken *corporate* PSUs cannot complete with Mobile
-          // BankID: the user approves in the app and then hits an error. Returns
-          // undefined for banks with no decoupled method, leaving them untouched.
-          const authMethod = await getPreferredAuthMethod(
+          // method; without pinning it, Enable Banking defaults to the REDIRECT
+          // method, which for Handelsbanken *corporate* PSUs cannot complete
+          // with Mobile BankID: the user approves in the app and then hits an
+          // error. Only hidden methods applicable to this psu_type are pinned;
+          // banks whose decoupled method is visible (e.g. Lunar) get undefined
+          // so their own working default flow runs untouched.
+          const preferredMethod = await getPreferredAuthMethodDetails(
             resolvedAspspName,
             resolvedAspspCountry,
             psuType
           )
+          const authMethod = preferredMethod?.name
 
           log.info('[enable-banking] Starting bank connection', {
             user_id: user.id,
@@ -382,6 +390,17 @@ export const enableBankingExtension: Extension = {
             country: resolvedAspspCountry,
             psu_type: psuType,
             auth_method: authMethod ?? '(aspsp default)',
+            // Chosen method's metadata, so prod logs can verify per-bank pinning
+            // behavior after deploy (hidden-only + psu_types selection). A
+            // pinned method with no psu_types (the documented Handelsbanken
+            // shape) applies to all PSU types and logs '(all)': the
+            // '(aspsp default)' sentinel is reserved for the unpinned case,
+            // where it would otherwise contradict auth_method on the same line.
+            auth_method_approach: preferredMethod?.approach ?? '(aspsp default)',
+            auth_method_hidden: preferredMethod?.hidden_method ?? '(aspsp default)',
+            auth_method_psu_types: preferredMethod
+              ? (preferredMethod.psu_types ?? '(all)')
+              : '(aspsp default)',
             reconnect: isReconnect,
           })
 
@@ -440,6 +459,46 @@ export const enableBankingExtension: Extension = {
                 count: sweptRows.length,
                 bank: resolvedAspspName,
               })
+            }
+
+            // A fresh connect while a DEAD-BUT-ESTABLISHED connection to the
+            // same bank exists (expired/error/pending_selection) is almost
+            // always a renewal that should go through the reconnect path: a
+            // second row duplicates the connection and used to strand the old
+            // one in "Åtgärd krävs" forever. 409 with the existing id lets
+            // the client offer "förnya i stället". An ACTIVE row never
+            // triggers the guard: two legitimate logins at the same bank
+            // (disjoint account sets, e.g. privat + företag) must remain
+            // creatable through the UI, and the callback's supersede leaves
+            // non-overlapping account sets alone. force_new stays as the
+            // deliberate escape hatch. Runs AFTER the sweep so a
+            // never-activated zombie cannot block a legitimate fresh connect.
+            if (forceNew !== true) {
+              const { data: establishedRow } = await supabase
+                .from('bank_connections')
+                .select('id, status')
+                .eq('company_id', companyId)
+                .eq('bank_name', resolvedAspspName)
+                .in('status', ['expired', 'error', 'pending_selection'])
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+
+              if (establishedRow) {
+                log.info('[enable-banking] Rejecting fresh connect: dead connection needs renewal', {
+                  existing_id: establishedRow.id,
+                  existing_status: establishedRow.status,
+                  bank: resolvedAspspName,
+                })
+                return NextResponse.json(
+                  {
+                    error: `Du har redan en koppling till ${resolvedAspspName} som behöver förnyas. Använd Förnya samtycke på kopplingen i stället.`,
+                    code: 'EXISTING_CONNECTION',
+                    existing_connection_id: establishedRow.id,
+                  },
+                  { status: 409 }
+                )
+              }
             }
           }
 
@@ -747,22 +806,38 @@ export const enableBankingExtension: Extension = {
           // When SIE overlap is detected, run a batch reconciliation sweep.
           // The greedy algorithm considers all candidates globally (highest-
           // confidence first) and catches matches the inline per-transaction
-          // pass may have missed due to processing order.
+          // pass may have missed due to processing order. One scoped run per
+          // enabled cash account (issue #1298): the pooled run could persist a
+          // cross-account journal_entry_id.
           // Skip for viewers: reconciliation updates transactions which viewers cannot do.
           if (sieOverlap && totalImported > 0 && !isViewer) {
             try {
-              const reconResult = await runReconciliation(supabase, companyId, user.id, {
-                dateFrom: fromDate,
-                dateTo: toDate,
-                // This sweep applies without a human reviewing a dry-run, so
-                // never commit low-confidence (fuzzy / date-range) matches.
-                confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
-              })
+              const reconResult = await runUnattendedReconciliationSweep(
+                supabase,
+                companyId,
+                user.id,
+                { dateFrom: fromDate, dateTo: toDate },
+              )
+              // Stamp the outcome so the UI can render "Vi matchade X av Y" and
+              // the review surface knows there is something to granska.
+              await supabase
+                .from('bank_connections')
+                .update({
+                  last_sie_sweep: toSweepSummary(reconResult, {
+                    dateFrom: fromDate,
+                    dateTo: toDate,
+                  }),
+                })
+                .eq('id', connection.id)
               if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {
                 log.info('Post-sync batch reconciliation matched additional transactions', {
                   applied: reconResult.applied,
                   skippedBelowThreshold: reconResult.skippedBelowThreshold,
-                  total: reconResult.matches.length,
+                  accounts: reconResult.accounts.map((a) => ({
+                    accountNumber: a.accountNumber,
+                    applied: a.applied,
+                    skippedBelowThreshold: a.skippedBelowThreshold,
+                  })),
                 })
               }
             } catch {
@@ -1322,6 +1397,7 @@ export const enableBankingExtension: Extension = {
         let initialSyncSummary: {
           imported: number
           duplicates: number
+          auto_matched: number
           requested_from: string
           returned_min_date: string | null
           returned_max_date: string | null
@@ -1335,12 +1411,37 @@ export const enableBankingExtension: Extension = {
             .toISOString()
             .split('T')[0]
 
+          // Same guard the manual /sync route and the cron apply. This path also
+          // runs on RENEWAL (reconnect resets status to pending_selection), and a
+          // fresh consent often makes the bank release history the first connect
+          // never delivered, straight over an already-bookkept period. Without
+          // the guard those rows would be auto-categorized into brand-new
+          // verifikat (double-booking) instead of being linked to the ones that
+          // already describe them.
+          const { data: sieOverlap } = await supabase
+            .from('sie_imports')
+            .select('id')
+            .eq('company_id', companyId)
+            .eq('status', 'completed')
+            .gte('fiscal_year_end', fromDate)
+            .limit(1)
+            .maybeSingle()
+
+          const { data: membership } = await supabase
+            .from('company_members')
+            .select('role')
+            .eq('company_id', companyId)
+            .eq('user_id', user.id)
+            .maybeSingle()
+          const isViewer = membership?.role === 'viewer'
+
           log.info('[enable-banking] Starting inline initial backfill', {
             connectionId: connection.id,
             accountCount: accountsToSync.length,
             lookbackDays: initialLookbackDays,
             fromDate,
             toDate,
+            sieOverlap: Boolean(sieOverlap),
           })
 
           let timeoutHandle: ReturnType<typeof setTimeout> | undefined
@@ -1356,7 +1457,11 @@ export const enableBankingExtension: Extension = {
                 fromDate,
                 toDate,
                 ingestFn,
-                { strategy: 'longest' }
+                {
+                  strategy: 'longest',
+                  ...(sieOverlap ? { skipAutoCategorization: true } : {}),
+                  ...(isViewer ? { rawInsertOnly: true } : {}),
+                }
               ))
             )
             // If the timeout wins the race, the underlying Promise.all keeps
@@ -1382,6 +1487,81 @@ export const enableBankingExtension: Extension = {
             const maxDates = results.map(r => r.returnedMaxBookingDate).filter((d): d is string => !!d)
             const returnedMin = minDates.length > 0 ? minDates.reduce((a, b) => (a < b ? a : b)) : null
             const returnedMax = maxDates.length > 0 ? maxDates.reduce((a, b) => (a > b ? a : b)) : null
+
+            // Post-backfill reconciliation sweep, mirroring the manual /sync
+            // route: link just-imported rows to the verifikat that already
+            // describe them so a re-released period does not resurface as
+            // hundreds of "ohanterade" transactions. Unlike the /sync and cron
+            // sweeps this runs once per enabled ledger account with a resolved
+            // cash-account scope: the pooled unscoped form can cross-link
+            // accounts (#1290/#1298). Both a thrown scope resolution AND an
+            // unresolved cash-account row (found: false) skip that account's
+            // sweep instead of widening to the pooled form.
+            //
+            // The window opens at the OLDEST booking date the bank actually
+            // returned when that is older than the requested fromDate: some
+            // ASPSPs over-return history, and rows outside the requested window
+            // would otherwise be ingested but never swept.
+            const sweepDateFrom = returnedMin && returnedMin < fromDate ? returnedMin : fromDate
+            // The sweep writes bank-feed metadata only (transactions.journal_entry_id,
+            // reconciliation_method, is_business): journal tables are never touched,
+            // so BFL immutability and period locks (which guard journal entries) are
+            // not in play. Links to opening-balance verifikat are blocked by the
+            // check_transaction_link_not_opening_balance trigger, and every link is
+            // reversible via unlinkReconciliation without any ledger write.
+            let totalAutoMatched = 0
+            if (sieOverlap && totalImported > 0 && !isViewer) {
+              // Filter, not `?? undefined`: an undefined accountNumber makes
+              // resolveCashAccountScope fall back to the primary account with
+              // includeUnassigned=true, which is the pooled form this block must
+              // never widen to. The allocator gives every enabled account a
+              // concrete ledger_account, so nothing is skipped in practice.
+              const ledgerAccounts = Array.from(
+                new Set(
+                  accountsToSync
+                    .map(a => a.ledger_account)
+                    .filter((l): l is string => typeof l === 'string' && l.length > 0)
+                )
+              )
+              for (const ledgerAccount of ledgerAccounts) {
+                try {
+                  const scope = await resolveCashAccountScope(supabase, companyId, ledgerAccount)
+                  if (!scope.found) {
+                    log.warn('[enable-banking] No cash_accounts row for ledger account; skipping its reconciliation sweep', {
+                      connectionId: connection.id,
+                      ledgerAccount,
+                    })
+                    continue
+                  }
+                  const reconResult = await runReconciliation(supabase, companyId, user.id, {
+                    dateFrom: sweepDateFrom,
+                    dateTo: toDate,
+                    accountNumber: scope.accountNumber,
+                    currency: scope.currency,
+                    cashAccountId: scope.cashAccountId,
+                    includeUnassigned: scope.includeUnassigned,
+                    // Unattended run: nobody reviews a dry-run first, so never
+                    // commit low-confidence (fuzzy / date-range) matches.
+                    confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
+                    // ...but don't DROP them either: the 0.75-0.89 band feeds
+                    // the "Granska förslag" review surface.
+                    persistSuggestions: true,
+                  })
+                  totalAutoMatched += reconResult.applied
+                  if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {
+                    log.info('[enable-banking] Post-backfill reconciliation linked imported rows to existing verifikat', {
+                      connectionId: connection.id,
+                      accountNumber: scope.accountNumber,
+                      applied: reconResult.applied,
+                      skippedBelowThreshold: reconResult.skippedBelowThreshold,
+                      total: reconResult.matches.length,
+                    })
+                  }
+                } catch {
+                  // Non-critical: rows stay unmatched for manual review.
+                }
+              }
+            }
 
             const completedAt = new Date().toISOString()
             // Don't re-write accounts_data here: the first update already wrote it.
@@ -1418,6 +1598,7 @@ export const enableBankingExtension: Extension = {
               initialSyncSummary = {
                 imported: totalImported,
                 duplicates: totalDuplicates,
+                auto_matched: totalAutoMatched,
                 requested_from: fromDate,
                 returned_min_date: returnedMin,
                 returned_max_date: returnedMax,

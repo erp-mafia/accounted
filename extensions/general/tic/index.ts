@@ -25,8 +25,16 @@ import {
 } from './lib/bankid-client'
 import { TICAPIError } from './lib/tic-types'
 import type { TICCompanyProfile, TICFinancialReportSummary } from './lib/tic-types'
-import type { BankIdCompleteRequest } from './lib/bankid-types'
-import type { CompanyLookupResult } from '@/lib/company-lookup/types'
+import {
+  BANKID_FLOW_ID_HEADER,
+  FLOW_VERIFIED_WINDOW_SECONDS,
+  FLOW_WINDOW_SECONDS,
+  clearBankIdFlowCookies,
+  isBankIdFlowMode,
+  readBankIdFlow,
+  setBankIdFlowCookies,
+} from './lib/bankid-flow-cookie'
+import { lookupCompanyByOrgNumber, registrationDateToMs } from './lib/lookup'
 import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -35,6 +43,42 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
 
 const log = createLogger('tic/bankid')
+
+/**
+ * Claim a BankID session, atomically and exactly once.
+ *
+ * The flow lives in a cookie now, so every tab of the browser shares one
+ * session and two of them can observe `status: complete` in the same poll tick.
+ * Both would call generateLink(), and the second magic link invalidates the
+ * first, so the tab the user is actually looking at may be the one that fails.
+ * Expiring the cookie on the way out does not prevent it: a Set-Cookie only
+ * applies once a response reaches the browser, and two requests that already
+ * carried the cookie both pass. The primary key is the only genuinely atomic
+ * thing available (serverless has no shared memory), so the loser of the race
+ * gets 23505 and stops before minting anything.
+ *
+ * Returns false when the session was already spent.
+ */
+async function consumeBankIdSession(
+  supabase: SupabaseClient,
+  sessionId: string
+): Promise<boolean> {
+  const { error } = await supabase
+    .from('bankid_consumed_sessions')
+    .insert({ session_id: sessionId })
+
+  if (!error) return true
+  // 23505 unique_violation: another request got here first.
+  if (error.code === '23505') return false
+
+  // Anything else (table missing, connection lost) must fail closed: minting a
+  // second magic link is worse than making the user authenticate again.
+  log.error('could not claim bankid session; refusing to complete', {
+    code: error.code,
+    message: error.message,
+  })
+  return false
+}
 
 /**
  * Request SPAR + CompanyRoles enrichment for a completed BankID session and
@@ -205,38 +249,6 @@ function toFinancialReportSummary(
  * Always logs the cleaned org number so we can correlate failures with input
  * in Vercel logs.
  */
-// Derive `{ startMonthDay, endMonthDay }` (e.g. "01-01" / "12-31") from the
-// search doc's mostRecentFinancialSummary. periodStart/periodEnd are Unix
-// timestamps in seconds. Returns null when the company has no closed period
-// yet: the client's deriveFirstYearDefaults handles newly-registered
-// companies from registrationDate instead.
-function deriveFiscalYearMonthDay(
-  fin: { periodStart?: number; periodEnd?: number } | undefined,
-): { startMonthDay: string | null; endMonthDay: string | null } | null {
-  if (!fin?.periodStart || !fin?.periodEnd) return null
-  const toMonthDay = (unixSeconds: number): string | null => {
-    const d = new Date(unixSeconds * 1000)
-    if (Number.isNaN(d.getTime())) return null
-    const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
-    const dd = String(d.getUTCDate()).padStart(2, '0')
-    return `${mm}-${dd}`
-  }
-  const startMonthDay = toMonthDay(fin.periodStart)
-  const endMonthDay = toMonthDay(fin.periodEnd)
-  if (!startMonthDay && !endMonthDay) return null
-  return { startMonthDay, endMonthDay }
-}
-
-// The search doc's registrationDate is a Unix timestamp in seconds (same
-// unit as periodStart/periodEnd above), but the app-facing contract
-// (CompanyLookupResult / TICCompanyProfile) is a millisecond epoch:
-// consumers feed it straight into `new Date()`. Skipping this conversion
-// is how 2026 registrations rendered as "21 jan 1970" in onboarding.
-function registrationDateToMs(unixSeconds: number | null | undefined): number | null {
-  if (unixSeconds == null || !Number.isFinite(unixSeconds)) return null
-  return unixSeconds * 1000
-}
-
 function handleTicError(
   error: unknown,
   log: { error: (msg: string, meta?: unknown) => void } | Console,
@@ -344,72 +356,13 @@ export const ticExtension: Extension = {
           // newly-registered companies without a financial summary return
           // fiscalYear: null and the client-side first-year derivation
           // takes over (see deriveFirstYearDefaults).
-          const doc = await searchCompanyByOrgNumber(orgNumber)
+          const result = await lookupCompanyByOrgNumber(orgNumber)
 
-          if (!doc) {
+          if (!result) {
             return NextResponse.json(
               { error: 'Company not found' },
               { status: 404 }
             )
-          }
-
-          const nameEntry =
-            doc.names.find((n) => n.companyNamingType === 'name') ?? doc.names[0]
-          const companyName = nameEntry?.nameOrIdentifier ?? ''
-
-          const isCeased = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
-
-          const address = doc.mostRecentRegisteredAddress
-            ? {
-                street: doc.mostRecentRegisteredAddress.streetAddress ?? null,
-                postalCode: doc.mostRecentRegisteredAddress.postalCode ?? null,
-                city: doc.mostRecentRegisteredAddress.city ?? null,
-              }
-            : null
-
-          const registration = {
-            fTax: doc.isRegisteredForFTax ?? false,
-            vat: doc.isRegisteredForVAT ?? false,
-          }
-
-          const bankAccounts = (doc.bankAccounts ?? [])
-            .filter((ba) => ba.accountNumber != null && ba.bankAccountType === 'bankgiro')
-            .map((ba) => ({
-              type: 'bankgiro',
-              accountNumber: String(ba.accountNumber),
-              bic: null,
-            }))
-
-          // Search-doc shape is `{ rank, sni_2007Code, sni_2007Name, ... }`;
-          // map to the canonical { code, name } the rest of the app expects.
-          const sniCodes = (doc.sniCodes ?? [])
-            .filter((s) => s.sni_2007Code)
-            .map((s) => ({
-              code: s.sni_2007Code ?? '',
-              name: s.sni_2007Name ?? '',
-            }))
-
-          const email = doc.emailAddresses?.[0]?.emailAddress ?? null
-
-          const phone =
-            doc.phoneNumbers?.[0]?.phoneNumberFormatted
-              ?? doc.phoneNumbers?.[0]?.e164PhoneNumber
-              ?? null
-
-          const fiscalYear = deriveFiscalYearMonthDay(doc.mostRecentFinancialSummary)
-
-          const result: CompanyLookupResult = {
-            companyName,
-            isCeased,
-            address,
-            registration,
-            bankAccounts,
-            email,
-            phone,
-            sniCodes,
-            fiscalYear,
-            legalEntityType: doc.legalEntityType ?? null,
-            registrationDate: registrationDateToMs(doc.registrationDate),
           }
 
           return NextResponse.json({ data: result })
@@ -787,6 +740,30 @@ export const ticExtension: Extension = {
             || request.headers.get('x-real-ip')
             || '127.0.0.1'
 
+          // The flow a session is opened for is fixed here and read back at
+          // /complete, so a 'link' session can never be finished as a 'login'.
+          // Validated before the rate limit: a malformed request starts no
+          // billable session, so it should not spend the caller's cooldown and
+          // lock them out of the retry that would have worked.
+          const body = await request.json().catch(() => ({}))
+          const mode = body?.mode
+          if (!isBankIdFlowMode(mode)) {
+            return NextResponse.json({ error: 'mode is required' }, { status: 400 })
+          }
+
+          // A link flow is owned by the user who opened it. /bankid/link binds
+          // the personnummer to whoever is authenticated when it runs, so an
+          // unowned link flow left behind in a shared browser would let the
+          // next person to sign in pick it up and bind the FIRST person's
+          // identity to their own account. Login and signup have no user yet
+          // and stay anonymous.
+          let userId: string | undefined
+          if (mode === 'link') {
+            const auth = await requireAuth()
+            if (auth.error) return auth.error
+            userId = auth.user.id
+          }
+
           // Per-IP rate limit (each start = billable TIC session)
           const now = Date.now()
           const lastStart = bankIdStartCooldowns.get(ip) ?? 0
@@ -804,9 +781,31 @@ export const ticExtension: Extension = {
           }
 
           const userAgent = request.headers.get('user-agent') || undefined
-
           const session = await startBankIdAuth(ip, userAgent)
-          return NextResponse.json({ data: session })
+          const flowId = crypto.randomUUID()
+
+          // sessionId is deliberately NOT in the response. It is a bearer
+          // credential for the holder's personnummer and for a Supabase
+          // session; it goes into the signed HttpOnly cookie instead, and the
+          // client drives the flow without ever seeing it.
+          const response = NextResponse.json({
+            data: {
+              flowId,
+              autoStartToken: session.autoStartToken,
+              qrStartToken: session.qrStartToken,
+              qrStartSecret: session.qrStartSecret,
+            },
+          })
+          await setBankIdFlowCookies(response, {
+            version: 1,
+            sessionId: session.sessionId,
+            flowId,
+            mode,
+            userId,
+            startedAt: Date.now(),
+            expiresAt: Date.now() + FLOW_WINDOW_SECONDS * 1000,
+          })
+          return response
         } catch (error) {
           if (error instanceof TICAPIError) {
             if (error.code === 'NOT_CONFIGURED') {
@@ -835,17 +834,106 @@ export const ticExtension: Extension = {
       skipAuth: true,
       handler: async (request: Request) => {
         try {
-          const body = await request.json()
-          const sessionId = body?.sessionId
-          if (!sessionId || typeof sessionId !== 'string') {
-            return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
+          const flow = await readBankIdFlow(request)
+          if (!flow) {
+            // No live flow in this browser: the tab is polling something that
+            // has finished, expired, or never belonged to it. Terminal, not an
+            // error, so the client can settle instead of spinning.
+            return NextResponse.json({ error: 'no_session' }, { status: 404 })
           }
 
-          const result = await pollBankIdSession(sessionId)
+          // The caller says which mode it is showing, and a flow only answers
+          // to its own. Without this a login session started on /login is
+          // picked up by the signup panel (or the reverse) whenever the user
+          // navigates between them. Deliberately NOT clearing: the flow is
+          // still legitimate for the page that started it.
+          const pollBody = await request.json().catch(() => ({}))
+          if (!isBankIdFlowMode(pollBody?.mode) || pollBody.mode !== flow.mode) {
+            return NextResponse.json({ error: 'no_session' }, { status: 404 })
+          }
+          const isProbe = pollBody?.probe === true
+
+          // The cookie is shared by every tab. A newer same-mode /start can
+          // replace it while an older tab is still polling, so mode alone is
+          // not enough: without the flow id, that stale tab would silently
+          // follow and complete the newer person's identification. A mount
+          // probe has no id yet and may discover it, but every active poll must
+          // present the id returned by /start or by that probe.
+          if (!isProbe && request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
+            return NextResponse.json({ error: 'no_session' }, { status: 404 })
+          }
+
+          let result: Awaited<ReturnType<typeof pollBankIdSession>>
+          try {
+            result = await pollBankIdSession(flow.sessionId)
+          } catch (error) {
+            // TIC no longer knows this session (404), or answered 410 for an
+            // expired one. Report it as no_session so the client settles
+            // instead of counting it as a service outage.
+            //
+            // Deliberately does NOT clear the cookie. A clearing Set-Cookie is
+            // untargeted: a slow response about a dead session would delete
+            // whatever flow is in the jar by the time it lands, including one
+            // the user has just started in another tab. The stale cookie is
+            // harmless (it answers no_session again and expires on its own),
+            // whereas deleting a live flow costs a billable session.
+            if (error instanceof TICAPIError && (error.statusCode === 404 || error.statusCode === 410)) {
+              return NextResponse.json({ error: 'no_session' }, { status: 404 })
+            }
+            throw error
+          }
+
+          // An expired-session body comes back with no `status` at all
+          // (identityFetch returns a 410 body verbatim). Same treatment.
+          if (!result?.status) {
+            return NextResponse.json({ error: 'no_session' }, { status: 404 })
+          }
+
           if (result.status !== 'pending') {
             log.info('poll status', { status: result.status, hintCode: result.hintCode, hasUser: !!result.user?.personalNumber })
           }
-          return NextResponse.json({ data: result })
+
+          // Whitelist the fields the UI renders. The raw TIC payload carries
+          // user.personalNumber, which the client has never used and must
+          // never receive: this endpoint is skipAuth, so anything it returns
+          // is readable by whoever holds the flow cookie.
+          //
+          // The name (givenName/surname) is withheld from a PROBE. A probe runs
+          // before the person here has confirmed the flow is theirs, so
+          // returning the name would hand a stranger's identity to whoever
+          // opened the page on a shared machine, defeating the confirm card.
+          // The signup e-mail step needs the name, but it is reached only
+          // through the active poll loop (no probe mode), which does get it.
+          const response = NextResponse.json({
+            data: {
+              flowId: isProbe ? flow.flowId : undefined,
+              status: result.status,
+              message: result.message,
+              hintCode: result.hintCode,
+              qrStartToken: result.qrStartToken,
+              qrStartSecret: result.qrStartSecret,
+              user: !isProbe && result.user
+                ? { givenName: result.user.givenName, surname: result.user.surname }
+                : undefined,
+            },
+          })
+
+          // A failed or cancelled order is over. Not cleared here for the same
+          // reason as the dead-session branch above: the Set-Cookie cannot be
+          // aimed at one flow, so a late response would delete a newer one.
+          // The client settles on this status, and the cookie expires.
+          if (result.status === 'complete') {
+            // Identification is done; what remains is the signup e-mail step,
+            // which is a person typing. Re-issue with the longer window so a
+            // user hunting for the right address does not have the session
+            // expire under them: on the old client-state design this step was
+            // bounded only by TIC's own retention.
+            await setBankIdFlowCookies(response, {
+              ...flow,
+              expiresAt: Date.now() + FLOW_VERIFIED_WINDOW_SECONDS * 1000,
+            })
+          }
+          return response
         } catch (error) {
           if (error instanceof TICAPIError) {
             if (error.code === 'RATE_LIMIT_EXCEEDED') {
@@ -870,17 +958,43 @@ export const ticExtension: Extension = {
       skipAuth: true,
       handler: async (request: Request) => {
         try {
-          const body: BankIdCompleteRequest = await request.json()
-          const { sessionId, mode, email } = body
-
-          if (!sessionId || !mode) {
+          // Session id and mode come from the signed cookie, never the body:
+          // a caller who could name both could complete any session it had
+          // seen, in whatever flow suited it.
+          const flow = await readBankIdFlow(request)
+          if (!flow) {
             return NextResponse.json(
-              { error: 'sessionId and mode are required' },
+              { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
+              { status: 400 }
+            )
+          }
+          const { sessionId, mode } = flow
+
+          // The shared cookie may have been replaced by a newer flow after
+          // this tab started. Only the tab that started or explicitly resumed
+          // the current flow may complete it.
+          if (request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
+            return NextResponse.json(
+              { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
               { status: 400 }
             )
           }
 
-          const trimmedEmail = email?.trim().toLowerCase()
+          if (mode === 'link') {
+            // Linking runs on the authenticated /bankid/link route, which
+            // proves who is being linked. Completing a link flow here would
+            // create or sign in an account off a session opened for something
+            // else entirely.
+            return NextResponse.json(
+              { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
+              { status: 400 }
+            )
+          }
+
+          const body = await request.json().catch(() => ({}))
+          const trimmedEmail = typeof body?.email === 'string'
+            ? body.email.trim().toLowerCase()
+            : undefined
 
           if (mode === 'signup' && !trimmedEmail) {
             return NextResponse.json(
@@ -889,14 +1003,26 @@ export const ticExtension: Extension = {
             )
           }
 
+          /**
+           * Every exit from here clears the flow, so a session is usable
+           * exactly once. Two tabs that both observe completion cannot both
+           * mint a magic link: the second finds no cookie and gets
+           * session_invalid, instead of a generateLink that silently
+           * invalidates the first tab's link and breaks the sign-in.
+           */
+          const settle = (response: NextResponse): NextResponse => {
+            clearBankIdFlowCookies(response)
+            return response
+          }
+
           // Verify BankID session is complete. The message surfaces directly
           // in the register-page toast, so it must be Swedish.
           const session = await collectBankIdResult(sessionId)
           if (session.status !== 'complete' || !session.user) {
-            return NextResponse.json(
+            return settle(NextResponse.json(
               { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
               { status: 400 }
-            )
+            ))
           }
 
           const { personalNumber, givenName, surname, name } = session.user
@@ -912,20 +1038,35 @@ export const ticExtension: Extension = {
 
           if (mode === 'login') {
             if (!existing) {
-              return NextResponse.json({
+              // Terminal for a login flow: the user is sent to signup, which
+              // starts its own session.
+              return settle(NextResponse.json({
                 error: 'no_account',
                 givenName,
                 surname,
-              }, { status: 404 })
+              }, { status: 404 }))
             }
 
             // Returning user: generate magic link
             const { data: userData } = await supabase.auth.admin.getUserById(existing.user_id)
             if (!userData?.user?.email) {
-              return NextResponse.json(
+              // Data problem, not a transient one: an identity with no user
+              // email will never complete. settle() so it is not re-offered as
+              // a resumable flow on the next page load.
+              return settle(NextResponse.json(
                 { error: 'session_invalid', message: 'User account not found' },
                 { status: 500 }
-              )
+              ))
+            }
+
+            // Claim the session BEFORE minting anything. Two tabs sharing this
+            // browser's flow cookie can both arrive here; only one may mint,
+            // because the second magic link invalidates the first.
+            if (!await consumeBankIdSession(supabase, sessionId)) {
+              return settle(NextResponse.json(
+                { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
+                { status: 400 }
+              ))
             }
 
             const { data: link, error: linkError } = await supabase.auth.admin.generateLink({
@@ -935,30 +1076,38 @@ export const ticExtension: Extension = {
 
             if (linkError || !link?.properties?.hashed_token) {
               log.error('generateLink failed for login', { message: linkError?.message, code: linkError?.code })
-              return NextResponse.json(
+              // The session is already consumed, so a retry would fail with
+              // session_invalid anyway; settle() clears the cookie now instead
+              // of leaving a spent flow to be re-offered as resumable.
+              return settle(NextResponse.json(
                 { error: 'Failed to create session' },
                 { status: 500 }
-              )
+              ))
             }
 
             // Refresh enrichment so /select-company sees current Bolagsverket roles.
             await fetchAndStoreEnrichment(sessionId, existing.user_id, supabase)
 
-            return NextResponse.json({
+            // settle(): the magic link is minted, so the flow is spent. A
+            // second tab reaching here would mint another and invalidate this
+            // one; it now gets session_invalid instead.
+            return settle(NextResponse.json({
               data: {
                 tokenHash: link.properties.hashed_token,
                 type: 'magiclink',
                 isNewUser: false,
               },
-            })
+            }))
           }
 
           // mode === 'signup'
           if (existing) {
-            return NextResponse.json(
+            // Terminal: this BankID already has an account, so the answer is
+            // to sign in, not to retry this session.
+            return settle(NextResponse.json(
               { error: 'already_linked', message: 'This BankID is already linked to an account' },
               { status: 409 }
-            )
+            ))
           }
 
           // Create new Supabase user. Email uniqueness is checked by createUser
@@ -981,10 +1130,15 @@ export const ticExtension: Extension = {
             // /bankid/link route so email ownership is proven by password login
             // first. (CWE-287)
             if (createError?.code === 'email_exists') {
+              // The session id is a bearer credential for a personnummer at
+              // TIC; a prefix is enough to correlate log lines.
               log.warn('bankid signup rejected: email already registered', {
-                sessionId,
+                sessionIdPrefix: sessionId.slice(0, 8),
                 pnrHashPrefix: pnrHash.slice(0, 8),
               })
+              // Deliberately NOT settled: nothing was consumed and the user
+              // may simply have typed the wrong address. Leaving the flow
+              // alive lets them correct it without a second BankID round trip.
               return NextResponse.json(
                 {
                   error: 'account_exists',
@@ -1009,14 +1163,14 @@ export const ticExtension: Extension = {
 
           // All-or-nothing signup: if any step after createUser fails, delete
           // the just-created user so the same email/BankID can retry cleanly.
-          // Leaving the half-created account behind strands the user — a retry
+          // Leaving the half-created account behind strands the user: a retry
           // hits account_exists/already_linked, but the account only has a
           // random password they never saw, so "log in instead" requires a
           // password reset. bankid_identities cascades on user delete.
           const rollbackSignup = async (step: string) => {
             const { error: deleteError } = await supabase.auth.admin.deleteUser(userId)
             if (deleteError) {
-              log.error(`signup rollback after failed ${step} could not delete user — orphaned account`, {
+              log.error(`signup rollback after failed ${step} could not delete user: orphaned account`, {
                 userId,
                 message: deleteError.message,
               })
@@ -1060,6 +1214,17 @@ export const ticExtension: Extension = {
             )
           }
 
+          // Claim the session before minting. Placed after createUser so the
+          // recoverable account_exists path above leaves the flow reusable,
+          // and before generateLink so two tabs cannot both mint.
+          if (!await consumeBankIdSession(supabase, sessionId)) {
+            await rollbackSignup('session already consumed')
+            return settle(NextResponse.json(
+              { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
+              { status: 400 }
+            ))
+          }
+
           // Generate magic link for session
           const { data: link, error: linkError } = await supabase.auth.admin.generateLink({
             type: 'magiclink',
@@ -1069,22 +1234,26 @@ export const ticExtension: Extension = {
           if (linkError || !link?.properties?.hashed_token) {
             log.error('generateLink failed for signup', { message: linkError?.message, code: linkError?.code })
             await rollbackSignup('generateLink')
-            return NextResponse.json(
+            // The session was already consumed above, so this flow cannot be
+            // retried; settle() clears it rather than leaving a spent,
+            // rolled-back flow to be re-offered as resumable.
+            return settle(NextResponse.json(
               { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
               { status: 500 }
-            )
+            ))
           }
 
           // Enrichment (CompanyRoles): pre-fills /select-company picker.
           await fetchAndStoreEnrichment(sessionId, userId, supabase)
 
-          return NextResponse.json({
+          // settle(): account created and magic link minted. The flow is spent.
+          return settle(NextResponse.json({
             data: {
               tokenHash: link.properties.hashed_token,
               type: 'magiclink',
               isNewUser: true,
             },
-          })
+          }))
         } catch (error) {
           if (error instanceof TICAPIError) {
             log.error('complete failed: TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
@@ -1109,23 +1278,34 @@ export const ticExtension: Extension = {
     },
 
     {
-      method: 'DELETE',
-      path: '/bankid/:sessionId',
+      method: 'POST',
+      // Was DELETE /bankid/:sessionId. The id is no longer something the
+      // client knows, so cancelling is now "end whatever flow this browser
+      // holds": it cannot be aimed at anyone else's session.
+      path: '/bankid/cancel',
       skipAuth: true,
       handler: async (request: Request) => {
-        try {
-          const url = new URL(request.url)
-          const sessionId = url.searchParams.get('_sessionId')
-          if (!sessionId) {
-            return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
-          }
+        // A malformed cookie must still be clearable rather than turning
+        // Avbryt into a 500.
+        const flow = await readBankIdFlow(request).catch(() => null)
 
-          await cancelBankIdSession(sessionId)
-          return NextResponse.json({ data: { cancelled: true } })
-        } catch (error) {
-          log.error('cancel failed', error)
-          return NextResponse.json({ error: 'Failed to cancel session' }, { status: 500 })
+        if (flow && request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
+          // A newer tab replaced the shared cookie. This caller may settle its
+          // own stale UI, but it must not cancel or clear the newer flow.
+          return NextResponse.json({ data: { cancelled: false, replaced: true } })
         }
+
+        const response = NextResponse.json({ data: { cancelled: true } })
+        clearBankIdFlowCookies(response)
+
+        if (flow) {
+          try {
+            await cancelBankIdSession(flow.sessionId)
+          } catch (error) {
+            log.error('cancel failed', error)
+          }
+        }
+        return response
       },
     },
 
@@ -1146,20 +1326,52 @@ export const ticExtension: Extension = {
           if (auth.error) return auth.error
           const userId = auth.user.id
 
-          const body = await request.json()
-          const { sessionId } = body
+          // Cookie, not body, and the mode must be the one the session was
+          // opened for. Otherwise a session started to sign SOMEONE ELSE in
+          // could be redirected into binding their personnummer to whoever is
+          // currently logged in on this browser.
+          const flow = await readBankIdFlow(request)
+          if (!flow || flow.mode !== 'link') {
+            return NextResponse.json(
+              { error: 'session_invalid', message: 'BankID session is not complete' },
+              { status: 400 }
+            )
+          }
 
-          if (!sessionId) {
-            return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
+          if (request.headers.get(BANKID_FLOW_ID_HEADER) !== flow.flowId) {
+            return NextResponse.json(
+              { error: 'session_invalid', message: 'BankID session is not complete' },
+              { status: 400 }
+            )
+          }
+
+          // The flow must belong to the caller. Mode alone is not enough: this
+          // route binds a personnummer to whoever is authenticated right now,
+          // so a link flow that someone else started and abandoned in this
+          // browser would otherwise bind THEIR identity to THIS account, and
+          // they could then sign in as this user with their own BankID.
+          if (flow.userId !== userId) {
+            log.warn('bankid link rejected: flow belongs to another user')
+            return NextResponse.json(
+              { error: 'session_invalid', message: 'BankID session is not complete' },
+              { status: 400 }
+            )
+          }
+          const { sessionId } = flow
+
+          /** Linking is single-use for the same reason completing is. */
+          const settle = (response: NextResponse): NextResponse => {
+            clearBankIdFlowCookies(response)
+            return response
           }
 
           // Verify BankID session
           const session = await collectBankIdResult(sessionId)
           if (session.status !== 'complete' || !session.user) {
-            return NextResponse.json(
+            return settle(NextResponse.json(
               { error: 'session_invalid', message: 'BankID session is not complete' },
               { status: 400 }
-            )
+            ))
           }
 
           const { personalNumber, givenName, surname } = session.user
@@ -1174,14 +1386,23 @@ export const ticExtension: Extension = {
             .single()
 
           if (existing && existing.user_id !== userId) {
-            return NextResponse.json(
+            return settle(NextResponse.json(
               { error: 'already_linked', message: 'This BankID is already linked to another account' },
               { status: 409 }
-            )
+            ))
           }
 
           if (existing && existing.user_id === userId) {
-            return NextResponse.json({ data: { linked: true, alreadyLinked: true } })
+            return settle(NextResponse.json({ data: { linked: true, alreadyLinked: true } }))
+          }
+
+          // Single-use, same reason as /complete: two tabs sharing this
+          // browser's flow must not both act on one identification.
+          if (!await consumeBankIdSession(supabase, sessionId)) {
+            return settle(NextResponse.json(
+              { error: 'session_invalid', message: 'BankID session is not complete' },
+              { status: 400 }
+            ))
           }
 
           // Link BankID to current user
@@ -1197,10 +1418,11 @@ export const ticExtension: Extension = {
 
           if (insertError) {
             log.error('link insert failed', { message: insertError.message, code: insertError.code })
-            return NextResponse.json(
+            // Session already consumed above, so the flow is spent; clear it.
+            return settle(NextResponse.json(
               { error: 'Failed to link BankID' },
               { status: 500 }
-            )
+            ))
           }
 
           // Read-merge-write: updateUserById REPLACES app_metadata wholesale
@@ -1214,7 +1436,7 @@ export const ticExtension: Extension = {
             app_metadata: { ...priorMeta, bankid_linked: true },
           })
 
-          return NextResponse.json({ data: { linked: true } })
+          return settle(NextResponse.json({ data: { linked: true } }))
         } catch (error) {
           if (error instanceof TICAPIError) {
             log.error('link failed: TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
@@ -1261,7 +1483,7 @@ export const ticExtension: Extension = {
           // Clear app_metadata.bankid_linked so MFA enforcement resumes.
           // Read-merge-write: updateUserById REPLACES app_metadata wholesale
           // (same rationale as /bankid/link above). Writing only
-          // { bankid_linked: false } would wipe has_password — a BankID-only
+          // { bankid_linked: false } would wipe has_password: a BankID-only
           // user (has_password: false) would then be inferred as HAVING a
           // password (lib/auth/has-password.ts) and could strand themselves
           // with no working login method.

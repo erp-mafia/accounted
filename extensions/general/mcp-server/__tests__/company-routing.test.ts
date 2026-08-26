@@ -117,6 +117,22 @@ describe('MCP company routing', () => {
     expect(chain.eq).toHaveBeenCalledWith('company_id', DEFAULT_COMPANY_ID)
   })
 
+  it('refuses company-dependent calls on a key whose user has no company yet', async () => {
+    // A key minted from the OAuth popup before onboarding (issue #1814) has
+    // no default company. The refusal is a distinct, actionable code and
+    // never reaches the membership lookup.
+    const { client, chain } = membershipClient({ data: null, error: null })
+
+    await expect(
+      resolveMcpCompanyContext({
+        supabase: client as never,
+        userId: 'user-1',
+        defaultCompanyId: null,
+      })
+    ).rejects.toMatchObject({ code: 'NO_COMPANY_YET' })
+    expect(chain.maybeSingle).not.toHaveBeenCalled()
+  })
+
   it('rejects companies without a current non-archived membership', async () => {
     const { client } = membershipClient({ data: null, error: null })
 
@@ -179,5 +195,24 @@ describe('MCP company routing', () => {
         args: { operation_id: 'operation-1', company_id: OTHER_COMPANY_ID },
       },
     })
+  })
+})
+
+describe('optional-company tools (issue #1814)', () => {
+  it('gnubok_list_skills is company-independent but still advertises company_id', () => {
+    expect(isCompanyDependentTool('gnubok_list_skills')).toBe(false)
+    const projected = projectToolInputSchema({
+      name: 'gnubok_list_skills',
+      inputSchema: { type: 'object', properties: { tag: { type: 'string' } } },
+    })
+    expect((projected.properties as Record<string, unknown>).company_id).toBeDefined()
+  })
+
+  it('purely context-free tools do not advertise company_id', () => {
+    const projected = projectToolInputSchema({
+      name: 'gnubok_search_tools',
+      inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+    })
+    expect((projected.properties as Record<string, unknown>).company_id).toBeUndefined()
   })
 })

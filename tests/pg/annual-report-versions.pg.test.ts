@@ -114,6 +114,26 @@ async function createVersion(params: {
   )
 }
 
+async function waitForAdvisoryLock(
+  pid: number,
+  maxAttempts = 150,
+  intervalMs = 20,
+): Promise<void> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const result = await getPool().query<{ wait_event: string | null }>(
+      `SELECT wait_event
+       FROM pg_stat_activity
+       WHERE pid = $1`,
+      [pid],
+    )
+    if (result.rows[0]?.wait_event === 'advisory') return
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  throw new Error(
+    `Backend ${pid} did not wait for the annual-report advisory lock after ${maxAttempts * intervalMs}ms`,
+  )
+}
+
 describe('annual report profile and version enforcement', () => {
   it('isolates profiles by membership and rejects cross-company period links', async () => {
     const owner = await seedCompany()
@@ -307,6 +327,54 @@ describe('annual report profile and version enforcement', () => {
     ).rejects.toThrow(/row-level security policy/i)
   })
 
+  it('limits authenticated roster edits to blank pending unbound inserts and deletes', async () => {
+    const owner = await seedCompany()
+    const signatureId = randomUUID()
+
+    const inserted = await withCommittedRoleContext(owner.userId, 'authenticated', (client) =>
+      client.query(
+        `INSERT INTO public.arsredovisning_signature_requests
+           (id, user_id, company_id, fiscal_period_id, role, signer_name)
+         VALUES ($1, $2, $3, $4, 'Styrelseledamot', 'Anna Andersson')
+         RETURNING id`,
+        [signatureId, owner.userId, owner.companyId, owner.fiscalPeriodId],
+      ),
+    )
+    expect(inserted.rowCount).toBe(1)
+
+    await expect(
+      withUserContext(owner.userId, (client) =>
+        client.query(
+          `INSERT INTO public.arsredovisning_signature_requests
+             (user_id, company_id, fiscal_period_id, role, signer_name, evidence_reference)
+           VALUES ($1, $2, $3, 'VD', 'Erik Eriksson', 'archive:A-2')`,
+          [owner.userId, owner.companyId, owner.fiscalPeriodId],
+        ),
+      ),
+    ).rejects.toThrow(/row-level security policy/i)
+
+    const updated = await withUserContext(owner.userId, (client) =>
+      client.query(
+        `UPDATE public.arsredovisning_signature_requests
+         SET signer_name = 'Changed signer'
+         WHERE id = $1
+         RETURNING id`,
+        [signatureId],
+      ),
+    )
+    expect(updated.rowCount).toBe(0)
+
+    const deleted = await withCommittedRoleContext(owner.userId, 'authenticated', (client) =>
+      client.query(
+        `DELETE FROM public.arsredovisning_signature_requests
+         WHERE id = $1
+         RETURNING id`,
+        [signatureId],
+      ),
+    )
+    expect(deleted.rowCount).toBe(1)
+  })
+
   it('invalidates representative confirmation when the draft signer roster changes', async () => {
     const owner = await seedCompany()
     await getPool().query(
@@ -351,6 +419,30 @@ describe('annual report profile and version enforcement', () => {
         ),
       ),
     ).rejects.toThrow(/only permits draft status/i)
+  })
+
+  it('requires ready_for_signature status at the trusted finalization boundary', async () => {
+    const owner = await seedCompany()
+
+    await expect(
+      withCommittedRoleContext(owner.userId, 'service_role', (client) =>
+        client.query(
+          `SELECT * FROM public.create_annual_report_version_with_signatures(
+             $1, $2, '1.0', 'k2', 'draft', $3::jsonb, $4::jsonb,
+             $5, '2024-09-12', 'k2-ab-risbs-2024-09-12', $6::jsonb, $7
+           )`,
+          [
+            owner.companyId,
+            owner.fiscalPeriodId,
+            JSON.stringify(reportData(owner.fiscalPeriodId)),
+            JSON.stringify({ entryPointId: 'k2-ab-risbs-2024-09-12' }),
+            'f'.repeat(64),
+            JSON.stringify({}),
+            owner.userId,
+          ],
+        ),
+      ),
+    ).rejects.toThrow(/requires ready_for_signature status/i)
   })
 
   it('keeps version content immutable and blocks member deletion', async () => {
@@ -533,5 +625,115 @@ describe('annual report profile and version enforcement', () => {
         [second.companyId, second.fiscalPeriodId, version.rows[0].id, second.userId],
       ),
     ).rejects.toThrow(/belongs to another company or period/i)
+  })
+
+  it('keeps validation history insert-only for authenticated callers', async () => {
+    const owner = await seedCompany()
+    const version = await createVersion(owner)
+    const validationId = randomUUID()
+
+    const inserted = await withCommittedRoleContext(owner.userId, 'authenticated', (client) =>
+      client.query(
+        `INSERT INTO public.annual_report_validation_runs
+           (id, company_id, fiscal_period_id, version_id, user_id, validation_layer, status)
+         VALUES ($1, $2, $3, $4, $5, 'local', 'passed')
+         RETURNING id`,
+        [
+          validationId,
+          owner.companyId,
+          owner.fiscalPeriodId,
+          version.rows[0].id,
+          owner.userId,
+        ],
+      ),
+    )
+    expect(inserted.rowCount).toBe(1)
+
+    const updated = await withUserContext(owner.userId, (client) =>
+      client.query(
+        `UPDATE public.annual_report_validation_runs
+         SET status = 'failed'
+         WHERE id = $1
+         RETURNING id`,
+        [validationId],
+      ),
+    )
+    expect(updated.rowCount).toBe(0)
+
+    const deleted = await withUserContext(owner.userId, (client) =>
+      client.query(
+        `DELETE FROM public.annual_report_validation_runs
+         WHERE id = $1
+         RETURNING id`,
+        [validationId],
+      ),
+    )
+    expect(deleted.rowCount).toBe(0)
+  })
+
+  it('serializes concurrent final signatures and completes the version exactly once', async () => {
+    const owner = await seedCompany()
+    const firstSignatureId = randomUUID()
+    const secondSignatureId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.arsredovisning_signature_requests
+         (id, user_id, company_id, fiscal_period_id, role, signer_name)
+       VALUES
+         ($1, $3, $4, $5, 'Styrelseledamot', 'Anna Andersson'),
+         ($2, $3, $4, $5, 'VD', 'Erik Eriksson')`,
+      [
+        firstSignatureId,
+        secondSignatureId,
+        owner.userId,
+        owner.companyId,
+        owner.fiscalPeriodId,
+      ],
+    )
+    const version = await createVersion({ ...owner, status: 'ready_for_signature' })
+
+    const firstClient = await getClient()
+    const secondClient = await getClient()
+    try {
+      await firstClient.query('BEGIN')
+      await secondClient.query('BEGIN')
+      const secondPid = await secondClient.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')
+
+      await firstClient.query(
+        `UPDATE public.arsredovisning_signature_requests
+         SET status = 'signed', signed_at = now(),
+             signing_method = 'paper_original', evidence_reference = 'archive:A-1',
+             evidence_recorded_by = $2, evidence_recorded_at = now()
+         WHERE id = $1`,
+        [firstSignatureId, owner.userId],
+      )
+
+      const secondUpdate = secondClient.query(
+        `UPDATE public.arsredovisning_signature_requests
+         SET status = 'signed', signed_at = now(),
+             signing_method = 'paper_original', evidence_reference = 'archive:A-2',
+             evidence_recorded_by = $2, evidence_recorded_at = now()
+         WHERE id = $1`,
+        [secondSignatureId, owner.userId],
+      )
+      await waitForAdvisoryLock(secondPid.rows[0].pid)
+      await firstClient.query('COMMIT')
+      await secondUpdate
+      await secondClient.query('COMMIT')
+
+      const signedVersion = await getPool().query<{ status: string }>(
+        `SELECT status
+         FROM public.annual_report_versions
+         WHERE id = $1`,
+        [version.rows[0].id],
+      )
+      expect(signedVersion.rows[0].status).toBe('signed')
+    } catch (error) {
+      await firstClient.query('ROLLBACK').catch(() => {})
+      await secondClient.query('ROLLBACK').catch(() => {})
+      throw error
+    } finally {
+      firstClient.release()
+      secondClient.release()
+    }
   })
 })

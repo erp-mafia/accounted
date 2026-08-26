@@ -67,6 +67,17 @@ const SEB_CSV = [
   '2024-01-13;2024-01-13;12347;LÖNEUTBETALNING;25000,00;12877,17',
 ].join('\n')
 
+const WISE_STATEMENT_CSV = [
+  '"TransferWise ID",Date,Amount,Currency,Description,"Payment Reference","Running Balance","Exchange From","Exchange To","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant,"Card Last Four Digits","Card Holder Full Name",Attachment,Note,"Total fees"',
+  'TRANSFER-100,01/08/2026,1250.50,SEK,Received money from Example AB,INV-100,5000.50,,,,Example AB,,,,,,,,0',
+].join('\n')
+
+const WISE_TRANSACTION_HISTORY_WITH_UNSAFE_ROW = [
+  'ID,Status,Direction,"Created on","Finished on","Source fee amount","Source fee currency","Target fee amount","Target fee currency","Source name","Source amount (after fees)","Source currency","Target name","Target amount (after fees)","Target currency","Exchange rate",Reference,Batch,"Created by",Category,Note',
+  'PLAN_ORDER-9,COMPLETED,NEUTRAL,"2026-08-01 10:00:00","2026-08-01 10:00:00",,,,,Wise,100,USD,Wise,900,SEK,9,,,,General,',
+  'TRANSFER-2,COMPLETED,IN,"2026-08-02 10:00:00","2026-08-02 10:00:00",,,,,Example AB,100,SEK,Accounted AB,100,SEK,1,,,,General,',
+].join('\n')
+
 type MockResult = { data?: unknown; error?: unknown }
 type RecordedCall = { table: string; method: string; args: unknown[] }
 
@@ -100,9 +111,18 @@ function makeRequest(options?: {
   body?: FormData | string
   auth?: boolean
   search?: string
+  fileContent?: string
+  filename?: string
 }): Request {
   const fd = new FormData()
-  fd.append('file', new File([SEB_CSV], 'kontoutdrag.csv', { type: 'text/csv' }))
+  fd.append(
+    'file',
+    new File(
+      [options?.fileContent ?? SEB_CSV],
+      options?.filename ?? 'kontoutdrag.csv',
+      { type: 'text/csv' },
+    ),
+  )
   const init: RequestInit = {
     method: 'POST',
     body: options?.body ?? fd,
@@ -185,6 +205,41 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     expect(ingestMock).not.toHaveBeenCalled()
   })
 
+  it('accepts a forced Wise balance statement and preserves its scoped provenance', async () => {
+    const res = await callRoute({
+      search: '?format=wise_statement',
+      fileContent: WISE_STATEMENT_CSV,
+      filename: 'statement_123_SEK_2026.csv',
+    })
+
+    expect(res.status).toBe(202)
+    expect(ingestedRows()).toHaveLength(1)
+    expect(ingestedRows()[0]).toMatchObject({
+      import_source: 'csv_wise_statement',
+      external_id: 'wise_TRANSFER-100',
+      amount: 1250.5,
+      currency: 'SEK',
+    })
+  })
+
+  it('rejects a Wise file when any movement cannot be imported safely', async () => {
+    const res = await callRoute({
+      search: '?format=wise',
+      fileContent: WISE_TRANSACTION_HISTORY_WITH_UNSAFE_ROW,
+      filename: 'transaction-history.csv',
+    })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.issues).toContainEqual(
+      expect.objectContaining({ severity: 'error', message: expect.stringMatching(/NEUTRAL/) }),
+    )
+    expect(body.error.details.issues.length).toBeLessThanOrEqual(20)
+    expect(body.error.details.issue_count).toBe(1)
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
   it('returns 404 when the key user is not a member of the company in the URL', async () => {
     supabase = makeSupabase({ company_members: { data: null, error: null } })
     mockServiceClient.mockReturnValue(supabase)
@@ -221,6 +276,46 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
       // disables ingestTransactions' cross-channel dedup mirrors.
       expect(row.import_source).toBe('csv_seb')
     }
+  })
+
+  it('passes the bank_file_imports batch id to ingest so undo can scope its delete', async () => {
+    supabase = makeSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      bank_file_imports: { data: { id: 'import-1' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    await callRoute()
+
+    expect(ingestMock).toHaveBeenCalledTimes(1)
+    expect(ingestMock.mock.calls[0][4]).toEqual({ bankFileImportId: 'import-1' })
+  })
+
+  it('still ingests (rows unlinked) when the upsert returns no batch id', async () => {
+    // Default beforeEach supabase: bank_file_imports resolves { data: null }.
+    await callRoute()
+
+    expect(ingestMock).toHaveBeenCalledTimes(1)
+    expect(ingestMock.mock.calls[0][4]).toBeUndefined()
+  })
+
+  it('stamps ids and provenance with the fallback format when an explicit override parses nothing', async () => {
+    // Swedbank file forced as `seb`: the parser falls back to the detected
+    // format, and external ids / import_source must follow the format the
+    // result carries so they equal what the auto-detect path would produce.
+    const swedbankCsv = [
+      'Kontouppgifter',
+      'Clearingnummer,Kontonummer,Datum,Text,Belopp,Saldo',
+      '8123,12345678,2024-01-15,SPOTIFY AB,-99.00,12345.67',
+    ].join('\n')
+
+    const res = await callRoute({ fileContent: swedbankCsv, search: '?format=seb' })
+    expect(res.status).toBe(202)
+
+    const rows = ingestedRows()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].import_source).toBe('csv_swedbank')
+    expect(rows[0].external_id).toMatch(/^swedbank_/)
   })
 
   it('never sends keys RawTransaction does not have (`source`, `counterparty`)', async () => {

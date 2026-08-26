@@ -4,7 +4,9 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { guessCounterAccount } from '../lib/skattekonto-booking'
 
 /**
- * System seeds mirror supabase/migrations/20260519100000_skattekonto_rules.sql.
+ * System seeds mirror supabase/migrations/20260519100000_skattekonto_rules.sql
+ * plus the follow-up corrections 20260817120100 (EF preliminärskatt 2012 ->
+ * 2013) and 20260819200100 (requires_employer on the 'avdragen skatt' rule).
  * Kept in lockstep so the resolver behaves identically against mock and real DB.
  */
 const SEED_RULES = [
@@ -12,55 +14,55 @@ const SEED_RULES = [
     id: 'sys-1', priority: 10, pattern: 'inbetalning bokförd,inbetalning,överföring från bank',
     amount_min: null, amount_max: null, company_type: 'all',
     counter_account: '__PRIMARY_SEK__', counter_account_ef: null,
-    label: 'Inbetalning till skattekonto', active: true,
+    label: 'Inbetalning till skattekonto', active: true, requires_employer: false,
   },
   {
     id: 'sys-2', priority: 10, pattern: 'utbetalning,återbetalning',
     amount_min: null, amount_max: null, company_type: 'all',
     counter_account: '__PRIMARY_SEK__', counter_account_ef: null,
-    label: 'Utbetalning från skattekonto', active: true,
+    label: 'Utbetalning från skattekonto', active: true, requires_employer: false,
   },
   {
     id: 'sys-3', priority: 20, pattern: 'debiterad preliminärskatt,preliminärskatt,f-skatt,fskatt',
     amount_min: null, amount_max: null, company_type: 'all',
-    counter_account: '2510', counter_account_ef: '2012',
-    label: 'Preliminär skatt', active: true,
+    counter_account: '2510', counter_account_ef: '2013',
+    label: 'Preliminär skatt', active: true, requires_employer: false,
   },
   {
     id: 'sys-4', priority: 20, pattern: 'arbetsgivaravgift,sociala avgifter,agi',
     amount_min: null, amount_max: null, company_type: 'all',
-    counter_account: '2730', counter_account_ef: null,
-    label: 'Arbetsgivaravgifter', active: true,
+    counter_account: '2731', counter_account_ef: null,
+    label: 'Arbetsgivaravgifter', active: true, requires_employer: false,
   },
   {
     id: 'sys-5', priority: 20, pattern: 'avdragen skatt,personalskatt,a-skatt',
     amount_min: null, amount_max: null, company_type: 'all',
     counter_account: '2710', counter_account_ef: null,
-    label: 'Avdragen skatt anställda', active: true,
+    label: 'Avdragen skatt anställda', active: true, requires_employer: true,
   },
   {
     id: 'sys-6', priority: 20, pattern: 'mervärdesskatt,moms,momsdeklaration',
     amount_min: null, amount_max: null, company_type: 'all',
     counter_account: '2650', counter_account_ef: null,
-    label: 'Redovisningskonto för moms', active: true,
+    label: 'Redovisningskonto för moms', active: true, requires_employer: false,
   },
   {
     id: 'sys-7', priority: 25, pattern: 'skattetillägg,förseningsavgift',
     amount_min: null, amount_max: null, company_type: 'all',
     counter_account: '6992', counter_account_ef: null,
-    label: 'Ej avdragsgilla skatteavgifter', active: true,
+    label: 'Ej avdragsgilla skatteavgifter', active: true, requires_employer: false,
   },
   {
     id: 'sys-8', priority: 30, pattern: 'kostnadsränta',
     amount_min: null, amount_max: null, company_type: 'all',
     counter_account: '8423', counter_account_ef: null,
-    label: 'Kostnadsränta skattekonto', active: true,
+    label: 'Kostnadsränta skattekonto', active: true, requires_employer: false,
   },
   {
     id: 'sys-9', priority: 30, pattern: 'intäktsränta',
     amount_min: null, amount_max: null, company_type: 'all',
     counter_account: '8314', counter_account_ef: null,
-    label: 'Intäktsränta skattekonto', active: true,
+    label: 'Intäktsränta skattekonto', active: true, requires_employer: false,
   },
 ]
 
@@ -120,7 +122,7 @@ describe('guessCounterAccount', () => {
     ).toBe('1930')
   })
 
-  it('uses 2510 for AB preliminär skatt and 2012 for EF', async () => {
+  it('uses 2510 for AB preliminär skatt and 2013 for EF (regression: 2012 is not standard BAS)', async () => {
     const { supabase, enqueue } = makeSupabase()
     enqueue({ data: SEED_RULES })
     expect(
@@ -130,27 +132,53 @@ describe('guessCounterAccount', () => {
     enqueue({ data: SEED_RULES })
     expect(
       (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Debiterad preliminärskatt', 'enskild_firma'))?.account,
-    ).toBe('2012')
+    ).toBe('2013')
   })
 
-  it('routes employer payroll taxes to 2730 (clearing/redovisningskonto, not 2731 accrual)', async () => {
+  // 2731 matches the salary module's AVGIFTER_LIABILITY credit so the SKV draw
+  // clears the same account (issue #1870); the accrual account is 2940, not 2731.
+  it('routes employer payroll taxes to 2731 (same account the salary module credits)', async () => {
     const { supabase, enqueue } = makeSupabase()
     enqueue({ data: SEED_RULES })
     expect(
       (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Arbetsgivaravgifter januari', 'aktiebolag'))?.account,
-    ).toBe('2730')
+    ).toBe('2731')
 
     enqueue({ data: SEED_RULES })
     expect(
       (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Sociala avgifter Q1', 'aktiebolag'))?.account,
-    ).toBe('2730')
+    ).toBe('2731')
   })
 
-  it('routes deducted income tax to 2710', async () => {
+  it('routes deducted income tax to 2710 for an aktiebolag', async () => {
     const { supabase, enqueue } = makeSupabase()
     enqueue({ data: SEED_RULES })
+    // requires_employer only gates enskild_firma: an AB with a personalskatt
+    // line by definition has payroll, so 2710 stays unconditional.
     expect(
       (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Avdragen skatt anställda', 'aktiebolag'))?.account,
+    ).toBe('2710')
+  })
+
+  it('returns null for "avdragen skatt" on an enskild firma without employer registration', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    // The EF's skattekonto is the owner's PERSONAL account: "Avdragen skatt"
+    // there is almost always A-skatt an outside employer withheld from the
+    // owner's private salary. Auto-crediting 2710 would fabricate a payroll
+    // liability, so the gate forces the NO_COUNTER_ACCOUNT path instead.
+    expect(
+      await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Avdragen skatt', 'enskild_firma'),
+    ).toBeNull()
+  })
+
+  it('keeps 2710 for "avdragen skatt" on an employer-registered enskild firma', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueue({ data: SEED_RULES })
+    // An EF that genuinely runs payroll (employer_registered) withholds tax
+    // from real third-party employees: 2710 is then correct, same as an AB.
+    expect(
+      (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Avdragen skatt', 'enskild_firma', undefined, true))?.account,
     ).toBe('2710')
   })
 

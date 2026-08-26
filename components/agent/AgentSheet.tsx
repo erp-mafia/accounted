@@ -1,11 +1,13 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   X,
   Expand,
   Shrink,
+  PanelRight,
   PanelRightClose,
+  PictureInPicture2,
   Eraser,
   History,
   ChevronLeft,
@@ -16,7 +18,21 @@ import AgentChat, {
   normalizeStoredMessages,
   type ChatMessage,
 } from './AgentChat'
-import type { StoredStagedOperation } from '@/types'
+import AskConsole, { type AskConsoleMessage } from './AskConsole'
+import { CHAT_INTENT_ID } from '@/lib/agent/ask/persist'
+import type { AgentPanelFloatRect, StoredStagedOperation } from '@/types'
+import {
+  DOCK_GUTTER,
+  DOCK_WIDTH_MAX,
+  DOCK_WIDTH_MIN,
+  clampDockWidth,
+  clampFloatRect,
+  containFloatRect,
+  defaultFloatRect,
+  expandedDockWidth,
+  resizeFloatRect,
+  type ResizeEdges,
+} from '@/lib/agent-panel/geometry'
 import type { AgentStatusEvent } from './agent-status'
 import ContextChip from './ContextChip'
 import { intentLabel } from './conversation-display'
@@ -25,6 +41,10 @@ import AgentSessionList from './AgentSessionList'
 import SandboxAgentPreview from './SandboxAgentPreview'
 import { useAgentSheet } from './AgentSheetProvider'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import {
+  clearAgentSheetSession,
+  writeAgentSheetSession,
+} from '@/lib/agent-panel/session-restore'
 import { cn } from '@/lib/utils'
 
 // Undimmed non-modal side sheet: sits above the page on a hairline border +
@@ -39,6 +59,9 @@ interface Props {
   intentArgs?: Record<string, unknown>
   contextRef?: string
   seedUserMessage?: string
+  // Open this existing thread on mount (a reload restore, see the provider)
+  // instead of starting a fresh one on the intent.
+  resumeConversationId?: string
   // Hidden (display:none) but still mounted so the conversation survives. The
   // provider keeps rendering this component; we just visually remove it.
   collapsed: boolean
@@ -54,10 +77,127 @@ interface Props {
   onClose: () => void
 }
 
-// The panel is max-w-[480px]; the page gives up that plus the frame's own
-// 10px gutter, so the two panels float side by side on the frame with the
-// same seam as everywhere else instead of butting their borders together.
-const DOCKED_WIDTH = 490
+// Geometry (docked width, expanded width, floating rect) lives in
+// lib/agent-panel/geometry and is persisted per user via the provider
+// (ui_state.agent_panel). The drag paths below write styles imperatively and
+// commit ONE preference update on release, so a long conversation never
+// re-renders at pointer-move frequency while the user drags.
+
+function useViewportSize() {
+  const [size, setSize] = useState(() =>
+    typeof window === 'undefined'
+      ? { w: 1440, h: 900 }
+      : { w: window.innerWidth, h: window.innerHeight },
+  )
+  useEffect(() => {
+    let frame = 0
+    const onResize = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() =>
+        setSize({ w: window.innerWidth, h: window.innerHeight }),
+      )
+    }
+    window.addEventListener('resize', onResize)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [])
+  return size
+}
+
+/** Matches Tailwind's md breakpoint: floating mode exists on desktop only. */
+function useMinWidthMd() {
+  const [md, setMd] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const onChange = () => setMd(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return md
+}
+
+/** Current sidebar column width (--nav-w, set inline on #dash-shell). */
+function readNavWidth(): number {
+  if (typeof document === 'undefined') return 248
+  const shell = document.getElementById('dash-shell')
+  const px = shell ? parseInt(getComputedStyle(shell).getPropertyValue('--nav-w'), 10) : NaN
+  return Number.isFinite(px) ? px : 248
+}
+
+/**
+ * Reactive sidebar width: the nav toggle rewrites #dash-shell's inline
+ * --nav-w, which fires no resize event, so observe the style attribute
+ * instead of forcing a computed-style read on every render.
+ */
+function useNavWidth(): number {
+  const [w, setW] = useState(readNavWidth)
+  useEffect(() => {
+    const shell = document.getElementById('dash-shell')
+    if (!shell) return
+    const update = () => setW(readNavWidth())
+    update()
+    const mo = new MutationObserver(update)
+    mo.observe(shell, { attributes: true, attributeFilter: ['style'] })
+    return () => mo.disconnect()
+  }, [])
+  return w
+}
+
+/**
+ * Minimal pointer drag: capture on the handle, report cursor deltas, call
+ * onEnd exactly once on release or cancel. Deliberately not a library:
+ * three call sites, no gesture semantics beyond delta tracking.
+ */
+function startPointerDrag(
+  e: React.PointerEvent,
+  onMove: (dx: number, dy: number) => void,
+  onEnd: () => void,
+) {
+  if (e.button !== 0) return
+  e.preventDefault()
+  const target = e.currentTarget as HTMLElement
+  const startX = e.clientX
+  const startY = e.clientY
+  try {
+    target.setPointerCapture(e.pointerId)
+  } catch {
+    // Capture is best-effort: without it the drag still works while the
+    // cursor stays over the handle.
+  }
+  // Listeners live on window, NOT on the handle: if capture fails (or the
+  // handle unmounts mid-drag), a pointerup outside the 8px strip would never
+  // reach the handle and onEnd would never run, leaving the drag's global
+  // side effects (transition suppression, data-agent-resizing) stuck for the
+  // rest of the session. lostpointercapture covers the mid-drag-unmount case.
+  // Window listeners see every active pointer, so a second touch or a pen
+  // must not move this drag or end it early: only the initiating pointer id
+  // counts. lostpointercapture carries no useful pointerId in all engines,
+  // so it stays unfiltered; it can only fire for the captured pointer anyway.
+  const pointerId = e.pointerId
+  const move = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointerId) return
+    onMove(ev.clientX - startX, ev.clientY - startY)
+  }
+  const end = () => {
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+    window.removeEventListener('pointercancel', up)
+    target.removeEventListener('lostpointercapture', end)
+    onEnd()
+  }
+  const up = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointerId) return
+    end()
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+  window.addEventListener('pointercancel', up)
+  target.addEventListener('lostpointercapture', end)
+}
 
 interface LoadedConversation {
   id: string
@@ -72,6 +212,7 @@ export default function AgentSheet({
   intentArgs,
   contextRef,
   seedUserMessage,
+  resumeConversationId,
   collapsed,
   onStatus,
   onDockWidthChange,
@@ -94,22 +235,72 @@ export default function AgentSheet({
   // A past conversation the user picked from the list, hydrated for resume. When
   // set, it replaces the intent-driven fresh chat.
   const [loaded, setLoaded] = useState<LoadedConversation | null>(null)
-  const [loadingConversation, setLoadingConversation] = useState(false)
+  // Starts true on a restore so the first frame is the spinner, not a fresh
+  // chat on the intent: a fresh tool-loop chat fires its first turn on mount
+  // and would create a stray conversation before the restore replaced it.
+  const [loadingConversation, setLoadingConversation] = useState(!!resumeConversationId)
   const [loadError, setLoadError] = useState<string | null>(null)
   // Enlarge the panel IN PLACE (no navigation): the user stays on the current
-  // page (e.g. /bookkeeping) with a wider reading/verifying surface.
+  // page (e.g. /bookkeeping) with a wider reading/verifying surface. Transient
+  // focus mode, deliberately not persisted (unlike the dock width below).
   const [expanded, setExpanded] = useState(false)
-  // Dock at the compact width only. Expanded is a deliberate focus mode: at
-  // 1100px there is no page left to read beside it, so it goes back to
-  // overlaying. Collapsed and mobile claim nothing (below md the panel is
-  // full-width and the frame layout ignores the variable anyway).
-  const dockWidth = collapsed || expanded ? null : DOCKED_WIDTH
-  useEffect(() => {
-    onDockWidthChange?.(dockWidth)
-  }, [dockWidth, onDockWidthChange])
-  useEffect(() => () => onDockWidthChange?.(null), [onDockWidthChange])
 
-  const { identity } = useAgentSheet()
+  const { identity, panelPrefs, updatePanelPrefs } = useAgentSheet()
+  const viewport = useViewportSize()
+  const isDesktop = useMinWidthMd()
+  const navW = useNavWidth()
+
+  // Resolved geometry for this render. Floating exists on desktop only: below
+  // md the sheet stays the full-screen mobile surface whatever the persisted
+  // mode says. Everything re-clamps against the live viewport, so preferences
+  // saved on another screen can never strand the panel off-screen.
+  const floating = panelPrefs.mode === 'floating' && isDesktop
+  const dockW = clampDockWidth(panelPrefs.dockWidth, viewport.w, navW)
+  const expandedW = expandedDockWidth(viewport.w, navW)
+  const floatRect = floating
+    ? clampFloatRect(
+        panelPrefs.float ?? defaultFloatRect(viewport.w, viewport.h),
+        viewport.w,
+        viewport.h,
+      )
+    : null
+
+  // Open/resize-time validation of the persisted float rect: a rect saved at
+  // the viewport edge (or on a larger monitor) passes clampFloatRect but
+  // renders as a 48px sliver, so snap it fully on screen and persist the
+  // corrected position. panelPrefs.float is read through a ref, NOT the deps:
+  // putting it in the deps would re-run this on every drag commit and snap
+  // the window back mid-session, killing the deliberate hang-off-the-edge
+  // allowance of the live drag path. The effect fires on sheet mount (every
+  // fresh open remounts, keyed by the provider) and on viewport resize only.
+  const floatPrefRef = useRef(panelPrefs.float)
+  useEffect(() => {
+    floatPrefRef.current = panelPrefs.float
+  }, [panelPrefs.float])
+  useEffect(() => {
+    if (!floating) return
+    const rect = floatPrefRef.current
+    if (!rect) return
+    const contained = containFloatRect(rect, viewport.w, viewport.h)
+    if (
+      contained.x !== rect.x ||
+      contained.y !== rect.y ||
+      contained.w !== rect.w ||
+      contained.h !== rect.h
+    ) {
+      updatePanelPrefs({ float: contained })
+    }
+  }, [floating, viewport.w, viewport.h, updatePanelPrefs])
+
+  // Reserve page margin while docked, compact AND expanded: both reflow the
+  // page beside the panel instead of covering it (the original complaint).
+  // Floating and collapsed claim nothing; below md the margin variable is
+  // inert (the frame layout gates it on md:).
+  const reservedWidth = collapsed || floating ? null : (expanded ? expandedW : dockW) + DOCK_GUTTER
+  useEffect(() => {
+    onDockWidthChange?.(reservedWidth)
+  }, [reservedWidth, onDockWidthChange])
+  useEffect(() => () => onDockWidthChange?.(null), [onDockWidthChange])
   const companyCtx = useCompanyOptional()
   const isSandbox = companyCtx?.isSandbox ?? false
   const agentName = identity.displayName?.trim() || null
@@ -171,15 +362,126 @@ export default function AgentSheet({
     onCollapse()
   }
 
-  // Resume a past conversation inline: fetch its messages, hydrate, and swap the
-  // sheet back to the chat view. Picking the one already open just closes the
-  // list (keeps its live in-memory state instead of re-hydrating it).
-  async function handleSelectConversation(id: string) {
-    if (id === activeConversationId) {
-      setView('chat')
+  // ── Docked width drag ─────────────────────────────────────────────────
+  // Live frames write the sheet's max-width and the page-margin variable
+  // directly; data-agent-resizing suppresses the 300ms margin transition
+  // (globals.css) so the page reflow tracks the cursor 1:1. One preference
+  // commit on release.
+  const pendingDockW = useRef<number | null>(null)
+  function onDockResizeStart(e: React.PointerEvent) {
+    const el = sheetRef.current
+    if (!el) return
+    const base = expanded ? expandedW : dockW
+    document.documentElement.setAttribute('data-agent-resizing', '')
+    el.style.transition = 'none'
+    startPointerDrag(
+      e,
+      (dx) => {
+        // The handle sits on the panel's left edge: dragging left widens.
+        // navW from the closure: the sidebar cannot change mid-drag, and this
+        // avoids a computed-style read on every pointer frame.
+        const w = clampDockWidth(base - dx, window.innerWidth, navW)
+        pendingDockW.current = w
+        el.style.maxWidth = `${w}px`
+        document.documentElement.style.setProperty('--agent-dock-w', `${w + DOCK_GUTTER}px`)
+      },
+      () => {
+        document.documentElement.removeAttribute('data-agent-resizing')
+        el.style.transition = ''
+        if (pendingDockW.current !== null) {
+          // Keep the final width as the inline override too: if the committed
+          // value equals the previous preference, React sees identical style
+          // props and writes nothing, so the DOM must already be correct.
+          el.style.maxWidth = `${pendingDockW.current}px`
+          // Dragging from focus mode lands on a custom width: that IS leaving
+          // focus mode, so fold the result back into the normal dock.
+          setExpanded(false)
+          updatePanelPrefs({ dockWidth: pendingDockW.current })
+          pendingDockW.current = null
+        }
+      },
+    )
+  }
+
+  function onDockResizeKey(e: React.KeyboardEvent) {
+    const step = 24
+    // Step from the width the user actually sees: in focus mode that is
+    // expandedW, and the first keypress folds it into a custom dock width.
+    const base = expanded ? expandedW : dockW
+    let next: number | null = null
+    if (e.key === 'ArrowLeft') next = base + step
+    if (e.key === 'ArrowRight') next = base - step
+    if (next === null) return
+    e.preventDefault()
+    setExpanded(false)
+    updatePanelPrefs({ dockWidth: clampDockWidth(next, viewport.w, navW) })
+  }
+
+  // ── Floating move / resize ────────────────────────────────────────────
+  const pendingFloat = useRef<AgentPanelFloatRect | null>(null)
+  const commitFloatRect = () => {
+    if (pendingFloat.current !== null) {
+      updatePanelPrefs({ float: pendingFloat.current })
+      pendingFloat.current = null
+    }
+  }
+
+  function onFloatMoveStart(e: React.PointerEvent) {
+    const el = sheetRef.current
+    if (!el || !floatRect) return
+    // Header buttons keep their clicks; only bare header surface drags.
+    if ((e.target as Element).closest('button, a, input, textarea, select, [role="button"]')) {
       return
     }
-    setView('chat')
+    const base = floatRect
+    startPointerDrag(
+      e,
+      (dx, dy) => {
+        const r = clampFloatRect(
+          { ...base, x: base.x + dx, y: base.y + dy },
+          window.innerWidth,
+          window.innerHeight,
+        )
+        pendingFloat.current = r
+        el.style.left = `${r.x}px`
+        el.style.top = `${r.y}px`
+      },
+      commitFloatRect,
+    )
+  }
+
+  function onFloatResizeStart(e: React.PointerEvent, edges: ResizeEdges) {
+    const el = sheetRef.current
+    if (!el || !floatRect) return
+    const base = floatRect
+    startPointerDrag(
+      e,
+      (dx, dy) => {
+        const r = resizeFloatRect(base, dx, dy, edges, window.innerWidth, window.innerHeight)
+        pendingFloat.current = r
+        el.style.left = `${r.x}px`
+        el.style.top = `${r.y}px`
+        el.style.width = `${r.w}px`
+        el.style.height = `${r.h}px`
+      },
+      commitFloatRect,
+    )
+  }
+
+  function toggleFloating() {
+    if (floating) {
+      updatePanelPrefs({ mode: 'docked' })
+    } else {
+      updatePanelPrefs({
+        mode: 'floating',
+        float: panelPrefs.float ?? defaultFloatRect(viewport.w, viewport.h),
+      })
+    }
+  }
+
+  // Open a past conversation inline: fetch its messages and hydrate. Shared by
+  // the session list and the reload restore below.
+  const loadConversation = useCallback(async (id: string) => {
     setLoaded(null)
     setLoadingConversation(true)
     setLoadError(null)
@@ -217,10 +519,43 @@ export default function AgentSheet({
       })
       setConversationId(data.conversation.id)
     } catch {
-      if (seq === selectSeqRef.current) setLoadError('Kunde inte öppna konversationen.')
+      if (seq === selectSeqRef.current) {
+        setLoadError('Kunde inte öppna konversationen.')
+        // A thread that no longer opens must not be retried on every reload.
+        clearAgentSheetSession()
+      }
     } finally {
       if (seq === selectSeqRef.current) setLoadingConversation(false)
     }
+  }, [])
+
+  // Reload restore: the provider remounts the sheet on the thread this tab
+  // had open, and it is loaded here the same way a picked one is.
+  useEffect(() => {
+    if (resumeConversationId) void loadConversation(resumeConversationId)
+  }, [resumeConversationId, loadConversation])
+
+  // Remember the open thread for this tab so a reload brings it back (see
+  // lib/agent-panel/session-restore). Nothing to remember until the thread
+  // has an id: a fresh chat that never sent anything simply does not return.
+  const activeIntentId = loaded?.intentId ?? intentId
+  useEffect(() => {
+    if (!activeConversationId) return
+    writeAgentSheetSession({
+      conversationId: activeConversationId,
+      intentId: activeIntentId,
+      contextRef: activeContextRef,
+      collapsed,
+    })
+  }, [activeConversationId, activeIntentId, activeContextRef, collapsed])
+
+  // Resume a past conversation from the list and swap the sheet back to the
+  // chat view. Picking the one already open just closes the list (keeps its
+  // live in-memory state instead of re-hydrating it).
+  function handleSelectConversation(id: string) {
+    setView('chat')
+    if (id === activeConversationId) return
+    void loadConversation(id)
   }
 
   return (
@@ -234,29 +569,95 @@ export default function AgentSheet({
       // conversation state in AgentChat survives) while removing it from view
       // and layout entirely (no stray horizontal scroll from an off-screen box).
       className={cn(
-        'fixed inset-y-0 right-0 z-[60] flex w-full flex-col border-l border-border bg-background shadow-lg transition-[max-width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+        'fixed z-[60] flex flex-col bg-background',
+        floating
+          ? // Undocked window: free rect from inline styles; overlay chrome
+            // (rounded, hairline border, shadow) like every other overlay.
+            'overflow-hidden rounded-lg border border-border shadow-lg'
+          : 'inset-y-0 right-0 w-full border-l border-border shadow-lg transition-[max-width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
         // Arrive along the same edge, on the same curve and duration, as the
         // page panel that animates its margin to make room (layout.tsx). Gated
         // on first mount only: the panel stays mounted while collapsed, and
         // display:none -> visible would otherwise replay the slide every time
-        // the user re-expands the same session.
-        entering && 'animate-in slide-in-from-right-full fade-in-0',
+        // the user re-expands the same session. A floating window has no edge
+        // to arrive from, so it just fades in.
+        entering && (floating ? 'animate-in fade-in-0' : 'animate-in slide-in-from-right-full fade-in-0'),
         collapsed && 'hidden',
-        // Expanded grows the panel leftward over the page (still non-modal: the
-        // page stays interactive); normal is the compact side sheet.
-        expanded ? 'max-w-[min(100vw,1100px)]' : 'max-w-[480px]',
       )}
-      style={{
-        // iOS notch / Android cutout: the sheet top edge needs to clear the
-        // status bar. Bottom is handled inside the form below.
-        paddingTop: 'env(safe-area-inset-top, 0px)',
-      }}
+      style={
+        floating && floatRect
+          ? { left: floatRect.x, top: floatRect.y, width: floatRect.w, height: floatRect.h }
+          : {
+              // Width is the persisted dock preference; expanded (focus mode)
+              // grows as far as the viewport allows while the page keeps a
+              // readable column beside it.
+              maxWidth: expanded ? expandedW : dockW,
+              // iOS notch / Android cutout: the sheet top edge needs to clear
+              // the status bar. Bottom is handled inside the form below.
+              paddingTop: 'env(safe-area-inset-top, 0px)',
+            }
+      }
     >
+      {/* Docked: left-edge width handle (desktop only; mobile is full-width). */}
+      {!floating && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Ändra panelens bredd"
+          aria-valuenow={expanded ? expandedW : dockW}
+          aria-valuemin={DOCK_WIDTH_MIN}
+          aria-valuemax={clampDockWidth(DOCK_WIDTH_MAX, viewport.w, navW)}
+          tabIndex={0}
+          onPointerDown={onDockResizeStart}
+          onKeyDown={onDockResizeKey}
+          className="group absolute inset-y-0 left-0 z-10 hidden w-2 cursor-col-resize touch-none focus-visible:outline-none md:block"
+        >
+          <div className="mx-auto h-full w-px bg-transparent transition-colors duration-150 group-hover:bg-border group-active:bg-border group-focus-visible:bg-ring" />
+        </div>
+      )}
+      {/* Undocked: edge + corner resize handles. Pointer-only affordances
+          (aria-hidden): the keyboard path is dock -> arrow keys on the
+          separator above. */}
+      {floating && (
+        <>
+          <div
+            onPointerDown={(e) => onFloatResizeStart(e, { left: true })}
+            className="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize touch-none"
+            aria-hidden="true"
+          />
+          <div
+            onPointerDown={(e) => onFloatResizeStart(e, { right: true })}
+            className="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize touch-none"
+            aria-hidden="true"
+          />
+          <div
+            onPointerDown={(e) => onFloatResizeStart(e, { bottom: true })}
+            className="absolute inset-x-0 bottom-0 z-10 h-2 cursor-ns-resize touch-none"
+            aria-hidden="true"
+          />
+          <div
+            onPointerDown={(e) => onFloatResizeStart(e, { left: true, bottom: true })}
+            className="absolute bottom-0 left-0 z-10 h-4 w-4 cursor-nesw-resize touch-none"
+            aria-hidden="true"
+          />
+          <div
+            onPointerDown={(e) => onFloatResizeStart(e, { right: true, bottom: true })}
+            className="absolute bottom-0 right-0 z-10 h-4 w-4 cursor-nwse-resize touch-none"
+            aria-hidden="true"
+          />
+        </>
+      )}
       {view === 'list' ? (
-        <header className="flex items-center gap-3 border-b border-border px-5 py-4">
+        <header
+          onPointerDown={floating ? onFloatMoveStart : undefined}
+          className={cn(
+            'flex items-center gap-3 border-b border-border px-5 py-4',
+            floating && 'cursor-move touch-none select-none',
+          )}
+        >
           <button
             onClick={() => setView('chat')}
-            className="h-9 w-9 -ml-1 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            className="h-9 w-9 -ml-1 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             aria-label="Tillbaka"
             title="Tillbaka"
           >
@@ -265,7 +666,7 @@ export default function AgentSheet({
           <h2 className="font-display text-lg tracking-tight truncate">Konversationer</h2>
           <button
             onClick={onClose}
-            className="ml-auto h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            className="ml-auto h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             aria-label="Stäng"
             title="Avsluta sessionen"
           >
@@ -273,11 +674,19 @@ export default function AgentSheet({
           </button>
         </header>
       ) : (
-        <header className="flex items-center gap-2 border-b border-border px-4 py-4">
+        <header
+          // In floating mode the header doubles as the window's drag surface
+          // (buttons excluded inside onFloatMoveStart).
+          onPointerDown={floating ? onFloatMoveStart : undefined}
+          className={cn(
+            'flex items-center gap-2 border-b border-border px-4 py-4',
+            floating && 'cursor-move touch-none select-none',
+          )}
+        >
           {!isSandbox && (
             <button
               onClick={() => setView('list')}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               aria-label="Tidigare konversationer"
               title="Tidigare konversationer"
             >
@@ -296,13 +705,35 @@ export default function AgentSheet({
             <ContextChip contextRef={activeContextRef} className="mt-0.5" />
           </div>
           <div className="ml-auto flex items-center gap-1">
-            {/* Grow/shrink the panel in place: NEVER navigates away, so the
-                user stays on the current page. Hidden on mobile where the sheet
-                is already full-width (the toggle would be a no-op). */}
+            {/* Undock into a floating window the user can move and resize
+                freely / dock it back to the right edge. Hidden on mobile
+                where the sheet is always the full-screen surface. */}
             {!isSandbox && (
               <button
+                onClick={toggleFloating}
+                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                aria-label={floating ? 'Docka mot högerkanten' : 'Frigör panelen'}
+                title={
+                  floating
+                    ? 'Docka mot högerkanten'
+                    : 'Frigör panelen: flytta och ändra storlek fritt'
+                }
+              >
+                {floating ? (
+                  <PanelRight className="h-4 w-4" />
+                ) : (
+                  <PictureInPicture2 className="h-4 w-4" />
+                )}
+              </button>
+            )}
+            {/* Grow/shrink the panel in place: NEVER navigates away, so the
+                user stays on the current page. Hidden on mobile where the sheet
+                is already full-width (the toggle would be a no-op), and while
+                floating (the window resizes by its edges instead). */}
+            {!isSandbox && !floating && (
+              <button
                 onClick={() => setExpanded((v) => !v)}
-                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                 aria-label={expanded ? 'Förminska' : 'Förstora'}
                 title={expanded ? 'Förminska' : 'Förstora'}
               >
@@ -315,7 +746,7 @@ export default function AgentSheet({
             {activeConversationId && !isSandbox && (
               <button
                 onClick={onRestart}
-                className="h-9 inline-flex items-center gap-2 rounded-md px-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                className="h-9 inline-flex items-center gap-2 rounded-sm px-2 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
                 aria-label="Rensa: börja en ny konversation"
                 title="Rensa: börja en ny konversation"
               >
@@ -325,7 +756,7 @@ export default function AgentSheet({
             )}
             <button
               onClick={handleCollapse}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               aria-label="Minimera"
               title="Minimera: behåll sessionen"
             >
@@ -333,7 +764,7 @@ export default function AgentSheet({
             </button>
             <button
               onClick={onClose}
-              className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               aria-label="Stäng"
               title="Avsluta sessionen"
             >
@@ -365,14 +796,35 @@ export default function AgentSheet({
           </button>
         </div>
       ) : loaded ? (
-        <AgentChat
-          key={loaded.id}
-          intentId={loaded.intentId}
-          contextRef={loaded.contextRef ?? undefined}
-          initialConversationId={loaded.id}
-          initialMessages={loaded.messages}
-          onConversationIdChange={(id) => setConversationId(id)}
-          onStatus={onStatus}
+        loaded.intentId === CHAT_INTENT_ID ? (
+          // Resumed free-form thread: the single-call console (runs on a local
+          // model). Its turns are text-only, so drop any empty/tool rows.
+          <AskConsole
+            key={loaded.id}
+            initialConversationId={loaded.id}
+            initialMessages={loaded.messages
+              .filter((m) => m.text.trim().length > 0)
+              .map((m): AskConsoleMessage => ({ role: m.role, text: m.text }))}
+            contextRef={loaded.contextRef}
+          />
+        ) : (
+          <AgentChat
+            key={loaded.id}
+            intentId={loaded.intentId}
+            contextRef={loaded.contextRef ?? undefined}
+            initialConversationId={loaded.id}
+            initialMessages={loaded.messages}
+            onConversationIdChange={(id) => setConversationId(id)}
+            onStatus={onStatus}
+          />
+        )
+      ) : intentId === CHAT_INTENT_ID ? (
+        // Fresh free-form ask (the FAB's "Fråga min assistent" catch-all).
+        <AskConsole
+          seedUserMessage={seedUserMessage}
+          initialConversationId={null}
+          contextRef={contextRef ?? null}
+          onConversationCreated={(id) => setConversationId(id)}
         />
       ) : (
         <AgentChat

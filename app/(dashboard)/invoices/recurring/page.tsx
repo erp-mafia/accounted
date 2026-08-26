@@ -4,18 +4,12 @@ import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { EmptyState } from '@/components/ui/empty-state'
+import { cn } from '@/lib/utils'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -196,120 +190,144 @@ export default function RecurringInvoicesPage() {
       />
 
       {isLoading ? (
-        <Card>
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            {t('loading')}
-          </CardContent>
-        </Card>
+        <div className="space-y-2">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
+        </div>
       ) : schedules.length === 0 ? (
-        <Card>
-          <CardContent className="p-0">
-            <EmptyState
-              icon={Repeat}
-              title={t('empty_title')}
-              description={t('empty_description')}
-              actionLabel={canWrite ? t('new_schedule') : undefined}
-              onAction={canWrite ? openNewSchedule : undefined}
-            />
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={Repeat}
+          title={t('empty_title')}
+          description={t('empty_description')}
+          actionLabel={canWrite ? t('new_schedule') : undefined}
+          onAction={canWrite ? openNewSchedule : undefined}
+        />
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('th_name')}</TableHead>
-                  <TableHead>{t('th_customer')}</TableHead>
-                  <TableHead className="tabular-nums">{t('th_day')}</TableHead>
-                  <TableHead className="tabular-nums">{t('th_next_run')}</TableHead>
-                  <TableHead>{t('th_status')}</TableHead>
-                  <TableHead className="tabular-nums text-right">{t('th_generated')}</TableHead>
-                  <TableHead className="text-right">{t('th_actions')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {schedules.map((s) => (
-                  <TableRow
-                    key={s.id}
-                    className={canWrite ? 'cursor-pointer' : undefined}
-                    onClick={canWrite ? () => openEdit(s.id) : undefined}
-                  >
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        {s.name}
-                        {s.last_run_warning && (
-                          <AlertTriangle
-                            className="h-4 w-4 text-warning-foreground"
-                            aria-label={s.last_run_warning}
-                          />
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {s.customer?.name ?? '-'}
-                    </TableCell>
-                    <TableCell className="tabular-nums">
-                      {s.day_of_month}
-                      <span className="text-muted-foreground">
-                        {' · '}
-                        {t('send_time', {
-                          time: `${String(s.send_hour ?? 8).padStart(2, '0')}:00`,
-                        })}
-                      </span>
-                    </TableCell>
-                    <TableCell className="tabular-nums">{formatDate(s.next_run_date)}</TableCell>
-                    <TableCell>
-                      {s.status === 'active' ? (
-                        <span className="text-xs text-muted-foreground">{t('status_active')}</span>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <th className={TH_CLASS}>{t('th_name')}</th>
+                <th className={TH_CLASS}>{t('th_customer')}</th>
+                <th className={TH_CLASS}>{t('th_day')}</th>
+                <th className={TH_CLASS}>{t('th_next_run')}</th>
+                <th className={TH_CLASS}>{t('th_status')}</th>
+                <th className={`${TH_CLASS} text-right`}>{t('th_generated')}</th>
+                <th className={`${TH_CLASS} text-right`}>{t('th_actions')}</th>
+              </tr>
+            </thead>
+            <tbody className="stagger-enter">
+              {schedules.map((s) => (
+                <tr
+                  key={s.id}
+                  className={cn(
+                    'group transition-colors duration-150 hover:bg-secondary/35',
+                    canWrite && 'cursor-pointer',
+                  )}
+                  onClick={canWrite ? () => openEdit(s.id) : undefined}
+                >
+                  <td className={`${TD_CLASS} font-medium`}>
+                    <div className="flex items-center gap-2">
+                      {/* Focusable edit affordance: the row onClick is mouse-only,
+                          so keyboard users open the editor through the name. */}
+                      {canWrite ? (
+                        <button
+                          type="button"
+                          className="hover:underline underline-offset-4"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openEdit(s.id)
+                          }}
+                        >
+                          {s.name}
+                        </button>
                       ) : (
-                        <Badge variant="outline" className="font-normal">{t('status_paused')}</Badge>
+                        s.name
                       )}
-                    </TableCell>
-                    <TableCell className="tabular-nums text-right">
-                      {s.generated_count}
-                    </TableCell>
-                    <TableCell className="text-right">
+                      {s.last_run_warning && (
+                        <AlertTriangle
+                          className="h-4 w-4 text-attn"
+                          aria-label={s.last_run_warning}
+                        />
+                      )}
+                    </div>
+                  </td>
+                  <td className={`${TD_CLASS} text-muted-foreground`}>
+                    {s.customer?.name ?? '-'}
+                  </td>
+                  <td className={`${TD_CLASS} tabular-nums`}>
+                    {s.day_of_month}
+                    <span className="text-muted-foreground">
+                      {' · '}
+                      {t('send_time', {
+                        time: `${String(s.send_hour ?? 8).padStart(2, '0')}:00`,
+                      })}
+                      {/* Monthly is the norm; only a deviating cadence is
+                          worth a label (chips-mark-exceptions convention). */}
+                      {(s.interval_months ?? 1) > 1 && (
+                        <>
+                          {' · '}
+                          {s.interval_months === 3
+                            ? t('interval_quarterly')
+                            : s.interval_months === 6
+                              ? t('interval_semiannual')
+                              : s.interval_months === 12
+                                ? t('interval_yearly')
+                                : t('interval_every_n', { n: s.interval_months })}
+                        </>
+                      )}
+                    </span>
+                  </td>
+                  <td className={`${TD_CLASS} tabular-nums`}>{formatDate(s.next_run_date)}</td>
+                  <td className={TD_CLASS}>
+                    {s.status === 'active' ? (
+                      <span className="text-xs text-muted-foreground">{t('status_active')}</span>
+                    ) : (
+                      <Badge variant="outline" className="font-normal">{t('status_paused')}</Badge>
+                    )}
+                  </td>
+                  <td className={`${TD_CLASS} tabular-nums text-right`}>
+                    {s.generated_count}
+                  </td>
+                  <td className={`${TD_CLASS} text-right`}>
+                    {canWrite && (
                       <div
-                        className="flex justify-end gap-2"
+                        className="flex justify-end gap-4 whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {canWrite && (
-                          <>
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              disabled={runningId !== null}
-                              onClick={() => runNow(s)}
-                            >
-                              {t('run_now')}
-                            </Button>
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              disabled={togglingId !== null}
-                              onClick={() => togglePause(s)}
-                            >
-                              {s.status === 'active' ? t('pause') : t('resume')}
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={deletingId !== null}
-                              onClick={() => deleteSchedule(s)}
-                            >
-                              {t('delete')}
-                            </Button>
-                          </>
-                        )}
+                        <button
+                          type="button"
+                          className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
+                          disabled={runningId !== null}
+                          onClick={() => runNow(s)}
+                        >
+                          {t('run_now')}
+                        </button>
+                        <button
+                          type="button"
+                          className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
+                          disabled={togglingId !== null}
+                          onClick={() => togglePause(s)}
+                        >
+                          {s.status === 'active' ? t('pause') : t('resume')}
+                        </button>
+                        <button
+                          type="button"
+                          className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
+                          disabled={deletingId !== null}
+                          onClick={() => deleteSchedule(s)}
+                        >
+                          {t('delete')}
+                        </button>
                       </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <NewRecurringScheduleDialog

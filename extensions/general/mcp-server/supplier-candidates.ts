@@ -10,10 +10,13 @@
  * fuzzy scores never auto-resolve.
  */
 
+import { vatNumbersMatch } from '@/lib/suppliers/match-supplier'
+
 export type SupplierRow = {
   id: string
   name: string
   org_number: string | null
+  vat_number?: string | null
 }
 
 export type SupplierCandidate = {
@@ -21,7 +24,7 @@ export type SupplierCandidate = {
   name: string
   org_number: string | null
   score: number
-  matched_on: 'org_number' | 'name'
+  matched_on: 'org_number' | 'vat_number' | 'name'
 }
 
 // Legal-form suffixes carry no identity signal and OCR/extraction includes
@@ -96,6 +99,7 @@ export function findSupplierCandidates(
   suppliers: SupplierRow[],
   extractedName: string | null,
   extractedOrgNumber: string | null,
+  extractedVatNumber: string | null = null,
   options: { limit?: number; minScore?: number } = {},
 ): SupplierCandidate[] {
   const limit = options.limit ?? 5
@@ -114,6 +118,19 @@ export function findSupplierCandidates(
         org_number: s.org_number,
         score: 1,
         matched_on: 'org_number',
+      })
+      continue
+    }
+    // The only identifier a foreign supplier prints: extraction leaves
+    // orgNumber null for non-Swedish entities by design, so without this a
+    // renamed EU supplier has no exact key left at all.
+    if (extractedVatNumber && vatNumbersMatch(s.vat_number, extractedVatNumber)) {
+      scored.push({
+        supplier_id: s.id,
+        name: s.name,
+        org_number: s.org_number,
+        score: 1,
+        matched_on: 'vat_number',
       })
       continue
     }

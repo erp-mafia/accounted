@@ -1,6 +1,8 @@
 /**
  * Tests for skills over MCP: registry, discovery tools, and resource exposure.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
 import { workflowSkills, findSkill, SKILL_URI_PREFIX, skillUri, __resetAtomCache } from '../skills'
@@ -136,6 +138,25 @@ describe('Skills registry', () => {
       expect(s.tags.length).toBeGreaterThan(0)
       expect(s.tier).toBe('workflow')
     }
+  })
+
+  it('does not advertise unsupported built-in e-invoice delivery', () => {
+    const invoiceComplianceAtom = readFileSync(
+      join(process.cwd(), '.claude/skills/swedish-invoice-compliance/SKILL.md'),
+      'utf8',
+    )
+    const allBodies = [...skills.map((skill) => skill.body), invoiceComplianceAtom].join('\n')
+
+    expect(allBodies).not.toMatch(/Accounted\s+(?:renders|generates|produces)[^.\n]*EN\s*16931/i)
+    expect(allBodies).not.toMatch(/Accounted\s+(?:handles|sends|delivers)[^.\n]*Peppol/i)
+
+    for (const slug of ['invoicing-rules', 'customer-onboarding']) {
+      const skill = skills.find((candidate) => candidate.slug === slug)
+      expect(skill?.body).toMatch(/external e-invoice provider/i)
+      expect(skill?.body).toContain('gnubok_mark_invoice_as_sent')
+    }
+    expect(invoiceComplianceAtom).toMatch(/external e-invoice provider/i)
+    expect(invoiceComplianceAtom).toContain('gnubok_mark_invoice_as_sent')
   })
 
   it('findSkill resolves the workflow skill or null (sync workflow lookup)', async () => {

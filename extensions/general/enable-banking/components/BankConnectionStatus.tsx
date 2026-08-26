@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -8,12 +9,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn, formatDate } from '@/lib/utils'
-import { getDaysUntilExpiry, isConsentExpiringSoon } from '../lib/api-client'
-import Link from 'next/link'
-import { ChevronDown, Loader2 } from 'lucide-react'
+import { ChevronRight, Loader2, MoreHorizontal } from 'lucide-react'
+import { getConnectionUiState } from '../lib/connection-state'
 import type { BankConnection } from '@/types'
 
 interface BankConnectionStatusProps {
@@ -27,10 +28,11 @@ interface BankConnectionStatusProps {
 
 /**
  * One bank connection as a flat hairline row (Fönster settings language):
- * bank name + state on one line with quiet actions on the right, live
- * warnings as compact warning-tone lines underneath, and the accounts as an
- * indented sub-list. Normal state (Aktiv) is muted text; a Badge appears
- * only when the row deviates (expired/error/pending).
+ * identity + state on one line, exactly ONE primary action decided by the
+ * derived UI state, every secondary action behind a "..." menu, and the
+ * details (accounts, IBAN, balances, initial backfill) behind a collapsed
+ * disclosure. The page-level attention sentence lives in the panel, not
+ * here (design convention 6: one .attn per page).
  */
 export function BankConnectionStatus({
   connection,
@@ -40,22 +42,10 @@ export function BankConnectionStatus({
   onManageAccounts,
   isSyncing = false,
 }: BankConnectionStatusProps) {
-  const daysUntilExpiry = getDaysUntilExpiry(connection.consent_expires)
-  const isExpiring = isConsentExpiringSoon(connection.consent_expires)
+  const [now] = useState(() => Date.now())
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
-  type StatusEntry =
-    | { kind: 'text'; label: string }
-    | { kind: 'badge'; label: string; variant: 'warning' | 'destructive' | 'secondary' }
-
-  const statusConfig: Record<string, StatusEntry> = {
-    active: { kind: 'text', label: 'Aktiv' },
-    pending: { kind: 'badge', label: 'Väntar', variant: 'warning' },
-    expired: { kind: 'badge', label: 'Utgånget samtycke', variant: 'warning' },
-    error: { kind: 'badge', label: 'Fel', variant: 'destructive' },
-    revoked: { kind: 'badge', label: 'Bortkopplad', variant: 'secondary' },
-  }
-
-  const status = statusConfig[connection.status] || statusConfig.error
+  const uiState = getConnectionUiState(connection, now)
 
   // Parse accounts from connection
   const accounts = (connection.accounts_data as Array<{
@@ -67,10 +57,7 @@ export function BankConnectionStatus({
     balance_updated_at?: string
     enabled?: boolean
   }>) || []
-
   const enabledCount = accounts.filter((a) => a.enabled !== false).length
-
-  const [now] = useState(() => Date.now())
 
   function formatBalanceAge(updatedAt: string): string {
     const hoursAgo = Math.floor((now - new Date(updatedAt).getTime()) / (1000 * 60 * 60))
@@ -80,250 +67,313 @@ export function BankConnectionStatus({
     return `${daysAgo}d sedan`
   }
 
-  const isConnectionExpired = connection.status === 'expired'
-  const isConnectionError = connection.status === 'error'
-  const errorMessage = connection.error_message ?? ''
-
-  // "Aktiv" is a stored status, not a live fact: a session killed bank-side
-  // keeps the row at 'active' until something tries to use it. The nightly
-  // health probe catches most of those, but a connection that has gone quiet
-  // for days is worth saying out loud rather than presenting old balances as
-  // current. The cron runs daily, so 3 days is several missed runs.
-  const STALE_SYNC_DAYS = 3
-  const daysSinceSync = connection.last_synced_at
-    ? Math.floor((now - new Date(connection.last_synced_at).getTime()) / (1000 * 60 * 60 * 24))
-    : null
-  const isStale =
-    connection.status === 'active' && daysSinceSync !== null && daysSinceSync >= STALE_SYNC_DAYS
-  const neverSynced = connection.status === 'active' && !connection.last_synced_at
-
-  return (
-    <div className="border-b border-border px-1 py-3">
-      {/* Main line: identity + state left, quiet actions right */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+  // In-flight authorization: the row exists but the user is still at the
+  // bank. Render it as a quiet spinner row instead of hiding it (the connect
+  // button lock alone made this state invisible).
+  if (uiState === 'pending') {
+    return (
+      <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-1 py-3">
         <span className="text-sm font-medium">{connection.bank_name}</span>
-        {status.kind === 'badge' ? (
-          <Badge variant={status.variant}>{status.label}</Badge>
-        ) : (
-          <span className="text-xs text-muted-foreground">{status.label}</span>
-        )}
-        {connection.last_synced_at && (
-          <span className="text-xs text-muted-foreground tabular-nums">
-            Synkad {formatDate(connection.last_synced_at)}
-          </span>
-        )}
-        {/* Consent renewal date as quiet metadata; the expired state already
-            carries its own warning line below. */}
-        {connection.consent_expires && !isConnectionExpired && (
-          <span className="text-xs text-muted-foreground tabular-nums">
-            Samtycke till {formatDate(connection.consent_expires)}
-          </span>
-        )}
-        <span className="ml-auto flex shrink-0 flex-wrap items-center gap-1">
-          {(isConnectionExpired || isConnectionError) && onReconnect && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-1 text-muted-foreground hover:text-foreground">
-                  Förnya anslutning
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {/* Let the user pick the account type for the bank login. The
-                    server reuses the last-used type by default, but some banks
-                    (notably Handelsbanken) only sign with one of them: e.g. an
-                    AB owner who signs with a personal Mobile BankID needs
-                    "Privatkonto", not the company default "Företagskonto". */}
-                <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                  Logga in på banken som
-                </DropdownMenuLabel>
-                <DropdownMenuItem onSelect={() => onReconnect(connection, 'business')}>
-                  Företagskonto
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onReconnect(connection, 'personal')}>
-                  Privatkonto
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-          {isConnectionError && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => onSync(connection.id)}
-              disabled={isSyncing}
-            >
-              {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
-              Försök igen
-            </Button>
-          )}
-          {connection.status === 'active' && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => onSync(connection.id)}
-              disabled={isSyncing}
-            >
-              {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
-              Synka
-            </Button>
-          )}
-          {onManageAccounts && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => onManageAccounts(connection.id)}
-            >
-              Välj konton
-            </Button>
-          )}
+        <span className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Väntar på banken…
+        </span>
+        <span className="ml-auto shrink-0">
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
-            className="text-muted-foreground hover:text-destructive"
+            className="text-muted-foreground hover:text-foreground"
             onClick={() => onDisconnect(connection.id)}
           >
-            Koppla från
+            Avbryt
           </Button>
         </span>
       </div>
+    )
+  }
 
-      {/* Error message: live warning, compact warning-tone lines */}
-      {isConnectionError && errorMessage && (
-        <>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-attn">{errorMessage}</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Du kan också{' '}
-            <Link href="/import?mode=bank" className="underline underline-offset-2 hover:text-foreground">
-              importera transaktioner via bankfil
-            </Link>
-          </p>
-        </>
-      )}
+  // Status display: muted text for the normal state, Badge only when the row
+  // deviates (design convention 5).
+  type StatusEntry =
+    | { kind: 'text'; label: string }
+    | { kind: 'badge'; label: string; variant: 'warning' | 'destructive' | 'secondary' }
+  const statusDisplay: StatusEntry = (() => {
+    switch (uiState) {
+      case 'pending_selection':
+        return { kind: 'badge', label: 'Välj konton', variant: 'warning' }
+      case 'error':
+        return { kind: 'badge', label: 'Fel', variant: 'destructive' }
+      case 'expired':
+        return { kind: 'badge', label: 'Utgånget samtycke', variant: 'warning' }
+      case 'expiring':
+        return { kind: 'badge', label: 'Går ut snart', variant: 'warning' }
+      default:
+        return { kind: 'text', label: 'Aktiv' }
+    }
+  })()
 
-      {/* Expired consent notice */}
-      {isConnectionExpired && (
-        <>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-attn">
-            PSD2-samtycket har löpt ut. Förnya anslutningen för att återuppta synkroniseringen.
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Medan du väntar kan du{' '}
-            <Link href="/import?mode=bank" className="underline underline-offset-2 hover:text-foreground">
-              importera transaktioner via bankfil
-            </Link>
-          </p>
-        </>
-      )}
+  const isExpired = uiState === 'expired'
+  const canReconnect = !!onReconnect
+  const canSync = connection.status === 'active' || connection.status === 'error'
 
-      {/* Gone quiet: the row still says Aktiv, but nothing has confirmed the
-          session is alive for days. */}
-      {isStale && (
-        <p className="mt-1 text-[12.5px] leading-relaxed text-attn">
-          Ingen synkning på {daysSinceSync} dagar. Saldon och transaktioner kan vara inaktuella:
-          kör Synka för att kontrollera att anslutningen fortfarande fungerar.
-        </p>
-      )}
-      {neverSynced && (
-        <p className="mt-1 text-[12.5px] leading-relaxed text-attn">
-          Anslutningen har aldrig synkat. Kör Synka för att hämta transaktioner.
-        </p>
-      )}
-
-      {/* Consent expiry warning (for active connections) */}
-      {!isConnectionExpired && isExpiring && daysUntilExpiry !== null && (
-        <p className="mt-1 text-[12.5px] leading-relaxed text-attn">
-          Samtycket går ut om {daysUntilExpiry} {daysUntilExpiry === 1 ? 'dag' : 'dagar'}.
-          Förnya genom att ansluta igen.
-        </p>
-      )}
-
-      {/* Initial backfill summary: shows what the bank actually returned vs what we asked for. */}
-      {connection.initial_sync_completed_at && connection.initial_sync_requested_from && (() => {
-        const requested = connection.initial_sync_requested_from
-        const min = connection.initial_sync_returned_min_date
-        const max = connection.initial_sync_returned_max_date
-        // Truncation = bank returned less history than requested. 7-day grace
-        // for off-by-one + weekend posting differences.
-        let truncated = false
-        if (min && requested) {
-          const requestedTime = new Date(requested).getTime()
-          const minTime = new Date(min).getTime()
-          truncated = (minTime - requestedTime) > 7 * 24 * 60 * 60 * 1000
-        }
+  // Exactly ONE primary action per state; everything else goes in the menu.
+  function renderPrimaryAction() {
+    switch (uiState) {
+      case 'pending_selection':
+        return onManageAccounts ? (
+          <Button size="sm" onClick={() => onManageAccounts(connection.id)}>
+            Välj konton
+          </Button>
+        ) : null
+      case 'error':
         return (
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span>
-              Initial historik:{' '}
-              <span className="tabular-nums">
-                {min ? formatDate(min) : '-'} → {max ? formatDate(max) : '-'}
-              </span>
-              {' '}(begärde <span className="tabular-nums">{formatDate(requested)}</span>)
-            </span>
-            {truncated && (
-              <Badge variant="outline">
-                Bankens API returnerade kortare period än begärt: använd SIE-import för äldre data
-              </Badge>
-            )}
-          </div>
+          <Button size="sm" onClick={() => onSync(connection.id)} disabled={isSyncing}>
+            {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+            Försök igen
+          </Button>
         )
-      })()}
+      case 'expired':
+      case 'expiring':
+        // No psu override: the server reuses the stored psu_type, so renewal
+        // is one click. Switching account type lives in the menu.
+        return canReconnect ? (
+          <Button size="sm" onClick={() => onReconnect!(connection)}>
+            Förnya samtycke
+          </Button>
+        ) : null
+      case 'stale':
+      case 'never_synced':
+        return (
+          <Button size="sm" onClick={() => onSync(connection.id)} disabled={isSyncing}>
+            {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+            Synka nu
+          </Button>
+        )
+      default:
+        // Healthy active row: no primary needed; sync stays reachable as a
+        // quiet ghost button.
+        return (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => onSync(connection.id)}
+            disabled={isSyncing}
+          >
+            {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+            Synka
+          </Button>
+        )
+    }
+  }
 
-      {/* Accounts: indented flat sub-list instead of boxed rows */}
-      {accounts.length > 0 && (
-        <div className="ml-3 mt-3 border-l border-border pl-4">
-          <div className="flex items-center justify-between">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              Konton
-            </p>
-            <p className="text-xs text-muted-foreground tabular-nums">
-              {enabledCount} av {accounts.length} synkas
-            </p>
-          </div>
-          {accounts.map((account) => {
-            const isDisabled = account.enabled === false
-            return (
-              <div
-                key={account.uid}
-                className={cn(
-                  'flex flex-wrap items-center gap-x-3 gap-y-1 py-2',
-                  isDisabled && 'opacity-60',
-                )}
+  const primaryIsSync = uiState === 'stale' || uiState === 'never_synced' || uiState === 'active' || uiState === 'error'
+  const primaryIsReconnect = uiState === 'expired' || uiState === 'expiring'
+
+  return (
+    <div className="border-b border-border px-1 py-3">
+      {/* Main line: identity + state left, one primary action + menu right */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-sm font-medium">{connection.bank_name}</span>
+        {statusDisplay.kind === 'badge' ? (
+          <Badge variant={statusDisplay.variant}>{statusDisplay.label}</Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">{statusDisplay.label}</span>
+        )}
+        {uiState === 'pending_selection' ? (
+          <span className="text-xs text-muted-foreground">
+            {accounts.length} konton tillgängliga: inga transaktioner synkas ännu
+          </span>
+        ) : (
+          <>
+            {connection.last_synced_at && (
+              <span className="text-xs text-muted-foreground tabular-nums">
+                Synkad {formatDate(connection.last_synced_at)}
+              </span>
+            )}
+            {connection.consent_expires && !isExpired && (
+              <span className="text-xs text-muted-foreground tabular-nums">
+                Samtycke till {formatDate(connection.consent_expires)}
+              </span>
+            )}
+          </>
+        )}
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {renderPrimaryAction()}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground hover:text-foreground"
+                aria-label={`Fler åtgärder för ${connection.bank_name}`}
               >
-                <span className="text-sm">
-                  {account.name || account.iban || 'Okänt konto'}
-                </span>
-                {isDisabled && (
-                  <Badge variant="outline" className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                    Synkas ej
-                  </Badge>
-                )}
-                {account.iban && (
-                  <span className="text-xs text-muted-foreground">
-                    {account.iban.replace(/(.{4})/g, '$1 ').trim()}
-                  </span>
-                )}
-                {account.balance !== undefined && (
-                  <span className="ml-auto inline-flex shrink-0 items-baseline gap-2">
-                    {account.balance_updated_at && (
-                      <span className="text-[10px] text-muted-foreground">
-                        {formatBalanceAge(account.balance_updated_at)}
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {uiState === 'pending_selection' ? (
+                <DropdownMenuItem onSelect={() => onDisconnect(connection.id)}>
+                  Avbryt
+                </DropdownMenuItem>
+              ) : (
+                <>
+                  {onManageAccounts && (
+                    <DropdownMenuItem onSelect={() => onManageAccounts(connection.id)}>
+                      Välj konton
+                    </DropdownMenuItem>
+                  )}
+                  {canSync && !primaryIsSync && (
+                    <DropdownMenuItem onSelect={() => onSync(connection.id)}>
+                      Synka
+                    </DropdownMenuItem>
+                  )}
+                  {canReconnect && !primaryIsReconnect && (
+                    <DropdownMenuItem onSelect={() => onReconnect!(connection)}>
+                      Förnya samtycke
+                    </DropdownMenuItem>
+                  )}
+                  {canReconnect && (
+                    <>
+                      <DropdownMenuSeparator />
+                      {/* Some banks (notably Handelsbanken) only sign with one
+                          account type: keep the explicit choice reachable even
+                          though the primary renew reuses the stored type. */}
+                      <DropdownMenuLabel className="text-xs font-normal normal-case tracking-normal">
+                        Förnya och logga in som
+                      </DropdownMenuLabel>
+                      <DropdownMenuItem onSelect={() => onReconnect!(connection, 'business')}>
+                        Företagskonto
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => onReconnect!(connection, 'personal')}>
+                        Privatkonto
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link href="/import?mode=bank">Importera bankfil</Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onSelect={() => onDisconnect(connection.id)}
+                  >
+                    Koppla från
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </span>
+      </div>
+
+      {/* Error detail: the page-level .attn owns the ochre sentence; the
+          row's own message stays quiet. */}
+      {uiState === 'error' && connection.error_message && (
+        <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+          {connection.error_message}
+        </p>
+      )}
+
+      {/* Details behind a collapsed disclosure: accounts, IBAN, balances,
+          initial backfill. Expired rows never show balances (stale numbers
+          would read as current). */}
+      {accounts.length > 0 && uiState !== 'pending_selection' && (
+        <div className="mt-1">
+          <button
+            type="button"
+            onClick={() => setDetailsOpen((v) => !v)}
+            aria-expanded={detailsOpen}
+            className="flex min-h-9 items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+          >
+            <ChevronRight
+              className={cn('h-3.5 w-3.5 transition-transform duration-150', detailsOpen && 'rotate-90')}
+            />
+            <span className="tabular-nums">
+              {enabledCount} av {accounts.length} konton synkas
+            </span>
+          </button>
+
+          {detailsOpen && (
+            <div className="ml-3 border-l border-border pl-4">
+              {/* Initial backfill summary: what the bank actually returned vs
+                  what we asked for. Diagnostics, so it lives in the details. */}
+              {!isExpired &&
+                connection.initial_sync_completed_at &&
+                connection.initial_sync_requested_from &&
+                (() => {
+                  const requested = connection.initial_sync_requested_from
+                  const min = connection.initial_sync_returned_min_date
+                  const max = connection.initial_sync_returned_max_date
+                  // Truncation = bank returned less history than requested.
+                  // 7-day grace for off-by-one + weekend posting differences.
+                  let truncated = false
+                  if (min && requested) {
+                    const requestedTime = new Date(requested).getTime()
+                    const minTime = new Date(min).getTime()
+                    truncated = minTime - requestedTime > 7 * 24 * 60 * 60 * 1000
+                  }
+                  return (
+                    <div className="flex flex-wrap items-center gap-2 py-2 text-xs text-muted-foreground">
+                      <span>
+                        Initial historik:{' '}
+                        <span className="tabular-nums">
+                          {min ? formatDate(min) : '-'} → {max ? formatDate(max) : '-'}
+                        </span>{' '}
+                        (begärde <span className="tabular-nums">{formatDate(requested)}</span>)
+                      </span>
+                      {truncated && (
+                        <Badge variant="outline">
+                          Bankens API returnerade kortare period än begärt: använd SIE-import för äldre data
+                        </Badge>
+                      )}
+                    </div>
+                  )
+                })()}
+
+              {accounts.map((account) => {
+                const isDisabled = account.enabled === false
+                return (
+                  <div
+                    key={account.uid}
+                    className={cn(
+                      'flex flex-wrap items-center gap-x-3 gap-y-1 py-2',
+                      isDisabled && 'opacity-60',
+                    )}
+                  >
+                    <span className="text-sm">
+                      {account.name || account.iban || 'Okänt konto'}
+                    </span>
+                    {isDisabled && (
+                      <Badge variant="outline" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        Synkas ej
+                      </Badge>
+                    )}
+                    {account.iban && (
+                      <span className="text-xs text-muted-foreground">
+                        {account.iban.replace(/(.{4})/g, '$1 ').trim()}
                       </span>
                     )}
-                    <span className="text-sm tabular-nums">
-                      {new Intl.NumberFormat('sv-SE', {
-                        style: 'currency',
-                        currency: account.currency,
-                      }).format(account.balance)}
-                    </span>
-                  </span>
-                )}
-              </div>
-            )
-          })}
+                    {!isExpired && account.balance !== undefined && (
+                      <span className="ml-auto inline-flex shrink-0 items-baseline gap-2">
+                        {account.balance_updated_at && (
+                          <span className="text-[10px] text-muted-foreground">
+                            {formatBalanceAge(account.balance_updated_at)}
+                          </span>
+                        )}
+                        <span className="text-sm tabular-nums">
+                          {new Intl.NumberFormat('sv-SE', {
+                            style: 'currency',
+                            currency: account.currency,
+                          }).format(account.balance)}
+                        </span>
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

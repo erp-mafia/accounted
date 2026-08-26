@@ -69,11 +69,17 @@ export async function generateBalanceSheet(
     'credit' // Equity/liabilities have credit normal balance
   )
 
-  // Calculate period result from income/expense accounts (class 3-8)
-  // Before year-end closing, this result lives on class 3-8 accounts and must
-  // be included in equity for the balance sheet to balance.
+  // Calculate the period result from every row OUTSIDE the balance-sheet
+  // classes (1-2), not just class 3-8. Invariant: synthetic result =
+  // everything outside the balance-sheet classes, so a resultatavslut that
+  // was posted to 2099 but whose counter-line landed on a class 0/9 or
+  // class-less account self-cancels here instead of double-counting the
+  // result (2099 already carries it inside the class 2 sections). The
+  // negated range is deliberate: it keeps null/undefined account_class rows
+  // in the result. A genuinely untransferred prior-year result still yields
+  // a real differens and the imbalance diagnosis below.
   const incomeExpenseRows = rows.filter(
-    (r) => r.account_class >= 3 && r.account_class <= 8
+    (r) => !(r.account_class >= 1 && r.account_class <= 2)
   )
   const periodResult = Math.round(
     incomeExpenseRows.reduce(

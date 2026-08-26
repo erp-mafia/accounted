@@ -21,6 +21,21 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn().mockResolvedValue({ id: 'doc-1' }),
 }))
 
+// The staged (deferred) upload path only exists when AI is configured on this
+// deployment: an unconfigured one skips synchronously (ai_unconfigured). These
+// tests simulate a configured deployment; the model call itself is mocked.
+vi.mock('@/lib/ai', () => ({
+  getAiStatus: () => ({
+    provider: 'bedrock',
+    configured: true,
+    reason: 'ok',
+    capabilities: { pdfNative: true, imageInput: true, toolUse: true, forcedToolChoice: true, strictJsonSchema: false },
+    models: { assistant: 'm', heavy: 'm', extraction: 'm' },
+    pdfMode: 'native',
+    assistantAvailable: true,
+  }),
+}))
+
 vi.mock('@/lib/rate-limits/inbox', () => ({
   checkInboxUploadRateLimit: vi.fn().mockResolvedValue({ ok: true }),
 }))
@@ -37,7 +52,16 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
 })
 
+// The deferred extraction worker builds its own cookieless service client
+// (the request-scoped one may be gone once the response is flushed). Route
+// it to the same mock supabase so the CAS flip is observable.
+vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
+  return { ...actual, createServiceClientNoCookies: vi.fn() }
+})
+
 import { extractInvoiceFields, emptyResult } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 
 function findRoute(method: string, path: string) {
   return invoiceInboxExtension.apiRoutes!.find(
@@ -47,16 +71,32 @@ function findRoute(method: string, path: string) {
 
 const uploadRoute = findRoute('POST', '/upload')
 
-// Build the supabase mock the upload handler needs:
+interface FlipCapture {
+  payload?: Record<string, unknown>
+  filters: Array<[string, unknown]>
+}
+
+// Build the supabase mock the upload handler and the deferred worker need:
 //   .from('invoice_inbox_items').insert(row).select('*').single() → { data: row, error: null }
+//   .from('invoice_inbox_items').update(p).eq().eq().select('id') → CAS flip (captured)
 //   .from('suppliers').select().eq().eq()... .maybeSingle() → { data: null }
-function makeSupabase(captured: { row?: Record<string, unknown> }) {
+function makeSupabase(
+  captured: { row?: Record<string, unknown> },
+  flip: FlipCapture = { filters: [] },
+) {
   const supplierChain = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     ilike: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
     maybeSingle: vi.fn().mockResolvedValue({ data: null }),
+  }
+  const updateChain = {
+    eq: vi.fn((...args: [string, unknown]) => {
+      flip.filters.push(args)
+      return updateChain
+    }),
+    select: vi.fn().mockResolvedValue({ data: [{ id: 'inbox-1' }], error: null }),
   }
   const inboxChain = {
     insert: vi.fn((row: Record<string, unknown>) => {
@@ -69,6 +109,10 @@ function makeSupabase(captured: { row?: Record<string, unknown> }) {
           }),
         }),
       }
+    }),
+    update: vi.fn((payload: Record<string, unknown>) => {
+      flip.payload = payload
+      return updateChain
     }),
   }
   return {
@@ -120,26 +164,59 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('POST /upload: page-count gate (issue #553)', () => {
-  it('skips extraction and marks the row as skipped when PDF has more than 3 pages', async () => {
+describe('POST /upload: staged extraction + page-count gate (issue #553)', () => {
+  it('defers long PDFs: responds processing, then slices to 3 pages and flips to received', async () => {
     const captured: { row?: Record<string, unknown> } = {}
-    const supabase = makeSupabase(captured)
+    const flip: FlipCapture = { filters: [] }
+    const supabase = makeSupabase(captured, flip)
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({
+      data: emptyResult(),
+      rawText: 'ok',
+    })
 
     const req = await makeUploadRequest(6)
     const res = await uploadRoute.handler(req, buildCtx(supabase))
     const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
 
+    // The response is the receipt ack: the row exists, extraction has not
+    // landed, nothing is reported skipped.
     expect(status).toBe(200)
-    expect(extractInvoiceFields).not.toHaveBeenCalled()
-    expect(captured.row?.extraction_skipped).toBe(true)
-    expect(body.data.extraction_skipped).toBe(true)
-    expect(body.data.skip_reason).toBe('too_many_pages')
+    expect(body.data.status).toBe('processing')
+    expect(body.data.extracted_data).toBeNull()
+    expect(body.data.extraction_skipped).toBe(false)
+    expect(body.data.skip_reason).toBeNull()
     expect(body.data.page_count).toBe(6)
+    expect(captured.row?.status).toBe('processing')
+    expect(captured.row?.extracted_data).toBeNull()
+    expect(captured.row?.extraction_skipped).toBe(false)
+
+    // The deferred worker extracts from the sliced copy, not the original.
+    await vi.waitFor(() => expect(extractInvoiceFields).toHaveBeenCalledOnce())
+    const sentBuffer = vi.mocked(extractInvoiceFields).mock.calls[0][0].buffer
+    const sentPdf = await PDFDocument.load(sentBuffer)
+    expect(sentPdf.getPageCount()).toBe(3)
+
+    // ...and CAS-flips the processing row to received, with the truncation
+    // recorded in extracted_data.pages rather than as a skip.
+    await vi.waitFor(() => expect(flip.payload).toBeDefined())
+    expect(flip.payload?.status).toBe('received')
+    expect(flip.payload?.extraction_skipped).toBe(false)
+    expect((flip.payload?.extracted_data as { pages?: unknown })?.pages).toEqual({
+      total: 6,
+      analyzed: 3,
+    })
+    expect(flip.filters).toEqual([
+      ['id', 'inbox-1'],
+      ['status', 'processing'],
+    ])
   })
 
-  it('runs extraction normally for PDFs at or below the page-count limit', async () => {
+  it('defers PDFs at or below the page-count limit and extracts the full buffer', async () => {
     const captured: { row?: Record<string, unknown> } = {}
-    const supabase = makeSupabase(captured)
+    const flip: FlipCapture = { filters: [] }
+    const supabase = makeSupabase(captured, flip)
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
     vi.mocked(extractInvoiceFields).mockResolvedValueOnce({
       data: emptyResult(),
       rawText: 'ok',
@@ -150,14 +227,26 @@ describe('POST /upload: page-count gate (issue #553)', () => {
     const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
 
     expect(status).toBe(200)
-    expect(extractInvoiceFields).toHaveBeenCalledOnce()
-    expect(captured.row?.extraction_skipped).toBe(false)
+    expect(body.data.status).toBe('processing')
     expect(body.data.extraction_skipped).toBe(false)
     expect(body.data.skip_reason).toBeNull()
     expect(body.data.page_count).toBe(2)
+
+    await vi.waitFor(() => expect(extractInvoiceFields).toHaveBeenCalledOnce())
+    const sentBuffer = vi.mocked(extractInvoiceFields).mock.calls[0][0].buffer
+    const sentPdf = await PDFDocument.load(sentBuffer)
+    expect(sentPdf.getPageCount()).toBe(2)
+
+    await vi.waitFor(() => expect(flip.payload).toBeDefined())
+    expect(flip.payload?.status).toBe('received')
+    // No slice happened, so no pages truncation marker.
+    expect((flip.payload?.extracted_data as { pages?: unknown })?.pages).toBeUndefined()
   })
 
-  it('honors client-side skip_extraction=true with skip_reason=client_opt_out', async () => {
+  it('honors client-side skip_extraction=true synchronously with skip_reason=client_opt_out', async () => {
+    // The BYO-extraction opt-out must stay on the synchronous path: the
+    // caller PUTs its parsed fields right after upload, and a deferred flip
+    // would overwrite them.
     const captured: { row?: Record<string, unknown> } = {}
     const supabase = makeSupabase(captured)
 
@@ -172,7 +261,9 @@ describe('POST /upload: page-count gate (issue #553)', () => {
     const { body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
 
     expect(extractInvoiceFields).not.toHaveBeenCalled()
+    expect(body.data.status).toBe('received')
     expect(body.data.extraction_skipped).toBe(true)
     expect(body.data.skip_reason).toBe('client_opt_out')
+    expect(captured.row?.status).toBe('received')
   })
 })

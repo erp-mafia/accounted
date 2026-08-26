@@ -165,7 +165,7 @@ export default function MunicipalityCombobox({
       {isOpen && filtered.length > 0 && (
         <div
           ref={listRef}
-          className="absolute z-50 top-full left-0 mt-1 w-full max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md"
+          className="absolute z-50 top-full left-0 mt-1 w-full max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md"
         >
           {filtered.map((k, i) => {
             const isHighlighted = i === highlightedIndex

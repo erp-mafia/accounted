@@ -1,0 +1,26 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: momsredovisning-nettning
+  order: 22
+  name: 'Momsredovisning (nettning)'
+  category: vat
+  entity_type: all
+  description: >-
+    Nettning av momskonton vid momsdeklaration. Justera konton och belopp efter din deklaration.
+lines:
+  - account: '2611'
+    label: 'Utgående moms 25%'
+    side: debit
+    type: business
+    ratio: 0.5
+  - account: '2641'
+    label: 'Ingående moms'
+    side: credit
+    type: business
+    ratio: 0.3
+  - account: '2650'
+    label: 'Redovisningskonto moms'
+    side: credit
+    type: business
+    ratio: 0.2

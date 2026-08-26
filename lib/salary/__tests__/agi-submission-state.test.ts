@@ -255,6 +255,80 @@ describe('resolveRunAgiSubmission', () => {
 })
 
 /**
+ * Once the kvittens reconciliation (cron / post-connect refresh) has promoted
+ * the declaration it deletes the period cache, and GET /agi/status serves the
+ * receipt from agi_declarations instead (#1597). That record carries no
+ * salaryRunId (the period's single row is repointed at a correction run when
+ * one regenerates its XML), so ownership rests on the timestamps below.
+ */
+describe('resolveRunAgiSubmission: receipt served from agi_declarations', () => {
+  const filedRun: AgiFilingRun = {
+    id: 'r1',
+    agi_generated_at: '2026-07-13T09:00:00Z',
+    agi_submitted_at: '2026-07-14T08:30:00+00:00',
+  }
+
+  it('the run whose stamp matches signeradTid owns the receipt with its metadata', () => {
+    const record: AgiSubmissionState = {
+      status: 'signed',
+      kvittensnummer: 'K1',
+      signeradAv: '191212121212',
+      signeradTid: '2026-07-14T08:30:00Z',
+      submittedAt: '2026-07-14T08:30:00+00:00',
+      submittedAtEstimated: false,
+      updatedAt: '2026-07-14T08:30:00+00:00',
+      source: 'declaration',
+    }
+    expect(resolveRunAgiSubmission(filedRun, record)).toBe(record)
+    expect(resolveRunAgiKvittensnummer(filedRun, record)).toBe('K1')
+    expect(deriveAgiFilingState(filedRun, record)).toBe('signed')
+  })
+
+  it('without signeradTid the reconciliation-time stamp decides ownership', () => {
+    // Skatteverket omitted signeradTid: the reconciler stamped both the
+    // declaration and the run row with its own clock, and the record says so.
+    const estimated: AgiSubmissionState = {
+      status: 'signed',
+      kvittensnummer: 'K1',
+      signeradAv: '191212121212',
+      submittedAt: '2026-07-14T08:30:00+00:00',
+      submittedAtEstimated: true,
+      updatedAt: '2026-07-14T08:30:00+00:00',
+      source: 'declaration',
+    }
+    expect(resolveRunAgiSubmission(filedRun, estimated)).toBe(estimated)
+
+    // A stamp from another moment is another declaration's receipt.
+    const otherRun: AgiFilingRun = { ...filedRun, agi_submitted_at: '2026-06-01T10:00:00Z' }
+    expect(resolveRunAgiSubmission(otherRun, estimated)).toBeNull()
+    expect(resolveRunAgiKvittensnummer(otherRun, estimated)).toBeNull()
+  })
+
+  it('a correction run generated after the receipt does not inherit it', () => {
+    // The declaration row now points at the correction run, which is exactly
+    // why the record carries no salaryRunId: updatedAt (= submitted_at)
+    // predates the correction's XML, so it belongs to the original.
+    const record: AgiSubmissionState = {
+      status: 'signed',
+      kvittensnummer: 'K1',
+      signeradTid: '2026-07-14T08:30:00Z',
+      submittedAt: '2026-07-14T08:30:00+00:00',
+      updatedAt: '2026-07-14T08:30:00+00:00',
+      source: 'declaration',
+    }
+    const correction: AgiFilingRun = {
+      id: 'r2',
+      agi_generated_at: '2026-07-20T09:00:00Z',
+      agi_submitted_at: null,
+    }
+    expect(resolveRunAgiSubmission(correction, record)).toBeNull()
+    expect(deriveAgiFilingState(correction, record)).toBe('generated')
+    // The original keeps its number.
+    expect(resolveRunAgiKvittensnummer(filedRun, record)).toBe('K1')
+  })
+})
+
+/**
  * The salary run page (`app/(dashboard)/salary/runs/[id]/page.tsx`) and the
  * AGI panel (`components/salary/AGIPanel.tsx`) read the same period-scoped
  * record at TWO different scopes, and getting the split wrong is the bug this

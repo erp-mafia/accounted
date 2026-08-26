@@ -11,6 +11,7 @@ import { NextRequest } from 'next/server'
 
 const state = vi.hoisted(() => ({
   user: null as null | { id: string; app_metadata?: Record<string, unknown> },
+  sessionId: 'session-1' as string | null,
   authError: null as unknown,
   aal: null as null | { currentLevel: string; nextLevel: string },
   factors: null as null | { totp: Array<{ id: string; status: string }> },
@@ -36,6 +37,10 @@ const state = vi.hoisted(() => ({
   clientMemberships: [] as Array<{ company_id: string }>,
   // What the mocked resolveBrandByHost returns for the request host.
   hostBrand: null as null | { teamId: string },
+  signOut: vi.fn(async () => ({ error: null })),
+  // Row returned for user_preferences reads (the auto_logout mint lookup).
+  userPreferences: null as null | { auto_logout: boolean },
+  userPreferencesError: null as unknown,
 }))
 
 vi.mock('@supabase/ssr', () => ({
@@ -45,7 +50,10 @@ vi.mock('@supabase/ssr', () => ({
         data: { user: state.user },
         error: state.authError,
       })),
-      signOut: vi.fn(async () => ({ error: null })),
+      getClaims: vi.fn(async () => ({
+        data: { claims: state.sessionId ? { session_id: state.sessionId } : {} },
+      })),
+      signOut: state.signOut,
       mfa: {
         getAuthenticatorAssuranceLevel: vi.fn(async () => ({ data: state.aal })),
         listFactors: vi.fn(async () => ({ data: state.factors })),
@@ -71,7 +79,14 @@ vi.mock('@supabase/ssr', () => ({
             return undefined
           }
           if (prop === 'maybeSingle' || prop === 'single') {
-            return async () => ({ data: null, error: null })
+            return async () => ({
+              data:
+                table === 'user_preferences' && !state.userPreferencesError
+                  ? state.userPreferences
+                  : null,
+              error:
+                table === 'user_preferences' ? state.userPreferencesError : null,
+            })
           }
           return () => self
         },
@@ -89,6 +104,12 @@ vi.mock('@/lib/branding/resolve', async (importOriginal) => ({
 }))
 
 import { updateSession } from '../middleware'
+import {
+  createSessionTimeoutState,
+  signSessionTimeoutState,
+  verifySessionTimeoutState,
+} from '@/lib/auth/session-timeout'
+import { SESSION_TIMEOUT_COOKIE } from '@/lib/auth/session-timeout-shared'
 
 const ORIGIN = 'http://localhost:3000'
 const SIGNED_IN = { id: 'user-1', app_metadata: {} }
@@ -97,8 +118,8 @@ function locationOf(response: Response) {
   return response.headers.get('location')
 }
 
-function run(path: string) {
-  return updateSession(new NextRequest(`${ORIGIN}${path}`))
+function run(path: string, init?: RequestInit) {
+  return updateSession(new NextRequest(`${ORIGIN}${path}`, init))
 }
 
 function runAt(origin: string, path: string, headers?: Record<string, string>) {
@@ -109,11 +130,16 @@ describe('updateSession redirect destinations', () => {
   const envBackup = {
     require: process.env.NEXT_PUBLIC_REQUIRE_MFA,
     selfHosted: process.env.NEXT_PUBLIC_SELF_HOSTED,
+    signingSecret: process.env.SESSION_TIMEOUT_SECRET,
+    idleTimeout: process.env.NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS,
+    absoluteTimeout: process.env.NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS,
+    warning: process.env.NEXT_PUBLIC_SESSION_WARNING_MS,
   }
 
   beforeEach(() => {
     vi.clearAllMocks()
     state.user = null
+    state.sessionId = 'session-1'
     state.authError = null
     state.aal = null
     state.factors = null
@@ -124,8 +150,14 @@ describe('updateSession redirect destinations', () => {
     state.byraMemberships = []
     state.clientMemberships = []
     state.hostBrand = null
+    state.userPreferences = null
+    state.userPreferencesError = null
     delete process.env.NEXT_PUBLIC_REQUIRE_MFA
     delete process.env.NEXT_PUBLIC_SELF_HOSTED
+    process.env.SESSION_TIMEOUT_SECRET = 'middleware-test-secret'
+    delete process.env.NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS
+    delete process.env.NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS
+    delete process.env.NEXT_PUBLIC_SESSION_WARNING_MS
   })
 
   afterEach(() => {
@@ -133,6 +165,243 @@ describe('updateSession redirect destinations', () => {
     else process.env.NEXT_PUBLIC_REQUIRE_MFA = envBackup.require
     if (envBackup.selfHosted === undefined) delete process.env.NEXT_PUBLIC_SELF_HOSTED
     else process.env.NEXT_PUBLIC_SELF_HOSTED = envBackup.selfHosted
+    if (envBackup.signingSecret === undefined) delete process.env.SESSION_TIMEOUT_SECRET
+    else process.env.SESSION_TIMEOUT_SECRET = envBackup.signingSecret
+    if (envBackup.idleTimeout === undefined) delete process.env.NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS
+    else process.env.NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS = envBackup.idleTimeout
+    if (envBackup.absoluteTimeout === undefined) delete process.env.NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS
+    else process.env.NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS = envBackup.absoluteTimeout
+    if (envBackup.warning === undefined) delete process.env.NEXT_PUBLIC_SESSION_WARNING_MS
+    else process.env.NEXT_PUBLIC_SESSION_WARNING_MS = envBackup.warning
+  })
+
+  describe('session timeout enforcement', () => {
+    beforeEach(() => {
+      state.user = SIGNED_IN
+      process.env.NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS = '30000'
+      process.env.NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS = '60000'
+      process.env.NEXT_PUBLIC_SESSION_WARNING_MS = '10000'
+    })
+
+    async function signedCookie(args?: {
+      startedAt?: number
+      lastActivityAt?: number
+      method?: 'password' | 'bankid'
+      userId?: string
+      sessionId?: string | null
+      autoLogout?: boolean
+      legacy?: boolean
+    }) {
+      const stateValue = {
+        ...createSessionTimeoutState({
+          userId: args?.userId ?? 'user-1',
+          sessionId: args?.sessionId === undefined ? 'session-1' : args.sessionId,
+          method: args?.method ?? 'password',
+          // Default the opt-in to true: these tests exercise enforcement.
+          autoLogout: args?.autoLogout ?? true,
+          now: args?.startedAt ?? Date.now(),
+        }),
+        ...(args?.lastActivityAt === undefined
+          ? {}
+          : { lastActivityAt: args.lastActivityAt }),
+      }
+      if (args?.legacy) {
+        // Pre-toggle cookies carry no auto_logout snapshot.
+        delete (stateValue as { autoLogout?: boolean }).autoLogout
+      }
+      const signed = await signSessionTimeoutState(stateValue)
+      if (!signed) throw new Error('test signing secret missing')
+      return signed
+    }
+
+    it('initializes a signed, session-bound cookie for an existing session', async () => {
+      const response = await run('/settings/tax', {
+        headers: { cookie: 'gnubok-auth-method=bankid' },
+      })
+
+      expect(response.status).toBe(200)
+      const encoded = response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+      expect(encoded).toBeTruthy()
+      await expect(verifySessionTimeoutState(encoded)).resolves.toMatchObject({
+        userId: 'user-1',
+        sessionId: 'session-1',
+        method: 'bankid',
+      })
+      expect(response.cookies.get('gnubok-auth-method')?.value).toBe('')
+    })
+
+    it('rejects a tampered cookie and revokes only the current session', async () => {
+      const response = await run('/settings/tax', {
+        headers: { cookie: `${SESSION_TIMEOUT_COOKIE}=tampered.value` },
+      })
+
+      expect(response.status).toBe(307)
+      expect(new URL(locationOf(response)!).searchParams.get('reason')).toBe('absolute')
+      expect(state.signOut).toHaveBeenCalledWith({ scope: 'local' })
+      expect(response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value).toBe('')
+    })
+
+    it('redirects an idle session with its original method and deep link', async () => {
+      const now = Date.now()
+      const encoded = await signedCookie({
+        startedAt: now - 40_000,
+        lastActivityAt: now - 30_000,
+        method: 'bankid',
+      })
+
+      const response = await run('/reports/vat?period=2026-01', {
+        headers: { cookie: `${SESSION_TIMEOUT_COOKIE}=${encoded}` },
+      })
+
+      const url = new URL(locationOf(response)!)
+      expect(url.pathname).toBe('/login')
+      expect(url.searchParams.get('reason')).toBe('idle')
+      expect(url.searchParams.get('method')).toBe('bankid')
+      expect(url.searchParams.get('next')).toBe('/reports/vat?period=2026-01')
+      expect(state.signOut).toHaveBeenCalledWith({ scope: 'local' })
+    })
+
+    it('gives absolute expiry precedence and returns structured API errors', async () => {
+      const now = Date.now()
+      const encoded = await signedCookie({
+        startedAt: now - 60_000,
+        lastActivityAt: now - 30_000,
+      })
+
+      const response = await run('/api/invoices', {
+        headers: { cookie: `${SESSION_TIMEOUT_COOKIE}=${encoded}` },
+      })
+
+      expect(response.status).toBe(401)
+      expect(response.headers.get('x-session-timeout-reason')).toBe('absolute')
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'SESSION_EXPIRED', reason: 'absolute' },
+      })
+    })
+
+    it('does not let a forged Authorization header bypass normal APIs', async () => {
+      const now = Date.now()
+      const encoded = await signedCookie({ lastActivityAt: now - 30_000, startedAt: now - 40_000 })
+      const headers = {
+        authorization: 'Bearer forged',
+        cookie: `${SESSION_TIMEOUT_COOKIE}=${encoded}`,
+      }
+
+      expect((await run('/api/invoices', { headers })).status).toBe(401)
+      expect((await run('/api/v1/companies/c1/invoices', { headers })).status).toBe(200)
+    })
+
+    it('mints the cookie with the auto_logout opt-out default for new sessions', async () => {
+      const response = await run('/settings/tax')
+
+      expect(response.status).toBe(200)
+      const encoded = response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+      await expect(verifySessionTimeoutState(encoded)).resolves.toMatchObject({
+        autoLogout: false,
+      })
+    })
+
+    it('snapshots an opted-in preference at mint time', async () => {
+      state.userPreferences = { auto_logout: true }
+
+      const response = await run('/settings/tax')
+
+      const encoded = response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+      await expect(verifySessionTimeoutState(encoded)).resolves.toMatchObject({
+        autoLogout: true,
+      })
+    })
+
+    it('persists no snapshot when the preference read fails', async () => {
+      state.userPreferencesError = { message: 'connection reset' }
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      const response = await run('/settings/tax')
+
+      // Unknown preference: nothing minted, nobody logged out; the next
+      // request retries the read.
+      expect(response.status).toBe(200)
+      expect(response.cookies.get(SESSION_TIMEOUT_COOKIE)).toBeUndefined()
+      expect(state.signOut).not.toHaveBeenCalled()
+      errorSpy.mockRestore()
+    })
+
+    it('never logs out a session that has not opted in', async () => {
+      const now = Date.now()
+      // Far past both limits: without the opt-in the session must survive.
+      const encoded = await signedCookie({
+        startedAt: now - 600_000,
+        lastActivityAt: now - 600_000,
+        autoLogout: false,
+      })
+
+      const response = await run('/reports/vat', {
+        headers: { cookie: `${SESSION_TIMEOUT_COOKIE}=${encoded}` },
+      })
+
+      expect(response.status).toBe(200)
+      expect(state.signOut).not.toHaveBeenCalled()
+    })
+
+    it('upgrades a pre-toggle cookie in place instead of treating it as forged', async () => {
+      state.userPreferences = { auto_logout: true }
+      const startedAt = Date.now() - 5_000
+      const encoded = await signedCookie({ startedAt, legacy: true })
+
+      const response = await run('/settings/tax', {
+        headers: { cookie: `${SESSION_TIMEOUT_COOKIE}=${encoded}` },
+      })
+
+      expect(response.status).toBe(200)
+      expect(state.signOut).not.toHaveBeenCalled()
+      const upgraded = response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+      // Timers survive the upgrade: only the opt-in snapshot is added.
+      await expect(verifySessionTimeoutState(upgraded)).resolves.toMatchObject({
+        startedAt,
+        autoLogout: true,
+      })
+    })
+
+    it('starts a new timeout window when the Supabase session changes', async () => {
+      const encoded = await signedCookie({ sessionId: 'old-session' })
+
+      const response = await run('/settings/tax', {
+        headers: { cookie: `${SESSION_TIMEOUT_COOKIE}=${encoded}` },
+      })
+
+      expect(response.status).toBe(200)
+      const renewed = response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+      await expect(verifySessionTimeoutState(renewed)).resolves.toMatchObject({
+        sessionId: 'session-1',
+      })
+      expect(state.signOut).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── Public agent-discovery + docs surfaces ────────────────────────────
+
+  describe('anonymous access to agent-discovery and docs surfaces', () => {
+    it.each(['/llms.txt', '/llms-full.txt', '/docs/api', '/docs/api.md', '/docs/api/reference.md', '/docs/api/cookbook/quickstart.md'])(
+      'serves %s without a login bounce',
+      async (path) => {
+        const response = await run(path)
+        expect(response.status).not.toBe(307)
+        expect(locationOf(response)).toBeNull()
+      },
+    )
+
+    it('does not treat a /docs prefix on another route as public', async () => {
+      // /docsy-dashboard must still bounce: only /docs and /docs/* are public.
+      const response = await run('/docsy-dashboard')
+      expect(response.status).toBe(307)
+      expect(new URL(locationOf(response)!).pathname).toBe('/login')
+    })
+
+    it('serves docs to a signed-in user without redirecting away', async () => {
+      state.user = SIGNED_IN
+      const response = await run('/docs/api')
+      expect(response.status).not.toBe(307)
+    })
   })
 
   // ── Site 1: protected-route bounce ────────────────────────────────────

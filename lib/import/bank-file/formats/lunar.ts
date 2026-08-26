@@ -8,9 +8,18 @@
  * Encoding: UTF-8, may start with a BOM
  *
  * Notes:
- * - English headers distinguish Lunar from Nordea (Swedish headers)
+ * - Lunar exports in the app's display language, so the same file ships with
+ *   English (Date, Time, Title, Amount, Balance) or Swedish (Datum, Tid,
+ *   Titel, Belopp, Balans) headers. Both sets are accepted. Nordea is still
+ *   distinguishable: it has Transaktion and Saldo, never Titel and Balans.
  * - Amounts use comma as decimal separator but are quoted since the file
  *   delimiter is also comma
+ * - The delimiter is sniffed from the header line: the documented export is
+ *   comma-delimited, but a semicolon- or tab-delimited copy of the same
+ *   header set (a spreadsheet re-save, a localized export) carries the same
+ *   distinctive English columns and must not fall through to the manual
+ *   mapping flow, where the Time column used to be picked as the description
+ *   (issue #1671)
  * - Thousand separator is a space in the 2026 export (e.g. "12 345,00");
  *   legacy exports used a period (e.g. "1.234,56"). Both are handled.
  */
@@ -19,6 +28,60 @@ import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFi
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
+
+const LUNAR_DELIMITERS = [',', ';', '\t']
+
+/**
+ * Sniff the field delimiter from the header line. Comma is the documented
+ * Lunar export and wins ties; semicolon and tab are accepted when they split
+ * the header into more cells.
+ */
+function sniffLunarDelimiter(headerLine: string): string {
+  let best = ','
+  let bestCount = parseCSVLine(headerLine, ',').length
+  for (const delimiter of LUNAR_DELIMITERS.slice(1)) {
+    const count = parseCSVLine(headerLine, delimiter).length
+    if (count > bestCount) {
+      best = delimiter
+      bestCount = count
+    }
+  }
+  return best
+}
+
+function parseLunarHeader(headerLine: string, delimiter: string): string[] {
+  return parseCSVLine(headerLine, delimiter).map((h) => h.trim().toLowerCase().replace(/"/g, ''))
+}
+
+/**
+ * The Lunar header set: date, a description column ("title" in the 2026
+ * export, "text" in the legacy one), amount and balance, matched as whole
+ * cells so a Swedish "Datum" export or an English file with e.g. "Running
+ * balance" is never claimed. Exact cells are also what parse() resolves on,
+ * so detect() can never accept a header parse() then rejects.
+ */
+const DATE_HEADERS = ['date', 'datum']
+/** Ordered by preference: the 2026 export's "title", then the legacy "text". */
+const DESC_HEADERS = ['title', 'titel', 'text']
+const AMOUNT_HEADERS = ['amount', 'belopp']
+const BALANCE_HEADERS = ['balance', 'balans']
+
+function firstIndexOf(headers: string[], candidates: string[]): number {
+  for (const candidate of candidates) {
+    const index = headers.indexOf(candidate)
+    if (index !== -1) return index
+  }
+  return -1
+}
+
+function isLunarHeader(cells: string[]): boolean {
+  return (
+    firstIndexOf(cells, DATE_HEADERS) !== -1 &&
+    firstIndexOf(cells, DESC_HEADERS) !== -1 &&
+    firstIndexOf(cells, AMOUNT_HEADERS) !== -1 &&
+    firstIndexOf(cells, BALANCE_HEADERS) !== -1
+  )
+}
 
 function parseLunarAmount(value: string): number {
   // Lunar format: "12 345,00" (2026, space thousands) or "1.234,56" (legacy,
@@ -34,22 +97,17 @@ function parseLunarAmount(value: string): number {
 export const lunarFormat: BankFileFormat = {
   id: 'lunar',
   name: 'Lunar',
-  description: 'Lunar CSV (comma-delimited, English headers)',
+  description: 'Lunar CSV (comma-delimited, English or Swedish headers)',
   fileExtensions: ['.csv', '.txt'],
 
   detect(content: string, _filename: string): boolean {
     const prepared = prepareContent(content)
-    const firstLine = prepared.split('\n')[0]?.toLowerCase() || ''
-    // Lunar: comma-delimited with English headers
-    // Must NOT contain semicolons, must have "date", "amount", "balance" and a
-    // description column: "title" (2026 export) or "text" (legacy export)
-    return (
-      !firstLine.includes(';') &&
-      firstLine.includes('date') &&
-      (firstLine.includes('title') || firstLine.includes('text')) &&
-      firstLine.includes('amount') &&
-      firstLine.includes('balance')
-    )
+    const firstLine = prepared.split('\n')[0] || ''
+    // Lunar: a date, description, amount and balance column, in English or
+    // Swedish. Delimiter is sniffed (comma, semicolon or tab). Nordea keeps
+    // priority in the registry and is now matched on whole cells, so a Swedish
+    // Lunar export no longer lands there (2026-08-18 report).
+    return isLunarHeader(parseLunarHeader(firstLine, sniffLunarDelimiter(firstLine)))
   },
 
   parse(content: string): BankFileParseResult {
@@ -60,16 +118,15 @@ export const lunarFormat: BankFileFormat = {
     const issues: BankFileParseIssue[] = []
     let skippedRows = 0
 
-    // Parse header
+    // Parse header; the delimiter is sniffed from it and reused for every row
     const headerLine = lines[0] || ''
-    const headers = parseCSVLine(headerLine, ',').map((h) => h.trim().toLowerCase().replace(/"/g, ''))
+    const delimiter = sniffLunarDelimiter(headerLine)
+    const headers = parseLunarHeader(headerLine, delimiter)
 
-    const dateIdx = headers.findIndex((h) => h === 'date')
-    // "title" is the 2026 export's description column; "text" is the legacy one
-    const titleIdx = headers.findIndex((h) => h === 'title')
-    const descIdx = titleIdx !== -1 ? titleIdx : headers.findIndex((h) => h === 'text')
-    const amountIdx = headers.findIndex((h) => h === 'amount')
-    const balanceIdx = headers.findIndex((h) => h === 'balance')
+    const dateIdx = firstIndexOf(headers, DATE_HEADERS)
+    const descIdx = firstIndexOf(headers, DESC_HEADERS)
+    const amountIdx = firstIndexOf(headers, AMOUNT_HEADERS)
+    const balanceIdx = firstIndexOf(headers, BALANCE_HEADERS)
 
     if (dateIdx === -1 || amountIdx === -1) {
       issues.push({
@@ -92,7 +149,7 @@ export const lunarFormat: BankFileFormat = {
       const line = lines[i].trim()
       if (!line) continue
 
-      const fields = parseCSVLine(line, ',').map((f) => f.trim().replace(/^"|"$/g, ''))
+      const fields = parseCSVLine(line, delimiter).map((f) => f.trim().replace(/^"|"$/g, ''))
 
       const date = fields[dateIdx]
       const description = descIdx >= 0 ? fields[descIdx] : 'Unknown'

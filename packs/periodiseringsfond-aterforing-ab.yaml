@@ -1,0 +1,24 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: periodiseringsfond-aterforing-ab
+  order: 25
+  name: 'Periodiseringsfond återföring (AB)'
+  category: year_end
+  entity_type: aktiebolag
+  description: >-
+    Återföring av periodiseringsfond (senast efter 6 år).
+  legal_note: >-
+    Återföring sker från den äldsta fonden först. Bokas på 2110 Periodiseringsfonder,
+    eller på det årsmärkta kontot (2120-2129) om fonderna följs per år.
+lines:
+  - account: '2110'
+    label: 'Periodiseringsfonder'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '8819'
+    label: 'Återföring periodiseringsfond'
+    side: credit
+    type: business
+    ratio: 1.0

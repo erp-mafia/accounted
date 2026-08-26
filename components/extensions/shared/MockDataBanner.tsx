@@ -19,15 +19,15 @@ export default function MockDataBanner({ importedAt, onClear, onReplace }: MockD
     : null
 
   return (
-    <Card className="border-l-4 border-l-warning bg-warning/[0.03]">
+    <Card className="border-l-4 border-l-warning bg-muted/30">
       <CardContent className="pt-4 pb-4">
         <div className="flex items-center gap-3">
-          <FlaskConical className="h-5 w-5 text-warning-foreground shrink-0" />
+          <FlaskConical className="h-5 w-5 text-attn shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-warning-foreground">
+            <p className="text-sm font-medium text-attn">
               Testdata aktivt
             </p>
-            <p className="text-xs text-warning-foreground mt-0.5">
+            <p className="text-xs text-attn mt-0.5">
               Rapporten visar importerad testdata istället för bokföringsdata.
               {formatted && <> Importerat {formatted}.</>}
             </p>

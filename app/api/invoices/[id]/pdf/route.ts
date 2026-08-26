@@ -3,7 +3,8 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
-import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
+import { invoicePdfFilename, paymentConfirmationPdfFilename } from '@/lib/invoices/pdf-filename'
+import { isPaymentConfirmationEligible } from '@/lib/invoices/payment-confirmation'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -24,6 +25,17 @@ const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
 function resolveDisposition(request: Request): 'inline' | 'attachment' {
   const requested = new URL(request.url).searchParams.get('disposition')
   return requested === 'inline' ? 'inline' : 'attachment'
+}
+
+/**
+ * `?variant=paid` asks for the betalningsbekräftelse (#1693): the same
+ * re-render, but refused unless the faktura is fully paid and named as a
+ * payment confirmation rather than as the invoice. It is always a fresh
+ * render; the archived original in the delivery history is never involved.
+ */
+function resolveVariant(request: Request): 'invoice' | 'paid' {
+  const requested = new URL(request.url).searchParams.get('variant')
+  return requested === 'paid' ? 'paid' : 'invoice'
 }
 
 function privateNoStore(response: NextResponse): NextResponse {
@@ -56,6 +68,14 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       { error: 'Invoice not found' },
       { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
     )
+  }
+
+  const variant = resolveVariant(request)
+  if (variant === 'paid' && !isPaymentConfirmationEligible(invoice as Invoice)) {
+    return privateNoStore(errorResponseFromCode('INVOICE_PAYMENT_CONFIRMATION_NOT_PAID', log, {
+      requestId,
+      details: { currentStatus: (invoice as Invoice).status },
+    }))
   }
 
   // Fetch company settings
@@ -124,15 +144,17 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     // Return PDF as response
     const isCreditNote = !!invoice.credited_invoice_id
-    const filename = invoicePdfFilename({
-      companyName: (company as CompanySettings).company_name,
-      customerName: (invoice.customer as Customer).name,
-      invoiceNumber: invoice.invoice_number,
-      invoiceId: invoice.id,
-      invoiceDate: invoice.invoice_date,
-      documentType: invoice.document_type,
-      isCreditNote,
-    })
+    const filename = variant === 'paid'
+      ? paymentConfirmationPdfFilename(invoice.invoice_number)
+      : invoicePdfFilename({
+          companyName: (company as CompanySettings).company_name,
+          customerName: (invoice.customer as Customer).name,
+          invoiceNumber: invoice.invoice_number,
+          invoiceId: invoice.id,
+          invoiceDate: invoice.invoice_date,
+          documentType: invoice.document_type,
+          isCreditNote,
+        })
 
     return new NextResponse(uint8Array, {
       status: 200,

@@ -2,9 +2,11 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
 import type {
   InvoiceDeliveryChannel,
   InvoiceDeliveryProviderStatus,
+  InvoiceDeliveryRecipientStatuses,
   InvoiceDeliveryStatus,
 } from '@/types'
 
@@ -18,6 +20,7 @@ interface InvoiceDeliverySummaryRow {
   provider_status: InvoiceDeliveryProviderStatus | null
   provider_status_at: string | null
   provider_status_detail: string | null
+  provider_recipient_statuses: InvoiceDeliveryRecipientStatuses
   error_code: string | null
   document_attachment_id: string | null
   attachment_filename: string | null
@@ -42,12 +45,12 @@ interface MaskedInvoiceDeliverySummaryRow
  * addresses stay server-side. The attachment filename passes through: it is
  * derived from data the invoice already exposes to every company member. The
  * database allow-list and masking boundary is defined by
- * list_invoice_delivery_summaries in migration 20260724160000; this route
+ * list_invoice_delivery_summaries in the invoice delivery migrations; this route
  * masks returned addresses again as defense in depth.
  *
- * The provider delivery outcome is message-level, never per recipient: the
- * provider reports one result for the whole send, and its reason text can
- * quote the failing address, so that text is masked the same way.
+ * Recipient outcomes use only stable To/CC positions. Exact addresses and BCC
+ * references never cross the database boundary, and reason text that can
+ * quote a failing address is masked again here.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.deliveries.list',
@@ -93,6 +96,9 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       provider_status: delivery.provider_status,
       provider_status_at: delivery.provider_status_at,
       provider_status_detail: maskAddressesInText(delivery.provider_status_detail),
+      provider_recipient_statuses: sanitizeDeliveryRecipientStatuses(
+        delivery.provider_recipient_statuses,
+      ),
       error_code: delivery.error_code,
       document_attachment_id: delivery.document_attachment_id,
       attachment_filename: delivery.attachment_filename,

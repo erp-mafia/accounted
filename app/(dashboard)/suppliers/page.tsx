@@ -6,14 +6,14 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Search, Building2, Lock } from 'lucide-react'
+import { Plus, Building2, Lock } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -68,10 +68,13 @@ export default function SuppliersPage() {
   async function fetchSuppliers() {
     if (!company) return
     setIsLoading(true)
+    // Archived suppliers (v1 API soft-delete) are kept for retention but are
+    // not part of the roster: same filter as /api/suppliers and the v1 list.
     const { data, error } = await supabase
       .from('suppliers')
       .select('*')
       .eq('company_id', company.id)
+      .is('archived_at', null)
       .order('name', { ascending: true })
 
     if (error) {
@@ -170,18 +173,14 @@ export default function SuppliersPage() {
 
       {/* Toolbar: search (concept) */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[220px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={t('search_placeholder')}
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value)
-              setVisibleCount(INITIAL_VISIBLE_ROWS)
-            }}
-            className="h-9 pl-10"
-          />
-        </div>
+        <ToolbarSearch
+          placeholder={t('search_placeholder')}
+          value={searchTerm}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            setVisibleCount(INITIAL_VISIBLE_ROWS)
+          }}
+        />
       </div>
 
       {isLoading ? (
@@ -195,7 +194,7 @@ export default function SuppliersPage() {
           <EmptyState
             icon={Building2}
             title={t('no_search_results_title')}
-            description={t('no_search_results_description', { term: searchTerm })}
+            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
         ) : (
           <EmptyState

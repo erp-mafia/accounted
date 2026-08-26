@@ -10,7 +10,7 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -34,6 +34,11 @@ vi.mock('@/lib/auth/require-write', () => ({
 const mockCreateJournalEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
+}))
+
+const mockReverseOrphanedJournalEntry = vi.fn()
+vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
+  reverseOrphanedJournalEntry: (...args: unknown[]) => mockReverseOrphanedJournalEntry(...args),
 }))
 
 // Booking-time duplicate guard: mocked so route tests exercise the WIRING
@@ -79,6 +84,7 @@ describe('POST /api/transactions/[id]/book', () => {
     // No booking-duplicate by default; guard tests override per-case.
     mockDetectDup.mockResolvedValue(null)
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
+    mockReverseOrphanedJournalEntry.mockResolvedValue(undefined)
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -197,7 +203,7 @@ describe('POST /api/transactions/[id]/book', () => {
     mockCreateJournalEntry.mockResolvedValue(je)
 
     // Update transaction
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
 
     const emitSpy = vi.spyOn(eventBus, 'emit')
 
@@ -231,6 +237,32 @@ describe('POST /api/transactions/[id]/book', () => {
     )
   })
 
+  it('atomically unignores an ignored transaction when booking it', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      journal_entry_id: null,
+      is_ignored: true,
+    })
+    enqueue({ data: tx, error: null })
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(findCalls('transactions', 'update')).toContainEqual([
+      expect.objectContaining({
+        journal_entry_id: 'je-new',
+        is_business: true,
+        is_ignored: false,
+      }),
+    ])
+  })
+
   it('returns 500 when transaction update fails', async () => {
     const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null })
     const je = makeJournalEntry({ id: 'je-new' })
@@ -245,10 +277,151 @@ describe('POST /api/transactions/[id]/book', () => {
       body: validBody,
     })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string }
+    }>(response)
 
     expect(status).toBe(500)
-    expect(body.error).toBe('Failed to update transaction')
+    expect(body.error).toMatchObject({
+      code: 'INTERNAL_ERROR',
+      message: 'Ett oväntat serverfel uppstod. Försök igen senare.',
+    })
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-new',
+      expect.any(String),
+    )
+  })
+
+  it('stornos the posted orphan when another booking wins the transaction-link race', async () => {
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null })
+    const je = makeJournalEntry({ id: 'je-new' })
+
+    enqueue({ data: tx, error: null })
+    mockCreateJournalEntry.mockResolvedValue(je)
+    enqueue({ data: [], error: null })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-new',
+      expect.any(String),
+    )
+  })
+
+  it('maps the ignored-row constraint to a typed conflict and stornos the posted orphan', async () => {
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: null, is_ignored: true })
+    enqueue({ data: tx, error: null })
+    mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
+    enqueue({
+      data: null,
+      error: {
+        code: '23514',
+        message:
+          'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"',
+      },
+    })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_IGNORED_CONFLICT')
+    expect(body.error.message).not.toContain('check constraint')
+    expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledTimes(1)
+  })
+
+  // ── Underlag propagation (pinned document + matched inbox items) ──────
+  // Attach-before-book: a document pinned to the transaction (or an inbox
+  // item hand-matched to it) must land on the new verifikat, or every
+  // underlag surface reads "Underlag saknas" for a booking that HAS its
+  // underlag (the 2026-08-13 user report).
+
+  it('anchors the pinned document to the new verifikat (attach-before-book)', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+    const je = makeJournalEntry({ id: 'je-new' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    mockCreateJournalEntry.mockResolvedValue(je)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // update transaction
+    enqueue({ data: { document_id: 'doc-1' } }) // propagate: tx pin lookup
+    enqueue({ data: { journal_entry_id: null } }) // pinned doc unanchored
+    enqueue({ data: { id: 'je-new' } }) // linkToJournalEntry: entry ownership check
+    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-new' } }) // doc update
+    enqueue({ data: [] }) // no matched inbox items
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: validBody,
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(findCalls('document_attachments', 'update')).toContainEqual([
+      { journal_entry_id: 'je-new', journal_entry_line_id: null },
+    ])
+  })
+
+  it('stamps a matched inbox item consumed by the booking', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+    const je = makeJournalEntry({ id: 'je-new' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    mockCreateJournalEntry.mockResolvedValue(je)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // update transaction
+    enqueue({ data: { document_id: null } }) // propagate: nothing pinned
+    enqueue({ data: [{ id: 'i1', document_id: null }] }) // matched inbox item
+    enqueue({ data: null }) // stamp update
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: validBody,
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
+      { created_journal_entry_id: 'je-new' },
+    ])
+  })
+
+  it('still returns success when underlag propagation fails (best-effort)', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
+    const je = makeJournalEntry({ id: 'je-new' })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    mockCreateJournalEntry.mockResolvedValue(je)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // update transaction
+    enqueue({ data: { document_id: 'doc-1' } }) // propagate: tx pin lookup
+    enqueue({ data: { journal_entry_id: null } }) // pinned doc unanchored
+    enqueue({ data: null }) // linkToJournalEntry: entry lookup fails -> throws
+    enqueue({ data: [] }) // no matched inbox items
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: validBody,
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+
+    // The verifikat is already posted: a propagation failure is logged and
+    // repaired by re-running, never allowed to fail the booking.
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(findCalls('document_attachments', 'update')).toEqual([])
   })
 
   // ── Booking-time duplicate guard ──────────────────────────────────────
@@ -285,7 +458,7 @@ describe('POST /api/transactions/[id]/book', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null })
     const je = makeJournalEntry({ id: 'je-new' })
     enqueue({ data: tx, error: null }) // fetch
-    enqueue({ data: null, error: null }) // update
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // update
     mockDetectDup.mockResolvedValue({
       transaction_id: SIBLING_UUID,
       journal_entry_id: 'je-existing',
@@ -352,7 +525,7 @@ describe('POST /api/transactions/[id]/book', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 98565, journal_entry_id: null })
     const je = makeJournalEntry({ id: 'je-new' })
     enqueue({ data: tx, error: null }) // fetch
-    enqueue({ data: null, error: null }) // update
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // update
     mockDetectDup.mockResolvedValue({
       transaction_id: null,
       journal_entry_id: VOUCHER_JE_UUID,

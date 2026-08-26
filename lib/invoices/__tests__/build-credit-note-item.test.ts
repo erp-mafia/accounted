@@ -20,7 +20,7 @@ function item(overrides: Partial<InvoiceItem> = {}): InvoiceItem {
 }
 
 describe('buildCreditNoteItem', () => {
-  it('negates amounts and preserves ROT/RUT, account, accrual, and dimension metadata', () => {
+  it('negates amounts, keeps the deduction magnitude positive, and preserves ROT/RUT, account, accrual, and dimension metadata', () => {
     const result = buildCreditNoteItem('credit-1', item({
       deduction_type: 'rot',
       deduction_amount: 600,
@@ -40,7 +40,8 @@ describe('buildCreditNoteItem', () => {
       line_total: -2000,
       vat_amount: -500,
       deduction_type: 'rot',
-      deduction_amount: -600,
+      // Positive magnitude: invoice_items has CHECK (deduction_amount >= 0).
+      deduction_amount: 600,
       labor_hours: 2,
       work_type: 'BYGG',
       housing_designation: 'Test 1:2',

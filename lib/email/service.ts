@@ -18,10 +18,17 @@ export interface SendEmailOptions {
   /**
    * Explicit From address. Only ever set by lib/email/brand-sender.ts for
    * brands whose Resend sender domain is VERIFIED. When absent, the provider
-   * sends from its default address (RESEND_FROM_EMAIL), rendering fromName
-   * as "<fromName> via <platform>".
+   * sends from its default address (RESEND_FROM_EMAIL) with fromName as the
+   * display name.
    */
   fromAddress?: string
+  /**
+   * Explicit From identity (company's own verified sending domain). When
+   * set, the provider sends as "<name> <address>" instead of the platform
+   * sender; `fromName` is ignored. Callers obtain it from
+   * resolveInvoiceSender(): never build one from raw user input.
+   */
+  from?: { name: string; address: string }
   attachments?: Array<{
     filename: string
     content: Buffer | string

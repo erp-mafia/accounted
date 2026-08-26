@@ -7,6 +7,84 @@ import {
 } from '@/tests/pg/fixtures'
 
 describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
+  it('rejects a directly inserted posted journal entry with no lines', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+
+    await expect(
+      getPool().query(
+        `INSERT INTO public.journal_entries
+           (user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+            entry_date, description, source_type, status)
+         VALUES ($1, $2, $3, 1, 'A', '2026-06-01', 'Direct posted insert', 'manual', 'posted')`,
+        [userId, companyId, fiscalPeriodId],
+      ),
+    ).rejects.toThrow(/has zero total/i)
+  })
+
+  it('rejects an unbalanced directly inserted posted journal entry at constraint time', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const client = await getPool().connect()
+
+    try {
+      await client.query('BEGIN')
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO public.journal_entries
+           (user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+            entry_date, description, source_type, status)
+         VALUES ($1, $2, $3, 1, 'A', '2026-06-01', 'Direct posted insert', 'manual', 'posted')
+         RETURNING id`,
+        [userId, companyId, fiscalPeriodId],
+      )
+      await client.query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount)
+         VALUES ($1, '1930', 100, 0)`,
+        [inserted.rows[0]!.id],
+      )
+
+      await expect(
+        client.query('SET CONSTRAINTS check_balance_on_posted_insert IMMEDIATE'),
+      ).rejects.toThrow(/not balanced/i)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  })
+
+  it('allows balanced lines to follow a posted header in the same transaction', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const client = await getPool().connect()
+
+    try {
+      await client.query('BEGIN')
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO public.journal_entries
+           (user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+            entry_date, description, source_type, status)
+         VALUES ($1, $2, $3, 1, 'A', '2026-06-01', 'Direct posted insert', 'manual', 'posted')
+         RETURNING id`,
+        [userId, companyId, fiscalPeriodId],
+      )
+      await client.query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount)
+         VALUES ($1, '1930', 100, 0),
+                ($1, '3001', 0, 100)`,
+        [inserted.rows[0]!.id],
+      )
+
+      await client.query('SET CONSTRAINTS check_balance_on_posted_insert IMMEDIATE')
+      const persisted = await client.query<{ status: string }>(
+        `SELECT status FROM public.journal_entries WHERE id = $1`,
+        [inserted.rows[0]!.id],
+      )
+      expect(persisted.rows[0]!.status).toBe('posted')
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  })
+
   it('rejects INSERT into journal_entries when the fiscal period is closed', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany({ isClosed: true })
 
@@ -51,9 +129,9 @@ describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
   it('rejects UPDATE to a posted journal entry (committed immutability)', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
 
-    // Bypass commit_journal_entry by inserting directly as 'posted'. The
-    // immutability trigger fires on UPDATE, not INSERT, so this is legal
-    // setup on the superuser connection.
+    // Bypass commit_journal_entry with the direct-posted fixture. It inserts
+    // balanced lines in the same transaction so the deferred insert balance
+    // trigger accepts the setup before immutability is exercised below.
     const entryId = await insertDraftJournalEntry({
       userId,
       companyId,

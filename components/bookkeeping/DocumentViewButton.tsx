@@ -42,7 +42,14 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
       return
     }
 
-    if (!window.open(`/api/documents/${documentId}/inline`, '_blank', 'noopener,noreferrer')) {
+    // window.open() returns null BY SPEC when 'noopener' is in the features
+    // string, even on success, so passing it here made this toast fire on
+    // every successful open. Open with a real return value and sever the
+    // reverse channel manually (same pattern as lib/browser/deferred-tab.ts).
+    const tab = window.open(`/api/documents/${documentId}/inline`, '_blank')
+    if (tab) {
+      tab.opener = null
+    } else {
       toast({
         title: 'Kunde inte öppna dokumentet',
         description: `Tillåt popupfönster för ${appName} i webbläsaren och försök igen.`,

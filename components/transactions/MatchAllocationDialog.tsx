@@ -458,7 +458,7 @@ export default function MatchAllocationDialog({
                                 ≈ {formatCurrency(parseAmount(draft.amount) / c.exchangeRate, c.currency)}
                               </p>
                             ) : (
-                              <p className="text-[11px] tabular-nums text-warning-foreground">
+                              <p className="text-[11px] tabular-nums text-attn">
                                 {t('fx_rate_missing_warning', { currency: c.currency })}
                               </p>
                             )
@@ -516,7 +516,7 @@ export default function MatchAllocationDialog({
               // must equal the bank's actual receipt or reconciliation
               // breaks. The user must allocate the full amount or remove
               // selections. PR #607 round-1 review fix.
-              <div className="flex items-start gap-2 rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
+              <div className="flex items-start gap-2 rounded-lg bg-muted/30 p-3 text-sm text-attn">
                 <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
                 <p>
                   {t('undershoot_warning', {

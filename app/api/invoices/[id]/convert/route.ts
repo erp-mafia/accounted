@@ -67,6 +67,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       vat_amount_sek: proforma.vat_amount_sek,
       total: proforma.total,
       total_sek: proforma.total_sek,
+      // The converted invoice is a fresh unpaid receivable: proformas carry no
+      // ROT/RUT deduction, so the customer owes the full total. Omitting this
+      // left the NOT NULL DEFAULT 0, which every payment surface reads as
+      // "nothing open" (dialog overpayment rejection, bank match sees 0).
+      remaining_amount: proforma.total,
+      paid_amount: 0,
       vat_treatment: proforma.vat_treatment,
       vat_rate: proforma.vat_rate,
       moms_ruta: proforma.moms_ruta,

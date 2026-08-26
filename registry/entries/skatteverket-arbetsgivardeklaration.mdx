@@ -1,0 +1,120 @@
+---
+title: "Arbetsgivardeklaration på individnivå — AGI som SKILL"
+description: "SKILL.md som tar en godkänd löneberäkning och genererar AGI-fil enligt Skatteverkets schema via gnubok_generate_agi. Producerar XML klar för manuell uppladdning i Skatteverkets e-tjänst."
+slug: "skatteverket-arbetsgivardeklaration"
+kind: "skill"
+author: "gnubok"
+status: "live"
+lang: "sv"
+personas: ["byra", "finance", "founder"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/skills-v1/skatteverket-arbetsgivardeklaration.zip"
+repoUrl: "https://github.com/erp-mafia/accounted/tree/main/skills/skatteverket-arbetsgivardeklaration"
+gnubokTools:
+  - "gnubok_list_employees"
+  - "gnubok_create_salary_run"
+  - "gnubok_calculate_salary_run"
+  - "gnubok_get_salary_run"
+  - "gnubok_get_salary_journal"
+  - "gnubok_generate_agi"
+oauthScopes:
+  - "payroll:read"
+  - "payroll:write"
+requiresWriteScope: true
+version: "1.0.0"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vilket AGI-format genererar skillen?"
+    a: "`gnubok_generate_agi` returnerar en download-länk till AGI-XML enligt Skatteverkets schema, sparat under `/api/salary/runs/{id}/agi/xml`. Filen följer formatet för arbetsgivardeklaration på individnivå."
+  - q: "Hanterar skillen förmåner och traktamenten?"
+    a: "Skillen orkestrerar `gnubok_get_salary_journal` och `gnubok_generate_agi` på en lönerunde. Lönerundans posttyper (bil, kost, bostad, traktamente, pension) hanteras av accounted-backend, inte av skillen själv. Du verifierar i appen att rätt typ är satt per lönepost innan AGI-genereringen körs."
+  - q: "Vad krävs för att lämna in?"
+    a: "Skillen producerar bara XML-filen. Själva uppladdningen sker manuellt i Skatteverkets e-tjänst med BankID eller SUS-certifikat. Skatteverket har ingen officiell MCP-bro idag, och accounteds egen Skatteverket-integration är en intern REST-tjänst (inte MCP-exponerad)."
+  - q: "Kostar det något extra att köra över byråns klienter?"
+    a: "Skillen kör mot ett företag i taget via en accounted-MCP-anslutning. För en byrå med flera klienter krävs en anslutning per klient. Multi-tenant via `companies:read` är på roadmap men inte i MCP än."
+  - q: "Vad händer om Skatteverket avvisar filen?"
+    a: "Du laddar upp den manuellt och får ett felmeddelande från Skatteverket. Vanligaste avslagen: ofullständiga personnummer, negativa belopp på fält som kräver positiva, validering mot förra periodens uppgifter. Skillen försöker inte rätta automatiskt. Du rättar i accounted och genererar AGI på nytt."
+---
+
+## Stegen
+
+Skillen tar en månads godkänd löneberäkning och producerar AGI-XML
+i Skatteverkets format. Stegen är idempotenta:
+
+1. `gnubok_get_salary_run(period: "2026-04")`. Drar lönerundans status.
+2. Validerar att rundan är godkänd och journalförd. Annars stoppar och säger varför.
+3. `gnubok_get_salary_journal(salary_run_id: ...)`. Hämtar alla löneposter per anställd.
+4. Visar sammanfattning per anställd: brutto, skatteavdrag, förmåner, traktamenten.
+5. `gnubok_generate_agi(salary_run_id: ...)`. Returnerar download-URL till AGI-XML.
+6. Returnerar filsökväg plus en kort kontrollista innan manuell upload.
+
+Den producerade filen laddas upp i Skatteverkets e-tjänst:
+[skatteverket.se/etjanster/arbetsgivardeklaration](https://skatteverket.se/etjanster/arbetsgivardeklaration).
+Skatteverket har ingen officiell MCP-yta för AGI-inlämning. accounteds
+egen Skatteverket-extension är aktiv som intern REST-tjänst men
+exponerar inte tools över MCP idag.
+
+## Konto- och AGI-mappning
+
+Lönerundan i accounted använder standardvärdena från BAS 2026:
+
+| Lönepost | AGI-fält (typiskt) | Konto-debet | Konto-kredit |
+|---|---|---|---|
+| Bruttolön | Ersättning | 7210 | 2710 |
+| Bilförmån | Bilförmån | 7385 | 2710 |
+| Bostadsförmån | Bostadsförmån | 7384 | 2710 |
+| Kostförmån | Kostförmån | 7382 | 2710 |
+| Traktamente över schablon | Skattepliktig del | 7321 | 2710 |
+| Pensionsförsäkringspremie | Pension | 7410 | 2710 |
+| Sjuklön | Ersättning | 7282 | 2710 |
+| Skatteavdrag | Avdragen skatt | 2710 | 2710 |
+| Arbetsgivaravgift 31.42% | (rapporteras separat) | 7510 | 2731 |
+
+Mappningen sker i accounted-backend när lönerundan beräknas, inte i
+skillen. Skillen läser bara journalen och triggar AGI-export.
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/accounted
+cd gnubok/skills/skatteverket-arbetsgivardeklaration
+```
+
+I Claude Desktop:
+
+```
+Cmd-Shift-P → Skills: Add from folder → välj mappen
+```
+
+Kräver att [accounted MCP](/community/registry/gnubok-mcp) är ansluten med
+scopes `payroll:read`, `payroll:write`.
+
+## Köra skillen
+
+```
+@skatteverket-arbetsgivardeklaration generera AGI för april 2026
+```
+
+Agenten:
+
+1. Listar antalet anställda i rundan (säg 8).
+2. Visar fördelningen mellan löneslag.
+3. Genererar AGI-XML.
+4. Returnerar download-URL.
+5. Visar sammanfattning per anställd så du kan korsa-checka mot lönespec innan upload.
+
+## Sånt skillen inte gör
+
+* Skillen laddar inte upp filen till Skatteverket. Det sker manuellt i Skatteverkets e-tjänst (BankID eller SUS-certifikat).
+* Skillen räknar inte ut själva lönerundan. Använd `gnubok_calculate_salary_run` först.
+* Skillen hanterar inte F-skatt-anmälan eller momsregistrering. Andra processer.
+* Skillen producerar inte KU-uppgifter (kontrolluppgifter på årsbasis). De är en separat process.
+
+## Om Skatteverket avvisar filen
+
+Vanligaste avslagen och vad de betyder:
+
+* **"Felaktig version på schema"**: AGI-schemat uppdateras med jämna mellanrum. Skillen följer den utgåva som accounted-backend producerar.
+* **"Personnummer matchar inte"**: någon i lönerundan har personnummer i fel format. Kör `gnubok_list_employees` för att fånga det innan AGI-genereringen.
+* **"Negativt belopp"**: betyder att lönerundan har en återbetalning. AGI tillåter inte negativa belopp på vissa fält. Bokför som korrigering i nästa period istället.

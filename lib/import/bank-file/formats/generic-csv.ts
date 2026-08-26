@@ -257,11 +257,31 @@ function pickDateHeader(headers: string[]): number {
   return headers.findIndex((h) => (h.includes('datum') || h.includes('date')) && !h.includes('valuta'))
 }
 
-/** Pick the best description column by header label. */
+/**
+ * Header labels that name a clock time, not a description: Lunar's 2026 export
+ * carries `Time` next to `Date`, and Swedish exports spell it Tid / Tidpunkt /
+ * Klockslag. Anchored at the end so compounds like Transaktionstid and
+ * "Transaction time" match too. A time-of-day column is never a description,
+ * whatever else the heuristics fail to resolve.
+ */
+const TIME_HEADER_RE = /(^|[^a-zåäö])(tidpunkt|klockslag|klocka|hour|hours|timestamp)$|tid$|time$/
+
+/** A cell that looks like a clock time (HH:MM or HH:MM:SS). */
+const TIME_VALUE_RE = /^\d{1,2}:\d{2}(:\d{2})?$/
+
+/**
+ * Pick the best description column by header label.
+ *
+ * `title` / `titel` are the Lunar 2026 export's description column; without
+ * them the label pass missed and the positional fallback grabbed the Time
+ * column sitting between Date and Title (issue #1671). Time-ish labels are
+ * excluded outright so a keyword like `text` can never land on
+ * "Transaktionstid" either.
+ */
 function pickDescriptionHeader(headers: string[]): number {
-  const keywords = ['text', 'beskrivning', 'description', 'rubrik', 'meddelande', 'referens', 'mottagare', 'namn']
+  const keywords = ['text', 'beskrivning', 'description', 'title', 'titel', 'rubrik', 'meddelande', 'referens', 'mottagare', 'namn']
   for (const kw of keywords) {
-    const idx = headers.findIndex((h) => h === kw || h.includes(kw))
+    const idx = headers.findIndex((h) => (h === kw || h.includes(kw)) && !TIME_HEADER_RE.test(h))
     if (idx >= 0) return idx
   }
   return -1
@@ -269,13 +289,14 @@ function pickDescriptionHeader(headers: string[]): number {
 
 /** Per-column value statistics across the sampled data rows. */
 function analyzeColumns(dataRows: string[][], colCount: number) {
-  const acc = Array.from({ length: colCount }, () => ({ numeric: 0, date: 0, negative: 0, nonEmpty: 0 }))
+  const acc = Array.from({ length: colCount }, () => ({ numeric: 0, date: 0, time: 0, negative: 0, nonEmpty: 0 }))
   for (const row of dataRows.slice(0, 20)) {
     for (let i = 0; i < colCount; i++) {
       const raw = (row[i] ?? '').trim()
       if (!raw) continue
       acc[i].nonEmpty++
       if (SUGGEST_DATE_PATTERNS.some((re) => re.test(raw))) acc[i].date++
+      if (TIME_VALUE_RE.test(raw)) acc[i].time++
       const cleaned = normalizeMinusSign(raw).replace(/\s/g, '')
       if (/^-?\d+([.,]\d+)?$/.test(cleaned)) {
         acc[i].numeric++
@@ -285,6 +306,7 @@ function analyzeColumns(dataRows: string[][], colCount: number) {
   }
   return acc.map((s) => ({
     isDate: s.nonEmpty > 0 && s.date / s.nonEmpty >= 0.5,
+    isTime: s.nonEmpty > 0 && s.time / s.nonEmpty >= 0.5,
     isNumeric: s.nonEmpty > 0 && s.numeric / s.nonEmpty >= 0.5,
     hasNegative: s.negative > 0,
   }))
@@ -357,15 +379,26 @@ export function suggestColumnMapping(
   }
 
   if (result.description === -1) {
-    result.description = stats.findIndex(
-      (s, i) => i !== result.date && i !== result.amount && i !== result.balance && !s.isNumeric && !s.isDate
-    )
-    if (result.description === -1) {
-      for (let i = 0; i < colCount; i++) {
-        if (i !== result.date && i !== result.amount && i !== result.balance) {
-          result.description = i
-          break
-        }
+    // A clock-time column (Lunar's `Time`, a Swedish `Tid`) is text-shaped to
+    // the numeric/date tests, so it must be excluded explicitly: by header
+    // label when there is one, and by HH:MM values either way. Otherwise the
+    // positional fallback picks it as the description whenever it sits before
+    // the real text column (issue #1671).
+    const hdr = headers?.map((h) => h.trim().toLowerCase().replace(/"/g, '')) ?? []
+    const isTimeColumn = (i: number) => stats[i].isTime || (hdr[i] !== undefined && TIME_HEADER_RE.test(hdr[i]))
+    const unassigned = (i: number) => i !== result.date && i !== result.amount && i !== result.balance
+    const passes: Array<(i: number) => boolean> = [
+      (i) => unassigned(i) && !stats[i].isNumeric && !stats[i].isDate && !isTimeColumn(i),
+      (i) => unassigned(i) && !isTimeColumn(i),
+      // Last resort: anything not already assigned, so the UI still seeds a
+      // value the user can correct.
+      unassigned,
+    ]
+    for (const pass of passes) {
+      const idx = stats.findIndex((_s, i) => pass(i))
+      if (idx >= 0) {
+        result.description = idx
+        break
       }
     }
   }

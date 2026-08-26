@@ -8,6 +8,7 @@ import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, shiftIsoDate } from '@/lib/transactions/external-id'
+import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
@@ -30,7 +31,7 @@ const MIXED_CURRENCIES = Symbol('mixed-currencies')
  * `isImportFeed` drive the cross-channel mirror bridge (see
  * `consumeBridgingTwin`); `cashAccountId` is the cross-account guard.
  */
-type BucketEntry = {
+export type BucketEntry = {
   /** Row id of the stored transaction; used to persist hand-mirror adoption. */
   id: string | null
   desc: string
@@ -63,9 +64,9 @@ type BucketEntry = {
  * spliced out per deduped incoming row), so two genuinely-distinct
  * same-(date,amount) transactions are never collapsed.
  */
-type DescBucket = Map<string, BucketEntry[]>
+export type DescBucket = Map<string, BucketEntry[]>
 
-interface ExistingTransactionMaps {
+export interface ExistingTransactionMaps {
   /**
    * Booked transactions (any source): consumed by any incoming raw transaction.
    * Hand-entered rows (import_source manual/mcp/null, no bank connection) in
@@ -118,10 +119,43 @@ function addToBucket(
   else bucket.set(key, [entry])
 }
 
-async function buildExistingTransactionMaps(
+/**
+ * Row shape returned by the two map queries below. `amount` may arrive as a
+ * PostgREST numeric string; `contentBucketKey` normalizes it to öre.
+ */
+type StoredDedupRow = {
+  id: string | null
+  date: string
+  amount: number | string
+  original_description: string | null
+  description: string | null
+  cash_account_id: string | null
+  import_source: string | null
+  bank_connection_id: string | null
+  currency: string | null
+  external_id: string | null
+}
+
+/**
+ * Build the (date, öre)-bucketed maps of already-stored transactions in the
+ * batch's date range: the stored-row universe every content-dedup layer works
+ * against.
+ *
+ * Exported for the read-only duplicate PREVIEW
+ * (`lib/transactions/dedup-preview.ts`): the preview must see exactly the
+ * stored rows execute-side ingest will dedup against, so it reuses this
+ * function instead of a lookalike query.
+ *
+ * Both queries paginate via `fetchAllRows`: PostgREST silently caps a plain
+ * select at 1000 rows, so a re-import over a wide date range in an active
+ * company used to dedup against a TRUNCATED map and insert the remainder as
+ * duplicates. `.order('id')` supplies the stable total order `.range()`
+ * paging requires (see fetch-all.ts).
+ */
+export async function buildExistingTransactionMaps(
   supabase: SupabaseClient,
   companyId: string,
-  rawTransactions: RawTransaction[]
+  rawTransactions: Array<{ date: string }>
 ): Promise<ExistingTransactionMaps> {
   const booked: DescBucket = new Map()
   const unbookedImported: DescBucket = new Map()
@@ -132,33 +166,35 @@ async function buildExistingTransactionMaps(
   const dateTo = dates[dates.length - 1]
 
   try {
-    const { data: bookedRows } = await supabase
-      .from('transactions')
-      .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id')
-      .eq('company_id', companyId)
-      .not('journal_entry_id', 'is', null)
-      .gte('date', dateFrom)
-      .lte('date', dateTo)
+    const bookedRows = await fetchAllRows<StoredDedupRow>(({ from, to }) =>
+      supabase
+        .from('transactions')
+        .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id')
+        .eq('company_id', companyId)
+        .not('journal_entry_id', 'is', null)
+        .gte('date', dateFrom)
+        .lte('date', dateTo)
+        .order('id')
+        .range(from, to)
+    )
 
-    if (bookedRows) {
-      for (const tx of bookedRows) {
-        // Key off the immutable bank original, not the user-editable
-        // description: a title edit must never make the dedup bridge miss a
-        // genuine re-import. Falls back to description for rows predating the
-        // original_description column.
-        addToBucket(
-          booked,
-          tx.id ?? null,
-          tx.date,
-          tx.amount,
-          normalizeImportedDescription(tx.original_description ?? tx.description),
-          tx.cash_account_id ?? null,
-          tx.import_source ?? null,
-          isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
-          tx.currency ?? null,
-          tx.external_id ?? null,
-        )
-      }
+    for (const tx of bookedRows) {
+      // Key off the immutable bank original, not the user-editable
+      // description: a title edit must never make the dedup bridge miss a
+      // genuine re-import. Falls back to description for rows predating the
+      // original_description column.
+      addToBucket(
+        booked,
+        tx.id ?? null,
+        tx.date,
+        tx.amount,
+        normalizeImportedDescription(tx.original_description ?? tx.description),
+        tx.cash_account_id ?? null,
+        tx.import_source ?? null,
+        isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
+        tx.currency ?? null,
+        tx.external_id ?? null,
+      )
     }
   } catch {
     // Non-critical: content-based dedup will be skipped
@@ -170,34 +206,36 @@ async function buildExistingTransactionMaps(
     // PSD2 row must dedup an incoming CSV import. Feeds always set a non-null
     // import_source outside the user-created allowlist (manual/mcp); null /
     // manual / mcp are hand-entered and intentionally excluded.
-    const { data: unbookedRows } = await supabase
-      .from('transactions')
-      .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id')
-      .eq('company_id', companyId)
-      .is('journal_entry_id', null)
-      .not('import_source', 'is', null)
-      .neq('import_source', 'manual')
-      .neq('import_source', 'mcp')
-      .gte('date', dateFrom)
-      .lte('date', dateTo)
+    const unbookedRows = await fetchAllRows<StoredDedupRow>(({ from, to }) =>
+      supabase
+        .from('transactions')
+        .select('id, date, amount, original_description, description, cash_account_id, import_source, bank_connection_id, currency, external_id')
+        .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .not('import_source', 'is', null)
+        .neq('import_source', 'manual')
+        .neq('import_source', 'mcp')
+        .gte('date', dateFrom)
+        .lte('date', dateTo)
+        .order('id')
+        .range(from, to)
+    )
 
-    if (unbookedRows) {
-      for (const tx of unbookedRows) {
-        // See booked-map note: dedup on the immutable bank original so a
-        // user title edit cannot reopen the duplicate-import window.
-        addToBucket(
-          unbookedImported,
-          tx.id ?? null,
-          tx.date,
-          tx.amount,
-          normalizeImportedDescription(tx.original_description ?? tx.description),
-          tx.cash_account_id ?? null,
-          tx.import_source ?? null,
-          isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
-          tx.currency ?? null,
-          tx.external_id ?? null,
-        )
-      }
+    for (const tx of unbookedRows) {
+      // See booked-map note: dedup on the immutable bank original so a
+      // user title edit cannot reopen the duplicate-import window.
+      addToBucket(
+        unbookedImported,
+        tx.id ?? null,
+        tx.date,
+        tx.amount,
+        normalizeImportedDescription(tx.original_description ?? tx.description),
+        tx.cash_account_id ?? null,
+        tx.import_source ?? null,
+        isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
+        tx.currency ?? null,
+        tx.external_id ?? null,
+      )
     }
   } catch {
     // Non-critical: reconnect dedup will be skipped
@@ -486,6 +524,14 @@ export async function ingestTransactions(
 
   const driftCandidateStoredByBucket = new Map<string, number>()
   if (batchIsImportFeed && scopeDriftShadow) {
+    // Same-feed orphaned-id rows on an INcompatible account are excluded from
+    // the candidates (a genuinely different account on the same company must
+    // never bridge), but they are exactly what a reconnect that minted a NEW
+    // cash_account for the same physical account produces (issue #1709): every
+    // stored twin then sits on the old account and the shadow stays 0 during
+    // the incident it was built to measure. Count them separately, log-only,
+    // so fleet validation can see those incidents.
+    let accountIncompatibleDriftRows = 0
     for (const bucket of [existingMaps.booked, existingMaps.unbookedImported]) {
       for (const [k, entries] of bucket) {
         for (const entry of entries) {
@@ -497,9 +543,20 @@ export async function ingestTransactions(
           const idOrphaned = entry.externalId !== null && !incomingIdSet.has(entry.externalId)
           if (sameFeed && accountCompatible && idOrphaned) {
             driftCandidateStoredByBucket.set(k, (driftCandidateStoredByBucket.get(k) ?? 0) + 1)
+          } else if (sameFeed && idOrphaned) {
+            accountIncompatibleDriftRows++
           }
         }
       }
+    }
+    if (accountIncompatibleDriftRows > 0) {
+      log.info('import dedup shadow: account-incompatible same-feed orphaned ids', {
+        decision: 'same-feed-scope-drift-cross-account',
+        mode: 'shadow',
+        count: accountIncompatibleDriftRows,
+        cashAccountId,
+        batchSource,
+      })
     }
   }
 
@@ -532,10 +589,34 @@ export async function ingestTransactions(
     // Normalize the source title once. Guarantees a non-empty, Swedish-first
     // label for every import path (PSD2 sync + all bank-file CSV/CAMT parsers
     // funnel into raw.description): catching both empty/whitespace titles and
-    // the legacy English 'Unknown' sentinel. This normalized value is stored as
-    // both description and original_description below; it's what the user sees
-    // and edits, and what the content-dedup key is built from.
+    // the legacy English 'Unknown' sentinel. This normalized FULL value is what
+    // the content-dedup key is built from and what original_description stores;
+    // the row's working title (description column) is the classifier's
+    // displayTitle: the same string with the trailing channel phrase
+    // ("Överföring via internet", "Kortköp/uttag", ...) stripped. A stripped
+    // title is a PREFIX of the full string, so the prefix-containment dedup
+    // bridge is unaffected.
     const description = normalizeImportedDescription(raw.description)
+    // Classification is a FEED-row concept: a user-created row (manual UI,
+    // MCP, or a source-less caller without a bank connection) carries a
+    // user-authored title, not bank channel vocabulary; classifying or
+    // stripping it would corrupt meaning ("Egen insättning" is a title, not a
+    // deposit label). Same predicate as isImportedTransaction(): a live
+    // bank_connection_id marks a feed row even when import_source is unset.
+    // Mirrors the scope of the 20260808090100 backfill.
+    const isUserCreatedSource = !isImportedTransaction({
+      bank_connection_id: raw.bank_connection_id ?? null,
+      import_source: raw.import_source ?? null,
+    })
+    const { method: transactionMethod, displayTitle } = isUserCreatedSource
+      ? { method: null, displayTitle: description }
+      : classifyTransactionMethod({
+          description,
+          bankTransactionCode: raw.bank_transaction_code ?? null,
+          proprietaryBankTransactionCode: raw.proprietary_bank_transaction_code ?? null,
+          mccCode: raw.mcc_code ?? null,
+          explicitMethod: raw.transaction_method ?? null,
+        })
 
     // 1. Check for duplicates via external_id (batch pre-fetched)
     if (existingExternalIds.has(raw.external_id)) {
@@ -863,11 +944,17 @@ export async function ingestTransactions(
         cash_account_id: cashAccountId,
         external_id: raw.external_id,
         date: raw.date,
-        description: description,
-        // Immutable bank/PSD2 original: captured once, never overwritten by a
-        // title edit. Equals description at insert; they diverge only if the
-        // user later edits the title.
+        // Working title: the source description with the trailing channel
+        // phrase stripped (classifyTransactionMethod). Falls back to the full
+        // string when no phrase matched or stripping would empty it.
+        description: displayTitle,
+        // Immutable bank/PSD2 original: the FULL source string, captured once,
+        // never overwritten by a title edit or the phrase strip. Dedup-bridge
+        // source and the "restore original" value.
         original_description: description,
+        transaction_method: transactionMethod,
+        bank_transaction_code: raw.bank_transaction_code || null,
+        proprietary_bank_transaction_code: raw.proprietary_bank_transaction_code || null,
         amount: raw.amount,
         currency: raw.currency,
         amount_sek: amountSek,
@@ -879,6 +966,9 @@ export async function ingestTransactions(
         merchant_name: raw.merchant_name || null,
         reference: raw.reference || null,
         import_source: raw.import_source || null,
+        // Batch link for "undo this import": only the bank-file import paths
+        // pass this; PSD2 sync and MCP rows stay NULL.
+        bank_file_import_id: options?.bankFileImportId ?? null,
         counterparty_iban: raw.counterparty_iban || null,
         counterparty_account: raw.counterparty_account || null,
       })

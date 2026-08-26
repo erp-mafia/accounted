@@ -51,6 +51,16 @@ vi.mock('../journal-register', () => ({
   }),
 }))
 
+// The bilagor step reads account_reconciliation_attachments through the
+// store; an empty list keeps the queued-mock order of these tests intact.
+// The pärm step runs the reconciliation and checklist readers; a null report
+// keeps the queued-mock order of these tests intact.
+vi.mock('../bokslutsbilagor', () => ({
+  generateBokslutsbilagor: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('@/lib/reconciliation/attachments-store', () => ({
+  listAttachmentRowsInRange: vi.fn().mockResolvedValue([]),
+}))
 vi.mock('../vat-declaration', () => ({
   calculateVatDeclaration: vi.fn().mockResolvedValue({
     period: { type: 'yearly', year: 2024, period: 1, start: '2024-01-01', end: '2024-12-31' },
@@ -118,6 +128,7 @@ function buildMasterDataQueue(opts: {
 describe('generateFullArchive', () => {
   let supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']
   let enqueueMany: ReturnType<typeof createQueuedMockSupabase>['enqueueMany']
+  let findCall: ReturnType<typeof createQueuedMockSupabase>['findCall']
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -125,6 +136,7 @@ describe('generateFullArchive', () => {
     const mock = createQueuedMockSupabase()
     supabase = mock.supabase
     enqueueMany = mock.enqueueMany
+    findCall = mock.findCall
   })
 
   describe('scope: period', () => {
@@ -825,6 +837,72 @@ describe('generateFullArchive', () => {
       ])
     })
 
+    // The archive is what a company leaving Accounted keeps as its BFL
+    // 7-year record. A representation answer given in chat is documented in
+    // full only in invoice_inbox_items.channel_context: the verifikat line
+    // caps at 220 chars and drops whole names ("… och N till"), while
+    // Skatteverket wants every deltagare. So the answers must be exported.
+    it('exports the chat answers behind a verifikat, in full', async () => {
+      const participants = Array.from({ length: 10 }, (_, i) => ({
+        name: `Deltagare Efternamnsson ${i + 1}`,
+        company: 'Företagsnamnet Aktiebolag',
+      }))
+      const inboxRow = {
+        id: 'inbox-1',
+        created_at: '2024-06-01T10:00:00Z',
+        source: 'whatsapp',
+        status: 'confirmed',
+        document_id: 'doc-1',
+        matched_transaction_id: 'tx-1',
+        created_journal_entry_id: 'je-1',
+        created_supplier_invoice_id: null,
+        channel_context: {
+          channel: 'whatsapp',
+          representation: {
+            participants,
+            purpose: 'avtalsförhandling',
+            event_date: '2024-06-01',
+            raw_answer: 'tio personer, avtalsförhandling',
+            answered_at: '2024-06-01T18:00:00Z',
+          },
+        },
+      }
+
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: [PERIOD_2024] },
+        { data: [] }, // document_attachments
+        { data: [] }, // sie_imports
+        { data: [] }, // sie_account_mappings
+        ...buildMasterDataQueue({ direct: { invoice_inbox_items: [inboxRow] } }),
+      ])
+
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'all',
+      })
+      const zip = await JSZip.loadAsync(buffer)
+      const rows = JSON.parse(
+        await zip.file('data/invoice_inbox_items.json')!.async('text')
+      ) as Array<Record<string, any>>
+
+      // Every deltagare survives, not the three that fit on the verifikat line.
+      expect(rows[0].channel_context.representation.participants).toHaveLength(10)
+      expect(rows[0].channel_context.representation.raw_answer).toBe(
+        'tio personer, avtalsförhandling'
+      )
+      // Tied to what was booked from it, so a revisor can find the verifikat.
+      expect(rows[0].created_journal_entry_id).toBe('je-1')
+
+      // A projection, not the whole row: inbox workflow state (email bodies,
+      // OCR output, error messages) stays out of the archive.
+      const select = findCall('invoice_inbox_items', 'select')?.[0] as string
+      expect(select).toContain('channel_context')
+      expect(select).toContain('created_journal_entry_id')
+      expect(select).not.toContain('email_body_text')
+      expect(select).not.toContain('extracted_data')
+      expect(select).not.toBe('*')
+    })
+
     it('skips raw SIE blobs when include_documents is false but keeps metadata', async () => {
       enqueueMany([
         { data: COMPANY_ROW },
@@ -968,5 +1046,35 @@ describe('estimateArchiveSize', () => {
     expect(result.document_bytes).toBe(0)
     expect(result.document_count).toBe(0)
     expect(result.total_bytes).toBe(8 * 1024 * 1024)
+  })
+
+  it('paginates the all-mode document read past the page cap', async () => {
+    const firstPage = Array.from({ length: 1000 }, () => ({ file_size_bytes: 1_000 }))
+    enqueueMany([
+      { data: firstPage }, // full first page forces a second fetch
+      { data: [{ file_size_bytes: 1_000 }] },
+    ])
+
+    const result = await estimateArchiveSize(supabase as any, 'company-1', 'all')
+
+    expect(result.document_count).toBe(1001)
+    expect(result.document_bytes).toBe(1_001_000)
+  })
+
+  it('chunks the period-mode entry-id filter and sums across chunks', async () => {
+    // 250 posted entries -> three IN() chunks of max 100 ids. An unchunked
+    // implementation consumes a single document response and undercounts.
+    const entryIds = Array.from({ length: 250 }, (_, i) => ({ id: `e${i}` }))
+    enqueueMany([
+      { data: entryIds }, // journal_entries for periodEntryIds
+      { data: [{ file_size_bytes: 100 }] }, // chunk 1
+      { data: [{ file_size_bytes: 200 }] }, // chunk 2
+      { data: [{ file_size_bytes: 300 }] }, // chunk 3
+    ])
+
+    const result = await estimateArchiveSize(supabase as any, 'company-1', 'period', 'p-1')
+
+    expect(result.document_count).toBe(3)
+    expect(result.document_bytes).toBe(600)
   })
 })

@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback } from 'react'
+import { Fragment, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/data-list'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
@@ -29,6 +31,7 @@ import {
   ALL_YEARS_VALUE as FISCAL_YEAR_ALL_VALUE,
 } from '@/components/common/FiscalYearSelector'
 import { FyPicker } from '@/components/common/FyPicker'
+import { AttnLine } from '@/components/ui/attn-line'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
 import {
@@ -39,7 +42,7 @@ import {
   QUIET_LINK_CLASS,
   RowFoldout,
 } from '@/components/ui/dry-table'
-import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
 import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -56,23 +59,123 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
+import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
 import type { FiscalPeriod, JournalEntry, JournalEntryLine } from '@/types'
 
-const NEEDS_ATTACHMENT = new Set([
-  'manual',
-  'bank_transaction',
-  'supplier_invoice_registered',
-  'supplier_invoice_paid',
-  'supplier_invoice_cash_payment',
-  'import',
-])
+// Shared source of truth (lib/worklist/types.ts) so the per-row chip and
+// waiver UI can never drift from the worklist count and the SQL predicate
+// (skeptic finding on #1881: a hardcoded copy here missed webshop_order,
+// leaving flagged rows without chip or waiver toggle).
+const NEEDS_ATTACHMENT = new Set<string>(NEEDS_DOC_SOURCE_TYPES)
 
-type SortBy = 'date_desc' | 'date_asc' | 'voucher_asc' | 'voucher_desc'
+// Column-header sorting (support feedback: "filtrera/sortera alla rubriker").
+// The sort order is a priority-ordered STACK of keys (max 3): the second key
+// breaks ties in the first, and so on. Plain click sets a single key;
+// shift-click stacks.
+type SortColumn = 'voucher' | 'date' | 'description' | 'total'
+type SortDirection = 'asc' | 'desc'
+interface SortKey {
+  column: SortColumn
+  direction: SortDirection
+}
 
-// Per-company persistence of the sort dropdown. Mirrors the localStorage
+// Per-company persistence of the sort order. Mirrors the localStorage
 // convention used by FiscalYearSelector ('Accounted:fiscal-year:<companyId>').
+// The stored value is the serialized stack (see serializeSortStack).
 const SORT_STORAGE_KEY_PREFIX = 'Accounted:journal-sort:'
-const SORT_VALUES = new Set<SortBy>(['date_desc', 'date_asc', 'voucher_asc', 'voucher_desc'])
+const MAX_SORT_KEYS = 3
+const SORT_TOKEN_RE = /^(voucher|date|description|total)_(asc|desc)$/
+
+// The list's resting order, and the exit of the header toggle cycle.
+const DEFAULT_SORT_STACK: SortKey[] = [{ column: 'date', direction: 'desc' }]
+
+// 'total_desc,description_asc' <-> [{total desc}, {description asc}]. The
+// single-token form is the pre-stack format, so persisted values from before
+// stacking (and the dialog's single-choice select) parse with the same code.
+// Any invalid token rejects the whole value: a corrupt stored string falls
+// back to the default rather than silently sorting by half a stack.
+function parseSortStack(raw: string | null): SortKey[] | null {
+  if (!raw) return null
+  const keys: SortKey[] = []
+  for (const token of raw.split(',')) {
+    const m = SORT_TOKEN_RE.exec(token.trim())
+    if (!m) return null
+    const column = m[1] as SortColumn
+    if (keys.some((k) => k.column === column)) continue
+    keys.push({ column, direction: m[2] as SortDirection })
+    if (keys.length === MAX_SORT_KEYS) break
+  }
+  return keys.length > 0 ? keys : null
+}
+
+const serializeSortStack = (stack: SortKey[]): string =>
+  stack.map((k) => `${k.column}_${k.direction}`).join(',')
+
+const sortStacksEqual = (a: SortKey[], b: SortKey[]): boolean =>
+  serializeSortStack(a) === serializeSortStack(b)
+
+// Same shape as the invoices list header (app/(dashboard)/invoices/page.tsx):
+// click cycles the sort, inactive columns show a dimmed two-way arrow. Two
+// deliberate differences: the plain-click cycle has a third step back to
+// DEFAULT_SORT_STACK so a sort is always escapable from the header itself
+// (the invoices list starts unsorted and has nothing to return to), and
+// shift-click stacks the column as a secondary/tertiary key, shown with a
+// priority number next to the arrow.
+interface SortableHeaderProps {
+  label: string
+  sortLabel: string
+  column: SortColumn
+  stack: SortKey[]
+  onSort: (column: SortColumn, additive: boolean) => void
+  className?: string
+  align?: 'left' | 'right'
+}
+
+function SortableHeader({
+  label,
+  sortLabel,
+  column,
+  stack,
+  onSort,
+  className,
+  align = 'left',
+}: SortableHeaderProps) {
+  const index = stack.findIndex((k) => k.column === column)
+  const active = index !== -1
+  const direction = active ? stack[index].direction : null
+  const SortIcon = !active ? ArrowUpDown : direction === 'asc' ? ArrowUp : ArrowDown
+
+  return (
+    <th
+      className={cn(TH_CLASS, className)}
+      aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      {/* Preflight sets text-transform: none on buttons, which would drop the
+          TH_CLASS uppercase idiom inside the sort control. */}
+      <button
+        type="button"
+        className={cn(
+          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          align === 'right' && 'ml-auto justify-end',
+        )}
+        aria-label={sortLabel}
+        onClick={(e) => onSort(column, e.shiftKey)}
+      >
+        <span>{label}</span>
+        <SortIcon
+          aria-hidden="true"
+          className={cn('h-3.5 w-3.5 shrink-0', !active && 'text-muted-foreground/60')}
+        />
+        {active && stack.length > 1 && (
+          <span className="text-[10px] font-medium tabular-nums text-muted-foreground" aria-hidden="true">
+            {index + 1}
+          </span>
+        )}
+      </button>
+    </th>
+  )
+}
 
 // Compact row density (support feedback: "kompakt visning av verifikat").
 // Persisted per company, mirroring the sort key convention.
@@ -87,7 +190,29 @@ const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
 // Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
 const ALL_PAGE_SIZE = 100000
 
-export default function JournalEntryList() {
+export default function JournalEntryList({
+  pristineSlot,
+  refreshToken,
+  initialShowMissingOnly = false,
+}: {
+  pristineSlot?: ReactNode
+  /**
+   * Parent-driven refresh: bump to re-fetch IN PLACE (list stays mounted,
+   * dims at opacity-60). Replaces the old key={refreshKey} remount on
+   * /bookkeeping, which reset hasLoaded and blanked the whole journal to a
+   * spinner after every created verifikat, destroying expanded rows,
+   * selection, pagination and scroll position.
+   */
+  refreshToken?: number
+  /**
+   * Deep-link arrival (dashboard "Verifikat utan underlag" card,
+   * push-notification link): start with the "Visa saknade underlag" filter on
+   * and, for this visit only, scope to all fiscal years so the visible set
+   * matches the all-years dashboard count. The saved fiscal-year preference
+   * is not overwritten.
+   */
+  initialShowMissingOnly?: boolean
+} = {}) {
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -105,6 +230,11 @@ export default function JournalEntryList() {
   // dims them, so the list never collapses to a spinner and springs back to
   // full height under the pointer. Growing lists were causing real mis-clicks.
   const [hasLoaded, setHasLoaded] = useState(false)
+  // A failed list fetch must NEVER render as an empty ledger: the sort order
+  // is persisted per company, so a sort the backend rejects (e.g. a computed
+  // column missing on this environment) would otherwise masquerade as "all
+  // entries gone" on every reload, with no toolbar to escape through.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [count, setCount] = useState(0)
   const [page, setPage] = useState(0)
@@ -119,7 +249,7 @@ export default function JournalEntryList() {
   // (BFL 5 kap 5 §), not only on the detail page.
   const [rattelseFlags, setRattelseFlags] = useState<Set<string>>(new Set())
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
-  const [showMissingOnly, setShowMissingOnly] = useState(false)
+  const [showMissingOnly, setShowMissingOnly] = useState(initialShowMissingOnly)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchReason, setBatchReason] = useState('')
   const [batchSubmitting, setBatchSubmitting] = useState(false)
@@ -131,10 +261,13 @@ export default function JournalEntryList() {
   const [reverseEntryTarget, setReverseEntryTarget] = useState<JournalEntry | null>(null)
   const [isReversing, setIsReversing] = useState(false)
   const [previewEntryId, setPreviewEntryId] = useState<string | null>(null)
-  const [sortBy, setSortBy] = useState<SortBy>('date_desc')
+  const [sortStack, setSortStack] = useState<SortKey[]>(DEFAULT_SORT_STACK)
   const [sortHydrated, setSortHydrated] = useState(false)
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [periodHydrated, setPeriodHydrated] = useState(false)
+  // One-shot: a deep-link arrival scopes the first period resolution to all
+  // years (see the period effect below) without touching the saved preference.
+  const deepLinkAllYearsRef = useRef(initialShowMissingOnly)
   const [filterOpen, setFilterOpen] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -150,6 +283,12 @@ export default function JournalEntryList() {
   // original). Toggled off via the filter dialog to reveal the full chain.
   const [collapseCorrections, setCollapseCorrections] = useState(true)
   const [draftCount, setDraftCount] = useState(0)
+  // All-years emptiness, resolved only when the scoped list comes back empty:
+  // the pristine start card must key on "this ledger has never had an entry",
+  // not "the selected fiscal year is empty" (the default year selection used
+  // to make the pristine state unreachable on brand-new companies). null =
+  // not yet known; the pristine gate requires an explicit false.
+  const [ledgerHasAnyEntry, setLedgerHasAnyEntry] = useState<boolean | null>(null)
   const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
   const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
   const showingAll = pageSizeChoice === 'all'
@@ -196,7 +335,12 @@ export default function JournalEntryList() {
     }
   }
 
-  const fetchAttachmentCounts = useCallback(async (entryIds: string[]) => {
+  // isCurrent: the caller's request-generation guard (see fetchGenRef). The
+  // metadata writes land after their own awaits, so a stale list request's
+  // late completion must not overwrite counts/flags for the rows a newer
+  // request just rendered: wrong counts here flip the missing-underlag
+  // warning and bulk-exemption eligibility.
+  const fetchAttachmentCounts = useCallback(async (entryIds: string[], isCurrent: () => boolean = () => true) => {
     if (entryIds.length === 0) {
       setAttachmentCounts({})
       setAttachmentCountsLoaded(true)
@@ -226,15 +370,18 @@ export default function JournalEntryList() {
           return (data || {}) as Record<string, number>
         })
       )
+      if (!isCurrent()) return
       setAttachmentCounts(Object.assign({}, ...results))
     } catch {
       // Non-critical: silently ignore
     } finally {
-      setAttachmentCountsLoaded(true)
+      // A stale run must not flip the loaded flag either: the newer run set
+      // it false on entry and owns setting it true when ITS counts land.
+      if (isCurrent()) setAttachmentCountsLoaded(true)
     }
   }, [])
 
-  const fetchRattelseFlags = useCallback(async (entryIds: string[]) => {
+  const fetchRattelseFlags = useCallback(async (entryIds: string[], isCurrent: () => boolean = () => true) => {
     if (entryIds.length === 0) {
       setRattelseFlags(new Set())
       return
@@ -245,6 +392,7 @@ export default function JournalEntryList() {
       )
       if (!res.ok) return
       const { data } = await res.json()
+      if (!isCurrent()) return
       setRattelseFlags(new Set((data || []) as string[]))
     } catch {
       // Non-critical: silently ignore
@@ -276,8 +424,10 @@ export default function JournalEntryList() {
   // the saved order, no flash of the default sort.
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const stored = window.localStorage.getItem(SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default'))
-      if (stored && SORT_VALUES.has(stored as SortBy)) setSortBy(stored as SortBy)
+      const stored = parseSortStack(
+        window.localStorage.getItem(SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default')),
+      )
+      if (stored) setSortStack(stored)
     }
     setSortHydrated(true)
   }, [company?.id])
@@ -306,6 +456,17 @@ export default function JournalEntryList() {
   // gates that first fetch so the list loads already scoped to the resolved year.
   useEffect(() => {
     if (!company?.id) {
+      setPeriodId(null)
+      setPeriodHydrated(true)
+      return
+    }
+
+    // Deep-link arrival with the missing-underlag filter: scope this visit to
+    // all fiscal years (in memory only) so the list can show the same set the
+    // all-years dashboard badge counted. Consumed once; picking a year in the
+    // FyPicker afterwards works and persists as usual.
+    if (deepLinkAllYearsRef.current) {
+      deepLinkAllYearsRef.current = false
       setPeriodId(null)
       setPeriodHydrated(true)
       return
@@ -367,13 +528,24 @@ export default function JournalEntryList() {
     return () => clearTimeout(handle)
   }, [searchInput])
 
-  async function fetchEntries() {
+  // Sort/filter changes fire fetchEntries while an earlier request may still
+  // be in flight; only the newest request may write state, or a slow earlier
+  // response would overwrite the current sort's rows after they rendered.
+  const fetchGenRef = useRef(0)
+
+  // `preserveSelection` marks a parent-driven background refresh (the
+  // refreshToken contract: refresh in place, don't disturb the user's
+  // working state). User-initiated reloads (filter/sort/page/mode changes,
+  // commit, storno, retry) keep the default reset: selection is page-scoped.
+  async function fetchEntries({ preserveSelection = false }: { preserveSelection?: boolean } = {}) {
+    const gen = ++fetchGenRef.current
+    const isCurrent = () => fetchGenRef.current === gen
     setLoading(true)
-    setSelectedIds(new Set()) // selection is page-scoped, reset on reload
+    if (!preserveSelection) setSelectedIds(new Set()) // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
       limit: String(pageSize),
       offset: String(page * pageSize),
-      sort_by: sortBy,
+      sort_by: serializeSortStack(sortStack),
     })
     if (listMode === 'drafts') {
       // Drafts get their own view spanning all years: they're work-in-progress
@@ -386,36 +558,98 @@ export default function JournalEntryList() {
       if (dateFrom) params.set('date_from', dateFrom)
       if (dateTo) params.set('date_to', dateTo)
       if (seriesFilter !== 'all') params.set('series', seriesFilter)
+      // Server-side filter: the missing-underlag predicate spans documents,
+      // supplier-invoice references and exemptions, so the server resolves it
+      // across ALL pages (count included). Filtering the fetched page here
+      // could only ever show this page's missing rows.
+      if (showMissingOnly) params.set('missing_underlag', 'true')
     }
     if (search) params.set('search', search)
 
-    const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
-    if (!res.ok) {
+    try {
+      const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
+      if (!isCurrent()) return
+      if (!res.ok) {
+        // Surface the failure: stale rows (if any) stay on screen, the empty
+        // case renders the error state below, and the toast covers refetches.
+        setLoadFailed(true)
+        toast({ title: t('load_failed_title'), variant: 'destructive' })
+        setHasLoaded(true)
+        return
+      }
+      setLoadFailed(false)
+      const { data, count: total } = await res.json()
+      if (!isCurrent()) return
+      const loadedEntries = data || []
+      setEntries(loadedEntries)
+      setCount(total || 0)
+      if (preserveSelection) {
+        // Reconcile with the refreshed page: rows that left it (recommitted
+        // elsewhere, filtered out by the new data) must leave the selection
+        // too, or the bulk bar would act on rows no longer on screen.
+        const visibleIds = new Set(loadedEntries.map((e: JournalEntry) => e.id))
+        setSelectedIds((prev) => {
+          const next = new Set([...prev].filter((id) => visibleIds.has(id)))
+          return next.size === prev.size ? prev : next
+        })
+      }
+
+      // The pristine empty card vs. the (toggle-bearing) "drafts exist" state hinges
+      // on draftCount. When the committed list comes back empty, resolve the draft
+      // count BEFORE clearing loading so the toggle doesn't flash out for a frame on
+      // a stale count of 0. Every other case refreshes the badge in the background.
+      if (loadedEntries.length === 0 && listMode === 'committed') {
+        // A missing-underlag-filtered total of 0 says nothing about whether
+        // the ledger has entries, so that mode never short-circuits the probe.
+        const unscopedQuery =
+          !periodId && !dateFrom && !dateTo && seriesFilter === 'all' && !search && !showMissingOnly
+        await Promise.all([
+          fetchDraftCount(),
+          unscopedQuery
+            ? Promise.resolve(setLedgerHasAnyEntry((total || 0) > 0))
+            : fetchLedgerHasAnyEntry(isCurrent),
+        ])
+      } else {
+        if (listMode === 'committed' && loadedEntries.length > 0) setLedgerHasAnyEntry(true)
+        fetchDraftCount()
+      }
+      if (!isCurrent()) return
       setHasLoaded(true)
-      setLoading(false)
-      return
-    }
-    const { data, count: total } = await res.json()
-    const loadedEntries = data || []
-    setEntries(loadedEntries)
-    setCount(total || 0)
 
-    // The pristine empty card vs. the (toggle-bearing) "drafts exist" state hinges
-    // on draftCount. When the committed list comes back empty, resolve the draft
-    // count BEFORE clearing loading so the toggle doesn't flash out for a frame on
-    // a stale count of 0. Every other case refreshes the badge in the background.
-    if (loadedEntries.length === 0 && listMode === 'committed') {
-      await fetchDraftCount()
-    } else {
-      fetchDraftCount()
+      // Fetch attachment counts + rättelse markers for the loaded entries,
+      // carrying the generation guard so their late completions can't
+      // overwrite metadata a newer request just rendered.
+      const ids = loadedEntries.map((e: JournalEntry) => e.id)
+      fetchAttachmentCounts(ids, isCurrent)
+      fetchRattelseFlags(ids, isCurrent)
+    } catch {
+      // Network-level rejection (offline, aborted response body): same
+      // surfacing as a non-OK response, or the list stays dimmed forever.
+      if (!isCurrent()) return
+      setLoadFailed(true)
+      setHasLoaded(true)
+      toast({ title: t('load_failed_title'), variant: 'destructive' })
+    } finally {
+      if (isCurrent()) setLoading(false)
     }
-    setHasLoaded(true)
-    setLoading(false)
+  }
 
-    // Fetch attachment counts + rättelse markers for the loaded entries
-    const ids = loadedEntries.map((e: JournalEntry) => e.id)
-    fetchAttachmentCounts(ids)
-    fetchRattelseFlags(ids)
+  // Cheap count-only probe across ALL years and filters: does this ledger
+  // hold any committed entry at all? Distinguishes "pristine ledger" from
+  // "the selected scope is empty" for the start-card gate below.
+  async function fetchLedgerHasAnyEntry(isCurrent: () => boolean) {
+    // Back to unknown while the probe is in flight: a failed probe must not
+    // leave a stale false behind, or the pristine card could render on data
+    // this scope change never confirmed.
+    if (isCurrent()) setLedgerHasAnyEntry(null)
+    try {
+      const res = await fetch('/api/bookkeeping/journal-entries?exclude_draft=true&limit=1')
+      if (!res.ok || !isCurrent()) return
+      const { count: total } = await res.json()
+      if (isCurrent()) setLedgerHasAnyEntry((total || 0) > 0)
+    } catch {
+      // Non-fatal: an unknown probe keeps the pristine card hidden.
+    }
   }
 
   // Cheap count-only query for the "Utkast" badge, all years, so the badge
@@ -431,13 +665,56 @@ export default function JournalEntryList() {
     }
   }
 
+  // The stack serializes to a string for the dependency array: a stable
+  // primitive, so refetches fire on real sort changes, not array identity.
+  const sortParam = serializeSortStack(sortStack)
+
   useEffect(() => {
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
-  }, [periodId, page, pageSize, sortBy, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, sortHydrated, periodHydrated, pageSizeHydrated])
+  }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, showMissingOnly, sortHydrated, periodHydrated, pageSizeHydrated])
+
+  // Parent-driven in-place refresh (see the refreshToken prop). Skips the
+  // mount value: the main effect above owns the initial fetch, and a token
+  // bump before hydration is covered by that same initial fetch.
+  const lastRefreshTokenRef = useRef(refreshToken)
+  useEffect(() => {
+    if (refreshToken === undefined || refreshToken === lastRefreshTokenRef.current) return
+    lastRefreshTokenRef.current = refreshToken
+    if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
+    // In-place refresh: the user didn't ask for a reload, so their current
+    // selection survives (reconciled against the refreshed page).
+    fetchEntries({ preserveSelection: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken, sortHydrated, periodHydrated, pageSizeHydrated])
+
+  // Render-time ref mirrors so the stable [] callback below can read current
+  // state and call the current fetchEntries (same pattern as
+  // JournalEntryAttachments' onCountChangeRef).
+  const showMissingOnlyRef = useRef(showMissingOnly)
+  showMissingOnlyRef.current = showMissingOnly
+  const fetchEntriesRef = useRef(fetchEntries)
+  fetchEntriesRef.current = fetchEntries
+  // Entry ids that already triggered a filter refetch after gaining underlag:
+  // if the server still included the row after that refetch (predicate
+  // disagreement), a remount would re-fire the callback and loop forever.
+  const refetchedAfterAttachRef = useRef<Set<string>>(new Set())
 
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))
+    // With the server-side saknade-underlag filter on, a listed row that just
+    // received its first underlag no longer belongs to the filtered set:
+    // refetch in place so it leaves the list, as the old client-side filter
+    // did. Listed rows arrive with zero underlag by definition, so a count
+    // above zero here can only follow a user action.
+    if (
+      count > 0 &&
+      showMissingOnlyRef.current &&
+      !refetchedAfterAttachRef.current.has(entryId)
+    ) {
+      refetchedAfterAttachRef.current.add(entryId)
+      void fetchEntriesRef.current({ preserveSelection: true })
+    }
   }, [])
 
   const toggleExpand = (id: string) => {
@@ -575,6 +852,10 @@ export default function JournalEntryList() {
         title: t('batch_no_doc_done_title'),
         description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? ids.length }),
       })
+      // With the server-side saknade-underlag filter on, the exempted rows no
+      // longer belong to the filtered set: refetch so they leave the list and
+      // the count updates (the pre-server-filter behavior).
+      if (showMissingOnly) await fetchEntries()
     } catch {
       toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
     } finally {
@@ -644,15 +925,21 @@ export default function JournalEntryList() {
     }
   }
 
-  const filteredEntries = showMissingOnly
-    ? entries.filter(
-        (e) =>
-          NEEDS_ATTACHMENT.has(e.source_type) &&
-          !attachmentCounts[e.id] &&
-          e.status === 'posted' &&
-          !noDocRequired.has(e.id)
-      )
-    : entries
+  // The missing-underlag filter is applied SERVER-side (missing_underlag=true
+  // in fetchEntries): the server's set spans all pages and includes reference
+  // -aware document checks the client can't see. Re-filtering here against the
+  // late-arriving attachmentCounts could hide rows the server included and
+  // desync the visible rows from the returned count, so the fetched page is
+  // rendered as-is.
+  const filteredEntries = entries
+
+  // Detail-pager context: the loaded page as rendered, written when the user
+  // opens a verifikat. Server-paginated, so prev/next spans this page only.
+  const rememberListContext = () => {
+    writeListContext(listContextKey('bookkeeping', company?.id), {
+      ids: filteredEntries.map((e) => e.id),
+    })
+  }
 
   // Count of active dialog filters, shown as a badge on the Filtrera button so
   // the user can tell the list is scoped without opening the dialog. Sort order
@@ -691,6 +978,53 @@ export default function JournalEntryList() {
     }
   }
 
+  // Apply a sort stack, whether it came from a column header or the dialog
+  // select. Resets to the first page and persists the choice per company.
+  const applySort = (next: SortKey[]) => {
+    setSortStack(next)
+    setPage(0)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(
+        SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default'),
+        serializeSortStack(next),
+      )
+    }
+  }
+
+  // Plain click: single-key tri-state, replacing any stack: ascending ->
+  // descending -> back to the default order. On the DATUM column descending
+  // IS the default, so that column degenerates to a plain asc/desc toggle
+  // instead of wasting the third click on a no-op.
+  // Shift-click stacks (max 3 keys): adds the column as the next priority
+  // (ascending), a second shift-click flips it, a third removes it again.
+  const handleHeaderSort = (column: SortColumn, additive: boolean) => {
+    if (additive) {
+      const index = sortStack.findIndex((k) => k.column === column)
+      if (index === -1) {
+        if (sortStack.length >= MAX_SORT_KEYS) return
+        applySort([...sortStack, { column, direction: 'asc' }])
+      } else if (sortStack[index].direction === 'asc') {
+        applySort(
+          sortStack.map((k, i) => (i === index ? { column, direction: 'desc' as const } : k)),
+        )
+      } else {
+        const next = sortStack.filter((_, i) => i !== index)
+        applySort(next.length > 0 ? next : DEFAULT_SORT_STACK)
+      }
+      return
+    }
+    const solo = sortStack.length === 1 && sortStack[0].column === column ? sortStack[0] : null
+    if (!solo) {
+      applySort([{ column, direction: 'asc' }])
+    } else if (solo.direction === 'asc') {
+      applySort([{ column, direction: 'desc' }])
+    } else if (sortStacksEqual(sortStack, DEFAULT_SORT_STACK)) {
+      applySort([{ column, direction: 'asc' }])
+    } else {
+      applySort(DEFAULT_SORT_STACK)
+    }
+  }
+
   const clearAllFilters = () => {
     setPeriodId(null)
     // Mirror the selector's "Alla räkenskapsår" write so the cleared scope
@@ -723,12 +1057,21 @@ export default function JournalEntryList() {
     })
   }
 
-  // Pristine, untouched ledger: nothing posted, no drafts, no filters, and we're
-  // on the committed view. ONLY this genuinely-empty case may short-circuit the
-  // whole component: every other empty state (a draft exists, or we're in the
-  // drafts view) must fall through to the main render below so the
+  // Pristine, untouched ledger: nothing posted in ANY year, no drafts, no
+  // search or dialog filters, and we're on the committed view. The fiscal-year
+  // scope deliberately does NOT count here: every company has a period
+  // selected by default, and requiring "no scope" made this state unreachable
+  // (the empty current year fell through to "inga träffar" on brand-new
+  // ledgers). ledgerHasAnyEntry must be an explicit false: while the
+  // all-years probe is in flight we show the filtered-empty state, never a
+  // flash of the start card. ONLY this genuinely-empty case may short-circuit
+  // the whole component: every other empty state (a draft exists, or we're in
+  // the drafts view) must fall through to the main render below so the
   // Verifikat/Utkast toggle stays reachable.
-  if (!loading && entries.length === 0 && !hasActiveFilters && listMode === 'committed' && draftCount === 0) {
+  if (!loading && entries.length === 0 && !loadFailed && !search && dialogFilterCount === 0 && ledgerHasAnyEntry === false && listMode === 'committed' && draftCount === 0) {
+    if (pristineSlot) {
+      return <>{pristineSlot}</>
+    }
     return (
       <DataList className="stagger-enter">
         <DataListEmpty
@@ -747,52 +1090,33 @@ export default function JournalEntryList() {
       <div className="flex flex-wrap items-center gap-2">
         {/* Verifikat vs Utkast. Drafts live in their own view with a count badge so
             they don't sink to the last page of the committed list. */}
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={listMode === 'committed'}
-            onClick={() => switchMode('committed')}
-            className={cn(
-              'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-              listMode === 'committed'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t('mode_vouchers')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={listMode === 'drafts'}
-            onClick={() => switchMode('drafts')}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-              listMode === 'drafts'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t('mode_drafts')}
-            {draftCount > 0 && (
-              <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                {draftCount}
-              </span>
-            )}
-          </button>
-        </div>
+        <SegmentedControl
+          value={listMode}
+          onChange={switchMode}
+          options={[
+            { value: 'committed', label: t('mode_vouchers') },
+            { value: 'drafts', label: t('mode_drafts'), count: draftCount },
+          ]}
+        />
         <div className="relative flex-1 sm:flex-none sm:w-[280px]">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-          <Input
+          <ToolbarSearch
             type="text"
             inputMode="search"
             placeholder={t('search_placeholder')}
             aria-label={t('search_placeholder')}
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            className="h-8 pl-8 pr-7 text-xs"
+            containerClassName="min-w-0 max-w-none"
+            className={cn('pr-7', loading && search && 'pr-12')}
           />
+          {loading && search && (
+            // Search is server-side and can take a moment on a large ledger;
+            // without this the only signal was the list dimming.
+            <Loader2
+              className="absolute right-7 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-muted-foreground"
+              aria-hidden="true"
+            />
+          )}
           {searchInput && (
             <button
               type="button"
@@ -839,15 +1163,14 @@ export default function JournalEntryList() {
               {/* Sortering */}
               <div className="space-y-2">
                 <Label className="text-sm font-medium">{t('filter_section_sort')}</Label>
+                {/* The select models a SINGLE sort key: it shows the primary
+                    key of the stack, and picking an option resets the whole
+                    stack to that one key. Stacking lives on the headers. */}
                 <Select
-                  value={sortBy}
+                  value={`${sortStack[0].column}_${sortStack[0].direction}`}
                   onValueChange={(v) => {
-                    const next = v as SortBy
-                    setSortBy(next)
-                    setPage(0)
-                    if (typeof window !== 'undefined') {
-                      window.localStorage.setItem(SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default'), next)
-                    }
+                    const parsed = parseSortStack(v)
+                    if (parsed) applySort(parsed)
                   }}
                 >
                   <SelectTrigger className="h-9 w-full text-sm">
@@ -858,6 +1181,10 @@ export default function JournalEntryList() {
                     <SelectItem value="date_asc">{t('sort_date_asc')}</SelectItem>
                     <SelectItem value="voucher_asc">{t('sort_voucher_asc')}</SelectItem>
                     <SelectItem value="voucher_desc">{t('sort_voucher_desc')}</SelectItem>
+                    <SelectItem value="total_desc">{t('sort_total_desc')}</SelectItem>
+                    <SelectItem value="total_asc">{t('sort_total_asc')}</SelectItem>
+                    <SelectItem value="description_asc">{t('sort_description_asc')}</SelectItem>
+                    <SelectItem value="description_desc">{t('sort_description_desc')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -929,17 +1256,23 @@ export default function JournalEntryList() {
 
               {/* Visa saknade underlag */}
               <div className="flex items-center gap-2">
+                {/* Committed view only: the predicate is posted-only, so in the
+                    drafts view the toggle would just mislabel the draft count. */}
                 <Switch
                   id="missing-attachments"
                   checked={showMissingOnly}
-                  onCheckedChange={setShowMissingOnly}
+                  disabled={listMode === 'drafts'}
+                  onCheckedChange={(on) => {
+                    setShowMissingOnly(on)
+                    setPage(0)
+                  }}
                 />
                 <Label htmlFor="missing-attachments" className="text-sm cursor-pointer">
                   {t('show_missing')}
                 </Label>
                 {showMissingOnly && (
                   <Badge variant="secondary" className="text-xs tabular-nums">
-                    {filteredEntries.length}
+                    {count}
                   </Badge>
                 )}
               </div>
@@ -980,7 +1313,15 @@ export default function JournalEntryList() {
             authoritatively in the period effect. */}
         {periodHydrated && (
           <div className="sm:ml-auto">
-            <FyPicker value={periodId} onChange={handlePeriodChange} />
+            {/* suppressAutoRestore on deep-link visits: the arrival scope is a
+                deliberate in-memory "Alla räkenskapsår" (matches the all-years
+                dashboard badge); FyPicker's on-load restore of the persisted
+                year would otherwise snap the scope back right after load. */}
+            <FyPicker
+              value={periodId}
+              onChange={handlePeriodChange}
+              suppressAutoRestore={initialShowMissingOnly}
+            />
           </div>
         )}
       </div>
@@ -988,6 +1329,22 @@ export default function JournalEntryList() {
       {loading && !hasLoaded ? (
         <DataList className="stagger-enter">
           <DataListLoading />
+        </DataList>
+      ) : loadFailed && filteredEntries.length === 0 ? (
+        // Failed load with nothing on screen: an explicit error state with a
+        // retry, never the "empty ledger" card. The toolbar above stays
+        // mounted so the sort/filter that caused the failure can be changed.
+        <DataList className={cn('stagger-enter', loading && 'opacity-60')} aria-busy={loading || undefined}>
+          <DataListEmpty
+            icon={<CircleSlash className="h-6 w-6" />}
+            title={t('load_failed_title')}
+            description={t('load_failed_description')}
+            action={
+              <Button variant="outline" size="sm" onClick={() => fetchEntries()}>
+                {t('load_failed_retry')}
+              </Button>
+            }
+          />
         </DataList>
       ) : filteredEntries.length === 0 ? (
         // Empty placeholder, scoped to the situation: an empty drafts view, a
@@ -1083,15 +1440,58 @@ export default function JournalEntryList() {
           </div>
         )}
 
+        {/* Discoverability for "Ångra import" (issue #1883): when the page
+            shows import-sourced vouchers, point at the SIE import history
+            where a bad import can be undone in one step. One page-domain
+            attn line (design convention 6). Only source_type 'import' is an
+            SIE marker: 'opening_balance' is also written by year-end closing
+            and the manual IB flows, which have nothing to undo here. */}
+        {entries.some((e) => e.source_type === 'import') && (
+          <AttnLine
+            className="px-1 pb-2"
+            action={{ label: t('import_attn_action'), href: '/import?history=sie' }}
+          >
+            {t('import_attn')}
+          </AttnLine>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
                 <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
-                <th className={TH_CLASS}>{t('th_voucher')}</th>
-                <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_date')}</th>
-                <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
-                <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                <SortableHeader
+                  label={t('th_voucher')}
+                  sortLabel={t('sort_by', { column: t('th_voucher') })}
+                  column="voucher"
+                  stack={sortStack}
+                  onSort={handleHeaderSort}
+                />
+                <SortableHeader
+                  label={t('th_date')}
+                  sortLabel={t('sort_by', { column: t('th_date') })}
+                  column="date"
+                  stack={sortStack}
+                  onSort={handleHeaderSort}
+                  className="hidden sm:table-cell"
+                />
+                <SortableHeader
+                  label={t('th_description')}
+                  sortLabel={t('sort_by', { column: t('th_description') })}
+                  column="description"
+                  stack={sortStack}
+                  onSort={handleHeaderSort}
+                  className="w-full"
+                />
+                <SortableHeader
+                  label={t('th_amount')}
+                  sortLabel={t('sort_by', { column: t('th_amount') })}
+                  column="total"
+                  stack={sortStack}
+                  onSort={handleHeaderSort}
+                  className="text-right"
+                  align="right"
+                />
                 <th className={TH_CLASS} aria-hidden="true"></th>
               </tr>
             </thead>
@@ -1159,7 +1559,10 @@ export default function JournalEntryList() {
                               'font-mono text-[13px] tabular-nums hover:underline',
                               struckCell,
                             )}
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              rememberListContext()
+                            }}
                             // The row's Enter/Space handler calls
                             // preventDefault(), so without this the voucher
                             // link expands the row instead of opening it.
@@ -1213,7 +1616,7 @@ export default function JournalEntryList() {
                                 e.stopPropagation()
                                 setPreviewEntryId(entry.id)
                               }}
-                              className="inline-flex items-center gap-0.5 rounded text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                              className="inline-flex items-center gap-0.5 rounded-sm text-muted-foreground transition-colors duration-150 hover:text-foreground"
                             >
                               <Paperclip className="h-3.5 w-3.5" />
                               <span className="text-xs tabular-nums">{attachmentCounts[entry.id]}</span>
@@ -1260,7 +1663,7 @@ export default function JournalEntryList() {
                                 // p-2 grows the tap target to 30px without
                                 // changing row height (the row is ~40px from
                                 // the description cell).
-                                'inline-flex items-center rounded p-2 text-muted-foreground transition-opacity duration-150 hover:text-foreground',
+                                'inline-flex items-center rounded-sm p-2 text-muted-foreground transition-opacity duration-150 hover:text-foreground',
                                 // Quiet at rest on desktop, but the table has no
                                 // mobile card to fall back on, so touch keeps the
                                 // icon visible.
@@ -1373,6 +1776,13 @@ export default function JournalEntryList() {
                                       else next.delete(entry.id)
                                       return next
                                     })
+                                    // Server-side saknade-underlag filter on: an
+                                    // exempted row leaves the filtered set, so
+                                    // refetch in place (keeps expansion state
+                                    // semantics of a background refresh).
+                                    if (exempted && showMissingOnly) {
+                                      void fetchEntries({ preserveSelection: true })
+                                    }
                                   }}
                                 />
                               )}
@@ -1391,7 +1801,11 @@ export default function JournalEntryList() {
                                     {t('post')}
                                   </Button>
                                 )}
-                                <Link href={`/bookkeeping/${entry.id}`} className={QUIET_LINK_CLASS}>
+                                <Link
+                                  href={`/bookkeeping/${entry.id}`}
+                                  className={QUIET_LINK_CLASS}
+                                  onClick={rememberListContext}
+                                >
                                   {t('show_details')}
                                 </Link>
                                 {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (

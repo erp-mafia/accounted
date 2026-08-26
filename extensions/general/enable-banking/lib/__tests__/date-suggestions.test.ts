@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { resolveBookedCoverage, resolveFiscalYearStart } from '../date-suggestions'
+import {
+  resolveBookedCoverage,
+  resolveFiscalYearStart,
+  resolveGapFillStart,
+} from '../date-suggestions'
 
 describe('resolveBookedCoverage', () => {
   it('suggests the day after the last posted verifikat date', () => {
@@ -40,6 +44,50 @@ describe('resolveBookedCoverage', () => {
     expect(resolveBookedCoverage(null)).toBeNull()
     expect(resolveBookedCoverage(undefined)).toBeNull()
     expect(resolveBookedCoverage('')).toBeNull()
+  })
+})
+
+describe('resolveGapFillStart', () => {
+  it('suggests one week of overlap before the newest imported transaction', () => {
+    const today = new Date('2026-08-13T12:00:00Z')
+    expect(resolveGapFillStart('2026-08-06', today)).toEqual({
+      latestImportedDate: '2026-08-06',
+      suggestedStartDate: '2026-07-30',
+    })
+  })
+
+  it('rolls over month and year boundaries', () => {
+    // Todays within the 365-day floor of each case so only the 7-day overlap acts.
+    expect(resolveGapFillStart('2026-01-03', new Date('2026-01-15T12:00:00Z'))?.suggestedStartDate).toBe('2025-12-27')
+    expect(resolveGapFillStart('2026-03-04', new Date('2026-03-10T12:00:00Z'))?.suggestedStartDate).toBe('2026-02-25')
+  })
+
+  it('clamps to today when bank data claims a future date (backend rejects non-past dates)', () => {
+    const today = new Date('2026-08-13T12:00:00Z')
+    expect(resolveGapFillStart('2026-09-20', today)).toEqual({
+      latestImportedDate: '2026-09-20',
+      suggestedStartDate: '2026-08-13',
+    })
+  })
+
+  it('clamps a stale renewal to the backend 365-day lookback floor so the shown date matches the actual backfill', () => {
+    const today = new Date('2026-08-13T12:00:00Z')
+    // Newest import 2025-01-10; minus 7d = 2025-01-03, older than the 365-day
+    // floor (2025-08-13), which the backend would silently clamp to anyway.
+    expect(resolveGapFillStart('2025-01-10', today)).toEqual({
+      latestImportedDate: '2025-01-10',
+      suggestedStartDate: '2025-08-13',
+    })
+  })
+
+  it('returns null when the connection has never imported anything (first connect has no gap)', () => {
+    expect(resolveGapFillStart(null)).toBeNull()
+    expect(resolveGapFillStart(undefined)).toBeNull()
+    expect(resolveGapFillStart('')).toBeNull()
+  })
+
+  it('returns null for an unparsable date', () => {
+    expect(resolveGapFillStart('not-a-date')).toBeNull()
   })
 })
 

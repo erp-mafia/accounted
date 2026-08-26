@@ -5,21 +5,19 @@ import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
+import { AttnLine } from '@/components/ui/attn-line'
+import {
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsSelect,
+} from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
+import { cn } from '@/lib/utils'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
-import {
-  AlertTriangle,
-  Box,
-  Cloud,
-  ExternalLink,
-  Loader2,
-  RefreshCw,
-  Unplug,
-} from 'lucide-react'
+import { Box, Cloud, ExternalLink, Loader2, RefreshCw, Unplug } from 'lucide-react'
 import { useBranding } from '@/lib/branding/brand-context'
 import type {
   CloudBackupStatus,
@@ -44,6 +42,7 @@ const PROVIDER_META: Record<CloudProviderId, { label: string; icon: typeof Cloud
 export default function CloudBackupCard() {
   const t = useTranslations('extensions')
   const { toast } = useToast()
+  const { appName } = useBranding()
   const searchParams = useSearchParams()
 
   const [status, setStatus] = useState<CloudBackupStatus | null>(null)
@@ -118,55 +117,78 @@ export default function CloudBackupCard() {
 
   if (isLoading) {
     return (
-      <div className="rounded-lg border border-border bg-card p-6">
-        <p className="text-sm text-muted-foreground">{t('ext_cloud_backup_loading')}</p>
-      </div>
+      <p className="px-1 py-3 text-xs text-muted-foreground">
+        {t('ext_cloud_backup_loading')}
+      </p>
     )
   }
 
+  const providers = status?.providers ?? []
+  // Configured too: reconnecting a destination whose credentials are gone
+  // would only bounce off `/connect`, so that row keeps its quiet
+  // "not configured" line instead.
+  const reauthProviders = providers.filter((p) => p.configured && p.needs_reauth)
+
+  // `/status` returns a row for every provider the build knows about, whether
+  // or not this deployment has credentials for it, so the note has to filter:
+  // naming Dropbox where Dropbox is not configured would promise a
+  // destination that does not exist. Configured (not connected) is the right
+  // cut, because the note is the compliance framing for the decision to
+  // connect and has to read before anything is connected.
+  const destinations = providers
+    .filter((p) => p.configured)
+    .map((p) => PROVIDER_META[p.provider]?.label ?? p.provider)
+    .join(' / ')
+
   return (
-    <div className="space-y-4">
-      {(status?.providers ?? []).map((providerStatus) => (
-        <ProviderRow
-          key={providerStatus.provider}
-          status={providerStatus}
-          onChanged={loadStatus}
-        />
-      ))}
+    <div>
+      {reauthProviders.length > 0 && <ReauthAttn providers={reauthProviders} />}
+
+      <div>
+        {providers.map((providerStatus) => (
+          <ProviderRow
+            key={providerStatus.provider}
+            status={providerStatus}
+            onChanged={loadStatus}
+          />
+        ))}
+      </div>
+
+      {/*
+        The 7-year BFL note is compliance context, so it stays visible rather
+        than hiding behind hover: it is shown once for the whole section
+        instead of once per destination, because the statement is identical
+        for every provider and repeating it was what made the panel bulky.
+      */}
+      {destinations.length > 0 && (
+        <p className="mt-4 px-1 text-xs leading-5 text-muted-foreground">
+          {t('ext_cloud_backup_legal_note', { provider: destinations, appName })}
+        </p>
+      )}
     </div>
   )
 }
 
-interface ProviderRowProps {
-  status: CloudProviderStatus
-  onChanged: () => Promise<void> | void
-}
-
 /**
- * One destination: identity on the left, its own connection state, schedule
- * and actions on the right. Every request carries `?provider=`, so the two
- * rows never touch each other's records.
+ * Start the OAuth handshake for one destination. Shared by the connect button
+ * on a row and by the section-level reconnect line, so both take the exact
+ * same path.
  */
-function ProviderRow({ status, onChanged }: ProviderRowProps) {
+function useConnectProvider(providerId: CloudProviderId, provider: string) {
   const { toast } = useToast()
   const t = useTranslations('extensions')
-  const { appName } = useBranding()
-  const { dialogProps, confirm } = useDestructiveConfirm()
-
   const [isConnecting, setIsConnecting] = useState(false)
-  const [isSyncing, setIsSyncing] = useState(false)
-  const [isDisconnecting, setIsDisconnecting] = useState(false)
 
-  const providerId = status.provider
-  const meta = PROVIDER_META[providerId]
-  const provider = meta?.label ?? providerId
-  const Icon = meta?.icon ?? Cloud
-  const qs = `?provider=${encodeURIComponent(providerId)}`
-
-  const handleConnect = useCallback(async () => {
+  const connect = useCallback(async () => {
+    // The reconnect affordance is a plain inline link (no disabled state), so
+    // the guard lives here instead of on a button.
+    if (isConnecting) return
     setIsConnecting(true)
     try {
-      const res = await fetch(`${API_BASE}/connect${qs}`, { method: 'POST' })
+      const res = await fetch(
+        `${API_BASE}/connect?provider=${encodeURIComponent(providerId)}`,
+        { method: 'POST' }
+      )
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error || t('ext_cloud_backup_connect_start_failed'))
@@ -181,7 +203,68 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
       })
       setIsConnecting(false)
     }
-  }, [provider, qs, t, toast])
+  }, [isConnecting, provider, providerId, t, toast])
+
+  return { isConnecting, connect }
+}
+
+/**
+ * Attention is one ochre sentence, max one per section (convention 6), so the
+ * reconnect notice lives here and not on each row: both destinations can lose
+ * their token at once, and two stacked banners is exactly the shape the
+ * convention forbids. The sentence names every affected destination; the
+ * action reconnects the first, since one redirect can only hand off to one
+ * provider. Once it is back the line returns for the next one.
+ */
+function ReauthAttn({ providers }: { providers: CloudProviderStatus[] }) {
+  const t = useTranslations('extensions')
+  const labels = providers.map((p) => PROVIDER_META[p.provider]?.label ?? p.provider)
+  const { isConnecting, connect } = useConnectProvider(providers[0].provider, labels[0])
+
+  return (
+    <AttnLine
+      className="pb-3"
+      action={{
+        label: isConnecting
+          ? t('ext_cloud_backup_redirecting')
+          : t('ext_cloud_backup_reauth_action', { provider: labels[0] }),
+        onClick: connect,
+      }}
+    >
+      {t('ext_cloud_backup_reauth_description', { provider: labels.join(' / ') })}
+    </AttnLine>
+  )
+}
+
+interface ProviderRowProps {
+  status: CloudProviderStatus
+  onChanged: () => Promise<void> | void
+}
+
+/**
+ * One destination as a single hairline row: brand mark and name on the left,
+ * the connect action on the right. Connected destinations unfold their detail
+ * (last sync, schedule) as indented settings rows below the same header row.
+ * Every request carries `?provider=`, so the two rows never touch each
+ * other's records. The reconnect notice is deliberately not here: it belongs
+ * to the section (see `ReauthAttn`), one ochre sentence for all destinations.
+ */
+function ProviderRow({ status, onChanged }: ProviderRowProps) {
+  const { toast } = useToast()
+  const t = useTranslations('extensions')
+  const { dialogProps, confirm } = useDestructiveConfirm()
+  const { appName } = useBranding()
+
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [isDisconnecting, setIsDisconnecting] = useState(false)
+
+  const providerId = status.provider
+  const meta = PROVIDER_META[providerId]
+  const provider = meta?.label ?? providerId
+  const Icon = meta?.icon ?? Cloud
+  const qs = `?provider=${encodeURIComponent(providerId)}`
+
+  const { isConnecting, connect: handleConnect } = useConnectProvider(providerId, provider)
 
   const handleDisconnect = useCallback(async () => {
     setIsDisconnecting(true)
@@ -298,102 +381,58 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
     if (ok) await syncOnce(true)
   }, [confirm, syncOnce, t])
 
+  // The scope copy ("only files the app creates" / "its own app folder") is
+  // what earns the OAuth grant, so it stays visible in the state where the
+  // user decides: it replaces the tagline, which only paraphrased the row
+  // title. Connected rows swap it for the account the backup lands in.
+  const scopeKey =
+    providerId === 'dropbox'
+      ? 'ext_cloud_backup_connect_description_dropbox'
+      : 'ext_cloud_backup_connect_description_google'
+
+  const supportingLine = status.connected
+    ? status.account_email
+    : status.configured
+      ? t(scopeKey, { appName })
+      : null
+
   return (
-    <div className="rounded-lg border border-border bg-card p-6">
+    <div className="border-b border-border">
       <DestructiveConfirmDialog {...dialogProps} />
-      <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
-        {/* Identity */}
-        <div className="flex items-start gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
-            <Icon className="h-[18px] w-[18px] text-foreground/60" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="text-[15px] font-semibold leading-tight">{provider}</h3>
-            <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
-              {t('ext_cloud_backup_card_tagline', { provider })}
-            </p>
-            <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
-              {t('ext_cloud_backup_legal_note', { provider, appName })}
-            </p>
+
+      {/* Header row: identity left, action right, in every state. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <div className="min-w-0">
+            <span className="text-sm font-medium">{provider}</span>
+            {supportingLine && (
+              <p
+                className={cn(
+                  'mt-1 text-xs leading-5 text-muted-foreground',
+                  // Only the account address is a single unbreakable token
+                  // worth clipping; the scope sentence has to wrap, or it is
+                  // cut off on a 390px screen where the row does not wrap.
+                  status.connected && 'truncate'
+                )}
+              >
+                {supportingLine}
+              </p>
+            )}
           </div>
         </div>
 
-        {/* Controls */}
-        <div>
-          {!status.configured ? (
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              {t('ext_cloud_backup_not_configured', { provider })}
-            </p>
-          ) : status.connected ? (
-            <>
-              {status.needs_reauth && (
-                <div className="mb-6 flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
-                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">
-                      {t('ext_cloud_backup_reauth_title', { provider })}
-                    </p>
-                    <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
-                      {t('ext_cloud_backup_reauth_description', { provider })}
-                    </p>
-                    <Button
-                      onClick={handleConnect}
-                      disabled={isConnecting}
-                      className="mt-3 w-full sm:w-auto"
-                    >
-                      {isConnecting ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          {t('ext_cloud_backup_redirecting')}
-                        </>
-                      ) : (
-                        <>
-                          <Icon className="mr-2 h-4 w-4" />
-                          {t('ext_cloud_backup_reauth_action', { provider })}
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </div>
-              )}
-              <dl className="space-y-3 text-sm">
-                <div className="flex items-baseline justify-between gap-3">
-                  <dt className="shrink-0 text-muted-foreground">
-                    {t('ext_cloud_backup_account_label')}
-                  </dt>
-                  <dd className="min-w-0 truncate font-medium">{status.account_email}</dd>
-                </div>
-                <div className="flex items-baseline justify-between gap-3">
-                  <dt className="shrink-0 text-muted-foreground">
-                    {t('ext_cloud_backup_last_sync_label')}
-                  </dt>
-                  <dd className="min-w-0 text-right">
-                    {status.last_sync ? (
-                      <LastSyncSummary
-                        lastSync={status.last_sync}
-                        providerId={providerId}
-                      />
-                    ) : (
-                      <span className="text-muted-foreground">
-                        {t('ext_cloud_backup_never')}
-                      </span>
-                    )}
-                  </dd>
-                </div>
-              </dl>
-
-              <div className="mt-6 pt-6 border-t border-border">
-                <ScheduleSection
-                  providerId={providerId}
-                  provider={provider}
-                  schedule={status.schedule}
-                  needsReauth={status.needs_reauth}
-                  onUpdated={onChanged}
-                />
-              </div>
-
-              <div className="mt-6 pt-6 border-t border-border flex flex-col gap-2 sm:flex-row sm:justify-between">
-                <Button onClick={handleSync} disabled={isSyncing} className="w-full sm:w-auto">
+        {!status.configured ? (
+          // Not configured is a state, not an action: one quiet line where the
+          // button would sit, free to wrap on narrow screens.
+          <span className="text-xs text-muted-foreground">
+            {t('ext_cloud_backup_not_configured', { provider })}
+          </span>
+        ) : (
+          <div className="flex shrink-0 items-center gap-2">
+            {status.connected ? (
+              <>
+                <Button variant="outline" onClick={handleSync} disabled={isSyncing}>
                   {isSyncing ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -406,12 +445,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
                     </>
                   )}
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={handleDisconnect}
-                  disabled={isDisconnecting}
-                  className="w-full sm:w-auto"
-                >
+                <Button variant="ghost" onClick={handleDisconnect} disabled={isDisconnecting}>
                   {isDisconnecting ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -424,37 +458,54 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
                     </>
                   )}
                 </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="text-sm text-muted-foreground leading-relaxed">
-                {t(
-                  providerId === 'dropbox'
-                    ? 'ext_cloud_backup_connect_description_dropbox'
-                    : 'ext_cloud_backup_connect_description_google',
-                  { appName }
+              </>
+            ) : (
+              <Button onClick={handleConnect} disabled={isConnecting}>
+                {isConnecting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {t('ext_cloud_backup_redirecting')}
+                  </>
+                ) : (
+                  t('ext_cloud_backup_connect', { provider })
                 )}
-              </p>
-              <div className="mt-4">
-                <Button onClick={handleConnect} disabled={isConnecting} className="w-full sm:w-auto">
-                  {isConnecting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {t('ext_cloud_backup_redirecting')}
-                    </>
-                  ) : (
-                    <>
-                      <Icon className="mr-2 h-4 w-4" />
-                      {t('ext_cloud_backup_connect', { provider })}
-                    </>
-                  )}
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
+              </Button>
+            )}
+          </div>
+        )}
       </div>
+
+      {/*
+        Both gates, not just `connected`: a deployment that loses its
+        credentials while an account is still stored shows the "not
+        configured" state alone, exactly as the header row does, instead of
+        offering controls next to a line saying the destination is unavailable.
+        `role="group"` ties these controls to the destination they belong to:
+        with two rows open, "Synka nu" is otherwise unattributable.
+      */}
+      {status.configured && status.connected && (
+        <div
+          role="group"
+          aria-label={provider}
+          className="ml-3 border-l border-border pb-3 pl-4"
+        >
+          <SettingsRow label={t('ext_cloud_backup_last_sync_label')} align="baseline">
+            {status.last_sync ? (
+              <LastSyncSummary lastSync={status.last_sync} providerId={providerId} />
+            ) : (
+              <span className="text-muted-foreground">{t('ext_cloud_backup_never')}</span>
+            )}
+          </SettingsRow>
+
+          <ScheduleSection
+            providerId={providerId}
+            provider={provider}
+            schedule={status.schedule}
+            needsReauth={status.needs_reauth}
+            onUpdated={onChanged}
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -490,7 +541,7 @@ function LastSyncSummary({
   const verified = files ? files.every((f) => f.sha256) : Boolean(lastSync.sha256)
 
   return (
-    <>
+    <div className="min-w-0">
       <a
         href={href}
         target="_blank"
@@ -511,7 +562,7 @@ function LastSyncSummary({
           {t('ext_cloud_backup_last_sync_no_documents')}
         </p>
       )}
-    </>
+    </div>
   )
 }
 
@@ -560,8 +611,7 @@ function ScheduleSection({
   const [localHour, setLocalHour] = useState(scheduleHour(schedule))
   const [isSaving, setIsSaving] = useState(false)
 
-  // Each provider renders its own controls, so the ids must not collide.
-  const toggleId = `auto-sync-toggle-${providerId}`
+  // Each provider renders its own controls, so the id must not collide.
   const hourId = `auto-sync-hour-${providerId}`
 
   useEffect(() => {
@@ -621,48 +671,43 @@ function ScheduleSection({
   )
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <Label htmlFor={toggleId} className="text-sm font-medium">
-            {t('ext_cloud_backup_auto_sync_title')}
-          </Label>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            {t('ext_cloud_backup_auto_sync_description', { provider })}
-          </p>
-        </div>
-        <Switch
-          id={toggleId}
-          checked={enabled}
-          onCheckedChange={handleToggle}
-          disabled={isSaving}
-        />
-      </div>
+    <>
+      <SettingsRow
+        label={t('ext_cloud_backup_auto_sync_title')}
+        help={t('ext_cloud_backup_auto_sync_description', { provider })}
+        borderless={!enabled}
+      >
+        <SettingsRowEnd>
+          <Switch
+            checked={enabled}
+            onCheckedChange={handleToggle}
+            disabled={isSaving}
+            aria-label={t('ext_cloud_backup_auto_sync_title')}
+          />
+        </SettingsRowEnd>
+      </SettingsRow>
 
       {enabled && (
-        <div className="flex items-center gap-2">
-          <Label htmlFor={hourId} className="text-xs text-muted-foreground">
-            {t('ext_cloud_backup_time_label')}
-          </Label>
-          <select
+        <SettingsRow label={t('ext_cloud_backup_time_label')} htmlFor={hourId} borderless>
+          <SettingsSelect
             id={hourId}
             value={localHour}
             onChange={handleHourChange}
             disabled={isSaving}
-            className="rounded-md border border-input bg-background px-2 py-1 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-ring"
+            className="tabular-nums"
           >
             {Array.from({ length: 24 }, (_, h) => (
               <option key={h} value={h}>
                 {h.toString().padStart(2, '0')}:00
               </option>
             ))}
-          </select>
+          </SettingsSelect>
           {isSaving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-        </div>
+        </SettingsRow>
       )}
 
       {schedule?.last_auto_sync_at && (
-        <p className="text-xs text-muted-foreground">
+        <p className="px-1 text-xs text-muted-foreground">
           {t('ext_cloud_backup_last_auto_sync')} {formatDateTime(schedule.last_auto_sync_at)}{' '}
           {schedule.last_auto_sync_status === 'success' ? (
             <span className="text-success">· {t('ext_cloud_backup_auto_sync_success')}</span>
@@ -678,7 +723,7 @@ function ScheduleSection({
           ) : null}
         </p>
       )}
-    </div>
+    </>
   )
 }
 

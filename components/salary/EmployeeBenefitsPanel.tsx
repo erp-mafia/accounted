@@ -2,13 +2,22 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Plus, Trash2, Loader2 } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { DetailSection } from '@/components/ui/detail-section'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -36,6 +45,12 @@ const BENEFIT_LABELS: Record<BenefitType, string> = {
   wellness: 'Friskvård (skattepliktig del)',
   other: 'Övrig förmån',
 }
+
+// In-row text action: underlined so it reads as an action next to plain
+// values, the hairline underline darkening on hover (same idiom as the
+// invoice detail rows).
+const ROW_ACTION_CLASS =
+  'text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground hover:decoration-foreground disabled:opacity-50'
 
 export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: string; canWrite: boolean }) {
   const t = useTranslations('salary_employee')
@@ -128,62 +143,77 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
   })()
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="text-base">{t('benefits_title')}</CardTitle>
-        {canWrite && !adding && (
-          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
-            <Plus className="mr-2 h-4 w-4" />
+    <DetailSection
+      kicker={t('benefits_title')}
+      help={<HelpPopover>{t('benefits_help')}</HelpPopover>}
+      aside={
+        canWrite ? (
+          <Button type="button" size="sm" variant="outline" className="-my-1" onClick={() => setAdding(true)}>
             {t('benefits_add')}
           </Button>
-        )}
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {loading ? (
-          <p className="text-sm text-muted-foreground">{t('benefits_loading')}</p>
-        ) : benefits.length === 0 && !adding ? (
-          <p className="text-sm text-muted-foreground">
-            {t('benefits_empty')}
-          </p>
-        ) : (
-          benefits.length > 0 && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('benefits_type')}</TableHead>
-                  <TableHead>{t('benefits_description')}</TableHead>
-                  <TableHead className="text-right">{t('benefits_value_per_month')}</TableHead>
-                  <TableHead>{t('benefits_period')}</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {benefits.map(b => (
-                  <TableRow key={b.id}>
-                    <TableCell>{t(`benefits_type_${b.benefit_type}`)}</TableCell>
-                    <TableCell className="text-muted-foreground">{b.description}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCurrency(b.monthly_value)}</TableCell>
-                    <TableCell className="text-muted-foreground tabular-nums text-xs">
-                      {formatDate(b.valid_from)}
-                      {b.valid_to ? ` ${formatDate(b.valid_to)}` : ` ${t('benefits_ongoing')}`}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {canWrite && (
-                        <Button size="icon" variant="ghost" onClick={() => handleDelete(b.id)} aria-label={t('benefits_remove')}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )
-        )}
+        ) : undefined
+      }
+    >
+      {loading ? (
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
+      ) : benefits.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{t('benefits_empty')}</p>
+      ) : (
+        <ul className="divide-y divide-border text-sm">
+          {benefits.map((b) => {
+            const typeLabel = t(`benefits_type_${b.benefit_type}`)
+            // The description defaults to the Swedish type label when left
+            // empty on creation; repeating it next to the type says nothing.
+            const showDescription =
+              !!b.description &&
+              b.description !== typeLabel &&
+              b.description !== BENEFIT_LABELS[b.benefit_type]
+            return (
+              <li key={b.id} className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 py-2">
+                <span className="min-w-0 truncate">
+                  {typeLabel}
+                  {showDescription && (
+                    <span className="text-muted-foreground">{' · '}{b.description}</span>
+                  )}
+                </span>
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {formatDate(b.valid_from)} → {b.valid_to ? formatDate(b.valid_to) : t('benefits_ongoing')}
+                </span>
+                <span className="ml-auto tabular-nums">
+                  {formatCurrency(b.monthly_value)}
+                  <span className="text-muted-foreground">{t('benefits_per_month')}</span>
+                </span>
+                {canWrite && (
+                  <button type="button" onClick={() => handleDelete(b.id)} className={ROW_ACTION_CLASS}>
+                    {t('benefits_remove')}
+                  </button>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
 
-        {adding && (
-          <div className="space-y-4 rounded-md border bg-muted/30 p-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Add dialog (convention 13: centered modal for create). Closing by
+          Escape or backdrop is the same as Avbryt; both are held while a
+          save is in flight. */}
+      <Dialog
+        open={adding}
+        onOpenChange={(open) => {
+          if (!open && !submitting) reset()
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t('benefits_add')}</DialogTitle>
+            <DialogDescription>{t('benefits_help')}</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="benefit_type">{t('benefits_type')}</Label>
                 <Select value={type} onValueChange={(v) => setType(v as BenefitType)}>
@@ -245,7 +275,7 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="valid_from">{t('benefits_valid_from')}</Label>
                 <Input id="valid_from" type="date" value={validFrom} onChange={e => setValidFrom(e.target.value)} />
@@ -255,17 +285,17 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
                 <Input id="valid_to" type="date" value={validTo} onChange={e => setValidTo(e.target.value)} />
               </div>
             </div>
-
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={reset} disabled={submitting}>{t('form_cancel')}</Button>
-              <Button size="sm" onClick={handleAdd} disabled={submitting}>
-                {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {t('form_save')}
-              </Button>
-            </div>
           </div>
-        )}
-      </CardContent>
-    </Card>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={reset} disabled={submitting}>{t('form_cancel')}</Button>
+            <Button type="button" onClick={handleAdd} disabled={submitting}>
+              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t('form_save')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </DetailSection>
   )
 }

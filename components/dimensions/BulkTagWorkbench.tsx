@@ -679,9 +679,11 @@ export default function BulkTagWorkbench() {
                       <DataListMetaSeparator />
                       <span>{voucher.lines.length} rader</span>
                       {(bags.length > 0 || partial) && <DataListMetaSeparator />}
+                      {/* data-ph-mask: dimension codes are user data */}
                       {bags.map((bag) => (
                         <Badge
                           key={mapKey(bag)}
+                          data-ph-mask=""
                           variant="outline"
                           className="px-1.5 py-0 text-[10px] font-normal"
                         >
@@ -745,6 +747,7 @@ export default function BulkTagWorkbench() {
                               dimEntries.map(([dimNo, code]) => (
                                 <Badge
                                   key={dimNo}
+                                  data-ph-mask=""
                                   variant="outline"
                                   className="px-1.5 py-0 text-[10px] font-normal"
                                 >

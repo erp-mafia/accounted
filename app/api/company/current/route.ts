@@ -3,20 +3,9 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { AccountingFrameworkSchema } from '@/lib/api/schemas'
-import { getBASReference } from '@/lib/bookkeeping/bas-reference'
-import { createLogger } from '@/lib/logger'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-const log = createLogger('api/company/current')
-
-// BAS 2026 accounts required for K3's uppskjuten skatt (latent tax) entries.
-// Both rows carry k2_excluded=true in lib/bookkeeping/bas-data so they are
-// NOT seeded by seed_chart_of_accounts() for K2 companies. When a company
-// opts into K3 we backfill them here so the engine can resolve them by
-// account_number when the first latent-tax entry is posted.
-const K3_LATENT_TAX_ACCOUNTS = ['2240', '8940'] as const
 
 /**
  * GET /api/company/current
@@ -73,7 +62,7 @@ const PatchBodySchema = z.object({
 export const PATCH = withRouteContext(
   'company.update_current',
   async (request, ctx) => {
-  const { supabase, companyId, user } = ctx
+  const { supabase, companyId } = ctx
 
   const validation = await validateBody(request, PatchBodySchema)
   if (!validation.success) return validation.response
@@ -126,56 +115,6 @@ export const PATCH = withRouteContext(
 
   if (error) {
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-  }
-
-  // When opting in to K3, ensure the two latent-tax (uppskjuten skatt)
-  // accounts exist in the company's chart of accounts. The base seed skips
-  // them for K2 companies via k2_excluded=true, so without this backfill
-  // the engine cannot resolve account_id for the first latent-tax post.
-  // Wrapped in try/catch so a CoA insert failure does not block the
-  // framework update: the user can still re-trigger the seed later.
-  // The reverse switch (K3 → K2) intentionally keeps the rows for audit
-  // history; the legal record of past K3 postings must remain intact.
-  if (data.accounting_framework === 'k3') {
-    try {
-      const rows = K3_LATENT_TAX_ACCOUNTS.map(accountNumber => {
-        const basRef = getBASReference(accountNumber)
-        if (!basRef) return null
-        return {
-          user_id: user.id,
-          company_id: companyId,
-          account_number: basRef.account_number,
-          account_name: basRef.account_name,
-          account_class: basRef.account_class,
-          account_group: basRef.account_group,
-          account_type: basRef.account_type,
-          normal_balance: basRef.normal_balance,
-          sru_code: basRef.sru_code,
-          k2_excluded: basRef.k2_excluded,
-          plan_type: 'full_bas',
-          is_active: true,
-          is_system_account: true,
-          description: basRef.description,
-        }
-      }).filter((row): row is NonNullable<typeof row> => row !== null)
-
-      if (rows.length > 0) {
-        const { error: seedError } = await supabase
-          .from('chart_of_accounts')
-          .upsert(rows, { onConflict: 'company_id,account_number', ignoreDuplicates: true })
-        if (seedError) {
-          log.error('Failed to seed K3 latent-tax accounts', {
-            companyId,
-            error: seedError.message,
-          })
-        }
-      }
-    } catch (err) {
-      log.error('Unexpected error seeding K3 latent-tax accounts', {
-        companyId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
   }
 
   return NextResponse.json({ data })

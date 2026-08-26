@@ -23,19 +23,28 @@
 # through SCHEDULE_OVERRIDES in scripts/generate-crontabs.ts, never by
 # editing this file.
 
-0 6 * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/deadlines/status/cron
-0 * * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/invoices/recurring/cron
-0 0 * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/tax-deadlines/cron
-0 5 * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/enable-banking/sync/cron
-30 3 * * *    curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/stripe/transactions/cron
-0 3 * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/verify/cron
-0 4 * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/sandbox/cleanup/cron
-0 2 * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/events/cleanup/cron
-0 * * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/cloud-backup/auto-sync/cron
-30 * * * *    curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/idempotency/cleanup/cron
-30 2 * * *    curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/pending-operations/expire/cron
-0 4 * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/skattekonto/sync/cron
-*/15 * * * *  curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/agi/kvittenser/cron
-30 */2 * * *  curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/vat/kvittenser/cron
-* * * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/webhooks/dispatch/cron
-15 5 * * *    curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/accruals/post-due/cron
+0 6 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/deadlines/status/cron
+0 * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/invoices/recurring/cron
+30 4 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/settings/booking-templates/sync/cron
+0 0 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/tax-deadlines/cron
+0 5 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/enable-banking/sync/cron
+30 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/stripe/transactions/cron
+45 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/woocommerce/orders/cron
+15 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/shopify/orders/cron
+0 3 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/verify/cron
+0 4 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/sandbox/cleanup/cron
+0 2 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/events/cleanup/cron
+0 * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/cloud-backup/auto-sync/cron
+30 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/idempotency/cleanup/cron
+30 2 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/pending-operations/expire/cron
+0 4 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/skattekonto/sync/cron
+*/15 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/agi/kvittenser/cron
+30 */2 * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/vat/kvittenser/cron
+* * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/webhooks/dispatch/cron
+* * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/whatsapp-inbox/sweep/cron
+15 4 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/whatsapp-inbox/retention/cron
+*/2 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/invoice-inbox/sweep/cron
+15 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/accruals/post-due/cron
+30 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/receipt-hunt/cron
+*/10 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/peppol/inbound/cron
+5,20,35,50 * * * *  curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/peppol/outbound/status/cron

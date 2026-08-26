@@ -404,11 +404,11 @@ export default function InvoiceMatchDialog({
           <div className="space-y-4">
             {/* Duplicate-payment warning: customer-side only, only when a candidate exists */}
             {!targetBlocked && candidate && isCustomerInvoice && (
-              <div className="rounded-lg border border-warning/40 bg-warning/10 p-4 space-y-3">
+              <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                 <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-warning-foreground" />
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
                   <div className="text-sm space-y-1">
-                    <p className="font-medium text-warning-foreground">{t('duplicate_title')}</p>
+                    <p className="font-medium text-attn">{t('duplicate_title')}</p>
                     {/* candidate.amount is the voucher leg's SEK debit
                         (duplicate-payment-detection.ts), so it is formatted as
                         SEK regardless of the transaction's currency: an
@@ -553,7 +553,7 @@ export default function InvoiceMatchDialog({
               if (targetBlocked) {
                 const isSettled = targetMatchState === 'settled'
                 return (
-                  <div className="flex items-start gap-2 p-3 rounded-lg bg-warning/10 text-warning-foreground">
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
                     <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
                     <div className="text-sm">
                       <p className="font-medium">
@@ -617,7 +617,7 @@ export default function InvoiceMatchDialog({
               }
 
               return (
-                <div className="flex items-start gap-2 p-3 rounded-lg bg-warning/10 text-warning-foreground">
+                <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
                   <div className="text-sm">
                     <p className="font-medium">{t('amounts_differ')}</p>
@@ -652,9 +652,9 @@ export default function InvoiceMatchDialog({
                 rather than inside the Valutaomräkning card below, because in
                 this state the preview 400s and that card never renders. */}
             {!targetBlocked && invoiceRateMissing && (
-              <div className="rounded-lg border border-warning/40 bg-warning/5 p-4">
+              <div className="rounded-lg border border-border bg-muted/30 p-4">
                 <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 text-warning-foreground flex-shrink-0" />
+                  <AlertTriangle className="h-4 w-4 mt-0.5 text-attn flex-shrink-0" />
                   <div className="flex-1 text-sm">
                     {/* Untinted title, matching the sibling
                         fx_rate_unavailable panel below: the ochre lives in the
@@ -691,9 +691,9 @@ export default function InvoiceMatchDialog({
               if ('error' in fx) {
                 // Riksbanken unavailable: show manual rate input.
                 return (
-                  <div className="rounded-lg border border-warning/40 bg-warning/5 p-4 space-y-3">
+                  <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                     <div className="flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 mt-0.5 text-warning-foreground flex-shrink-0" />
+                      <AlertTriangle className="h-4 w-4 mt-0.5 text-attn flex-shrink-0" />
                       <div className="flex-1 text-sm">
                         <p className="font-medium">{t('fx_rate_unavailable_title')}</p>
                         <p className="text-muted-foreground mt-1">
@@ -879,7 +879,7 @@ export default function InvoiceMatchDialog({
                         {/* Side toggle: segmented control. Clicking either
                             button picks that side; the amount stays the
                             same. */}
-                        <div className="inline-flex rounded-md border bg-background overflow-hidden h-9">
+                        <div className="inline-flex rounded-lg border bg-background overflow-hidden h-9">
                           <button
                             type="button"
                             onClick={() => updateEditLine(i, { side: 'debit' })}

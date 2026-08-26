@@ -10,7 +10,8 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { ClipboardCheck, Loader2, AlertTriangle } from 'lucide-react'
+import { AttnLine } from '@/components/ui/attn-line'
+import { ClipboardCheck, Loader2 } from 'lucide-react'
 
 interface ConfirmationDialogProps {
   open: boolean
@@ -33,7 +34,10 @@ export function ConfirmationDialog({
   onConfirm,
   isSubmitting,
   title,
-  warningText = 'En verifikation skapas och kan inte ändras efteråt.',
+  // No default warning: an accounting-immutability sentence used to be baked
+  // in here, which put it into dialogs whose authors never asked for one.
+  // Callers that commit a voucher directly pass their own warningText.
+  warningText,
   confirmLabel = 'Bekräfta & skapa',
   extraActions,
   children,
@@ -55,7 +59,11 @@ export function ConfirmationDialog({
               <ClipboardCheck className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <DialogTitle className="text-lg sm:text-xl">{title}</DialogTitle>
+              {/* data-ph-mask on the title: confirm dialogs describe the
+                  object being acted on (convention 10), so the title is user
+                  data in session replays. The description is a static
+                  sentence and stays readable. */}
+              <DialogTitle data-ph-mask="" className="text-lg sm:text-xl">{title}</DialogTitle>
               <DialogDescription>Granska uppgifterna innan du bekräftar</DialogDescription>
             </div>
           </div>
@@ -66,12 +74,8 @@ export function ConfirmationDialog({
         </div>
 
         <div className="border-t px-4 sm:px-6 py-3 sm:py-4 space-y-3 sm:space-y-4 shrink-0">
-          {warningText && (
-            <div className="flex items-start gap-2 rounded-lg bg-warning/10 border border-warning/30 p-3">
-              <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
-              <p className="text-sm text-warning-foreground">{warningText}</p>
-            </div>
-          )}
+          {/* Attention is one ochre sentence, not a banner (convention 6). */}
+          {warningText && <AttnLine>{warningText}</AttnLine>}
 
           <DialogFooter>
             <Button

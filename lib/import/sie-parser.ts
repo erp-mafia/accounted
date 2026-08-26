@@ -1072,7 +1072,11 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
   // Warn if non-BAS kontoplan declared: mapping logic assumes BAS number ranges
   if (parsed.header.kontoPlanType) {
     const planType = parsed.header.kontoPlanType.toUpperCase()
-    const isBAS = planType.startsWith('BAS') || planType === 'EUBAS' || planType === 'EU-BAS'
+    // EUBAS97 is one of the four kontoplanstyp values the SIE 4B spec
+    // enumerates (BAS95, BAS96, EUBAS97, NE2007), and the spec routes every
+    // BAS2xxx chart through it. Matched exactly, not by prefix, so this stays
+    // pinned to the spec's own table.
+    const isBAS = planType.startsWith('BAS') || planType === 'EUBAS97' || planType === 'EUBAS' || planType === 'EU-BAS'
     if (!isBAS) {
       warnings.push(
         `Kontoplanstyp "${parsed.header.kontoPlanType}" är inte BAS-baserad. Automatisk kontomappning kan bli felaktig: granska alla mappningar manuellt i nästa steg.`

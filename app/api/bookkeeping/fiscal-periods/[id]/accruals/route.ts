@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getCompanyEntityType } from '@/lib/company/context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
@@ -15,6 +16,7 @@ import {
   proposeVacationLiabilityChange,
 } from '@/lib/bokslut/accruals/accrual-detector'
 import { detectPeriodisering } from '@/lib/bokslut/accruals/auto-detect'
+import type { PeriodiseringEntityType } from '@/lib/bokslut/accruals/auto-detect'
 import type { AccrualProposal } from '@/lib/bokslut/accruals/types'
 import type { JournalEntry } from '@/types'
 
@@ -28,7 +30,17 @@ export const GET = withRouteContext(
       // paint isn't gated on the slower auto-detect query.
       const [proposal, autoDetected] = await Promise.all([
         buildAccrualsProposal(supabase, companyId, id),
-        detectPeriodisering(supabase, companyId, id).catch((err) => {
+        (async () => {
+          // Entity type picks the regelverk the materiality wording cites:
+          // K1 (BFNAR 2006:1) for enskild firma, K2 (BFNAR 2016:10) for AB.
+          // Resolved via getCompanyEntityType: company_settings is the
+          // read-primary source (what the user edits in Settings), with
+          // companies.entity_type as the fallback.
+          const entityType = await getCompanyEntityType(supabase, companyId)
+          return detectPeriodisering(supabase, companyId, id, {
+            entityType: (entityType as PeriodiseringEntityType | null) ?? null,
+          })
+        })().catch((err) => {
           // Auto-detect is best-effort: a malformed invoice description
           // shouldn't break the rest of the preflight. Log + return empty.
           log.warn('auto-detect failed', { error: (err as Error)?.message })

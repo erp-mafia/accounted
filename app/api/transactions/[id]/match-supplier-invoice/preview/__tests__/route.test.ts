@@ -112,6 +112,59 @@ describe('GET /api/transactions/[id]/match-supplier-invoice/preview: settlement 
     expect(body.lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(750)
   })
 
+  it('kontantmetod: the cash preview includes the SLP pair the POST will book for a flagged 741x line', async () => {
+    // Regression: the cash branch previewed expense + VAT + bank only, while
+    // createSupplierInvoiceCashEntry also books 7533 D / 2514 K for items
+    // flagged apply_slp on a 741x pension account. The user approved four
+    // lines and the POST committed six.
+    enqueue({
+      data: {
+        id: TX_UUID,
+        date: '2026-02-01',
+        amount: -10000,
+        currency: 'SEK',
+        amount_sek: null,
+        cash_account_id: null,
+      },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'SEK',
+        exchange_rate: null,
+        total: 10000,
+        remaining_amount: 10000,
+        paid_amount: 0,
+        registration_journal_entry_id: null,
+        items: [
+          {
+            description: 'Tjänstepension',
+            line_total: 10000,
+            vat_amount: 0,
+            account_number: '7412',
+            apply_slp: true,
+          },
+        ],
+      },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'cash' }, error: null })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { body } = await parseJsonResponse<{
+      entry_type: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }>(res)
+
+    expect(body.entry_type).toBe('cash')
+    // 10 000 × 0.2426 = 2 426: mirrors generateSlpLines in the engine.
+    expect(body.lines.find((l) => l.account_number === '7533')?.debit_amount).toBe(2426)
+    expect(body.lines.find((l) => l.account_number === '2514')?.credit_amount).toBe(2426)
+    // The pair nets to zero: the bank credit stays at the invoice total.
+    expect(body.lines.find((l) => l.account_number === '1930')?.credit_amount).toBe(10000)
+  })
+
   it('previews a credit to the linked cash account when it is not the primary 1930', async () => {
     enqueue({
       data: {

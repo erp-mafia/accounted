@@ -7,6 +7,10 @@ import {
   getNarrative,
   upsertNarrative,
 } from '@/lib/bokslut/arsredovisning/narrative-service'
+import {
+  isValidParentCompanyIdentifier,
+  PARENT_COMPANY_IDENTIFIER_ERROR,
+} from '@/lib/bokslut/arsredovisning/parent-company-identifier'
 
 // Strip non-printable control characters that would corrupt PDF output or
 // mislead a human reader of the årsredovisning. Whitelist printable ASCII
@@ -69,16 +73,15 @@ const PostSchema = z.object({
   securities_pledged: sanitizedText(4000).nullable().optional(),
   contingent_liabilities: sanitizedText(4000).nullable().optional(),
   parent_company_name: sanitizedText(200).nullable().optional(),
-  // Swedish organisationsnummer NNNNNN-NNNN. Third digit ≥ 2 distinguishes
-  // legal-entity org numbers from personnummer (whose third digit forms part
-  // of a month, 0-1). ÅRL 5:13-15 disclosure is about parent legal entities,
-  // so personnummer-shaped values are out of scope and a GDPR Art.5(1)(c)
-  // data-minimisation concern if persisted. Empty string clears the override.
+  // Swedish organisationsnummer or a foreign parent's registration identifier
+  // (a Swiss holding's CHE-number was refused as "ej personnummer" on
+  // 2026-08-20). Rules live in parent-company-identifier.ts; personnummer-
+  // shaped values stay rejected. Empty string clears the override.
   parent_company_org_number: z
     .union([
       z.literal(''),
-      z.string().regex(/^\d{2}[2-9]\d{3}-\d{4}$/, {
-        message: 'Ogiltigt organisationsnummer (NNNNNN-NNNN, ej personnummer)',
+      z.string().max(40).refine(isValidParentCompanyIdentifier, {
+        message: PARENT_COMPANY_IDENTIFIER_ERROR,
       }),
     ])
     .nullable()

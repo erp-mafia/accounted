@@ -150,7 +150,7 @@ export function InvoiceEmailTextsSettings({ settings, onUpdate }: InvoiceEmailTe
           <p>
             {t('placeholders_help')}{' '}
             {INVOICE_EMAIL_PLACEHOLDER_KEYS.map((key) => (
-              <code key={key} className="mr-1 rounded bg-muted px-1 text-xs">{`{${key}}`}</code>
+              <code key={key} className="mr-1 rounded-sm bg-muted px-1 text-xs">{`{${key}}`}</code>
             ))}
           </p>
           <p>{t('firstname_note')}</p>

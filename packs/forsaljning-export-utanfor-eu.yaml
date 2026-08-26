@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: forsaljning-export-utanfor-eu
+  order: 2
+  name: 'Försäljning export (utanför EU)'
+  category: eu_trade
+  entity_type: all
+  description: >-
+    Försäljning till land utanför EU. Momsfritt.
+lines:
+  - account: '1510'
+    label: 'Kundfordringar'
+    side: debit
+    type: settlement
+    ratio: 1.0
+  - account: '3305'
+    label: 'Försäljning export'
+    side: credit
+    type: business
+    ratio: 1.0

@@ -41,8 +41,9 @@ describe('transactions page booking feedback', () => {
 
   it('routes every successful booking through it', () => {
     // runCategorize (category / catalog template / library template), the
-    // counterparty-template booking, and the counterparty activate-and-retry.
-    expect(PAGE_SRC.match(/finishBooking\(\{/g) ?? []).toHaveLength(3)
+    // counterparty-template booking, the counterparty activate-and-retry, and
+    // the counterparty duplicate-warning "Bokför ändå" retry.
+    expect(PAGE_SRC.match(/finishBooking\(\{/g) ?? []).toHaveLength(4)
   })
 
   it('no longer ends the counterparty path on a bare exitingIds add', () => {
@@ -60,10 +61,17 @@ describe('transactions page booking feedback', () => {
 
   it('lets a completed undo win over the delayed booked-state patch', () => {
     // The 350ms animation timer must not re-apply journal_entry_id after an
-    // Ångra has already storno-reversed the verifikat server-side.
+    // Ångra has already storno-reversed the verifikat server-side. The
+    // closure-local flag covers the per-row Ångra; the shared undoneIdsRef
+    // covers "Ångra alla", which runs outside finishBooking's closure.
     expect(PAGE_SRC).toMatch(/let undone = false/)
     expect(PAGE_SRC).toMatch(/undone = true/)
-    expect(PAGE_SRC).toMatch(/if \(!undone\) \{/)
+    expect(PAGE_SRC).toMatch(/if \(!undone && !undoneIdsRef\.current\.has\(id\)\) \{/)
+    // Both undo paths record into the shared ref, and a fresh booking clears
+    // its row's entry again so a re-booked row still gets its delayed patch.
+    expect(PAGE_SRC).toMatch(/undoneIdsRef\.current\.add\(id\)/)
+    expect(PAGE_SRC).toMatch(/undoneIdsRef\.current\.add\(undoneId\)/)
+    expect(PAGE_SRC).toMatch(/undoneIdsRef\.current\.delete\(id\)/)
   })
 
   it('clears only the finished row\'s spinner', () => {
@@ -74,10 +82,13 @@ describe('transactions page booking feedback', () => {
 
   it('decrements the unbooked count on every path that removes a row', () => {
     // finishBooking, handleTransactionBooked (manual booking dialog / voucher
-    // match), and the three other single-row exits already on the page.
+    // match), the three other single-row exits already on the page, the
+    // duplicate-dialog "Ignorera transaktionen" tail, and
+    // handleDeleteTransaction (deleting a pending row must not leave the
+    // inbox badge stale: the realtime echo is not guaranteed for DELETE).
     expect(
       PAGE_SRC.match(/setTotalUncategorizedCount\(\(prev\) => Math\.max\(0, \(prev \?\? 1\) - 1\)\)/g) ?? [],
-    ).toHaveLength(5)
+    ).toHaveLength(7)
   })
 
   it('ships the undo strings it renders in both locales', () => {
@@ -94,5 +105,32 @@ describe('transactions page booking feedback', () => {
         expect(messages[key], `${locale}.transactions.${key}`).toBeTruthy()
       }
     }
+  })
+})
+
+/**
+ * Duplicate-guard feedback parity: every client of POST /categorize must route
+ * a TRANSACTION_BOOK_POSSIBLE_DUPLICATE 409 into DuplicateBookingDialog (which
+ * offers match / ignore / book-anyway), never into a destructive toast that
+ * names no way forward. The counterparty-template branch of
+ * handleQuickReviewConfirm used to dead-end. (The old BankReconciliationView
+ * quick-book was retired with the view on 2026-08-25; /reconciliation books
+ * through the shared transactions inbox flow instead.)
+ */
+
+describe('duplicate-guard 409 routing parity', () => {
+  it('handles the duplicate code on both booking paths of the transactions page', () => {
+    // runCategorize AND the counterparty-template branch.
+    expect(
+      PAGE_SRC.match(/error\?\.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE'/g) ?? [],
+    ).toHaveLength(2)
+  })
+
+  it('opens the dialog from the counterparty branch with a force-bound retry', () => {
+    // The branch must set the shared duplicateWarning state (the dialog) and
+    // bind the retry to the reviewed candidate's voucher.
+    expect(PAGE_SRC).toMatch(
+      /TRANSACTION_BOOK_POSSIBLE_DUPLICATE'[\s\S]{0,600}cpCategorize\(\{\s*\n?\s*expectedDuplicateJournalEntryId: candidate\.journal_entry_id,/,
+    )
   })
 })

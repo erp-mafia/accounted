@@ -16,7 +16,9 @@ let results: Array<{ data?: unknown; error?: unknown }>
 let chartAccounts: Array<{
   account_number: string
   account_name?: string
+  account_class?: number
   default_vat_rate: number | null
+  default_vat_treatment?: string | null
 }>
 
 function makeBuilder() {
@@ -37,12 +39,17 @@ function makeBuilder() {
  */
 function makeChartBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'not', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'gte', 'lte', 'in', 'not', 'order', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.then = (resolve: (v: unknown) => void) =>
     resolve({
-      data: chartAccounts.map((account) => ({ account_name: '', ...account })),
+      data: chartAccounts.map((account) => ({
+        account_name: '',
+        account_class: 3,
+        default_vat_treatment: null,
+        ...account,
+      })),
       error: null,
     })
   return b
@@ -98,6 +105,7 @@ import {
   getVatDeclarationSummary,
   calculateVatDeclaration,
   rcInputTotalsFromDeclaration,
+  rutorFromTotals,
 } from '../vat-declaration'
 import { runVatDeclarationChecks } from '../vat-declaration-checks'
 import type { VatDeclaration } from '@/types'
@@ -115,6 +123,60 @@ beforeEach(() => {
 // ============================================================
 // Pure function tests: no mocks needed
 // ============================================================
+
+describe('rutorFromTotals: explicit account VAT treatments', () => {
+  it('puts a custom sales account in ruta 05', () => {
+    const totals = new Map([['3041', { debit: 0, credit: 1000 }]])
+    const rutor = rutorFromTotals(totals, {
+      mappingByAccount: new Map([['3041', { box: 'ruta05', side: 'credit' }]]),
+      explicitAccounts: new Set(['3041']),
+    })
+    expect(rutor.ruta05).toBe(1000)
+  })
+
+  it('puts a custom EU purchase account in ruta 20', () => {
+    const totals = new Map([['4056', { debit: 1000, credit: 0 }]])
+    const rutor = rutorFromTotals(totals, {
+      mappingByAccount: new Map([['4056', { box: 'ruta20', side: 'debit' }]]),
+      explicitAccounts: new Set(['4056']),
+    })
+    expect(rutor.ruta20).toBe(1000)
+  })
+
+  it('lets an explicit treatment replace a static BAS mapping', () => {
+    const totals = new Map([['3001', { debit: 0, credit: 1000 }]])
+    const rutor = rutorFromTotals(totals, {
+      mappingByAccount: new Map([['3001', { box: 'ruta42', side: 'credit' }]]),
+      explicitAccounts: new Set(['3001']),
+    })
+    expect(rutor.ruta05).toBe(0)
+    expect(rutor.ruta42).toBe(1000)
+  })
+})
+
+describe('rutorFromTotals: ruta 41 (omvänd skattskyldighet, sales side)', () => {
+  it('projects 3231/3232/3233 credit balances into ruta 41', () => {
+    const totals = new Map([
+      ['3231', { debit: 0, credit: 100_000 }],
+      ['3232', { debit: 500, credit: 10_500 }],
+      ['3233', { debit: 0, credit: 0 }],
+    ])
+    const rutor = rutorFromTotals(totals)
+    expect(rutor.ruta41).toBe(110_000)
+    // Buyer accounts for the VAT: an RC sale must not leak into the
+    // taxable-sales pairing (rutor 05-08) nor into the net (ruta 49).
+    expect(rutor.ruta05).toBe(0)
+    expect(rutor.ruta49).toBe(0)
+  })
+
+  it('a pure ruta 41 declaration passes the sales/output pairing checks', () => {
+    const totals = new Map([['3231', { debit: 0, credit: 50_000 }]])
+    const rutor = rutorFromTotals(totals)
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).not.toContain('TAXABLE_SALES_WITHOUT_OUTPUT')
+    expect(findings.map((f) => f.code)).not.toContain('OUTPUT_VAT_WITHOUT_SALES_BASE')
+  })
+})
 
 describe('calculatePeriodDates', () => {
   it('returns correct dates for monthly period', () => {
@@ -907,6 +969,14 @@ describe('calculateVatDeclaration: parent/summary accounts', () => {
     expect(result.rutor.ruta49).toBe(-200) // refund
   })
 
+  it('maps year-end input VAT on 2648 to ruta48', async () => {
+    seedLedger([{ account_number: '2648', debit_amount: 250, credit_amount: 0 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta48).toBe(250)
+  })
+
   it('reproduces the user-reported bug: 2610 balance now reaches ruta10', async () => {
     // Customer screenshot scenario (simplified): 3001 + 2610 booked with the
     // correct VAT amount on the parent account. Before the fix, ruta10 read 0
@@ -1109,6 +1179,34 @@ describe('calculateVatDeclaration: company-specific ruta 05 accounts', () => {
 
     expect(result.rutor.ruta05).toBe(2000)
     expect(result.breakdown.invoices.base25).toBe(2000)
+  })
+
+  it('keeps accounts with the oss treatment out of every ruta, static 3001 included', async () => {
+    // Unionsordningen: the sale is declared in the quarterly OSS declaration
+    // and must not appear in the Swedish momsdeklaration at all. The explicit
+    // treatment also overrides the static BAS mapping of a 3001-style number.
+    chartAccounts = [
+      { account_number: '3001', default_vat_rate: null, default_vat_treatment: 'oss' },
+      {
+        account_number: '3106',
+        account_name: 'Försäljning enl. OSS (Tyskland 19%)',
+        default_vat_rate: null,
+        default_vat_treatment: 'oss',
+      },
+    ]
+    seedLedger([
+      { account_number: '3001', debit_amount: 0, credit_amount: 7000 },
+      { account_number: '3106', debit_amount: 0, credit_amount: 2000 },
+      { account_number: '2670', debit_amount: 0, credit_amount: 1710 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(0)
+    expect(result.rutor.ruta10).toBe(0)
+    expect(result.rutor.ruta35).toBe(0)
+    expect(result.rutor.ruta42).toBe(0)
+    expect(result.breakdown.invoices.base25).toBe(0)
   })
 
   it('ignores missing rates without matching evidence and keeps explicit 0 % authoritative', async () => {

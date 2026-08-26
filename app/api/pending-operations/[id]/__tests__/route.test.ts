@@ -194,6 +194,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
       },
     })
     enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({
       data: {
         id: 'op-1',
@@ -247,6 +248,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     })
     enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -500, currency: 'SEK' } })
     enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
 
     const mapping = {
@@ -279,6 +281,46 @@ describe('PATCH /api/pending-operations/[id]', () => {
     )
   })
 
+  it('re-derives edited previews against the linked cash account', async () => {
+    enqueue({
+      data: {
+        id: 'op-1',
+        company_id: 'company-1',
+        operation_type: 'categorize_transaction',
+        status: 'pending',
+        params: { transaction_id: 'tx-1', category: 'expense_other', vat_treatment: null },
+        preview_data: { debit_account: '6990', credit_account: '1930', amount: 500 },
+        title: 'Kategorisera: X',
+      },
+    })
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: -500,
+        currency: 'SEK',
+        cash_account_id: 'cash-1',
+      },
+    })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: { ledger_account: '1931' } })
+    enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
+
+    const res = await PATCH(
+      createMockRequest('/api/pending-operations/op-1', {
+        method: 'PATCH',
+        body: { category: 'expense_software' },
+      }),
+      createMockRouteParams({ id: 'op-1' }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(buildLinesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'tx-1', cash_account_id: 'cash-1' }),
+      expect.objectContaining({ debit_account: '5410', credit_account: '1931' }),
+    )
+  })
+
   it('preserves a staged vat_amount override when the new treatment still carries VAT', async () => {
     enqueue({
       data: {
@@ -298,6 +340,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     })
     enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -415.8, currency: 'SEK' } })
     enqueue({ data: { entity_type: 'enskild_firma' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
 
     const res = await PATCH(
@@ -341,6 +384,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     })
     enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -415.8, currency: 'SEK' } })
     enqueue({ data: { entity_type: 'enskild_firma' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
 
     const res = await PATCH(
@@ -433,6 +477,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     })
     enqueue({ data: { id: 'tx-1', amount: -100, currency: 'SEK' } })
     enqueue({ data: { entity_type: 'enskild_firma' } })
+    enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     mappingMock.mockReturnValueOnce({
       debit_account: null,
       credit_account: null,

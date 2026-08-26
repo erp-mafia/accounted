@@ -2,7 +2,7 @@
 
 The official plugin for [Accounted](https://app.accounted.se), the open-source Swedish bookkeeping platform. Installing it gives Claude two things at once:
 
-1. **The connection**: the Accounted MCP server (90+ bookkeeping tools, resources, and loadable skills) via OAuth. No API key needed.
+1. **The connection**: the Accounted MCP server (150+ bookkeeping tools, resources, and loadable skills) via OAuth. No API key needed.
 2. **The flows**: seven short workflow skills that follow the Swedish bookkeeping rhythm. Each one grounds itself in your company's live data, loads the product's Swedish accounting knowledge when it needs it, and stages every write for your approval. Nothing is ever booked without you saying yes.
 
 ## Install
@@ -12,12 +12,13 @@ The official plugin for [Accounted](https://app.accounted.se), the open-source S
 /plugin install accounted@accounted
 ```
 
-Then run `/mcp` and authenticate with Accounted (OAuth consent screen; read-only scopes by default, write scopes are ticked explicitly). Start with `/accounted:start`.
+Then run `/accounted:setup`. It connects the Accounted connector (`/mcp` → authenticate; no account yet? create it on that sign-in screen, with BankID or e-mail), and for a brand-new account it sets up the company right here in the conversation (company form, organisationsnummer, VAT, fiscal year), then hands you the bank and Skatteverket connect links. After that, `/accounted:start` orients you in the books.
 
 ## Skills
 
 | Command | What it does |
 |---|---|
+| `/accounted:setup` | First run: connect (create the account if needed) and set up the company from the conversation |
 | `/accounted:start` | Connect, orient, and surface what needs attention |
 | `/accounted:bookkeep` | Clear unbooked bank transactions and receipts (daily) |
 | `/accounted:check` | Read-only health check with a prioritized fix list |

@@ -1,11 +1,11 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { skvRequestWithAuth, SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
 import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/kvittens-notification'
-import { resolveReadAuth, currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { resolveReadAuth, currentSkvEnvironment, findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { hasCapability } from '@/lib/entitlements/has-capability'
@@ -48,7 +48,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Missing Supabase configuration' }, { status: 500 })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   // AGI submission state uses the distinct `agi_submission_` prefix, so the
   // `submission_` filter below cannot match AGI rows.
@@ -260,13 +260,11 @@ export async function GET(request: Request) {
         // connection. Best-effort: a failure here must not abort the
         // remaining companies' rows.
         try {
-          const { data: tokenRow } = await supabase
-            .from('skatteverket_tokens')
-            .select('user_id')
-            .eq('company_id', companyId)
-            .maybeSingle()
-          if (tokenRow?.user_id) {
-            await markNeedsReconsent(supabase, tokenRow.user_id as string, err.code)
+          // Same pick as resolveReadAuth above (a company can hold one row
+          // per connected member), so the flag lands on the row that failed.
+          const tokenRow = await findCompanyTokenUser(supabase, companyId)
+          if (tokenRow) {
+            await markNeedsReconsent(supabase, tokenRow.userId, companyId, err.code)
           }
         } catch (reconsentErr) {
           console.warn('[vat-kvittenser-cron] Failed to persist reconsent flag', {

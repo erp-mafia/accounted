@@ -11,8 +11,8 @@ import { FiscalYearsManager } from '@/components/settings/FiscalYearsManager'
 import { VoucherSeriesManager } from '@/components/settings/VoucherSeriesManager'
 import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSeriesPerSourceTypeForm'
 import { applyDefaultSeriesToMap } from '@/lib/bookkeeping/voucher-series-resolver'
-import { PeriodiseringAutoDetectToggle } from '@/components/settings/PeriodiseringAutoDetectToggle'
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
+import { MileageToggle } from '@/components/settings/MileageToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import {
   SettingsGroup,
@@ -172,14 +172,26 @@ export function BookkeepingSettingsContent() {
       <VoucherSeriesManager defaultSeries={settings.default_voucher_series || 'A'} />
 
       <SettingsGroup label={t('group_automation')}>
-        <PeriodiseringAutoDetectToggle />
+        {/* Periodisering is a review-gated wizard step, not an automation
+            that can be switched on or off, so this row is a plain link. The
+            old toggle here wrote a localStorage preference nothing read. */}
+        <SettingsRow label={t('periodisering_label')} help={t('periodisering_help')}>
+          <Link
+            href="/bookkeeping/year-end/periodisering"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {t('periodisering_open_wizard')}
+          </Link>
+        </SettingsRow>
         <DimensionsToggle />
+        <MileageToggle />
       </SettingsGroup>
 
       <SettingsGroup>
         <SettingsRow label={t('related_heading')} borderless>
           <Link
-            href="/bookkeeping?tab=accounts"
+            href="/chart-of-accounts"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ExternalLink className="h-3.5 w-3.5" />

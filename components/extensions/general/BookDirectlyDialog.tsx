@@ -12,12 +12,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Plus, Trash2, AlertTriangle, Search, Check, BookmarkPlus } from 'lucide-react'
+import { Loader2, Plus, Trash2, Search, Check, BookmarkPlus } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
 import { TemplateForm } from '@/components/settings/TemplateForm'
@@ -32,13 +33,20 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
-import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
+import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
+import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { AttnLine } from '@/components/ui/attn-line'
+import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
   id: string
   document_id: string | null
   matched_transaction_id: string | null
   extracted_data: InvoiceExtractionResult | null
+  // Verified human answers from the delivering chat (WhatsApp items):
+  // prefills the notes field so representation deltagare + syfte reach the
+  // verifikat. Absent for email/upload items.
+  channel_context?: InboxChannelContext | null
 }
 
 interface PickerTransaction {
@@ -182,6 +190,12 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
 
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [accounts, setAccounts] = useState<BASAccount[]>([])
+  // Full BAS catalogue (static reference data, fetched once per session). Lets
+  // the account picker surface standard accounts the company hasn't activated
+  // yet; picking one activates it at commit via the existing
+  // ActivateAccountsDialog rail. Without it the picker only knows the active
+  // chart, which reads as "the account doesn't exist".
+  const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [entryDate, setEntryDate] = useState<string>(
     item.extracted_data?.invoice?.invoiceDate || new Date().toISOString().slice(0, 10)
   )
@@ -225,9 +239,58 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     const supplier = item.extracted_data?.supplier?.name?.trim() || ''
     const invoiceNum = item.extracted_data?.invoice?.invoiceNumber?.trim() || ''
     setDescription([supplier, invoiceNum].filter(Boolean).join(' · ') || 'Bokföring från inkorg')
-    setNotes('')
+    // WhatsApp items: prefill with the rendered chat context (representation
+    // deltagare + syfte, sender note) so it lands on the verifikat unless the
+    // user edits it away. This is the one place the photo caption is included:
+    // the user reads it here and can change or delete it before booking, which
+    // no other path offers (see channel-context-notes.ts).
+    //
+    // The dialog always submits the field, empty string included, so clearing
+    // the prefill really clears it: the server only defaults when the field is
+    // absent from the request.
+    setNotes(renderChannelContextNotes(item.channel_context, { includeCaption: true }) ?? '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, item.id])
+
+  // Cost-account prefill from the company's own booking history for this
+  // supplier (counterparty templates). Fills only the first line's still-empty
+  // account: never a generic seed (the old silent-'5010' incident is the
+  // reason there is no fallback), never over anything the user typed, and only
+  // for expense-shaped templates (cost on debit, settlement on credit) so an
+  // income template can't plant a revenue account on a purchase.
+  const [accountSuggestion, setAccountSuggestion] = useState<{ account: string; counterparty: string } | null>(null)
+  useEffect(() => {
+    if (!open) return
+    setAccountSuggestion(null)
+    const supplier = item.extracted_data?.supplier?.name?.trim()
+    if (!supplier) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(
+          `/api/settings/counterparty-templates?counterparty=${encodeURIComponent(supplier)}`
+        )
+        if (!res.ok) return
+        const json = await res.json()
+        if (cancelled) return
+        const match = json?.data
+        const debit: string | undefined = match?.template?.debit_account
+        const credit: string | undefined = match?.template?.credit_account
+        if (!match || (match.confidence ?? 0) < 0.5) return
+        // P&L cost on debit (4xxx-8xxx), settlement on credit: keeps private
+        // and balance-sheet templates (2013, 1630, 12xx) out of a cost field.
+        if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
+        setLines((current) => {
+          if (!current[0] || current[0].account_number) return current
+          return current.map((l, i) => (i === 0 ? { ...l, account_number: debit } : l))
+        })
+        setAccountSuggestion({ account: debit, counterparty: match.template.counterparty_name })
+      } catch {
+        // Prefill is best-effort; the field simply stays blank.
+      }
+    })()
+    return () => { cancelled = true }
+  }, [open, item.id, item.extracted_data?.supplier?.name])
 
   // Fetch the underlag's SEK rate for a foreign-currency document so candidate
   // transactions can be ranked against the SEK-equivalent total (and not the
@@ -359,21 +422,24 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
         console.error('[book-direct] fetch reference data failed:', err)
       }
     })()
+    loadBasCatalog().then((data) => {
+      if (!cancelled) setCatalog(data)
+    }).catch(() => {/* search degrades to the active chart */})
     return () => { cancelled = true }
   }, [open])
 
-  // Auto-select fiscal period matching the entry date
+  // Derive the fiscal period from the entry date. Periods never overlap, so
+  // this is a total function of the date; when the date falls outside every
+  // period the id clears and submit is blocked with an explanation. The old
+  // else-branch silently borrowed periods[0], which could book into the wrong
+  // period with only the DB period trigger left to catch it.
   useEffect(() => {
     if (periods.length === 0) return
     const match = periods.find(
       (p) => entryDate >= p.period_start && entryDate <= p.period_end
     )
-    if (match) {
-      setPeriodId(match.id)
-    } else if (!periodId && periods.length > 0) {
-      setPeriodId(periods[0].id)
-    }
-  }, [entryDate, periods, periodId])
+    setPeriodId(match ? match.id : '')
+  }, [entryDate, periods])
 
   // Fetch unmatched transactions whenever the dialog opens: the picker
   // is always visible now (selection is optional).
@@ -468,6 +534,37 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     setLines((prev) => prev.length <= 2 ? prev : prev.filter((_, i) => i !== idx))
   }, [])
 
+  // Outstanding imbalance from every line except `excludeIndex`.
+  // Positive => debit side is short (a debit on the target row balances it);
+  // negative => credit side is short. Same semantics as JournalEntryForm.
+  const computeBalancingDiff = useCallback(
+    (excludeIndex: number) => {
+      const others = lines.filter((_, i) => i !== excludeIndex)
+      const d = others.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
+      const c = others.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
+      return roundOre(c - d)
+    },
+    [lines]
+  )
+
+  // Opt-in balancing (ported from JournalEntryForm): double-click a debit or
+  // credit field to fill the amount that makes the entry balance. No-op if
+  // already balanced or if the balancing entry belongs on the other side.
+  const handleFillBalance = useCallback(
+    (idx: number, side: 'debit' | 'credit') => {
+      const diff = computeBalancingDiff(idx)
+      const fill = side === 'debit' ? diff : -diff
+      if (fill <= 0) return
+      updateLine(
+        idx,
+        side === 'debit'
+          ? { debit_amount: fill.toFixed(2), credit_amount: '' }
+          : { credit_amount: fill.toFixed(2), debit_amount: '' }
+      )
+    },
+    [computeBalancingDiff, updateLine]
+  )
+
   // Replace the line set with a booking template's computed rows. The picker
   // hands back JournalEntryForm-shaped lines; we keep only the three fields
   // book-direct posts. A meaningful supplier description is preserved: the
@@ -489,15 +586,22 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     [],
   )
 
+  const derivedPeriod = useMemo(
+    () => periods.find((p) => p.id === periodId) ?? null,
+    [periods, periodId],
+  )
+  const derivedPeriodBlocked = !!(derivedPeriod?.locked_at || derivedPeriod?.is_closed)
+
   const disabledReason = useMemo(() => {
     if (isSubmitting) return null
     if (!entryDate) return 'Välj datum'
-    if (!periodId) return 'Välj räkenskapsperiod'
+    if (!periodId) return 'Datumet matchar ingen öppen räkenskapsperiod'
+    if (derivedPeriodBlocked) return 'Räkenskapsperioden är låst eller stängd'
     if (description.trim().length === 0) return 'Fyll i beskrivning'
     if (lines.some((l) => l.account_number.trim().length === 0)) return 'Alla rader behöver ett konto'
     if (!totals.balanced) return 'Debet och kredit måste vara lika'
     return null
-  }, [isSubmitting, entryDate, periodId, description, lines, totals.balanced])
+  }, [isSubmitting, entryDate, periodId, derivedPeriodBlocked, description, lines, totals.balanced])
 
   const canSubmit = !isSubmitting && disabledReason === null
 
@@ -506,7 +610,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       fiscal_period_id: periodId,
       entry_date: entryDate,
       description: description.trim(),
-      notes: notes.trim() || undefined,
+      // Always send the field, '' included: the server treats an absent
+      // `notes` as "default it from the chat context" and a present one as
+      // the user's own value. Sending undefined for a cleared prefill would
+      // resurrect the text the user just deleted onto an immutable verifikat.
+      notes: notes.trim(),
       lines: lines.map((l) => ({
         account_number: l.account_number.trim(),
         debit_amount: parseFloat(l.debit_amount) || 0,
@@ -601,31 +709,25 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
               />
             </div>
             <div className="space-y-1.5 md:col-span-2">
-              <Label htmlFor="bd-period">Räkenskapsperiod</Label>
-              <Select
-                value={periodId}
-                onValueChange={setPeriodId}
-                disabled={isSubmitting || periods.length === 0}
-              >
-                <SelectTrigger id="bd-period">
-                  <SelectValue placeholder="Välj period" />
-                </SelectTrigger>
-                <SelectContent>
-                  {periods.map((p) => {
-                    const lockState = p.locked_at
-                      ? 'låst'
-                      : p.is_closed
-                        ? 'stängd'
-                        : null
-                    return (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.period_start}: {p.period_end}
-                        {lockState && ` (${lockState})`}
-                      </SelectItem>
-                    )
-                  })}
-                </SelectContent>
-              </Select>
+              <Label>Räkenskapsperiod</Label>
+              {/* Derived from the entry date (periods never overlap): text,
+                  not a picker, so it can never disagree with the date. */}
+              {periods.length === 0 ? (
+                <p className="text-sm text-muted-foreground pt-2">Hämtar perioder …</p>
+              ) : derivedPeriod ? (
+                <p className="text-sm pt-2 tabular-nums">
+                  {derivedPeriod.period_start}: {derivedPeriod.period_end}
+                  {(derivedPeriod.locked_at || derivedPeriod.is_closed) && (
+                    <span className="text-attn">
+                      {' '}({derivedPeriod.locked_at ? 'låst' : 'stängd'})
+                    </span>
+                  )}
+                </p>
+              ) : (
+                <AttnLine className="pt-2">
+                  Datumet ligger utanför öppna räkenskapsperioder. Ändra datumet eller skapa perioden under Bokföring.
+                </AttnLine>
+              )}
             </div>
           </div>
 
@@ -661,7 +763,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   disabled={isSubmitting}
                 />
               </div>
-              <div className="max-h-56 overflow-y-auto rounded-md border">
+              <div className="max-h-56 overflow-y-auto rounded-lg border">
                 {isLoadingTransactions ? (
                   <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Laddar…
@@ -774,6 +876,13 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 lägg till en rad för omvänd skattskyldighet manuellt.
               </p>
             )}
+            {accountSuggestion && lines[0]?.account_number === accountSuggestion.account && (
+              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
+                Konto {accountSuggestion.account} föreslaget från tidigare bokföringar av{' '}
+                {formatCounterpartyName(accountSuggestion.counterparty)}
+              </p>
+            )}
             <div className="rounded-lg border overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-muted/40">
@@ -791,6 +900,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                         <AccountCombobox
                           value={line.account_number}
                           accounts={accounts}
+                          catalog={catalog}
                           onChange={(v) => updateLine(idx, { account_number: v })}
                         />
                       </td>
@@ -801,6 +911,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           inputMode="decimal"
                           value={line.debit_amount}
                           onChange={(e) => updateLine(idx, { debit_amount: e.target.value, credit_amount: e.target.value ? '' : line.credit_amount })}
+                          onDoubleClick={() => handleFillBalance(idx, 'debit')}
                           disabled={isSubmitting}
                           className="text-right tabular-nums"
                           placeholder="0,00"
@@ -813,6 +924,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           inputMode="decimal"
                           value={line.credit_amount}
                           onChange={(e) => updateLine(idx, { credit_amount: e.target.value, debit_amount: e.target.value ? '' : line.debit_amount })}
+                          onDoubleClick={() => handleFillBalance(idx, 'credit')}
                           disabled={isSubmitting}
                           className="text-right tabular-nums"
                           placeholder="0,00"
@@ -836,13 +948,36 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 </tbody>
                 <tfoot className="bg-muted/20 text-xs">
                   <tr>
-                    <td className="px-3 py-2 text-right font-medium uppercase tracking-wider text-muted-foreground">
-                      Summa
+                    <td className="px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        {/* The remaining debit/credit gap, right where the user
+                            reconciles the sums: what is still missing to balance. */}
+                        {totals.diff !== 0 ? (
+                          <span className="tabular-nums font-medium text-destructive">
+                            Differens {Math.abs(totals.diff).toFixed(2)}
+                          </span>
+                        ) : (
+                          <span />
+                        )}
+                        <span className="text-right font-medium uppercase tracking-wider text-muted-foreground">
+                          Summa
+                        </span>
+                      </div>
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-medium">
+                    <td
+                      className={cn(
+                        'px-3 py-2 text-right tabular-nums font-medium',
+                        totals.diff !== 0 && 'text-destructive'
+                      )}
+                    >
                       {totals.debit.toFixed(2)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums font-medium">
+                    <td
+                      className={cn(
+                        'px-3 py-2 text-right tabular-nums font-medium',
+                        totals.diff !== 0 && 'text-destructive'
+                      )}
+                    >
                       {totals.credit.toFixed(2)}
                     </td>
                     <td />
@@ -891,12 +1026,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 <Badge variant="success" className="text-[11px]">
                   Balanserad
                 </Badge>
-              ) : (
-                <span className="text-xs text-muted-foreground flex items-center gap-1.5 tabular-nums">
-                  <AlertTriangle className="h-3.5 w-3.5 text-warning" />
-                  Diff {totals.diff.toFixed(2)}
+              ) : totals.diff !== 0 ? (
+                <span className="text-xs text-muted-foreground">
+                  Dubbelklicka i ett tomt beloppsfält för att fylla i differensen
                 </span>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -918,7 +1052,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
             <p
               className={cn(
                 'text-xs tabular-nums',
-                disabledReason ? 'text-warning-foreground' : 'text-muted-foreground'
+                disabledReason ? 'text-attn' : 'text-muted-foreground'
               )}
               aria-live="polite"
             >

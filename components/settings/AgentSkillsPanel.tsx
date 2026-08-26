@@ -50,7 +50,7 @@ const PROSE =
   'prose-h1:text-lg prose-h2:text-base prose-h3:text-sm prose-p:my-2 prose-p:leading-6 ' +
   'prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 ' +
   'prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 ' +
-  'prose-code:bg-secondary prose-code:rounded prose-code:px-1 prose-code:py-0.5 prose-code:text-xs ' +
+  'prose-code:bg-secondary prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:text-xs ' +
   'prose-code:before:content-none prose-code:after:content-none ' +
   'prose-table:my-2 prose-table:text-xs [&_table]:w-full ' +
   '[&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium ' +

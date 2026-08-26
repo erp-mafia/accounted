@@ -1,0 +1,19 @@
+{
+  "id": "mail",
+  "sector": "general",
+  "exportName": "mailExtension",
+  "entryPoint": "@/extensions/general/mail",
+  "requiredEnvVars": ["GOOGLE_MAIL_CLIENT_ID", "GOOGLE_MAIL_CLIENT_SECRET"],
+  "optionalEnvVars": ["MAIL_TOKEN_ENCRYPTION_KEY"],
+  "npmDependencies": [],
+  "definition": {
+    "name": "Brevlådor",
+    "category": "operations",
+    "icon": "Mail",
+    "dataPattern": "manual",
+    "hasOwnData": true,
+    "description": "Låt Kvittojakten leta upp kvitton i era brevlådor",
+    "longDescription": "Koppla en eller flera brevlådor, så letar Kvittojakten själv upp kvitton till kortköp som saknar underlag. Åtkomsten är läsbehörighet: agenten kan aldrig skicka, ändra eller radera något i din mejl. Inkorgen kopieras aldrig, utan bara mejl som kan vara ett kvitto till ett visst köp hämtas i stunden och släpps igen. Det som blir underlag arkiveras i ert vanliga sjuåriga arkiv, efter att du godkänt det.",
+    "subscriptionNotice": "Kräver ett Google-konto. Varje brevlåda kopplas av sin egen ägare och kan kopplas från när som helst."
+  }
+}

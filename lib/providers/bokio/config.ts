@@ -57,8 +57,8 @@ export const BOKIO_RESOURCE_CONFIGS: Partial<Record<ResourceType, BokioResourceC
     paginated: false,
   },
   [ResourceType.CompanyInformation]: {
-    listEndpoint: '',
-    detailEndpoint: '',
+    listEndpoint: '/company-information',
+    detailEndpoint: '/company-information',
     idField: 'id',
     mapper: mapBokioToCompanyInformation,
     singleton: true,

@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import { updateDeadlineStatuses } from '@/lib/deadlines/status-engine'
 import { withCronContext } from '@/lib/api/with-cron-context'
@@ -19,7 +19,7 @@ export const GET = withCronContext('cron.deadlines_status', async (_request, ctx
     })
   }
 
-  const supabase = createClient(supabaseUrl, supabaseServiceKey)
+  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   const result = await updateDeadlineStatuses(supabase)
 

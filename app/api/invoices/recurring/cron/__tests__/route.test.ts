@@ -65,6 +65,7 @@ function makeSchedule(overrides: Record<string, unknown> = {}) {
     id: 's-1',
     company_id: 'c-1',
     day_of_month: 6,
+    interval_months: 1,
     send_hour: 8,
     next_run_date: '2026-07-06',
     last_run_at: null,
@@ -201,6 +202,49 @@ describe('GET /api/invoices/recurring/cron', () => {
     expect(roll!.payload.next_run_date).toBe('2026-08-05')
     expect(roll!.payload.last_run_warning).toContain('Ingen faktura skapades den 2026-07-05')
     expect(roll!.payload.last_run_warning).toContain('2026-08-05')
+  })
+
+  it('advances a quarterly schedule one quarter after a successful run', async () => {
+    vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+    enqueue({ data: [makeSchedule({ interval_months: 3 })], error: null })
+    // Atomic claim wins.
+    enqueue({ data: [{ id: 's-1' }], error: null })
+    executeRecurringSchedule.mockResolvedValue({
+      invoiceId: 'inv-1',
+      invoiceNumber: 'F-1',
+      autoSent: true,
+      warning: null,
+    })
+
+    const { body } = await parseJsonResponse<CronBody>(await GET(req()))
+    expect(body.succeeded).toBe(1)
+
+    const bump = updatePayloads.find(
+      (u) => u.table === 'recurring_invoice_schedules' && 'next_run_date' in u.payload,
+    )
+    expect(bump).toBeDefined()
+    expect(bump!.payload.next_run_date).toBe('2026-10-06')
+  })
+
+  it('rolls a stale quarterly schedule forward on its own quarter grid', async () => {
+    // Quarterly Jan/Apr/Jul/Oct schedule missed Apr 5 (long outage or pause);
+    // today is Jul 6. The next slot on the grid is Oct 5 (Jul 5 already
+    // passed), NOT Aug 5 as a today-anchored monthly roll would give.
+    vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+    enqueue({
+      data: [makeSchedule({ next_run_date: '2026-04-05', day_of_month: 5, interval_months: 3 })],
+      error: null,
+    })
+    // Roll-forward update.
+    enqueue({ data: null, error: null })
+
+    const { body } = await parseJsonResponse<CronBody>(await GET(req()))
+    expect(executeRecurringSchedule).not.toHaveBeenCalled()
+    expect(body.results[0].skipReason).toBe('stale_rolled_forward')
+
+    const roll = updatePayloads.find((u) => u.table === 'recurring_invoice_schedules')
+    expect(roll).toBeDefined()
+    expect(roll!.payload.next_run_date).toBe('2026-10-05')
   })
 
   it('skips a schedule that already ran earlier today', async () => {

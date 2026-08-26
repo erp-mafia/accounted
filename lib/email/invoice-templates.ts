@@ -39,6 +39,13 @@ const LABELS = {
     fSkatt: 'Innehar F-skattsedel',
     documentSummary: (doc: string) => `${doc.toLowerCase()}sammanfattning:`,
     subjectFrom: (doc: string, num: string, sender: string) => `${doc} ${num} från ${sender}`,
+    // Payment confirmation (#1693)
+    confirmationSubject: (num: string, sender: string) => `Betalningsbekräftelse för faktura ${num} från ${sender}`,
+    confirmationHeading: (sender: string) => `Betalningsbekräftelse från ${sender}`,
+    confirmationBody: (num: string) => `Tack för din betalning! Vi bekräftar att faktura ${num} är betald i sin helhet. Bifogat hittar du en betalningsbekräftelse.`,
+    confirmationPaidOn: 'Betald:',
+    confirmationPaidAmount: 'Betalt belopp:',
+    confirmationQuestions: 'Har du frågor om betalningen? Svara direkt på detta mejl så hjälper vi dig.',
   },
   en: {
     docInvoice: 'Invoice',
@@ -70,6 +77,12 @@ const LABELS = {
     fSkatt: 'Innehar F-skattsedel',
     documentSummary: (doc: string) => `${doc} summary:`,
     subjectFrom: (doc: string, num: string, sender: string) => `${doc} ${num} from ${sender}`,
+    confirmationSubject: (num: string, sender: string) => `Payment confirmation for invoice ${num} from ${sender}`,
+    confirmationHeading: (sender: string) => `Payment confirmation from ${sender}`,
+    confirmationBody: (num: string) => `Thank you for your payment. We confirm that invoice ${num} has been paid in full. A payment confirmation is attached.`,
+    confirmationPaidOn: 'Paid on:',
+    confirmationPaidAmount: 'Amount paid:',
+    confirmationQuestions: 'Questions about the payment? Reply directly to this email and we will help you.',
   },
 } as const
 
@@ -425,4 +438,144 @@ export function generateInvoiceEmailSubject(data: InvoiceEmailData): string {
 
   const documentType = getDocumentLabel(invoice, lang)
   return L.subjectFrom(documentType, invoice.invoice_number ?? '', getCompanyPrimaryName(company))
+}
+
+// ---------------------------------------------------------------------------
+// Payment confirmation (#1693)
+//
+// Sent on request for a paid faktura, with the BETALD re-render attached. It
+// is not an invoice send: no custom invoice texts apply, no payment details
+// are listed (nothing is due), and nothing here touches delivery history.
+// ---------------------------------------------------------------------------
+
+function paidAmountForCustomer(invoice: Invoice, company: CompanySettings): number {
+  // What the customer actually paid; the deduction-aware amount to pay is only
+  // the fallback for legacy rows marked paid before paid_amount was recorded.
+  return invoice.paid_amount ?? getAmountToPay(invoice, company).toPay
+}
+
+function paidDateForCustomer(invoice: Invoice): string | null {
+  return invoice.paid_at ? formatDate(invoice.paid_at) : null
+}
+
+export function generatePaymentConfirmationEmailSubject(data: InvoiceEmailData): string {
+  const { invoice, customer, company } = data
+  const L = LABELS[resolveLang(customer)]
+  return sanitizeSubjectLine(
+    L.confirmationSubject(invoice.invoice_number ?? '', getCompanyPrimaryName(company)),
+  )
+}
+
+export function generatePaymentConfirmationEmailHtml(data: InvoiceEmailData): string {
+  const { invoice, customer, company } = data
+  const lang = resolveLang(customer)
+  const L = LABELS[lang]
+  const firstName = customer.name ? customer.name.split(' ')[0] : ''
+  const primaryColor = safeBrandingColor(company.invoice_primary_color, '#111111')
+  const paidDate = paidDateForCustomer(invoice)
+  const paidAmount = formatCurrencyForCustomer(paidAmountForCustomer(invoice, company), invoice.currency, lang)
+  const invoiceNumber = escapeHtml(invoice.invoice_number ?? '')
+
+  return `
+<!DOCTYPE html>
+<html lang="${L.htmlLang}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(L.confirmationSubject(invoice.invoice_number ?? '', getCompanyPrimaryName(company)))}</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333;">
+  <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+    <div style="margin-bottom: 30px; border-bottom: 2px solid ${primaryColor}; padding-bottom: 16px;">
+      <h1 style="margin: 0 0 10px 0; font-size: 24px; font-weight: 600; color: ${primaryColor};">
+        ${escapeHtml(L.confirmationHeading(getCompanyPrimaryName(company)))}
+      </h1>
+      <p style="margin: 0; color: #666; font-size: 14px;">
+        ${L.documentNumber(L.docInvoice)} ${invoiceNumber}
+      </p>
+    </div>
+
+    <div style="margin-bottom: 30px;">
+      <p style="margin: 0 0 15px 0;">${escapeHtml(L.greeting(firstName))}</p>
+      <p style="margin: 0;">${escapeHtml(L.confirmationBody(invoice.invoice_number ?? ''))}</p>
+    </div>
+
+    <div style="background: #f8f9fa; border-radius: 8px; padding: 25px; margin-bottom: 30px;">
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+          <td style="padding: 8px 0; color: #666; font-size: 14px;">${L.documentNumber(L.docInvoice)}</td>
+          <td style="padding: 8px 0; text-align: right; font-weight: 500;">${invoiceNumber}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; color: #666; font-size: 14px;">${L.documentDate(L.docInvoice)}</td>
+          <td style="padding: 8px 0; text-align: right;">${formatDate(invoice.invoice_date)}</td>
+        </tr>
+        ${paidDate ? `
+        <tr>
+          <td style="padding: 8px 0; color: #666; font-size: 14px;">${L.confirmationPaidOn}</td>
+          <td style="padding: 8px 0; text-align: right;">${paidDate}</td>
+        </tr>
+        ` : ''}
+        <tr>
+          <td colspan="2" style="padding: 15px 0 8px 0; border-top: 1px solid #e5e7eb;"></td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-size: 18px; font-weight: 600;">${L.confirmationPaidAmount}</td>
+          <td style="padding: 8px 0; text-align: right; font-size: 18px; font-weight: 600; color: #059669;">
+            ${paidAmount}
+          </td>
+        </tr>
+      </table>
+    </div>
+
+    <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+      <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">${L.confirmationQuestions}</p>
+      <p style="margin: 0; color: #666; font-size: 14px;">
+        ${L.sincerely}<br>
+        <strong style="color: ${primaryColor};">${escapeHtml(getCompanyPrimaryName(company))}</strong>
+      </p>
+      ${company.org_number ? `
+      <p style="margin: 10px 0 0 0; color: #999; font-size: 12px;">
+        ${L.orgNo} ${escapeHtml(company.org_number)}
+        ${company.vat_number ? ` | ${L.vat} ${escapeHtml(company.vat_number)}` : ''}
+        ${company.f_skatt ? ` | ${L.fSkatt}` : ''}
+      </p>
+      ` : ''}
+    </div>
+  </div>
+</body>
+</html>
+`
+}
+
+export function generatePaymentConfirmationEmailText(data: InvoiceEmailData): string {
+  const { invoice, customer, company } = data
+  const lang = resolveLang(customer)
+  const L = LABELS[lang]
+  const firstName = customer.name ? customer.name.split(' ')[0] : ''
+  const paidDate = paidDateForCustomer(invoice)
+  const number = invoice.invoice_number ?? ''
+
+  let text = `${L.confirmationHeading(getCompanyPrimaryName(company))}\n`
+  text += `${L.documentNumber(L.docInvoice)} ${number}\n\n`
+  text += `${L.greeting(firstName)}\n\n`
+  text += `${L.confirmationBody(number)}\n\n`
+  text += `---\n`
+  text += `${L.documentNumber(L.docInvoice)} ${number}\n`
+  text += `${L.documentDate(L.docInvoice)} ${formatDate(invoice.invoice_date)}\n`
+  if (paidDate) text += `${L.confirmationPaidOn} ${paidDate}\n`
+  text += `${L.confirmationPaidAmount} ${formatCurrencyForCustomer(paidAmountForCustomer(invoice, company), invoice.currency, lang)}\n`
+  text += `---\n\n`
+  text += `${L.confirmationQuestions}\n\n`
+  text += `${L.sincerely}\n`
+  text += `${getCompanyDisplayName(company)}\n`
+
+  if (company.org_number) {
+    text += `\n${L.orgNo} ${company.org_number}`
+    if (company.vat_number) text += ` | ${L.vat} ${company.vat_number}`
+    if (company.f_skatt) text += ` | ${L.fSkatt}`
+    text += `\n`
+  }
+
+  return text
 }

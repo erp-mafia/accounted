@@ -8,19 +8,97 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto,
 } from '../dto';
+import {
+  readNumber,
+  resolveVatTriple,
+  lineVatFromPercent,
+  multiplyIfBothPresent,
+} from '../amounts';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
   return { value: value ?? 0, currencyCode: currency };
 }
 
+/**
+ * eAccounting states the VAT total on the invoice header (`TotalVatAmount`)
+ * and the ex-VAT amount per row (`AmountNoVat`), alongside the rate as
+ * `PercentVat`. None of the three was read: the header net was taken straight
+ * from `TotalAmount`, which is the amount INCLUDING VAT, so every migrated
+ * Visma invoice recorded its gross as its net and 0 kr of VAT. The row reader
+ * asked for `LineTotal` and `VatRatePercent`, neither of which exists in the
+ * schema, so every line landed with a 0 amount and the hardcoded 25 % default.
+ *
+ * `TotalAmount` and `TotalVatAmount` are both in the company's accounting
+ * currency, while `currencyCode` below reports the INVOICE currency; the
+ * `*InvoiceCurrency` twins carry the invoice-currency figures. What matters
+ * for VAT is reading a consistent pair, so both come from the
+ * accounting-currency family here. The currency-label mismatch on foreign
+ * invoices predates this change and is deliberately left alone:
+ * `RemainingAmount` and the paid/balance logic read that same family, and
+ * switching only the totals would desync payment status.
+ */
+const VISMA_INVOICE_VAT_KEYS = ['TotalVatAmount'] as const;
+
+// CustomerInvoiceApi.PaymentStatus: 0 = Paid, 1 = Unpaid, 2 = Overdue.
+const CUSTOMER_PS_PAID = 0;
+const CUSTOMER_PS_OVERDUE = 2;
+
+// SupplierInvoiceApi.PaymentStatus: Unpaid = 3, PartiallyPaidOverDue = 4,
+// PartiallyPaid = 5, Paid = 6, OverDue = 7, PaidInBank = 9; the remaining
+// values (8, 10-17) are bank-integration in-flight states where the money has
+// NOT verifiably left the account, so they must stay open payables.
+const SUPPLIER_PS_SETTLED = new Set([6, 9]);
+const SUPPLIER_PS_OVERDUE = new Set([4, 7]);
+
+/**
+ * RemainingAmount is nullable in the eAccounting schema, and in practice the
+ * /supplierinvoices LIST payload omits it entirely: reading a missing value as
+ * 0 made every migrated supplier invoice look fully settled (ElvaSmultron,
+ * 290/290 imported as paid). Distinguish "0" from "absent" and let the caller
+ * fall back to the PaymentStatus enum / TotalAmount instead.
+ */
+function readRemaining(raw: Record<string, unknown>): number | null {
+  const company = raw['RemainingAmount'];
+  if (typeof company === 'number') return company;
+  const invoiceCurrency = raw['RemainingAmountInvoiceCurrency'];
+  if (typeof invoiceCurrency === 'number') return invoiceCurrency;
+  return null;
+}
+
 function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
-  const remaining = raw['RemainingAmount'] as number ?? 0;
+  const remaining = readRemaining(raw);
   const total = raw['TotalAmount'] as number ?? 0;
+  const ps = raw['PaymentStatus'] as number | undefined;
   if (raw['IsCancelled'] === true) return 'cancelled';
-  if (remaining === 0 && total > 0) return 'paid';
+  // A credit invoice has a negative TotalAmount, so the `total > 0` paid check
+  // below can never match it: without this it fell all the way through to
+  // 'draft' and surfaced on the dashboard as an overdue unsent invoice.
+  if (raw['IsCreditInvoice'] === true) return 'credited';
+  if (ps === CUSTOMER_PS_PAID) return 'paid';
+  if (ps === CUSTOMER_PS_OVERDUE) return 'overdue';
+  if (ps == null && remaining === 0 && total !== 0) return 'paid';
   if (raw['IsBooked'] === true) return 'booked';
   if (raw['IsSent'] === true || raw['SendType'] != null) return 'sent';
   return 'draft';
+}
+
+/**
+ * SupplierInvoiceApi carries none of the customer-invoice flags
+ * (IsCancelled/IsBooked/IsSent): its lifecycle lives in `Status`
+ * (0 = Draft, 1 = Normal, 2 = Deleted) plus the PaymentStatus enum.
+ */
+function deriveSupplierInvoiceStatus(
+  raw: Record<string, unknown>,
+  paid: boolean,
+): InvoiceStatusCode {
+  const status = raw['Status'] as number | undefined;
+  if (status === 2) return 'cancelled';
+  if (raw['IsCreditInvoice'] === true) return 'credited';
+  if (paid) return 'paid';
+  if (status === 0) return 'draft';
+  const ps = raw['PaymentStatus'] as number | undefined;
+  if (ps != null && SUPPLIER_PS_OVERDUE.has(ps)) return 'overdue';
+  return 'booked';
 }
 
 function buildParty(name: string, orgNumber?: string, raw?: Record<string, unknown>): PartyDto {
@@ -49,29 +127,52 @@ function buildParty(name: string, orgNumber?: string, raw?: Record<string, unkno
 export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['CurrencyCode'] as string) ?? 'SEK';
   const total = raw['TotalAmount'] as number ?? 0;
-  const remaining = raw['RemainingAmount'] as number ?? 0;
+  const remaining = readRemaining(raw);
+  const ps = raw['PaymentStatus'] as number | undefined;
+  const paid = ps != null
+    ? ps === CUSTOMER_PS_PAID
+    : remaining === 0 && total !== 0;
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
-  const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => ({
-    id: String(row['LineNumber'] ?? idx + 1),
-    description: row['Text'] as string | undefined,
-    quantity: row['Quantity'] as number | undefined,
-    unitCode: row['UnitAbbreviation'] as string | undefined,
-    unitPrice: row['UnitPrice'] != null ? amount(row['UnitPrice'] as number, currency) : undefined,
-    lineExtensionAmount: amount(row['LineTotal'] as number ?? 0, currency),
-    taxPercent: row['VatRatePercent'] as number | undefined,
-    accountNumber: row['AccountNumber'] != null ? String(row['AccountNumber']) : undefined,
-    articleNumber: row['ArticleNumber'] as string | undefined,
-  }));
+  const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
+    // `AmountNoVat` is the row amount excluding VAT. Fall back to
+    // UnitPrice x Quantity only when the schema field is absent, never to 0.
+    const lineNet = readNumber(row, ['AmountNoVat'])
+      ?? multiplyIfBothPresent(readNumber(row, ['UnitPrice']), readNumber(row, ['Quantity']));
+    const taxPercent = readNumber(row, ['PercentVat']);
+    const lineVat = lineNet !== undefined ? lineVatFromPercent(lineNet, taxPercent) : undefined;
+
+    return {
+      id: String(row['LineNumber'] ?? idx + 1),
+      description: row['Text'] as string | undefined,
+      quantity: row['Quantity'] as number | undefined,
+      unitCode: row['UnitAbbreviation'] as string | undefined,
+      unitPrice: row['UnitPrice'] != null ? amount(row['UnitPrice'] as number, currency) : undefined,
+      lineExtensionAmount: amount(lineNet ?? 0, currency),
+      taxPercent,
+      taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
+      accountNumber: row['AccountNumber'] != null ? String(row['AccountNumber']) : undefined,
+      articleNumber: row['ArticleNumber'] as string | undefined,
+    };
+  });
+
+  const vat = resolveVatTriple({
+    gross: total,
+    vat: readNumber(raw, VISMA_INVOICE_VAT_KEYS),
+  });
 
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(total, currency),
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
+    taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: remaining === 0 && total > 0,
-    balance: amount(remaining, currency),
+    paid,
+    // When the payload omits RemainingAmount the honest open balance for an
+    // unpaid invoice is its total, not 0: 0 would read as fully settled.
+    balance: amount(remaining ?? (paid ? 0 : total), currency),
+    lastPaymentDate: raw['PaymentDate'] as string | undefined,
   };
 
   return {
@@ -81,12 +182,14 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
     status: deriveInvoiceStatus(raw),
+    invoiceTypeCode: raw['IsCreditInvoice'] === true ? '381' : undefined,
     supplier: buildParty(''),
     customer: buildParty(
       (raw['InvoiceCustomerName'] ?? '') as string,
       undefined,
     ),
     lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     createdAt: raw['CreatedUtc'] as string | undefined,
@@ -98,7 +201,19 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
 export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): SupplierInvoiceDto {
   const currency = (raw['CurrencyCode'] as string) ?? 'SEK';
   const total = raw['TotalAmount'] as number ?? 0;
-  const remaining = raw['RemainingAmount'] as number ?? 0;
+  const remaining = readRemaining(raw);
+  const ps = raw['PaymentStatus'] as number | undefined;
+  // The PaymentStatus enum is the reliable signal here: the /supplierinvoices
+  // LIST payload omits RemainingAmount, and reading that absence as 0 imported
+  // every supplier invoice as fully paid. Fall back to RemainingAmount only
+  // when the enum itself is missing.
+  const paid = ps != null
+    ? SUPPLIER_PS_SETTLED.has(ps)
+    : remaining === 0 && total !== 0;
+  // A partially paid invoice without a RemainingAmount cannot be represented
+  // faithfully: report the full total as open (visible and correctable)
+  // rather than inventing a split.
+  const balance = remaining ?? (paid ? 0 : total);
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => {
@@ -114,14 +229,24 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
     };
   });
 
+  // Supplier-invoice `Rows` are accounting rows (debit/credit per account),
+  // not invoice lines, so the VAT total cannot be summed off them: one of the
+  // rows IS the VAT account. The header field is the only usable source.
+  const vat = resolveVatTriple({
+    gross: total,
+    vat: readNumber(raw, VISMA_INVOICE_VAT_KEYS),
+  });
+
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(total, currency),
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
+    taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: remaining === 0 && total > 0,
-    balance: amount(remaining, currency),
+    paid,
+    balance: amount(balance, currency),
+    lastPaymentDate: raw['PaymentDate'] as string | undefined,
   };
 
   return {
@@ -130,10 +255,12 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw),
+    status: deriveSupplierInvoiceStatus(raw, paid),
+    invoiceTypeCode: raw['IsCreditInvoice'] === true ? '381' : undefined,
     supplier: buildParty((raw['SupplierName'] ?? '') as string),
     buyer: buildParty(''),
     lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     updatedAt: raw['ModifiedUtc'] as string | undefined,

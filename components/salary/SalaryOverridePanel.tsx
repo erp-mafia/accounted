@@ -2,13 +2,17 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
-import { Settings2, Loader2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { DetailSection } from '@/components/ui/detail-section'
+import { HelpPopover } from '@/components/ui/help-popover'
+import {
+  SettingsInput,
+  SettingsRow,
+  SettingsRowNote,
+  SettingsTextarea,
+} from '@/components/settings/SettingsRows'
+import { Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -26,6 +30,11 @@ interface SalaryOverridePanelProps {
   onSaved: () => void
   disabled?: boolean
 }
+
+// Amount fields are sized by their content, not by the row. ph-no-capture:
+// the placeholder is the employee's effective amount, and replay masking
+// covers values, not attributes.
+const FIELD_CLASS = 'max-w-44 flex-none tabular-nums ph-no-capture'
 
 function num(v: string): number | null {
   const trimmed = v.trim()
@@ -60,8 +69,12 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
   async function handleSave() {
     setSaving(true)
     try {
+      // Skatteavdrag is stated in whole kronor (öretal bortfaller): the
+      // schema rejects öre, so drop them here instead of bouncing the save
+      // with a 400 when someone types a decimal.
+      const taxOverride = num(taxStr)
       const body = {
-        tax_withheld_override: num(taxStr),
+        tax_withheld_override: taxOverride === null ? null : Math.trunc(taxOverride),
         avgifter_amount_override: num(avgStr),
         avgifter_basis_override: num(basisStr),
         reason: reason.trim() || null,
@@ -126,116 +139,105 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
     }
   }
 
+  const fieldDisabled = props.disabled || saving
+
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <div className="flex items-center gap-2">
-          <CardTitle className="text-base">{t('title')}</CardTitle>
+    <DetailSection
+      kicker={t('title')}
+      help={<HelpPopover>{t('description')}</HelpPopover>}
+      aside={
+        // Chips mark exceptions: the chip appears only once an override is
+        // in effect; the show/hide toggle is the section's one action.
+        <span className="-my-1 flex items-center gap-3">
           {hasOverride && <Badge variant="warning">{t('adjusted_badge')}</Badge>}
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setExpanded((v) => !v)}
-          disabled={props.disabled}
-        >
-          <Settings2 className="mr-1.5 h-3.5 w-3.5" />
-          {expanded ? t('hide') : t('show')}
-        </Button>
-      </CardHeader>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setExpanded((v) => !v)}
+            disabled={props.disabled}
+          >
+            {expanded ? t('hide') : t('show')}
+          </Button>
+        </span>
+      }
+    >
       {expanded && (
-        <CardContent className="space-y-4">
-          <p className="text-xs text-muted-foreground">
-            {t('description')}
-          </p>
+        <>
+          <SettingsRow label={t('tax_label')} htmlFor="tax_override" align="baseline">
+            <SettingsInput
+              id="tax_override"
+              inputMode="decimal"
+              placeholder={String(props.taxWithheld)}
+              value={taxStr}
+              onChange={(e) => setTaxStr(e.target.value)}
+              disabled={fieldDisabled}
+              className={FIELD_CLASS}
+            />
+            <SettingsRowNote>
+              {t('calculated')} <span className="tabular-nums">{formatCurrency(props.taxWithheld)}</span>
+            </SettingsRowNote>
+          </SettingsRow>
 
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="tax_override" className="text-xs">
-                {t('tax_label')}
-              </Label>
-              <Input
-                id="tax_override"
-                inputMode="decimal"
-                placeholder={String(props.taxWithheld)}
-                value={taxStr}
-                onChange={(e) => setTaxStr(e.target.value)}
-                disabled={props.disabled || saving}
-                className="tabular-nums"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                {t('calculated')} <span className="tabular-nums">{formatCurrency(props.taxWithheld)}</span>
-              </p>
-            </div>
+          <SettingsRow label={t('avgifter_label')} htmlFor="avgifter_override" align="baseline">
+            <SettingsInput
+              id="avgifter_override"
+              inputMode="decimal"
+              placeholder={String(props.avgifterAmount)}
+              value={avgStr}
+              onChange={(e) => setAvgStr(e.target.value)}
+              disabled={fieldDisabled}
+              className={FIELD_CLASS}
+            />
+            <SettingsRowNote>
+              {t('calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterAmount)}</span>
+            </SettingsRowNote>
+          </SettingsRow>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="avgifter_override" className="text-xs">
-                {t('avgifter_label')}
-              </Label>
-              <Input
-                id="avgifter_override"
-                inputMode="decimal"
-                placeholder={String(props.avgifterAmount)}
-                value={avgStr}
-                onChange={(e) => setAvgStr(e.target.value)}
-                disabled={props.disabled || saving}
-                className="tabular-nums"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                {t('calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterAmount)}</span>
-              </p>
-            </div>
+          <SettingsRow label={t('basis_label')} htmlFor="avgifter_basis_override" align="baseline">
+            <SettingsInput
+              id="avgifter_basis_override"
+              inputMode="decimal"
+              placeholder={String(props.avgifterBasis)}
+              value={basisStr}
+              onChange={(e) => setBasisStr(e.target.value)}
+              disabled={fieldDisabled}
+              className={FIELD_CLASS}
+            />
+            <SettingsRowNote>
+              {t('calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterBasis)}</span>
+            </SettingsRowNote>
+          </SettingsRow>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="avgifter_basis_override" className="text-xs">
-                {t('basis_label')}
-              </Label>
-              <Input
-                id="avgifter_basis_override"
-                inputMode="decimal"
-                placeholder={String(props.avgifterBasis)}
-                value={basisStr}
-                onChange={(e) => setBasisStr(e.target.value)}
-                disabled={props.disabled || saving}
-                className="tabular-nums"
-              />
-              <p className="text-[11px] text-muted-foreground">
-                {t('calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterBasis)}</span>
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="override_reason" className="text-xs">
-              {t('reason_label')}
-            </Label>
-            <Textarea
+          <SettingsRow label={t('reason_label')} htmlFor="override_reason" align="baseline" borderless>
+            <SettingsTextarea
               id="override_reason"
               rows={2}
               placeholder={t('reason_placeholder')}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              disabled={props.disabled || saving}
+              disabled={fieldDisabled}
             />
-          </div>
+          </SettingsRow>
 
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={handleSave} disabled={props.disabled || saving}>
-              {saving && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+          <div className="flex flex-wrap gap-2 pt-3">
+            <Button size="sm" onClick={handleSave} disabled={fieldDisabled}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {t('save')}
             </Button>
             {hasOverride && (
               <Button
+                size="sm"
                 variant="outline"
                 onClick={handleClear}
-                disabled={props.disabled || saving}
+                disabled={fieldDisabled}
               >
                 {t('clear')}
               </Button>
             )}
           </div>
-        </CardContent>
+        </>
       )}
-    </Card>
+    </DetailSection>
   )
 }

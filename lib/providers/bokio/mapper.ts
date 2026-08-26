@@ -9,6 +9,22 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto,
 } from '../dto';
+import {
+  readNumber,
+  resolveVatTriple,
+  lineVatFromPercent,
+  multiplyIfBothPresent,
+} from '../amounts';
+
+/**
+ * Bokio's live payloads have repeatedly differed from its published spec (the
+ * company-information body was the previous case), and `totalTax` is absent
+ * from the supplier-invoice payload in practice: defaulting it to 0 recorded
+ * every such invoice with its gross as its net and no VAT. Candidates cover
+ * the spellings seen across Bokio's endpoints; none matching leaves the VAT
+ * unknown, which the migration reports, rather than zero, which it cannot see.
+ */
+const BOKIO_VAT_KEYS = ['totalTax', 'totalVat', 'vatAmount', 'taxAmount'] as const;
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
   return { value: value ?? 0, currencyCode: currency };
@@ -54,7 +70,6 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
 export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['currency'] as string) ?? 'SEK';
   const totalAmount = (raw['totalAmount'] as number) ?? 0;
-  const totalTax = (raw['totalTax'] as number) ?? 0;
   const paidAmount = (raw['paidAmount'] as number) ?? 0;
   const balance = totalAmount - paidAmount;
 
@@ -62,9 +77,11 @@ export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   const rawLines = (raw['lineItems'] as Record<string, unknown>[] | undefined) ?? [];
 
   const lines: SalesInvoiceLineDto[] = rawLines.map((line, idx) => {
-    const unitPrice = line['unitPrice'] as number | undefined;
-    const quantity = line['quantity'] as number | undefined;
-    const lineTotal = unitPrice != null && quantity != null ? unitPrice * quantity : 0;
+    const unitPrice = readNumber(line, ['unitPrice']);
+    const quantity = readNumber(line, ['quantity']);
+    const lineTotal = multiplyIfBothPresent(unitPrice, quantity);
+    const taxPercent = readNumber(line, ['taxRate']);
+    const lineVat = lineTotal !== undefined ? lineVatFromPercent(lineTotal, taxPercent) : undefined;
 
     return {
       id: String(line['id'] ?? idx + 1),
@@ -73,12 +90,18 @@ export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
       unitCode: line['unitType'] as string | undefined,
       unitPrice: unitPrice != null ? amount(unitPrice, currency) : undefined,
       lineExtensionAmount: amount(lineTotal, currency),
-      taxPercent: line['taxRate'] as number | undefined,
+      taxPercent,
+      taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
     };
   });
 
+  const vat = resolveVatTriple({
+    gross: totalAmount,
+    vat: readNumber(raw, BOKIO_VAT_KEYS),
+  });
+
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(totalAmount - totalTax, currency),
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
     taxInclusiveAmount: amount(totalAmount, currency),
     payableAmount: amount(totalAmount, currency),
   };
@@ -100,6 +123,7 @@ export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
       (customerRef?.['name'] as string) ?? '',
     ),
     lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     _raw: raw,
@@ -252,7 +276,6 @@ export function mapBokioToSupplier(raw: Record<string, unknown>): SupplierDto {
 export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): SupplierInvoiceDto {
   const currency = (raw['currency'] as string) ?? 'SEK';
   const totalAmount = (raw['totalAmount'] as number) ?? 0;
-  const totalTax = (raw['totalTax'] as number) ?? 0;
   const paidAmount = (raw['paidAmount'] as number) ?? 0;
   const balance = totalAmount - paidAmount;
 
@@ -260,9 +283,11 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
   const rawLines = (raw['lineItems'] as Record<string, unknown>[] | undefined) ?? [];
 
   const lines: SupplierInvoiceLineDto[] = rawLines.map((line, idx) => {
-    const unitPrice = line['unitPrice'] as number | undefined;
-    const quantity = line['quantity'] as number | undefined;
-    const lineTotal = unitPrice != null && quantity != null ? unitPrice * quantity : 0;
+    const unitPrice = readNumber(line, ['unitPrice']);
+    const quantity = readNumber(line, ['quantity']);
+    const lineTotal = multiplyIfBothPresent(unitPrice, quantity);
+    const taxPercent = readNumber(line, ['taxRate']);
+    const lineVat = lineTotal !== undefined ? lineVatFromPercent(lineTotal, taxPercent) : undefined;
 
     return {
       id: String(line['id'] ?? idx + 1),
@@ -271,12 +296,18 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
       unitCode: line['unitType'] as string | undefined,
       unitPrice: unitPrice != null ? amount(unitPrice, currency) : undefined,
       lineExtensionAmount: amount(lineTotal, currency),
-      taxPercent: line['taxRate'] as number | undefined,
+      taxPercent,
+      taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
     };
   });
 
+  const vat = resolveVatTriple({
+    gross: totalAmount,
+    vat: readNumber(raw, BOKIO_VAT_KEYS),
+  });
+
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(totalAmount - totalTax, currency),
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
     taxInclusiveAmount: amount(totalAmount, currency),
     payableAmount: amount(totalAmount, currency),
   };
@@ -298,6 +329,7 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
     ),
     buyer: buildParty(''),
     lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     ocrNumber: raw['ocrNumber'] as string | undefined,
@@ -309,7 +341,7 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
  * Map Bokio Company to CompanyInformationDto.
  *
  * Bokio Company fields:
- * - id, name, orgNumber, vatNumber, currency, country
+ * - id, name, organizationNumber, companyType
  * - address: { line1, line2, city, postalCode, country }
  */
 export function mapBokioToCompanyInformation(raw: Record<string, unknown>): CompanyInformationDto {
@@ -317,10 +349,10 @@ export function mapBokioToCompanyInformation(raw: Record<string, unknown>): Comp
 
   return {
     companyName: (raw['name'] as string) ?? '',
-    organizationNumber: raw['orgNumber'] as string | undefined,
+    organizationNumber: raw['organizationNumber'] as string | undefined,
     legalEntity: {
       registrationName: (raw['name'] as string) ?? '',
-      companyId: raw['orgNumber'] as string | undefined,
+      companyId: raw['organizationNumber'] as string | undefined,
       companyIdSchemeId: 'SE:ORGNR',
     },
     address: address ? {

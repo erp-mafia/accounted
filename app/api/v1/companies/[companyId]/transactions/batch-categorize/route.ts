@@ -19,17 +19,21 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import {
   getTemplateById,
   buildMappingResultFromTemplate,
   validateTemplateForEntity,
 } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
-import { recordVoucherGapExplanation } from '@/lib/bookkeeping/cancel-orphaned-entry'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
 import type { EntityType, Transaction, TransactionCategory } from '@/types'
@@ -114,6 +118,21 @@ interface Item {
   error?: { code: string; message: string; details?: unknown }
 }
 
+function categorizeUpdateError(error: unknown): NonNullable<Item['error']> {
+  const structured = getStructuredError(error)
+  if (structured.code === 'TX_CATEGORIZE_IGNORED_CONFLICT') {
+    const mapped = getErrorEntry(structured.code)
+    return {
+      code: structured.code,
+      message: mapped?.message_sv ?? 'Transaktionens tillstånd ändrades samtidigt.',
+    }
+  }
+  return {
+    code: 'INTERNAL_ERROR',
+    message: getErrorMessage(error),
+  }
+}
+
 async function categorizeOne(
   supabase: SupabaseClient,
   companyId: string,
@@ -187,6 +206,30 @@ async function categorizeOne(
       input.vat_treatment,
     )
   }
+  try {
+    const settlementAccount = await resolveSettlementAccount(
+      supabase,
+      companyId,
+      transaction.cash_account_id,
+      log,
+      transaction.currency,
+    )
+    mappingResult = applySettlementAccount(mappingResult, settlementAccount)
+  } catch (err) {
+    log.error('batch-categorize: settlement account lookup failed', err as Error, {
+      request_index: index,
+      transactionId,
+    })
+    return {
+      ok: false,
+      request_index: index,
+      transaction_id: transactionId,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: isBookkeepingError(err) ? getErrorMessage(err, { context: 'transaction' }) : getErrorMessage(err),
+      },
+    }
+  }
   // Dimensions: an explicitly supplied bag tags the business lines of the
   // generated verifikat (bank/VAT legs stay untagged).
   if (input.dimensions && Object.keys(input.dimensions).length > 0) {
@@ -251,7 +294,7 @@ async function categorizeOne(
   if (transaction.journal_entry_id) {
     const { error: updateErr } = await supabase
       .from('transactions')
-      .update({ is_business, category: finalCategory })
+      .update({ is_business, category: finalCategory, is_ignored: false })
       .eq('id', transactionId)
       .eq('company_id', companyId)
     if (updateErr) {
@@ -259,7 +302,7 @@ async function categorizeOne(
         ok: false,
         request_index: index,
         transaction_id: transactionId,
-        error: { code: 'INTERNAL_ERROR', message: 'Failed to update flags.' },
+        error: categorizeUpdateError(updateErr),
       }
     }
     return {
@@ -341,62 +384,39 @@ async function categorizeOne(
     .update({
       is_business,
       category: finalCategory,
+      is_ignored: false,
       journal_entry_id: journalEntryId,
     })
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .is('journal_entry_id', null)
-    .select('id')
+    .select('*')
   if (updateErr) {
+    if (journalEntryId) {
+      await reverseOrphanedJournalEntry(
+        supabase,
+        companyId,
+        userId,
+        journalEntryId,
+        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+      )
+    }
     return {
       ok: false,
       request_index: index,
       transaction_id: transactionId,
-      error: { code: 'INTERNAL_ERROR', message: getErrorMessage(updateErr) },
+      error: categorizeUpdateError(updateErr),
     }
   }
-  if ((!updated || updated.length === 0) && journalEntryId) {
-    // CAS race: storno the orphan (BFL 5 kap 5 §). Direct statusflip
-    // would be blocked by enforce_journal_entry_immutability since the
-    // engine writes the JE as posted. Same fix as the single :categorize
-    // route. Storno keeps the verifikationsnummer series unbroken.
-    try {
-      await reverseEntry(supabase, companyId, userId, journalEntryId)
-    } catch (revErr) {
-      log.error('batch-categorize TX_CATEGORIZE_RACE: failed to storno orphaned JE', revErr as Error, {
-        request_index: index,
-        orphanJournalEntryId: journalEntryId,
-      })
-      // Document the gap so the orphan is traceable per BFL 5 kap 5 §.
-      try {
-        const { data: orphan } = await supabase
-          .from('journal_entries')
-          .select('fiscal_period_id, voucher_series, voucher_number')
-          .eq('id', journalEntryId)
-          .eq('company_id', companyId)
-          .single()
-        if (orphan && orphan.voucher_series) {
-          // Same rationale as the single :categorize route: skip the gap row
-          // when no series exists rather than filing under a fallback series
-          // that an audit query won't find. The insert itself lives in the
-          // shared helper, which owns the real voucher_gap_explanations
-          // column set (gap_start/gap_end/user_id) and logs failures loudly.
-          await recordVoucherGapExplanation(supabase, {
-            companyId,
-            userId,
-            fiscalPeriodId: orphan.fiscal_period_id,
-            voucherSeries: orphan.voucher_series,
-            voucherNumber: orphan.voucher_number,
-            explanation:
-              'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',
-          })
-        }
-      } catch (gapErr) {
-        log.error('batch-categorize: failed to look up the orphan for its gap explanation', gapErr as Error, {
-          request_index: index,
-          orphanJournalEntryId: journalEntryId,
-        })
-      }
+  if (!updated || updated.length === 0) {
+    if (journalEntryId) {
+      await reverseOrphanedJournalEntry(
+        supabase,
+        companyId,
+        userId,
+        journalEntryId,
+        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+      )
     }
     return {
       ok: false,
@@ -406,11 +426,22 @@ async function categorizeOne(
     }
   }
 
+  const updatedTransaction = updated[0] as Transaction
+
+  // Propagate the underlag onto the new verifikat: anchor the transaction's
+  // pinned document and stamp matched inbox items. Same shared step as the
+  // single :categorize route and every dashboard booking path; best-effort
+  // by contract (logged inside), never fails the item. Runs only when THIS
+  // item won the CAS write.
+  if (journalEntryId) {
+    await propagateUnderlagForBookedTransaction(supabase, companyId, transactionId, journalEntryId)
+  }
+
   try {
     await eventBus.emit({
       type: 'transaction.categorized',
       payload: {
-        transaction: transaction as Transaction,
+        transaction: updatedTransaction,
         account: mappingResult.debit_account,
         taxCode: mappingResult.vat_lines[0]?.account_number || '',
         userId,

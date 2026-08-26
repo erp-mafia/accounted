@@ -163,7 +163,9 @@ export function dimensionsBagKey(dimensions?: LineDimensions): string {
  * write that follows hits the same database anyway. Reversal/storno/correction
  * paths intentionally bypass this function: they copy posted data verbatim
  * (BFL 5 kap 5§ requires the storno to mirror the original even if a value
- * has since been archived).
+ * has since been archived). Accrual dissolutions bypass it on the same
+ * grounds (DIMENSION_VALIDATION_EXEMPT_SOURCE_TYPES in dimension-rules.ts):
+ * they replay the origin entry's bag and must always be able to post.
  */
 export async function validateEntryDimensions(
   supabase: SupabaseClient,

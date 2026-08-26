@@ -17,26 +17,26 @@ import {
 import { calculateSarskildLoneskatt } from '@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator'
 import {
   getPeriodiseringsfondCohortAccount,
-  getSchablonintaktRate,
   listExistingPeriodiseringsfonder,
   proposeAvsattning,
   proposeAteforing,
+  resolveSchablonintaktRate,
 } from '@/lib/bokslut/reserves/periodiseringsfond-service'
 import { proposeOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-service'
+import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import {
-  buildDispositionsProposal,
-  buildLatentTaxProposal,
-} from '@/lib/bokslut/dispositions-proposal-builder'
+import { roundOre } from '@/lib/money'
+import { buildDispositionsProposal } from '@/lib/bokslut/dispositions-proposal-builder'
 import type { ProposedDisposition } from '@/lib/bokslut/types'
 import type { JournalEntry } from '@/types'
 
 /**
  * The schablonintäkt rate (IL 30 kap 6a §) defaults per fiscal year via
- * getSchablonintaktRate (statslåneräntan 30 nov året före det kalenderår
- * beskattningsåret går ut, lägst 0.5 %). Caller can override per request
- * via `schablonintaktRate` in the POST body; a future Riksbanken
- * integration will fetch the rate automatically.
+ * resolveSchablonintaktRate (statslåneräntan 30 nov året före det kalenderår
+ * beskattningsåret går ut, lägst 0.5 %; only consulted when the company holds
+ * fonder at the start of the year). Caller can override per request via
+ * `schablonintaktRate` in the POST body; a future Riksbanken integration
+ * will fetch the rate automatically.
  *
  * Canonical bokslut order. Each calculator re-reads the trial balance to
  * derive its base, so earlier items must post before later items see their
@@ -53,9 +53,6 @@ const DISPOSITION_ORDER: Record<string, number> = {
   sarskild_loneskatt: 2,
   periodiseringsfond_avsattning: 3,
   bolagsskatt: 4,
-  // K3 only: posts last because it depends on the closing 21xx balance,
-  // which only stabilises once avsättning / återföring have been applied.
-  uppskjuten_skatt: 5,
 }
 
 // ============================================================
@@ -172,11 +169,6 @@ const ItemSchema = z.discriminatedUnion('kind', [
       .enum(['machinery_equipment', 'building', 'immaterial', 'group'])
       .optional(),
   }),
-  // K3 only: uppskjuten skatt provision. Server recomputes the amount from
-  // current 2240 + 21xx state so the client cannot override it.
-  z.object({
-    kind: z.literal('uppskjuten_skatt'),
-  }),
 ])
 
 const PostBodySchema = z.object({
@@ -243,6 +235,13 @@ export const POST = withRouteContext(
 
       return NextResponse.json({ data: { created } })
     } catch (err) {
+      if (err instanceof OveravskrivningarConflictError) {
+        return errorResponseFromCode('CONFLICT', opLog, {
+          requestId,
+          messageSv: err.message,
+          messageEn: err.messageEn,
+        })
+      }
       if (err instanceof TaxProvisionConflictError) {
         return errorResponseFromCode('CONFLICT', opLog, {
           requestId,
@@ -295,6 +294,16 @@ class TaxProvisionConflictError extends Error {
   }
 }
 
+class OveravskrivningarConflictError extends Error {
+  constructor(
+    message: string,
+    readonly messageEn: string,
+  ) {
+    super(message)
+    this.name = 'OveravskrivningarConflictError'
+  }
+}
+
 async function computeProposal(
   item: PostItem,
   supabase: Parameters<typeof calculateBolagsskatt>[0],
@@ -325,9 +334,9 @@ async function computeProposal(
             period.opening_balance_entry_id,
           ),
         ])
+      const schablonintaktRate = resolveSchablonintaktRate(fiscalYear, existingFonder)
       const schablonintakt = existingFonder.reduce(
-        (sum, fund) =>
-          sum + Math.max(0, fund.opening_balance) * getSchablonintaktRate(fiscalYear),
+        (sum, fund) => sum + Math.max(0, fund.opening_balance) * schablonintaktRate,
         0,
       )
       const manuallyBookedTax = Math.max(
@@ -372,7 +381,11 @@ async function computeProposal(
         period.period_start,
         period.opening_balance_entry_id,
       )
-      const schablonintaktRate = item.schablonintaktRate ?? getSchablonintaktRate(fiscalYear)
+      const schablonintaktRate = resolveSchablonintaktRate(
+        fiscalYear,
+        existing,
+        item.schablonintaktRate,
+      )
       // Schablonintäkt applies to the fond balance at the START of the tax
       // year (IL 30 kap 6a §): opening balances, regardless of what has
       // been avsatt or återfört during the period.
@@ -434,7 +447,7 @@ async function computeProposal(
       )
       const result = proposeAteforing(existing, {
         returns: item.returns,
-        schablonintaktRate: item.schablonintaktRate ?? getSchablonintaktRate(fiscalYear),
+        schablonintaktRate: resolveSchablonintaktRate(fiscalYear, existing, item.schablonintaktRate),
       })
       // Combine multiple cohort reversals into a single voucher with multiple
       // lines so we don't blow up voucher numbering, but each fond is its own
@@ -442,20 +455,43 @@ async function computeProposal(
       if (result.proposals.length === 0) return null
       return mergeAteforingProposals(result.proposals)
     }
-    case 'overavskrivningar':
-      return proposeOveravskrivningar({
-        additionalAmount: item.additionalAmount,
-        category: item.category,
-      })
-    case 'uppskjuten_skatt':
-      // Server-only: recompute from current TB (which already reflects any
-      // 21xx postings that committed earlier in this batch). The client
-      // sends no amount: the calculator owns the K3 split.
-      return buildLatentTaxProposal({
+    case 'overavskrivningar': {
+      if (item.category && item.category !== 'machinery_equipment') {
+        throw new OveravskrivningarConflictError(
+          'Den automatiska beräkningen omfattar endast maskiner och inventarier enligt IL 18 kap.',
+          'The automatic calculation only covers machinery and equipment under Chapter 18 of the Income Tax Act.',
+        )
+      }
+      const calculation = await calculateOveravskrivningar({
         supabase,
         companyId,
-        fiscalPeriodId,
+        fiscalPeriod: period,
       })
+      if (calculation.status === 'blocked') {
+        throw new OveravskrivningarConflictError(
+          calculation.warning ?? 'Överavskrivningen kan inte beräknas säkert.',
+          'The excess depreciation cannot be calculated safely.',
+        )
+      }
+      if (!calculation.proposal) return null
+
+      const requested = roundOre(item.additionalAmount)
+      const maximum = calculation.proposal.signedAmount ?? calculation.proposal.amount
+      const invalidIncrease = maximum > 0 && (requested <= 0 || requested > maximum)
+      const invalidRelease = maximum < 0 && requested !== maximum
+      if (invalidIncrease || invalidRelease) {
+        throw new OveravskrivningarConflictError(
+          'Beloppet är inte längre giltigt. Ladda om bokslutet och använd den aktuella beräkningen.',
+          'The amount is no longer valid. Reload the year-end flow and use the current calculation.',
+        )
+      }
+
+      return proposeOveravskrivningar({
+        additionalAmount: requested,
+        category: 'machinery_equipment',
+        computation: calculation.proposal.computation,
+      })
+    }
   }
 }
 

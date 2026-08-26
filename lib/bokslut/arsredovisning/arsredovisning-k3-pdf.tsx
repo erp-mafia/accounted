@@ -140,6 +140,23 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: '#888',
   },
+  // Draft watermark: completeness.ts classifies every K3 report as
+  // AR-K3-DRAFT-ONLY (it can never be finalized), so the rendered PDF must
+  // say so on every page, not just in a cover banner. Rendered with the
+  // `fixed` prop inside PageChrome so it repeats on wrap-generated
+  // continuation pages too.
+  draftWatermark: {
+    position: 'absolute',
+    top: '45%',
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+    fontSize: 48,
+    fontFamily: 'Helvetica-Bold',
+    color: '#000',
+    opacity: 0.1,
+    transform: 'rotate(-45deg)',
+  },
 })
 
 function fmt(amount: number): string {
@@ -208,6 +225,9 @@ function PageChrome({
       <Text style={styles.pageFooter} fixed>
         {pageLabel ?? ''}
       </Text>
+      <Text style={styles.draftWatermark} fixed>
+        GRANSKNINGSUTKAST
+      </Text>
     </>
   )
 }
@@ -232,7 +252,7 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
         <View>
           <Text style={styles.title}>Årsredovisning</Text>
           <Text style={styles.subtitle}>
-            för räkenskapsåret {data.fiscal_period.period_start}: {data.fiscal_period.period_end}
+            för räkenskapsåret {data.fiscal_period.period_start} till {data.fiscal_period.period_end}
           </Text>
           <Text style={styles.k3Banner}>Upprättad enligt K3 (BFNAR 2012:1)</Text>
           <Text style={styles.paragraph}>{data.company.name}</Text>

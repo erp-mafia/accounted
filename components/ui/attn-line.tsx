@@ -5,6 +5,12 @@ interface AttnLineProps {
   children: React.ReactNode
   /** Optional inline action at the end of the sentence. */
   action?: { label: string; href?: string; onClick?: () => void }
+  /**
+   * Optional quiet controls rendered inside the sentence after the action
+   * (e.g. the notice line's "+N till" expander and dismiss). Style them
+   * muted; the ochre tone belongs to the sentence and its action alone.
+   */
+  trailing?: React.ReactNode
   className?: string
 }
 
@@ -13,7 +19,7 @@ interface AttnLineProps {
  * a single 12.5px line in the attn tone with an optional embedded action
  * link. Max one per page.
  */
-export function AttnLine({ children, action, className }: AttnLineProps) {
+export function AttnLine({ children, action, trailing, className }: AttnLineProps) {
   return (
     <p className={cn('text-[12.5px] leading-5 text-attn', className)}>
       {children}
@@ -38,6 +44,7 @@ export function AttnLine({ children, action, className }: AttnLineProps) {
           )}
         </>
       )}
+      {trailing}
     </p>
   )
 }

@@ -58,7 +58,9 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     if (!settings?.bankgiro) {
       return NextResponse.json(
-        { error: 'Bankgironummer saknas i företagsinställningar. Krävs för Bankgirot LB-fil.' },
+        // The settings overview shows a bankgiro from the Bolagsverket snapshot,
+        // which is display data only; point at the field this route reads.
+        { error: 'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturering för att skapa Bankgirot LB-fil.' },
         { status: 400 }
       )
     }

@@ -37,7 +37,7 @@ export default function NewSupplierInvoiceDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-4xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
+        className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
         // A half-typed invoice must survive an accidental backdrop click or a
         // stray Escape (nested comboboxes and date pickers portal outside the
         // dialog). Closing is explicit: the header X or Avbryt. Same

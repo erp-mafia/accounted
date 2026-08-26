@@ -29,15 +29,17 @@ export const nordeaFormat: BankFileFormat = {
 
   detect(content: string, _filename: string): boolean {
     const prepared = prepareContent(content)
-    const firstLine = prepared.split('\n')[0]?.toLowerCase() || ''
-    // Nordea header: comma-delimited with "datum", "transaktion", "belopp"
+    const firstLine = prepared.split('\n')[0] || ''
     // Must NOT contain semicolons (that would be SEB or Handelsbanken)
-    return (
-      !firstLine.includes(';') &&
-      firstLine.includes('datum') &&
-      firstLine.includes('transaktion') &&
-      firstLine.includes('belopp')
+    if (firstLine.includes(';')) return false
+    // Whole cells, not substrings. A substring test claimed a Swedish-language
+    // Lunar export, whose "Transaktions-ID" column contains "transaktion":
+    // Nordea is checked first, so it won and parsed Lunar's "Tid" column as the
+    // description. Reported 2026-08-18 with 117 rows titled "21:30", "08:38".
+    const cells = parseCSVLine(firstLine, ',').map((cell) =>
+      cell.trim().toLowerCase().replace(/"/g, ''),
     )
+    return cells.includes('datum') && cells.includes('transaktion') && cells.includes('belopp')
   },
 
   parse(content: string): BankFileParseResult {

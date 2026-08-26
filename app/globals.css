@@ -103,6 +103,14 @@
   --duration-slow: 500ms;
 }
 
+/* While the assistant panel's width handle is being dragged, the page margin
+   must track the cursor 1:1: the page panel's 300ms margin transition would
+   trail the drag and leave a gap. AgentSheet sets the attribute for the
+   duration of the drag only. */
+:root[data-agent-resizing] #main-content {
+  transition: none !important;
+}
+
 .dark {
   color-scheme: dark;
 
@@ -356,19 +364,69 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── Touch / mobile-web behavior ──
+   Hover styling is already safe: Tailwind 4 gates every hover: variant
+   behind @media (hover: hover), so no stuck-hover rules are needed here. */
 
-/* Display typography - Fraunces */
+/* Kill the gray/blue tap flash (inherited property, one declaration covers all) */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Stop pull-to-refresh from hijacking list scrolling and stop inner scrollers
+   from chaining into the document. `contain`, not `none`: none would also kill
+   iOS rubber-banding, which should stay. */
+html,
+body {
+  overscroll-behavior-y: contain;
+}
+
+/* Remove the double-tap-to-zoom wait on interactive elements so taps commit
+   immediately; pinch zoom and panning are unaffected. */
+a,
+button,
+label,
+summary,
+input,
+select,
+textarea,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+/* Long-press on a button must not enter text selection */
+button,
+summary,
+[role="button"] {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* iOS Safari zooms into any focused field whose font-size is under 16px.
+   Touch-primary devices get a 16px floor; desktop keeps text-sm form fields.
+   Unlayered on purpose so it also beats layered text-[13px]-style utilities
+   on bespoke inputs. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
+}
+
+/* Display typography - Hedvig Letters Serif */
 .font-display {
   font-family: var(--font-display);
   font-optical-sizing: auto;
 }
 
 /* Layered so utility classes (e.g. font-sans on a pane title) can override:
-   unlayered element rules would beat Tailwind's layered utilities. */
+   unlayered element rules would beat Tailwind's layered utilities.
+   Hedvig ships weight 400 only; anything heavier is browser-synthesized. */
 @layer base {
   h1, h2, h3 {
     font-family: var(--font-display);
-    font-weight: 500;
+    font-weight: 400;
     letter-spacing: -0.015em;
     font-optical-sizing: auto;
   }
@@ -558,6 +616,69 @@ body {
 .stagger-enter > *:nth-child(9) { animation-delay: 320ms; }
 .stagger-enter > *:nth-child(n+10) { animation-delay: 360ms; }
 
+/* Quiet settle for a freshly committed row (invoice editor line entry): a
+   brief beige wash that fades to transparent, confirming where the row
+   landed without moving anything. The global reduced-motion rule above
+   collapses it to an instant no-op. */
+@keyframes row-settle {
+  from { background-color: hsl(var(--secondary) / 0.7); }
+  to { background-color: transparent; }
+}
+.row-settle {
+  animation: row-settle 0.6s ease-out both;
+}
+
+/* Row exit (booking/ignore/delete in dry-table lists). The page keeps the
+   row rendered for a 350ms window (see finishBooking on /transactions) and
+   marks it .row-exit; the row fades fast, then the space closes by
+   transitioning the cell paddings/line metrics to zero. Table rows cannot
+   animate height directly, so fixed-height cell content (action pill,
+   badges) carries .row-collapsible: a numeric max-height at rest, so the
+   transition to 0 interpolates instead of snapping. The stagger-enter
+   animation on the same row has long finished; `both` fill keeps it inert.
+   All timings stay inside the 350ms removal window.
+   pointer-events only guards the pointer: the exiting row also carries the
+   `inert` attribute (set by the row components) so keyboard focus and
+   activation are blocked during the window too. */
+.row-exit {
+  pointer-events: none;
+}
+.row-exit > td {
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 0;
+  font-size: 0;
+  border-bottom-width: 0;
+  transition:
+    opacity 160ms var(--ease-out),
+    padding-top 240ms var(--ease-emphasized) 60ms,
+    padding-bottom 240ms var(--ease-emphasized) 60ms,
+    line-height 240ms var(--ease-emphasized) 60ms,
+    font-size 240ms var(--ease-emphasized) 60ms,
+    border-bottom-width 240ms var(--ease-emphasized) 60ms;
+}
+.row-collapsible {
+  /* Numeric rest value so the exit transition has something to interpolate
+     from; comfortably above the tallest row content (h-7 action pill). */
+  max-height: 2.5rem;
+}
+.row-exit .row-collapsible {
+  max-height: 0;
+  overflow: hidden;
+  transform: translateX(0.5rem);
+  transition:
+    max-height 240ms var(--ease-emphasized) 60ms,
+    transform 240ms var(--ease-out);
+}
+/* Reduced motion: the row is removed instantly; the delayed state cleanup
+   in the page is invisible. */
+@media (prefers-reduced-motion: reduce) {
+  .row-exit {
+    display: none;
+  }
+}
+
 /* Utility animations */
 .animate-fade-in {
   animation: fadeIn var(--duration-base) var(--ease-out);
@@ -569,6 +690,18 @@ body {
 
 .animate-scale-in {
   animation: scaleIn var(--duration-base) var(--ease-out);
+}
+
+/* Chrome/Safari autofill repaints the field in a browser-chosen blue/yellow
+   that ignores the theme. Painting an inset shadow in the input's own surface
+   color over it keeps autofilled fields inside the achromatic palette; the
+   text and caret colors follow the foreground token. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px hsl(var(--card)) inset;
+  -webkit-text-fill-color: hsl(var(--foreground));
+  caret-color: hsl(var(--foreground));
 }
 
 /* Soft focus states */
@@ -683,4 +816,37 @@ input[type="number"] {
     animation: none;
     opacity: 1;
   }
+}
+
+/* Indeterminate sweep for the receipt hunt.
+   A pass runs for over two minutes and reports nothing until it lands, so
+   there is no honest percentage to show inside one. This says "still working"
+   without inventing progress. Reduced motion holds it still and dims it
+   rather than removing it: the band still has to read as active. */
+@keyframes hunt-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.hunt-sweep {
+  animation: hunt-sweep 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hunt-sweep {
+    animation: none;
+    width: 100%;
+    opacity: 0.35;
+  }
+}
+
+/* Brief sage settle tint on tolkning-filled fields (supplier-invoice
+   dokument-först flow): the field flashes softly as the extraction lands and
+   fades back to its normal surface. Runs once per class application; the
+   global prefers-reduced-motion block collapses the animation, so reduced
+   motion sees the filled value with no flash. */
+@keyframes prefill-settle {
+  0% { background-color: hsl(var(--success) / 0.16); }
+  100% { background-color: transparent; }
+}
+.prefill-settle {
+  animation: prefill-settle 0.9s ease-out both;
 }

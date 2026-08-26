@@ -88,8 +88,12 @@ export class VismaClient {
     const page = options?.page ?? 1;
 
     const params = new URLSearchParams();
-    params.set('$top', String(pageSize));
-    params.set('$skip', String((page - 1) * pageSize));
+    // eAccounting paginates with $page/$pagesize (default 50, max 1000).
+    // OData-style $top/$skip are silently IGNORED by the API: every request
+    // returns page 1, so a multi-page fetch yields the first page N times
+    // and never reaches the rest of the collection.
+    params.set('$page', String(page));
+    params.set('$pagesize', String(pageSize));
 
     if (options?.modifiedSince && options?.modifiedField) {
       params.set(
@@ -134,6 +138,11 @@ export class VismaClient {
         modifiedSince: options?.modifiedSince,
         modifiedField: options?.modifiedField,
       });
+
+      // An empty page means the collection is exhausted regardless of what
+      // Meta claims; trusting a stale/buggy TotalNumberOfPages here would
+      // re-append duplicate rows or loop for nothing.
+      if (result.items.length === 0) break;
 
       allItems.push(...result.items);
       totalPages = result.totalPages;

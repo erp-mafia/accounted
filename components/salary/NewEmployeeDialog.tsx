@@ -294,6 +294,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
             </Field>
             <Field label="Sysselsättningsgrad (%)" htmlFor="employment_degree">
               <Input id="employment_degree" name="employment_degree" type="number" defaultValue="100" min="1" max="100" />
+              <p className="text-xs text-muted-foreground">Under 100 % räknas grundlönen som månadslön × sysselsättningsgrad.</p>
             </Field>
             <Field label="Timmar per vecka" htmlFor="hours_per_week">
               <Input id="hours_per_week" name="hours_per_week" type="number" defaultValue="40" min="1" max="80" step="0.5" />
@@ -415,7 +416,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
             </Field>
           </div>
           {showChecksumWarning && (
-            <p className="text-xs text-warning-foreground">{BANK_CHECKSUM_WARNING_SV}</p>
+            <p className="text-xs text-attn">{BANK_CHECKSUM_WARNING_SV}</p>
           )}
         </section>
         </div>

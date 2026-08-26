@@ -3,6 +3,47 @@ import { getPool } from './setup'
 import { insertAuthUser, insertCompany, insertFiscalPeriod } from './fixtures'
 
 describe('BFL retention expiry', () => {
+  it('runs the corrected retention trigger after the original migration 017 trigger', async () => {
+    const result = await getPool().query<{
+      trigger_name: string
+      trigger_definition: string
+    }>(
+      `SELECT
+         trigger.tgname AS trigger_name,
+         pg_get_triggerdef(trigger.oid) AS trigger_definition
+       FROM pg_trigger trigger
+       JOIN pg_class target ON target.oid = trigger.tgrelid
+       JOIN pg_namespace schema ON schema.oid = target.relnamespace
+       WHERE schema.nspname = 'public'
+         AND target.relname = 'fiscal_periods'
+         AND NOT trigger.tgisinternal
+         AND trigger.tgname IN (
+           'calculate_retention_expiry',
+           'zz_set_bfl_retention_expiry',
+           'enforce_period_start_day'
+         )
+       ORDER BY trigger.tgname`,
+    )
+
+    expect(result.rows).toEqual([
+      {
+        trigger_name: 'calculate_retention_expiry',
+        trigger_definition:
+          'CREATE TRIGGER calculate_retention_expiry BEFORE INSERT OR UPDATE ON public.fiscal_periods FOR EACH ROW EXECUTE FUNCTION calculate_retention_expiry()',
+      },
+      {
+        trigger_name: 'enforce_period_start_day',
+        trigger_definition:
+          'CREATE TRIGGER enforce_period_start_day BEFORE INSERT OR UPDATE OF company_id, period_start ON public.fiscal_periods FOR EACH ROW EXECUTE FUNCTION enforce_first_of_month_for_subsequent_periods()',
+      },
+      {
+        trigger_name: 'zz_set_bfl_retention_expiry',
+        trigger_definition:
+          'CREATE TRIGGER zz_set_bfl_retention_expiry BEFORE INSERT OR UPDATE ON public.fiscal_periods FOR EACH ROW EXECUTE FUNCTION set_bfl_retention_expiry()',
+      },
+    ])
+  })
+
   it('retains a fiscal year through the end of the seventh following calendar year', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })

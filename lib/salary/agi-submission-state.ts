@@ -4,7 +4,9 @@
  * Combines the run row's authoritative timestamps (agi_generated_at,
  * agi_submitted_at) with the Skatteverket extension's per-period submission
  * record (extension_data key `agi_submission_{period}`, surfaced via
- * GET /api/extensions/ext/skatteverket/agi/status).
+ * GET /api/extensions/ext/skatteverket/agi/status; once the kvittens
+ * reconciliation has deleted that cache the same route serves the receipt
+ * recorded on `agi_declarations`, see `source`).
  *
  * The submission record is optional: self-hosted installs without the
  * Skatteverket extension, users without the capability, and periods that
@@ -40,6 +42,25 @@ export interface AgiSubmissionState {
   kvittensnummer?: string
   signeradAv?: string
   signeradTid?: string
+  /**
+   * The moment recorded as the filing time: Skatteverket's signeradTid, or
+   * the reconciliation time when Skatteverket omitted it. Written by the
+   * extension's status read from `agi_declarations.submitted_at`, the same
+   * value that stamps `salary_runs.agi_submitted_at`.
+   */
+  submittedAt?: string
+  /**
+   * True when `submittedAt` is our reconciliation-time upper bound rather
+   * than Skatteverket's signing moment (signeradTid absent), so the UI can
+   * label it as an estimate instead of as the legal signing time.
+   */
+  submittedAtEstimated?: boolean
+  /**
+   * Where the record was read from: the in-flight `agi_submission_{period}`
+   * cache, or the receipt on `agi_declarations` once the kvittens
+   * reconciliation has deleted that cache (#1597).
+   */
+  source?: 'cache' | 'declaration'
   inlamningId?: number
   tillstand?: string
   meddelande?: string
@@ -110,9 +131,11 @@ export function resolveRunAgiSubmission(
   // 2. This run already carries a kvittens stamp. Its own receipt is the one
   // whose signeradTid produced that stamp; a record signed at any other moment
   // belongs to another declaration for the same period. Skatteverket may omit
-  // signeradTid, in which case there is nothing to contradict ownership.
+  // signeradTid: the record then carries the reconciliation-time stamp as
+  // `submittedAt` (the same value written to the run row), and a record with
+  // neither has nothing to contradict ownership.
   if (submission.status === 'signed' && submittedAt !== null) {
-    const signeradTid = epoch(submission.signeradTid)
+    const signeradTid = epoch(submission.signeradTid ?? submission.submittedAt)
     return signeradTid === null || signeradTid === submittedAt ? submission : null
   }
 

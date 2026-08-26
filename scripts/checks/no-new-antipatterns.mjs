@@ -11,8 +11,11 @@
  *   1. raw-route-auth : an `app/api/**\/route.ts` that calls
  *      `supabase.auth.getUser()` directly instead of going through
  *      `requireAuth()` / `withRouteContext()` (the only guards that enforce
- *      MFA AAL2 on hosted). Tracked as a file-set so a NEW offending route
- *      fails CI even if an old one was fixed in the same PR.
+ *      MFA AAL2 on hosted). Judged per exported handler, not per file: a
+ *      wrapped PATCH next to a hand-rolled DELETE in the same file is still
+ *      a violation (that exact shape hid two MFA bypasses until 2026-08-26).
+ *      Tracked as a file-set so a NEW offending route fails CI even if an
+ *      old one was fixed in the same PR.
  *   2. naive-ore-round: `Math.round(x * 100) / 100`, which is subtly wrong on
  *      exact-half values (see lib/money.ts `roundOre`). Tracked as a count.
  *      The canonical rounding modules are excluded.
@@ -51,9 +54,64 @@
  *      extensionRegistry.get('<id>') so a disabled extension never exposes a
  *      live surface (allowlisted file-set, may only shrink). Implementation
  *      and rationale in extension-route-guards.mjs.
+ *   8. hand-rolled-invariant: a shared format rule (BAS account number, ISO
+ *      date, four-digit fiscal year) spelled out inline instead of imported
+ *      from lib/invariants/. The BAS account rule was written out at 20 sites
+ *      and the ISO date rule at 68, with error messages that differed per site;
+ *      the four Skatteverket-bound org-number paths disagreed outright about
+ *      what "valid" meant, which is the kind of drift a customer only discovers
+ *      when a filing fails at the deadline. Tracked as a count.
+ *   9. leaky-supabase-client: server code importing supabase-js's `createClient`
+ *      as a value instead of `createServiceRoleClient()`. The default
+ *      `autoRefreshToken: true` starts a 30 s setInterval that is never
+ *      cleared; `unref()` keeps the process exitable but not the timer
+ *      collectable, so each constructed client retains its whole request scope.
+ *      Killed a self-hosted instance after 42 idle hours (2026-08-13). No
+ *      baseline: the count is 0 today.
+ *   10. off-ladder-radius: a border-radius class outside the locked ladder
+ *      (pill / rounded-xl overlays / rounded-lg surfaces / rounded-sm leaves;
+ *      see .claude/rules/design.md). Before the 2026-08 migration the UI had
+ *      seven radii in circulation (4/5/6/8/12/16px + pill) and one toolbar row
+ *      could mix four of them. `rounded-md`, bare `rounded`, `rounded-2xl`+
+ *      and arbitrary `rounded-[Npx]` are dead vocabulary in app/ and
+ *      components/. No baseline: the count is 0, any new one is a hard
+ *      failure.
+ *  10. folded-public-flag: `process.env.NEXT_PUBLIC_X === 'true'` compared in
+ *      place. The Docker image bakes sentinels that docker-entrypoint.sh
+ *      substitutes at container start; an in-place comparison is constant-
+ *      folded and dead-code-eliminated at build time, erasing both the name
+ *      and the sentinel, so the flag is permanently false however the operator
+ *      configures it. Every Docker self-host consequently ran with the
+ *      entitlement paywall live (diagnosed 2026-08-17). Read flags as values
+ *      via lib/env/public-flags. No baseline: the count is 0, any new one is
+ *      a hard failure.
+ *   11. dialog-overflow-risk: patterns that make a dialog scroll sideways.
+ *      (a) a bare `1fr` grid track inside grid-cols-[...] in a file that
+ *      imports DialogContent/SheetContent: per the CSS Grid spec a bare fr
+ *      track's implicit minimum is auto (its content's min-content size), so
+ *      the track refuses to shrink below its content and overflows the dialog
+ *      (StrikeLinesDialog and CorrectionEntryDialog shipped this, fixed
+ *      2026-08-19; TransactionBookingDialog had the safe minmax(0,1fr) idiom
+ *      all along). (b) whitespace-nowrap inside a <DialogContent>/
+ *      <SheetContent> JSX region outside DIALOG_NOWRAP_ALLOWED (numeric
+ *      columns inside their own overflow-x-auto wrapper are fine and
+ *      allowlisted per file). (c) a hand-rolled absolute overlay forcing
+ *      min-w-[>=20rem] in a file that never portals anything to
+ *      document.body: DialogContent's overflow-y-auto computes overflow-x to
+ *      auto as well, so an oversized non-portaled panel grows the dialog a
+ *      horizontal scrollbar instead of repositioning (AccountCombobox's
+ *      dropdown pre-2026-08-19). Tracked as a per-file baseline set that may
+ *      only shrink.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
+ *  11. direct-ai-client: a file outside lib/ai that imports createAiClient,
+ *      calls `.messages.create/stream(` on an Anthropic client, or imports
+ *      the Vercel AI SDK. Every model call goes through getAiService() so the
+ *      backend (Bedrock on hosted, a Swedish OpenAI-compatible endpoint on a
+ *      sovereign self-host) stays an environment decision. Allowlist of the
+ *      pre-abstraction call sites in this file, may only shrink.
+ *
  *   node scripts/checks/no-new-antipatterns.mjs --update   # re-baseline after a migration ratchets the count down
  *
  * Exit code 1 if either check regressed past its baseline.
@@ -81,7 +139,30 @@ const RAW_AUTH_RE = /\.auth\.getUser\(/
 // flagged. withRouteContext is usually called with a generic (`withRouteContext<…>(`),
 // so accept either `<` or `(` after the name.
 const GUARD_RE = /requireAuth\(|withRouteContext[<(]/
+// Each top-level `export` starts a new segment, so every handler (and the
+// preamble of shared helpers above the first export) is judged on its own.
+// Without this split, one wrapped handler exempted the whole file.
+const TOP_LEVEL_EXPORT_RE = /^(?=export\s)/m
 const NAIVE_ROUND_RE = /Math\.round\([^\n]*\*\s*100\s*\)\s*\/\s*100/
+
+// 8. hand-rolled-invariant. Shared format contracts live in lib/invariants/
+// (account number, ISO date, four-digit fiscal year, org number). Before that
+// module the BAS account rule was written out at 20 sites and the ISO date rule
+// at 68, with error messages that differed per site, and the four
+// Skatteverket-bound org-number paths did not agree on what "valid" meant.
+//
+// Only the two unambiguous regex families are counted. An org-number
+// digit-strip is too varied in shape to match reliably by regex; the
+// cross-path test in lib/invariants/__tests__/org-number-cross-path.test.ts is
+// the guard on that one instead.
+const HAND_ROLLED_INVARIANT_RES = [
+  // /^\d{4}$/ or /^[0-9]{4}$/  → accountNumberSchema or fiscalYearSchema
+  /\/\^(?:\\d|\[0-9\])\{4\}\$\//,
+  // /^\d{4}-\d{2}-\d{2}$/      → isoDateSchema or ISO_DATE_RE
+  /\/\^(?:\\d|\[0-9\])\{4\}-(?:\\d|\[0-9\])\{2\}-(?:\\d|\[0-9\])\{2\}\$\//,
+]
+// The sanctioned home of these rules: must not count against itself.
+const INVARIANT_EXEMPT_PREFIX = 'lib/invariants/'
 
 function walk(dir, exts, out = []) {
   let entries
@@ -104,14 +185,18 @@ function walk(dir, exts, out = []) {
 
 const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/')
 
+/** True when any handler segment calls getUser() without an MFA-enforcing guard. */
+function handRollsRouteAuth(src) {
+  return src
+    .split(TOP_LEVEL_EXPORT_RE)
+    .some((segment) => RAW_AUTH_RE.test(segment) && !GUARD_RE.test(segment))
+}
+
 /** Route files that hand-roll auth instead of the MFA-enforcing guard. */
 function findRawRouteAuth() {
   const apiDir = path.join(ROOT, 'app', 'api')
   return walk(apiDir, ['route.ts'])
-    .filter((f) => {
-      const src = fs.readFileSync(f, 'utf8')
-      return RAW_AUTH_RE.test(src) && !GUARD_RE.test(src)
-    })
+    .filter((f) => handRollsRouteAuth(fs.readFileSync(f, 'utf8')))
     .map(rel)
     .sort()
 }
@@ -142,6 +227,64 @@ function findDirectJelInserts() {
       if (JEL_INSERT_SANCTIONED.has(r)) return false
       if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
       return JEL_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
+    })
+    .map(rel)
+    .sort()
+}
+
+// The one module allowed to import supabase-js's createClient as a value: it
+// is the wrapper that applies SERVER_AUTH_OPTIONS.
+const LEAKY_CLIENT_SANCTIONED = new Set(['lib/supabase/service-client.ts'])
+const SUPABASE_JS_IMPORT_RE = /import\s+(type\s+)?\{([^}]*)\}\s*from\s*['"]@supabase\/supabase-js['"]/g
+// A namespace import hands over the whole module, so `sb.createClient(...)` is
+// reachable without ever naming it in the import. Treat any value-namespace
+// import as leaky rather than trying to track member access.
+const SUPABASE_JS_NAMESPACE_RE =
+  /import\s+(type\s+)?\*\s+as\s+\w+\s+from\s*['"]@supabase\/supabase-js['"]/g
+
+/**
+ * Files that import supabase-js's `createClient` as a VALUE instead of going
+ * through createServiceRoleClient().
+ *
+ * `autoRefreshToken` defaults to true, and auth-js starts the 30 s refresh
+ * ticker unconditionally off-browser. The ticker calls unref(), so the process
+ * still exits and nothing fails in tests or on Vercel, but unref does not make
+ * a timer collectable: it stays a GC root for its callback and retains the
+ * client plus the whole request scope around it. A self-hosted instance died of
+ * heap exhaustion after 42 idle hours this way (2026-08-13), holding 445
+ * request graphs and ~1050 Timeouts in the 30 000 ms bucket.
+ *
+ * Both named (`{ createClient }`) and namespace (`* as sb`) value imports count:
+ * the latter reaches createClient through member access without naming it.
+ *
+ * Type-only imports are fine; so is the browser client, which needs the ticker
+ * and is built on @supabase/ssr's createBrowserClient anyway.
+ */
+function findLeakySupabaseClients() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  return files
+    .filter((f) => {
+      const r = rel(f)
+      if (LEAKY_CLIENT_SANCTIONED.has(r)) return false
+      if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
+      const src = fs.readFileSync(f, 'utf8')
+      for (const m of src.matchAll(SUPABASE_JS_IMPORT_RE)) {
+        const [, typeOnly, bindings] = m
+        if (typeOnly) continue
+        const bindsCreateClient = bindings
+          .split(',')
+          .map((b) => b.trim())
+          .some((b) => b === 'createClient' || b.startsWith('createClient as'))
+        if (bindsCreateClient) return true
+      }
+      for (const m of src.matchAll(SUPABASE_JS_NAMESPACE_RE)) {
+        if (!m[1]) return true
+      }
+      return false
     })
     .map(rel)
     .sort()
@@ -231,6 +374,283 @@ function countNaiveRound() {
   return count
 }
 
+/**
+ * Occurrences of a shared format rule written out by hand instead of imported
+ * from lib/invariants/. Counted, not file-setted: the campaign lowers the
+ * number file by file and the count may only go down.
+ */
+function countHandRolledInvariants() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  let count = 0
+  for (const f of files) {
+    const relPath = rel(f)
+    if (relPath.startsWith(INVARIANT_EXEMPT_PREFIX)) continue
+    // Tests legitimately spell out the pattern they are asserting about.
+    if (relPath.includes('__tests__/') || relPath.endsWith('.test.ts')) continue
+    for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
+      if (HAND_ROLLED_INVARIANT_RES.some((re) => re.test(line))) count++
+    }
+  }
+  return count
+}
+
+// 9. off-ladder-radius. The radius ladder (.claude/rules/design.md) allows
+// exactly: rounded-full (interactive toolbar controls, chips, dots),
+// rounded-xl (page panel, dialogs, slide-overs, hero surfaces), rounded-lg
+// (cards, form fields, popover/menu content, bordered boxes), rounded-sm
+// (nested leaf elements), rounded-none, and directional variants of those.
+// Everything else is off-ladder. Bare `rounded` is banned as vocabulary: it
+// renders the same 4px as rounded-sm but hides from a rounded-sm grep.
+const OFF_LADDER_RADIUS_RES = [
+  // rounded-md and any directional variant (rounded-t-md, rounded-bl-md, ...)
+  /\brounded(?:-[trbl]{1,2})?-(?:md|2xl|3xl|4xl)\b/,
+  // arbitrary radius values: rounded-[5px], rounded-t-[10px], ...
+  /\brounded(?:-[trbl]{1,2})?-\[/,
+]
+
+// Bare `rounded` as a class token (not rounded-*): renders the same 4px as
+// rounded-sm but hides from a rounded-sm grep. `rounded` is also a common
+// variable name and an ordinary English word, so this one only counts inside
+// a quoted string that looks like a Tailwind class list (contains at least
+// one other utility-class token).
+const BARE_ROUNDED_RE = /(?<![-\w])rounded(?![-\w])/
+const CLASS_LIST_HINT_RE =
+  /(?:^|\s)(?:[a-z-]+:)*(?:flex|inline-flex|grid|hidden|absolute|relative|sticky|fixed|bg-\S|text-\S|border\b|border-\S|shadow\S*|p-\d|px-\S|py-\S|pl-\S|pr-\S|pt-\S|pb-\S|h-\S|w-\S|gap-\S|items-\S|justify-\S|font-\S|overflow-\S|transition\S*|animate-\S)/
+
+function lineHasBareRoundedClass(line) {
+  const strings = line.match(/"[^"]*"|'[^']*'|`[^`]*`/g)
+  if (!strings) return false
+  return strings.some(
+    (s) => BARE_ROUNDED_RE.test(s) && CLASS_LIST_HINT_RE.test(s.slice(1, -1)),
+  )
+}
+
+/** Off-ladder border-radius classes in UI code. */
+function findOffLadderRadii() {
+  const files = [
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+  ]
+  const findings = []
+  for (const f of files) {
+    const lines = fs.readFileSync(f, 'utf8').split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      // Prose mentions of "rounded" in comments are not class tokens.
+      const trimmed = line.trim()
+      if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue
+      if (OFF_LADDER_RADIUS_RES.some((re) => re.test(line)) || lineHasBareRoundedClass(line)) {
+        findings.push(`${rel(f)}:${i + 1}`)
+      }
+    }
+  }
+  return findings.sort()
+}
+
+// 10. folded-public-flag. The Docker image is built once with sentinel values
+// (ENV NEXT_PUBLIC_SELF_HOSTED=__NEXT_PUBLIC_SELF_HOSTED__) that
+// docker-entrypoint.sh seds into .next at container start. Comparing the var in
+// place defeats that: the bundler inlines the sentinel, the minifier folds
+// `"__NEXT_PUBLIC_SELF_HOSTED__" === 'true'` to false and eliminates the
+// branch, so BOTH the name and the sentinel vanish and sed has nothing to
+// replace. The flag is then permanently false whatever the operator sets.
+//
+// That shipped and stayed invisible for weeks: every Docker self-host ran with
+// the entitlement paywall live, killing ai/bank_sync/skatteverket/email_send 30
+// days after company creation. Read public flags as VALUES instead
+// (flagEnabled(process.env.NEXT_PUBLIC_X) from lib/env/public-flags), which
+// keeps the sentinel in the output as a live string literal.
+//
+// No baseline: the count is 0, any new one is a hard failure.
+const PUBLIC_FLAG_EXEMPT = new Set(['lib/env/public-flags.ts'])
+
+const EQUALITY_OPS = new Set([
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+])
+
+/** `process.env.NEXT_PUBLIC_ANYTHING` as an expression node. */
+function isPublicEnvRead(node) {
+  return (
+    ts.isPropertyAccessExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    node.expression.expression.text === 'process' &&
+    node.expression.name.text === 'env' &&
+    ts.isIdentifier(node.name) &&
+    node.name.text.startsWith('NEXT_PUBLIC_')
+  )
+}
+
+/** Public env flags compared in place, which the Docker build folds away. */
+function findFoldedPublicFlags() {
+  const files = [
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'contexts'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  const findings = []
+  for (const file of files) {
+    const relPath = rel(file)
+    if (PUBLIC_FLAG_EXEMPT.has(relPath)) continue
+    // Tests never ship in the image, and they legitimately assert on raw env.
+    // Both layouts: the __tests__/ convention, and a colocated *.test.ts(x),
+    // which would otherwise be a false positive that invites weakening this
+    // guard rather than fixing a real call site.
+    if (relPath.includes('__tests__/') || /\.test\.tsx?$/.test(relPath)) continue
+    const text = fs.readFileSync(file, 'utf8')
+    if (!text.includes('NEXT_PUBLIC_')) continue
+
+    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
+    const visit = (node) => {
+      if (
+        ts.isBinaryExpression(node) &&
+        EQUALITY_OPS.has(node.operatorToken.kind) &&
+        (isPublicEnvRead(node.left) || isPublicEnvRead(node.right))
+      ) {
+        const pos = source.getLineAndCharacterOfPosition(node.getStart(source))
+        findings.push(`${relPath}:${pos.line + 1}`)
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(source)
+  }
+  return [...new Set(findings)].sort()
+}
+
+// 11. dialog-overflow-risk. See the header comment for the three patterns.
+// Files whose whitespace-nowrap cells are fixed-width numeric/tabular columns
+// living inside their OWN overflow-x-auto scroll container, so they cannot
+// widen the dialog itself:
+// - MockDataImportDialog: CSV preview built on the Table primitive, which
+//   self-wraps in overflow-auto (components/ui/table.tsx).
+// - PaymentFileDialog: payment-line table wrapped in an overflow-x-auto div.
+// 11. direct-ai-client. Every model call goes through the job-shaped service
+// in lib/ai (getAiService): that is what lets hosted stay on Bedrock while a
+// sovereign self-host points at an OpenAI-compatible Swedish endpoint, and
+// what stops new AI surfaces from hard-wiring one SDK. Outside lib/ai/, a
+// file may not import createAiClient, call `.messages.create/stream(` on an
+// Anthropic client, or import the Vercel AI SDK (`ai`, `@ai-sdk/*`). The
+// allowlist is the pre-abstraction call sites that still speak the Anthropic
+// SDK directly (chat loop, composer, receipt hunt, WhatsApp interpreter, the
+// legacy smoke script); it may only shrink as they migrate or are deleted.
+const DIRECT_AI_CLIENT_ALLOWED = new Set([
+  'lib/agent/chat/run-turn.ts',
+  'lib/agent/composer/atom-selection.ts',
+  'lib/agent/composer/client.ts',
+  'lib/agent/composer/narrative.ts',
+  'lib/agent/composer/prewarm.ts',
+  'lib/receipt-hunt/adjudicate.ts',
+  'lib/receipt-hunt/mail-intelligence.ts',
+  'extensions/general/whatsapp-inbox/lib/interpret-answer.ts',
+  'scripts/smoke-ai.ts',
+  // Out-of-tree CI reviewer with its own pinned SDK install (see the
+  // compliance workflow); deliberately not part of the app's AI layer.
+  'scripts/swedish-compliance-review.mjs',
+])
+const DIRECT_AI_CLIENT_RES = [
+  { rule: 'createAiClient-import', re: /import[^;]*\bcreateAiClient\b[^;]*from\s+['"]@\/lib\/ai\/provider['"]/ },
+  { rule: 'anthropic-messages-call', re: /\.messages\.(create|stream)\(/ },
+  { rule: 'ai-sdk-import', re: /from\s+['"](ai|ai\/[\w-]+|@ai-sdk\/[\w-]+)['"]/ },
+]
+
+function findDirectAiClients() {
+  const out = []
+  for (const dir of ['lib', 'app', 'extensions', 'components', 'scripts']) {
+    for (const file of walk(path.join(ROOT, dir), ['.ts', '.tsx', '.mjs'])) {
+      const r = rel(file)
+      if (r.startsWith('lib/ai/')) continue
+      if (r.includes('/__tests__/') || r.endsWith('.test.ts') || r.endsWith('.test.tsx')) continue
+      const src = fs.readFileSync(file, 'utf8')
+      for (const { rule, re } of DIRECT_AI_CLIENT_RES) {
+        if (re.test(src)) out.push({ file: r, rule })
+      }
+    }
+  }
+  return out
+}
+
+const DIALOG_NOWRAP_ALLOWED = new Set([
+  'components/extensions/shared/MockDataImportDialog.tsx',
+  'components/supplier-invoices/PaymentFileDialog.tsx',
+])
+
+const DIALOG_CONTENT_IMPORT_RE =
+  /import\s*\{[^}]*\b(?:DialogContent|SheetContent)\b[^}]*\}\s*from\s*['"]@\/components\/ui\/(?:dialog|sheet)['"]/
+const GRID_COLS_TEMPLATE_RE = /grid-cols-\[([^\]]+)\]/g
+const BARE_FR_TOKEN_RE = /^\d+(?:\.\d+)?fr$/
+const WIDE_MIN_W_RE = /min-w-\[(\d+(?:\.\d+)?)(rem|px)\]/g
+const PORTAL_HINT_RE = /createPortal|\bPortal\b/
+const OVERLAY_ABSOLUTE_RE = /\babsolute\b/
+const OVERLAY_Z_RE = /\bz-(?:40|50|\[\d+\])/
+
+/**
+ * Overflow-risky patterns in dialog/sheet hosts. Returns
+ * { file, where, rule } findings; the ratchet compares the file set.
+ */
+function findDialogOverflowRisks() {
+  const files = [
+    ...walk(path.join(ROOT, 'app'), ['.tsx']),
+    ...walk(path.join(ROOT, 'components'), ['.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.tsx']),
+  ]
+  const findings = []
+  for (const f of files) {
+    const r = rel(f)
+    const src = fs.readFileSync(f, 'utf8')
+    const lines = src.split('\n')
+
+    if (DIALOG_CONTENT_IMPORT_RE.test(src)) {
+      // (a) bare fr grid tracks anywhere in a dialog-hosting file.
+      lines.forEach((line, i) => {
+        for (const m of line.matchAll(GRID_COLS_TEMPLATE_RE)) {
+          if (m[1].split('_').some((token) => BARE_FR_TOKEN_RE.test(token))) {
+            findings.push({ file: r, where: `${r}:${i + 1}`, rule: 'bare-fr-grid-track' })
+          }
+        }
+      })
+      // (b) whitespace-nowrap inside the <DialogContent>/<SheetContent>
+      // region. Line-based depth tracking is a heuristic, but dialog JSX in
+      // this repo keeps the tags on their own lines.
+      if (!DIALOG_NOWRAP_ALLOWED.has(r)) {
+        let depth = 0
+        lines.forEach((line, i) => {
+          if (/<(?:Dialog|Sheet)Content\b/.test(line)) depth++
+          if (depth > 0 && line.includes('whitespace-nowrap')) {
+            findings.push({ file: r, where: `${r}:${i + 1}`, rule: 'nowrap-in-dialog' })
+          }
+          const closes = (line.match(/<\/(?:Dialog|Sheet)Content>/g) || []).length
+          depth = Math.max(0, depth - closes)
+        })
+      }
+    }
+
+    // (c) a hand-rolled absolute overlay forcing a >=20rem minimum width in a
+    // file that never portals anything: inside a scrollable DialogContent
+    // that minimum becomes a horizontal scrollbar on the dialog.
+    if (!PORTAL_HINT_RE.test(src) && OVERLAY_ABSOLUTE_RE.test(src) && OVERLAY_Z_RE.test(src)) {
+      lines.forEach((line, i) => {
+        for (const m of line.matchAll(WIDE_MIN_W_RE)) {
+          const value = parseFloat(m[1])
+          if ((m[2] === 'rem' && value >= 20) || (m[2] === 'px' && value >= 320)) {
+            findings.push({ file: r, where: `${r}:${i + 1}`, rule: 'unportaled-wide-overlay' })
+          }
+        }
+      })
+    }
+  }
+  return findings.sort((a, b) => a.where.localeCompare(b.where))
+}
+
 // Dependencies pinned to an EXACT version on purpose, because a bump broke prod
 // and must not silently return via `npm update`, a dependabot bump, or a manual
 // install. Any drift (in package.json OR the lockfile) fails CI. See DECISIONS.md.
@@ -242,6 +662,27 @@ const PINNED_DEPS = [
       '0.32.0 (grouped dependabot bump #884) broke Bedrock streaming in prod: empty stream, ' +
       '"request ended without sending any chunks", taking down the AI assistant + invoice OCR. ' +
       'Keep 0.29.1 until 0.32.x streaming is verified against Bedrock.',
+  },
+  {
+    name: '@anthropic-ai/sdk',
+    version: '0.95.0',
+    reason:
+      'Declared explicitly at the version bedrock-sdk 0.29.1 pulls in transitively (#1406 Tier 1), so ' +
+      'the lockfile dedupes to one copy; a drift here is a second SDK copy and an untested wire surface.',
+  },
+  {
+    name: 'ai',
+    version: '6.0.259',
+    reason:
+      'Vercel AI SDK backs lib/ai/services/openai-compatible.ts (Tier 2 BYO endpoints). Major versions ' +
+      'rename core APIs; upgrades are deliberate PRs with the provider test suite, never a silent bump.',
+  },
+  {
+    name: '@ai-sdk/openai-compatible',
+    version: '2.0.69',
+    reason:
+      'Paired with ai 6.x; the provider package follows its own major cadence and must move together with ' +
+      'the core pin in one reviewed change.',
   },
 ]
 
@@ -563,13 +1004,21 @@ function findRawUserErrors() {
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
+  handRolledInvariants: countHandRolledInvariants(),
   ledgerScanningReports: findLedgerScanningReports(),
   directJelInsert: findDirectJelInserts(),
+  leakySupabaseClients: findLeakySupabaseClients(),
   pinnedDepViolations: findPinnedDepViolations(),
   rawUserErrors: findRawUserErrors(),
   sekLabelledAmounts: findSekLabelledFxAmounts(ROOT),
   extensionRoutes: findExtensionRouteFindings(ROOT),
+  offLadderRadii: findOffLadderRadii(),
+  foldedPublicFlags: findFoldedPublicFlags(),
+  dialogOverflowRisk: findDialogOverflowRisks(),
+  directAiClients: findDirectAiClients(),
 }
+
+const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
 
 const isUpdate = process.argv.includes('--update')
 
@@ -579,9 +1028,14 @@ if (isUpdate) {
       'Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).',
     rawRouteAuth: { count: current.rawRouteAuth.length, files: current.rawRouteAuth },
     naiveOreRound: { count: current.naiveOreRound },
+    handRolledInvariants: { count: current.handRolledInvariants },
     ledgerScanningReports: {
       count: current.ledgerScanningReports.length,
       files: current.ledgerScanningReports,
+    },
+    dialogOverflowRisk: {
+      count: dialogOverflowFiles.length,
+      files: dialogOverflowFiles,
     },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
@@ -629,6 +1083,23 @@ if (current.directJelInsert.length) {
   )
 }
 
+// 1b2. leaky-supabase-client: server code must construct clients through
+// createServiceRoleClient(). No baseline: the count is 0 today.
+if (current.leakySupabaseClients.length) {
+  failed = true
+  console.error(
+    `\n✗ leaky-supabase-client: ${current.leakySupabaseClients.length} file(s) import supabase-js's ` +
+      `createClient as a value instead of createServiceRoleClient():`,
+  )
+  current.leakySupabaseClients.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → import { createServiceRoleClient } from "@/lib/supabase/service-client". Constructing a\n' +
+      '    client directly leaves autoRefreshToken on, which starts a 30 s setInterval that is never\n' +
+      '    cleared and retains the client plus the whole request scope (heap death after ~42 h).\n' +
+      '    Type-only imports are fine: use `import type { SupabaseClient } from "@supabase/supabase-js"`.',
+  )
+}
+
 // 1c. pinned-dep: a version-pinned dependency must match its pin EXACTLY, in
 // both package.json and the lockfile. No baseline: any drift is a hard failure.
 if (current.pinnedDepViolations.length) {
@@ -672,6 +1143,71 @@ if (current.sekLabelledAmounts.length) {
   console.error(
     '  → pass the record\'s currency as the second argument, formatCurrency(amount, record.currency),\n' +
       '    or format the SEK twin (record.amount_sek / record.total_sek) when one exists.',
+  )
+}
+
+// 1e1. off-ladder-radius: no baseline, the count is 0 after the 2026-08
+// migration and any new off-ladder radius class is a hard failure.
+if (current.offLadderRadii.length) {
+  failed = true
+  console.error(
+    `\n✗ off-ladder-radius: ${current.offLadderRadii.length} border-radius class(es) outside the locked ladder:`,
+  )
+  current.offLadderRadii.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → use the radius ladder (.claude/rules/design.md): rounded-full for toolbar controls/chips,\n' +
+      '    rounded-xl for overlays, rounded-lg for cards/fields/menu content, rounded-sm for nested\n' +
+      '    leaves. rounded-md, bare `rounded`, rounded-2xl and rounded-[Npx] are dead vocabulary.',
+  )
+}
+
+// 1e1b. folded-public-flag: no baseline, the count is 0 and any new in-place
+// comparison is a hard failure. This one is invisible in dev and in the Vercel
+// build (both have real env values); it only misfires in the Docker image, and
+// then silently.
+if (current.foldedPublicFlags.length) {
+  failed = true
+  console.error(
+    `\n✗ folded-public-flag: ${current.foldedPublicFlags.length} NEXT_PUBLIC_* flag(s) compared in place:`,
+  )
+  current.foldedPublicFlags.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → read the value instead: flagEnabled(process.env.NEXT_PUBLIC_X) from @/lib/env/public-flags\n' +
+      '    (or isSelfHosted()). Comparing in place lets the minifier fold the Docker sentinel to\n' +
+      '    false and delete the branch, so the flag can never be switched on by an operator.',
+  )
+}
+
+// 1e1c. direct-ai-client: allowlist in this file, may only shrink. A file
+// outside the allowlist that talks to a model SDK directly is a NEW
+// violation; allowlisted files that no longer do are reported as progress.
+const newDirectAi = current.directAiClients.filter((f) => !DIRECT_AI_CLIENT_ALLOWED.has(f.file))
+const directAiFilesNow = new Set(current.directAiClients.map((f) => f.file))
+const migratedDirectAi = [...DIRECT_AI_CLIENT_ALLOWED].filter((f) => !directAiFilesNow.has(f))
+if (newDirectAi.length) {
+  failed = true
+  console.error(
+    `\n✗ direct-ai-client: ${newDirectAi.length} file(s) outside lib/ai talk to a model SDK directly:`,
+  )
+  newDirectAi.forEach((f) => console.error(`    ${f.file}  (${f.rule})`))
+  console.error(
+    '  → use getAiService() from @/lib/ai (generateText / generateStructured / extractFromDocument).\n' +
+      '    Hosted and self-host resolve the backend from the environment there; a direct SDK call\n' +
+      '    hard-wires one provider and breaks the sovereign self-host path.',
+  )
+}
+
+// 1e2. hand-rolled-invariant: counted, may only go down.
+if (current.handRolledInvariants > (baseline.handRolledInvariants?.count ?? Infinity)) {
+  failed = true
+  console.error(
+    `\n✗ hand-rolled-invariant: ${current.handRolledInvariants} inline copies of a shared format rule ` +
+      `(baseline ${baseline.handRolledInvariants?.count}):`,
+  )
+  console.error(
+    '  → import the rule instead: accountNumberSchema / isoDateSchema / saneIsoDateSchema /\n' +
+      '    fiscalYearSchema from @/lib/invariants/zod, or the ACCOUNT_NUMBER_RE / ISO_DATE_RE\n' +
+      '    constants from @/lib/invariants. See lib/invariants/README.md.',
   )
 }
 
@@ -739,6 +1275,31 @@ if (newLedgerScans.length) {
   )
 }
 
+// 1e3. dialog-overflow-risk: per-file ratchet, a finding in a file outside
+// the baseline set is a NEW violation. Grandfathered files stay until fixed.
+const dialogOverflowBaseline = new Set(baseline.dialogOverflowRisk?.files ?? [])
+const newDialogOverflow = current.dialogOverflowRisk.filter(
+  (finding) => !dialogOverflowBaseline.has(finding.file),
+)
+const fixedDialogOverflow = [...dialogOverflowBaseline].filter(
+  (file) => !dialogOverflowFiles.includes(file),
+)
+if (newDialogOverflow.length) {
+  failed = true
+  console.error(
+    `\n✗ dialog-overflow-risk: ${newDialogOverflow.length} overflow-risky pattern(s) in new dialog/sheet file(s):`,
+  )
+  newDialogOverflow.forEach((finding) => console.error(`    ${finding.where}  (${finding.rule})`))
+  console.error(
+    '  → bare-fr-grid-track: a bare 1fr track refuses to shrink below its content; use\n' +
+      '    minmax(0,1fr), plus min-w-0 on the cell when a combobox/long text lives in it.\n' +
+      '    nowrap-in-dialog: give the table/row its own overflow-x-auto wrapper, then allowlist\n' +
+      '    the file in DIALOG_NOWRAP_ALLOWED in this script with a reason.\n' +
+      '    unportaled-wide-overlay: portal the panel to document.body with viewport-clamped\n' +
+      '    geometry, like AccountCombobox\'s dropdown or info-tooltip.tsx.',
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -750,14 +1311,28 @@ if (current.naiveOreRound > baseline.naiveOreRound.count) {
 }
 
 // Report ratchet-down progress (informational, never fails).
-if (fixedAuthFiles.length || fixedLedgerScans.length || current.naiveOreRound < baseline.naiveOreRound.count) {
+if (
+  fixedAuthFiles.length ||
+  fixedLedgerScans.length ||
+  fixedDialogOverflow.length ||
+  current.naiveOreRound < baseline.naiveOreRound.count
+) {
   console.log('\n✓ Progress since baseline:')
   if (fixedAuthFiles.length) console.log(`    raw-route-auth: -${fixedAuthFiles.length} file(s)`)
   if (fixedLedgerScans.length)
     console.log(`    ledger-scanning-report: -${fixedLedgerScans.length} file(s)`)
+  if (fixedDialogOverflow.length)
+    console.log(`    dialog-overflow-risk: -${fixedDialogOverflow.length} file(s)`)
   if (current.naiveOreRound < baseline.naiveOreRound.count)
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
   console.log('    Run with --update to ratchet the baseline down and lock in the gains.')
+}
+if (migratedDirectAi.length) {
+  console.log(
+    `\n✓ direct-ai-client progress: ${migratedDirectAi.length} allowlisted file(s) no longer call a model SDK directly.` +
+      ' Remove them from DIRECT_AI_CLIENT_ALLOWED in this script to lock it in:',
+  )
+  migratedDirectAi.forEach((f) => console.log(`    ${f}`))
 }
 if (gatedSinceBaseline.length) {
   console.log(
@@ -772,5 +1347,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

@@ -160,6 +160,72 @@ describe('upsertAbsenceRange', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('ABSENCE_HOURS_CONFLICT')
   })
+
+  it('maps a non-24h CHECK violation (23514) to VALIDATION_ERROR, not ABSENCE_HOURS_CONFLICT', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({
+      data: null,
+      error: {
+        code: '23514',
+        message:
+          'new row for relation "salary_absence_days" violates check constraint "salary_absence_days_hours_check"',
+      },
+    })
+
+    const result = await upsertAbsenceRange(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      from: '2026-03-02',
+      to: '2026-03-02',
+      absenceType: 'sick',
+      hoursPerDay: 30,
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('maps an RLS/privilege denial (42501) to DB_PERMISSION_DENIED with the PG message in details', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({
+      data: null,
+      error: {
+        code: '42501',
+        message:
+          'new row violates row-level security policy for table "salary_absence_franvaro_audit"',
+      },
+    })
+
+    const result = await upsertAbsenceRange(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      from: '2026-03-02',
+      to: '2026-03-02',
+      absenceType: 'parental',
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('DB_PERMISSION_DENIED')
+      expect(result.details?.message).toMatch(/row-level security/)
+    }
+  })
+
+  it('keeps unrecognized DB errors as INTERNAL_ERROR', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+
+    const result = await upsertAbsenceRange(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      from: '2026-03-02',
+      to: '2026-03-02',
+      absenceType: 'sick',
+    })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INTERNAL_ERROR')
+  })
 })
 
 describe('upsertAbsenceDay', () => {

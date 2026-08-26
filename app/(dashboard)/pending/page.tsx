@@ -1,13 +1,15 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS, VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   SlideOver,
   SlideOverContent,
@@ -27,9 +29,12 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { ToastAction } from '@/components/ui/toast'
+import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import {
   ClipboardCheck,
   Bot,
@@ -41,99 +46,19 @@ import {
   MessageSquare,
   AlertTriangle,
   X,
+  ArrowDownUp,
 } from 'lucide-react'
 import type {
   PendingOperation,
   PendingOperationRejectionCategory,
 } from '@/types'
-import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
-import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
-
-// Short human label (i18n key in the "pending" namespace) for each staged
-// operation_type. Keep in sync with OPERATION_RISK_TIERS in
-// lib/pending-operations/risk-tiers.ts: every operation an agent can stage
-// needs a label here, otherwise the Granskning list falls back to the raw
-// snake_case tool name (e.g. "create_supplier_invoice_from_inbox"), which is
-// long and pushes the meta row to wrap awkwardly on mobile.
-const OPERATION_LABEL_KEYS: Record<string, string> = {
-  categorize_transaction: 'type_categorize_transaction',
-  create_customer: 'type_create_customer',
-  create_invoice: 'type_create_invoice',
-  create_transaction: 'type_create_transaction',
-  create_voucher: 'type_create_voucher',
-  correct_entry: 'type_correct_entry',
-  reverse_entry: 'type_reverse_entry',
-  mark_invoice_paid: 'type_mark_invoice_paid',
-  send_invoice: 'type_send_invoice',
-  mark_invoice_sent: 'type_mark_invoice_sent',
-  match_transaction_invoice: 'type_match_transaction_invoice',
-  // Master data
-  create_supplier: 'type_create_supplier',
-  create_article: 'type_create_article',
-  update_article: 'type_update_article',
-  create_account: 'type_create_account',
-  update_account: 'type_update_account',
-  create_dimension_value: 'type_create_dimension_value',
-  // Supplier invoices
-  create_supplier_invoice_from_inbox: 'type_create_supplier_invoice_from_inbox',
-  create_self_billed_supplier_invoice: 'type_create_self_billed_supplier_invoice',
-  approve_supplier_invoice: 'type_approve_supplier_invoice',
-  credit_supplier_invoice: 'type_credit_supplier_invoice',
-  // Invoices
-  credit_invoice: 'type_credit_invoice',
-  convert_invoice: 'type_convert_invoice',
-  // Documents & links
-  attach_document_to_transaction: 'type_attach_document_to_transaction',
-  link_document_to_voucher: 'type_link_document_to_voucher',
-  link_invoice_voucher: 'type_link_invoice_voucher',
-  link_supplier_invoice_voucher: 'type_link_supplier_invoice_voucher',
-  link_transaction_journal_entry: 'type_link_transaction_journal_entry',
-  uncategorize_transaction: 'type_uncategorize_transaction',
-  retag_line_dimensions: 'type_retag_line_dimensions',
-  set_voucher_note: 'type_set_voucher_note',
-  // Bulk booking / allocation
-  match_batch_allocate: 'type_match_batch_allocate',
-  bulk_book_transactions: 'type_bulk_book_transactions',
-  bulk_book_inbox_items: 'type_bulk_book_inbox_items',
-  // Periods, year-end, depreciation
-  close_period: 'type_close_period',
-  lock_period: 'type_lock_period',
-  unlock_period: 'type_unlock_period',
-  set_opening_balances: 'type_set_opening_balances',
-  run_year_end: 'type_run_year_end',
-  run_currency_revaluation: 'type_run_currency_revaluation',
-  post_annual_depreciation: 'type_post_annual_depreciation',
-  explain_voucher_gap: 'type_explain_voucher_gap',
-  // SIE
-  import_sie: 'type_import_sie',
-  undo_sie_import: 'type_undo_sie_import',
-  // Payroll & Skatteverket filings
-  create_salary_run: 'type_create_salary_run',
-  book_salary_run: 'type_book_salary_run',
-  generate_agi: 'type_generate_agi',
-  update_payslip_line: 'type_update_payslip_line',
-  register_absence: 'type_register_absence',
-  delete_absence: 'type_delete_absence',
-  create_employee: 'type_create_employee',
-  update_employee: 'type_update_employee',
-  set_employee_opening_balances: 'type_set_employee_opening_balances',
-  vacation_year_close: 'type_vacation_year_close',
-  submit_vat_declaration: 'type_submit_vat_declaration',
-  submit_agi: 'type_submit_agi',
-}
-
-// Fallback for an operation_type with no entry above (e.g. a newly added op
-// not yet given a label): turn "create_supplier_invoice_from_inbox" into
-// "Create supplier invoice from inbox" so it never surfaces as raw snake_case.
-function humanizeOperationType(operationType: string): string {
-  const spaced = operationType.replace(/_/g, ' ')
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
-}
-
-function operationLabel(operationType: string, t: (key: string) => string): string {
-  const labelKey = OPERATION_LABEL_KEYS[operationType]
-  return labelKey ? t(labelKey) : humanizeOperationType(operationType)
-}
+import { OperationPreview, AccountNamesContext } from '@/components/pending-operations/OperationPreview'
+import { useAccountNamesSource } from '@/components/pending-operations/use-account-names'
+import {
+  operationLabel,
+  singleActionWarning,
+  REJECTION_CATEGORY_LABELS,
+} from '@/components/pending-operations/vocabulary'
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
 // they read naturally under the heading "Genom att bekräfta utförs följande:".
@@ -157,47 +82,6 @@ function bulkActionLabel(operationType: string, count: number, t: (key: string) 
   const fn = bulkActionDescriptions[operationType]
   if (fn) return fn(count)
   return `${count} × ${operationLabel(operationType, t)}`
-}
-
-// Full-sentence warning for the single-op confirmation dialog AND the inline
-// list-view warning when risk is medium/high. The list-view truncates beyond
-// one line; the dialog shows it in full. Order roughly low → high risk so
-// reviewers scanning the source see the destructive paths grouped together.
-const singleActionWarnings: Record<string, string> = {
-  // Low/medium risk: light verifikation work
-  create_transaction: 'Genom att klicka godkänn så skapar du en transaktion.',
-  create_customer: 'Genom att klicka godkänn så skapar du en kund.',
-  create_invoice: 'Genom att klicka godkänn så skapas ett fakturautkast (det skickas inte).',
-  categorize_transaction: 'Genom att klicka godkänn så kategoriseras transaktionen och en verifikation skapas.',
-  match_transaction_invoice: 'Genom att klicka godkänn så matchas transaktionen mot fakturan.',
-  attach_document_to_transaction: 'Genom att klicka godkänn så bifogas dokumentet till transaktionen.',
-  uncategorize_transaction: 'Genom att klicka godkänn så tas kategoriseringen bort.',
-  send_invoice: 'Genom att klicka godkänn så skickas fakturan till kunden.',
-  mark_invoice_paid: 'Genom att klicka godkänn så bokförs en betalning på fakturan.',
-  mark_invoice_sent: 'Genom att klicka godkänn så märks fakturan som skickad och en verifikation skapas.',
-  // High risk: period/year-end/voucher edits. These are the ones the reviewer
-  // really needs the warning for, so we keep them concrete: name the
-  // irreversibility or compliance consequence, not the generic risk-level.
-  lock_period: 'Genom att klicka godkänn så låses perioden: inga nya verifikationer kan bokföras tills den låses upp.',
-  unlock_period: 'Genom att klicka godkänn så låses perioden upp. Använd endast för rättelser; lås igen efter.',
-  close_period: 'Genom att klicka godkänn så stängs perioden permanent (BFL). Stängningen kan inte ångras.',
-  run_year_end: 'Genom att klicka godkänn så körs bokslut: resultatkonton nollställs, perioden låses, nästa period skapas.',
-  set_opening_balances: 'Genom att klicka godkänn så bokförs ingående balans i nästa period.',
-  run_currency_revaluation: 'Genom att klicka godkänn så bokförs valutaomvärdering (3960/7960).',
-  create_voucher: 'Genom att klicka godkänn så bokförs verifikationen med ett nytt löpnummer.',
-  correct_entry: 'Genom att klicka godkänn så stornas originalverifikationen och en rättelse bokförs (BFL 5 kap 5§).',
-  reverse_entry: 'Genom att klicka godkänn så stornas verifikationen: originalet behålls synligt (BFL 5 kap).',
-  credit_invoice: 'Genom att klicka godkänn så skapas en kreditfaktura och originalverifikationen stornas.',
-  credit_supplier_invoice: 'Genom att klicka godkänn så krediteras leverantörsfakturan och registreringsverifikationen stornas.',
-  approve_supplier_invoice: 'Genom att klicka godkänn så attesteras leverantörsfakturan och blir betalningsbar.',
-  convert_invoice: 'Genom att klicka godkänn så konverteras proformafakturan till en riktig faktura med F-nummer.',
-  import_sie: 'Genom att klicka godkänn så importeras SIE-filen: räkenskapsperiod, ingående balans och verifikationer skapas.',
-  explain_voucher_gap: 'Genom att klicka godkänn så dokumenteras förklaringen för verifikationsluckan (BFNAR 2013:2).',
-  post_annual_depreciation: 'Genom att klicka godkänn så bokförs planenlig avskrivning: en verifikation per tillgång.',
-}
-
-function singleActionWarning(operationType: string): string {
-  return singleActionWarnings[operationType] ?? ''
 }
 
 // Period status carried inside preview_data when stagePendingOperation can
@@ -227,17 +111,10 @@ function getPeriodStatus(op: PendingOperation): PeriodStatusShape | null {
 const GACT_CLASS =
   'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-[5px] text-xs transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50'
 const GACT_OK_CLASS = 'border-success/40 text-success hover:bg-success/10'
+const SORT_ORDER_STORAGE_KEY = 'pending.sortOrder'
 const GACT_NO_CLASS = 'border-destructive/40 text-destructive hover:bg-destructive/10'
 const GACT_NEUTRAL_CLASS =
   'border-border text-muted-foreground hover:bg-secondary/40 hover:text-foreground'
-
-const REJECTION_CATEGORY_LABELS: Record<PendingOperationRejectionCategory, string> = {
-  wrong_category: 'Fel kategori / konto',
-  wrong_amount: 'Fel belopp',
-  duplicate: 'Dubblett',
-  wrong_period: 'Fel period',
-  other: 'Annat',
-}
 
 /**
  * Human origin line for a staged operation. Many reviewers never used the AI
@@ -304,410 +181,19 @@ function formatRelativeTime(dateStr: string): string {
   return `${diffDays} dagar sedan`
 }
 
-function CategorizePreview({ data }: { data: Record<string, unknown> }) {
-  // The exact journal lines the approval will post (net cost line, VAT line,
-  // gross bank line, SEK) — staged by the server since the preview-lines fix.
-  const lines = (data.lines as Array<{ account_number?: string; debit_amount?: number; credit_amount?: number; description?: string }>) || []
-  const vatLines = (data.vat_lines as Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>) || []
-
-  if (lines.length > 0) {
-    return (
-      <div className="space-y-1 text-sm">
-        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
-        {lines.map((line, i) => {
-          const debitAmt = typeof line.debit_amount === 'number' ? line.debit_amount : 0
-          const creditAmt = typeof line.credit_amount === 'number' ? line.credit_amount : 0
-          return (
-            <div key={i} className="flex justify-between gap-4 font-mono text-xs">
-              <span className="truncate">{line.account_number ?? '?'}{line.description ? ` ${line.description}` : ''}</span>
-              <span className="tabular-nums shrink-0">
-                {debitAmt > 0 ? `D ${formatCurrency(debitAmt)}` : `K ${formatCurrency(creditAmt)}`}
-              </span>
-            </div>
-          )
-        })}
-      </div>
-    )
-  }
-
-  // Some operations carry their kontering under the generic `preview_lines`
-  // key instead (the shape every other staged type renders through). Read it
-  // before falling through to the legacy summary, which would otherwise show
-  // blank accounts for a preview that does describe the entry in full.
-  if (isKonteringLines(data.preview_lines)) {
-    return (
-      <div className="space-y-1 text-sm">
-        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
-        <PreviewKonteringTable lines={data.preview_lines} />
-      </div>
-    )
-  }
-
-  // Legacy summary for operations staged before the preview carried full
-  // lines: debit/credit accounts + gross amount + separate VAT rows.
-  const legacyAmount = typeof data.amount === 'number' && Number.isFinite(data.amount)
-    ? data.amount
-    : null
-  return (
-    <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Debetkonto</span>
-        <span className="font-mono">{String(data.debit_account ?? '')}</span>
-        <span className="text-muted-foreground">Kreditkonto</span>
-        <span className="font-mono">{String(data.credit_account ?? '')}</span>
-        <span className="text-muted-foreground">Belopp</span>
-        <span className="font-mono tabular-nums">
-          {/* A preview with no usable amount used to render "NaN kr": show the
-              gap as a gap instead of a number that isn't one. */}
-          {legacyAmount === null
-            ? '-'
-            : formatCurrency(legacyAmount, (data.currency as string) || 'SEK')}
-        </span>
-      </div>
-      {vatLines.length > 0 && (
-        <div className="border-t pt-2">
-          <p className="text-xs text-muted-foreground mb-1">Momsrader</p>
-          {vatLines.map((line, i) => (
-            <div key={i} className="flex justify-between font-mono text-xs">
-              <span>{line.account_number} {line.description}</span>
-              <span className="tabular-nums">
-                {line.debit_amount > 0 ? `D ${formatCurrency(line.debit_amount)}` : `K ${formatCurrency(line.credit_amount)}`}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function CustomerPreview({ data }: { data: Record<string, unknown> }) {
-  return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-      <span className="text-muted-foreground">Namn</span>
-      <span>{String(data.name ?? '')}</span>
-      <span className="text-muted-foreground">Typ</span>
-      <span>{String(data.customer_type ?? '')}</span>
-      {data.email ? (
-        <>
-          <span className="text-muted-foreground">E-post</span>
-          <span>{String(data.email)}</span>
-        </>
-      ) : null}
-      {data.org_number ? (
-        <>
-          <span className="text-muted-foreground">Org.nr</span>
-          <span className="font-mono">{String(data.org_number)}</span>
-        </>
-      ) : null}
-    </div>
-  )
-}
-
-function InvoicePreview({ data }: { data: Record<string, unknown> }) {
-  const items = (data.items as Array<{ description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate: number }>) || []
-
-  return (
-    <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Kund</span>
-        <span>{String(data.customer_name ?? '')}</span>
-        <span className="text-muted-foreground">Datum</span>
-        <span>{String(data.invoice_date ?? '')}</span>
-        <span className="text-muted-foreground">Förfallodatum</span>
-        <span>{String(data.due_date ?? '')}</span>
-      </div>
-      {items.length > 0 && (
-        <div className="border-t pt-2 space-y-1">
-          {items.map((item, i) => (
-            <div key={i} className="flex justify-between text-xs">
-              <span className="truncate mr-4">{item.description} ({item.quantity} {item.unit})</span>
-              <span className="font-mono tabular-nums whitespace-nowrap">
-                {formatCurrency(item.line_total, (data.currency as string) || 'SEK')}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Netto</span>
-        <span className="tabular-nums text-right">{formatCurrency(data.subtotal as number, (data.currency as string) || 'SEK')}</span>
-        <span className="text-muted-foreground">Moms</span>
-        <span className="tabular-nums text-right">{formatCurrency(data.vat_amount as number, (data.currency as string) || 'SEK')}</span>
-        <span className="font-medium">Totalt</span>
-        <span className="tabular-nums font-medium text-right">{formatCurrency(data.total as number, (data.currency as string) || 'SEK')}</span>
-      </div>
-    </div>
-  )
-}
-
-function CreateTransactionPreview({ data }: { data: Record<string, unknown> }) {
-  const amount = data.amount as number
-  const currency = (data.currency as string) || 'SEK'
-
-  return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-      <span className="text-muted-foreground">Datum</span>
-      <span className="font-mono">{String(data.date ?? '')}</span>
-      <span className="text-muted-foreground">Beskrivning</span>
-      <span className="truncate">{String(data.description ?? '')}</span>
-      <span className="text-muted-foreground">Belopp</span>
-      <span className="font-mono tabular-nums">
-        {formatCurrency(amount, currency)}
-      </span>
-      {data.external_id ? (
-        <>
-          <span className="text-muted-foreground">Extern referens</span>
-          <span className="font-mono text-xs truncate">{String(data.external_id)}</span>
-        </>
-      ) : null}
-    </div>
-  )
-}
-
-type VoucherLine = {
-  account_number: string
-  account_name?: string | null
-  debit_amount: number
-  credit_amount: number
-  line_description?: string | null
-}
-
-function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency?: string }) {
-  return (
-    <div className="border-t pt-2 space-y-1">
-      {lines.map((line, i) => (
-        <div key={i} className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs items-baseline">
-          <span className="font-mono text-muted-foreground">{line.account_number}</span>
-          <span className="truncate">
-            {line.account_name || line.line_description || '-'}
-          </span>
-          <span className="font-mono tabular-nums text-right w-24">
-            {line.debit_amount > 0 ? formatCurrency(line.debit_amount, currency || 'SEK') : ''}
-          </span>
-          <span className="font-mono tabular-nums text-right w-24">
-            {line.credit_amount > 0 ? formatCurrency(line.credit_amount, currency || 'SEK') : ''}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function VoucherPreview({ data }: { data: Record<string, unknown> }) {
-  const lines = (data.lines as VoucherLine[]) || []
-  const totalDebit = data.total_debit as number | undefined
-  const totalCredit = data.total_credit as number | undefined
-
-  return (
-    <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Datum</span>
-        <span className="font-mono">{String(data.entry_date ?? '')}</span>
-        <span className="text-muted-foreground">Beskrivning</span>
-        <span className="truncate">{String(data.description ?? '')}</span>
-        <span className="text-muted-foreground">Serie</span>
-        <span className="font-mono">{String(data.voucher_series ?? 'A')}</span>
-      </div>
-      {lines.length > 0 && (
-        <div>
-          <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-[11px] uppercase tracking-wider text-muted-foreground pb-1">
-            <span>Konto</span>
-            <span>Text</span>
-            <span className="text-right w-24">Debet</span>
-            <span className="text-right w-24">Kredit</span>
-          </div>
-          <VoucherLinesTable lines={lines} />
-        </div>
-      )}
-      {totalDebit != null && totalCredit != null && (
-        <div className="border-t pt-2 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs">
-          <span></span>
-          <span className="text-muted-foreground">Summa</span>
-          <span className="font-mono tabular-nums text-right w-24 font-medium">
-            {formatCurrency(totalDebit)}
-          </span>
-          <span className="font-mono tabular-nums text-right w-24 font-medium">
-            {formatCurrency(totalCredit)}
-          </span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
-  const original = (data.original as {
-    voucher?: string
-    entry_date?: string
-    description?: string
-    lines?: VoucherLine[]
-  }) || {}
-  const correction = (data.correction as {
-    total_debit?: number
-    total_credit?: number
-    line_count?: number
-    lines?: VoucherLine[]
-  }) || {}
-
-  return (
-    <div className="space-y-4 text-sm">
-      <div>
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-          Originalverifikation V{original.voucher ?? ''}, {original.entry_date ?? ''}
-        </p>
-        <p className="text-xs text-muted-foreground italic mb-2">{original.description ?? ''}</p>
-        {original.lines && original.lines.length > 0 && (
-          <VoucherLinesTable lines={original.lines} />
-        )}
-      </div>
-      <div>
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-          Korrigerad verifikation ({correction.line_count ?? correction.lines?.length ?? 0} rader)
-        </p>
-        {correction.lines && correction.lines.length > 0 && (
-          <VoucherLinesTable lines={correction.lines} />
-        )}
-        {correction.total_debit != null && (
-          <div className="border-t pt-1 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs mt-1">
-            <span></span>
-            <span className="text-muted-foreground">Summa</span>
-            <span className="font-mono tabular-nums text-right w-24 font-medium">
-              {formatCurrency(correction.total_debit)}
-            </span>
-            <span className="font-mono tabular-nums text-right w-24 font-medium">
-              {formatCurrency(correction.total_credit ?? 0)}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// Render a primitive (string/number/bool) or a short summary of an array/object.
-// Used by GenericPreview to avoid the "[object Object]" stringification that
-// occurs when an operation_type has no dedicated preview component.
-function renderPrimitive(value: unknown): string {
-  if (value == null) return ''
-  if (Array.isArray(value)) return `${value.length} rader`
-  if (typeof value === 'object') return JSON.stringify(value)
-  return String(value)
-}
-
-// A preview_data value that is a kontering (array of account/debit/credit
-// rows). Several staged op types carry one under keys like `preview_lines`
-// without a dedicated preview component; rendering it as the actual
-// verifikat rows is what makes the detail panel say what the agent will do.
-interface PreviewKonteringLine {
-  account?: string
-  account_number?: string
-  description?: string
-  debit?: number
-  credit?: number
-  debit_amount?: number
-  credit_amount?: number
-}
-
-function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
-  return (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.every(
-      (line) =>
-        line != null &&
-        typeof line === 'object' &&
-        ('account' in line || 'account_number' in line) &&
-        ('debit' in line || 'credit' in line || 'debit_amount' in line || 'credit_amount' in line),
-    )
-  )
-}
-
-function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
-  const amount = (n: number | undefined) =>
-    n && n > 0 ? n.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''
-  return (
-    <table className="w-full border-collapse text-[12.5px]" aria-label="Föreslagen kontering">
-      <thead>
-        <tr>
-          <th className={cn(VTH_CLASS, 'w-[70px]')}>Konto</th>
-          <th className={VTH_CLASS}>Beskrivning</th>
-          <th className={cn(VTH_CLASS, 'text-right')}>Debet</th>
-          <th className={cn(VTH_CLASS, 'text-right')}>Kredit</th>
-        </tr>
-      </thead>
-      <tbody>
-        {lines.map((line, i) => (
-          <tr key={i}>
-            <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
-              {line.account ?? line.account_number}
-            </td>
-            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>{line.description ?? ''}</td>
-            <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-              {amount(line.debit ?? line.debit_amount)}
-            </td>
-            <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-              {amount(line.credit ?? line.credit_amount)}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
-}
-
-function GenericPreview({ data }: { data: Record<string, unknown> }) {
-  // Skip period_status here: it's surfaced in the dedicated banner, not the
-  // generic key-value dump (otherwise the approver sees the same fact twice).
-  const entries = Object.entries(data).filter(([k, v]) => v != null && v !== '' && k !== 'period_status')
-  const konteringEntries = entries.filter(([, v]) => isKonteringLines(v))
-  const rest = entries.filter(([, v]) => !isKonteringLines(v))
-  return (
-    <div className="space-y-3">
-      {konteringEntries.map(([key, value]) => (
-        <PreviewKonteringTable key={key} lines={value as PreviewKonteringLine[]} />
-      ))}
-      {rest.length > 0 && (
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-          {rest.map(([key, value]) => (
-            <Fragment key={key}>
-              <span className="text-muted-foreground">{key.replace(/_/g, ' ')}</span>
-              <span className={typeof value === 'number' ? 'font-mono tabular-nums' : ''}>
-                {renderPrimitive(value)}
-              </span>
-            </Fragment>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function OperationPreview({ op }: { op: PendingOperation }) {
-  const body = (() => {
-    switch (op.operation_type) {
-      case 'categorize_transaction':
-        return <CategorizePreview data={op.preview_data} />
-      case 'create_customer':
-        return <CustomerPreview data={op.preview_data} />
-      case 'create_invoice':
-        return <InvoicePreview data={op.preview_data} />
-      case 'create_transaction':
-        return <CreateTransactionPreview data={op.preview_data} />
-      case 'create_voucher':
-        return <VoucherPreview data={op.preview_data} />
-      case 'correct_entry':
-        return <CorrectEntryPreview data={op.preview_data} />
-      case 'attach_document_to_transaction':
-        return <AttachDocumentPreview data={op.preview_data} params={op.params} />
-      case 'match_transaction_invoice':
-        return <MatchTransactionInvoicePreview data={op.preview_data} />
-      default:
-        return <GenericPreview data={op.preview_data} />
-    }
-  })()
-  return body
-}
+/**
+ * Account number -> account name, for the proposal previews.
+ *
+ * A preview line showed the account number next to the line's own description,
+ * so "5890 Utlägg Norwegian" hid the fact that 5890 is Övriga resekostnader.
+ * The number alone is not readable and the description is not the account, so
+ * approving meant trusting a label that never named what was being debited.
+ *
+ * Owned by the page rather than a module-level cache: the map is per company,
+ * and a cache that outlives the page would keep serving one company's account
+ * names after a switch. A failed fetch leaves the map empty, which shows the
+ * bare number rather than a wrong name, and retries on the next mount.
+ */
 
 /**
  * Inline period-lock banner. Renders when the staged operation touches a
@@ -719,7 +205,7 @@ function OperationPreview({ op }: { op: PendingOperation }) {
 function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
   const lockedThrough = period.lock_date ? formatDate(period.lock_date) : null
   return (
-    <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
+    <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
       <Lock className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
       <div className="flex-1">
         <p className="font-medium text-destructive">
@@ -753,10 +239,34 @@ type ViewTab = 'pending' | 'history'
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
+  const router = useRouter()
+  const accountNames = useAccountNamesSource()
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ViewTab>('pending')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
+  // Queue order. Newest first by default; a bokslut batch is approved oldest
+  // first, so the choice is remembered per browser.
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(SORT_ORDER_STORAGE_KEY)
+      if (stored === 'asc' || stored === 'desc') setSortOrder(stored)
+    } catch {
+      // Storage blocked: keep the default.
+    }
+  }, [])
+  const toggleSortOrder = () => {
+    setSortOrder((prev) => {
+      const next = prev === 'desc' ? 'asc' : 'desc'
+      try {
+        window.localStorage.setItem(SORT_ORDER_STORAGE_KEY, next)
+      } catch {
+        // Storage blocked: the toggle still applies for this session.
+      }
+      return next
+    })
+  }
   const [conversationFilter, setConversationFilter] = useState<string | null>(null)
   const [pendingCount, setPendingCount] = useState<number | null>(null)
   // Detail slide-over (convention 13): id rather than the row object, so the
@@ -777,6 +287,30 @@ export default function PendingOperationsPage() {
   const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
   const { toast } = useToast()
+  const company = useCompanyOptional()?.company ?? null
+  // Whether the "Bokför utkasten" toast CTA leads anywhere: bulk Bokför on
+  // /invoices only selects drafts when the company books at issue. Under
+  // kontantmetoden or deferred booking (#967) the CTA would be a dead end,
+  // so it stays suppressed (false until settings load: suppressing is the
+  // safe direction, the neutral hint sentence still shows).
+  const [invoiceDraftsCtaUseful, setInvoiceDraftsCtaUseful] = useState(false)
+
+  useEffect(() => {
+    if (!company) return
+    let cancelled = false
+    const supabase = createClient()
+    supabase
+      .from('company_settings')
+      .select('accounting_method, defer_invoice_booking')
+      .eq('company_id', company.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) setInvoiceDraftsCtaUseful(booksInvoicesOnIssue(data))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [company])
 
   // Read ?conversation= once on mount so deep-links from the agent context
   // strip filter the list automatically.
@@ -787,33 +321,80 @@ export default function PendingOperationsPage() {
     if (conv) setConversationFilter(conv)
   }, [])
 
+  // Which tab the rows in `operations` belong to, and whether anything is on
+  // screen: lets refetches decide between the first-load takeover and a
+  // background reconcile without making row state a useCallback dependency
+  // (which would re-subscribe the realtime channel on every data change).
+  const loadedTabRef = useRef<ViewTab | null>(null)
+  const hasRowsRef = useRef(false)
+  useEffect(() => {
+    hasRowsRef.current = operations.length > 0
+  }, [operations])
+  // Background reconcile in flight: drives the quiet toolbar cue.
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  // Monotonic request sequence: a fetch kicked off for a previous tab (or an
+  // older realtime echo) can resolve after the current one. Only the latest
+  // request may touch rows, counts, refs, toasts, or loading cues; stale
+  // responses bail out and leave the newer request's state alone.
+  const fetchSequenceRef = useRef(0)
+
   const fetchOperations = useCallback(async () => {
-    setIsLoading(true)
+    const sequence = ++fetchSequenceRef.current
+    const isCurrent = () => sequence === fetchSequenceRef.current
+    // The list-for-spinner swap is reserved for a first load or a tab whose
+    // rows aren't on screen yet. Approving/rejecting a row (and its realtime
+    // echo) used to run list → spinner → list → spinner → list: a whole-page
+    // layout collapse plus a full stagger-enter replay, twice, for a
+    // single-row change.
+    const takeover = !hasRowsRef.current || loadedTabRef.current !== activeTab
+    if (takeover) setIsLoading(true)
+    else setIsRefreshing(true)
     try {
       if (activeTab === 'pending') {
-        const res = await fetch('/api/pending-operations?status=pending')
+        const res = await fetch(`/api/pending-operations?status=pending&order=${sortOrder}`)
+        // A JSON error body parses fine but carries no data: without this
+        // check a failed refresh would blank the list and zero the badge
+        // instead of keeping current rows and surfacing the error toast.
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const json = await res.json()
+        if (!isCurrent()) return
         setOperations(json.data ?? [])
         setPendingCount(json.count ?? json.data?.length ?? 0)
+        loadedTabRef.current = 'pending'
       } else {
         // The API is single-status per fetch: Historik merges godkända and
         // avvisade, newest resolution first.
-        const [committed, rejected] = await Promise.all([
-          fetch('/api/pending-operations?status=committed').then((r) => r.json()),
-          fetch('/api/pending-operations?status=rejected').then((r) => r.json()),
+        const [committedRes, rejectedRes] = await Promise.all([
+          fetch('/api/pending-operations?status=committed'),
+          fetch('/api/pending-operations?status=rejected'),
         ])
+        if (!committedRes.ok || !rejectedRes.ok) {
+          throw new Error(`HTTP ${committedRes.status}/${rejectedRes.status}`)
+        }
+        const [committed, rejected] = await Promise.all([committedRes.json(), rejectedRes.json()])
+        if (!isCurrent()) return
         const merged = ([...(committed.data ?? []), ...(rejected.data ?? [])] as PendingOperation[]).sort(
           (a, b) => (b.resolved_at ?? b.created_at).localeCompare(a.resolved_at ?? a.created_at),
         )
         setOperations(merged)
         const pc = committed.counts?.pending ?? rejected.counts?.pending
         if (typeof pc === 'number') setPendingCount(pc)
+        loadedTabRef.current = 'history'
       }
     } catch {
+      if (!isCurrent()) return
       toast({ title: 'Kunde inte ladda operationer', variant: 'destructive' })
+      // The rows on screen belong to another tab (or no load has succeeded
+      // yet): dropping the loading state here would render those foreign rows
+      // under this tab's header as if they were its content. Hold the loading
+      // state instead; the toast says why, and the next tab switch or
+      // realtime echo retries.
+      if (loadedTabRef.current !== activeTab) return
     }
+    if (!isCurrent()) return
     setIsLoading(false)
-  }, [activeTab, toast])
+    setIsRefreshing(false)
+  }, [activeTab, sortOrder, toast])
 
   useEffect(() => {
     fetchOperations()
@@ -854,19 +435,32 @@ export default function PendingOperationsPage() {
     setSelectedIds(new Set())
   }, [activeTab, sourceFilter, conversationFilter])
 
-  async function handleCommit() {
-    if (!selectedOp) return
+  // Shared by the direct-commit pill (low/medium risk) and the high-risk
+  // confirmation dialog. The Granskning row already states source, title and
+  // risk and offers Detaljer, so for low/medium the pill IS the deliberate
+  // approval; only high risk keeps the dialog, whose warning sentence carries
+  // information the row does not.
+  async function commitOp(op: PendingOperation) {
     setIsCommitting(true)
     try {
-      const res = await fetch(`/api/pending-operations/${selectedOp.id}/commit`, { method: 'POST' })
+      const res = await fetch(`/api/pending-operations/${op.id}/commit`, { method: 'POST' })
       const json = await res.json().catch(() => ({}))
       // getErrorMessage handles both `{ error: string }` and the structured
       // `{ error: { code, message } }` envelope (the latter would otherwise
       // toast "[object Object]") and never surfaces raw English.
       if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
-      toast({ title: 'Godkänd', description: selectedOp.title })
+      toast({ title: 'Godkänd', description: op.title })
       setShowCommitDialog(false)
       setSelectedOp(null)
+      // Drop the committed op from the bulk selection: the row leaves the
+      // pending list on refresh, but a stale id would keep inflating the
+      // bulk bar and ride along into bulk-commit.
+      setSelectedIds((prev) => {
+        if (!prev.has(op.id)) return prev
+        const next = new Set(prev)
+        next.delete(op.id)
+        return next
+      })
       fetchOperations()
     } catch (err) {
       toast({
@@ -876,6 +470,11 @@ export default function PendingOperationsPage() {
       })
     }
     setIsCommitting(false)
+  }
+
+  async function handleCommit() {
+    if (!selectedOp) return
+    await commitOp(selectedOp)
   }
 
   async function handleBulkCommit(ids: string[]) {
@@ -894,6 +493,28 @@ export default function PendingOperationsPage() {
         | { committed: number; failed: number; skipped: number; rejected: number }
         | undefined
 
+      // Committed create_invoice ops land as unnumbered DRAFTS: point the
+      // user at the draft view where bulk Bokför finishes the job.
+      const results = (json.data?.results ?? []) as Array<{ id: string; status: string }>
+      const committedIds = new Set(
+        results.filter((r) => r.status === 'committed').map((r) => r.id),
+      )
+      const committedInvoiceDrafts = operations.some(
+        (op) => committedIds.has(op.id) && op.operation_type === 'create_invoice',
+      )
+      const draftsCta = committedInvoiceDrafts && invoiceDraftsCtaUseful
+        ? {
+            action: (
+              <ToastAction
+                altText={t('bulk_invoice_drafts_cta')}
+                onClick={() => router.push('/invoices?status=draft')}
+              >
+                {t('bulk_invoice_drafts_cta')}
+              </ToastAction>
+            ),
+          }
+        : {}
+
       if (summary) {
         const parts: string[] = []
         if (summary.committed > 0) parts.push(`${summary.committed} godkända`)
@@ -903,11 +524,14 @@ export default function PendingOperationsPage() {
 
         toast({
           title: summary.failed > 0 ? 'Klart med fel' : 'Godkänt',
-          description: parts.join(', '),
+          description: committedInvoiceDrafts
+            ? `${parts.join(', ')}. ${t('bulk_invoice_drafts_hint')}`
+            : parts.join(', '),
           variant: summary.failed > 0 ? 'destructive' : 'default',
+          ...draftsCta,
         })
       } else {
-        toast({ title: 'Godkänt' })
+        toast({ title: 'Godkänt', ...draftsCta })
       }
 
       setShowBulkDialog(false)
@@ -1106,6 +730,7 @@ export default function PendingOperationsPage() {
   ]
 
   return (
+    <AccountNamesContext.Provider value={accountNames}>
     <div className="space-y-8">
       {/* Page header (concept scene 11): title + Godkänn alla */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1124,7 +749,7 @@ export default function PendingOperationsPage() {
       </div>
 
       {conversationFilter && (
-        <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2 text-sm">
+        <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
           <div className="flex items-center gap-2">
             <MessageSquare className="h-4 w-4 text-muted-foreground" />
             <span>
@@ -1153,30 +778,36 @@ export default function PendingOperationsPage() {
       {/* Toolbar (concept): status seg left, source picker (convention 8)
           far right. The count chip rides only on Väntar: it is the queue. */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          {SEG_TABS.map(({ tab, labelKey }) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab}
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-                activeTab === tab
-                  ? 'border border-border bg-card font-medium text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t(labelKey)}
-              {tab === 'pending' && (pendingCount ?? 0) > 0 && (
-                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                  {pendingCount}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          value={activeTab}
+          onChange={setActiveTab}
+          options={SEG_TABS.map(({ tab, labelKey }) => ({
+            value: tab,
+            label: t(labelKey),
+            count: tab === 'pending' ? pendingCount ?? 0 : undefined,
+          }))}
+        />
+        {activeTab === 'pending' && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
+            onClick={toggleSortOrder}
+            aria-pressed={sortOrder === 'asc'}
+            title={sortOrder === 'asc' ? t('sort_oldest_first') : t('sort_newest_first')}
+          >
+            <ArrowDownUp className="h-3.5 w-3.5" aria-hidden="true" />
+            {sortOrder === 'asc' ? t('sort_oldest_first') : t('sort_newest_first')}
+          </Button>
+        )}
+        {/* Quiet cue that a background reconcile is running (post-action or
+            realtime): the list itself never swaps to a spinner for it. */}
+        {isRefreshing && !isLoading && (
+          <Loader2
+            className="h-3.5 w-3.5 animate-spin text-muted-foreground"
+            aria-label={t('refreshing')}
+          />
+        )}
         <div className="ml-auto">
           <ContextPicker
             value={sourceFilter}
@@ -1307,6 +938,14 @@ export default function PendingOperationsPage() {
                       detailOpId === op.id ? 'bg-secondary/25' : 'hover:bg-secondary/35',
                     )}
                   >
+                    {/* Same actor mark as the pending rows, minus the curved
+                        op-thread (it points at an action row history lacks). */}
+                    <span
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground"
+                      aria-hidden
+                    >
+                      {isAgent ? <Bot className="h-3.5 w-3.5" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
+                    </span>
                     <Badge
                       variant={
                         isAutoExpired(op)
@@ -1421,8 +1060,17 @@ export default function PendingOperationsPage() {
                         onClick={(e) => {
                           e.stopPropagation()
                           if (periodLocked) return
-                          setSelectedOp(op)
-                          setShowCommitDialog(true)
+                          if (op.risk_level === 'high') {
+                            // High risk keeps the confirmation dialog: its
+                            // warning sentence carries real information.
+                            setSelectedOp(op)
+                            setShowCommitDialog(true)
+                          } else {
+                            // Low/medium: the pill on the review row is the
+                            // approval; a second Godkann in a dialog restated
+                            // what the row already shows.
+                            void commitOp(op)
+                          }
                         }}
                       >
                         <Check className="h-3.5 w-3.5" />
@@ -1492,6 +1140,17 @@ export default function PendingOperationsPage() {
                 <div className="rounded-lg border border-border p-4">
                   <OperationPreview op={detailOp} />
                 </div>
+                {/* The agent's audit-trail note for this operation (the
+                    `notes` tool input): the approver should read why, not
+                    only what. */}
+                {typeof detailOp.params?.notes === 'string' && detailOp.params.notes.trim() !== '' && (
+                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
+                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                      {t('note_label')}
+                    </p>
+                    <p className="mt-0.5 whitespace-pre-wrap text-xs leading-snug">{detailOp.params.notes}</p>
+                  </div>
+                )}
                 {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type) && (
                   <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
                     <p className="text-xs leading-snug text-muted-foreground">
@@ -1547,8 +1206,15 @@ export default function PendingOperationsPage() {
                       disabled={detailPeriodLocked || isCommitting}
                       title={detailPeriodLocked ? 'Perioden är låst' : undefined}
                       onClick={() => {
-                        setSelectedOp(detailOp)
-                        setShowCommitDialog(true)
+                        // Same risk gate as the review-row pill: the detail
+                        // panel already shows the full preview, so low/medium
+                        // commit directly; only high risk keeps the dialog.
+                        if (detailOp.risk_level === 'high') {
+                          setSelectedOp(detailOp)
+                          setShowCommitDialog(true)
+                        } else {
+                          void commitOp(detailOp)
+                        }
                       }}
                     >
                       {t('approve')}
@@ -1586,7 +1252,7 @@ export default function PendingOperationsPage() {
       >
         <div className="space-y-3 text-sm">
           <p>{t('bulk_confirm_intro')}</p>
-          <ul className="space-y-1 rounded-md border bg-muted/30 px-3 py-2">
+          <ul className="space-y-1 rounded-lg border bg-muted/30 px-3 py-2">
             {selectedBreakdown.map(({ type, count }) => (
               <li key={type} className="flex justify-between font-mono tabular-nums">
                 <span className="font-sans">{bulkActionLabel(type, count, t)}</span>
@@ -1611,7 +1277,8 @@ export default function PendingOperationsPage() {
                 ? t('reject_bulk_title', { count: selectedCount })
                 : 'Avvisa operation'}
             </DialogTitle>
-            <DialogDescription>
+            {/* data-ph-mask: the operation title carries counterparty and amount */}
+            <DialogDescription data-ph-mask="">
               {rejectTarget === 'bulk'
                 ? t('reject_bulk_description')
                 : rejectTarget?.title}
@@ -1670,5 +1337,6 @@ export default function PendingOperationsPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </AccountNamesContext.Provider>
   )
 }

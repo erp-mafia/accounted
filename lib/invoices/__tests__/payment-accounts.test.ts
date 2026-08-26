@@ -81,6 +81,94 @@ describe('invoice payment accounts', () => {
     expect(hasUsableInvoicePaymentAccount(withoutIban, 'EUR')).toBe(false)
   })
 
+  it('accepts a USD account identified by routing number + account number + BIC without an IBAN', () => {
+    // gnubok_feedback 2026-08-03: a Wise US receiving account has no IBAN
+    // (US banking does not use them); the only way past the old validation
+    // was pasting an IBAN from another currency, which then printed on the
+    // invoice and misrouted the payment.
+    const usd = resolveInvoicePaymentAccount(company({
+      invoice_payment_accounts: {
+        USD: {
+          bank_name: 'Wise US Inc',
+          clearing_number: null,
+          account_number: null,
+          bankgiro: null,
+          plusgiro: null,
+          swish: null,
+          iban: null,
+          bic: 'TRWIUS35XXX',
+          bank_code: '084009519',
+          foreign_account_number: '9600001234567890',
+        },
+      },
+    }), 'USD')
+
+    expect(hasUsableInvoicePaymentAccount(usd, 'USD')).toBe(true)
+    expect(usd?.bank_code).toBe('084009519')
+    expect(usd?.foreign_account_number).toBe('9600001234567890')
+
+    const rendered = companyWithInvoicePaymentAccount(company({
+      invoice_payment_accounts: {
+        USD: {
+          bank_name: 'Wise US Inc',
+          clearing_number: null,
+          account_number: null,
+          bankgiro: null,
+          plusgiro: null,
+          swish: null,
+          iban: null,
+          bic: 'TRWIUS35XXX',
+          bank_code: '084009519',
+          foreign_account_number: '9600001234567890',
+        },
+      },
+    }), 'USD')
+    expect(rendered.iban).toBeNull()
+    expect(rendered.bank_code).toBe('084009519')
+    expect(rendered.foreign_account_number).toBe('9600001234567890')
+  })
+
+  it('still requires an IBAN for a non-IBAN-currency account that lacks the routing triple', () => {
+    const partial = resolveInvoicePaymentAccount(company({
+      invoice_payment_accounts: {
+        GBP: {
+          bank_name: 'UK bank',
+          clearing_number: null,
+          account_number: null,
+          bankgiro: null,
+          plusgiro: null,
+          swish: null,
+          iban: null,
+          bic: null,
+          bank_code: '12-34-56',
+          foreign_account_number: '12345678',
+        },
+      },
+    }), 'GBP')
+    // Sort code + account number but no BIC: not payable from abroad.
+    expect(hasUsableInvoicePaymentAccount(partial, 'GBP')).toBe(false)
+  })
+
+  it('does not accept the routing triple for an IBAN currency', () => {
+    const eur = resolveInvoicePaymentAccount(company({
+      invoice_payment_accounts: {
+        EUR: {
+          bank_name: 'EUR bank',
+          clearing_number: null,
+          account_number: null,
+          bankgiro: null,
+          plusgiro: null,
+          swish: null,
+          iban: null,
+          bic: 'DEUTDEFF',
+          bank_code: '37040044',
+          foreign_account_number: '0532013000',
+        },
+      },
+    }), 'EUR')
+    expect(hasUsableInvoicePaymentAccount(eur, 'EUR')).toBe(false)
+  })
+
   it('blocks payable rendering in every currency without a usable account', () => {
     const emptySettings = company({
       clearing_number: null,

@@ -17,6 +17,40 @@ export class FortnoxApiError extends Error {
   }
 }
 
+/**
+ * Human-readable message from a Fortnox error body
+ * ({"ErrorInformation":{"error":1,"message":"...","code":2000423}}), or null
+ * when the body is empty or not in that shape.
+ */
+export function fortnoxErrorMessage(error: unknown): string | null {
+  if (!(error instanceof FortnoxApiError) || !error.body) return null;
+  try {
+    const parsed = JSON.parse(error.body) as {
+      ErrorInformation?: { message?: unknown; Message?: unknown };
+      message?: unknown;
+    };
+    const message =
+      parsed?.ErrorInformation?.message ?? parsed?.ErrorInformation?.Message ?? parsed?.message;
+    return typeof message === 'string' && message.trim() ? message.trim().slice(0, 300) : null;
+  } catch {
+    const text = error.body.trim();
+    return text ? text.slice(0, 300) : null;
+  }
+}
+
+/**
+ * Missing scope or licence. Fortnox documents 403 for failed authorisation,
+ * but live answers for an unlicensed/unscoped resource have also come back
+ * as 400 with a behörighet/scope/licens message, so both are recognised.
+ */
+export function isFortnoxPermissionError(error: unknown): error is FortnoxApiError {
+  if (!(error instanceof FortnoxApiError)) return false;
+  if (error.statusCode === 403) return true;
+  if (error.statusCode !== 400) return false;
+  const text = `${error.body ?? ''} ${fortnoxErrorMessage(error) ?? ''}`;
+  return /beh[öo]righet|scope|licens|licence|license|permission|unauthori[sz]ed/i.test(text);
+}
+
 function isRetryableError(error: unknown): boolean {
   if (isTimeoutError(error)) return true;
   if (error instanceof FortnoxApiError) {
@@ -161,6 +195,60 @@ export class FortnoxClient {
         }
 
         return response.arrayBuffer();
+      },
+      {
+        maxAttempts: 6,
+        initialDelayMs: 2000,
+        maxDelayMs: 60_000,
+        shouldRetry: isRetryableError,
+        getDelayMs: (error) => {
+          if (error instanceof FortnoxApiError && error.retryAfterMs) {
+            return error.retryAfterMs;
+          }
+          return undefined;
+        },
+      },
+    );
+  }
+
+  /**
+   * Fetch a binary resource and retain its declared content type.
+   * Attachment import needs both the raw bytes and the response metadata.
+   */
+  async getBinary(
+    accessToken: string,
+    path: string,
+  ): Promise<{ bytes: ArrayBuffer; contentType: string | null }> {
+    return withRetry(
+      async () => {
+        await this.rateLimiter.acquire();
+        const url = `${this.baseUrl}${path}`;
+        const response = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          const body = await response.text().catch(() => '');
+          let retryAfterMs: number | undefined;
+          if (response.status === 429) {
+            const retryAfter = response.headers.get('Retry-After');
+            retryAfterMs = retryAfter ? Math.ceil(parseFloat(retryAfter)) * 1000 : undefined;
+          }
+          throw new FortnoxApiError(
+            `Fortnox API error: ${response.status} ${response.statusText}`,
+            response.status,
+            body,
+            retryAfterMs,
+          );
+        }
+
+        return {
+          bytes: await response.arrayBuffer(),
+          contentType: response.headers.get('Content-Type'),
+        };
       },
       {
         maxAttempts: 6,

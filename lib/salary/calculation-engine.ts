@@ -51,6 +51,15 @@ export interface SalaryCalculationInput {
   lineItems: CalculationLineItem[]
 
   /**
+   * Öresavrundning (company_settings.salary_net_rounding): round the net
+   * payout UP to the nearest whole krona. Never down: rounding down would
+   * underpay wages. The 0-99 öre difference is returned as netRounding and
+   * booked on 3740 Öres- och kronutjämning via a derived line item. Gross
+   * salary, tax and avgifter are unaffected.
+   */
+  roundNetToWholeKrona?: boolean
+
+  /**
    * Pay period bounds (YYYY-MM-DD). Together with employmentStart/employmentEnd
    * they drive partial-month proration: an employee hired mid-period or
    * terminated mid-period receives only the workday-fraction of base salary.
@@ -88,6 +97,8 @@ export interface SalaryCalculationResult {
   taxWithheld: number
   netDeductions: number
   netSalary: number
+  /** Öre added to reach a whole-krona net payout (0 when rounding is off or the net is already whole). */
+  netRounding: number
   avgifterRate: number
   avgifterAmount: number
   avgifterBasis: number
@@ -415,8 +426,8 @@ export function calculateSalary(
       output: 0,
     })
   } else if (input.fSkattStatus === 'not_verified') {
-    // Unverified: flat 30%
-    taxWithheld = r(taxableIncome * 0.30)
+    // Unverified: flat 30%, whole kronor (SFF 22 kap. 1 §)
+    taxWithheld = calculateSidoinkomstTax(taxableIncome)
     steps.push({
       label: 'Skatteavdrag (ej verifierad)',
       formula: 'skattegrundande inkomst × 30 %',
@@ -451,8 +462,8 @@ export function calculateSalary(
       output: taxWithheld,
     })
   } else {
-    // Fallback: flat 30%
-    taxWithheld = r(taxableIncome * 0.30)
+    // Fallback: flat 30%, whole kronor (SFF 22 kap. 1 §)
+    taxWithheld = calculateSidoinkomstTax(taxableIncome)
     steps.push({
       label: 'Skatteavdrag (30 % schablon)',
       formula: 'skattegrundande inkomst × 30 %',
@@ -465,7 +476,7 @@ export function calculateSalary(
   const netDeductionItems = input.lineItems.filter(li => li.isNetDeduction)
   const totalNetDeductions = r(Math.abs(netDeductionItems.reduce((sum, li) => sum + li.amount, 0)))
 
-  const netSalary = r(grossSalary - taxWithheld - totalNetDeductions)
+  let netSalary = r(grossSalary - taxWithheld - totalNetDeductions)
   steps.push({
     label: 'Nettolön',
     formula: 'bruttolön − skatt − nettoavdrag',
@@ -473,9 +484,29 @@ export function calculateSalary(
     output: netSalary,
   })
 
+  // ─── Step 7b: Öresavrundning (optional, uppåt till hel krona) ───
+  // Integer öre arithmetic: netSalary is already r()-rounded so netOre is
+  // exact; ceil-by-remainder avoids float noise. Only positive payouts round:
+  // a zero or negative net produces no payment-file line to round.
+  let netRounding = 0
+  if (input.roundNetToWholeKrona && netSalary > 0) {
+    const netOre = Math.round(netSalary * 100)
+    const remainderOre = netOre % 100
+    if (remainderOre !== 0) {
+      netRounding = (100 - remainderOre) / 100
+      netSalary = (netOre + 100 - remainderOre) / 100
+      steps.push({
+        label: 'Öresavrundning (uppåt till hel krona)',
+        formula: 'nettolön avrundas uppåt till hel krona',
+        input: { net_before_rounding: r(netOre / 100), rounding: netRounding },
+        output: netSalary,
+      })
+    }
+  }
+
   // ─── Step 8: Employer contributions (avgifter) ───
   const avgifterCalc = calculateAvgifterRate(input, config, paymentYear)
-  const avgifterBasis = r(grossSalary + totalBenefits)
+  const avgifterBasis = input.fSkattStatus === 'f_skatt' ? 0 : r(grossSalary + totalBenefits)
 
   // Handle salary caps for youth and växa-stöd:
   // Reduced rate applies only up to the cap, standard rate on the rest
@@ -590,6 +621,12 @@ export function calculateSalary(
     output: vacationAccrualAvgifter,
   })
 
+  // totalEmployerCost deliberately EXCLUDES netRounding: payslip summary,
+  // run KPI cards and the lönejournal all recompute this figure as
+  // gross + avgifter + semester + avgifter-på-semester from stored columns,
+  // so including the rounding only here would print two different totals on
+  // the same payslip. The öre cost is still real and lives in the ledger as
+  // the 3740 debit.
   const totalEmployerCost = r(grossSalary + avgifterAmount + vacationAccrual + vacationAccrualAvgifter)
   steps.push({
     label: 'Total arbetsgivarkostnad',
@@ -606,6 +643,7 @@ export function calculateSalary(
     taxWithheld,
     netDeductions: totalNetDeductions,
     netSalary,
+    netRounding,
     avgifterRate: avgifterCalc.rate,
     avgifterAmount,
     avgifterBasis,
@@ -631,6 +669,16 @@ export function calculateAvgifterRate(
   paymentYear: number
 ): AvgifterCalculation {
   const steps: CalculationStep[] = []
+
+  if (input.fSkattStatus === 'f_skatt') {
+    steps.push({
+      label: 'Avgiftskategori',
+      formula: 'F-skatt: inga arbetsgivaravgifter',
+      input: {},
+      output: null,
+    })
+    return { rate: 0, amount: 0, basis: 0, category: 'exempt', steps }
+  }
 
   // Decrypt personnummer to calculate age
   let pnr: string

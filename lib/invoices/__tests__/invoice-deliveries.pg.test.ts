@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { PoolClient } from 'pg'
-import { getPool, withUserContext } from '@/tests/pg/setup'
+import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
 import { insertAuthUser, insertCompanyMember, seedCompany } from '@/tests/pg/fixtures'
 
 async function withServiceRoleContext<T>(
@@ -88,6 +88,9 @@ async function insertPendingEmailDelivery(params: {
   invoiceId: string
   documentId: string
   retentionExpiresAt?: string
+  toAddresses?: string[]
+  ccAddresses?: string[]
+  bccAddresses?: string[]
 }): Promise<string> {
   const deliveryId = randomUUID()
   await getPool().query(
@@ -97,7 +100,7 @@ async function insertPendingEmailDelivery(params: {
         body_text, body_html, document_attachment_id, attachment_filename,
         attachment_content_type, attachment_sha256, retention_expires_at)
      VALUES ($1, $2, $3, $4, 'email', 'pending',
-             ARRAY['customer@example.com'], ARRAY['copy@example.com'], ARRAY['archive@example.com'],
+             $8::text[], $9::text[], $10::text[],
              'sender@example.com', 'Example AB', 'Faktura F-1001',
              'Exact plain text', '<p>Exact HTML</p>', $5,
              'invoice.pdf', 'application/pdf', $6, $7)`,
@@ -109,6 +112,9 @@ async function insertPendingEmailDelivery(params: {
       params.documentId,
       'a'.repeat(64),
       params.retentionExpiresAt ?? null,
+      params.toAddresses ?? ['customer@example.com'],
+      params.ccAddresses ?? ['copy@example.com'],
+      params.bccAddresses ?? ['archive@example.com'],
     ],
   )
   return deliveryId
@@ -125,6 +131,9 @@ async function insertSentEmailDelivery(params: {
   invoiceId: string
   documentId: string
   retentionExpiresAt?: string
+  toAddresses?: string[]
+  ccAddresses?: string[]
+  bccAddresses?: string[]
 }): Promise<{ deliveryId: string; providerMessageId: string }> {
   const deliveryId = await insertPendingEmailDelivery(params)
   const providerMessageId = `provider-${randomUUID()}`
@@ -453,6 +462,24 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
         [companyId, invoiceId, userId],
       )),
     ).rejects.toThrow(/permission denied/i)
+
+    await expect(
+      withServiceRoleContext(userId, (client) => client.query(
+        `SELECT public.apply_invoice_delivery_provider_event(
+                  'resend', 'msg-1', 'opened', now(), NULL,
+                  ARRAY['customer@example.com']
+                )`,
+      )),
+    ).rejects.toThrow(/unsupported invoice delivery provider status/i)
+
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `SELECT public.apply_invoice_delivery_provider_event(
+                  'resend', 'msg-1', 'delivered', now(), NULL,
+                  ARRAY['customer@example.com']
+                )`,
+      )),
+    ).rejects.toThrow(/permission denied/i)
   })
 
   it('uses server-only RPCs for reservation, payload capture, and finalization', async () => {
@@ -753,6 +780,139 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
 })
 
 describe('invoice_deliveries.pg: provider delivery outcome', () => {
+  it('tracks independent To and CC outcomes on one provider message', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const { deliveryId, providerMessageId } = await insertSentEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+      toAddresses: ['primary@example.com', 'secondary@example.com'],
+      ccAddresses: ['copy@example.org'],
+    })
+
+    await withServiceRoleContext(userId, async (client) => {
+      await client.query(
+        `SELECT public.apply_invoice_delivery_provider_event(
+                  'resend', $1, 'delivered', '2026-08-03T08:00:00Z', NULL,
+                  ARRAY['secondary@example.com', 'COPY@example.org']
+                )`,
+        [providerMessageId],
+      )
+      await client.query(
+        `SELECT public.apply_invoice_delivery_provider_event(
+                  'resend', $1, 'bounced', '2026-08-03T08:01:00Z', 'Mailbox unavailable',
+                  ARRAY['primary@example.com']
+                )`,
+        [providerMessageId],
+      )
+
+      const row = await client.query<{
+        provider_status: string
+        provider_recipient_statuses: Record<string, { status: string; status_at: string }>
+      }>(
+        `SELECT provider_status, provider_recipient_statuses
+           FROM public.invoice_deliveries
+          WHERE id = $1`,
+        [deliveryId],
+      )
+
+      expect(row.rows[0].provider_status).toBe('bounced')
+      expect(row.rows[0].provider_recipient_statuses).toMatchObject({
+        'to:1': { status: 'bounced' },
+        'to:2': { status: 'delivered' },
+        'cc:1': { status: 'delivered' },
+      })
+      expect(Object.keys(row.rows[0].provider_recipient_statuses).sort()).toEqual([
+        'cc:1',
+        'to:1',
+        'to:2',
+      ])
+    })
+  })
+
+  it('never downgrades one recipient on late or repeated reports', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const { deliveryId, providerMessageId } = await insertSentEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+    })
+
+    await withServiceRoleContext(userId, async (client) => {
+      const apply = (status: string, occurredAt: string) => client.query(
+        `SELECT public.apply_invoice_delivery_provider_event(
+                  'resend', $1, $2, $3::timestamptz, NULL,
+                  ARRAY['customer@example.com']
+                )`,
+        [providerMessageId, status, occurredAt],
+      )
+
+      await apply('bounced', '2026-08-03T08:02:00Z')
+      await apply('delivered', '2026-08-03T08:03:00Z')
+      await apply('bounced', '2026-08-03T08:01:00Z')
+
+      const row = await client.query<{
+        provider_recipient_statuses: Record<string, { status: string; status_at: string }>
+      }>(
+        `SELECT provider_recipient_statuses
+           FROM public.invoice_deliveries
+          WHERE id = $1`,
+        [deliveryId],
+      )
+      expect(row.rows[0].provider_recipient_statuses['to:1']).toMatchObject({
+        status: 'bounced',
+        status_at: '2026-08-03T08:02:00+00:00',
+      })
+    })
+  })
+
+  it('keeps unknown and BCC recipients out of visible recipient state', async () => {
+    const { userId, companyId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const { providerMessageId } = await insertSentEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+      bccAddresses: ['archive.secret@example.net'],
+    })
+
+    // The applied event must survive into the member's read below, so this
+    // uses the committing service-role helper: the rollback-scoped
+    // withServiceRoleContext only supports asserting inside its own callback.
+    await runAsServiceRole((client) => client.query(
+      `SELECT public.apply_invoice_delivery_provider_event(
+                'resend', $1, 'bounced', now(), NULL,
+                ARRAY['archive.secret@example.net', 'unknown@example.org']
+              )`,
+      [providerMessageId],
+    ))
+
+    const summary = await withUserContext(memberId, (client) => client.query<{
+      provider_status: string
+      provider_recipient_statuses: Record<string, unknown>
+    }>(
+      `SELECT provider_status, provider_recipient_statuses
+         FROM public.list_invoice_delivery_summaries($1, $2)`,
+      [companyId, invoiceId],
+    ))
+
+    expect(summary.rows[0]).toEqual({
+      provider_status: 'bounced',
+      provider_recipient_statuses: {},
+    })
+    expect(JSON.stringify(summary.rows[0])).not.toContain('archive.secret')
+  })
+
   it('records the provider outcome on a sent email and keeps the rest locked', async () => {
     const { userId, companyId } = await seedCompany()
     const invoiceId = await insertInvoice(userId, companyId)
@@ -892,6 +1052,50 @@ describe('invoice_deliveries.pg: provider delivery outcome', () => {
       ),
     ).rejects.toThrow(/terminal invoice delivery.*immutable/i)
 
+    await expect(
+      getPool().query(
+        `UPDATE public.invoice_deliveries
+            SET provider_status = 'delivered', provider_status_at = now(),
+                provider_recipient_statuses = jsonb_build_object(
+                  'to:1', jsonb_build_object('status', 'delivered', 'status_at', now()),
+                  'bcc:1', jsonb_build_object('status', 'bounced', 'status_at', now())
+                )
+          WHERE id = $1`,
+        [deliveryId],
+      ),
+    ).rejects.toThrow(/invoice_deliveries_recipient_statuses_shape/i)
+
+    await expect(
+      getPool().query(
+        `UPDATE public.invoice_deliveries
+            SET provider_status = 'delivered', provider_status_at = now(),
+                provider_recipient_statuses = jsonb_build_object(
+                  'to:999', jsonb_build_object(
+                    'status', 'delivered',
+                    'status_at', now()
+                  )
+                )
+          WHERE id = $1`,
+        [deliveryId],
+      ),
+    ).rejects.toThrow(/invoice_deliveries_recipient_statuses_shape/i)
+
+    await expect(
+      getPool().query(
+        `UPDATE public.invoice_deliveries
+            SET provider_status = 'delivered', provider_status_at = now(),
+                provider_recipient_statuses = jsonb_build_object(
+                  'to:1', jsonb_build_object(
+                    'status', 'delivered',
+                    'status_at', now(),
+                    'unexpected', 'not allowed'
+                  )
+                )
+          WHERE id = $1`,
+        [deliveryId],
+      ),
+    ).rejects.toThrow(/invoice_deliveries_recipient_statuses_shape/i)
+
     await getPool().query(
       `UPDATE public.invoice_deliveries
           SET provider_status = 'bounced', provider_status_at = now()
@@ -932,7 +1136,7 @@ describe('invoice_deliveries.pg: provider delivery outcome', () => {
     ).rejects.toThrow(/invoice delivery payload is immutable/i)
   })
 
-  it('redacts the provider reason text with the rest of the expired PII', async () => {
+  it('redacts provider recipient details with the rest of the expired PII', async () => {
     const { userId, companyId } = await seedCompany()
     const invoiceId = await insertInvoice(userId, companyId)
     const documentId = await insertDocument(userId, companyId)
@@ -946,7 +1150,10 @@ describe('invoice_deliveries.pg: provider delivery outcome', () => {
     await getPool().query(
       `UPDATE public.invoice_deliveries
           SET provider_status = 'bounced', provider_status_at = now(),
-              provider_status_detail = '550 5.1.1 <customer@example.com> rejected'
+              provider_status_detail = '550 5.1.1 <customer@example.com> rejected',
+              provider_recipient_statuses = jsonb_build_object(
+                'to:1', jsonb_build_object('status', 'bounced', 'status_at', now())
+              )
         WHERE id = $1`,
       [deliveryId],
     )
@@ -956,15 +1163,18 @@ describe('invoice_deliveries.pg: provider delivery outcome', () => {
     const delivery = await getPool().query<{
       provider_status: string
       provider_status_detail: string | null
+      provider_recipient_statuses: Record<string, unknown>
       pii_redacted_at: string | null
     }>(
-      `SELECT provider_status, provider_status_detail, pii_redacted_at
+      `SELECT provider_status, provider_status_detail, provider_recipient_statuses,
+              pii_redacted_at
          FROM public.invoice_deliveries
         WHERE id = $1`,
       [deliveryId],
     )
     expect(delivery.rows[0].provider_status).toBe('bounced')
     expect(delivery.rows[0].provider_status_detail).toBeNull()
+    expect(delivery.rows[0].provider_recipient_statuses).toEqual({})
     expect(delivery.rows[0].pii_redacted_at).toBeTruthy()
   })
 

@@ -196,6 +196,9 @@ export function makeTransaction(overrides: Partial<Transaction> = {}): Transacti
     journal_entry_id: null,
     mcc_code: null,
     merchant_name: 'ICA Maxi',
+    transaction_method: null,
+    bank_transaction_code: null,
+    proprietary_bank_transaction_code: null,
     reconciliation_method: null,
     is_ignored: false,
     receipt_id: null,
@@ -255,6 +258,8 @@ export function makeJournalEntry(overrides: Partial<JournalEntry> = {}): Journal
     attachment_urls: null,
     notes: null,
     commit_method: null,
+    committed_actor_type: null,
+    committed_actor_label: null,
     rubric_version: null,
     created_at: '2024-06-15T14:30:00Z',
     updated_at: '2024-06-15T14:30:00Z',
@@ -417,6 +422,9 @@ export function makeCustomer(overrides: Partial<Customer> = {}): Customer {
     vat_number_validated: true,
     vat_number_validated_at: '2024-01-01T00:00:00Z',
     personal_number: null,
+    contact_person: null,
+    invoice_email_cc_addresses: null,
+    invoice_email_bcc_addresses: null,
     language: 'sv',
     default_payment_terms: 30,
     notes: null,
@@ -447,6 +455,8 @@ export function makeSupplier(overrides: Partial<Supplier> = {}): Supplier {
     bank_account: null,
     iban: null,
     bic: null,
+    clearing_number: null,
+    account_number: null,
     default_expense_account: '6200',
     default_payment_terms: 30,
     default_currency: 'SEK',
@@ -614,9 +624,11 @@ export function makeCompanySettings(
     reminder_fee_amount: 60,
     reminder_interest_rate_override: null,
     dimensions_enabled: false,
+    mileage_enabled: false,
     preferred_payment_format: 'pain001',
     salary_pay_day: 25,
     salary_default_bank: null,
+    salary_net_rounding: false,
     logo_url: null,
     onboarding_step: 6,
     onboarding_complete: true,
@@ -671,6 +683,8 @@ export function createMockRequest(
     method?: string
     body?: unknown
     searchParams?: Record<string, string>
+    /** Extra request headers, e.g. `cookie` for routes that read one. */
+    headers?: Record<string, string>
   }
 ): Request {
   const fullUrl = new URL(url, 'http://localhost:3000')
@@ -681,7 +695,7 @@ export function createMockRequest(
   }
   return new Request(fullUrl.toString(), {
     method: options?.method || 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
   })
 }

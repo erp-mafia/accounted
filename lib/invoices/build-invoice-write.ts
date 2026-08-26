@@ -11,9 +11,11 @@ import {
 } from '@/lib/invoices/rot-rut-rules'
 import {
   encryptPersonnummer,
+  expandPersonnummerTo12,
   extractLast4,
   validatePersonnummer,
 } from '@/lib/salary/personnummer'
+import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 
 /**
  * Shared invoice write-builder.
@@ -334,6 +336,7 @@ export async function buildInvoiceWriteData(params: {
       // below are stored with.
       vat_rate: item.vat_rate !== undefined ? item.vat_rate : vatRules.rate,
       labor_hours: item.labor_hours ?? null,
+      work_type: item.work_type ?? null,
       housing_designation: item.housing_designation ?? null,
     }))
 
@@ -343,7 +346,38 @@ export async function buildInvoiceWriteData(params: {
     const hasDeductionItems = validateInput.some((item) => item.deduction_type != null)
     const keepStoredPersonnummer =
       personnummerRaw.length === 0 && hasDeductionItems && !!existingPersonnummer
-    const personnummerProvided = personnummerRaw.length > 0 || keepStoredPersonnummer
+    // Neither typed nor stored on the draft: fall back to the personnummer on
+    // the customer card (kundkortet). It lives on customers.personal_number as
+    // ciphertext (or a legacy plaintext row) in 10- or 12-digit form; the
+    // Skatteverket claim needs 12 digits, so expand and Luhn-validate before
+    // counting it as provided. Anything unreadable, inexpandable or invalid is
+    // treated as absent: the validator below then asks the user to type one,
+    // which beats surfacing an "invalid personnummer" error for a value they
+    // never entered.
+    // Individual-only: ROT/RUT is a privatperson deduction (HUSFL), and
+    // customers.personal_number is individual-only in the Zod schemas but not
+    // in the DB, so a stray value on a business row (legacy import, direct
+    // write) must never be claimed on implicitly. A typed personnummer is
+    // unaffected: the user is stating it explicitly.
+    let customerCardPersonnummer: string | null = null
+    if (
+      personnummerRaw.length === 0 &&
+      hasDeductionItems &&
+      !keepStoredPersonnummer &&
+      customer.customer_type === 'individual'
+    ) {
+      try {
+        const revealed = revealStoredCustomerPersonalNumber(customer.personal_number)
+        const expanded = revealed ? expandPersonnummerTo12(revealed) : null
+        if (expanded && validatePersonnummer(expanded).valid) {
+          customerCardPersonnummer = expanded
+        }
+      } catch {
+        // Undecryptable customer value: same as absent.
+      }
+    }
+    const personnummerProvided =
+      personnummerRaw.length > 0 || keepStoredPersonnummer || customerCardPersonnummer !== null
     // The invoice currency decides whether the item amounts can be compared
     // against the kronor ceilings at all. The booking rate is fetched further
     // down (the write needs the invoice totals first), so a foreign-currency
@@ -367,13 +401,17 @@ export async function buildInvoiceWriteData(params: {
     if (keepStoredPersonnummer && existingPersonnummer) {
       deductionPersonnummerEncrypted = existingPersonnummer.encrypted
       deductionPersonnummerLast4 = existingPersonnummer.last4
-    } else if (personnummerProvided) {
+    } else if (personnummerRaw.length > 0) {
       const pnValid = validatePersonnummer(personnummerRaw)
       if (!pnValid.valid) {
         return { ok: false, code: 'INVOICE_CREATE_ROT_RUT_PERSONNUMMER_INVALID', details: { error: pnValid.error } }
       }
       deductionPersonnummerEncrypted = encryptPersonnummer(personnummerRaw)
       deductionPersonnummerLast4 = extractLast4(personnummerRaw)
+    } else if (customerCardPersonnummer) {
+      // Already expanded to 12 digits and Luhn-validated above.
+      deductionPersonnummerEncrypted = encryptPersonnummer(customerCardPersonnummer)
+      deductionPersonnummerLast4 = extractLast4(customerCardPersonnummer)
     }
   }
 

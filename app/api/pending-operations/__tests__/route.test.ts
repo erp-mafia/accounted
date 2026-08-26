@@ -6,7 +6,7 @@ import {
   parseJsonResponse,
 } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 const requireAuthMock = vi.fn()
 
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -77,6 +77,39 @@ describe('GET /api/pending-operations', () => {
     expect(body.count).toBe(12)
     expect(body.counts).toEqual({ pending: 12, committed: 3, rejected: 4 })
     expect(supabase.from).toHaveBeenCalledTimes(3)
+  })
+
+  it('orders the pending queue oldest-first when order=asc is given', async () => {
+    enqueue({ data: [{ id: 'operation-old', status: 'pending' }], count: 1 })
+    enqueue({ count: 0 })
+    enqueue({ count: 0 })
+
+    const response = await GET(
+      createMockRequest('/api/pending-operations', { searchParams: { status: 'pending', order: 'asc' } }),
+      { params: Promise.resolve({}) },
+    )
+    expect(response.status).toBe(200)
+    const orderCalls = findCalls('pending_operations', 'order')
+    expect(orderCalls[0]).toEqual(['created_at', { ascending: true, nullsFirst: false }])
+  })
+
+  it('defaults to newest-first and rejects an unknown order with 400', async () => {
+    enqueue({ data: [], count: 0 })
+    enqueue({ count: 0 })
+    enqueue({ count: 0 })
+    await GET(createMockRequest('/api/pending-operations'), { params: Promise.resolve({}) })
+    expect(findCalls('pending_operations', 'order')[0]).toEqual([
+      'created_at',
+      { ascending: false, nullsFirst: false },
+    ])
+
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    const bad = await GET(
+      createMockRequest('/api/pending-operations', { searchParams: { order: 'sideways' } }),
+      { params: Promise.resolve({}) },
+    )
+    expect(bad.status).toBe(400)
   })
 
   it('returns 500 when the list query fails', async () => {

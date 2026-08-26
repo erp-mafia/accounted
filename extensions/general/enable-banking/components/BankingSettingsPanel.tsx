@@ -6,6 +6,14 @@ import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { CheckCircle, Loader2, Upload } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
@@ -22,6 +30,11 @@ import {
 import { BankSelector, type Bank } from './BankSelector'
 import { BankConnectionStatus } from './BankConnectionStatus'
 import { AccountPickerDialog } from './AccountPickerDialog'
+import {
+  buildPageAttentionSentence,
+  selectPageAttention,
+  sortConnectionsByPrecedence,
+} from '../lib/connection-state'
 import type { BankConnection } from '@/types'
 import type { StoredAccount } from '../types'
 
@@ -84,6 +97,18 @@ export default function BankingSettingsPanel() {
   // different company than the active one: without this the picker simply
   // never opens and the connection looks like it vanished.
   const [pickerCompanyMismatch, setPickerCompanyMismatch] = useState<string | null>(null)
+  // "Anslut ny bank" is collapsed behind one button whenever the company
+  // already has a connection: renewing the existing row is almost always the
+  // right move, so the fresh-connect surface must not compete with it.
+  const [connectNewOpen, setConnectNewOpen] = useState(false)
+  // Same-bank intercept: a fresh connect to an already-connected bank pauses
+  // here so the user can renew the existing row instead of creating a
+  // duplicate.
+  const [sameBankIntercept, setSameBankIntercept] = useState<{
+    bank: Bank
+    psuTypeOverride?: 'personal' | 'business'
+    existing: BankConnection
+  } | null>(null)
 
   // Must match STALE_THRESHOLD_MS in extensions/general/enable-banking/index.ts
   const PENDING_LOCK_MS = 30 * 1000
@@ -321,6 +346,26 @@ export default function BankingSettingsPanel() {
 
   async function handleConnectBank(bank: Bank, psuTypeOverride?: 'personal' | 'business') {
     if (connectingRef.current) return
+    // Same-bank intercept: when this company already holds a non-revoked
+    // connection to the bank, renewing that row is almost always what the
+    // user means. A second fresh row leaves the old one stuck in "Åtgärd
+    // krävs" and risks duplicate transactions on the re-import.
+    const existing = bankConnections.find(
+      (c) => c.status !== 'revoked' && c.status !== 'pending' && c.bank_name === bank.name,
+    )
+    if (existing) {
+      setSameBankIntercept({ bank, psuTypeOverride, existing })
+      return
+    }
+    await startFreshConnect(bank, psuTypeOverride)
+  }
+
+  async function startFreshConnect(
+    bank: Bank,
+    psuTypeOverride?: 'personal' | 'business',
+    forceNew = false,
+  ) {
+    if (connectingRef.current) return
     // Claim the lock BEFORE the confirm await. The dialog can sit open
     // indefinitely, and a second click in that window would otherwise sail
     // past the guard above and start a concurrent connect flow.
@@ -337,10 +382,15 @@ export default function BankingSettingsPanel() {
         bankName: bank.name,
         bankCountry: bank.country,
         psuTypeOverride,
+        forceNew,
       })
 
-      const body: Record<string, string> = { aspsp_name: bank.name, aspsp_country: bank.country }
+      const body: Record<string, string | boolean> = { aspsp_name: bank.name, aspsp_country: bank.country }
       if (psuTypeOverride) body.psu_type = psuTypeOverride
+      // Deliberate second connection to a bank this company is already
+      // connected to (past the intercept dialog). The server ignores the flag
+      // today; a parallel change adds a 409 guard that force_new bypasses.
+      if (forceNew) body.force_new = true
 
       const response = await fetch('/api/extensions/ext/enable-banking/connect', {
         method: 'POST',
@@ -610,9 +660,21 @@ export default function BankingSettingsPanel() {
     )
   }
 
-  const activeConnections = bankConnections.filter((c) => c.status === 'active')
-  const pendingSelectionConnections = bankConnections.filter((c) => c.status === 'pending_selection')
-  const actionRequiredConnections = bankConnections.filter((c) => ['expired', 'error'].includes(c.status))
+  // One group, sorted so the row that needs the user sits first
+  // (pending_selection, pending, error, expired, expiring soon, active).
+  // Revoked rows stay hidden, exactly as before.
+  const stateNow = Date.now()
+  const visibleConnections = sortConnectionsByPrecedence(
+    bankConnections.filter((c) => c.status !== 'revoked'),
+    stateNow,
+  )
+  const hasVisibleConnections = visibleConnections.length > 0
+  // Exactly one page-level attention sentence for the worst state, or none
+  // (design convention 6).
+  const pageAttention = selectPageAttention(visibleConnections, stateNow)
+  // With zero connections the bank list IS the page; with any connection it
+  // collapses behind one button.
+  const connectNewExpanded = connectNewOpen || !hasVisibleConnections
 
   const pickerConnection = pickerConnectionId
     ? bankConnections.find(c => c.id === pickerConnectionId)
@@ -624,6 +686,55 @@ export default function BankingSettingsPanel() {
   return (
     <div>
       <DestructiveConfirmDialog {...dialogProps} />
+
+      {/* Same-bank intercept: renew the existing connection (primary) or
+          deliberately connect a second one (e.g. another login at the same
+          bank). */}
+      <Dialog
+        open={!!sameBankIntercept}
+        onOpenChange={(open) => {
+          if (!open) setSameBankIntercept(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle data-ph-mask="">
+              Du har redan en koppling till {sameBankIntercept?.bank.name}
+            </DialogTitle>
+            <DialogDescription data-ph-mask="">
+              Förnya den i stället? Då behåller kontona sin historik och du undviker dubbletter
+              av transaktioner. Anslut som ny bara om det gäller en annan inloggning på samma
+              bank.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              className="min-h-11 w-full sm:w-auto"
+              onClick={() => {
+                const intercept = sameBankIntercept
+                setSameBankIntercept(null)
+                if (!intercept) return
+                void startFreshConnect(intercept.bank, intercept.psuTypeOverride, true)
+              }}
+            >
+              Anslut som ny
+            </Button>
+            <Button
+              className="min-h-11 w-full sm:w-auto"
+              onClick={() => {
+                const intercept = sameBankIntercept
+                setSameBankIntercept(null)
+                if (!intercept) return
+                // No psu override: the server reuses the stored psu_type.
+                void handleReconnect(intercept.existing)
+              }}
+            >
+              Förnya kopplingen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {pickerConnection && (
         <AccountPickerDialog
@@ -663,69 +774,26 @@ export default function BankingSettingsPanel() {
         </div>
       )}
 
-      {/* Pending account selection: new connections waiting for the user to pick accounts */}
-      {pendingSelectionConnections.length > 0 && (
-        <SettingsGroup
-          label="Välj konton att synka"
-          help="Banken har gett åtkomst till flera konton. Välj vilka du vill synka innan några transaktioner hämtas."
-        >
-          {pendingSelectionConnections.map((connection) => {
-            const accountsList = (connection.accounts_data as StoredAccount[] | null) || []
-            return (
-              <div
-                key={connection.id}
-                className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-1 py-3"
-              >
-                <span className="text-sm font-medium">{connection.bank_name}</span>
-                <span className="text-xs text-muted-foreground">
-                  {accountsList.length} konton tillgängliga: inga transaktioner synkas ännu
-                </span>
-                <span className="ml-auto flex shrink-0 items-center gap-2">
-                  <Button size="sm" onClick={() => setPickerConnectionId(connection.id)}>
-                    Välj konton
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={() => handleDisconnectBank(connection.id)}
-                  >
-                    Avbryt
-                  </Button>
-                </span>
-              </div>
-            )
-          })}
-        </SettingsGroup>
+      {/* The page's one attention sentence: the worst connection state, or
+          nothing (convention 6). The rows themselves stay quiet. */}
+      {pageAttention && (
+        <p className="px-1 pt-6 text-[12.5px] leading-relaxed text-attn">
+          {buildPageAttentionSentence(pageAttention, stateNow)}
+        </p>
       )}
 
-      {/* Action required: expired/error connections */}
-      {actionRequiredConnections.length > 0 && (
-        <SettingsGroup label="Åtgärd krävs" help="Dessa anslutningar behöver uppmärksamhet.">
-          {actionRequiredConnections.map((connection) => (
+      {/* All connections in one group, worst state first. Each row carries
+          its own state badge and exactly one primary action. */}
+      {hasVisibleConnections && (
+        <SettingsGroup label="Dina bankkopplingar">
+          {visibleConnections.map((connection) => (
             <BankConnectionStatus
               key={connection.id}
               connection={connection}
               onSync={handleSyncTransactions}
               onDisconnect={handleDisconnectBank}
               onReconnect={handleReconnect}
-              onManageAccounts={() => setPickerConnectionId(connection.id)}
-              isSyncing={syncingConnectionId === connection.id}
-            />
-          ))}
-        </SettingsGroup>
-      )}
-
-      {/* Connected banks */}
-      {activeConnections.length > 0 && (
-        <SettingsGroup label="Anslutna banker">
-          {activeConnections.map((connection) => (
-            <BankConnectionStatus
-              key={connection.id}
-              connection={connection}
-              onSync={handleSyncTransactions}
-              onDisconnect={handleDisconnectBank}
-              onManageAccounts={() => setPickerConnectionId(connection.id)}
+              onManageAccounts={(connectionId) => setPickerConnectionId(connectionId)}
               isSyncing={syncingConnectionId === connection.id}
             />
           ))}
@@ -736,8 +804,11 @@ export default function BankingSettingsPanel() {
           ABOVE the bank list deliberately: at a one-session-per-login bank,
           choosing the bank below is the very action that kills the other
           company's feed, so the cheaper and safer path has to be seen first.
-          Renders only when a live session actually has unclaimed accounts. */}
-      {hasBankSync && reusableSessions.length > 0 && (
+          Renders only when a live session actually has unclaimed accounts,
+          and only while the connect-new surface is visible: it is an
+          alternative to a fresh connect, not a state of this company's
+          connections. */}
+      {connectNewExpanded && hasBankSync && reusableSessions.length > 0 && (
         <SettingsGroup
           label="Återanvänd befintlig anslutning"
           help={
@@ -759,7 +830,7 @@ export default function BankingSettingsPanel() {
           }
         >
           {reusableSessions.map((offer) => (
-            <SettingsRow key={offer.connection_id} label={offer.bank_name ?? 'Bank'}>
+            <SettingsRow key={offer.connection_id} label={<span data-ph-mask="">{offer.bank_name ?? 'Bank'}</span>}>
               <SettingsRowNote>
                 Ansluten för{' '}
                 <span className="font-medium text-foreground">
@@ -795,10 +866,20 @@ export default function BankingSettingsPanel() {
         </SettingsGroup>
       )}
 
-      {/* Connect new bank. Non-payers keep seeing the group (conversion
-          surface) but the bank list is replaced by an upgrade note: the
-          server gate would 403 the connect anyway. The former "Om
+      {/* Connect new bank. Collapsed behind one outline button whenever the
+          company already has a connection (renewing the existing row is the
+          primary path); the full group is the page's main content only when
+          nothing is connected yet. Non-payers keep seeing the group
+          (conversion surface) but the bank list is replaced by an upgrade
+          note: the server gate would 403 the connect anyway. The former "Om
           bankintegration (PSD2)" card lives on as group-level help. */}
+      {!connectNewExpanded ? (
+        <div className="px-1 pt-8">
+          <Button variant="outline" size="sm" onClick={() => setConnectNewOpen(true)}>
+            Anslut en bank till
+          </Button>
+        </div>
+      ) : (
       <SettingsGroup
         label="Anslut ny bank"
         help={
@@ -864,6 +945,7 @@ export default function BankingSettingsPanel() {
           </>
         )}
       </SettingsGroup>
+      )}
     </div>
   )
 }

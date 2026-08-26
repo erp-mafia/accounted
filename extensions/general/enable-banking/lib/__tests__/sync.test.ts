@@ -372,6 +372,88 @@ describe('syncAccountTransactions', () => {
     expect(ids).toEqual(['eb_SE4550000000058398257466_2024-06-15_10000_0'])
   })
 
+  it('keeps external_ids identical across a uid change when dedup_scope is preserved', async () => {
+    // The renewal case for accounts WITHOUT an IBAN: many ASPSPs mint a fresh
+    // uid on re-authorization. dedup_scope pins the scope of the first ingest,
+    // so the re-synced ids must be byte-identical and collide on
+    // (company_id, external_id) instead of re-importing the history.
+    mockConvertTransaction.mockReturnValue({
+      id: 'tx-1', date: '2024-06-15', booking_date: '2024-06-15', amount: 100, currency: 'SEK', description: 'Test',
+    })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    mockGetAllTransactionsWithRaw.mockResolvedValueOnce({
+      transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2024-06-15' }],
+      rawPages: ['{}'],
+    })
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount({ uid: 'uid-before-renewal', dedup_scope: 'uid-before-renewal' }),
+      '2024-06-01', '2024-06-30', mockIngest
+    )
+    const firstIds = mockIngest.mock.calls[0][3].map((t: { external_id: string }) => t.external_id)
+
+    // Renewed consent: the ASPSP minted a NEW uid, the carried scope survives.
+    mockGetAllTransactionsWithRaw.mockResolvedValueOnce({
+      transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2024-06-15' }],
+      rawPages: ['{}'],
+    })
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount({ uid: 'uid-after-renewal', dedup_scope: 'uid-before-renewal' }),
+      '2024-06-01', '2024-06-30', mockIngest
+    )
+    const secondIds = mockIngest.mock.calls[1][3].map((t: { external_id: string }) => t.external_id)
+
+    expect(firstIds).toEqual(['eb_uid-before-renewal_2024-06-15_10000_0'])
+    expect(secondIds).toEqual(firstIds)
+  })
+
+  it('prefers dedup_scope over both IBAN and uid for the external_id account scope', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2024-06-15' }],
+      rawPages: ['{}'],
+    })
+    mockConvertTransaction.mockReturnValue({
+      id: 'tx-1', date: '2024-06-15', booking_date: '2024-06-15', amount: 100, currency: 'SEK', description: 'Test',
+    })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount({ iban: 'SE4550000000058398257466', dedup_scope: 'pinned-scope' }),
+      '2024-06-01', '2024-06-30', mockIngest
+    )
+
+    const ids = mockIngest.mock.calls[0][3].map((t: { external_id: string }) => t.external_id)
+    expect(ids).toEqual(['eb_pinned-scope_2024-06-15_10000_0'])
+  })
+
+  it('stamps dedup_scope with the scope used, so the accounts_data write-back persists it', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2024-06-15' }],
+      rawPages: ['{}'],
+    })
+    mockConvertTransaction.mockReturnValue({
+      id: 'tx-1', date: '2024-06-15', booking_date: '2024-06-15', amount: 100, currency: 'SEK', description: 'Test',
+    })
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    const withIban = makeAccount({ iban: 'se45 5000 0000 0583 9825 7466' })
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, withIban,
+      '2024-06-01', '2024-06-30', mockIngest
+    )
+    expect(withIban.dedup_scope).toBe('SE4550000000058398257466')
+
+    const withoutIban = makeAccount()
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, withoutIban,
+      '2024-06-01', '2024-06-30', mockIngest
+    )
+    expect(withoutIban.dedup_scope).toBe('acc-uid-1')
+  })
+
   it('reproduces the same SET of external_ids when a re-sync returns transactions in a different order', async () => {
     // Two genuinely distinct same-day/same-amount transactions. A later sync may
     // return them in any order; the dedupe guarantee is that the id SET is

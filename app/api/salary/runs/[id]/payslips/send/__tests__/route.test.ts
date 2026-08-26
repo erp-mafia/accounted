@@ -19,6 +19,16 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 vi.mock('@/lib/email/service', () => ({ getEmailService: vi.fn() }))
+// The sandbox guard issues a company_settings query at the top of the route;
+// short-circuit it in tests since the queued mock-supabase is shaped for the
+// route's existing fetch chain, not an extra pre-flight read. Mirrors the same
+// mock on the sibling /api/invoices/[id]/send route.
+vi.mock('@/lib/sandbox/guard', () => ({
+  guardSandbox: vi.fn().mockResolvedValue(null),
+  isSandboxCompany: vi.fn().mockResolvedValue(false),
+  sandboxBlockedResponse: vi.fn(),
+}))
+
 vi.mock('@/lib/entitlements/has-capability', () => ({
   requireCapability: vi.fn().mockResolvedValue(null),
 }))
@@ -94,6 +104,25 @@ describe('POST /api/salary/runs/[id]/payslips/send', () => {
     const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
     expect(response.status).toBe(401)
+  })
+
+  it('refuses to send for a sandbox company', async () => {
+    // The demo ships a booked salary run, which puts "Skicka lönebesked" one
+    // click from an anonymous visitor. Without this gate the route reaches the
+    // live mail provider and bounces off the production sending domain.
+    const { guardSandbox } = await import('@/lib/sandbox/guard')
+    vi.mocked(guardSandbox).mockResolvedValueOnce(
+      NextResponse.json({ sandbox_blocked: true }, { status: 403 }),
+    )
+    const { supabase } = createQueuedMockSupabase()
+    authed(supabase)
+    const sendEmail = mockEmail({ success: true, messageId: 'm-1' })
+
+    const request = createMockRequest('/api/salary/runs/run-1/payslips/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+
+    expect(response.status).toBe(403)
+    expect(sendEmail).not.toHaveBeenCalled()
   })
 
   it('returns 403 when the company lacks the email_send capability', async () => {

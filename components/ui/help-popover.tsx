@@ -86,7 +86,13 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
             ref={panelRef}
             role="note"
             data-help-popover=""
-            className="fixed z-[60] w-[300px] rounded-lg border border-border bg-popover p-4 text-[13px] leading-relaxed text-foreground shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
+            // Inside a modal dialog the panel is DOM-outside DialogContent:
+            // data-dialog-companion keeps a click in it from dismissing the
+            // dialog, and pointer-events-auto undoes the modal body lock.
+            data-dialog-companion=""
+            // data-ph-unmask: page help is static i18n chrome in session replays.
+            data-ph-unmask=""
+            className="pointer-events-auto fixed z-[60] w-[300px] rounded-lg border border-border bg-popover p-4 text-[13px] leading-relaxed text-foreground shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
             style={{ top: pos.top, left: pos.left }}
           >
             {children}

@@ -36,6 +36,10 @@ vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
   createTransactionJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
 }))
 
+vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
+  detectBookingDuplicate: vi.fn().mockResolvedValue(null),
+}))
+
 // Mock VAT validation
 vi.mock('@/lib/vat/vies-client', () => ({
   validateVatNumber: vi.fn().mockResolvedValue({ valid: true }),
@@ -129,8 +133,9 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: { id: 'op-1' } },                    // CAS claim
         { data: tx },                                 // fetch transaction
         { data: settings },                           // fetch company settings
+        { data: [] },                                 // resolveSettlementAccount: no cash accounts -> 1930
         { data: [{ id: 'fp-1' }] },                  // fiscal period check
-        { data: null, error: null },                  // update transaction
+        { data: [{ id: 'tx-1' }], error: null },      // transaction CAS matched
         { data: null, error: null },                  // upsert counterparty template
         { data: null, error: null },                  // update pending op status
       ])
@@ -160,6 +165,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
         { data: { id: 'op-1' } },                    // CAS claim (pending -> committing)
         { data: tx },                                 // fetch transaction
         { data: settings },                           // fetch company settings
+        { data: [] },                                 // resolveSettlementAccount: no cash accounts -> 1930
         { data: [{ id: 'fp-1' }] },                  // fiscal period exists
         { data: null, error: null },                  // dispatcher releases op back to 'pending'
       ])
@@ -218,6 +224,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
       enqueueMany([
         { data: pendingOp },                         // fetch pending op
         { data: { id: 'op-1' } },                    // CAS claim
+        { data: null, error: null },                  // company_settings read (payment-terms default)
         { data: { id: 'cust-1', name: 'Acme AB' } }, // insert customer
         { data: null, error: null },                  // update pending op status
       ])

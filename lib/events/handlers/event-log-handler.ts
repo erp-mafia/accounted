@@ -60,8 +60,15 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   // Bank connection consent lifecycle: required audit trail per ASVS V16
   // and GDPR Art.30 (records of processing) for PSD2 consent decisions.
   'bank_connection.consent_granted',
+  // Denied/failed consent attempts: the pending bank_connections row is
+  // deleted on failure and console logs expire, so this durable trail is the
+  // only way support can answer "which attempt, which error, whose side"
+  // (issue #1716).
+  'bank_connection.consent_denied',
+  'bank_connection.finalize_failed',
   'bank_connection.account_selection_changed',
   'bank_connection.revoked',
+  'bank_connection.superseded',
   'bank_connection.cash_account_mirror_failed',
 ]
 

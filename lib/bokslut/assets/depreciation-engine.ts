@@ -1,17 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
-import { listAssets } from './asset-service'
 import type {
   Asset,
   FiscalPeriod,
   JournalEntry,
   CreateJournalEntryLineInput,
 } from '@/types'
-
-/** Rate constants for the non-linear Swedish depreciation methods. */
-const DECLINING_RATE_30 = 0.3
-const DECLINING_RATE_20 = 0.2
-const RESTVARDE_RATE_25 = 0.25
 
 export interface AssetDepreciation {
   asset: Asset
@@ -41,34 +35,14 @@ export interface DepreciationProposal {
 /**
  * Compute avskrivning för en enskild tillgång under en given fiscal period.
  *
- * Method dispatch:
- *   * 'linear' (planenlig raklinje): pro-rates by day-overlap of the
- *     period with the asset's active life and the disposal cutoff. Annual
- *     amount = (acquisition_cost − salvage_value) × 12 / useful_life_months.
- *   * 'declining_balance_30' (räkenskapsenlig huvudregel, IL 18 kap 13§):  *     30% of the current book value. No annual pro-ration: K2 10.23 says
- *     "full annual amount regardless of partial year" when the asset is
- *     put into use, mirrored in Swedish tax practice for IL 18 kap. Disposal
- *     in-period still zeros out: we return 0 if disposed before the period
- *     and the full 30% if disposed during, because the disposal entry itself
- *     takes care of the asset's remaining book value.
- *   * 'declining_balance_20' (kompletteringsregel, IL 18 kap 17§): 20% of
- *     book value. Same proration semantics as 30%.
- *   * 'restvardesavskrivning_25' (IL 18 kap 13§ st.3): 25% of
- *     max(0, currentBookValue − restvarde_target). Floors at the target so
- *     the asset is never charged below restvärde. Same proration semantics
- *     as the other declining methods.
- *
- * For non-linear methods, currentBookValue =
- *   acquisition_cost − accumulated_depreciation_through_period_start.
- *
- * Callers that don't know prior accumulated depreciation pass 0 (e.g. tests
- * for year-1 declining-balance). The orchestrator (`proposeAnnualPostings`)
- * fetches it from posted depreciation_schedules.
+ * Ordinary depreciation is always linear at asset level and pro-rates by the
+ * active-life overlap. The pooled 30, 20 and 25 percent tax rules live in
+ * tax-depreciation.ts and never create ordinary per-asset postings.
  */
 export function computeAnnualDepreciation(
   asset: Asset,
   fiscalPeriod: Pick<FiscalPeriod, 'period_start' | 'period_end'>,
-  priorAccumulated: number = 0,
+  _priorAccumulated: number = 0,
 ): { amount: number; proRated: boolean } {
   if (asset.disposed_at && asset.disposed_at < fiscalPeriod.period_start) {
     return { amount: 0, proRated: false }
@@ -85,48 +59,7 @@ export function computeAnnualDepreciation(
     return { amount: result.amount, proRated: result.proRated }
   }
 
-  const acquisitionCost = Number(asset.acquisition_cost)
-  const method = asset.depreciation_method
-
-  if (method === 'linear') {
-    return computeLinearAnnual(asset, fiscalPeriod)
-  }
-
-  // Declining-balance methods (huvudregel 30%, kompletteringsregel 20%,
-  // restvärde 25%) do NOT pro-rate annually: full-year amount applies
-  // regardless of acquisition month. Disposal during the period is handled
-  // by disposeAsset(); we still charge the full annual amount because the
-  // disposal entry zeroes out the residual.
-  const currentBookValue = acquisitionCost - priorAccumulated
-
-  // Already fully depreciated (linear-style accumulated overshoot) or
-  // negative: defensive guard.
-  if (currentBookValue <= 0.005) {
-    return { amount: 0, proRated: false }
-  }
-
-  let annualAmount = 0
-  if (method === 'declining_balance_30') {
-    annualAmount = currentBookValue * DECLINING_RATE_30
-  } else if (method === 'declining_balance_20') {
-    annualAmount = currentBookValue * DECLINING_RATE_20
-  } else if (method === 'restvardesavskrivning_25') {
-    const target = Number(asset.restvarde_target ?? 0)
-    const depreciable = currentBookValue - target
-    if (depreciable <= 0.005) {
-      // Already at or below restvärde: never deplete past the floor.
-      return { amount: 0, proRated: false }
-    }
-    annualAmount = depreciable * RESTVARDE_RATE_25
-  }
-
-  // Monetary rounding per CLAUDE.md guard-rail #9. Schedules store NUMERIC
-  // values, but the journal entry rounds to whole kronor downstream: match
-  // the linear branch which rounds to integer kronor for the entry amount.
-  return {
-    amount: Math.round(annualAmount),
-    proRated: false,
-  }
+  return computeLinearAnnual(asset, fiscalPeriod)
 }
 
 function computeLinearAnnual(
@@ -272,6 +205,9 @@ export async function proposeAnnualPostings(
   companyId: string,
   fiscalPeriodId: string,
 ): Promise<DepreciationProposal> {
+  // Loaded here to keep the pure depreciation calculator reusable from the
+  // asset disposal service without creating a module initialization cycle.
+  const { listAssets } = await import('./asset-service')
   const [periodResult, assets, currentSchedulesResult, priorSchedulesResult] = await Promise.all([
     supabase
       .from('fiscal_periods')

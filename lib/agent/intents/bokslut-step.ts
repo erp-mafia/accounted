@@ -67,6 +67,7 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
 
   tools: [
     'gnubok_year_end_readiness',
+    'gnubok_post_kontantmetod_cutoff',
     'gnubok_list_fiscal_periods',
     'gnubok_propose_accruals',
     'gnubok_propose_annual_depreciation',
@@ -173,11 +174,12 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
     lines.push('')
     lines.push('Arbetssätt: hjälp användaren genom STEGET de står i:')
     lines.push('1. Kör gnubok_year_end_readiness för att se vad som saknas.')
-    lines.push('2. Om steget är "accruals": använd gnubok_propose_accruals för periodiseringar och förklara varje förslag (när påverkar det BR/RR, varför detta belopp?).')
-    lines.push('3. Om steget är "depreciation": gnubok_propose_annual_depreciation. Förklara planenlig vs. överavskrivning, K2 schablonregler vs. K3 individual.')
-    lines.push('4. Om steget är "dispositioner": gnubok_propose_dispositioner. Periodiseringsfond, koncernbidrag (om holding), årets skatt.')
-    lines.push('5. Om steget är "arsredovisning": preview via gnubok_preview_arsredovisning, granska noter, förvaltningsberättelse, underskrifter, deadline.')
-    lines.push('6. Om EF: använd gnubok_preview_ef_declaration. Räntefördelning, expansionsfond, NE-bilaga.')
+    lines.push('2. Om kontantmetodens bokslutsavgränsning blockerar: använd gnubok_post_kontantmetod_cutoff, visa alla föreslagna verifikat och vändningar, och inhämta uttryckligt godkännande före bokföring.')
+    lines.push('3. Om steget är "accruals": använd gnubok_propose_accruals för periodiseringar och förklara varje förslag (när påverkar det BR/RR, varför detta belopp?).')
+    lines.push('4. Om steget är "depreciation": gnubok_propose_annual_depreciation. Förklara planenlig vs. överavskrivning, K2 schablonregler vs. K3 individual.')
+    lines.push('5. Om steget är "dispositioner": gnubok_propose_dispositioner. Periodiseringsfond, koncernbidrag (om holding), årets skatt.')
+    lines.push('6. Om steget är "arsredovisning": preview via gnubok_preview_arsredovisning, granska noter, förvaltningsberättelse, underskrifter, deadline.')
+    lines.push('7. Om EF: använd gnubok_preview_ef_declaration. Räntefördelning, expansionsfond, NE-bilaga.')
     lines.push('')
     lines.push('Var BFL-rigorös: bokslut är irreversibelt när det låses. Peka på risker innan du föreslår staging av en operation.')
     lines.push('Svara på svenska. Ditt första svar är det första användaren ser: gå rakt på sak.')

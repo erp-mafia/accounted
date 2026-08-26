@@ -76,7 +76,7 @@ export async function runPostConnectRefresh(
       err instanceof SkatteverketAuthError &&
       (RECONSENT_ERROR_CODES as readonly string[]).includes(err.code)
     ) {
-      await markNeedsReconsent(supabase, userId, err.code)
+      await markNeedsReconsent(supabase, userId, companyId, err.code)
     }
   }
 

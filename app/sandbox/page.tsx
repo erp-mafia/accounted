@@ -1,24 +1,36 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  TurnstileChallenge,
+  type TurnstileChallengeHandle,
+} from '@/components/auth/TurnstileChallenge'
 import { Loader2 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  captchaTokenOptions,
+  isTurnstileSubmissionBlocked,
+} from '@/lib/auth/turnstile'
 
 const branding = getBranding()
 
 export default function SandboxPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null)
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const turnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
   const router = useRouter()
   const supabase = createClient()
+  const tAuth = useTranslations('auth')
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -27,17 +39,27 @@ export default function SandboxPage() {
   }, [supabase.auth])
 
   const handleStartSandbox = async () => {
+    if (isTurnstileSubmissionBlocked(captchaToken)) {
+      toast({
+        title: 'Kunde inte starta sandlådan',
+        description: tAuth('turnstile_required'),
+        variant: 'destructive',
+      })
+      return
+    }
+
     setIsLoading(true)
 
     try {
-      const { error } = await supabase.auth.signInAnonymously()
+      const { error } = await supabase.auth.signInAnonymously({
+        options: captchaTokenOptions(captchaToken),
+      })
       if (error) {
         toast({
           title: 'Kunde inte starta sandlådan',
           description: getUserErrorMessage(error),
           variant: 'destructive',
         })
-        setIsLoading(false)
         return
       }
 
@@ -51,7 +73,6 @@ export default function SandboxPage() {
           description: 'Försök igen om en stund.',
           variant: 'destructive',
         })
-        setIsLoading(false)
         return
       }
 
@@ -63,6 +84,8 @@ export default function SandboxPage() {
         description: 'Försök igen om en stund.',
         variant: 'destructive',
       })
+    } finally {
+      turnstileRef.current?.reset()
       setIsLoading(false)
     }
   }
@@ -70,7 +93,7 @@ export default function SandboxPage() {
   // Loading state while checking auth
   if (isLoggedIn === null) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-background to-primary/[0.03]">
+      <div className="min-h-dvh flex items-center justify-center bg-gradient-to-b from-background to-primary/[0.03]">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     )
@@ -79,14 +102,14 @@ export default function SandboxPage() {
   // Already logged in as a real user
   if (isLoggedIn) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
         <div className="w-full max-w-sm animate-slide-up">
           <div className="text-center mb-10">
             <BrandWordmark size="hero" className="mb-2" />
           </div>
 
           <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-            <h1 className="text-lg font-medium tracking-tight text-center mb-2">
+            <h1 className="text-lg tracking-tight text-center mb-2">
               Du är redan inloggad
             </h1>
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
@@ -107,11 +130,11 @@ export default function SandboxPage() {
 
   // Sandbox landing
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-10">
           <BrandWordmark size="hero" className="mb-2" />
-          <h1 className="text-xl font-medium tracking-tight mt-3">
+          <h1 className="text-xl tracking-tight mt-3">
             Testa {branding.appName.toLowerCase()} utan att registrera dig
           </h1>
           <p className="text-muted-foreground text-sm mt-2 leading-relaxed">
@@ -126,10 +149,16 @@ export default function SandboxPage() {
             kräver ett riktigt konto.
           </p>
 
+          <TurnstileChallenge
+            ref={turnstileRef}
+            action="accounted_sandbox"
+            onTokenChange={setCaptchaToken}
+          />
+
           <Button
             className="w-full h-11"
             onClick={handleStartSandbox}
-            disabled={isLoading}
+            disabled={isLoading || isTurnstileSubmissionBlocked(captchaToken)}
           >
             {isLoading ? (
               <>

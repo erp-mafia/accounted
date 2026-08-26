@@ -72,6 +72,26 @@ describe('GET /api/salary/runs/[id]/payment/bg-lb', () => {
     expect(response.status).toBe(403)
   })
 
+  it('returns 400 pointing at the invoicing settings when bankgiro is empty', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 3, payment_date: '2026-03-25' } },
+      { data: { name: 'Bolaget AB' } }, // companies
+      { data: { company_name: 'Bolaget AB', bankgiro: null } }, // company_settings
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/payment/bg-lb'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    // The message must name where the setting lives: the settings overview
+    // shows a registry bankgiro this route does not read.
+    expect(body.error).toContain('Inställningar → Fakturering')
+  })
+
   it('generates a Bankgirot LB file for an approved run', async () => {
     const { enqueueMany } = authed()
     enqueueMany([

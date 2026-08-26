@@ -1,0 +1,157 @@
+---
+title: "Daglig runway → Slack"
+description: "n8n-workflow med dagligt 08:00-cron som anropar gnubok_get_kpi_report, beräknar runway lokalt från cash_position och 90d-burn, jämför med gårdagens snapshot (i n8n data-store), och postar en Slack-block med trendpil och färgkodning vid runway under 6 mån."
+slug: "daglig-runway-till-slack"
+kind: "workflow"
+author: "gnubok"
+status: "live"
+lang: "sv"
+personas: ["founder"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/workflows-v1/daglig-runway-till-slack.zip"
+repoUrl: "https://github.com/erp-mafia/accounted/tree/main/workflows/daglig-runway-till-slack"
+gnubokTools:
+  - "gnubok_get_kpi_report"
+  - "gnubok_get_balance_sheet"
+  - "gnubok_query_journal"
+oauthScopes:
+  - "reports:read"
+requiresWriteScope: false
+version: "1.0.0"
+ogImageEyebrow: "Workflow"
+faq:
+  - q: "Vad händer om PSD2-banken är offline och 1930 inte är dagsfärsk?"
+    a: "Workflowet läser timestamp på senaste 1930-transaktion via `gnubok_query_journal(account: '1930', limit: 1)`. Är den >24 h läggs en notering i Slack-blocket: 'Bank-feed släpar, 1930 baserat på data från X timmar sedan.' Inget larmar förrän feeden är inne igen. Inga falska alarm bara för att banken har problem."
+  - q: "Kan jag ha olika trösklar per företag (jag har två AB)?"
+    a: "Ja. Tröskel-värden ligger i n8n Data Store keyed på `company_id`. Lägg till en rad per företag med fälten orange_months (default 6), red_months (default 3), critical_months (default 1). Workflowet läser raden vid varje körning. Inget kod-deploy behövs."
+  - q: "Hur stänger jag av posten på lördagar?"
+    a: "Cron-uttrycket i Schedule-noden är `0 8 * * 1-5` som default, alltså bara vardagar. Vill du även lördagar, ändra till `0 8 * * 1-6`."
+  - q: "Vad om jag inte har Slack, funkar Discord eller Teams?"
+    a: "Ja. Workflowet är en n8n-mall. Sista noden är 'Slack: Post Message' men kan bytas mot 'Discord: Send Message', 'Microsoft Teams: Post Message' eller HTTP request mot valfri webhook. Innehållet (block-format) anpassas i den noden, allt annat förblir."
+  - q: "Vad händer med personuppgifter, skickas något känsligt till Slack?"
+    a: "Nej. Workflowet skickar bara aggregerade tal: kassa, burn, runway. Inga transaktionsdetaljer, inga kundnamn, inga personnummer. Slack-meddelandet är säkert nog för en allmän #finance-kanal."
+---
+
+## Vad som händer 08:00
+
+Varje vardag kl 08:00:
+
+1. n8n-cron triggar.
+2. Anropar `gnubok_get_kpi_report` via accounted MCP. Returnerar `cash_position`, `total_revenue`, `total_expenses`, `months[]`.
+3. Anropar `gnubok_query_journal(account: '1930', limit: 1)` för att kolla bank-feed-färskhet.
+4. Beräknar runway lokalt: `runway_months = cash_position / ((total_expenses - total_revenue över senaste 90 dagar) / 90 * 30.4)`.
+5. Hämtar gårdagens snapshot från Data Store.
+6. Beräknar deltat: kassa-diff, burn-trend, runway-diff i dagar.
+7. Bestämmer färg: grön (`>12 mån`), gul (`6–12 mån`), orange (`3–6 mån`), röd (`<3 mån`).
+8. Bygger Slack-block-message.
+9. Postar till konfigurerad kanal.
+10. Sparar dagens snapshot i Data Store inför imorgon.
+
+Read-only API-nyckel räcker. Inga skriv-scopes behövs.
+
+## Slack-blocket
+
+```
+🟢  Runway: 9.06 månader
+
+   Kassa:       1 247 380 SEK   ↓ 52 080 (4.0%)
+   Burn / mån:   137 600 SEK   stabil
+   Trend 7d:    −0.4 månader   under 12-mån-mål
+
+   1930 senast: 06:14, idag
+   Detaljerad vy → app.gnubok.se/dashboard
+```
+
+Vid sjunkande trend till orange/röd nivå:
+
+```
+🟠  RUNWAY UNDER 6 MÅNADER
+
+   Runway: 5.8 månader (mål: ≥ 6)
+   Kassa:     843 200 SEK   ↓ 47 100 från igår
+   Burn / mån: 145 600 SEK   ↑ 5.8% jämfört förra månaden
+
+   Tre största utlopp senaste 7 dagar:
+   • 134 800 SEK  Löneutbetalning april
+   • 23 400 SEK   AWS april
+   • 19 200 SEK   Lokalhyra Q2
+
+   Detaljerad vy → app.gnubok.se/dashboard
+```
+
+Färgmappningen är emoji plus Slack-attachment-color så det syns både i
+notification-vyn och i tråden.
+
+## Importera i n8n
+
+```bash
+# Ladda ner zip-paketet, packa upp
+n8n import:workflow --input=daglig-runway-till-slack.json
+```
+
+Eller via UI: `n8n → Workflows → Import → välj filen`.
+
+Konfigurera credentials:
+
+1. **accounted MCP-anslutning** med scope `reports:read`. För n8n som inte stödjer MCP-OAuth direkt: använd stdio-fallback via API-nyckel (`gnubok_sk_...`) med scopen begränsad till `reports:read`. Skapa nyckeln på app.gnubok.se → Inställningar → API-nycklar.
+2. **Slack webhook** för kanalen `#finance` (eller motsvarande).
+
+Aktivera workflowet. Första körningen blir inom 24 timmar. Vill du
+testa direkt, klicka "Execute workflow" i n8n.
+
+## Data Store-strukturen
+
+n8n Data Store används för att hålla gårdagens snapshot per företag:
+
+```json
+{
+  "company_id": "ab_123abc",
+  "ts": "2026-05-11T08:00:00Z",
+  "kassa": 1299460,
+  "burn_30d": 142800,
+  "runway_months": 9.10,
+  "thresholds": {
+    "orange_months": 6,
+    "red_months": 3,
+    "critical_months": 1
+  }
+}
+```
+
+Vid körning skriver workflowet över raden med dagens värden. Behöver
+du historik längre tillbaka, kör en parallell n8n-workflow som
+exporterar till Google Sheets eller en kolumn-databas.
+
+## Konfiguration via Data Store
+
+Lägg till en rad per företag med dessa fält:
+
+| Fält | Default | Notering |
+|---|---|---|
+| `company_id` | krävs | Hämtas från accounted-API |
+| `slack_channel` | krävs | `#finance` eller annat |
+| `orange_months` | 6 | Runway där posten blir gul |
+| `red_months` | 3 | Där posten blir orange |
+| `critical_months` | 1 | Där posten blir röd plus pingar specifik person |
+| `critical_user_id` | optional | Slack user-id att @-mention vid kritisk nivå |
+| `weekend_post` | false | Skicka även lör/sön |
+
+Ändra utan att deploya. n8n läser raden vid varje körning.
+
+## Begränsningar
+
+* Workflowet förutspår inte framtida burn. Det jämför dagens läge mot gårdagens.
+* Workflowet inkluderar inte commitments, alltså utgående fakturor som inte gått ut än, försenade payouts.
+* Workflowet pingar inte vid varje förändring, bara vid tröskel-överskridning.
+* En API-nyckel per företag krävs idag. Multi-tenant via `companies:read`-scopen är på roadmap men inte exponerad i MCP än.
+
+## Vad du får
+
+Daglig runway-uppdatering i kanalen där folk faktiskt läser, utan
+att grundaren behöver öppna en dashboard. Plus en historisk
+snapshot per dag som tillåter "när började det luta?"-analys
+vid kvartalsrapporten.
+
+Konfiguration: 5 minuter. Kostnad: 0 SEK/månad i n8n self-hosted, eller
+n8n Cloud Starter (200 körningar/mån räcker till 6 företag dagliga).

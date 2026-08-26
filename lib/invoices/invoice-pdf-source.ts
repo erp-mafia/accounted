@@ -68,6 +68,12 @@ export type InvoicePdfRerenderReason =
   | 'no_archived_copy'
   /** An archived copy may exist but could not be retrieved; the user chose this. */
   | 'archive_unreachable'
+  /**
+   * The betalningsbekräftelse (#1693): a fresh render of a paid invoice with
+   * the BETALD stamp. It is its own document, produced on request, and is never
+   * the file the customer was originally sent, however the archive looks.
+   */
+  | 'payment_confirmation'
 
 export type InvoicePdfSource =
   | {
@@ -94,6 +100,31 @@ export type InvoicePdfSource =
 export function invoiceRerenderUrl(invoiceId: string, options?: { inline?: boolean }): string {
   const base = `/api/invoices/${encodeURIComponent(invoiceId)}/pdf`
   return options?.inline ? `${base}?disposition=inline` : base
+}
+
+/**
+ * The betalningsbekräftelse endpoint: the same re-render route in its paid
+ * variant. The route refuses anything but a paid faktura and names the file
+ * accordingly; the archived original is not involved at any point.
+ */
+export function invoicePaymentConfirmationUrl(invoiceId: string): string {
+  return `${invoiceRerenderUrl(invoiceId)}?variant=paid`
+}
+
+/**
+ * The paid copy is always a re-render and is always labelled as one. There is
+ * no archived variant to look for: even when the delivery history holds the
+ * sent invoice, that file shows the invoice as it was before payment and is
+ * a different document from the betalningsbekräftelse.
+ */
+export function paymentConfirmationPdfSource(
+  invoiceId: string,
+): Extract<InvoicePdfSource, { kind: 'rerender' }> {
+  return {
+    kind: 'rerender',
+    url: invoicePaymentConfirmationUrl(invoiceId),
+    reason: 'payment_confirmation',
+  }
 }
 
 /**

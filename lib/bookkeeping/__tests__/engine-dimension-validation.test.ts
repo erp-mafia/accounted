@@ -125,7 +125,10 @@ const DIMENSION_TABLES: Record<string, TableResult> = {
   },
 }
 
-function makeInput(dimensions?: Record<string, string>): CreateJournalEntryInput {
+function makeInput(
+  dimensions?: Record<string, string>,
+  overrides: Partial<CreateJournalEntryInput> = {}
+): CreateJournalEntryInput {
   return {
     fiscal_period_id: 'period-1',
     entry_date: '2026-06-15',
@@ -138,6 +141,7 @@ function makeInput(dimensions?: Record<string, string>): CreateJournalEntryInput
       { account_number: '4010', debit_amount: 100, credit_amount: 0, dimensions },
       { account_number: '1930', debit_amount: 0, credit_amount: 100, dimensions },
     ],
+    ...overrides,
   }
 }
 
@@ -228,6 +232,88 @@ describe('createDraftEntry: dimension validation wiring', () => {
     // an explicit value would make Postgres reject the insert.
     expect('cost_center' in lineRows[0]).toBe(false)
     expect('project' in lineRows[0]).toBe(false)
+  })
+})
+
+/**
+ * Accrual dissolutions (source_type 'accrual') are exempt from the soft
+ * registry validation: they replay the origin entry's dimensions bag month
+ * after month, so a value archived (or removed from the registry) after the
+ * origin was posted must not be able to stop the remaining installments from
+ * booking. Exemption is by source type only, and it does NOT strip the tag.
+ */
+describe('createDraftEntry: accrual dissolution exemption', () => {
+  const accrual = { source_type: 'accrual' as const, source_id: 'sched-1' }
+
+  it('posts a dissolution tagged with a value archived since the origin entry', async () => {
+    const { supabase, inserts, queriedTables } = buildSupabase({
+      ...BASE_TABLES,
+      ...DIMENSION_TABLES,
+      dimension_values: {
+        data: [{ dimension_id: 'dim-proj', code: 'P001', is_active: false }],
+      },
+    })
+
+    const entry = await createDraftEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      makeInput({ '6': 'P001' }, accrual)
+    )
+
+    expect(entry.id).toBe('entry-1')
+    // The tag survives: an archived value still exists in the registry and the
+    // cost genuinely belongs to that project.
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    expect(lineRows[0].dimensions).toEqual({ '6': 'P001' })
+    expect(lineRows[1].dimensions).toEqual({ '6': 'P001' })
+    // Registry never consulted at all for an exempt source.
+    expect(queriedTables()).not.toContain('dimensions')
+    expect(queriedTables()).not.toContain('dimension_values')
+  })
+
+  it('posts a dissolution tagged with a code that is not in the registry', async () => {
+    const { supabase, inserts } = buildSupabase({
+      ...BASE_TABLES,
+      ...DIMENSION_TABLES,
+      dimension_values: { data: [] },
+    })
+
+    const entry = await createDraftEntry(
+      supabase as never,
+      'company-1',
+      'user-1',
+      makeInput({ '6': 'P999' }, accrual)
+    )
+
+    expect(entry.id).toBe('entry-1')
+    const lineRows = inserts.journal_entry_lines[0] as Array<Record<string, unknown>>
+    expect(lineRows[0].dimensions).toEqual({ '6': 'P999' })
+  })
+
+  it('still rejects the same archived value on an operational source', async () => {
+    const { supabase } = buildSupabase({
+      ...BASE_TABLES,
+      ...DIMENSION_TABLES,
+      dimension_values: {
+        data: [{ dimension_id: 'dim-proj', code: 'P001', is_active: false }],
+      },
+    })
+
+    // The exemption is narrow: only 'accrual' skips validation, every
+    // operational source keeps its typed Swedish rejection.
+    await expect(
+      createDraftEntry(supabase as never, 'company-1', 'user-1', makeInput({ '6': 'P001' }))
+    ).rejects.toBeInstanceOf(DimensionValidationError)
+
+    await expect(
+      createDraftEntry(
+        supabase as never,
+        'company-1',
+        'user-1',
+        makeInput({ '6': 'P001' }, { source_type: 'supplier_invoice_registered' })
+      )
+    ).rejects.toBeInstanceOf(DimensionValidationError)
   })
 })
 

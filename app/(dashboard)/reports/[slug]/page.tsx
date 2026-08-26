@@ -11,13 +11,19 @@ import type { FiscalPeriod } from '@/types'
  */
 export default async function ReportSlugPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
-  const { slug } = await params
+  const [{ slug }, query] = await Promise.all([params, searchParams])
   const report = getReport(slug)
   if (!report) notFound()
-  if (report.route) redirect(report.route)
+  if (report.route) {
+    // The old bankavstämning deep link (?autorun=1 from the transactions
+    // inbox) keeps working on the page that absorbed it.
+    redirect(slug === 'bank-reconciliation' && query.autorun === '1' ? `${report.route}?autorun=1` : report.route)
+  }
 
   const [{ supabase }, companyId] = await Promise.all([
     getDashboardAuthContext(),

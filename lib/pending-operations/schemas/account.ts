@@ -1,4 +1,8 @@
 import { z } from 'zod'
+import {
+  ACCOUNT_VAT_TREATMENTS,
+  isVatTreatmentAllowedForAccountClass,
+} from '@/lib/vat/account-vat-treatment'
 
 // Commit-boundary re-validation for staged chart-of-accounts operations
 // (gnubok_create_account / gnubok_update_account). A staged
@@ -26,6 +30,8 @@ const defaultVatRate = z
   .union([z.literal(0), z.literal(0.06), z.literal(0.12), z.literal(0.25)])
   .nullable()
   .optional()
+
+const defaultVatTreatment = z.enum(ACCOUNT_VAT_TREATMENTS).nullable().optional()
 
 /** Empty string / null → undefined, then bounded string. */
 const optString = (max: number) =>
@@ -84,12 +90,26 @@ export const CreateAccountParamsSchema = z
     description: optString(2000),
     default_vat_code: optString(32),
     default_vat_rate: defaultVatRate,
+    default_vat_treatment: defaultVatTreatment,
     sru_code: optString(16),
   })
   .superRefine((v, ctx) => {
     const conflict = accountClassTypeConflict(v.account_number, v.account_type)
     if (conflict) {
       ctx.addIssue({ code: 'custom', message: conflict, path: ['account_type'] })
+    }
+    if (
+      v.default_vat_treatment &&
+      !isVatTreatmentAllowedForAccountClass(
+        v.default_vat_treatment,
+        Number(v.account_number[0]),
+      )
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'VAT treatment is not valid for this account class',
+        path: ['default_vat_treatment'],
+      })
     }
   })
 
@@ -99,8 +119,23 @@ export const UpdateAccountParamsSchema = z.object({
   description: clearableString(2000),
   default_vat_code: clearableString(32),
   default_vat_rate: defaultVatRate,
+  default_vat_treatment: defaultVatTreatment,
   sru_code: clearableString(16),
   is_active: z.boolean().optional(),
+}).superRefine((v, ctx) => {
+  if (
+    v.default_vat_treatment &&
+    !isVatTreatmentAllowedForAccountClass(
+      v.default_vat_treatment,
+      Number(v.account_number[0]),
+    )
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'VAT treatment is not valid for this account class',
+      path: ['default_vat_treatment'],
+    })
+  }
 })
 
 export type CreateAccountParams = z.infer<typeof CreateAccountParamsSchema>

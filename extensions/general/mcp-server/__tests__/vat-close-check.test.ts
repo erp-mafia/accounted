@@ -7,7 +7,7 @@
  * supabase call here would couple tests to internal query order.
  */
 import { describe, it, expect } from 'vitest'
-import { tools, computeMomsDeadline } from '../server'
+import { tools, computeMomsDeadline, UNCATEGORIZED_TRANSACTIONS_HINT } from '../server'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
 describe('gnubok_vat_close_check', () => {
@@ -42,32 +42,110 @@ describe('gnubok_vat_close_check', () => {
   it('is mapped to reports:read scope', () => {
     expect(TOOL_SCOPE_MAP.gnubok_vat_close_check).toBe('reports:read')
   })
+
+  it('uncategorized-transactions hint offers both resolution paths', () => {
+    // The blocker must not steer agents into double-booking: a transaction
+    // whose affärshändelse is already booked needs the link tool, not a new
+    // booking via categorize/auto-match. An agent that only sees the booking
+    // tools concludes linking requires support intervention.
+    expect(UNCATEGORIZED_TRANSACTIONS_HINT).toContain('gnubok_categorize_transaction')
+    expect(UNCATEGORIZED_TRANSACTIONS_HINT).toContain('gnubok_auto_match_period')
+    expect(UNCATEGORIZED_TRANSACTIONS_HINT).toContain('gnubok_link_transaction_to_journal_entry')
+  })
 })
 
 describe('computeMomsDeadline', () => {
-  it('monthly: March 2026 → 12 April 2026', () => {
-    const d = computeMomsDeadline('monthly', 2026, 3)
-    expect(d?.date).toBe('2026-04-12')
-    expect(d?.label).toBe('12 april 2026')
+  const standardSettings = {
+    vat_taxable_base_over_40m: false,
+    entity_type: 'aktiebolag' as const,
+    fiscal_year_start_month: 1,
+    vat_has_eu_trade: false,
+    vat_filing_method: 'electronic' as const,
+  }
+
+  it('monthly: June 2026 is due 17 August 2026', () => {
+    const d = computeMomsDeadline('monthly', 2026, 6, standardSettings)
+    expect(d?.date).toBe('2026-08-17')
+    expect(d?.label).toBe('17 augusti 2026')
   })
 
-  it('monthly: December rolls into next year', () => {
-    const d = computeMomsDeadline('monthly', 2026, 12)
-    expect(d?.date).toBe('2027-01-12')
+  it('monthly: December 2026 is due 12 February 2027', () => {
+    const d = computeMomsDeadline('monthly', 2026, 12, standardSettings)
+    expect(d?.date).toBe('2027-02-12')
   })
 
-  it('quarterly: Q1 2026 → 26 April 2026', () => {
-    const d = computeMomsDeadline('quarterly', 2026, 1)
-    expect(d?.date).toBe('2026-04-26')
+  it('monthly: filers above SEK 40 million use the 26th of the following month', () => {
+    const d = computeMomsDeadline('monthly', 2026, 1, {
+      ...standardSettings,
+      vat_taxable_base_over_40m: true,
+    })
+    expect(d?.date).toBe('2026-02-26')
+    expect(d?.label).toBe('26 februari 2026')
   })
 
-  it('quarterly: Q4 2026 → 26 January 2027', () => {
-    const d = computeMomsDeadline('quarterly', 2026, 4)
-    expect(d?.date).toBe('2027-01-26')
+  it('adjusts a raw 26 December deadline to the next banking day', () => {
+    const d = computeMomsDeadline('monthly', 2026, 11, {
+      ...standardSettings,
+      vat_taxable_base_over_40m: true,
+    })
+    expect(d?.date).toBe('2026-12-28')
   })
 
-  it('yearly: 2026 → 26 February 2027', () => {
-    const d = computeMomsDeadline('yearly', 2026, 1)
+  it.each([
+    [1, '2026-05-12'],
+    [2, '2026-08-17'],
+    [3, '2026-11-12'],
+    [4, '2027-02-12'],
+  ])('quarterly: Q%s uses the canonical table', (quarter, expected) => {
+    expect(computeMomsDeadline('quarterly', 2026, quarter, standardSettings)?.date)
+      .toBe(expected)
+  })
+
+  it('yearly: an enskild firma with EU trade is due 26 February', () => {
+    const d = computeMomsDeadline('yearly', 2026, 1, {
+      ...standardSettings,
+      entity_type: 'enskild_firma',
+      vat_has_eu_trade: true,
+    })
     expect(d?.date).toBe('2027-02-26')
+  })
+
+  it('yearly: an enskild firma does not require a filing method', () => {
+    const d = computeMomsDeadline('yearly', 2026, 1, {
+      ...standardSettings,
+      entity_type: 'enskild_firma',
+      vat_filing_method: null,
+    })
+    expect(d?.date).toBe('2027-05-12')
+  })
+
+  it('yearly: an AB with EU trade does not require a filing method', () => {
+    const d = computeMomsDeadline('yearly', 2026, 1, {
+      ...standardSettings,
+      vat_has_eu_trade: true,
+      vat_filing_method: null,
+    })
+    expect(d?.date).toBe('2027-02-26')
+  })
+
+  it('yearly: an aktiebolag uses its canonical electronic filing deadline', () => {
+    const d = computeMomsDeadline('yearly', 2026, 1, standardSettings)
+    expect(d?.date).toBe('2027-08-17')
+  })
+
+  it('yearly: an AB without EU trade still requires a filing method', () => {
+    const d = computeMomsDeadline('yearly', 2026, 1, {
+      ...standardSettings,
+      vat_filing_method: null,
+    })
+    expect(d).toBeNull()
+  })
+
+  it('yearly: does not guess a calendar year for an AB without fiscal settings', () => {
+    const d = computeMomsDeadline('yearly', 2026, 1, {
+      ...standardSettings,
+      fiscal_year_start_month: null,
+    })
+    expect(d).toBeNull()
   })
 })

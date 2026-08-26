@@ -4,6 +4,10 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { AttachDocumentSchema } from '@/lib/api/schemas'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import {
+  completeInboxItemsForBookedTransaction,
+  resolveVoucherLinkedEntryIds,
+} from '@/lib/transactions/inbox-underlag'
 
 ensureInitialized()
 
@@ -55,13 +59,20 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // A document that already serves as underlag for a DIFFERENT verifikation
     // cannot be pinned here: propagating would either corrupt that link or be
     // blocked by the document-metadata immutability trigger. Same verifikation
-    // is fine (idempotent re-attach; propagation below becomes a no-op).
+    // is fine (idempotent re-attach; propagation below becomes a no-op). A
+    // bulk-booked tx keeps journal_entry_id null and is anchored through
+    // transaction_voucher_links, so that anchoring counts as "same" too.
     const docJournalEntryId = (document.journal_entry_id as string | null) ?? null
     if (docJournalEntryId && docJournalEntryId !== transaction.journal_entry_id) {
-      return NextResponse.json(
-        { error: 'Underlaget är redan kopplat till en annan verifikation.' },
-        { status: 409 },
-      )
+      const voucherLinked = await resolveVoucherLinkedEntryIds(supabase, companyId, [
+        transactionId,
+      ])
+      if (docJournalEntryId !== voucherLinked.get(transactionId)) {
+        return NextResponse.json(
+          { error: 'Underlaget är redan kopplat till en annan verifikation.' },
+          { status: 409 },
+        )
+      }
     }
 
     // Race-free read of journal_entry_id: UPDATE ... RETURNING so the value we
@@ -152,6 +163,21 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
     }
 
+    // The transaction may already be booked, directly or via a bulk-book
+    // samlingsverifikat (journal_entry_id null, anchored through
+    // transaction_voucher_links): complete the matched inbox items against
+    // the anchoring verifikat so an after-the-fact attach resolves them
+    // instead of stranding them as "linked" forever. Best-effort, logged
+    // inside. Returns the anchoring verifikat (the direct id when there is
+    // one), so the response and audit trail can report the voucher-linked
+    // case too.
+    const effectiveJournalEntryId = await completeInboxItemsForBookedTransaction(
+      supabase,
+      companyId,
+      transactionId,
+      { directJournalEntryId: journalEntryId },
+    )
+
     // Rättelse audit trail (BFL 5 kap 5 §): record swaps where a non-null doc
     // was replaced. Best-effort: a logging failure must not roll back the
     // (compliant) attach.
@@ -167,7 +193,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             transaction_id: transactionId,
             previous_document_id: previousDocumentId,
             new_document_id: document_id,
-            journal_entry_id: journalEntryId,
+            journal_entry_id: effectiveJournalEntryId,
           },
           actor: { type: 'user', id: user.id },
           occurredAt: new Date(),
@@ -182,7 +208,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         transaction_id: transactionId,
         document_id,
         previous_document_id: previousDocumentId,
-        journal_entry_id: journalEntryId,
+        journal_entry_id: effectiveJournalEntryId,
       },
     })
   },

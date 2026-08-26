@@ -43,8 +43,11 @@ export default function BankSyncSinceLastVisit() {
       .eq('company_id', company.id)
       .eq('import_source', 'enable_banking')
       .gt('created_at', lastVisitRaw)
-      .then(({ count: rowCount }) => {
+      .then(({ count: rowCount, error }) => {
         if (cancelled) return
+        // A failed query must not advance the marker: that would silently
+        // swallow the notification for rows that DID arrive in the window.
+        if (error) return
         if (rowCount && rowCount > 0) {
           setCount(rowCount)
         } else {
@@ -72,7 +75,7 @@ export default function BankSyncSinceLastVisit() {
   }
 
   return (
-    <div className="inline-flex items-center gap-2 rounded-md border border-border bg-secondary px-2.5 py-1 text-xs text-foreground">
+    <div className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary px-2.5 py-1 text-xs text-foreground">
       <span>
         {count === 1
           ? t('bank_sync_new_since_last_visit_one')

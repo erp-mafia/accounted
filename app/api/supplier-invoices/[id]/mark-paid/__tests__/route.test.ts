@@ -8,7 +8,7 @@ import {
   makeSupplier,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -135,9 +135,12 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     // Record payment
     enqueue({ data: null, error: null })
 
+    const paidHandler = vi.fn()
+    eventBus.on('supplier_invoice.paid', paidHandler)
+
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
-      body: {},
+      body: { payment_date: '2026-05-12' },
     })
     const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
     const { status, body } = await parseJsonResponse<{
@@ -155,6 +158,13 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
     expect(mockCreateSupplierInvoicePaymentEntry).toHaveBeenCalled()
+    const invoiceUpdate = findCalls('supplier_invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({ paid_at: '2026-05-12T12:00:00Z' })
+    expect(paidHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        supplierInvoice: expect.objectContaining({ paid_at: '2026-05-12T12:00:00Z' }),
+      }),
+    )
     // Issue #1259: full settlement retires every transaction's suggestion
     // pointer at this invoice. No exceptTransactionId: mark-paid is not driven
     // by a bank transaction.
@@ -264,6 +274,67 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(body.journal_entry_id).toBe('je-3')
     expect(mockCreateSupplierInvoiceCashEntry).toHaveBeenCalled()
     expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects a cash-method partial payment on a never-booked supplier invoice', async () => {
+    // createSupplierInvoiceCashEntry books the FULL invoice (all items + VAT)
+    // and takes no payment amount, so a partial would over-book the expense.
+    const supplier = makeSupplier()
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      total: 10000,
+      remaining_amount: 10000,
+      paid_amount: 0,
+      supplier,
+      items: [],
+    })
+
+    enqueue({ data: invoice, error: null })
+    // Duplicate-payment guard is skipped on partials, so the next query is
+    // the settings fetch.
+    enqueue({ data: { accounting_method: 'cash' }, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { amount: 4000 },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CASH_PARTIAL_UNSUPPORTED')
+    expect(mockCreateSupplierInvoiceCashEntry).not.toHaveBeenCalled()
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects completing a previously part-paid never-booked cash supplier invoice', async () => {
+    const supplier = makeSupplier()
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'partially_paid',
+      total: 10000,
+      remaining_amount: 6000,
+      paid_amount: 4000,
+      supplier,
+      items: [],
+    })
+
+    enqueue({ data: invoice, error: null })
+    // Full-remaining payment: duplicate-payment guard runs (no candidates).
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'cash' }, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: {},
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CASH_PARTIAL_UNSUPPORTED')
+    expect(mockCreateSupplierInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
   it('cash method: anchors the invoice document to a posted verifikat (BFL 5 kap 6 §)', async () => {

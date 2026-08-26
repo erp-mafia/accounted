@@ -3,9 +3,9 @@
  *
  * "Accepted by Resend" and "the recipient's server took it" are two different
  * facts, and only the first one is known when a send returns. Resend reports
- * the second one asynchronously, per message: one report covers every
- * recipient on that message, and the reason text names the address that
- * failed. This module verifies the signed payload and maps it onto the
+ * the second one asynchronously. Resend identifies the recipient(s) affected
+ * by each event in `data.to`, which lets one message carry independent To/CC
+ * outcomes. This module verifies the signed payload and maps it onto the
  * provider status stored on the invoice delivery row.
  */
 
@@ -25,6 +25,7 @@ export interface ProviderDeliveryReport {
   status: InvoiceDeliveryProviderStatus
   occurredAt: string
   detail: string | null
+  recipients: string[]
 }
 
 /**
@@ -83,6 +84,27 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+function recipientAddresses(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+
+  const seen = new Set<string>()
+  const recipients: string[] = []
+
+  for (const valueItem of value) {
+    const address = text(valueItem)
+    if (!address || address.length > 320) continue
+
+    const normalized = address.toLocaleLowerCase('en-US')
+    if (seen.has(normalized)) continue
+
+    seen.add(normalized)
+    recipients.push(address)
+    if (recipients.length === 100) break
+  }
+
+  return recipients
+}
+
 /**
  * The reason is read defensively: the payload is external input, and a
  * provider that ships a new event shape must degrade to "no reason given"
@@ -123,16 +145,18 @@ export function toDeliveryReport(event: WebhookEventPayload): ProviderDeliveryRe
   const status = STATUS_BY_EVENT[event.type]
   if (!status) return null
 
-  const data = event.data as { email_id?: string }
-  if (!data.email_id) return null
+  const data = event.data as { email_id?: unknown; to?: unknown }
+  const providerMessageId = text(data.email_id)
+  if (!providerMessageId) return null
 
   const occurredAt = parseTimestamp(event.created_at)
 
   return {
-    providerMessageId: data.email_id,
+    providerMessageId,
     status,
     occurredAt,
     detail: reasonText(event),
+    recipients: recipientAddresses(data.to),
   }
 }
 

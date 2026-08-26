@@ -89,7 +89,7 @@ export default function CustomersEditStep({
       <CardContent className="space-y-4">
         {/* Duplicate handling banner */}
         {liveDuplicateCount > 0 && (
-          <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
             <RefreshCw className="h-4 w-4 text-warning mt-0.5 shrink-0" />
             <div className="flex-1 space-y-2">
               <p className="text-sm">
@@ -119,7 +119,7 @@ export default function CustomersEditStep({
         )}
 
         {/* Table */}
-        <div className="overflow-x-auto rounded-md border">
+        <div className="overflow-x-auto rounded-lg border">
           <table className="w-full text-sm">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b">
@@ -183,9 +183,9 @@ export default function CustomersEditStep({
                       {row.duplicate_match ? (
                         <span
                           className={cn(
-                            'text-[11px] font-medium px-1.5 py-0.5 rounded',
+                            'text-[11px] font-medium px-1.5 py-0.5 rounded-full',
                             updateDuplicates
-                              ? 'bg-warning/15 text-warning'
+                              ? 'bg-muted text-warning'
                               : 'bg-muted text-muted-foreground',
                           )}
                           title={`Matchar ${row.duplicate_match.existing_name} (${row.duplicate_match.matched_by})`}
@@ -193,7 +193,7 @@ export default function CustomersEditStep({
                           {updateDuplicates ? 'Uppdateras' : 'Hoppas över'}
                         </span>
                       ) : (
-                        <span className="text-[11px] font-medium px-1.5 py-0.5 rounded bg-success/15 text-success">
+                        <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-success/15 text-success">
                           Ny
                         </span>
                       )}
@@ -216,7 +216,7 @@ export default function CustomersEditStep({
         </div>
 
         {hasErrors && (
-          <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
             <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
             <p className="text-sm text-warning">
               Vissa rader har valideringsfel (markerade i rött). Åtgärda eller ta bort dem

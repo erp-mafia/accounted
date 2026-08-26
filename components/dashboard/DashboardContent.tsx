@@ -1,25 +1,21 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
-import { AttnLine } from '@/components/ui/attn-line'
-import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { useCapability, useCompany } from '@/contexts/CompanyContext'
-import { CAPABILITY } from '@/lib/entitlements/keys'
+import { useCompany } from '@/contexts/CompanyContext'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
 import ResumePane from '@/components/dashboard/ResumePane'
-import BackupHealthBanner from '@/components/dashboard/BackupHealthBanner'
+import NoticeLines from '@/components/dashboard/NoticeLines'
 import { SkatteverketPromoCard } from '@/components/dashboard/SkatteverketPromoCard'
-import { ArrowRight } from 'lucide-react'
-import { useBranding } from '@/lib/branding/brand-context'
+import { AgentPromo } from '@/components/dashboard/AgentPromo'
 import type { InitialSetupState, OnboardingProgress } from '@/types'
+import type { Notice } from '@/lib/notices/types'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 import type { ResumeItem } from '@/lib/worklist/resume'
+import type { VatDeadlineLine } from '@/lib/onboarding/checklist'
 
 interface DashboardContentProps {
   companyId: string
@@ -35,11 +31,12 @@ interface DashboardContentProps {
   /** In-progress work for the Fortsätt pane (lib/worklist/resume). */
   resumeItems: ResumeItem[]
   /**
-   * True when this account looks bookkeeping-empty while a same-orgnr
-   * company with real bookkeeping exists in another account (#1231): the
-   * user probably signed in with the wrong login (stale BankID account).
+   * Active degraded-state notices in priority order (lib/notices): broken or
+   * expiring bank connections, Skatteverket reconnect, failing backups, the
+   * wrong-account hint. Rendered as ONE attn line at the top with a quiet
+   * "+N till" expander: never a stack of banners.
    */
-  otherAccountHint?: boolean
+  notices?: Notice[]
   onboardingProgress?: OnboardingProgress
   initialSetup: InitialSetupState
   /**
@@ -49,6 +46,17 @@ interface DashboardContentProps {
    * full-screen onboarding takeover.
    */
   agentBuilt?: boolean
+  /** Personalized VAT-deadline line for the checklist's Skatteverket step. */
+  vatLine?: VatDeadlineLine
+  /**
+   * True while the setup checklist is still open and the company has zero
+   * posted journal entries: Att göra's all-clear then reads as "empty, get
+   * started" instead of a false "all caught up".
+   */
+  emptyLedger?: boolean
+  /** Latest SIE reconciliation-sweep outcome, for the checklist's bank step
+   *  ("X matchade, Y att granska"). Null when no sweep has run. */
+  sieSweep?: { auto_linked: number; suggested: number; unmatched: number; errors: number } | null
 }
 
 /**
@@ -65,14 +73,15 @@ export default function DashboardContent({
   worklist,
   suggestedMatches,
   resumeItems,
-  otherAccountHint = false,
+  notices = [],
   onboardingProgress,
   initialSetup,
   agentBuilt = true,
+  vatLine = null,
+  emptyLedger = false,
+  sieSweep = null,
 }: DashboardContentProps) {
   const t = useTranslations('dashboard')
-  const { appName } = useBranding()
-  const hasAi = useCapability(CAPABILITY.ai)
   const { company } = useCompany()
   const router = useRouter()
 
@@ -99,7 +108,15 @@ export default function DashboardContent({
 
   return (
     <div className="stagger-enter space-y-8">
-      <BackupHealthBanner />
+      {/* Degraded-state notices (lib/notices): one attn line, highest
+          priority first, quiet "+N till" expander. The wrong-account hint
+          participates in the same priority list instead of rendering its own
+          unconditional line, and the old boxed BackupHealthBanner card lives
+          on as the backup_failing category. */}
+      <NoticeLines
+        notices={notices}
+        actionOverrides={{ other_account_hint: handleSwitchAccount }}
+      />
 
       {/* Greeting hero (concept scene 14) */}
       <section>
@@ -110,14 +127,6 @@ export default function DashboardContent({
           {dateLine}
           {company?.name ? ` · ${company.name}` : ''}
         </p>
-        {otherAccountHint && (
-          <AttnLine
-            className="mt-3"
-            action={{ label: t('other_account_hint_action'), onClick: handleSwitchAccount }}
-          >
-            {t('other_account_hint', { appName })}
-          </AttnLine>
-        )}
       </section>
 
       <NewUserChecklist
@@ -125,40 +134,19 @@ export default function DashboardContent({
         hasBookkeepingImported={!!onboardingProgress?.hasSIEImport}
         hasBankConnected={!!onboardingProgress?.hasBankConnected}
         hasSkatteverketConnected={!!onboardingProgress?.hasSkatteverketConnected}
+        hasInboxItems={!!onboardingProgress?.hasInboxItems}
         hasAgentBuilt={agentBuilt}
+        vatLine={vatLine}
+        sieSweep={sieSweep}
       />
 
-      {/* Build-assistant hero: shown only until the company has a verified
+      {/* Build-assistant nudge: shown only until the company has a verified
           agent_profile, so existing/migrated users get a clear prompt instead
           of a full-screen onboarding takeover. While the stepped first-run
-          checklist is visible it already carries the assistant as step 3, so
-          the hero waits until that block is dismissed or completed. */}
+          checklist is visible it already carries the assistant as its last
+          step, so the promo waits until that block is dismissed or completed. */}
       {!agentBuilt && (initialSetup.dismissedAt || initialSetup.completedAt) && (
-        <section>
-          {/* Non-payers keep seeing the hero (conversion surface) but it
-              routes to billing instead of a build flow that would 403. */}
-          <Link href={hasAi ? '/onboarding/agent' : '/settings/billing'} className="block group">
-            <Card className="transition-colors hover:border-primary/50">
-              <CardContent className="p-6 flex items-center gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="font-display text-xl leading-tight">Bygg din bokföringsassistent</p>
-                    <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {hasAi
-                      ? 'Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig.'
-                      : 'Ingår i abonnemanget: en assistent som föreslår bokföring åt dig.'}
-                  </p>
-                </div>
-                <div className="hidden sm:flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
-                  <span>{hasAi ? 'Kom igång' : 'Uppgradera'}</span>
-                  <ArrowRight className="h-4 w-4" />
-                </div>
-              </CardContent>
-            </Card>
-          </Link>
-        </section>
+        <AgentPromo companyId={companyId} />
       )}
 
       {/* The two panes (concept hem-grid). When nothing is in progress the
@@ -172,6 +160,7 @@ export default function DashboardContent({
           worklist={worklist}
           suggestedMatches={suggestedMatches}
           expiringBankConnections={expiringBankConnections}
+          emptyLedger={emptyLedger}
         />
         <ResumePane items={resumeItems} />
       </div>

@@ -9,7 +9,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { importDimensionRegistry } from './sie-dimensions'
-import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { createJournalEntry, replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
 import type {
   ParsedSIEFile,
   AccountMapping,
@@ -19,8 +19,10 @@ import type {
   MigrationDocumentation,
 } from './types'
 import type { CreateJournalEntryLineInput } from '@/types'
+import { roundOre } from '@/lib/money'
 import { mappingsToMap, getMappingStats } from './account-mapper'
 import { syncMappedAccounts } from './account-sync'
+import { defaultOpeningBalanceSeries } from './opening-balance-defaults'
 import {
   calculateFileHash,
   getEffectiveOpeningBalances,
@@ -32,6 +34,7 @@ import {
 // Re-export from the parser (moved there to avoid an import cycle:
 // getEffectiveOpeningBalances needs it) so existing importers keep working.
 export { isBalanceSheetAccount } from './sie-parser'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import { computeSRUCode } from '@/lib/bookkeeping/bas-data/sru-mapping'
@@ -98,6 +101,13 @@ export function generateImportPreview(
       lowConfidence: mappingStats.lowConfidence,
     },
     excludedSystemAccounts: [],
+    voucherSeriesInFile: [
+      ...new Set(
+        parsed.vouchers
+          .map((v) => (v.series ?? '').trim())
+          .filter((s) => s.length > 0)
+      ),
+    ].sort(),
     issues: derivedFromPriorYearUB
       ? [
           ...parsed.issues,
@@ -134,10 +144,55 @@ export async function checkDuplicateImport(
 }
 
 /**
+ * Every completed SIE import whose fiscal year overlaps the given range,
+ * newest first (imported_at desc, created_at as tiebreak).
+ *
+ * More than one row can overlap the same räkenskapsår: a manual upload plus
+ * a provider sync, or residue from partially deleted data. The old
+ * `.limit(1).maybeSingle()` shape picked an arbitrary row in that case, so
+ * the replace flow resolved one watermark and left the others standing,
+ * permanently blocking a re-sync of that year (issue #1667). Callers that
+ * resolve prior imports must handle every returned row.
+ */
+export async function findOverlappingPeriodImports(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalYearStart: string,
+  fiscalYearEnd: string
+): Promise<SIEImport[]> {
+  // Range overlap check: start <= other_end AND end >= other_start.
+  // Two imports whose räkenskapsår overlap would produce duplicate
+  // verifikationer, violating BFL 4:1 (löpande bokföring).
+  //
+  // fetchAllRows throws on any query error: a swallowed error here would
+  // return [] and let replace mode import fresh on top of rows it never
+  // resolved. It also pages past PostgREST's row cap, and the id tiebreak
+  // keeps the pagination order total.
+  const rows = await fetchAllRows<SIEImport>(
+    ({ from, to }) =>
+      supabase
+        .from('sie_imports')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('status', 'completed')
+        .lte('fiscal_year_start', fiscalYearEnd)
+        .gte('fiscal_year_end', fiscalYearStart)
+        .order('imported_at', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(from, to),
+    { dedupeBy: (r) => r.id }
+  )
+  return rows
+}
+
+/**
  * Check if a completed SIE import already exists for the same fiscal year period.
  * Prevents importing two different SIE files that cover the same accounting period,
  * which would create duplicate verifikationer violating BFL 4:1 (löpande bokföring).
  * Only blocks on status='completed': failed/pending imports don't prevent retries.
+ * When several rows overlap, the newest is returned (deterministic, see
+ * findOverlappingPeriodImports).
  */
 export async function checkDuplicatePeriodImport(
   supabase: SupabaseClient,
@@ -145,24 +200,15 @@ export async function checkDuplicatePeriodImport(
   fiscalYearStart: string,
   fiscalYearEnd: string
 ): Promise<SIEImport | null> {
-  // Range overlap check: start <= other_end AND end >= other_start.
-  // Two imports whose räkenskapsår overlap would produce duplicate
-  // verifikationer, violating BFL 4:1 (löpande bokföring).
-  const { data } = await supabase
-    .from('sie_imports')
-    .select('*')
-    .eq('company_id', companyId)
-    .eq('status', 'completed')
-    .lte('fiscal_year_start', fiscalYearEnd)
-    .gte('fiscal_year_end', fiscalYearStart)
-    .limit(1)
-    .maybeSingle()
-
-  return data as SIEImport | null
+  const overlapping = await findOverlappingPeriodImports(
+    supabase, companyId, fiscalYearStart, fiscalYearEnd
+  )
+  return overlapping[0] ?? null
 }
 
 /**
- * Client for the bulk hard-delete RPCs (replace_sie_import / undo_sie_import).
+ * Client for the bulk hard-delete RPCs (replace_sie_import / undo_sie_import /
+ * undo_bank_file_import).
  *
  * The authenticated role carries statement_timeout=8s on hosted Supabase,
  * and deleting a large import (thousands of journal_entries, each firing
@@ -177,8 +223,11 @@ export async function checkDuplicatePeriodImport(
  *
  * Falls back to the caller's client when the service key is absent
  * (unit tests, misconfigured self-hosted), same behavior as before.
+ *
+ * Exported for lib/import/bank-file/undo.ts, which needs the exact same
+ * escalation shape for undo_bank_file_import.
  */
-async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<SupabaseClient> {
+export async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<SupabaseClient> {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) return fallback
   const { createServiceClient } = await import('@/lib/supabase/server')
   return createServiceClient()
@@ -209,27 +258,55 @@ async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<Supabas
  * actor the gate can never match and always raises. Making the parameter
  * required means a caller that has no authenticated user fails to compile
  * rather than discovering the closed gate at runtime.
+ *
+ * On failure `code` classifies why, so callers can tell a stale watermark
+ * (the row vanished or already left 'completed': nothing left to replace,
+ * safe to proceed as a fresh import) from a real refusal (locked period,
+ * authorization, RPC failure) that must abort.
  */
+export type ReplaceSIEImportResult = {
+  success: boolean
+  deletedEntries: number
+  error?: string
+  code?: 'not_found' | 'not_completed' | 'period_locked' | 'rpc_error'
+}
+
 export async function replaceSIEImport(
   supabase: SupabaseClient,
   companyId: string,
   importId: string,
   userId: string
-): Promise<{ success: boolean; deletedEntries: number; error?: string }> {
-  // 1. Fetch and validate the import record
-  const { data: importRecord } = await supabase
+): Promise<ReplaceSIEImportResult> {
+  // 1. Fetch and validate the import record. Only PGRST116 (zero rows from
+  // .single()) means the row is genuinely absent; any other error (statement
+  // timeout, network failure, 5xx surfaced as a PostgREST error) tells us
+  // nothing about whether the prior import's verifikationer are still in the
+  // ledger. Classifying such a failure as not_found would let the replace
+  // loop in executeSIEImport treat it as a stale watermark and import the
+  // year fresh on top of the old entries (silent duplicates, BFL 4:1), so it
+  // must fail closed as rpc_error and abort instead.
+  const { data: importRecord, error: fetchError } = await supabase
     .from('sie_imports')
     .select('status, fiscal_period_id')
     .eq('id', importId)
     .eq('company_id', companyId)
     .single()
 
+  if (fetchError && fetchError.code !== 'PGRST116') {
+    return {
+      success: false,
+      deletedEntries: 0,
+      error: `Kunde inte läsa tidigare import: ${fetchError.message}`,
+      code: 'rpc_error',
+    }
+  }
+
   if (!importRecord) {
-    return { success: false, deletedEntries: 0, error: 'Import hittades inte' }
+    return { success: false, deletedEntries: 0, error: 'Import hittades inte', code: 'not_found' }
   }
 
   if (importRecord.status !== 'completed') {
-    return { success: false, deletedEntries: 0, error: `Kan bara ersätta slutförda importer (status: ${importRecord.status})` }
+    return { success: false, deletedEntries: 0, error: `Kan bara ersätta slutförda importer (status: ${importRecord.status})`, code: 'not_completed' }
   }
 
   // 2. Check that the fiscal period is not closed or locked
@@ -242,7 +319,7 @@ export async function replaceSIEImport(
       .single()
 
     if (period?.is_closed || period?.locked_at) {
-      return { success: false, deletedEntries: 0, error: 'Kan inte ersätta import i ett låst eller stängt räkenskapsår. Öppna perioden först.' }
+      return { success: false, deletedEntries: 0, error: 'Kan inte ersätta import i ett låst eller stängt räkenskapsår. Öppna perioden först.', code: 'period_locked' }
     }
   }
 
@@ -259,7 +336,21 @@ export async function replaceSIEImport(
   })
 
   if (rpcError) {
-    return { success: false, deletedEntries: 0, error: `Kunde inte ersätta import: ${rpcError.message}` }
+    // The RPC re-checks status inside its transaction; a row that lost the
+    // race between our pre-check and the RPC surfaces here as "not found or
+    // not in completed status": classify it as the stale watermark it is.
+    // CONTRACT: this regex must match the RAISE EXCEPTION wording in
+    // replace_sie_import (supabase/migrations/*replace_sie_import*.sql).
+    // If that wording changes without this regex, a genuine stale race is
+    // reclassified as rpc_error — which fails closed (the import aborts),
+    // never open.
+    const staleRace = /not found or not in completed status/i.test(rpcError.message)
+    return {
+      success: false,
+      deletedEntries: 0,
+      error: `Kunde inte ersätta import: ${rpcError.message}`,
+      code: staleRace ? 'not_completed' : 'rpc_error',
+    }
   }
 
   return { success: true, deletedEntries: deletedCount as number }
@@ -533,14 +624,24 @@ export async function ensureFiscalPeriod(
   // route: point this period at its closest predecessor, then relink the
   // immediate successor (if any) to follow this one, so multi-year SIE files
   // chain correctly regardless of the order #RAR years are processed in.
+  //
+  // Adjacency is required on both sides. previous_period_id means "the
+  // räkenskapsår immediately before", and year-end seeds opening balances
+  // into whatever follows the chain: linking the NEAREST period across a gap
+  // of missing years once sent a company's IB two years forward (feedback
+  // seq 249297). A gap stays unlinked until the missing year is imported.
   const { data: predecessors } = await supabase
     .from('fiscal_periods')
-    .select('id')
+    .select('id, period_end')
     .eq('company_id', companyId)
     .lt('period_end', startDate)
     .order('period_end', { ascending: false })
     .limit(1)
-  const previousPeriodId = predecessors && predecessors.length > 0 ? predecessors[0].id : null
+  const nearestPredecessor = predecessors && predecessors.length > 0 ? predecessors[0] : null
+  const previousPeriodId =
+    nearestPredecessor && nearestPredecessor.period_end === shiftIsoDate(startDate, -1)
+      ? nearestPredecessor.id
+      : null
 
   const { data: newPeriod, error } = await supabase
     .from('fiscal_periods')
@@ -561,16 +662,21 @@ export async function ensureFiscalPeriod(
   }
 
   // Relink the immediate successor (e.g. when an earlier year is imported after
-  // a later one) so the chain holds in both directions.
+  // a later one) so the chain holds in both directions. Only a successor that
+  // starts the day after this period qualifies (see above).
   const { data: successors } = await supabase
     .from('fiscal_periods')
-    .select('id')
+    .select('id, period_start')
     .eq('company_id', companyId)
     .gt('period_start', endDate)
     .neq('id', newPeriod.id)
     .order('period_start', { ascending: true })
     .limit(1)
-  if (successors && successors.length > 0) {
+  if (
+    successors &&
+    successors.length > 0 &&
+    successors[0].period_start === shiftIsoDate(endDate, 1)
+  ) {
     await supabase
       .from('fiscal_periods')
       .update({ previous_period_id: newPeriod.id })
@@ -579,6 +685,13 @@ export async function ensureFiscalPeriod(
   }
 
   return newPeriod.id
+}
+
+/** Shift a YYYY-MM-DD string by `days` in pure UTC (no local DST drift). */
+function shiftIsoDate(isoDate: string, days: number): string {
+  const d = new Date(isoDate + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
 }
 
 /**
@@ -659,7 +772,8 @@ async function createOpeningBalanceEntry(
   fiscalPeriodId: string,
   parsed: ParsedSIEFile,
   accountMap: Map<string, string>,
-  roundingAdjustment: number
+  roundingAdjustment: number,
+  voucherSeries: string
 ): Promise<string | null> {
   // Effective set: explicit #IB 0, or IB derived from #UB -1 (issue #675).
   const { balances: currentYearBalances, derivedFromPriorYearUB } =
@@ -727,7 +841,11 @@ async function createOpeningBalanceEntry(
       ? 'Ingående balanser från SIE-import (härledda från föregående års utgående balans)'
       : 'Ingående balanser från SIE-import',
     source_type: 'opening_balance',
-    voucher_series: 'A',
+    // Never hardcoded to 'A': the IB entry is created BEFORE the file's
+    // vouchers, so booking it in a series the file uses would consume that
+    // series' next number and shift every imported voucher one number
+    // higher than in the source system (issue #1882).
+    voucher_series: voucherSeries,
     lines,
   })
 
@@ -735,9 +853,10 @@ async function createOpeningBalanceEntry(
 }
 
 /**
- * Returns true when the company already has at least one posted (or reversed)
- * non-IB journal entry, i.e. this is a continuation import, not the first
- * ever SIE upload for the company.
+ * Returns true when the company already has at least one posted non-IB
+ * journal entry dated no later than the target fiscal period, i.e. this is a
+ * continuation import rather than the first SIE upload for that point in the
+ * company's chronology.
  *
  * Used to gate IB-entry creation: when a company is already live, each year's
  * #IB equals the prior year's UB, which is the sum of already-imported
@@ -746,7 +865,8 @@ async function createOpeningBalanceEntry(
  */
 export async function companyHasPriorActivity(
   supabase: SupabaseClient,
-  companyId: string
+  companyId: string,
+  targetPeriodEnd: string,
 ): Promise<boolean> {
   // Only count currently-effective real activity. Excluding 'reversed' drops
   // cancelled originals; excluding source_type 'storno' drops their matching
@@ -760,6 +880,9 @@ export async function companyHasPriorActivity(
     .neq('source_type', 'opening_balance')
     .neq('source_type', 'storno')
     .eq('status', 'posted')
+    // Keep same-period activity in the continuation guard, but ignore a
+    // later year that happened to be imported first.
+    .lte('entry_date', targetPeriodEnd)
 
   return (count ?? 0) > 0
 }
@@ -839,6 +962,21 @@ export async function resyncNextPeriodOpeningBalance(
     return { resynced: false, reason: 'no_next_period' }
   }
 
+  const importedPeriodEnd = new Date(`${justImportedPeriodEnd}T00:00:00Z`)
+  importedPeriodEnd.setUTCDate(importedPeriodEnd.getUTCDate() + 1)
+  const expectedNextPeriodStart = importedPeriodEnd.toISOString().slice(0, 10)
+
+  if (nextPeriod.period_start !== expectedNextPeriodStart) {
+    // A later period separated by a gap has its own authoritative IB. It must
+    // not be replaced with a non-adjacent year's UB while the middle year is
+    // still missing.
+    return {
+      resynced: false,
+      reason: 'next_period_not_adjacent',
+      nextPeriodName: nextPeriod.name,
+    }
+  }
+
   if (!nextPeriod.opening_balance_entry_id) {
     // No existing IB on the next period: caller has nothing to resync; the
     // user's first IB for the next period will be derived from the import
@@ -909,52 +1047,26 @@ export async function resyncNextPeriodOpeningBalance(
     }
   }
 
-  // Ordering note: create the new IB FIRST, then storno the old one. If we
-  // stornoed first and the createJournalEntry call failed, the next period
-  // would be left with a reversed IB and nothing to replace it, and
-  // executeSIEImport swallows our error as a non-fatal warning. By creating
-  // first we guarantee the worst case is "new IB exists but not yet linked",
-  // which getOpeningBalances() can still reason about.
-
-  // Build the new IB entry on the next period.
-  const newEntry = await createJournalEntry(supabase, companyId, userId, {
-    fiscal_period_id: nextPeriod.id,
-    entry_date: nextPeriod.period_start as string,
-    description: 'Ingående balanser (resynk efter prior-year SIE-import)',
-    source_type: 'opening_balance',
-    voucher_series: 'A',
-    lines: newLines,
-  })
-
-  // Atomically swap the period FK pointer (two-step around the
-  // immutability trigger).
-  const { error: relinkError } = await supabase.rpc('replace_period_opening_balance_link', {
-    p_company_id: companyId,
-    p_period_id: nextPeriod.id,
-    p_new_entry_id: newEntry.id,
-  })
-
-  if (relinkError) {
-    throw new Error(`Failed to relink opening balance on next period: ${relinkError.message}`)
-  }
-
-  // Now that the period points at the new IB, storno the old one. If this
-  // throws, the period is already on the correct entry: the orphaned old
-  // entry shows up as a stray verifikat but the FK stays consistent.
-  const storno = await reverseEntry(
+  const replacement = await replaceOpeningBalanceEntry(
     supabase,
     companyId,
     userId,
     nextPeriod.opening_balance_entry_id,
-    nextPeriod.period_start as string,
+    {
+      fiscal_period_id: nextPeriod.id,
+      entry_date: nextPeriod.period_start as string,
+      description: 'Ingående balanser (resynk efter prior-year SIE-import)',
+      source_type: 'opening_balance',
+      lines: newLines,
+    },
   )
 
   return {
     resynced: true,
     nextPeriodId: nextPeriod.id,
     nextPeriodName: nextPeriod.name,
-    stornoEntryId: storno.id,
-    newOpeningBalanceEntryId: newEntry.id,
+    stornoEntryId: replacement.stornoEntryId,
+    newOpeningBalanceEntryId: replacement.newEntryId,
   }
 }
 
@@ -1706,11 +1818,32 @@ export async function finalizeImportRecord(
   // overlapping-period check would block any retry. Flipping to 'failed'
   // (which the partial index already excludes) keeps the slot free so the
   // caller can re-import the same file once the mapping is fixed.
+  //
+  // Exception: a file the parser found NO vouchers in (documentation
+  // carries the parsed count) is a legitimate no-op, not a failure.
+  // Fortnox exports an empty SIE file for a fiscal year with nothing
+  // booked yet, and failing it aborts the whole migration wizard. A later
+  // export with actual vouchers has a different hash, so the claimed slot
+  // never blocks it: the Fortnox flow replaces completed imports, and the
+  // manual flow offers "Ersätt import".
   const noEntriesCreated =
     result.success &&
     result.journalEntriesCreated === 0 &&
     !result.openingBalanceEntryId
-  if (noEntriesCreated) {
+  // The parsed count alone can't prove the year was empty: a separator or
+  // encoding mismatch can swallow every #VER block without a parse error
+  // (the parser only warns). Cross-check the raw content; a file that
+  // declares #VER but parsed to 0 vouchers must keep failing, or real
+  // affärshändelser would silently never be bokförda (BFL 5 kap).
+  const rawDeclaresVouchers = /^\s*#VER\b/m.test(fileContent)
+  const fileHadNoVouchers =
+    documentation?.vouchers.total === 0 && !rawDeclaresVouchers
+  if (noEntriesCreated && fileHadNoVouchers) {
+    result.warnings.push(
+      'SIE-filen innehåller inga verifikationer för räkenskapsåret: inget ' +
+      'att importera. Räkenskapsåret är skapat och redo att bokföras i.',
+    )
+  } else if (noEntriesCreated) {
     result.success = false
     if (result.errors.length === 0) {
       result.errors.push(
@@ -1875,10 +2008,13 @@ export async function loadMappings(supabase: SupabaseClient, companyId: string):
  * the new SIE's fiscal year is handled:
  *   - 'block' (default): refuse with a Swedish error. Used by the manual
  *     upload route in app/api/import/sie. Preserves prior behavior.
- *   - 'replace': automatically call replaceSIEImport on the prior row
- *     (marks it 'replaced', cancels its imported journal entries) and
- *     proceed. Used by the Fortnox re-sync flow so the user can pull
- *     updated data from Fortnox without manual cleanup.
+ *   - 'replace': automatically call replaceSIEImport on EVERY overlapping
+ *     completed row (marks them 'replaced', cancels their imported journal
+ *     entries) and proceed. A row that can no longer be resolved (deleted
+ *     or already left 'completed') is a stale watermark: it is skipped with
+ *     a warning and the year imports fresh (issue #1667). Used by the
+ *     provider re-sync flow so the user can pull updated data without
+ *     manual cleanup.
  *
  * Replace only cancels journal entries with source_type='import'; entries
  * the user created natively in Accounted (categorized transactions, invoices,
@@ -1903,6 +2039,9 @@ export async function executeSIEImport(
     importOpeningBalances: boolean
     importTransactions: boolean
     voucherSeries?: string
+    // Series for the opening-balance voucher. Defaults to a series the
+    // file's own vouchers do not use (issue #1882): never 'A'.
+    openingBalanceSeries?: string
     onExistingPeriod?: 'block' | 'replace'
     updateAccountNames?: boolean
     // Opt-in: mark every imported (source_type='import') verifikat as "Inget
@@ -1972,34 +2111,62 @@ export async function executeSIEImport(
       return result
     }
 
-    // Replace mode: if a prior completed import overlaps the new SIE's fiscal
-    // year, mark it 'replaced' (and cancel its imported entries) before we
+    // Replace mode: if prior completed imports overlap the new SIE's fiscal
+    // year, mark them 'replaced' (and cancel their imported entries) before we
     // try to insert. Done before checkDuplicateImport / checkDuplicatePeriodImport
     // since both of those would otherwise reject the replace flow.
+    //
+    // ALL overlapping rows are resolved, not just the newest: more than one
+    // completed row can cover the same year (manual upload + provider sync,
+    // or residue from partially deleted data), and leaving one standing
+    // permanently blocks or corrupts the next re-sync of that year
+    // (issue #1667).
     if (onExistingPeriod === 'replace') {
       const fyStart = parsed.stats.fiscalYearStart
       const fyEnd = parsed.stats.fiscalYearEnd
       if (fyStart && fyEnd) {
-        const priorPeriodImport = await checkDuplicatePeriodImport(
+        const priorPeriodImports = await findOverlappingPeriodImports(
           supabase, companyId, fyStart, fyEnd
         )
-        if (priorPeriodImport) {
+        let replacedNewestId: string | null = null
+        let replacedDeletedEntries = 0
+        let staleSkips = 0
+        for (const priorPeriodImport of priorPeriodImports) {
           // Pass the authorising user: this path often runs on an API-key /
           // MCP client where auth.uid() is NULL, and the replace_sie_import
           // owner/admin gate would otherwise fail closed.
           const replaceResult = await replaceSIEImport(
             supabase, companyId, priorPeriodImport.id, userId
           )
+
           if (!replaceResult.success) {
+            // Stale watermark: the sie_imports row is gone or no longer
+            // 'completed' (its data was already deleted or another actor
+            // resolved it). There is nothing left to replace for that row,
+            // so treat this year as a fresh import instead of stranding the
+            // user between states (issue #1667: re-sync could not re-import
+            // an earlier fiscal year after deletion).
+            if (replaceResult.code === 'not_found' || replaceResult.code === 'not_completed') {
+              staleSkips += 1
+              result.warnings.push(
+                `Tidigare import ${priorPeriodImport.id} kunde inte ersättas (${replaceResult.error ?? 'okänd orsak'}): dess data är redan borttagen, importen fortsätter som ny import.`
+              )
+              continue
+            }
+            // Real refusals (låst/stängd period, behörighet, RPC-fel) still
+            // abort the year: importing on top of entries we could not
+            // delete would duplicate verifikationer.
             result.errors.push(
               replaceResult.error ?? 'Kunde inte ersätta tidigare SIE-import'
             )
             return result
           }
-          result.replacedPriorImport = {
-            importId: priorPeriodImport.id,
-            deletedEntries: replaceResult.deletedEntries,
-          }
+
+          // Rows arrive newest first: report the newest replaced import's id
+          // (the shape consumers already render) with the total entries
+          // deleted across every replaced row.
+          replacedNewestId ??= priorPeriodImport.id
+          replacedDeletedEntries += replaceResult.deletedEntries
 
           // The replace_sie_import RPC clears fiscal_periods
           // opening_balance_entry_id and opening_balances_set inside its
@@ -2019,6 +2186,41 @@ export async function executeSIEImport(
               .eq('opening_balance_entry_id', priorPeriodImport.opening_balance_entry_id)
           }
         }
+        // A stale watermark (not_found / not_completed) only proves the
+        // sie_imports METADATA row is gone: replace_sie_import deletes
+        // entries by (company, fiscal_period, source_type='import'), so
+        // posted entries can outlive their import row. Before trusting the
+        // skip, positively confirm the year holds no surviving posted
+        // import entries — importing on top of survivors would duplicate
+        // verifikationer (BFL 4:1). Fail closed on a failed check.
+        if (staleSkips > 0) {
+          const { count: survivorCount, error: survivorError } = await supabase
+            .from('journal_entries')
+            .select('id', { count: 'exact', head: true })
+            .eq('company_id', companyId)
+            .eq('source_type', 'import')
+            .eq('status', 'posted')
+            .gte('entry_date', fyStart)
+            .lte('entry_date', fyEnd)
+          if (survivorError || typeof survivorCount !== 'number') {
+            result.errors.push(
+              `Kunde inte verifiera att tidigare importdata är borttagen: ${survivorError?.message ?? 'okänt fel'}. Importen avbryts.`
+            )
+            return result
+          }
+          if (survivorCount > 0) {
+            result.errors.push(
+              `Räkenskapsåret har ${survivorCount} kvarvarande verifikationer från en tidigare import vars importpost saknas. Importen avbryts för att undvika dubbletter (BFL 4:1). Ta bort de kvarvarande verifikationerna först.`
+            )
+            return result
+          }
+        }
+        if (replacedNewestId) {
+          result.replacedPriorImport = {
+            importId: replacedNewestId,
+            deletedEntries: replacedDeletedEntries,
+          }
+        }
       }
     }
 
@@ -2028,8 +2230,12 @@ export async function executeSIEImport(
     if (onExistingPeriod === 'block') {
       const duplicate = await checkDuplicateImport(supabase, companyId, options.fileContent)
       if (duplicate) {
+        // Name the way out. A completed import (including one that created
+        // zero verifikat, e.g. mappings that skipped everything) holds the
+        // (company_id, file_hash) slot until it is undone; agents reported
+        // being stuck here without knowing undo-then-retry is the path.
         result.errors.push(
-          `This file has already been imported on ${duplicate.imported_at ? new Date(duplicate.imported_at).toLocaleDateString('sv-SE') : 'okänt datum'}`
+          `Den här filen har redan importerats ${duplicate.imported_at ? new Date(duplicate.imported_at).toLocaleDateString('sv-SE') : 'vid okänt datum'} (import ${duplicate.id}, ${duplicate.transactions_count} verifikat). Ångra den importen först (Ångra import i webbappen, eller gnubok_undo_sie_import via MCP) och importera sedan igen.`
         )
         return result
       }
@@ -2114,7 +2320,7 @@ export async function executeSIEImport(
       )
       if (periodDuplicate) {
         result.errors.push(
-          `En SIE-import för ett överlappande räkenskapsår (${periodDuplicate.fiscal_year_start} till ${periodDuplicate.fiscal_year_end}) finns redan`
+          `En SIE-import för ett överlappande räkenskapsår (${periodDuplicate.fiscal_year_start} till ${periodDuplicate.fiscal_year_end}) finns redan (import ${periodDuplicate.id}, ${periodDuplicate.transactions_count} verifikat). Ångra den importen först (Ångra import i webbappen, eller gnubok_undo_sie_import via MCP) och importera sedan igen.`
         )
         return result
       }
@@ -2164,6 +2370,52 @@ export async function executeSIEImport(
     // Source series from #VER are preserved per-voucher by importVouchers.
     const defaultSeries = options.voucherSeries || 'B'
 
+    // Series for the IB voucher: caller's choice, else the first candidate
+    // the file's own vouchers do not use. The IB entry is created before
+    // the file's vouchers, so a colliding series would consume its next
+    // number and shift the whole series by one (issue #1882).
+    //
+    // Type-checked, not just trimmed: the web execute route and MCP accept
+    // untyped JSON, and a non-string here must fall back to the default,
+    // not crash mid-import after the fiscal period was already created.
+    // Uppercased before persisting: a lowercase 'a' would otherwise book a
+    // case-distinct parallel series next to 'A', fragmenting what BFL
+    // 5 kap requires to be one systematic series, and would slip past the
+    // collision warning below.
+    const requestedOpeningBalanceSeries =
+      typeof options.openingBalanceSeries === 'string'
+        ? options.openingBalanceSeries.trim().toUpperCase()
+        : ''
+    const seriesUsedByFile = new Set(
+      parsed.vouchers
+        .map((v) => (v.series ?? '').trim().toUpperCase())
+        .filter((s) => s.length > 0)
+    )
+    // Series-less #VER records (SIE4I subsystem files) resolve to
+    // defaultSeries at import time, so the default picker must treat that
+    // series as used by the file too: otherwise the IB voucher can land in
+    // it and shift those vouchers' numbering, the same #1882 pattern.
+    if (parsed.vouchers.some((v) => !(v.series ?? '').trim())) {
+      seriesUsedByFile.add(defaultSeries.trim().toUpperCase())
+    }
+    const openingBalanceSeries =
+      requestedOpeningBalanceSeries || defaultOpeningBalanceSeries(seriesUsedByFile)
+
+    // An explicitly chosen IB series that the file's vouchers also use
+    // reintroduces the numbering shift this option exists to prevent.
+    // Honor the choice (the caller may know better) but say what it does.
+    if (
+      requestedOpeningBalanceSeries &&
+      options.importOpeningBalances &&
+      options.importTransactions &&
+      seriesUsedByFile.has(requestedOpeningBalanceSeries)
+    ) {
+      result.warnings.push(
+        `Vald verifikationsserie för ingående balanser (${requestedOpeningBalanceSeries}) används även av filens verifikationer: ` +
+        'IB-verifikationen tar seriens nästa nummer, så filens verifikationer i den serien kan förskjutas ett nummer jämfört med källsystemet.'
+      )
+    }
+
     // Validate and import opening balances.
     //
     // IB imbalance is NORMAL in Swedish SIE files for two common reasons:
@@ -2199,7 +2451,11 @@ export async function executeSIEImport(
         // first-ever import creates the legitimate pre-system IB; subsequent
         // imports must rely on the prior entries to derive opening balances
         // on the fly (via getOpeningBalances() fallback).
-        const isContinuationImport = await companyHasPriorActivity(supabase, companyId)
+        const isContinuationImport = await companyHasPriorActivity(
+          supabase,
+          companyId,
+          fiscalYearEnd,
+        )
 
         if (isContinuationImport) {
           result.warnings.push(
@@ -2207,6 +2463,120 @@ export async function executeSIEImport(
             'Ingående balans för denna period härleds från föregående periods utgående balans. ' +
             'Stäm av mot SIE-filens #IB om du är osäker.'
           )
+        } else {
+        // Orphan-IB guard (issue #1882): the period pointer above is not
+        // proof that no IB voucher exists. replace_sie_import deletes only
+        // source_type='import' entries and CLEARS the period's OB pointer,
+        // so a prior import's IB voucher (source_type='opening_balance')
+        // survives every replace cycle with no pointer left behind: each
+        // re-import then created another "Ingående balanser" verifikat
+        // (field report: five accumulated). Look the survivors up directly
+        // and skip when any exist. On a failed check, skip too (fail
+        // closed against duplication) and say why.
+        const { data: existingIbEntries, error: existingIbError } = await supabase
+          .from('journal_entries')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', result.fiscalPeriodId)
+          .eq('source_type', 'opening_balance')
+          .eq('status', 'posted')
+
+        if (existingIbError) {
+          result.warnings.push(
+            `Ingående balanser hoppades över: det gick inte att kontrollera om en IB-verifikation redan finns (${existingIbError.message}). ` +
+            'Importera om filen med enbart ingående balanser, eller skapa IB manuellt, om ingen IB-verifikation finns.'
+          )
+        } else if ((existingIbEntries?.length ?? 0) > 0) {
+          // Skip the duplicate, but leave a consistent state behind. With
+          // the pointer NULL, getOpeningBalances falls back to
+          // compute_prior_opening_balances, which excludes an IB entry
+          // dated ON period_start (reports then show IB = 0), the manual
+          // IB flow (gated on opening_balances_set) can double-book, and
+          // year-end's duplicate-IB blocker never arms. So when the
+          // survivor is unambiguous (exactly one), relink it as the
+          // period's OB entry (permitted by
+          // enforce_opening_balance_immutability while the pointer is
+          // NULL) and diff its lines against the file's IB so a stale
+          // orphan is called out instead of silently kept. Both steps are
+          // best effort: the skip alone already stops the duplication, and
+          // reverseEntry clears the pointer again if the user stornos the
+          // relinked voucher to re-import corrected balances.
+          const orphans = existingIbEntries ?? []
+          let relinked = false
+          let amountsDiffer = false
+          if (orphans.length === 1) {
+            try {
+              const expected = validateIBBalance(parsed, accountMap)
+              const expectedNet = new Map<string, number>()
+              for (const line of expected.lines) {
+                const prev = expectedNet.get(line.account_number) ?? 0
+                expectedNet.set(
+                  line.account_number,
+                  roundOre(prev + line.debit_amount - line.credit_amount)
+                )
+              }
+              if (Math.abs(expected.roundingAdjustment) > 0.01) {
+                // createOpeningBalanceEntry books the adjustment on 2099
+                // with the opposite sign of the mapped diff.
+                const prev = expectedNet.get('2099') ?? 0
+                expectedNet.set('2099', roundOre(prev - expected.roundingAdjustment))
+              }
+
+              const { data: orphanLines, error: orphanLinesError } = await supabase
+                .from('journal_entry_lines')
+                .select('account_number, debit_amount, credit_amount')
+                .eq('journal_entry_id', orphans[0].id)
+              if (orphanLinesError) {
+                throw new Error(orphanLinesError.message)
+              }
+              const orphanNet = new Map<string, number>()
+              for (const line of orphanLines ?? []) {
+                const prev = orphanNet.get(line.account_number) ?? 0
+                orphanNet.set(
+                  line.account_number,
+                  roundOre(prev + (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0))
+                )
+              }
+              for (const account of new Set([...expectedNet.keys(), ...orphanNet.keys()])) {
+                const diff = (expectedNet.get(account) ?? 0) - (orphanNet.get(account) ?? 0)
+                if (Math.abs(diff) > 0.01) {
+                  amountsDiffer = true
+                  break
+                }
+              }
+
+              await linkOpeningBalanceEntryToPeriod(
+                supabase,
+                companyId,
+                result.fiscalPeriodId,
+                orphans[0].id
+              )
+              relinked = true
+            } catch (relinkError) {
+              // Best effort only: a failed comparison or relink keeps the
+              // pre-guard state, and the warning below still says what to
+              // do about the surviving IB voucher.
+              console.error('[sie-import] orphan-IB relink skipped (non-fatal):', relinkError)
+            }
+          }
+
+          let ibSkipWarning =
+            orphans.length === 1
+              ? 'En verifikation för ingående balanser finns redan i räkenskapsåret: hoppar över IB-import för att inte skapa en dubblett.'
+              : `${orphans.length} verifikationer för ingående balanser finns redan i räkenskapsåret: hoppar över IB-import för att inte skapa ännu en dubblett.`
+          if (relinked) {
+            ibSkipWarning +=
+              ' Den befintliga IB-verifikationen har kopplats som räkenskapsårets ingående balans.'
+          }
+          if (amountsDiffer) {
+            ibSkipWarning +=
+              ' OBS: den befintliga IB-verifikationens belopp skiljer sig från filens ingående balanser. ' +
+              'Ångra (storno) den gamla IB-verifikationen och importera om filen om filens belopp är de rätta.'
+          } else {
+            ibSkipWarning +=
+              ' Ångra eller ta bort den gamla IB-verifikationen först om du vill importera om ingående balanser.'
+          }
+          result.warnings.push(ibSkipWarning)
         } else {
         const ibValidation = validateIBBalance(parsed, accountMap)
 
@@ -2255,7 +2625,8 @@ export async function executeSIEImport(
             result.fiscalPeriodId,
             parsed,
             accountMap,
-            ibRoundingAdjustment
+            ibRoundingAdjustment,
+            openingBalanceSeries
           )
 
           if (result.openingBalanceEntryId) {
@@ -2269,6 +2640,7 @@ export async function executeSIEImport(
               result.openingBalanceEntryId
             )
           }
+        }
         }
         }
       }
@@ -2381,11 +2753,11 @@ export async function executeSIEImport(
       const totalSkipped = voucherResults.skippedEmpty + voucherResults.skippedSingleLine + voucherResults.skippedUnbalanced + voucherResults.skippedUnmapped
       if (totalSkipped > 0) {
         const parts: string[] = []
-        if (voucherResults.skippedEmpty > 0) parts.push(`${voucherResults.skippedEmpty} tomma`)
+        if (voucherResults.skippedEmpty > 0) parts.push(`${voucherResults.skippedEmpty} ${voucherResults.skippedEmpty === 1 ? 'tom' : 'tomma'}`)
         if (voucherResults.skippedUnbalanced > 0) parts.push(`${voucherResults.skippedUnbalanced} obalanserade`)
         if (voucherResults.skippedUnmapped > 0) parts.push(`${voucherResults.skippedUnmapped} med ej mappade konton`)
         result.warnings.push(
-          `${totalSkipped} verifikationer hoppades över (ofullständiga i källsystemet): ${parts.join(', ')}`
+          `${totalSkipped} ${totalSkipped === 1 ? 'verifikation' : 'verifikationer'} hoppades över (${totalSkipped === 1 ? 'ofullständig' : 'ofullständiga'} i källsystemet): ${parts.join(', ')}`
         )
       }
 
@@ -2396,7 +2768,7 @@ export async function executeSIEImport(
           .slice(0, 10)
           .map(d => d.voucherId)
         result.warnings.push(
-          `${voucherResults.skippedSingleLine} enradsverifikationer hoppades över (kan vara periodiseringar/manuella justeringar): ${singleLineDetails.join(', ')}${voucherResults.skippedSingleLine > 10 ? '...' : ''}`
+          `${voucherResults.skippedSingleLine} ${voucherResults.skippedSingleLine === 1 ? 'enradsverifikation' : 'enradsverifikationer'} hoppades över (kan vara periodiseringar/manuella justeringar): ${singleLineDetails.join(', ')}${voucherResults.skippedSingleLine > 10 ? '...' : ''}`
         )
       }
 
@@ -2464,7 +2836,16 @@ export async function executeSIEImport(
     // exists with its own opening_balance entry, the customer is doing a
     // prior-year backfill. Sync the next period's IB to match the UB we
     // just imported so reports stay consistent.
-    if (result.success && fiscalYearEnd && result.fiscalPeriodId && parsed.closingBalances.length > 0) {
+    // result.success is finalized below, after diagnostics and documentation.
+    // Use the same error condition here so this block is reachable, but require
+    // a target-period entry so a no-op file cannot succeed through resync alone.
+    if (
+      result.errors.length === 0 &&
+      result.journalEntriesCreated > 0 &&
+      fiscalYearEnd &&
+      result.fiscalPeriodId &&
+      parsed.closingBalances.length > 0
+    ) {
       try {
         const resync = await resyncNextPeriodOpeningBalance(
           supabase,

@@ -272,7 +272,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
         <Settings className="h-12 w-12 text-muted-foreground/40 mb-4" />
-        <h3 className="text-lg font-medium text-foreground">
+        <h3 className="text-lg text-foreground">
           {t('no_org_number_title')}
         </h3>
         <p className="text-sm text-muted-foreground mt-1 max-w-md">
@@ -293,7 +293,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
         <XCircle className="h-12 w-12 text-muted-foreground/40 mb-4" />
-        <h3 className="text-lg font-medium text-foreground">
+        <h3 className="text-lg text-foreground">
           {t('fetch_failed_title')}
         </h3>
         <p className="text-sm text-muted-foreground mt-1 max-w-md">
@@ -328,10 +328,13 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Building2 className="h-4 w-4" />
-              {profile.companyName}
+              {/* data-ph-mask: the looked-up company name is user data */}
+              <span data-ph-mask="">{profile.companyName}</span>
             </CardTitle>
             <CardDescription>
-              {profile.orgNumber} &middot; {profile.legalEntityType}
+              {/* data-ph-mask: TIC serves the orgnr in unnormalized format, so
+                  the separator-based pattern scrub cannot be relied on */}
+              <span data-ph-mask="">{profile.orgNumber}</span> &middot; {profile.legalEntityType}
               {!isActive && (
                 <span className="ml-2 text-destructive">&middot; {t('deregistered')}</span>
               )}
@@ -477,7 +480,8 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
               {profile.statuses.slice(0, 6).map((status, i) => (
                 <li key={i} className="flex items-center justify-between gap-3 text-sm">
                   <div className="flex items-center gap-2">
-                    <Badge variant={statusColorToVariant(status.color)}>
+                    {/* data-ph-mask: the Bolagsverket status text is user data */}
+                    <Badge variant={statusColorToVariant(status.color)} data-ph-mask="">
                       {status.description ?? status.code ?? '-'}
                     </Badge>
                     {status.isCeased && (

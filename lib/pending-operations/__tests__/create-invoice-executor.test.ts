@@ -265,6 +265,79 @@ describe('commitPendingOperation: create_invoice: VAT rates for a foreign busine
   })
 })
 
+describe('commitPendingOperation: create_invoice: staged article references', () => {
+  it('writes a company-scoped article_id through to the invoice_items row', async () => {
+    // Queue: CAS claim → customers → company_settings → articles scope check →
+    // invoices insert → invoice_items insert → complete select → update.
+    const { supabase, inserts } = createCapturingSupabase([
+      { data: { id: 'op-1' } },
+      { data: customer },
+      { data: { vat_registered: true } },
+      { data: [{ id: 'art-1' }] },
+      { data: { id: 'inv-1', invoice_number: null } },
+      { data: null },
+      { data: { id: 'inv-1' } },
+      { data: null },
+    ])
+
+    const op = makePendingOp({
+      params: {
+        customer_id: 'cust-1',
+        items: [
+          {
+            description: 'Konsulttimme',
+            quantity: 2,
+            unit: 'tim',
+            unit_price: 1200,
+            vat_rate: 25,
+            article_id: 'art-1',
+          },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const itemRows = inserts['invoice_items'][0] as Array<Record<string, unknown>>
+    expect(itemRows[0]).toMatchObject({ article_id: 'art-1', line_total: 2400 })
+  })
+
+  it('fails when a staged article_id belongs to another company (drift/tamper gate)', async () => {
+    // The FK on invoice_items.article_id only proves existence, not tenancy:
+    // the executor must refuse an id the scoped select cannot see.
+    const { supabase, inserts } = createCapturingSupabase([
+      { data: { id: 'op-1' } },
+      { data: customer },
+      { data: { vat_registered: true } },
+      { data: [] },
+      { data: null },
+    ])
+
+    const op = makePendingOp({
+      params: {
+        customer_id: 'cust-1',
+        items: [
+          {
+            description: 'Konsulttimme',
+            quantity: 1,
+            unit: 'tim',
+            unit_price: 1200,
+            vat_rate: 25,
+            article_id: 'art-foreign',
+          },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toMatch(/Artikel art-foreign finns inte i företaget/)
+    expect(inserts['invoices']).toBeUndefined()
+  })
+})
+
 describe('commitPendingOperation: create_invoice: dimensions propagation (PR7)', () => {
   it('staged default_dimensions lands on the invoices row and item bags on invoice_items rows', async () => {
     const { supabase, inserts } = createCapturingSupabase(queueFor({ vat_registered: true }))

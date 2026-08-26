@@ -137,13 +137,15 @@ export async function insertTransaction(params: {
   journalEntryId?: string | null
   cashAccountId?: string | null
   isIgnored?: boolean
+  bankFileImportId?: string | null
 }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.transactions
        (id, company_id, user_id, currency, amount, date, description,
-        external_id, journal_entry_id, cash_account_id, is_ignored, category)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'uncategorized')`,
+        external_id, journal_entry_id, cash_account_id, is_ignored,
+        bank_file_import_id, category)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'uncategorized')`,
     [
       id,
       params.companyId,
@@ -156,6 +158,7 @@ export async function insertTransaction(params: {
       params.journalEntryId ?? null,
       params.cashAccountId ?? null,
       params.isIgnored ?? false,
+      params.bankFileImportId ?? null,
     ],
   )
   return id
@@ -179,6 +182,10 @@ export async function insertDraftJournalEntry(params: {
   // fires on draft->posted UPDATE), so committed_at stays null unless set here.
   committedAt?: string | null
 }): Promise<string> {
+  if (params.status === 'posted') {
+    return insertPostedJournalEntry(params)
+  }
+
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.journal_entries
@@ -202,6 +209,95 @@ export async function insertDraftJournalEntry(params: {
     ],
   )
   return id
+}
+
+export interface PostedJournalEntryLine {
+  accountNumber: string
+  debitAmount: number
+  creditAmount: number
+  currency?: string
+  lineDescription?: string | null
+  sortOrder?: number
+  dimensions?: Record<string, string>
+}
+
+// Insert a posted entry and all of its lines in one transaction. This is the
+// only valid shape for pg fixtures that intentionally exercise a direct posted
+// INSERT: check_balance_on_posted_insert is deferred until the lines exist, but
+// still executes before COMMIT.
+export async function insertPostedJournalEntry(params: {
+  userId: string
+  companyId: string
+  fiscalPeriodId: string
+  entryDate?: string
+  description?: string
+  voucherSeries?: string
+  voucherNumber?: number
+  sourceType?: string
+  sourceId?: string | null
+  createdAt?: string
+  committedAt?: string | null
+  lines?: PostedJournalEntryLine[]
+}): Promise<string> {
+  const id = randomUUID()
+  const lines = params.lines ?? [
+    { accountNumber: '1930', debitAmount: 1000, creditAmount: 0 },
+    { accountNumber: '3001', debitAmount: 0, creditAmount: 1000 },
+  ]
+  const client = await getPool().connect()
+
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, source_id, status, created_at, committed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'posted',
+               COALESCE($11::timestamptz, now()), $12::timestamptz)`,
+      [
+        id,
+        params.userId,
+        params.companyId,
+        params.fiscalPeriodId,
+        params.voucherNumber ?? 0,
+        params.voucherSeries ?? 'A',
+        params.entryDate ?? '2026-06-01',
+        params.description ?? 'Test entry',
+        params.sourceType ?? 'manual',
+        params.sourceId ?? null,
+        params.createdAt ?? null,
+        params.committedAt ?? null,
+      ],
+    )
+
+    for (const [index, line] of lines.entries()) {
+      await client.query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount,
+            currency, line_description, sort_order, dimensions)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+        [
+          id,
+          line.accountNumber,
+          line.debitAmount,
+          line.creditAmount,
+          line.currency ?? 'SEK',
+          line.lineDescription ?? null,
+          line.sortOrder ?? index,
+          JSON.stringify(line.dimensions ?? {}),
+        ],
+      )
+    }
+
+    await client.query('SET CONSTRAINTS check_balance_on_posted_insert IMMEDIATE')
+    await client.query('COMMIT')
+    return id
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 // Insert a balanced pair of journal entry lines (1 debit row + 1 credit row

@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: forsaljning-eu-tjanster-b2b
+  order: 1
+  name: 'Försäljning EU-tjänster (B2B)'
+  category: eu_trade
+  entity_type: all
+  description: >-
+    Tjänsteförsäljning till annat EU-land (B2B). Ingen moms — kunden redovisar omvänd skattskyldighet.
+lines:
+  - account: '1510'
+    label: 'Kundfordringar'
+    side: debit
+    type: settlement
+    ratio: 1.0
+  - account: '3308'
+    label: 'Försäljning tjänster EU'
+    side: credit
+    type: business
+    ratio: 1.0

@@ -1,4 +1,5 @@
 {
+  "buildCommand": "NODE_OPTIONS=--max-old-space-size=6144 npm run build",
   "regions": ["arn1"],
   "crons": [
     {
@@ -8,6 +9,10 @@
     {
       "path": "/api/invoices/recurring/cron",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/settings/booking-templates/sync/cron",
+      "schedule": "30 4 * * *"
     },
     {
       "path": "/api/tax-deadlines/cron",
@@ -20,6 +25,14 @@
     {
       "path": "/api/extensions/stripe/transactions/cron",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/extensions/woocommerce/orders/cron",
+      "schedule": "45 3 * * *"
+    },
+    {
+      "path": "/api/extensions/shopify/orders/cron",
+      "schedule": "15 3 * * *"
     },
     {
       "path": "/api/documents/verify/cron",
@@ -62,8 +75,32 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/extensions/whatsapp-inbox/sweep/cron",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/extensions/whatsapp-inbox/retention/cron",
+      "schedule": "15 4 * * *"
+    },
+    {
+      "path": "/api/extensions/invoice-inbox/sweep/cron",
+      "schedule": "*/2 * * * *"
+    },
+    {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
+    },
+    {
+      "path": "/api/receipt-hunt/cron",
+      "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/peppol/inbound/cron",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/peppol/outbound/status/cron",
+      "schedule": "5,20,35,50 * * * *"
     }
   ]
 }

@@ -31,6 +31,12 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 const runReconciliationMock = vi.fn()
 vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   runReconciliation: (...args: unknown[]) => runReconciliationMock(...args),
+  DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD: 0.9,
+}))
+
+const sweepMock = vi.fn()
+vi.mock('@/lib/reconciliation/unattended-sweep', () => ({
+  runUnattendedReconciliationSweep: (...args: unknown[]) => sweepMock(...args),
 }))
 
 import { POST } from '../route'
@@ -75,6 +81,87 @@ describe('POST /api/reconciliation/bank/run', () => {
 
     const response = await POST(request, emptyParams)
     expect(response.status).toBe(403)
+  })
+
+  it('rejects an out-of-range confidence_threshold with 400', async () => {
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: { dry_run: false, confidence_threshold: 1.5 },
+    })
+
+    const response = await POST(request, emptyParams)
+    expect(response.status).toBe(400)
+    expect(runReconciliationMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a negative confidence_threshold with 400', async () => {
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: { dry_run: false, confidence_threshold: -0.1 },
+    })
+
+    const response = await POST(request, emptyParams)
+    expect(response.status).toBe(400)
+    expect(runReconciliationMock).not.toHaveBeenCalled()
+  })
+
+  it('passes confidence_threshold and selected_matches through to runReconciliation', async () => {
+    // cash_accounts lookup: no row, '1930' default is exempt.
+    enqueue({ data: null })
+
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: {
+        dry_run: false,
+        confidence_threshold: 0.85,
+        selected_matches: [
+          {
+            transaction_id: '11111111-1111-4111-8111-111111111111',
+            journal_entry_id: '22222222-2222-4222-8222-222222222222',
+          },
+        ],
+      },
+    })
+
+    const response = await POST(request, emptyParams)
+    expect(response.status).toBe(200)
+    expect(runReconciliationMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        confidenceThreshold: 0.85,
+        applyOnly: [
+          {
+            transactionId: '11111111-1111-4111-8111-111111111111',
+            journalEntryId: '22222222-2222-4222-8222-222222222222',
+          },
+        ],
+      }),
+    )
+  })
+
+  it('defaults a no-selection apply to the 0.9 unattended floor when the client sends no threshold', async () => {
+    // Merged semantics (#1571 x bank-and-sie-match): an explicit
+    // confidence_threshold always wins; WITHOUT one, an apply with no
+    // selected_matches is effectively unattended, so it floors at 0.9 and
+    // persists the review band instead of auto-committing fuzzy matches.
+    // cash_accounts lookup: no row, '1930' default is exempt.
+    enqueue({ data: null })
+
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: { dry_run: false },
+    })
+
+    const response = await POST(request, emptyParams)
+    expect(response.status).toBe(200)
+    expect(runReconciliationMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({ confidenceThreshold: 0.9, persistSuggestions: true }),
+    )
   })
 
   it('rejects a non-default account with no cash_accounts row', async () => {
@@ -134,7 +221,117 @@ describe('POST /api/reconciliation/bank/run', () => {
       supabase,
       'company-1',
       'user-1',
-      expect.objectContaining({ accountNumber: '1930', currency: 'SEK', dryRun: false }),
+      // A no-selection apply run persists the review band as suggestions
+      // behind the unattended confidence floor ("Kör matchning igen").
+      expect.objectContaining({
+        accountNumber: '1930',
+        currency: 'SEK',
+        dryRun: false,
+        confidenceThreshold: 0.9,
+        persistSuggestions: true,
+      }),
     )
+  })
+
+  it('keeps the legacy no-threshold behavior for a reviewed selected_matches apply', async () => {
+    // cash_accounts lookup: no row, '1930' exempt.
+    enqueue({ data: null })
+    runReconciliationMock.mockResolvedValue({
+      matches: [],
+      applied: 0,
+      errors: 0,
+      skippedBelowThreshold: 0,
+      suggested: 0,
+      candidates: 0,
+    })
+
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: {
+        selected_matches: [
+          {
+            transaction_id: '11111111-1111-4111-8111-111111111111',
+            journal_entry_id: '22222222-2222-4222-8222-222222222222',
+          },
+        ],
+      },
+    })
+
+    const response = await POST(request, emptyParams)
+    expect(response.status).toBe(200)
+
+    const options = runReconciliationMock.mock.calls[0][3] as Record<string, unknown>
+    expect(options.applyOnly).toHaveLength(1)
+    // The user already reviewed these pairs in the dry-run preview: no floor,
+    // no suggestion persistence.
+    expect(options.confidenceThreshold).toBeUndefined()
+    expect(options.persistSuggestions).toBeUndefined()
+  })
+
+  it('routes all_accounts to the per-account sweep ("Kör matchning igen")', async () => {
+    sweepMock.mockResolvedValue({
+      accounts: [
+        { accountNumber: '1930', applied: 3, suggested: 1 },
+        { accountNumber: '1931', applied: 1, suggested: 0 },
+      ],
+      applied: 4,
+      errors: 0,
+      skippedBelowThreshold: 1,
+      suggested: 1,
+      unmatched: 2,
+    })
+
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: { all_accounts: true },
+    })
+
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{
+      data: { applied: number; suggested: number; unmatched: number }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.applied).toBe(4)
+    expect(body.data.suggested).toBe(1)
+    expect(body.data.unmatched).toBe(2)
+    expect(sweepMock).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', {
+      dateFrom: undefined,
+      dateTo: undefined,
+    })
+    expect(runReconciliationMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects all_accounts combined with dry_run: the sweep has no preview form and must never apply on a requested preview', async () => {
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: { all_accounts: true, dry_run: true },
+    })
+
+    const response = await POST(request, emptyParams)
+    expect(response.status).toBe(400)
+    expect(sweepMock).not.toHaveBeenCalled()
+    expect(runReconciliationMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects all_accounts combined with account_number or selected_matches', async () => {
+    for (const body of [
+      { all_accounts: true, account_number: '1930' },
+      { all_accounts: true, confidence_threshold: 0.85 },
+      {
+        all_accounts: true,
+        selected_matches: [
+          {
+            transaction_id: '11111111-1111-4111-8111-111111111111',
+            journal_entry_id: '22222222-2222-4222-8222-222222222222',
+          },
+        ],
+      },
+    ]) {
+      const request = createMockRequest('/api/reconciliation/bank/run', { method: 'POST', body })
+      const response = await POST(request, emptyParams)
+      expect(response.status).toBe(400)
+    }
+    expect(sweepMock).not.toHaveBeenCalled()
   })
 })

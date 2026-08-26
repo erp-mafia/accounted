@@ -49,11 +49,20 @@ interface SheetContentProps
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ className, children, side = "right", ...props }, ref) => (
+>(({ className, children, side = "right", onInteractOutside, ...props }, ref) => (
   <SheetPortal>
     <SheetOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      // Same companion-overlay guard as DialogContent: a portaled panel
+      // marked data-dialog-companion counts as an inside interaction.
+      onInteractOutside={(event) => {
+        onInteractOutside?.(event)
+        const target = event.target
+        if (target instanceof Element && target.closest('[data-dialog-companion]')) {
+          event.preventDefault()
+        }
+      }}
       className={cn(
         "fixed z-50 flex flex-col gap-4 bg-background p-6 transition ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:duration-300",
         sideClasses[side],
@@ -100,9 +109,12 @@ const SheetTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
 >(({ className, ...props }, ref) => (
+  // data-ph-unmask: sheet titles are static i18n chrome in session replays;
+  // a title carrying user data adds data-ph-mask at the call site.
   <DialogPrimitive.Title
     ref={ref}
-    className={cn("text-base font-semibold tracking-tight", className)}
+    data-ph-unmask=""
+    className={cn("break-words text-base tracking-tight", className)}
     {...props}
   />
 ))
@@ -114,7 +126,8 @@ const SheetDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn("text-sm text-muted-foreground", className)}
+    data-ph-unmask=""
+    className={cn("break-words text-sm text-muted-foreground", className)}
     {...props}
   />
 ))

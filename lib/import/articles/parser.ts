@@ -4,6 +4,7 @@ import { cellOrNull } from '../shared/column-utils'
 import { parseAmount } from '../opening-balance/parser'
 import { readBestSheet } from '../shared/workbook-reader'
 import type { DetectedArticleColumns, ParsedArticleRow } from './types'
+import { normalizeHouseworkType } from '@/lib/invoices/rot-rut-rules'
 
 const VALID_VAT_RATES = [0, 6, 12, 25] as const
 
@@ -141,6 +142,7 @@ export function parseArticlesFile(
   let vatNoteCount = 0
   let droppedAccountCount = 0
   let droppedCurrencyCount = 0
+  let droppedHouseworkCount = 0
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i]
@@ -183,7 +185,12 @@ export function parseArticlesFile(
     const costPrice = costRaw !== null ? parseAmount(costRaw) : null
 
     const ean = cell(row, columns.ean_col)
-    const houseworkType = cell(row, columns.housework_type_col)
+    // Canonical work-type code / bare ROT-RUT, or null: a boolean "Rot" column
+    // ('0'/'1'/'Ja') mapped by the keyword detector must not land as a value
+    // the invoice editor can never interpret.
+    const houseworkRaw = cell(row, columns.housework_type_col)
+    const houseworkType = normalizeHouseworkType(houseworkRaw)
+    if (houseworkRaw !== null && houseworkType === null) droppedHouseworkCount++
     const notes = cell(row, columns.notes_col)
 
     const validationErrors: string[] = []
@@ -217,6 +224,9 @@ export function parseArticlesFile(
   }
   if (droppedAccountCount > 0) {
     warnings.push(`${droppedAccountCount} rad${droppedAccountCount === 1 ? '' : 'er'} hade ett ogiltigt bokföringskonto (måste vara klass 1-3) som ignorerades.`)
+  }
+  if (droppedHouseworkCount > 0) {
+    warnings.push(`${droppedHouseworkCount} rad${droppedHouseworkCount === 1 ? '' : 'er'} hade ett ROT/RUT-värde som inte är en arbetstyp (t.ex. 0/1/Ja) och som ignorerades: sätt arbetstyp på artikeln efteråt.`)
   }
   if (droppedCurrencyCount > 0) {
     warnings.push(`${droppedCurrencyCount} rad${droppedCurrencyCount === 1 ? '' : 'er'} hade en ogiltig valutakod (måste vara tre bokstäver, t.ex. EUR) som ignorerades: priset importeras som SEK.`)

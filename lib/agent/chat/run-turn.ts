@@ -51,6 +51,52 @@ export function friendlyModelError(err: unknown): string {
   return 'Något gick fel hos assistenten. Försök igen om en stund.'
 }
 
+/**
+ * True when a Bedrock stream failure is transient: the identical request can
+ * succeed on an immediate retry without any input change. Covers throttling
+ * (429), server errors (5xx), transport cuts (timeout/reset/socket), and the
+ * two known SDK stream-corruption signatures observed in prod on the pinned
+ * 0.29.x SDK ("Unexpected event order", "request ended without sending any
+ * chunks"). Auth/validation failures (4xx other than 429) are NOT transient:
+ * retrying them is wasted work and they must keep surfacing immediately.
+ */
+export function isTransientStreamError(err: unknown): boolean {
+  const status = (err as { status?: number } | null)?.status
+  if (status === 429) return true
+  if (typeof status === 'number' && status >= 500) return true
+  // A non-429 4xx is permanent regardless of message text.
+  if (typeof status === 'number' && status >= 400) return false
+
+  const name = (err as { name?: string } | null)?.name ?? ''
+  const raw = err instanceof Error ? err.message : ''
+  let cause = ''
+  try {
+    const c = (err as { cause?: unknown } | null)?.cause
+    cause = c instanceof Error ? `${c.name} ${c.message}` : c != null ? String(c) : ''
+  } catch {
+    cause = ''
+  }
+  const text = `${name} ${raw} ${cause}`.toLowerCase()
+  return (
+    text.includes('unexpected event order') ||
+    text.includes('request ended without sending any chunks') ||
+    text.includes('throttl') ||
+    text.includes('rate limit') ||
+    text.includes('rate exceeded') ||
+    text.includes('too many') ||
+    text.includes('timeout') ||
+    text.includes('timed out') ||
+    text.includes('etimedout') ||
+    text.includes('econnreset') ||
+    text.includes('network') ||
+    text.includes('socket')
+  )
+}
+
+// One automatic retry per turn on a transient stream failure, after a short
+// backoff. Per-turn, not per-iteration: a turn that dies twice is not a blip.
+const STREAM_RETRY_BACKOFF_MS = 750
+
 // One turn of the chat loop:
 //
 //   1. Resolve context (company, profile, ranked memory).
@@ -77,6 +123,12 @@ export type StreamEvent =
       kind: 'staged_operation'
       tool_use_id: string
       tool_name: string
+      // The tool-use input: a superset of what the staging tool stored as
+      // pending_operations.params (it may also carry transport fields such
+      // as idempotency_key/dry_run). Carried so chat previews that need
+      // params (e.g. attach_document's DocumentViewButton) work live;
+      // previews read only the fields they need.
+      params: Record<string, unknown>
       staged: StagedOperationResult
     }
   | {
@@ -90,6 +142,15 @@ export type StreamEvent =
       memory_id: string
       memory_kind?: 'fact' | 'preference' | 'pattern' | 'correction'
       content?: string
+    }
+  | {
+      // The Bedrock stream died on a transient error and the turn is being
+      // retried once. Text and eager tool chips from the dead stream were
+      // never persisted; the chat surface must reset the in-progress
+      // assistant bubble to `assistant_text` (what had accumulated BEFORE the
+      // failed attempt) and drop un-completed tool chips.
+      kind: 'stream_restart'
+      assistant_text: string
     }
   | { kind: 'turn_complete'; assistant_text: string }
   | { kind: 'error'; message: string }
@@ -249,6 +310,15 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
 
   let assistantText = ''
   let iterations = 0
+  // stop_reason of the last completed model call: lets the post-loop check
+  // tell "finished" from "ran out of output budget before any visible text".
+  let lastStopReason: string | null = null
+  // One automatic retry per TURN when the Bedrock stream dies on a transient
+  // error (throttling, 5xx, transport cut, stream corruption). The failed
+  // attempt persisted nothing (persist happens after finalMessage() succeeds),
+  // so a clean retry is safe; the client is told to discard the partial
+  // bubble via stream_restart.
+  let streamRetryUsed = false
 
   // Extended thinking ("tänka längre"): when the intent opts in, every model
   // call in the loop gets a reasoning channel so the agent reasons BEFORE it
@@ -285,106 +355,137 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     // sees Anna's reply appear word-by-word instead of waiting 1-5 s for
     // the full block to land. We still collect the final assembled message
     // for tool detection, persistence and stop-reason control flow.
-    const stream = anthropic.messages.stream({
-      model,
-      max_tokens: maxTokens,
-      system: systemPrompt.blocks,
-      messages,
-      tools: tools.length > 0 ? tools.map(toAnthropicTool) : undefined,
-      ...(thinking ? { thinking } : {}),
-      ...(outputConfig ? { output_config: outputConfig } : {}),
-    })
-
-    stream.on('text', (delta) => {
-      assistantText += delta
-      emit({ kind: 'text_delta', delta })
-    })
-
-    // Track which tool_use ids have already been announced to the client so
-    // the dispatch loop below doesn't re-emit them. Eager-emitting on
-    // `content_block_start` shaves the perceived lag for tool chips: the
-    // chip appears the moment the LLM commits to a tool call, instead of
-    // after the entire response is buffered.
-    const eagerToolIds = new Set<string>()
-    stream.on('streamEvent', (ev) => {
-      // The raw stream event shape depends on the SDK; we care about
-      // content_block_start with a tool_use block, and content_block_delta
-      // carrying extended-thinking text.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const e = ev as any
-      if (
-        e?.type === 'content_block_delta' &&
-        e?.delta?.type === 'thinking_delta' &&
-        typeof e.delta.thinking === 'string'
-      ) {
-        emit({ kind: 'reasoning_delta', delta: e.delta.thinking })
-        return
-      }
-      if (e?.type === 'content_block_start' && e?.content_block?.type === 'tool_use') {
-        const block = e.content_block
-        if (typeof block.id === 'string' && typeof block.name === 'string') {
-          eagerToolIds.add(block.id)
-          emit({
-            kind: 'tool_use',
-            tool_use_id: block.id,
-            name: block.name,
-            // Input is still being streamed at this point; the chip only
-            // displays the tool name so empty input is fine.
-            input: {},
-          })
-        }
-      }
-    })
-
+    //
+    // The attempt loop wraps stream creation + finalMessage() so a transient
+    // failure (throttling, 5xx, transport cut, stream corruption) gets ONE
+    // automatic retry per turn. Everything the dead stream emitted is
+    // reverted: assistantText rolls back to its pre-attempt snapshot and the
+    // client discards the partial bubble on stream_restart.
     let response
-    try {
-      response = await stream.finalMessage()
-    } catch (err) {
-      // Surface as a chat error so the UI clears its streaming state. Re-throw
-      // to let the route's outer try/catch persist the failure if needed.
-      // Normalize Bedrock throttling/timeout/5xx into a friendly Swedish line.
-      //
-      // Extract status/code/cause/stack explicitly: the logger keeps only
-      // name/message/code from an Error and drops the stack in production, so
-      // the real failure was invisible (every prod log just said "request ended
-      // without sending any chunks"). These fields tell us whether the empty
-      // stream is auth (403), bad model/region (400), throttling (429), or a
-      // genuine transport cut. No secrets: AWS/SDK errors carry none, and the
-      // logger still redacts personnummer/UUIDs from any string.
-      const bedrockErr = err as {
-        status?: number
-        code?: string
-        cause?: unknown
-        stack?: string
-      }
-      let errCause: string | undefined
-      try {
-        errCause =
-          bedrockErr?.cause != null
-            ? String(
-                bedrockErr.cause instanceof Error
-                  ? `${bedrockErr.cause.name}: ${bedrockErr.cause.message}`
-                  : bedrockErr.cause,
-              ).slice(0, 300)
-            : undefined
-      } catch {
-        errCause = '[uninspectable cause]'
-      }
-      log.error('Bedrock stream failed', err, {
-        conversationId,
-        companyId,
+    let eagerToolIds = new Set<string>()
+    for (;;) {
+      const assistantTextBefore = assistantText
+      const stream = anthropic.messages.stream({
         model,
-        iterations,
-        errStatus: typeof bedrockErr?.status === 'number' ? bedrockErr.status : undefined,
-        errCode: typeof bedrockErr?.code === 'string' ? bedrockErr.code : undefined,
-        errCause,
-        errStack: typeof bedrockErr?.stack === 'string' ? bedrockErr.stack.slice(0, 1200) : undefined,
+        max_tokens: maxTokens,
+        system: systemPrompt.blocks,
+        messages,
+        tools: tools.length > 0 ? tools.map(toAnthropicTool) : undefined,
+        ...(thinking ? { thinking } : {}),
+        ...(outputConfig ? { output_config: outputConfig } : {}),
       })
-      emit({ kind: 'error', message: friendlyModelError(err) })
-      throw err
+
+      stream.on('text', (delta) => {
+        assistantText += delta
+        emit({ kind: 'text_delta', delta })
+      })
+
+      // Track which tool_use ids have already been announced to the client so
+      // the dispatch loop below doesn't re-emit them. Eager-emitting on
+      // `content_block_start` shaves the perceived lag for tool chips: the
+      // chip appears the moment the LLM commits to a tool call, instead of
+      // after the entire response is buffered.
+      eagerToolIds = new Set<string>()
+      stream.on('streamEvent', (ev) => {
+        // The raw stream event shape depends on the SDK; we care about
+        // content_block_start with a tool_use block, and content_block_delta
+        // carrying extended-thinking text.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const e = ev as any
+        if (
+          e?.type === 'content_block_delta' &&
+          e?.delta?.type === 'thinking_delta' &&
+          typeof e.delta.thinking === 'string'
+        ) {
+          emit({ kind: 'reasoning_delta', delta: e.delta.thinking })
+          return
+        }
+        if (e?.type === 'content_block_start' && e?.content_block?.type === 'tool_use') {
+          const block = e.content_block
+          if (typeof block.id === 'string' && typeof block.name === 'string') {
+            eagerToolIds.add(block.id)
+            emit({
+              kind: 'tool_use',
+              tool_use_id: block.id,
+              name: block.name,
+              // Input is still being streamed at this point; the chip only
+              // displays the tool name so empty input is fine.
+              input: {},
+            })
+          }
+        }
+      })
+
+      try {
+        response = await stream.finalMessage()
+        break
+      } catch (err) {
+        if (!streamRetryUsed && isTransientStreamError(err)) {
+          streamRetryUsed = true
+          log.warn('Bedrock stream failed transiently, retrying once', {
+            conversationId,
+            companyId,
+            model,
+            iterations,
+            errMessage: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
+            errStatus: (err as { status?: number } | null)?.status,
+          })
+          // Roll back what the dead stream produced. Nothing was persisted
+          // (persist happens after finalMessage() succeeds), so state-wise
+          // this attempt never happened; the client resets its bubble.
+          assistantText = assistantTextBefore
+          emit({ kind: 'stream_restart', assistant_text: assistantText })
+          await new Promise((resolve) => setTimeout(resolve, STREAM_RETRY_BACKOFF_MS))
+          continue
+        }
+        // Surface as a chat error so the UI clears its streaming state. Re-throw
+        // to let the route's outer try/catch persist the failure if needed.
+        // Normalize Bedrock throttling/timeout/5xx into a friendly Swedish line.
+        //
+        // Extract status/code/cause/stack explicitly: the logger keeps only
+        // name/message/code from an Error and drops the stack in production, so
+        // the real failure was invisible (every prod log just said "request ended
+        // without sending any chunks"). These fields tell us whether the empty
+        // stream is auth (403), bad model/region (400), throttling (429), or a
+        // genuine transport cut. No secrets: AWS/SDK errors carry none, and the
+        // logger still redacts personnummer/UUIDs from any string.
+        const bedrockErr = err as {
+          status?: number
+          code?: string
+          cause?: unknown
+          stack?: string
+        }
+        let errCause: string | undefined
+        try {
+          errCause =
+            bedrockErr?.cause != null
+              ? String(
+                  bedrockErr.cause instanceof Error
+                    ? `${bedrockErr.cause.name}: ${bedrockErr.cause.message}`
+                    : bedrockErr.cause,
+                ).slice(0, 300)
+              : undefined
+        } catch {
+          errCause = '[uninspectable cause]'
+        }
+        log.error('Bedrock stream failed', err, {
+          conversationId,
+          companyId,
+          model,
+          iterations,
+          retried: streamRetryUsed,
+          errStatus: typeof bedrockErr?.status === 'number' ? bedrockErr.status : undefined,
+          errCode: typeof bedrockErr?.code === 'string' ? bedrockErr.code : undefined,
+          errCause,
+          errStack: typeof bedrockErr?.stack === 'string' ? bedrockErr.stack.slice(0, 1200) : undefined,
+        })
+        emit({ kind: 'error', message: friendlyModelError(err) })
+        throw err
+      }
     }
 
     const assistantContent: ContentBlock[] = response.content
+    lastStopReason = (response as { stop_reason?: string | null }).stop_reason ?? null
 
     // Persist the assistant turn (text + tool_use blocks). Thinking blocks are
     // stripped for storage but kept in `messages` below for the in-turn loop.
@@ -450,6 +551,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
             kind: 'staged_operation',
             tool_use_id: tu.id,
             tool_name: tu.name,
+            params: tu.input as Record<string, unknown>,
             staged: result,
           })
         }
@@ -554,6 +656,27 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     } catch {
       // intentional: best-effort
     }
+  }
+
+  // A turn that hit the output ceiling before producing any visible text
+  // (thinking or tool churn spent the whole max_tokens budget) is a failure,
+  // not a completion. A bare turn_complete here is the silent-stop bug: the
+  // client hides the empty bubble and "Tänker" just disappears. A PARTIAL
+  // answer that hit the ceiling still completes; only the empty case errors.
+  if (lastStopReason === 'max_tokens' && assistantText.trim().length === 0) {
+    log.error('model hit max_tokens with no visible text', {
+      conversationId,
+      companyId,
+      model,
+      iterations,
+      thinking: Boolean(intent.thinking),
+      maxTokens,
+    })
+    emit({
+      kind: 'error',
+      message: 'Assistenten fick slut på utrymme innan svaret blev klart. Försök igen.',
+    })
+    return
   }
 
   emit({ kind: 'turn_complete', assistant_text: assistantText })

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
 import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
@@ -16,6 +17,7 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { Currency, EntityType, Invoice, Transaction } from '@/types'
@@ -332,9 +334,26 @@ export const POST = withRouteContext(
       })
     }
 
+    // A RECONCILIATION link (reconciliation_method set) is not a conflicting
+    // booking: the entry it points at is an independent verifikat (SIE import,
+    // salary run, manual booking) that may evidence OTHER affärshändelser, and
+    // reversing it wholesale as a side effect of matching one payment would be
+    // an over-broad rättelse (BFL 5 kap 5 §: a correction is scoped to the
+    // actual error). Nothing is detached HERE: the final transaction update
+    // below overwrites the pointer and clears reconciliation_method in the
+    // same write, so a failure anywhere in between leaves the existing link
+    // fully intact instead of orphaning the row.
+    const priorReconciliationLink =
+      transaction.journal_entry_id && transaction.reconciliation_method
+        ? {
+            journalEntryId: transaction.journal_entry_id as string,
+            method: transaction.reconciliation_method as string,
+          }
+        : null
+
     // Storno conflicting auto-categorization JE before any other state change.
     // If storno fails, return immediately: nothing else has been modified.
-    if (transaction.journal_entry_id) {
+    if (transaction.journal_entry_id && !priorReconciliationLink) {
       try {
         await reverseEntry(supabase, companyId, user.id, transaction.journal_entry_id)
 
@@ -346,7 +365,7 @@ export const POST = withRouteContext(
           txLog.warn('failed to clear journal_entry_id after storno', clearJeError)
         }
 
-        logMatchEvent(supabase, user.id, transactionId, 'storno_conflict_resolved', {
+        await logMatchEvent(supabase, user.id, transactionId, 'storno_conflict_resolved', {
           invoiceId: invoice_id,
           previousState: { journal_entry_id: transaction.journal_entry_id },
           newState: { journal_entry_id: null },
@@ -357,7 +376,6 @@ export const POST = withRouteContext(
       }
     }
 
-    const now = new Date().toISOString()
     // paidAmountInInvoiceCurrency is what gets accumulated into
     // invoice.paid_amount / remaining_amount and stored on the
     // invoice_payments row. For same-currency it's just tx.amount; for
@@ -384,6 +402,7 @@ export const POST = withRouteContext(
       })
     }
     const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+    const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
     const { data: settings } = await supabase
       .from('company_settings')
@@ -418,6 +437,33 @@ export const POST = withRouteContext(
     // receivable on the books) do we recognise revenue + VAT here.
     const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
+
+    // Reject cash-method partial payments and part-paid completions for pure
+    // kontantmetoden invoices (no prior JE), mirroring the v1 route. The old
+    // partial fallback booked an accrual-style clearing entry against an
+    // EMPTY 1510 (negative receivable, no revenue, no moms: bokslutsmetoden
+    // reports moms at payment, per installment), and the
+    // "resolved on final payment" theory was wrong: createInvoiceCashEntry
+    // never touches 1510 and books the FULL total, so the final payment
+    // double-debited the bank account instead. When the invoice was already
+    // booked under accrual, the clearing entry IS the correct partial path
+    // regardless of the company's current setting.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
+      paysRemainingInFull: isFullyPaid,
+    })
+    if (cashBlock) {
+      return errorResponseFromCode('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED', txLog, {
+        requestId,
+        details: {
+          reason: cashBlock,
+          payment_amount: paidAmountInInvoiceCurrency,
+          invoice_total: invoice.total,
+        },
+      })
+    }
 
     let journalEntryId: string | null = null
 
@@ -462,11 +508,10 @@ export const POST = withRouteContext(
         )
         journalEntryId = journalEntry?.id ?? null
       } else {
-        // Clearing entry against 1510. Covers accrual, cash-with-prior-JE
-        // (mid-stream switch), and cash partial. The cash partial path is
-        // intentional: under kontantmetoden 1510 has no prior balance, so
-        // partials leave a credit on 1510 that gets resolved on final
-        // payment when createInvoiceCashEntry would normally run.
+        // Clearing entry against 1510. Covers accrual and cash-with-prior-JE
+        // (mid-stream method switch). Pure kontantmetoden partials never
+        // reach this branch: they are rejected above, because 1510 has no
+        // prior balance to clear and the cash builder cannot book a partial.
         //
         // Builds lines via buildInvoicePaymentClearingLines so the verifikat
         // is byte-identical to what the preview route showed the user. For
@@ -622,7 +667,7 @@ export const POST = withRouteContext(
       .from('invoices')
       .update({
         status: newStatus,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: paidAt,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
       })
@@ -639,13 +684,9 @@ export const POST = withRouteContext(
       return errorResponseFromCode('MATCH_INVOICE_ALREADY_PAID', txLog, { requestId })
     }
 
-    // The "intäkt bokförs vid slutbetalning" note only applies to genuine
-    // kontantmetoden partials: invoices that were never booked. When the
-    // invoice was booked under accrual, the clearing entry already handles
-    // the partial cleanly and the note would be misleading.
-    const cashMethodNote = (!invoiceAlreadyBooked && accountingMethod === 'cash' && !isFullyPaid)
-      ? 'Kontantmetoden: intäkt bokförs vid slutbetalning'
-      : null
+    // No cash-method note anymore: pure kontantmetoden partials are rejected
+    // above, and for an invoice booked at send the clearing entry handles a
+    // partial correctly, so the note would be misleading.
 
     // Provenance for a manually-supplied FX rate. The Riksbanken spot rate is
     // self-documenting (rate + rate_date are reproducible), but a rate the
@@ -657,7 +698,7 @@ export const POST = withRouteContext(
         ? `Manuell valutakurs ${fx.rate} ${invoice.currency}/SEK (betalningsdatum ${transaction.date})`
         : null
 
-    const paymentNotes = [cashMethodNote, manualRateNote].filter(Boolean).join(' · ') || null
+    const paymentNotes = manualRateNote
 
     // Payment row stores amount in INVOICE currency (the column unit). For
     // same-currency that's tx.amount; for cross-currency it's the spot-rate
@@ -706,6 +747,13 @@ export const POST = withRouteContext(
         journal_entry_id: journalEntryId,
         is_business: true,
         category: 'income_services',
+        // The invoice match supersedes any prior reconciliation link: the
+        // stale method label must not survive the re-pointed journal_entry_id
+        // (deferred detach, see the priorReconciliationLink block above).
+        // Unconditional literal on purpose: null is already the value on every
+        // non-reconciliation-linked row, and a literal payload keeps the
+        // phantom-column scanner able to verify the column set.
+        reconciliation_method: null,
       })
       .eq('id', transactionId)
 
@@ -714,7 +762,21 @@ export const POST = withRouteContext(
       return errorResponseFromCode('MATCH_INVOICE_LINK_TX_FAILED', txLog, { requestId })
     }
 
-    logMatchEvent(supabase, user.id, transactionId, 'matched', {
+    // The deferred detach committed with the update above: record the release
+    // of the prior reconciliation link so the append-only trail shows the full
+    // transition (behandlingshistorik, BFNAR 2013:2 kap 8).
+    if (priorReconciliationLink) {
+      await logMatchEvent(supabase, user.id, transactionId, 'unmatched', {
+        invoiceId: invoice_id,
+        previousState: {
+          journal_entry_id: priorReconciliationLink.journalEntryId,
+          reconciliation_method: priorReconciliationLink.method,
+        },
+        newState: { journal_entry_id: journalEntryId, reconciliation_method: null },
+      })
+    }
+
+    await logMatchEvent(supabase, user.id, transactionId, 'matched', {
       invoiceId: invoice_id,
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',
@@ -736,8 +798,21 @@ export const POST = withRouteContext(
       eventBus.emit({
         type: 'invoice.match_confirmed',
         payload: {
-          invoice: invoice as Invoice,
-          transaction: transaction as Transaction,
+          invoice: {
+            ...invoice,
+            status: newStatus,
+            paid_at: paidAt,
+            paid_amount: newPaidAmount,
+            remaining_amount: newRemaining,
+          } as Invoice,
+          transaction: {
+            ...transaction,
+            invoice_id,
+            potential_invoice_id: null,
+            journal_entry_id: journalEntryId,
+            is_business: true,
+            category: 'income_services',
+          } as Transaction,
           userId: user.id,
           companyId,
         },
@@ -749,7 +824,7 @@ export const POST = withRouteContext(
     return NextResponse.json({
       success: true,
       invoice_status: newStatus,
-      paid_at: isFullyPaid ? now : null,
+      paid_at: paidAt,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
       journal_entry_id: journalEntryId,

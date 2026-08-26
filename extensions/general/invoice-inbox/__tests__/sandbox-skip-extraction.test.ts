@@ -24,6 +24,21 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn().mockResolvedValue({ id: 'doc-1' }),
 }))
 
+// The staged (deferred) upload path only exists when AI is configured on this
+// deployment: an unconfigured one skips synchronously (ai_unconfigured). These
+// tests simulate a configured deployment; the model call itself is mocked.
+vi.mock('@/lib/ai', () => ({
+  getAiStatus: () => ({
+    provider: 'bedrock',
+    configured: true,
+    reason: 'ok',
+    capabilities: { pdfNative: true, imageInput: true, toolUse: true, forcedToolChoice: true, strictJsonSchema: false },
+    models: { assistant: 'm', heavy: 'm', extraction: 'm' },
+    pdfMode: 'native',
+    assistantAvailable: true,
+  }),
+}))
+
 vi.mock('@/lib/rate-limits/inbox', () => ({
   checkInboxUploadRateLimit: vi.fn().mockResolvedValue({ ok: true }),
 }))
@@ -41,8 +56,17 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
 })
 
+// The deferred extraction worker (staged upload) builds its own cookieless
+// service client; route it to the same mock supabase so the flow is
+// observable in the one test that reaches Bedrock.
+vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
+  return { ...actual, createServiceClientNoCookies: vi.fn() }
+})
+
 import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { hasCapability } from '@/lib/entitlements/has-capability'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 
 function findRoute(method: string, path: string) {
   return invoiceInboxExtension.apiRoutes!.find(
@@ -86,7 +110,7 @@ function makeMultipartRequest(form: FormData, path: string): Request {
 // suppliers (match) in that order via separate .from() chains.
 function makeUploadSupabase(opts: {
   isSandbox: boolean
-  captured: { row?: Record<string, unknown> }
+  captured: { row?: Record<string, unknown>; flip?: Record<string, unknown> }
 }) {
   const settingsChain = {
     select: vi.fn().mockReturnThis(),
@@ -100,6 +124,11 @@ function makeUploadSupabase(opts: {
     limit: vi.fn().mockReturnThis(),
     maybeSingle: vi.fn().mockResolvedValue({ data: null }),
   }
+  // The deferred worker's CAS flip: .update(p).eq().eq().select('id').
+  const updateChain = {
+    eq: vi.fn(() => updateChain),
+    select: vi.fn().mockResolvedValue({ data: [{ id: 'inbox-1' }], error: null }),
+  }
   const inboxChain = {
     insert: vi.fn((row: Record<string, unknown>) => {
       opts.captured.row = row
@@ -112,8 +141,9 @@ function makeUploadSupabase(opts: {
         }),
       }
     }),
-    update: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnThis(),
+    update: vi.fn((payload: Record<string, unknown>) => {
+      opts.captured.flip = payload
+      return updateChain
     }),
   }
   return {
@@ -151,9 +181,10 @@ describe('Sandbox companies skip Bedrock extraction', () => {
       expect(captured.row?.extraction_skipped).toBe(true)
     })
 
-    it('runs extraction normally for non-sandbox companies', async () => {
-      const captured: { row?: Record<string, unknown> } = {}
+    it('defers extraction for non-sandbox companies: responds processing, then flips', async () => {
+      const captured: { row?: Record<string, unknown>; flip?: Record<string, unknown> } = {}
       const supabase = makeUploadSupabase({ isSandbox: false, captured })
+      vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
       vi.mocked(extractInvoiceFields).mockResolvedValueOnce({
         data: {
           supplier: { name: null, orgNumber: null, vatNumber: null, address: null, bankgiro: null, plusgiro: null },
@@ -174,10 +205,19 @@ describe('Sandbox companies skip Bedrock extraction', () => {
       const res = await uploadRoute.handler(makeMultipartRequest(form, '/upload'), buildCtx(supabase))
       const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
 
+      // Staged upload: the response is the receipt ack, extraction runs after.
       expect(status).toBe(200)
-      expect(extractInvoiceFields).toHaveBeenCalledOnce()
+      expect(body.data.status).toBe('processing')
+      expect(body.data.extracted_data).toBeNull()
       expect(body.data.extraction_skipped).toBe(false)
       expect(body.data.skip_reason).toBeNull()
+      expect(captured.row?.status).toBe('processing')
+      expect(captured.row?.extracted_data).toBeNull()
+
+      await vi.waitFor(() => expect(extractInvoiceFields).toHaveBeenCalledOnce())
+      await vi.waitFor(() => expect(captured.flip).toBeDefined())
+      expect(captured.flip?.status).toBe('received')
+      expect(captured.flip?.extraction_skipped).toBe(false)
     })
   })
 

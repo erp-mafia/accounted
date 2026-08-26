@@ -97,7 +97,7 @@ export function ReportRowExpansion({
           aria-expanded={expanded}
           aria-controls={`expansion-${rowId}`}
           aria-label={expanded ? 'Dölj verifikat' : 'Visa verifikat'}
-          className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+          className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
         >
           {expanded ? (
             <ChevronDown className="h-4 w-4" />
@@ -142,7 +142,7 @@ export function useReportRowExpansion(fetcher: ReportSourceFetcher, rowId: strin
       aria-expanded={expanded}
       aria-controls={`expansion-${rowId}`}
       aria-label={expanded ? 'Dölj verifikat' : 'Visa verifikat'}
-      className="inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+      className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
     >
       {expanded ? (
         <ChevronDown className="h-4 w-4" />

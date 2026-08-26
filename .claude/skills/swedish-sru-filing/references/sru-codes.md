@@ -22,14 +22,14 @@ Complete field code (fältkod) tables for INK2, INK2R, and INK2S blankett types,
 |---|---|---|
 | 7011 | N/A | Räkenskapsår fr.o.m. (YYYYMMDD) |
 | 7012 | N/A | Räkenskapsår t.o.m. (YYYYMMDD) |
-| 7113 | 1.1 | Överskott av näringsverksamhet |
+| 7104 | 1.1 | Överskott av näringsverksamhet |
 | 7114 | 1.2 | Underskott av näringsverksamhet |
 | 7132 | 1.4 | Underlag för särskild löneskatt på pensionskostnader |
 | 7133 | 1.5 | Negativt underlag särskild löneskatt |
 | 7153 | 1.6a | Avkastningsskatt 15% |
 | 7155 | 1.7a | Avkastningsskatt 30% |
 
-Fields 7113/7114 correspond directly to INK2S fields 8020/8021.
+Fields 7104/7114 correspond directly to INK2S fields 8020/8021. (Verified against Skatteverket's official 2025P4 field list: 1.1 is 7104, NOT 7113; 7113 does not exist on INK2 and Skatteverket rejects it with "är inte ett giltigt postnamn".)
 
 ---
 
@@ -168,7 +168,7 @@ Fields 7113/7114 correspond directly to INK2S fields 8020/8021.
 | 7763 | 4.14a | Outnyttjat underskott från föregående beskattningsår |
 | 7664 | 4.14b | Reduktion av underskott (beloppsspärr/ackord) |
 | 7670 | 4.14c | Reduktion pga koncernbidragsspärr/fusionsspärr |
-| 8020 | 4.15 | Överskott → överförs till punkt 1.1 (INK2 field 7113) |
+| 8020 | 4.15 | Överskott → överförs till punkt 1.1 (INK2 field 7104) |
 | 8021 | 4.16 | Underskott → överförs till punkt 1.2 (INK2 field 7114) |
 | 7770 | 4.20 | Lån från aktieägare (fysisk person) vid beskattningsårets utgång |
 
@@ -258,8 +258,8 @@ Source: BAS-kontogruppen + Skatteverket joint mapping at bas.se/kontoplaner/sru/
 | 4600-4699 | 7512 | 3.6 | Handelsvaror |
 | **5000-6999** | **7513** | 3.7 | **Övriga externa kostnader (ALL accounts in range)** |
 | 7000-7699 | 7514 | 3.8 | Personalkostnader |
-| 7700-7799 | 7516 | 3.10 | Nedskrivningar omsättningstillgångar |
-| 7800-7899 | 7515 | 3.9 | Avskrivningar |
+| 7740-7749, 7790-7799 | 7516 | 3.10 | Nedskrivningar omsättningstillgångar |
+| 7700-7739, 7750-7789, 7800-7899 | 7515 | 3.9 | Av- och nedskrivningar av anläggningstillgångar (incl. återföringar) |
 | 7900-7999 | 7517 | 3.11 | Övriga rörelsekostnader |
 | 8000-8099 | 7414 | 3.12 | Resultat koncernföretag |
 | 8100-8199 | 7415 | 3.13 | Resultat intresseföretag |

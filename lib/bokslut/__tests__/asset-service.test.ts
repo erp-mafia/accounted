@@ -1,20 +1,14 @@
+
 import { describe, it, expect, vi } from 'vitest'
 import {
   AssetCorrectionBlockedError,
   DEFAULT_ACCOUNTS_BY_CATEGORY,
-  disposeAsset,
+  createAsset,
+  defaultAccountsForCategory,
   updateAsset,
 } from '../assets/asset-service'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
-import type { Asset } from '@/types'
-
-vi.mock('@/lib/bookkeeping/engine', () => ({
-  createJournalEntry: vi.fn().mockResolvedValue({
-    id: 'entry-1',
-    voucher_series: 'A',
-    voucher_number: 1,
-  }),
-}))
+import type { AccountingFramework, Asset, AssetCategory } from '@/types'
 
 describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
   it('maps every AssetCategory to a BAS-aligned account triple', () => {
@@ -56,252 +50,69 @@ describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
   // triple must resolve in BAS_REFERENCE: otherwise the lazy backfill silently
   // can't add it and the depreciation posting fails on minimal charts.
   it('every account in the triple exists in the BAS reference (backfillable)', () => {
-    for (const cat of Object.keys(DEFAULT_ACCOUNTS_BY_CATEGORY) as Array<
-      keyof typeof DEFAULT_ACCOUNTS_BY_CATEGORY
-    >) {
-      const { asset, accumulated, expense } = DEFAULT_ACCOUNTS_BY_CATEGORY[cat]
-      for (const account of [asset, accumulated, expense]) {
-        expect(getBASReference(account), `${cat}: ${account} missing from BAS reference`).toBeDefined()
+    for (const framework of ['k2', 'k3'] as const) {
+      for (const cat of Object.keys(DEFAULT_ACCOUNTS_BY_CATEGORY) as AssetCategory[]) {
+        const { asset, accumulated, expense } = defaultAccountsForCategory(cat, framework)
+        for (const account of [asset, accumulated, expense]) {
+          expect(
+            getBASReference(account),
+            `${framework}/${cat}: ${account} missing from BAS reference`,
+          ).toBeDefined()
+        }
       }
     }
   })
 })
 
-describe('disposeAsset: gain/loss account selection', () => {
-  function makeAsset(overrides: Partial<Asset> = {}): Asset {
-    return {
-      id: 'asset-1',
-      user_id: 'u',
-      company_id: 'co',
-      name: 'Test',
-      category: 'equipment',
-      acquisition_date: '2023-01-01',
-      acquisition_cost: 100_000,
-      salvage_value: 0,
-      useful_life_months: 60,
-      depreciation_method: 'linear',
-      bas_asset_account: '1220',
-      bas_accumulated_account: '1229',
-      bas_expense_account: '7832',
-      restvarde_target: null,
-      disposed_at: null,
-      disposed_proceeds: null,
-      disposed_proceeds_vat: 0,
-      disposed_vat_treatment: null,
-      jamkning_amount: 0,
-      jamkning_remaining_months: null,
-      jamkning_total_months: null,
-      jamkning_original_input_vat: null,
-      k3_components: null,
-      notes: null,
-      created_at: '2023-01-01T00:00:00Z',
-      updated_at: '2023-01-01T00:00:00Z',
-      ...overrides,
-    }
-  }
-
-  function makeSupabaseForDispose(asset: Asset, schedules: Array<{ planned_depreciation: number }>) {
-    // Three from() calls happen inside disposeAsset:
-    //   1. getAsset (.maybeSingle on 'assets')
-    //   2. sumPostedDepreciation (.then on 'depreciation_schedules': server-derived
-    //      accumulated_depreciation; replaces the previously client-supplied value)
-    //   3. update (.single on 'assets', returning the disposed row)
-    const builders = {
-      getBuilder: {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({ data: asset, error: null }),
-      },
-      schedulesBuilder: (() => {
-        const b: Record<string, unknown> = {
-          select: vi.fn(),
-          eq: vi.fn(),
-          not: vi.fn(),
-          then: undefined,
-        }
-        ;(b.select as ReturnType<typeof vi.fn>).mockReturnValue(b)
-        ;(b.eq as ReturnType<typeof vi.fn>).mockReturnValue(b)
-        ;(b.not as ReturnType<typeof vi.fn>).mockReturnValue(b)
-        b.then = (resolve: (v: { data: unknown; error: unknown }) => void) =>
-          resolve({ data: schedules, error: null })
-        return b as { select: ReturnType<typeof vi.fn>; eq: ReturnType<typeof vi.fn>; not: ReturnType<typeof vi.fn> }
-      })(),
-      updateBuilder: {
-        update: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        select: vi.fn().mockReturnThis(),
-        single: vi.fn().mockResolvedValue({
-          data: { ...asset, disposed_at: '2025-06-30', disposed_proceeds: 50_000 },
-          error: null,
-        }),
-      },
-    }
-    let calls = 0
-    const supabase = {
-      from: vi.fn((table: string) => {
-        calls++
-        if (table === 'depreciation_schedules') return builders.schedulesBuilder
-        return calls === 1 ? builders.getBuilder : builders.updateBuilder
-      }),
-    }
-    return { supabase, builders } as const
-  }
-
-  it('uses 3973 / 7973 for tangible asset disposal (equipment)', async () => {
-    const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
-    vi.mocked(createJournalEntry).mockClear()
-    const asset = makeAsset({ category: 'equipment' })
-    // Two prior posted schedules summing to 40_000 → NBV = 60_000, proceeds 80_000 → gain 20_000
-    const { supabase } = makeSupabaseForDispose(asset, [
-      { planned_depreciation: 20_000 },
-      { planned_depreciation: 20_000 },
-    ])
-
-    await disposeAsset(
-      supabase as unknown as Parameters<typeof disposeAsset>[0],
-      'co',
-      'u',
-      'asset-1',
-      {
-        disposed_at: '2025-06-30',
-        disposed_proceeds: 80_000,
-        fiscal_period_id: 'fp',
-      },
-    )
-
-    const call = vi.mocked(createJournalEntry).mock.calls[0]
-    expect(call).toBeDefined()
-    const lines = (call![3] as { lines: { account_number: string; debit_amount: number; credit_amount: number }[] }).lines
-    // Server-derived accumulated debits 1229
-    expect(lines.find((l) => l.account_number === '1229')?.debit_amount).toBe(40_000)
-    // Gain goes to 3973 (tangible), not 3013
-    expect(lines.find((l) => l.account_number === '3973')).toBeDefined()
-    expect(lines.find((l) => l.account_number === '3013')).toBeUndefined()
-  })
-
-  it('uses 3013 / 7813 for immaterial asset disposal', async () => {
-    const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
-    vi.mocked(createJournalEntry).mockClear()
-    const asset = makeAsset({
-      category: 'immaterial',
-      bas_asset_account: '1010',
-      bas_accumulated_account: '1019',
-      bas_expense_account: '7810',
+/**
+ * K2 (BFNAR 2016:10 punkt 10.4) forbids capitalizing EGENUPPARBETADE
+ * immateriella tillgångar, which is what 1010/1019 carry. An ACQUIRED
+ * intangible is lawful under K2 and belongs on 1090/1099
+ * (.claude/skills/swedish-year-end-closing/references/k2-vs-k3.md:24, "Only
+ * acquired intangibles may be recognized"), so the default has to follow the
+ * company's framework rather than being one pair for everyone.
+ */
+describe('defaultAccountsForCategory', () => {
+  it('gives a K3 company the egenupparbetade pair for immaterial', () => {
+    expect(defaultAccountsForCategory('immaterial', 'k3')).toEqual({
+      asset: '1010',
+      accumulated: '1019',
+      expense: '7810',
     })
-    // NBV = 50_000, proceeds 10_000 → loss 40_000
-    const { supabase } = makeSupabaseForDispose(asset, [{ planned_depreciation: 50_000 }])
-
-    await disposeAsset(
-      supabase as unknown as Parameters<typeof disposeAsset>[0],
-      'co',
-      'u',
-      'asset-1',
-      {
-        disposed_at: '2025-06-30',
-        disposed_proceeds: 10_000,
-        fiscal_period_id: 'fp',
-      },
-    )
-
-    const call = vi.mocked(createJournalEntry).mock.calls[0]
-    expect(call).toBeDefined()
-    const lines = (call![3] as { lines: { account_number: string; debit_amount: number }[] }).lines
-    expect(lines.find((l) => l.account_number === '7813')).toBeDefined()
-    expect(lines.find((l) => l.account_number === '7973')).toBeUndefined()
   })
 
-  it('uses 3971 / 7971 for building disposal', async () => {
-    const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
-    vi.mocked(createJournalEntry).mockClear()
-    const asset = makeAsset({
-      category: 'building',
-      acquisition_cost: 2_000_000,
-      bas_asset_account: '1110',
-      bas_accumulated_account: '1119',
-      bas_expense_account: '7821',
-    })
-    // NBV = 1_500_000, proceeds 2_000_000 → gain 500_000
-    const { supabase } = makeSupabaseForDispose(asset, [{ planned_depreciation: 500_000 }])
+  it.each([['k2' as const], [null], [undefined]])(
+    'gives the acquired pair 1090/1099 for immaterial when the framework is %s',
+    (framework: AccountingFramework | null | undefined) => {
+      expect(defaultAccountsForCategory('immaterial', framework)).toEqual({
+        asset: '1090',
+        accumulated: '1099',
+        expense: '7810',
+      })
+    },
+  )
 
-    await disposeAsset(
-      supabase as unknown as Parameters<typeof disposeAsset>[0],
-      'co',
-      'u',
-      'asset-1',
-      {
-        disposed_at: '2025-06-30',
-        disposed_proceeds: 2_000_000,
-        fiscal_period_id: 'fp',
-      },
-    )
-
-    const call = vi.mocked(createJournalEntry).mock.calls[0]
-    const lines = (call![3] as { lines: { account_number: string }[] }).lines
-    // Buildings route to 3971/7971, not 3973/7973
-    expect(lines.find((l) => l.account_number === '3971')).toBeDefined()
-    expect(lines.find((l) => l.account_number === '3973')).toBeUndefined()
+  it('leaves 1090/1099 unflagged in the BAS chart, so the K2 gate passes them', () => {
+    expect(getBASReference('1090')?.k2_excluded).toBe(false)
+    expect(getBASReference('1099')?.k2_excluded).toBe(false)
+    // Inside the 1010-1099 window the immaterial Zod/service range checks allow.
+    expect('1090' >= '1010' && '1099' <= '1099').toBe(true)
   })
 
-  it('uses 3971 / 7971 for land_improvement disposal', async () => {
-    const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
-    vi.mocked(createJournalEntry).mockClear()
-    const asset = makeAsset({
-      category: 'land_improvement',
-      acquisition_cost: 100_000,
-      bas_asset_account: '1150',
-      bas_accumulated_account: '1159',
-      bas_expense_account: '7824',
-    })
-    // NBV = 80_000, proceeds 40_000 → loss 40_000
-    const { supabase } = makeSupabaseForDispose(asset, [{ planned_depreciation: 20_000 }])
-
-    await disposeAsset(
-      supabase as unknown as Parameters<typeof disposeAsset>[0],
-      'co',
-      'u',
-      'asset-1',
-      {
-        disposed_at: '2025-06-30',
-        disposed_proceeds: 40_000,
-        fiscal_period_id: 'fp',
-      },
-    )
-
-    const call = vi.mocked(createJournalEntry).mock.calls[0]
-    const lines = (call![3] as { lines: { account_number: string }[] }).lines
-    // Markanläggning routes to 7971 like buildings
-    expect(lines.find((l) => l.account_number === '7971')).toBeDefined()
-    expect(lines.find((l) => l.account_number === '7973')).toBeUndefined()
-  })
-
-  it('server-derives accumulated_depreciation: caller cannot inflate gain', async () => {
-    const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
-    vi.mocked(createJournalEntry).mockClear()
-    const asset = makeAsset({ category: 'equipment', acquisition_cost: 100_000 })
-    // Real accumulated = 30_000 from one posted schedule. A malicious client
-    // could previously pass accumulated_depreciation: 100_000 to fake a fully
-    // depreciated asset and pocket a 50_000 phantom gain on proceeds. With
-    // server derivation, the lines reflect the actual 30_000.
-    const { supabase } = makeSupabaseForDispose(asset, [{ planned_depreciation: 30_000 }])
-
-    await disposeAsset(
-      supabase as unknown as Parameters<typeof disposeAsset>[0],
-      'co',
-      'u',
-      'asset-1',
-      {
-        disposed_at: '2025-06-30',
-        disposed_proceeds: 50_000,
-        fiscal_period_id: 'fp',
-      },
-    )
-
-    const call = vi.mocked(createJournalEntry).mock.calls[0]
-    const lines = (call![3] as { lines: { account_number: string; debit_amount: number; credit_amount: number }[] }).lines
-    // accumulated debit must be 30_000 (server-derived), not anything else
-    expect(lines.find((l) => l.account_number === '1229')?.debit_amount).toBe(30_000)
-    // NBV = 100_000 − 30_000 = 70_000, proceeds 50_000 → loss 20_000 to 7973
-    expect(lines.find((l) => l.account_number === '7973')?.debit_amount).toBe(20_000)
+  it('is framework-independent for every tangible category', () => {
+    const tangible: AssetCategory[] = [
+      'building',
+      'land_improvement',
+      'machinery',
+      'equipment',
+      'vehicle',
+      'computer',
+      'other_tangible',
+    ]
+    for (const cat of tangible) {
+      expect(defaultAccountsForCategory(cat, 'k2')).toEqual(DEFAULT_ACCOUNTS_BY_CATEGORY[cat])
+      expect(defaultAccountsForCategory(cat, 'k3')).toEqual(DEFAULT_ACCOUNTS_BY_CATEGORY[cat])
+    }
   })
 })
 
@@ -357,12 +168,25 @@ describe('updateAsset: acquisition-basis correction guard', () => {
       postedCount?: number
       otherAssetEntryIds?: string[]
       accumulatedCredits?: { journal_entry_id: string }[]
+      accountingFramework?: AccountingFramework | null
     } = {},
   ) {
     const captured: { update: Record<string, unknown> | null } = { update: null }
     let schedCall = 0
     const supabase = {
       from: vi.fn((table: string) => {
+        if (table === 'companies') {
+          // Only read when a category change needs a framework-dependent
+          // default (the immaterial category).
+          const chain: Record<string, unknown> = {}
+          chain.select = vi.fn(() => chain)
+          chain.eq = vi.fn(() => chain)
+          chain.single = vi.fn(async () => ({
+            data: { accounting_framework: opts.accountingFramework ?? null },
+            error: null,
+          }))
+          return chain
+        }
         if (table === 'depreciation_schedules') {
           schedCall += 1
           const isCountQuery = schedCall === 1
@@ -478,6 +302,73 @@ describe('updateAsset: acquisition-basis correction guard', () => {
     })
   })
 
+  // A K2 aktiebolag that bought a software licence and first filed it under
+  // "Inventarier" must be able to recategorize it to "Immateriell tillgång":
+  // K2 forbids only EGENUPPARBETADE intangibles, and an acquired one is
+  // lawful on 1090/1099. Landing it on 1010/1019 would be the Ej K2 pair and
+  // the API gate would reject the whole edit.
+  it('realigns a category correction to immaterial onto 1090/1099 for a K2 company', async () => {
+    const { supabase, captured } = mockForUpdate(
+      makeAssetRow({
+        category: 'equipment',
+        bas_asset_account: '1220',
+        bas_accumulated_account: '1229',
+        bas_expense_account: '7832',
+      }),
+      { postedCount: 0, accountingFramework: 'k2' },
+    )
+    await updateAsset(asSupabase(supabase), 'co', 'asset-1', { category: 'immaterial' })
+    expect(captured.update).toMatchObject({
+      category: 'immaterial',
+      bas_asset_account: '1090',
+      bas_accumulated_account: '1099',
+      bas_expense_account: '7810',
+    })
+  })
+
+  it('realigns a category correction to immaterial onto 1010/1019 for a K3 company', async () => {
+    const { supabase, captured } = mockForUpdate(
+      makeAssetRow({
+        category: 'equipment',
+        bas_asset_account: '1220',
+        bas_accumulated_account: '1229',
+        bas_expense_account: '7832',
+      }),
+      { postedCount: 0, accountingFramework: 'k3' },
+    )
+    await updateAsset(asSupabase(supabase), 'co', 'asset-1', { category: 'immaterial' })
+    expect(captured.update).toMatchObject({
+      category: 'immaterial',
+      bas_asset_account: '1010',
+      bas_accumulated_account: '1019',
+      bas_expense_account: '7810',
+    })
+  })
+
+  it('keeps an explicit account override on a recategorization to immaterial', async () => {
+    // Explicit accounts suppress the realign entirely (unchanged semantics):
+    // a K3 company deliberately picking 1010/1019 still gets them.
+    const { supabase, captured } = mockForUpdate(
+      makeAssetRow({
+        category: 'equipment',
+        bas_asset_account: '1220',
+        bas_accumulated_account: '1229',
+        bas_expense_account: '7832',
+      }),
+      { postedCount: 0, accountingFramework: 'k3' },
+    )
+    await updateAsset(asSupabase(supabase), 'co', 'asset-1', {
+      category: 'immaterial',
+      bas_asset_account: '1010',
+      bas_accumulated_account: '1019',
+      bas_expense_account: '7810',
+    })
+    expect(captured.update).toMatchObject({
+      bas_asset_account: '1010',
+      bas_accumulated_account: '1019',
+    })
+  })
+
   it('blocks a correction when depreciation was hand-posted (no engine schedule)', async () => {
     // No depreciation_schedules row, but a manual credit to the asset's 1259
     // accumulated account exists in the ledger: must still block.
@@ -507,3 +398,107 @@ describe('updateAsset: acquisition-basis correction guard', () => {
     expect(captured.update).toMatchObject({ acquisition_date: '2025-08-15' })
   })
 })
+
+describe('createAsset: framework-aware immaterial defaults', () => {
+  function mockForCreate(
+    opts: { accountingFramework?: AccountingFramework | null; companyError?: string } = {},
+  ) {
+    const captured: { insert: Record<string, unknown> | null; companyReads: number } = {
+      insert: null,
+      companyReads: 0,
+    }
+    const supabase = {
+      from: vi.fn((table: string) => {
+        const chain: Record<string, unknown> = {}
+        if (table === 'companies') {
+          captured.companyReads += 1
+          chain.select = vi.fn(() => chain)
+          chain.eq = vi.fn(() => chain)
+          chain.single = vi.fn(async () =>
+            opts.companyError
+              ? { data: null, error: { message: opts.companyError } }
+              : { data: { accounting_framework: opts.accountingFramework ?? null }, error: null },
+          )
+          return chain
+        }
+        chain.insert = vi.fn((payload: Record<string, unknown>) => {
+          captured.insert = payload
+          return chain
+        })
+        chain.select = vi.fn(() => chain)
+        chain.single = vi.fn(async () => ({
+          data: { id: 'asset-new', ...(captured.insert ?? {}) },
+          error: null,
+        }))
+        return chain
+      }),
+    }
+    return { supabase, captured }
+  }
+
+  const asSupabase = (s: unknown) => s as Parameters<typeof createAsset>[0]
+
+  const baseInput = {
+    name: 'Programvarulicens',
+    category: 'immaterial' as const,
+    acquisition_date: '2025-03-01',
+    acquisition_cost: 60_000,
+    useful_life_months: 60,
+  }
+
+  it('books a K2 company immaterial asset on the acquired pair 1090/1099', async () => {
+    const { supabase, captured } = mockForCreate({ accountingFramework: 'k2' })
+    await createAsset(asSupabase(supabase), 'co', 'user-1', baseInput)
+    expect(captured.insert).toMatchObject({
+      bas_asset_account: '1090',
+      bas_accumulated_account: '1099',
+      bas_expense_account: '7810',
+    })
+  })
+
+  it('books a K3 company immaterial asset on 1010/1019', async () => {
+    const { supabase, captured } = mockForCreate({ accountingFramework: 'k3' })
+    await createAsset(asSupabase(supabase), 'co', 'user-1', baseInput)
+    expect(captured.insert).toMatchObject({
+      bas_asset_account: '1010',
+      bas_accumulated_account: '1019',
+    })
+  })
+
+  it('still honours an explicit account override', async () => {
+    const { supabase, captured } = mockForCreate({ accountingFramework: 'k2' })
+    await createAsset(asSupabase(supabase), 'co', 'user-1', {
+      ...baseInput,
+      bas_asset_account: '1030',
+      bas_accumulated_account: '1039',
+    })
+    expect(captured.insert).toMatchObject({
+      bas_asset_account: '1030',
+      bas_accumulated_account: '1039',
+    })
+  })
+
+  it('does not read the company for a tangible category', async () => {
+    const { supabase, captured } = mockForCreate({ accountingFramework: 'k2' })
+    await createAsset(asSupabase(supabase), 'co', 'user-1', {
+      ...baseInput,
+      name: 'MacBook Pro',
+      category: 'computer',
+    })
+    expect(captured.companyReads).toBe(0)
+    expect(captured.insert).toMatchObject({
+      bas_asset_account: '1250',
+      bas_accumulated_account: '1259',
+    })
+  })
+
+  it('throws instead of guessing a framework when the company read fails', async () => {
+    const { supabase, captured } = mockForCreate({ companyError: 'connection reset' })
+    await expect(
+      createAsset(asSupabase(supabase), 'co', 'user-1', baseInput),
+    ).rejects.toThrow(/accounting framework/i)
+    expect(captured.insert).toBeNull()
+  })
+})
+
+

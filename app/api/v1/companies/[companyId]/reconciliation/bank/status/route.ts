@@ -18,8 +18,11 @@ import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliatio
 // total_unmatched_amount, …) that the endpoint never returned; any client coded
 // against it read undefined for every field except difference.
 const StatusResponse = z.object({
-  /** Sum of bank-feed transactions in the window (the bank side). */
+  /** Sum of bank-feed transactions in the window (the bank side), excluding ignored rows. */
   bank_transaction_total: z.number(),
+  /** Sum of ignored bank transactions in the window. Informational: not part of bank_transaction_total or difference. */
+  ignored_transaction_total: z.number(),
+  ignored_transaction_count: z.number().int(),
   /** Full ledger balance on the account incl. opening balance: matches the balance sheet. */
   gl_1930_balance: z.number(),
   /** Ledger movement excluding opening balance: what `difference` compares against. */
@@ -27,12 +30,21 @@ const StatusResponse = z.object({
   gl_1930_opening_balance: z.number(),
   /** Net storno/correction activity in the window. Informational; included in the movement. */
   gl_1930_correction_adjustment: z.number(),
-  /** bank_transaction_total − gl_1930_period_movement. */
+  /** bank_transaction_total minus gl_1930_period_movement: how far apart the two
+   *  sides stand. Expected to be large mid-year; see unexplained_difference. */
   difference: z.number(),
   is_reconciled: z.boolean(),
   matched_count: z.number().int(),
   unmatched_transaction_count: z.number().int(),
+  /** Sum of the unmatched bank transactions: one of the two components of difference. */
+  unmatched_transaction_total: z.number(),
   unmatched_gl_line_count: z.number().int(),
+  /** Sum of the unmatched ledger lines, signed like a bank movement. null on a
+   *  foreign account, whose candidate lines carry no amount in that currency. */
+  unmatched_gl_line_total: z.number().nullable(),
+  /** difference - unmatched_transaction_total + unmatched_gl_line_total: what is
+   *  left once both work lists are accounted for. null when the GL total is. */
+  unexplained_difference: z.number().nullable(),
 })
 
 registerEndpoint({
@@ -50,11 +62,15 @@ registerEndpoint({
     'A non-zero difference is normal between sync runs (uncleared cheques, in-flight transfers). Investigate only if it persists across reconciliations.',
     'difference compares against gl_1930_period_movement (movement excl. opening balance), NOT gl_1930_balance. Do not display gl_1930_balance next to difference.',
     'is_reconciled means |difference| < 0.01 for the window, an aggregate check, not a per-transaction guarantee.',
+    'Judge health on unexplained_difference, NOT on difference. difference is just the gap between the two sides and is expected to be large mid-year; it is fully explained while every krona of it sits in unmatched_transaction_total or unmatched_gl_line_total. A non-zero unexplained_difference is the real finding: a matched pair disagreeing in amount, a voucher with several lines on the account, or a storno/correction line the candidate list hides.',
+    'Ignored transactions are excluded from bank_transaction_total and difference (they never get a ledger counterpart); their count and sum are reported separately.',
   ],
   example: {
     response: {
       data: {
         bank_transaction_total: 48150,
+        ignored_transaction_total: 0,
+        ignored_transaction_count: 0,
         gl_1930_balance: 98150,
         gl_1930_period_movement: 48150,
         gl_1930_opening_balance: 50000,
@@ -63,7 +79,10 @@ registerEndpoint({
         is_reconciled: true,
         matched_count: 142,
         unmatched_transaction_count: 3,
+        unmatched_transaction_total: 1250,
         unmatched_gl_line_count: 2,
+        unmatched_gl_line_total: 1250,
+        unexplained_difference: 0,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },

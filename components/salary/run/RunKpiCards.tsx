@@ -45,15 +45,15 @@ export function RunKpiCards({ run, employees }: RunKpiCardsProps) {
     { label: t('kpi_employer_cost'), value: effEmployerCost },
   ]
 
-  // Inline stat row framed by hairlines — Linear-style, no boxes. Metrics
-  // breathe on whitespace and wrap on narrow viewports.
+  // Flat stat row: label/number pairs on whitespace, no boxes or rules.
+  // Metrics wrap on narrow viewports.
   return (
-    <div className="flex flex-wrap gap-x-10 gap-y-3 border-y border-border py-4">
+    <div className="flex flex-wrap gap-x-10 gap-y-4">
       {cards.map(({ label, value, accent }) => (
         <div key={label} className="min-w-0">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
           <p
-            className={`mt-1 font-sans font-medium text-lg tabular-nums leading-none ${accent ? 'text-success' : ''}`}
+            className={`mt-1 font-display text-xl tabular-nums leading-none ${accent ? 'text-success' : ''}`}
           >
             {formatCurrency(value)}
           </p>

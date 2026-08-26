@@ -17,8 +17,8 @@ import {
   computeInstallmentAmounts,
   countCalendarMonths,
 } from '@/lib/bookkeeping/accruals/compute'
-import { shouldShowK2AccrualHint } from '@/components/bookkeeping/accrual-k2-hint'
-import type { AccrualDirection } from '@/types'
+import { accrualHintKey, shouldShowK2AccrualHint } from '@/components/bookkeeping/accrual-k2-hint'
+import type { AccrualDirection, EntityType } from '@/types'
 
 export interface AccrualFormValue {
   start: string
@@ -59,6 +59,7 @@ export default function AccrualPeriodControl({
   onChange,
   onRemove,
   idPrefix,
+  entityType,
 }: {
   direction: AccrualDirection
   /** Net line amount (ex VAT), in `currency`: drives the preview and the K2 hint. */
@@ -75,6 +76,12 @@ export default function AccrualPeriodControl({
   onChange: (next: AccrualFormValue) => void
   onRemove: () => void
   idPrefix: string
+  /**
+   * Picks the regelverk the materiality hint cites: K1 (BFNAR 2006:1) for
+   * enskild firma, K2 (BFNAR 2016:10) otherwise. Missing keeps the K2
+   * wording (the historical default).
+   */
+  entityType?: EntityType | null
 }) {
   const t = useTranslations('accruals')
 
@@ -101,14 +108,15 @@ export default function AccrualPeriodControl({
     }
   }
 
-  // K2's 5 000 kr vasentlighetsgrans is measured in kronor, and it is a
-  // simplification the company may use, not an obligation. So when the line
+  // The 5 000 kr vasentlighetsgrans (K1/K2) is measured in kronor, and it is
+  // a simplification the company may use, not an obligation. So when the line
   // is in a foreign currency and no rate is available, show nothing at all
   // rather than compare the raw foreign amount against a SEK threshold.
-  const showK2Hint = shouldShowK2AccrualHint({ amount, currency, exchangeRate })
+  const showMaterialityHint = shouldShowK2AccrualHint({ amount, currency, exchangeRate })
+  const materialityHintKey = accrualHintKey(entityType)
 
   return (
-    <div className="rounded-md border bg-muted/30 p-3 space-y-3">
+    <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           {t('panel_title')}
@@ -177,8 +185,8 @@ export default function AccrualPeriodControl({
           {previewInvalid ?? preview}
         </p>
       )}
-      {showK2Hint && (
-        <p className="text-xs text-muted-foreground">{t('k2_hint')}</p>
+      {showMaterialityHint && (
+        <p className="text-xs text-muted-foreground">{t(materialityHintKey)}</p>
       )}
     </div>
   )

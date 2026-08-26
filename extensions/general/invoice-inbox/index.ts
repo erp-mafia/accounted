@@ -1,10 +1,26 @@
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { z } from 'zod'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
+import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
+import { mirrorExtractionToDocument } from './lib/mirror-extraction'
+import {
+  uploadAndExtract,
+  sanitiseFilename,
+  sanitiseMime,
+  isSandboxCompany,
+  countPdfPages,
+  slicePdfForExtraction,
+  MAX_FILE_SIZE,
+  MAX_PAGES_FOR_AUTO_EXTRACT,
+  UPLOAD_ALLOWED_MIME_TYPES,
+  EMAIL_ALLOWED_MIME_TYPES,
+  ensureHtmlDocument,
+  buildEmailBodyHtmlDocument,
+} from './lib/upload-and-extract'
 import {
   verifyInboundWebhook,
   fetchReceivingEmail,
@@ -28,8 +44,10 @@ import {
   applyDomainStatusFromWebhook,
 } from './lib/custom-domains'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -39,73 +57,30 @@ import {
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
+import {
+  completeInboxItemsForBookedTransaction,
+  resolveBookedJournalEntryIds,
+} from '@/lib/transactions/inbox-underlag'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
+import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { buildFallbackKonteringLines } from './lib/fallback-kontering'
+import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import type { Transaction, EntityType } from '@/types'
+import { createLogger } from '@/lib/logger'
+import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-without-underlag'
+import { lookupPortal } from '@/lib/receipt-hunt/portal-directory'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { simpleParser } from 'mailparser'
-import { PDFDocument } from 'pdf-lib'
-import path from 'node:path'
+import type { InboxChannelContext, InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
-/**
- * Defensive filename sanitisation for content arriving from .eml inner
- * attachments and rejected-attachment metadata. The document-service already
- * sanitises before storage paths are built (lib/core/documents/document-service.ts),
- * so this is defense-in-depth: strip directory traversal sequences and exotic
- * characters before they ever flow into DB columns or downstream consumers.
- */
-function sanitiseFilename(raw: string | null | undefined, fallback: string): string {
-  const base = path.basename(String(raw ?? '').trim())
-  const cleaned = base.replace(/[^\w.-]/g, '_').slice(0, 200)
-  return cleaned || fallback
-}
-
-function sanitiseMime(raw: string | null | undefined): string {
-  const value = String(raw ?? '').trim().slice(0, 120)
-  return /^[\w./+-]+$/.test(value) ? value : 'application/octet-stream'
-}
-import type { InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
-
-const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_ATTACHMENTS_PER_EMAIL = 20
-
-// AI extraction is tuned for single-page receipts/invoices. Documents above
-// this page count tend to be sales reports, bank statements, or contracts:
-// Bedrock churns for minutes and still extracts nothing useful (issue #553).
-// Above the limit we skip extraction entirely; the document still lands in
-// the inbox and can be attached to a transaction or converted manually.
-const MAX_PAGES_FOR_AUTO_EXTRACT = 3
-
-// Returns the page count for a PDF buffer, or null if the buffer isn't a
-// parseable PDF. Errors fall through so callers can treat "unknown" the same
-// as "small enough": preserves today's behavior on malformed inputs.
-async function countPdfPages(buffer: ArrayBuffer): Promise<number | null> {
-  try {
-    const pdf = await PDFDocument.load(buffer, { updateMetadata: false })
-    return pdf.getPageCount()
-  } catch {
-    return null
-  }
-}
-
-// Sandbox companies (24h anonymous demo accounts) skip the Bedrock extraction
-// pipeline entirely. The document still uploads, the inbox row still lands,
-// and the user can fill the fields in by hand, but no Claude tokens are
-// spent on a throwaway account. See migration 20260311120000 for the column.
-async function isSandboxCompany(
-  supabase: import('@supabase/supabase-js').SupabaseClient,
-  companyId: string,
-): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('company_settings')
-    .select('is_sandbox')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (error || !data) return false
-  return data.is_sandbox === true
-}
 
 // Partial-update schema for the /items/:id/fields PATCH route. Only the
 // scalar fields the UI exposes for inline editing: line items and
@@ -179,203 +154,6 @@ const customDomainsDisabledResponse = () =>
     { status: 403 }
   )
 
-const UPLOAD_ALLOWED_MIME_TYPES = new Set([
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/heic',
-  'image/heif',
-  'image/webp',
-])
-
-interface EmailMeta {
-  from?: string | null
-  subject?: string | null
-  receivedAt?: string | null
-  messageId?: string | null
-  bodyText?: string | null
-  resendEmailId?: string | null
-  resendAttachmentId?: string | null
-}
-
-// ── Shared helper: upload + extract + create inbox item ──────
-
-async function uploadAndExtract(
-  supabase: import('@supabase/supabase-js').SupabaseClient,
-  userId: string,
-  companyId: string,
-  file: { name: string; buffer: ArrayBuffer; type: string },
-  source: 'upload' | 'email',
-  emailMeta?: EmailMeta,
-  // Pre-match the new inbox item to a bank transaction. Set when the caller
-  // already knows which transaction this receipt belongs to (e.g. the
-  // VerifyAndBookOverlay opened from a transaction row's paperclip or from
-  // a transaction-anchored chat). Skipped silently if missing.
-  matchedTransactionId?: string | null,
-  opts: { skipExtraction?: boolean } = {},
-) {
-  const correlationId = crypto.randomUUID()
-
-  const doc = await uploadDocument(supabase, userId, companyId, {
-    name: file.name,
-    buffer: file.buffer,
-    type: file.type,
-  }, {
-    upload_source: source === 'email' ? 'email' : 'file_upload',
-  })
-
-  try {
-    await appendProcessingHistory({
-      companyId,
-      correlationId,
-      aggregateType: 'Document',
-      aggregateId: doc.id,
-      eventType: 'DocumentIngested',
-      payload: {
-        channel: source,
-        document_id: doc.id,
-        mime_type: file.type,
-        size_bytes: file.buffer.byteLength,
-      },
-      actor: source === 'email' ? { type: 'system', id: 'resend-inbound' } : { type: 'user', id: userId },
-      occurredAt: new Date(),
-    })
-  } catch (err) {
-    console.error('[invoice-inbox] Failed to append DocumentIngested:', err)
-  }
-
-  // Page-count gate (issue #553): PDFs above MAX_PAGES_FOR_AUTO_EXTRACT
-  // skip extraction. Bedrock would otherwise block the upload response for
-  // minutes on a 6-page sales report and return nothing useful. Images and
-  // non-PDFs are never gated (single-page by definition). countPdfPages
-  // returns null on malformed PDFs: we treat null as "not gated" and fall
-  // through to the existing extraction path so today's behavior is preserved.
-  const pageCount =
-    file.type === 'application/pdf' ? await countPdfPages(file.buffer) : null
-  const gatedByPageCount =
-    pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
-  const sandbox = await isSandboxCompany(supabase, companyId)
-  // Paid-tier gate: AI document OCR (Bedrock, via extractInvoiceFields) is the
-  // `ai` capability. A company without it (free/manual tier) must never trigger
-  // paid extraction: we seed an empty skeleton exactly like the sandbox / BYO-
-  // extraction path, so the document is still stored and can be filled in
-  // manually. Highest priority (a hard paywall rule, not a heuristic).
-  const hasAiEntitlement = await hasCapability(supabase, companyId, CAPABILITY.ai)
-  // Skip-reason priority: no-AI-entitlement > sandbox > page-count > client opt-out.
-  const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'client_opt_out' | 'sandbox' | null =
-    !hasAiEntitlement
-      ? 'no_ai_entitlement'
-      : sandbox
-        ? 'sandbox'
-        : gatedByPageCount
-          ? 'too_many_pages'
-          : opts.skipExtraction
-            ? 'client_opt_out'
-            : null
-  const skipExtraction = skipReason !== null
-
-  // Bring-your-own-extraction: skip the Bedrock call entirely and seed an
-  // empty extraction skeleton. The caller is expected to PUT the parsed
-  // fields via /items/:id/extracted-data before converting to a supplier
-  // invoice. extracted_data is never null in the DB; an empty skeleton
-  // keeps downstream readers (UI, MCP) happy.
-  const { data: extracted, rawText } = skipExtraction
-    ? { data: emptyResult(), rawText: null }
-    : await extractInvoiceFields({
-        buffer: Buffer.from(file.buffer),
-        mimeType: file.type,
-        fileName: file.name,
-      })
-
-  // Supplier match by org-nr, then case-insensitive name (no AI fuzz).
-  let matchedSupplierId: string | null = null
-  if (extracted.supplier.orgNumber) {
-    const { data: s } = await supabase
-      .from('suppliers')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('org_number', extracted.supplier.orgNumber)
-      .limit(1)
-      .maybeSingle()
-    if (s) matchedSupplierId = s.id
-  }
-  if (!matchedSupplierId && extracted.supplier.name) {
-    const { data: s } = await supabase
-      .from('suppliers')
-      .select('id')
-      .eq('company_id', companyId)
-      .ilike('name', extracted.supplier.name)
-      .limit(1)
-      .maybeSingle()
-    if (s) matchedSupplierId = s.id
-  }
-
-  const { data: inbox, error: inboxError } = await supabase
-    .from('invoice_inbox_items')
-    .insert({
-      company_id: companyId,
-      user_id: userId,
-      status: 'received',
-      source,
-      document_id: doc.id,
-      extracted_data: extracted as unknown as Record<string, unknown>,
-      extraction_skipped: skipExtraction,
-      matched_supplier_id: matchedSupplierId,
-      email_from: emailMeta?.from || null,
-      email_subject: emailMeta?.subject || null,
-      email_received_at: emailMeta?.receivedAt || null,
-      email_body_text: emailMeta?.bodyText || null,
-      resend_email_id: emailMeta?.resendEmailId || null,
-      resend_attachment_id: emailMeta?.resendAttachmentId || null,
-      raw_email_payload: emailMeta?.messageId
-        ? { messageId: emailMeta.messageId, filename: file.name }
-        : null,
-      correlation_id: correlationId,
-      matched_transaction_id: matchedTransactionId ?? null,
-    })
-    .select('*')
-    .single()
-
-  if (inboxError) throw new Error(`Failed to create inbox item: ${inboxError.message}`)
-
-  try {
-    await appendProcessingHistory({
-      companyId,
-      correlationId,
-      aggregateType: 'Document',
-      aggregateId: doc.id,
-      eventType: 'DocumentExtractionAttempted',
-      payload: {
-        document_id: doc.id,
-        inbox_item_id: inbox.id,
-        succeeded: rawText != null && rawText.length > 0,
-        extracted_total: extracted.totals.total,
-        has_org_number: extracted.supplier.orgNumber != null,
-        has_ocr: extracted.invoice.paymentReference != null,
-        skipped: skipExtraction,
-        skip_reason: skipReason,
-        page_count: pageCount,
-      },
-      actor: { type: 'system', id: 'invoice-inbox-extract' },
-      occurredAt: new Date(),
-    })
-  } catch (err) {
-    console.error('[invoice-inbox] Failed to append DocumentExtractionAttempted:', err)
-  }
-
-  return {
-    document_id: doc.id,
-    inbox_item_id: inbox.id,
-    status: inbox.status,
-    extracted_data: extracted,
-    matched_supplier_id: inbox.matched_supplier_id,
-    matched_transaction_id: inbox.matched_transaction_id,
-    extraction_skipped: skipExtraction,
-    skip_reason: skipReason,
-    page_count: pageCount,
-  }
-}
-
 // ── Admin/owner check helper ──────────────────────────────────
 
 async function isCompanyAdmin(
@@ -414,10 +192,17 @@ export const invoiceInboxExtension: Extension = {
         if (!limit.ok) {
           return NextResponse.json(
             {
-              error:
-                limit.scope === 'minute'
-                  ? 'För många uppladdningar på kort tid. Försök igen om en stund.'
-                  : 'Dagsgränsen för uppladdningar är nådd. Försök igen imorgon.',
+              error: {
+                code: 'RATE_LIMITED',
+                message:
+                  limit.scope === 'minute'
+                    ? 'För många uppladdningar på kort tid. Försök igen om en stund.'
+                    : 'Dagsgränsen för uppladdningar är nådd. Försök igen imorgon.',
+                message_en:
+                  limit.scope === 'minute'
+                    ? 'Too many uploads in a short time. Try again in a moment.'
+                    : 'The daily upload limit has been reached. Try again tomorrow.',
+              },
               retry_after: limit.retryAfterSec,
             },
             { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
@@ -438,15 +223,18 @@ export const invoiceInboxExtension: Extension = {
           formData.get('skip_extraction') === 'true' ||
           formData.get('skip_extraction') === '1'
 
-        if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+        if (!file) return errorResponseFromCode('INBOX_UPLOAD_NO_FILE', ctx.log)
         if (file.size > MAX_FILE_SIZE) {
-          return NextResponse.json({ error: `File too large (max ${MAX_FILE_SIZE / 1024 / 1024} MB)` }, { status: 400 })
+          return errorResponseFromCode('INBOX_UPLOAD_TOO_LARGE', ctx.log, {
+            messageSv: `Filen är för stor. Maxstorlek är ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
+            messageEn: `File exceeds the ${MAX_FILE_SIZE / 1024 / 1024} MB size limit.`,
+          })
         }
         if (!UPLOAD_ALLOWED_MIME_TYPES.has(file.type)) {
-          return NextResponse.json(
-            { error: `Unsupported file type: ${file.type}. Allowed: PDF, JPEG, PNG, HEIC, WebP` },
-            { status: 400 }
-          )
+          return errorResponseFromCode('INBOX_UPLOAD_UNSUPPORTED_TYPE', ctx.log, {
+            messageSv: `Filtypen stöds inte: ${file.type || 'okänd'}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
+            messageEn: `Unsupported file type: ${file.type || 'unknown'}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
+          })
         }
 
         // Validate matched_transaction_id belongs to this company before we
@@ -465,15 +253,18 @@ export const invoiceInboxExtension: Extension = {
             return NextResponse.json({ error: txErr.message }, { status: 500 })
           }
           if (!tx) {
-            return NextResponse.json(
-              { error: 'matched_transaction_id refers to a transaction outside this company.' },
-              { status: 400 },
-            )
+            return errorResponseFromCode('INBOX_UPLOAD_TX_NOT_IN_COMPANY', ctx.log)
           }
         }
 
         try {
           const buffer = await file.arrayBuffer()
+          // Staged upload: the row lands as 'processing' and the response
+          // returns before Bedrock runs; the deferred worker (or the sweep
+          // cron) flips it to 'received'. Only this web route defers: email
+          // and WhatsApp ingestion already run in background contexts and
+          // consume the returned item synchronously. When skipExtraction is
+          // set the call stays synchronous (see uploadAndExtract).
           const result = await uploadAndExtract(
             ctx.supabase,
             ctx.userId,
@@ -482,13 +273,24 @@ export const invoiceInboxExtension: Extension = {
             'upload',
             undefined,
             matchedTransactionId,
-            { skipExtraction },
+            { skipExtraction, deferExtraction: true },
           )
           return NextResponse.json({ data: result })
         } catch (error) {
           console.error('[invoice-inbox/upload] Failed:', error)
+          // Pass the thrown message through: the document service raises its
+          // user-facing failures (magic-byte mismatch, corrupt content) in
+          // Swedish, and getErrorMessage substitutes the registry copy for
+          // this code when the message is internal English.
+          const message = error instanceof Error && error.message.trim() ? error.message : null
           return NextResponse.json(
-            { error: error instanceof Error ? error.message : 'Upload failed' },
+            {
+              error: {
+                code: 'INBOX_UPLOAD_FAILED',
+                message: message ?? 'Uppladdningen misslyckades. Försök igen.',
+                message_en: message ?? 'Upload failed.',
+              },
+            },
             { status: 500 }
           )
         }
@@ -518,7 +320,7 @@ export const invoiceInboxExtension: Extension = {
             email_received_at, email_body_text, error_message,
             created_supplier_invoice_id,
             matched_transaction_id, created_journal_entry_id,
-            resend_email_id, extraction_skipped
+            resend_email_id, extraction_skipped, channel_context
           `)
           .eq('company_id', ctx.companyId)
           .order('created_at', { ascending: false })
@@ -529,7 +331,44 @@ export const invoiceInboxExtension: Extension = {
         const { data, error } = await query
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-        return NextResponse.json({ data: { items: data, count: data?.length ?? 0 } })
+        // Enrich matched-but-unstamped items with the verifikat that anchors
+        // their transaction, when it is already booked. The stamp
+        // (created_journal_entry_id) is UNIQUE per verifikat, so on a
+        // samlingsverifikat only one of N items can carry it: deriving
+        // "booked" from the transaction's own state is what lets the rest
+        // leave the active inbox (2026-08-12 report: booked items stuck in
+        // "Att göra" pointing at a transaction no longer in the work list).
+        type ItemRow = {
+          matched_transaction_id: string | null
+          created_journal_entry_id: string | null
+          created_supplier_invoice_id: string | null
+        }
+        const rows = (data ?? []) as ItemRow[]
+        const unresolvedTxIds = Array.from(
+          new Set(
+            rows
+              .filter(
+                (r) =>
+                  r.matched_transaction_id &&
+                  !r.created_journal_entry_id &&
+                  !r.created_supplier_invoice_id,
+              )
+              .map((r) => r.matched_transaction_id as string),
+          ),
+        )
+        const bookedByTx = await resolveBookedJournalEntryIds(
+          ctx.supabase,
+          ctx.companyId,
+          unresolvedTxIds,
+        )
+        const items = rows.map((r) => ({
+          ...r,
+          matched_transaction_journal_entry_id: r.matched_transaction_id
+            ? bookedByTx.get(r.matched_transaction_id) ?? null
+            : null,
+        }))
+
+        return NextResponse.json({ data: { items, count: items.length } })
       },
     },
 
@@ -590,7 +429,28 @@ export const invoiceInboxExtension: Extension = {
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
         if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-        return NextResponse.json({ data })
+        // Same enrichment as the list: the detail rail must not offer to
+        // book a matched transaction that is already booked.
+        const row = data as {
+          matched_transaction_id: string | null
+          created_journal_entry_id: string | null
+          created_supplier_invoice_id: string | null
+        }
+        let matchedTransactionJournalEntryId: string | null = null
+        if (
+          row.matched_transaction_id &&
+          !row.created_journal_entry_id &&
+          !row.created_supplier_invoice_id
+        ) {
+          const bookedByTx = await resolveBookedJournalEntryIds(ctx.supabase, ctx.companyId, [
+            row.matched_transaction_id,
+          ])
+          matchedTransactionJournalEntryId = bookedByTx.get(row.matched_transaction_id) ?? null
+        }
+
+        return NextResponse.json({
+          data: { ...row, matched_transaction_journal_entry_id: matchedTransactionJournalEntryId },
+        })
       },
     },
 
@@ -633,8 +493,19 @@ export const invoiceInboxExtension: Extension = {
 
         // Merge user edits into existing extracted_data so we don't lose
         // line items, vatBreakdown, or AI-confidence on partial updates.
+        //
+        // The spread of `current` is load-bearing and must come first. Naming
+        // the surviving keys one by one, as this did, silently destroyed every
+        // field the list happened not to mention: documentKind,
+        // merchantCategory, legibility, purchaseTime, payment and
+        // suggestedTemplateId were all wiped the first time somebody corrected
+        // a single field by hand. The classification is not recoverable
+        // afterwards without re-running extraction, and nothing surfaced the
+        // loss. Spreading means anything added to InvoiceExtractionResult later
+        // survives by default instead of waiting to be noticed missing.
         const current = (item.extracted_data ?? {}) as InvoiceExtractionResult
         const merged: InvoiceExtractionResult = {
+          ...current,
           supplier: { ...current.supplier, ...body.supplier },
           invoice: { ...current.invoice, ...body.invoice },
           totals: { ...current.totals, ...body.totals },
@@ -727,28 +598,12 @@ export const invoiceInboxExtension: Extension = {
         }
 
         // Re-run supplier match so the agent's parsed fields trigger the
-        // same auto-link the AI path uses. Skipped if neither key is present.
-        let matchedSupplierId: string | null = null
-        if (extracted.supplier.orgNumber) {
-          const { data: s } = await ctx.supabase
-            .from('suppliers')
-            .select('id')
-            .eq('company_id', ctx.companyId)
-            .eq('org_number', extracted.supplier.orgNumber)
-            .limit(1)
-            .maybeSingle()
-          if (s) matchedSupplierId = s.id
-        }
-        if (!matchedSupplierId && extracted.supplier.name) {
-          const { data: s } = await ctx.supabase
-            .from('suppliers')
-            .select('id')
-            .eq('company_id', ctx.companyId)
-            .ilike('name', extracted.supplier.name)
-            .limit(1)
-            .maybeSingle()
-          if (s) matchedSupplierId = s.id
-        }
+        // same auto-link the AI path uses. Skipped if no key is present.
+        const matchedSupplierId = await matchSupplierId(
+          ctx.supabase,
+          ctx.companyId,
+          extracted.supplier,
+        )
 
         const { data: updated, error: updateError } = await ctx.supabase
           .from('invoice_inbox_items')
@@ -807,15 +662,18 @@ export const invoiceInboxExtension: Extension = {
 
         const formData = await request.formData()
         const file = formData.get('file') as File | null
-        if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+        if (!file) return errorResponseFromCode('INBOX_UPLOAD_NO_FILE', ctx.log)
         if (file.size > MAX_FILE_SIZE) {
-          return NextResponse.json({ error: `File too large (max ${MAX_FILE_SIZE / 1024 / 1024} MB)` }, { status: 400 })
+          return errorResponseFromCode('INBOX_UPLOAD_TOO_LARGE', ctx.log, {
+            messageSv: `Filen är för stor. Maxstorlek är ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
+            messageEn: `File exceeds the ${MAX_FILE_SIZE / 1024 / 1024} MB size limit.`,
+          })
         }
         if (!UPLOAD_ALLOWED_MIME_TYPES.has(file.type)) {
-          return NextResponse.json(
-            { error: `Unsupported file type: ${file.type}. Allowed: PDF, JPEG, PNG, HEIC, WebP` },
-            { status: 400 }
-          )
+          return errorResponseFromCode('INBOX_UPLOAD_UNSUPPORTED_TYPE', ctx.log, {
+            messageSv: `Filtypen stöds inte: ${file.type || 'okänd'}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
+            messageEn: `Unsupported file type: ${file.type || 'unknown'}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
+          })
         }
 
         const { data: item } = await ctx.supabase
@@ -841,11 +699,15 @@ export const invoiceInboxExtension: Extension = {
             type: file.type,
           }, {
             upload_source: 'file_upload',
+            // This route extracts below and mirrors the outcome onto the
+            // document row; the document-extraction extension must not race it.
+            extractionOwner: 'invoice-inbox',
           })
 
-          // Same page-count gate as /upload (issue #553): attaching a 6-page
-          // sales report to an existing inbox row should not block on Bedrock.
-          // Sandbox companies skip Bedrock unconditionally.
+          // Same page handling as /upload (issue #553): long PDFs extract
+          // from a slice of their first pages; the skip only remains for
+          // unsliceable (encrypted/malformed) PDFs. Sandbox companies skip
+          // Bedrock unconditionally.
           const pageCount =
             file.type === 'application/pdf' ? await countPdfPages(buffer) : null
           const gatedByPageCount =
@@ -855,23 +717,37 @@ export const invoiceInboxExtension: Extension = {
           // skeleton; the attached document is still stored). Same paywall as
           // the shared upload path above.
           const hasAiEntitlement = await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.ai)
+          const slicedBuffer =
+            gatedByPageCount && hasAiEntitlement && !sandbox
+              ? await slicePdfForExtraction(buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
+              : null
           const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'sandbox' | null =
             !hasAiEntitlement
               ? 'no_ai_entitlement'
               : sandbox
                 ? 'sandbox'
-                : gatedByPageCount
+                : gatedByPageCount && slicedBuffer == null
                   ? 'too_many_pages'
                   : null
           const skipExtraction = skipReason !== null
 
-          const { data: extracted } = skipExtraction
-            ? { data: emptyResult() }
+          const extraction = skipExtraction
+            ? { data: emptyResult(), rawText: null, model: null, skipped: null }
             : await extractInvoiceFields({
-                buffer: Buffer.from(buffer),
+                buffer: Buffer.from(slicedBuffer ?? buffer),
                 mimeType: file.type,
                 fileName: file.name,
               })
+          const { data: extracted } = extraction
+          if (!skipExtraction && slicedBuffer != null && pageCount != null) {
+            extracted.pages = { total: pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
+          }
+          await mirrorExtractionToDocument(doc.id, {
+            data: extracted,
+            rawText: extraction.rawText,
+            model: extraction.model ?? null,
+            skipped: skipReason ?? extraction.skipped ?? null,
+          })
 
           const { error: linkError } = await ctx.supabase
             .from('invoice_inbox_items')
@@ -922,8 +798,16 @@ export const invoiceInboxExtension: Extension = {
           })
         } catch (error) {
           console.error('[invoice-inbox/attach-document] Failed:', error)
+          // Same pass-through rationale as the /upload catch above.
+          const message = error instanceof Error && error.message.trim() ? error.message : null
           return NextResponse.json(
-            { error: error instanceof Error ? error.message : 'Attach failed' },
+            {
+              error: {
+                code: 'INBOX_ATTACH_FAILED',
+                message: message ?? 'Bilagan kunde inte kopplas. Försök igen.',
+                message_en: message ?? 'Failed to attach the document.',
+              },
+            },
             { status: 500 }
           )
         }
@@ -1055,6 +939,17 @@ export const invoiceInboxExtension: Extension = {
             console.error('[invoice-inbox/match-transaction] tx.document_id backfill failed:', txUpdateError)
           }
         }
+
+        // The matched transaction may already be booked (directly or via a
+        // bulk-book samlingsverifikat): complete the item against the
+        // anchoring verifikat (underlag link + consumed stamp) so matching
+        // to a settled purchase resolves the item instead of stranding it
+        // as "linked". Best-effort, logged inside.
+        await completeInboxItemsForBookedTransaction(
+          ctx.supabase,
+          ctx.companyId,
+          body.transaction_id,
+        )
 
         return NextResponse.json({ data: updated })
       },
@@ -1205,24 +1100,58 @@ export const invoiceInboxExtension: Extension = {
 
         try {
           const buffer = Buffer.from(await blob.arrayBuffer())
-          const { data: extracted } = await extractInvoiceFields({
+          const extraction = await extractInvoiceFields({
             buffer,
             mimeType: doc.mime_type,
             fileName: doc.file_name,
           })
+          const { data: extracted } = extraction
+          await mirrorExtractionToDocument(item.document_id, {
+            data: extracted,
+            rawText: extraction.rawText,
+            model: extraction.model ?? null,
+            skipped: extraction.skipped ?? null,
+          })
 
-          const { error: updateError } = await ctx.supabase
-            .from('invoice_inbox_items')
-            .update({
-              status: 'received',
-              error_message: null,
-              extracted_data: extracted as unknown as Record<string, unknown>,
-              // Retry is user-initiated and bypasses the page-count gate by
-              // design: the user explicitly opted into the slow path.
-              extraction_skipped: false,
-            })
-            .eq('id', id)
-            .eq('company_id', ctx.companyId)
+          // Re-running the extraction has to re-run the match too, or the one
+          // affordance the user reaches for when an item failed to auto-link
+          // ("Tolka om") can never produce a link: this path rewrote
+          // extracted_data and left matched_supplier_id untouched. Only a
+          // positive match is written, so a supplier the user picked by hand
+          // survives a retry that finds nothing.
+          const matchedSupplierId = await matchSupplierId(
+            ctx.supabase,
+            ctx.companyId,
+            extracted.supplier,
+          )
+
+          // Two literal payloads instead of one with a conditional spread:
+          // the phantom-column guard can only check columns written as inline
+          // object literals, and matched_supplier_id should be checkable.
+          const { error: updateError } = matchedSupplierId
+            ? await ctx.supabase
+                .from('invoice_inbox_items')
+                .update({
+                  status: 'received',
+                  error_message: null,
+                  extracted_data: extracted as unknown as Record<string, unknown>,
+                  // Retry is user-initiated and bypasses the page-count gate by
+                  // design: the user explicitly opted into the slow path.
+                  extraction_skipped: false,
+                  matched_supplier_id: matchedSupplierId,
+                })
+                .eq('id', id)
+                .eq('company_id', ctx.companyId)
+            : await ctx.supabase
+                .from('invoice_inbox_items')
+                .update({
+                  status: 'received',
+                  error_message: null,
+                  extracted_data: extracted as unknown as Record<string, unknown>,
+                  extraction_skipped: false,
+                })
+                .eq('id', id)
+                .eq('company_id', ctx.companyId)
 
           if (updateError) {
             return NextResponse.json({ error: updateError.message }, { status: 500 })
@@ -1477,7 +1406,7 @@ export const invoiceInboxExtension: Extension = {
         // the user pressing "Kontrollera igen" (requires the event type to be
         // subscribed on the Resend webhook; harmless when it isn't).
         if (event.type === 'domain.updated') {
-          const domainServiceSupabase = createClient(
+          const domainServiceSupabase = createServiceRoleClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.SUPABASE_SERVICE_ROLE_KEY!
           )
@@ -1495,7 +1424,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { email_id, to, from, subject, message_id, created_at } = event.data
 
-        const serviceSupabase = createClient(
+        const serviceSupabase = createServiceRoleClient(
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
           process.env.SUPABASE_SERVICE_ROLE_KEY!
         )
@@ -1627,6 +1556,55 @@ export const invoiceInboxExtension: Extension = {
         }
 
         if (attachments.length === 0) {
+          // Body-only mail: for many suppliers the HTML body IS the invoice
+          // (SaaS receipts, e-mail invoices), and often the only underlag the
+          // user has. Store the body as a text/html document and run the
+          // normal extract pipeline instead of dead-ending in an error row.
+          // Mails with an empty body keep the old error row.
+          const bodyDoc = buildEmailBodyHtmlDocument(fullEmail.html ?? null, bodyText)
+          if (bodyDoc && bodyDoc.byteLength <= MAX_FILE_SIZE) {
+            // Resend retries the webhook on failure: a retry after success
+            // must not duplicate the body document. Body items carry the
+            // email_id with a NULL attachment id.
+            const { data: existingBody } = await serviceSupabase
+              .from('invoice_inbox_items')
+              .select('id')
+              .eq('resend_email_id', email_id)
+              .is('resend_attachment_id', null)
+              .maybeSingle()
+            if (existingBody) {
+              return NextResponse.json(
+                { data: { processed: 0, reason: 'email_body_duplicate', inbox_item_id: existingBody.id } }
+              )
+            }
+            try {
+              const result = await uploadAndExtract(
+                serviceSupabase,
+                userId,
+                companyId,
+                {
+                  name: `mail-${sanitiseFilename(subject, 'meddelande')}.html`,
+                  buffer: bodyDoc,
+                  type: 'text/html',
+                },
+                'email',
+                {
+                  from,
+                  subject,
+                  receivedAt: created_at,
+                  messageId: message_id,
+                  bodyText,
+                  resendEmailId: email_id,
+                }
+              )
+              return NextResponse.json(
+                { data: { processed: 1, reason: 'email_body', inbox_item_id: result.inbox_item_id } }
+              )
+            } catch (err) {
+              // Fall through to the error row so the mail never vanishes.
+              console.error('[invoice-inbox/inbound] Email-body document failed:', err)
+            }
+          }
           await serviceSupabase.from('invoice_inbox_items').insert({
             company_id: companyId,
             user_id: userId,
@@ -1704,13 +1682,44 @@ export const invoiceInboxExtension: Extension = {
             if (download.contentType === 'message/rfc822') {
               const parsed = await simpleParser(Buffer.from(download.buffer))
               const innerAttachments = parsed.attachments || []
+              const innerFrom = parsed.from?.text || from
+              const innerSubject = parsed.subject || subject
               if (innerAttachments.length === 0) {
+                // Gmail "Forward as attachment" of a body-only HTML invoice:
+                // the forwarded mail's body is the underlag. Same treatment
+                // as a direct body-only mail; empty bodies keep the rejection.
+                const innerBodyDoc = buildEmailBodyHtmlDocument(
+                  typeof parsed.html === 'string' ? parsed.html : null,
+                  parsed.text ?? null
+                )
+                if (innerBodyDoc && innerBodyDoc.byteLength <= MAX_FILE_SIZE) {
+                  const innerBodyResult = await uploadAndExtract(
+                    serviceSupabase,
+                    userId,
+                    companyId,
+                    {
+                      name: `mail-${sanitiseFilename(innerSubject, 'meddelande')}.html`,
+                      buffer: innerBodyDoc,
+                      type: 'text/html',
+                    },
+                    'email',
+                    {
+                      from: innerFrom,
+                      subject: innerSubject,
+                      receivedAt: created_at,
+                      messageId: message_id,
+                      bodyText,
+                      resendEmailId: email_id,
+                      resendAttachmentId: att.id,
+                    }
+                  )
+                  results.push({ attachment_id: att.id, inbox_item_id: innerBodyResult.inbox_item_id })
+                  continue
+                }
                 await logRejection(att.id, download.filename, download.contentType, 'Det vidarebefordrade meddelandet innehöll inga bilagor')
                 results.push({ attachment_id: att.id, error: 'eml_no_inner_attachments' })
                 continue
               }
-              const innerFrom = parsed.from?.text || from
-              const innerSubject = parsed.subject || subject
               for (let i = 0; i < innerAttachments.length; i++) {
                 const inner = innerAttachments[i]
                 const innerType = sanitiseMime(inner.contentType)
@@ -1718,7 +1727,7 @@ export const invoiceInboxExtension: Extension = {
                 const innerBuffer = inner.content
                 if (!innerBuffer) continue
                 const innerId = `${att.id}#${i}`
-                if (!UPLOAD_ALLOWED_MIME_TYPES.has(innerType)) {
+                if (!EMAIL_ALLOWED_MIME_TYPES.has(innerType)) {
                   await logRejection(innerId, innerName, innerType, `Avvisad bilaga från vidarebefordrat mejl: filtypen ${innerType} stöds inte`)
                   results.push({ attachment_id: innerId, error: `Unsupported type ${innerType}` })
                   continue
@@ -1728,7 +1737,10 @@ export const invoiceInboxExtension: Extension = {
                   results.push({ attachment_id: innerId, error: 'Inner attachment too large' })
                   continue
                 }
-                const innerArrayBuffer = new Uint8Array(innerBuffer).buffer
+                const innerArrayBuffer =
+                  innerType === 'text/html'
+                    ? ensureHtmlDocument(innerBuffer.toString('utf8'))
+                    : new Uint8Array(innerBuffer).buffer
                 const innerResult = await uploadAndExtract(
                   serviceSupabase,
                   userId,
@@ -1750,7 +1762,7 @@ export const invoiceInboxExtension: Extension = {
               continue
             }
 
-            if (!UPLOAD_ALLOWED_MIME_TYPES.has(download.contentType)) {
+            if (!EMAIL_ALLOWED_MIME_TYPES.has(download.contentType)) {
               await logRejection(att.id, download.filename, download.contentType, `Avvisad: filtypen ${download.contentType} stöds inte`)
               results.push({ attachment_id: att.id, error: `Unsupported type ${download.contentType}` })
               continue
@@ -1761,11 +1773,18 @@ export const invoiceInboxExtension: Extension = {
               continue
             }
 
+            // Attached .html invoices are often fragments; wrap them into a
+            // self-contained document so the archive holds a renderable file.
+            const attachmentBuffer =
+              download.contentType === 'text/html'
+                ? ensureHtmlDocument(Buffer.from(download.buffer).toString('utf8'))
+                : download.buffer
+
             const result = await uploadAndExtract(
               serviceSupabase,
               userId,
               companyId,
-              { name: download.filename, buffer: download.buffer, type: download.contentType },
+              { name: download.filename, buffer: attachmentBuffer, type: download.contentType },
               'email',
               {
                 from,
@@ -1877,6 +1896,28 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Supplier not found' }, { status: 404 })
         }
 
+        // Särskild löneskatt (SLP): same guards as /api/supplier-invoices.
+        // The 7533/2514 pair is only lawful on 741x pension premiums and
+        // cannot be combined with periodisering on the same row.
+        if (
+          body.items.some(
+            (bodyItem) => bodyItem.apply_slp && !isSlpPensionAccount(bodyItem.account_number),
+          )
+        ) {
+          return errorResponseFromCode('SI_CREATE_SLP_INVALID_ACCOUNT', ctx.log)
+        }
+        if (
+          body.items.some(
+            (bodyItem) =>
+              bodyItem.apply_slp &&
+              (bodyItem.accrual_period_start ||
+                bodyItem.accrual_period_end ||
+                bodyItem.accrual_balance_account),
+          )
+        ) {
+          return errorResponseFromCode('SI_CREATE_SLP_ACCRUAL', ctx.log)
+        }
+
         // Periodisering requires faktureringsmetoden: mirror the main
         // /api/supplier-invoices guard so kontantmetod companies never store
         // accrual fields the booking would silently ignore.
@@ -1963,6 +2004,9 @@ export const invoiceInboxExtension: Extension = {
                 ? (bodyItem.accrual_balance_account ??
                   suggestBalanceAccount('expense', bodyItem.account_number))
                 : null,
+            // Särskild löneskatt (SLP): booking injects the self-balancing
+            // 7533/2514 pair for this line. Guarded above (741x, no accrual).
+            apply_slp: bodyItem.apply_slp === true,
           }
         })
 
@@ -2007,7 +2051,20 @@ export const invoiceInboxExtension: Extension = {
             total_sek: totalSek,
             remaining_amount: total,
             document_id: item.document_id || null,
-            notes: body.notes || null,
+            // WhatsApp-sourced items: when the request carries NO notes field
+            // at all, default to the rendered chat context (representation
+            // deltagare + syfte, sender note) so the human answers from the
+            // chat reach the leverantörsfaktura. Presence decides, not
+            // truthiness: `notes: ""` is an explicit clear and stays empty
+            // (same rule as book-direct, where the value lands on an
+            // immutable verifikat). The caption is excluded: this form never
+            // shows the chat context, so nobody reviewed it.
+            notes:
+              body.notes === undefined
+                ? renderChannelContextNotes(
+                    (item as { channel_context?: InboxChannelContext | null }).channel_context,
+                  )
+                : body.notes.trim() || null,
           })
           .select()
           .single()
@@ -2095,14 +2152,15 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: settings } = await ctx.supabase
           .from('company_settings')
-          .select('accounting_method')
+          .select('accounting_method, defer_invoice_booking')
           .eq('company_id', ctx.companyId)
           .single()
 
-        const accountingMethod = settings?.accounting_method || 'accrual'
         let registrationJournalEntryId: string | null = null
 
-        if (accountingMethod === 'accrual') {
+        // #967: deferred companies register WITHOUT booking (same gate as
+        // POST /api/supplier-invoices); ekonomi books later via Bokför.
+        if (booksInvoicesOnIssue(settings)) {
           try {
             const journalEntry = await createSupplierInvoiceRegistrationEntry(
               ctx.supabase,
@@ -2257,7 +2315,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item, error: fetchError } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id')
+          .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id, channel_context')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -2309,6 +2367,24 @@ export const invoiceInboxExtension: Extension = {
           transaction = tx
         }
 
+        // WhatsApp-sourced items: when the request carries NO notes field at
+        // all, default to the rendered chat context (representation deltagare
+        // + syfte, sender note) so the audit text reaches the verifikat even
+        // through clients that never saw the chat (MCP, older UI).
+        //
+        // Presence decides, not truthiness: `notes: ""` is the UI saying the
+        // user emptied the field, and resurrecting the prefill there would
+        // write text onto an immutable verifikat against an explicit user
+        // action (removable only via rättelse). So an empty string clears,
+        // and only an absent field defaults. The caption is excluded: this
+        // path can run without a human ever seeing the string.
+        const effectiveNotes =
+          body.notes === undefined
+            ? renderChannelContextNotes(
+                (item as { channel_context?: InboxChannelContext | null }).channel_context,
+              ) ?? undefined
+            : body.notes.trim() || undefined
+
         // Create the journal entry via the engine. Source-tracks back to
         // the inbox item so the audit trail is preserved even when no
         // transaction is involved.
@@ -2320,7 +2396,7 @@ export const invoiceInboxExtension: Extension = {
             description: body.description,
             source_type: transaction ? 'bank_transaction' : 'inbox_item',
             source_id: transaction ? transaction.id : item.id,
-            notes: body.notes,
+            notes: effectiveNotes,
             lines: body.lines,
           })
         } catch (err) {
@@ -2348,8 +2424,14 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
-        // If transaction-linked, mark the transaction as booked.
-        if (transaction) {
+        // The transaction this verifikat settles: the one the caller named, or
+        // the one the item was already matched to. Preserving the match without
+        // booking it was half a fix, and the worse half: the item then looked
+        // resolved while the bank line stayed open forever. The fallback needs
+        // no ownership check because it was read off a company-scoped item.
+        const bookedTransactionId = transaction?.id ?? item.matched_transaction_id ?? null
+
+        if (bookedTransactionId) {
           const { error: txUpdateError } = await ctx.supabase
             .from('transactions')
             .update({
@@ -2357,7 +2439,7 @@ export const invoiceInboxExtension: Extension = {
               is_business: true,
               category: 'uncategorized',
             })
-            .eq('id', transaction.id)
+            .eq('id', bookedTransactionId)
             .eq('company_id', ctx.companyId)
           if (txUpdateError) {
             console.error('[invoice-inbox/book-direct] Transaction link failed:', txUpdateError)
@@ -2372,7 +2454,11 @@ export const invoiceInboxExtension: Extension = {
           .from('invoice_inbox_items')
           .update({
             created_journal_entry_id: journalEntry.id,
-            matched_transaction_id: transaction?.id ?? null,
+            // Keep the existing match when the caller sent no transaction_id.
+            // Overwriting with null let a caller that merely forgot the field
+            // silently unpick a match somebody had already made, and left the
+            // bank line unbooked with nothing on screen saying so.
+            matched_transaction_id: bookedTransactionId,
           })
           .eq('id', id)
           .eq('company_id', ctx.companyId)
@@ -2434,6 +2520,296 @@ export const invoiceInboxExtension: Extension = {
             skipped,
           },
         })
+      },
+    },
+
+    // ── What this underlag would be booked as ─────────────────────
+    //
+    // Read-only. Nothing here writes, and nothing here is authoritative: the
+    // answer is a suggestion the user approves, edits or ignores, and the
+    // actual posting still goes through book-direct → createJournalEntry.
+    //
+    // Derived on demand rather than stored on the row, so it cannot go stale
+    // against a corrected amount, a re-matched transaction or a template the
+    // company taught itself yesterday. The receipt hunt deliberately does not
+    // compute it: the nightly run is already at its time ceiling, and a
+    // proposal nobody opens is wasted work.
+    //
+    // The lines come from buildTransactionEntryLines, the same function the
+    // commit path and the pending-operations preview use, so what is shown
+    // here cannot drift from what gets posted.
+    {
+      method: 'POST',
+      path: '/items/:id/suggest-booking',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+
+        // A dropped `error` here would report a missing column or a lagging
+        // migration as "Posten hittades inte", pointing the user at their
+        // document instead of at the database.
+        const { data: item, error: itemError } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .select('id, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id')
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+
+        if (itemError) {
+          ctx.log.error('suggest-booking: inbox lookup failed', { itemId: id, error: itemError.message })
+          return NextResponse.json({ error: 'Kunde inte läsa posten' }, { status: 500 })
+        }
+        if (!item) return NextResponse.json({ error: 'Posten hittades inte' }, { status: 404 })
+
+        // Already resolved: there is nothing left to propose, and showing a
+        // suggestion beside a posted verifikat invites double-booking.
+        if (item.created_journal_entry_id || item.created_supplier_invoice_id) {
+          return NextResponse.json({
+            data: { source: 'already_booked' as const, lines: [], confidence: null },
+          })
+        }
+
+        if (!item.matched_transaction_id) {
+          // Without a transaction there is no amount we trust, no settlement
+          // account and no learned counterparty. The honest answer is that we
+          // cannot propose one yet; the UI asks the user to match first.
+          return NextResponse.json({
+            data: { source: 'no_transaction' as const, lines: [], confidence: null },
+          })
+        }
+
+        // The transaction is queried explicitly by company even though RLS
+        // would narrow it: service-role paths have none, and the filter is the
+        // defense-in-depth this repo mandates.
+        const { data: tx, error: txError } = await ctx.supabase
+          .from('transactions')
+          .select('*')
+          .eq('id', item.matched_transaction_id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+
+        if (txError) {
+          ctx.log.error('suggest-booking: transaction lookup failed', {
+            itemId: id,
+            error: txError.message,
+          })
+          return NextResponse.json({ error: 'Kunde inte läsa transaktionen' }, { status: 500 })
+        }
+        if (!tx) {
+          return NextResponse.json({ error: 'Transaktionen hittades inte' }, { status: 404 })
+        }
+
+        // The inbox row is not the only way a purchase gets booked. Booking the
+        // bank line from Transaktioner, from bulk-book or over MCP stamps the
+        // transaction and leaves invoice_inbox_items.created_journal_entry_id
+        // null, so trusting the inbox row alone proposes a second verifikat for
+        // money that already has one.
+        if ((tx as Transaction).journal_entry_id) {
+          return NextResponse.json({
+            data: { source: 'already_booked' as const, lines: [], confidence: null },
+          })
+        }
+
+        // Everything an empty proposal can still say about the matched bank
+        // row: the amount in kronor and the day the money moved. Without it
+        // the manual-booking dialog opened with nothing at all (the regression
+        // behind "beloppet följer inte med längre"), which on a foreign
+        // invoice left the user with no kronor figure anywhere.
+        const txSekSigned = resolveSekAmountOrNull(
+          (tx as Transaction).amount,
+          (tx as Transaction).amount_sek,
+          (tx as Transaction).currency,
+          (tx as Transaction).exchange_rate,
+        )
+        const txSummary =
+          txSekSigned != null
+            ? {
+                amount_sek: roundOre(txSekSigned),
+                date: (tx as Transaction).date,
+              }
+            : null
+        const emptyProposalExtras = (settlementAccount: string) => ({
+          entry_date: (tx as Transaction).date,
+          transaction: txSummary,
+          fallback_lines: buildFallbackKonteringLines(tx as Transaction, settlementAccount),
+        })
+
+        try {
+          const { data: settings } = await ctx.supabase
+            .from('company_settings')
+            .select('entity_type')
+            .eq('company_id', ctx.companyId)
+            .maybeSingle()
+          // Same default as categorize-core. Leaving it undefined silently
+          // proposed enskild-firma accounts to aktiebolag: 2013 instead of
+          // 2893 for an owner expense, 6991 instead of 7610 for a course.
+          const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+
+          const settlementAccount = await resolveSettlementAccount(
+            ctx.supabase,
+            ctx.companyId,
+            (tx as Transaction).cash_account_id,
+            createLogger('invoice-inbox.suggest-booking'),
+            (tx as Transaction).currency,
+          )
+          // evaluateMappingRules applies the settlement account itself on every
+          // return path. Applying it again rewrote a legitimate 1930 leg, which
+          // on an own-account transfer collapsed both sides onto one account.
+          const mapping = await evaluateMappingRules(
+            ctx.supabase,
+            ctx.companyId,
+            tx as Transaction,
+            entityType,
+            settlementAccount,
+          )
+
+          // getDefaultResult is the engine's way of saying it has nothing: a
+          // 6991 placeholder at confidence 0.1. Rendering that as a proposal
+          // dresses "no idea" up as an answer, so it is reported as no_mapping,
+          // which is what the empty branch was always meant to cover.
+          const isPlaceholder =
+            !mapping.rule && !mapping.template_id && mapping.confidence <= 0.1
+          if (isPlaceholder || !mapping.debit_account || !mapping.credit_account) {
+            return NextResponse.json({
+              data: {
+                source: 'no_mapping' as const,
+                lines: [],
+                confidence: mapping.confidence ?? null,
+                ...emptyProposalExtras(settlementAccount),
+              },
+            })
+          }
+
+          // mapping-engine's rule branch computes VAT from the transaction's own
+          // currency while every other line is built in SEK (see the NOTE at
+          // buildResult). On a non-SEK row that understates ingående moms by the
+          // exchange rate: 100 EUR at 11.5 shows 20 kr of moms instead of 230.
+          // The entry still balances, so nothing downstream catches it. Until
+          // that is fixed in the engine, this surface does not render it: a
+          // wrong number one click from the ledger is worse than no number.
+          const sekAmount = (tx as Transaction).amount_sek
+          const isForeign =
+            (tx as Transaction).currency !== 'SEK' &&
+            sekAmount != null &&
+            Math.abs(sekAmount) !== Math.abs((tx as Transaction).amount)
+          if (mapping.rule && isForeign) {
+            ctx.log.info('suggest-booking: withheld a rule-branch proposal on a foreign-currency row', {
+              itemId: id,
+              currency: (tx as Transaction).currency,
+            })
+            return NextResponse.json({
+              data: {
+                source: 'currency_unsupported' as const,
+                lines: [],
+                confidence: null,
+                ...emptyProposalExtras(settlementAccount),
+              },
+            })
+          }
+
+          const lines = buildTransactionEntryLines(tx as Transaction, mapping).map((l) => ({
+            account_number: l.account_number,
+            debit_amount: l.debit_amount,
+            credit_amount: l.credit_amount,
+            description: l.line_description ?? '',
+          }))
+
+          return NextResponse.json({
+            data: {
+              // template_id marks a static library template; a learned
+              // counterparty template sets neither field. Reading it the other
+              // way round labelled the konteringskarta's most trusted match
+              // 'default', the same word the 6991 placeholder gets.
+              source: mapping.rule
+                ? ('mapping_rule' as const)
+                : mapping.template_id
+                  ? ('booking_template' as const)
+                  : ('counterparty_template' as const),
+              lines,
+              // Everything below is what the "Varför så här?" fold reads. It
+              // already existed on MappingResult and nothing rendered it.
+              confidence: mapping.confidence,
+              requires_review: mapping.requires_review,
+              direction_mismatch: mapping.direction_mismatch ?? false,
+              risk_level: mapping.risk_level,
+              description: mapping.description,
+              rule_name: mapping.rule?.rule_name ?? null,
+              template_id: mapping.template_id ?? null,
+              dimensions: mapping.dimensions ?? null,
+              // The day the money moved, not the day printed on the document:
+              // it is what decides the period the entry lands in.
+              entry_date: (tx as Transaction).date,
+            },
+          })
+        } catch (err) {
+          ctx.log.warn('suggest-booking failed', {
+            itemId: id,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          // A suggestion that cannot be produced is not an error the user did
+          // anything about: fall back to the empty proposal and let them book
+          // by hand. The settlement account may be what threw, so the skeleton
+          // uses the 1930 default rather than the resolved account here.
+          return NextResponse.json({
+            data: {
+              source: 'no_mapping' as const,
+              lines: [],
+              confidence: null,
+              ...emptyProposalExtras('1930'),
+            },
+          })
+        }
+      },
+    },
+
+    // ── Purchases still missing their underlag ────────────────────
+    //
+    // The page has always listed documents, so a purchase with no document at
+    // all could not appear on it. That is exactly the gap the receipt hunt
+    // exists to close, and the half a user can act on: fetch the invoice from
+    // the supplier's portal, or ask whoever made the purchase.
+    //
+    // Read-only. The predicate is shared with the hunt so the page and the
+    // nightly run cannot disagree about what "missing its receipt" means.
+    {
+      method: 'GET',
+      path: '/purchases',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        try {
+          const purchases = await fetchPurchasesWithoutUnderlag(ctx.supabase, ctx.companyId)
+
+          return NextResponse.json({
+            data: {
+              count: purchases.length,
+              purchases: purchases.map((p) => {
+                // Where the invoice lives, when the supplier does not send one.
+                // lookupPortal answers null for salary and tax, which have no
+                // invoice to fetch: a link there would be worse than silence.
+                const portal = lookupPortal(p.merchant_name || p.description)
+                return {
+                  id: p.id,
+                  date: p.date,
+                  description: p.description,
+                  merchant_name: p.merchant_name,
+                  amount: p.amount,
+                  currency: p.currency,
+                  amount_sek: p.amount_sek,
+                  portal: portal ? { vendor: portal.vendor, url: portal.url, note: portal.note ?? null } : null,
+                }
+              }),
+            },
+          })
+        } catch (err) {
+          ctx.log.error('purchases lookup failed', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return NextResponse.json({ error: 'Kunde inte hämta köpen' }, { status: 500 })
+        }
       },
     },
   ],

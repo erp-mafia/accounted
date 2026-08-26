@@ -10,7 +10,6 @@ import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
 import { SupportLink } from '@/components/ui/support-link'
 import {
-  Building2,
   Check,
   ChevronsUpDown,
   ChevronRight,
@@ -26,8 +25,9 @@ import {
 
 // Community invite (Accounted's Discord). Deliberately a constant, not
 // branding config: self-hosted rebrands can hide or swap it when someone
-// actually asks for that.
-const DISCORD_INVITE_URL = 'https://discord.gg/D9SxtTgvx'
+// actually asks for that. Must be a never-expiring invite: the previous one
+// expired and left logged-in users with a dead link.
+const DISCORD_INVITE_URL = 'https://discord.gg/nfE9Uyv69a'
 
 // Lucide ships no brand marks, so the Discord logo is inlined (simple-icons
 // path, CC0). Sized and colored like the surrounding lucide icons.
@@ -60,6 +60,19 @@ function accountInitial(name: string | null, email: string | null): string {
   const trimmedEmail = email?.trim()
   if (trimmedEmail && trimmedEmail.length > 0) return trimmedEmail[0]!.toUpperCase()
   return '?'
+}
+
+// Company monogram: first letter in a small rounded square. Square = company,
+// circle = person (the avatar above), so the two identity marks stay distinct.
+function CompanyMark({ name }: { name: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-sm bg-secondary text-[9px] font-semibold uppercase leading-none text-foreground"
+    >
+      {name.trim().charAt(0) || '?'}
+    </span>
+  )
 }
 
 /**
@@ -188,7 +201,7 @@ export default function UserMenu({
   )
 
   const menuRow =
-    'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] ' +
+    'flex w-full items-center gap-2.5 rounded-sm px-2.5 py-2 text-left text-[13px] ' +
     'text-muted-foreground hover:text-foreground hover:bg-secondary/60 ' +
     'transition-colors duration-150 cursor-pointer'
 
@@ -255,7 +268,7 @@ export default function UserMenu({
                 aria-expanded={companiesOpen}
                 className={cn(menuRow, companiesOpen && 'bg-secondary/60 text-foreground')}
               >
-                <Building2 className="h-4 w-4 flex-shrink-0" />
+                <CompanyMark name={company?.name || tSwitcher('default_company_name')} />
                 <span className="flex-1 truncate">
                   {cockpitMode
                     ? tSwitcher('choose_company')
@@ -294,14 +307,14 @@ export default function UserMenu({
                           role="option"
                           aria-selected={isCurrent}
                           className={cn(
-                            'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
+                            'flex w-full items-center gap-2 rounded-sm px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
                             isCurrent
                               ? 'bg-secondary/60 text-foreground'
                               : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
                             isPending && 'opacity-50',
                           )}
                         >
-                          <Building2 className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                          <CompanyMark name={c.name} />
                           <span className="min-w-0 flex-1 truncate">{c.name}</span>
                           {role !== 'owner' && (
                             <span className="flex-shrink-0 text-[10px] text-muted-foreground/60">
@@ -341,7 +354,7 @@ export default function UserMenu({
                   )}
                   {!sandbox && (
                     <div className="border-t border-border/60 px-1 pt-1">
-                      <Link href="/select-company" onClick={close} className={menuRow}>
+                      <Link href="/select-company?choose=1" onClick={close} className={menuRow}>
                         <Plus className="h-4 w-4 flex-shrink-0" />
                         {tSwitcher('add_company')}
                       </Link>
@@ -364,7 +377,7 @@ export default function UserMenu({
                 {tNav('settings')}
               </Link>
               <Link
-                href={cockpitMode ? '/settings/team?ctx=byra' : '/settings/team'}
+                href={cockpitMode ? '/settings/team?ctx=byra' : '/settings/company#members'}
                 onClick={close}
                 className={menuRow}
               >

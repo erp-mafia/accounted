@@ -6,19 +6,20 @@ import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { Plus, Search, Users, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+import { Plus, Users, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
+import { customerListIdentifier } from '@/lib/customers/mask-personal-number'
 
 const CustomerForm = dynamic(
   () => import('@/components/customers/CustomerForm'),
@@ -53,8 +54,11 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
 ]
 const INITIAL_VISIBLE_ROWS = 100
 
+// Business rows show org_number; individual rows show the masked
+// personnummer the API returns, and a legacy individual row that still
+// carries its personnummer in org_number shows that masked too, never raw.
 function getIdentifier(customer: Customer): string {
-  return customer.org_number || customer.personal_number || ''
+  return customerListIdentifier(customer)
 }
 
 function compareStrings(a: string, b: string): number {
@@ -69,6 +73,10 @@ function CustomersPageInner() {
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
+  // Company default payment terms (Inställningar → Fakturering). Prefilled
+  // into the new-customer form so it opens on the company's own default
+  // instead of a hardcoded 30.
+  const [companyDefaultTerms, setCompanyDefaultTerms] = useState<number | null>(null)
   const { toast } = useToast()
   const t = useTranslations('customers')
   const tCommon = useTranslations('common')
@@ -137,6 +145,22 @@ function CustomersPageInner() {
   useEffect(() => {
     fetchCustomers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    // Best-effort: the dialog falls back to 30 until (or unless) this lands.
+    let cancelled = false
+    fetch('/api/settings')
+      .then((response) => (response.ok ? response.json() : null))
+      .then((json) => {
+        if (cancelled) return
+        const days = json?.data?.invoice_default_days
+        if (typeof days === 'number' && days > 0) setCompanyDefaultTerms(days)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   async function handleCreateCustomer(data: CreateCustomerInput) {
@@ -285,6 +309,11 @@ function CustomersPageInner() {
               <CustomerForm
                 onSubmit={handleCreateCustomer}
                 isLoading={isCreating}
+                initialData={
+                  companyDefaultTerms !== null
+                    ? { default_payment_terms: companyDefaultTerms }
+                    : undefined
+                }
               />
             </DialogContent>
           </Dialog>
@@ -293,18 +322,14 @@ function CustomersPageInner() {
 
       {/* Toolbar: search (concept) */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[220px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={t('search_placeholder')}
-            value={searchTerm}
-            onChange={(e) => {
-              setSearchTerm(e.target.value)
-              setVisibleCount(INITIAL_VISIBLE_ROWS)
-            }}
-            className="h-9 pl-10"
-          />
-        </div>
+        <ToolbarSearch
+          placeholder={t('search_placeholder')}
+          value={searchTerm}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            setVisibleCount(INITIAL_VISIBLE_ROWS)
+          }}
+        />
       </div>
 
       {isLoading ? (
@@ -318,7 +343,7 @@ function CustomersPageInner() {
           <EmptyState
             icon={Users}
             title={t('no_search_results_title')}
-            description={t('no_search_results_description', { term: searchTerm })}
+            description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
         ) : (
           <EmptyCustomers onAction={() => setIsDialogOpen(true)} />

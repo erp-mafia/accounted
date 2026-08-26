@@ -150,7 +150,7 @@ export default function SIEPreviewStep({
       </div>
 
       {/* Trial balance check */}
-      <Card className={preview.trialBalance.isBalanced ? 'border-success/50' : 'border-warning/50'}>
+      <Card className={preview.trialBalance.isBalanced ? 'border-success/50' : 'border-border'}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             {preview.trialBalance.isBalanced ? (
@@ -185,7 +185,7 @@ export default function SIEPreviewStep({
 
           {/* Significant imbalance: explain + require acknowledgement before continuing */}
           {significantImbalance && (
-            <div className="mt-4 space-y-3 rounded-lg border border-warning/40 bg-warning/5 px-4 py-3">
+            <div className="mt-4 space-y-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
               <div className="flex items-start gap-2 text-sm">
                 <AlertCircle className="h-4 w-4 text-warning mt-0.5 flex-shrink-0" />
                 <div className="space-y-1">
@@ -222,7 +222,7 @@ export default function SIEPreviewStep({
           preview.mappingStatus.unmapped > 0
             ? 'border-destructive/50'
             : preview.mappingStatus.lowConfidence > 0
-            ? 'border-warning/50'
+            ? 'border-border'
             : 'border-success/50'
         }
       >
@@ -356,7 +356,7 @@ export default function SIEPreviewStep({
 
       {/* Warnings */}
       {warnings.length > 0 && (
-        <Card className="border-warning/50">
+        <Card className="border-border">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <AlertCircle className="h-5 w-5 text-warning" />

@@ -1,9 +1,12 @@
 'use client'
 
+import { useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { Switch } from '@/components/ui/switch'
 import {
   SettingsGroup,
   SettingsInput,
+  SettingsReveal,
   SettingsRow,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
@@ -15,6 +18,7 @@ interface InvoiceSettingsFormProps {
 
 export function InvoiceSettingsForm({ settings }: InvoiceSettingsFormProps) {
   const t = useTranslations('settings_invoice_form')
+  const [sendReminders, setSendReminders] = useState(settings.send_invoice_reminders ?? true)
   return (
     <>
       <SettingsGroup label={t('heading')}>
@@ -101,50 +105,65 @@ export function InvoiceSettingsForm({ settings }: InvoiceSettingsFormProps) {
 
       <SettingsGroup label={t('reminder_days_heading')} help={t('reminder_days_help')}>
         <SettingsRow
-          label={t('reminder_days_level_1')}
-          htmlFor="reminder_days_level_1"
-          align="baseline"
+          label={t('send_reminders_label')}
+          htmlFor="send_invoice_reminders"
+          help={t('send_reminders_help')}
+          borderless={sendReminders}
         >
-          <SettingsInput
-            id="reminder_days_level_1"
-            name="reminder_days_level_1"
-            type="number"
-            min="1"
-            max="365"
-            defaultValue={settings.reminder_days_level_1 ?? 15}
-            className="max-w-24 flex-none tabular-nums"
+          <Switch
+            id="send_invoice_reminders"
+            checked={sendReminders}
+            onCheckedChange={(v) => setSendReminders(v === true)}
           />
+          <input type="hidden" name="send_invoice_reminders" value={sendReminders ? 'true' : 'false'} />
         </SettingsRow>
-        <SettingsRow
-          label={t('reminder_days_level_2')}
-          htmlFor="reminder_days_level_2"
-          align="baseline"
-        >
-          <SettingsInput
-            id="reminder_days_level_2"
-            name="reminder_days_level_2"
-            type="number"
-            min="1"
-            max="365"
-            defaultValue={settings.reminder_days_level_2 ?? 30}
-            className="max-w-24 flex-none tabular-nums"
-          />
-        </SettingsRow>
-        <SettingsRow
-          label={t('reminder_days_level_3')}
-          htmlFor="reminder_days_level_3"
-          align="baseline"
-        >
-          <SettingsInput
-            id="reminder_days_level_3"
-            name="reminder_days_level_3"
-            type="number"
-            min="1"
-            max="365"
-            defaultValue={settings.reminder_days_level_3 ?? 45}
-            className="max-w-24 flex-none tabular-nums"
-          />
-        </SettingsRow>
+        <SettingsReveal open={sendReminders}>
+          <SettingsRow
+            label={t('reminder_days_level_1')}
+            htmlFor="reminder_days_level_1"
+            align="baseline"
+          >
+            <SettingsInput
+              id="reminder_days_level_1"
+              name="reminder_days_level_1"
+              type="number"
+              min="1"
+              max="365"
+              defaultValue={settings.reminder_days_level_1 ?? 15}
+              className="max-w-24 flex-none tabular-nums"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label={t('reminder_days_level_2')}
+            htmlFor="reminder_days_level_2"
+            align="baseline"
+          >
+            <SettingsInput
+              id="reminder_days_level_2"
+              name="reminder_days_level_2"
+              type="number"
+              min="1"
+              max="365"
+              defaultValue={settings.reminder_days_level_2 ?? 30}
+              className="max-w-24 flex-none tabular-nums"
+            />
+          </SettingsRow>
+          <SettingsRow
+            label={t('reminder_days_level_3')}
+            htmlFor="reminder_days_level_3"
+            align="baseline"
+          >
+            <SettingsInput
+              id="reminder_days_level_3"
+              name="reminder_days_level_3"
+              type="number"
+              min="1"
+              max="365"
+              defaultValue={settings.reminder_days_level_3 ?? 45}
+              className="max-w-24 flex-none tabular-nums"
+            />
+          </SettingsRow>
+        </SettingsReveal>
       </SettingsGroup>
     </>
   )

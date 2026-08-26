@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useCompany } from '@/contexts/CompanyContext'
 import { cn, formatCurrency } from '@/lib/utils'
 import {
   PERIODISERING_TEMPLATES,
@@ -31,12 +32,16 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 type Step = 'vacation' | 'audit' | 'auto' | 'manual' | 'review'
 
 const STEP_ORDER: Step[] = ['vacation', 'audit', 'auto', 'manual', 'review']
-const STEP_LABELS: Record<Step, string> = {
-  vacation: 'Semester',
-  audit: 'Revisionsarvode',
-  auto: 'Auto-detektering',
-  manual: 'Manuella tillägg',
-  review: 'Granska & posta',
+
+/** An enskild firma has no revisor, so its step 2 is the bokslutsarvode. */
+function stepLabels(isEnskildFirma: boolean): Record<Step, string> {
+  return {
+    vacation: 'Semester',
+    audit: isEnskildFirma ? 'Bokslutsarvode' : 'Revisionsarvode',
+    auto: 'Auto-detektering',
+    manual: 'Manuella tillägg',
+    review: 'Granska & posta',
+  }
 }
 
 interface PeriodOption {
@@ -93,6 +98,12 @@ export default function PeriodiseringWizardPage() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const { company } = useCompany()
+  // Entity-aware copy: an enskild firma has no revision and normally closes
+  // under K1 (BFNAR 2006:1, förenklat årsbokslut). entity_type is a proxy:
+  // no stored flag distinguishes förenklat from full årsbokslut, so all
+  // K1 wording stays advisory ("behöver normalt inte").
+  const isEF = company?.entity_type === 'enskild_firma'
 
   const [periods, setPeriods] = useState<PeriodOption[] | null>(null)
   const [periodsError, setPeriodsError] = useState<string | null>(null)
@@ -111,6 +122,16 @@ export default function PeriodiseringWizardPage() {
     amount: '',
     liabilityAccount: '2992',
   })
+
+  // Default the liability account per entity: 2991 (bokslut) for enskild
+  // firma, 2992 (revision) for aktiebolag. The company row loads async, so
+  // adjust once it arrives, but never override a state the user has touched.
+  useEffect(() => {
+    if (!isEF) return
+    setAuditState((prev) =>
+      prev.enabled || prev.amount !== '' ? prev : { ...prev, liabilityAccount: '2991' },
+    )
+  }, [isEF])
   const [autoState, setAutoState] = useState<AutoState>({ selections: {} })
   const [manualEntries, setManualEntries] = useState<ManualEntry[]>([])
 
@@ -190,6 +211,7 @@ export default function PeriodiseringWizardPage() {
   )
 
   const currentStepIndex = STEP_ORDER.indexOf(step)
+  const labels = stepLabels(isEF)
   const progressValue = ((currentStepIndex + 1) / STEP_ORDER.length) * 100
   const showWizard = selectedPeriodId !== null && (periods?.length ?? 0) > 0 && !loading && !loadError
 
@@ -418,7 +440,7 @@ export default function PeriodiseringWizardPage() {
             <CardContent className="p-4 space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="sm:hidden text-primary font-medium">
-                  Steg {currentStepIndex + 1}/{STEP_ORDER.length}: {STEP_LABELS[step]}
+                  Steg {currentStepIndex + 1}/{STEP_ORDER.length}: {labels[step]}
                 </span>
                 {STEP_ORDER.map((s, i) => (
                   <span
@@ -428,7 +450,7 @@ export default function PeriodiseringWizardPage() {
                       i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
                     )}
                   >
-                    {STEP_LABELS[s]}
+                    {labels[s]}
                   </span>
                 ))}
               </div>
@@ -446,6 +468,7 @@ export default function PeriodiseringWizardPage() {
           )}
           {step === 'audit' && (
             <AuditStep
+              isEF={isEF}
               state={auditState}
               onChange={setAuditState}
               onBack={() => setStep('vacation')}
@@ -454,6 +477,7 @@ export default function PeriodiseringWizardPage() {
           )}
           {step === 'auto' && (
             <AutoStep
+              isEF={isEF}
               suggestions={proposal.autoDetected ?? []}
               selections={autoState.selections}
               onToggle={(key, val) =>
@@ -522,7 +546,7 @@ function VacationStep({
         </CardHeader>
         <CardContent>
           {proposal ? (
-            <div className="flex items-start justify-between gap-4 rounded-md border border-border p-4">
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-4">
               <div className="flex-1 space-y-2">
                 <p className="text-sm font-medium">{proposal.label}</p>
                 <p className="text-xs text-muted-foreground">{proposal.description}</p>
@@ -558,11 +582,13 @@ function VacationStep({
 }
 
 function AuditStep({
+  isEF,
   state,
   onChange,
   onBack,
   onNext,
 }: {
+  isEF: boolean
   state: AuditState
   onChange: (s: AuditState) => void
   onBack: () => void
@@ -572,10 +598,13 @@ function AuditStep({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Steg 2: Revisions- / bokslutsarvode</CardTitle>
+          <CardTitle className="text-base">
+            {isEF ? 'Steg 2: Bokslutsarvode' : 'Steg 2: Revisions- / bokslutsarvode'}
+          </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Periodisera arvode för revision (2992) eller bokslut (2991). Posten
-            vänds första dagen i nästa räkenskapsår när fakturan kommer.
+            {isEF
+              ? 'Periodisera arvode för bokslut (2991). Posten vänds första dagen i nästa räkenskapsår när fakturan kommer.'
+              : 'Periodisera arvode för revision (2992) eller bokslut (2991). Posten vänds första dagen i nästa räkenskapsår när fakturan kommer.'}
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -590,7 +619,7 @@ function AuditStep({
             </Label>
           </div>
           {state.enabled && (
-            <div className="grid grid-cols-2 gap-4 rounded-md border border-border p-4">
+            <div className="grid grid-cols-2 gap-4 rounded-lg border border-border p-4">
               <div className="space-y-1">
                 <Label className="text-xs">Belopp (kr)</Label>
                 <Input
@@ -605,7 +634,7 @@ function AuditStep({
               <div className="space-y-1">
                 <Label className="text-xs">Konto</Label>
                 <select
-                  className="border border-border rounded-md h-9 text-sm px-2 w-full bg-background"
+                  className="border border-border rounded-lg h-9 text-sm px-2 w-full bg-background"
                   value={state.liabilityAccount}
                   onChange={(e) =>
                     onChange({ ...state, liabilityAccount: e.target.value as '2991' | '2992' })
@@ -632,12 +661,14 @@ function AuditStep({
 }
 
 function AutoStep({
+  isEF,
   suggestions,
   selections,
   onToggle,
   onBack,
   onNext,
 }: {
+  isEF: boolean
   suggestions: PeriodiseringSuggestion[]
   selections: Record<string, boolean>
   onToggle: (key: string, val: boolean) => void
@@ -654,6 +685,12 @@ function AutoStep({
             innehåller en datumintervall som sträcker sig in i nästa räkenskapsår.
             Granska och bekräfta: högst säkra förslag är förvalda.
           </p>
+          {isEF && (
+            <p className="text-xs text-muted-foreground">
+              Enskild firma med förenklat årsbokslut (K1) behöver normalt inte
+              periodisera poster under 5 000 kr. Förslag under gränsen är avmarkerade.
+            </p>
+          )}
         </CardHeader>
         <CardContent className="space-y-3">
           {suggestions.length === 0 && (
@@ -667,7 +704,7 @@ function AutoStep({
             return (
               <div
                 key={key}
-                className="flex items-start gap-3 rounded-md border border-border p-3"
+                className="flex items-start gap-3 rounded-lg border border-border p-3"
               >
                 <Checkbox
                   id={`auto-${key}`}
@@ -677,7 +714,9 @@ function AutoStep({
                 />
                 <div className="flex-1 space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
+                    {/* data-ph-mask: source_label is counterparty name + invoice number */}
                     <Label
+                      data-ph-mask=""
                       htmlFor={`auto-${key}`}
                       className="text-sm font-medium cursor-pointer select-none"
                     >
@@ -806,7 +845,7 @@ function ManualEntryEditor({
     template.side === 'deferred_revenue' ? 'Intäktskonto' : 'Kostnadskonto'
 
   return (
-    <div className="rounded-md border border-border p-3 space-y-3">
+    <div className="rounded-lg border border-border p-3 space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">{template.name}</p>
         <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 px-2" aria-label="Ta bort">
@@ -987,7 +1026,7 @@ function ReviewStep({
 
 function ReviewLine({ label, amount, note }: { label: string; amount: number; note?: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-md border border-border px-3 py-2">
+    <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
       <div className="min-w-0">
         <p className="text-sm font-medium truncate">{label}</p>
         {note && <p className="text-xs text-muted-foreground">{note}</p>}

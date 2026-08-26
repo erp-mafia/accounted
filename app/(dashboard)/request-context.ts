@@ -66,7 +66,7 @@ export const getDashboardSettings = cache(async () => {
 
   return supabase
     .from('company_settings')
-    .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox, dimensions_enabled, ore_rounding, initial_setup_path, initial_setup_completed_at, initial_setup_dismissed_at')
+    .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox, dimensions_enabled, mileage_enabled, ore_rounding, initial_setup_path, initial_setup_completed_at, initial_setup_dismissed_at, vat_registered, moms_period')
     .eq('company_id', companyId)
     .maybeSingle()
 })

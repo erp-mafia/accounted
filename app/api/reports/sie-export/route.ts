@@ -36,7 +36,6 @@ export const GET = withRouteContext(
         company_name: company.company_name || 'Unknown',
         org_number: company.org_number,
         exclude_year_end_closing: excludeClosing,
-        emit_format_pc8: useCP437,
       })
 
       const body = useCP437 ? Buffer.from(encodeSIEToCP437(sieContent)) : sieContent

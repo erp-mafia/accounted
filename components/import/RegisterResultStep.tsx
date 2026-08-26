@@ -106,7 +106,7 @@ export default function RegisterResultStep({
         {result.warnings && result.warnings.length > 0 && (
           <div className="space-y-2">
             <h4 className="text-sm font-medium">Att notera</h4>
-            <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+            <div className="rounded-lg border border-border bg-muted/30 px-4 py-3">
               <ul className="space-y-1 text-sm text-muted-foreground">
                 {result.warnings.map((w, i) => (
                   <li key={i} className="flex items-start gap-2">

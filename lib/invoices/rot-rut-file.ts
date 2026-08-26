@@ -1,6 +1,7 @@
 import type { Invoice, InvoiceItem } from '@/types'
+import { truncateToWholeKronor } from '@/lib/money'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
-import { deductionSekConverter, type DeductionType } from './rot-rut-rules'
+import { deductionSekConverter, SCHABLON_WORK_TYPES, type DeductionType } from './rot-rut-rules'
 
 /**
  * Begäran om utbetalning: rot & rut (Skatteverkets husavdragstjänst).
@@ -44,6 +45,10 @@ const KOMPONENT_NS = 'http://xmls.skatteverket.se/se/skatteverket/ht/komponent/b
  * is also the emission order inside UtfortArbete. `schablon` services are
  * reported as <Utfort>true</Utfort>: no hours, no material.
  */
+// `schablon` is derived from SCHABLON_WORK_TYPES (rot-rut-rules.ts), the one
+// place that decides which services report utförd/ej utförd without hours:
+// the invoice validator and this generator must never disagree on it.
+const schablon = (code: string): boolean => SCHABLON_WORK_TYPES.includes(code)
 const WORK_TYPE_ELEMENTS: Record<DeductionType, ReadonlyArray<{
   code: string
   element: string
@@ -70,16 +75,20 @@ const WORK_TYPE_ELEMENTS: Record<DeductionType, ReadonlyArray<{
     { code: 'REPARATION', element: 'ReparationAvVitvaror' },
     { code: 'MOBLERING', element: 'Moblering' },
     { code: 'TILLSYN', element: 'TillsynAvBostad' },
-    { code: 'TRANSPORT', element: 'TransportTillForsaljning', schablon: true },
-    { code: 'TVATT', element: 'TvattVidTvattinrattning', schablon: true },
+    { code: 'TRANSPORT', element: 'TransportTillForsaljning', schablon: schablon('TRANSPORT') },
+    { code: 'TVATT', element: 'TvattVidTvattinrattning', schablon: schablon('TVATT') },
   ],
 }
 
 export type RotRutBlockerCode =
   | 'NOT_PAID'
   | 'MISSING_PAYMENT_DATE'
+  | 'FUTURE_PAYMENT_DATE'
   | 'NO_DEDUCTION_OF_TYPE'
+  | 'DEDUCTION_TOTAL_MISSING'
   | 'MIXED_DEDUCTION_TYPES'
+  | 'MIXED_PAYMENT_YEARS'
+  | 'TOO_MANY_CASES'
   | 'MISSING_PERSONNUMMER'
   | 'PERSONNUMMER_UNREADABLE'
   | 'MISSING_EXCHANGE_RATE'
@@ -167,6 +176,7 @@ export function normalizeBrfOrgNr(raw: string): string | null {
 export function evaluateInvoiceForFile(
   type: DeductionType,
   invoice: Invoice,
+  options: { today?: string } = {},
 ): { ok: true; value: EvaluatedArende } | { ok: false; blocker: RotRutBlocker } {
   const block = (code: RotRutBlockerCode, message: string): { ok: false; blocker: RotRutBlocker } => ({
     ok: false,
@@ -179,6 +189,15 @@ export function evaluateInvoiceForFile(
   const otherLines = items.filter((i) => isDeductionLine(i, otherType))
 
   if (typeLines.length === 0) {
+    // Point at the other list instead of a bare "no lines": a paid RUT
+    // invoice viewed as ROT (the dialog default) used to read as "no
+    // invoices" with no hint that it lives under the other type.
+    if (otherLines.length > 0) {
+      return block(
+        'NO_DEDUCTION_OF_TYPE',
+        `Fakturans avdrag är ${otherType.toUpperCase()}: fakturan hanteras under ${otherType.toUpperCase()}, inte ${type.toUpperCase()}.`,
+      )
+    }
     return block('NO_DEDUCTION_OF_TYPE', `Fakturan har inga ${type.toUpperCase()}-rader.`)
   }
   // One invoice must map to exactly one ärende in exactly one file. Mixed
@@ -191,12 +210,64 @@ export function evaluateInvoiceForFile(
     )
   }
 
-  if (invoice.status !== 'paid') {
+  // Header/lines integrity: the lines claim a deduction but the invoice
+  // header never recorded it (older rows and import paths where
+  // computeInvoiceDeductionTotal never wrote deduction_total). Building the
+  // file from line amounts alone would request money the ledger never booked
+  // to 1513 (the 1513 debit is driven by the header total), and the missing
+  // header is also why such an invoice can never reach status paid: its
+  // remaining_amount wrongly includes the deduction. Refuse with the root
+  // cause instead of a misleading "not paid".
+  const lineDeductionTotal = typeLines.reduce((sum, l) => sum + (l.deduction_amount ?? 0), 0)
+  if (lineDeductionTotal > 0 && (invoice.deduction_total ?? 0) <= 0) {
+    return block(
+      'DEDUCTION_TOTAL_MISSING',
+      'Fakturan har ROT/RUT-rader men inget sparat avdragsbelopp: avdraget är inte bokfört mot Skatteverket. Ett utkast kan redigeras direkt; en skickad eller betald faktura rättas med kreditfaktura och en ny faktura. Kontakta supporten om ingen av vägarna fungerar.',
+    )
+  }
+
+  // "Paid" for a rot/rut claim means the BUYER has paid their share: the
+  // deduction itself is Skatteverket's to pay (fakturamodellen). The customer
+  // share outstanding is DERIVED from the header fields here, with the same
+  // formula as buildInvoiceWriteData and migration 20260817191708
+  // (total - paid_amount - deduction_total), deliberately NOT read off
+  // remaining_amount: at least one writer (payment-sync's storno path)
+  // recomputes remaining_amount without subtracting the deduction, so the
+  // stored column is not a deterministic signal, while total, paid_amount and
+  // deduction_total are maintained by every settlement path. Invoices settled
+  // through older payment paths can sit at partially_paid although the
+  // customer share is fully paid; those are accepted here instead of being
+  // dropped as unpaid. Amounts are invoice currency throughout.
+  const customerShareOutstanding =
+    Math.round(
+      (invoice.total - (invoice.paid_amount ?? 0) - (invoice.deduction_total ?? 0)) * 100,
+    ) / 100
+  const customerSharePaid =
+    invoice.status === 'paid' ||
+    (invoice.status === 'partially_paid' && customerShareOutstanding <= 0)
+  if (!customerSharePaid) {
+    if (invoice.status === 'partially_paid') {
+      const currencyLabel = (invoice.currency ?? 'SEK').toUpperCase()
+      const amount = customerShareOutstanding.toLocaleString('sv-SE', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })
+      return block(
+        'NOT_PAID',
+        `Fakturan är delbetald: ${amount} ${currencyLabel === 'SEK' ? 'kr' : currencyLabel} av kundens del återstår innan utbetalning kan begäras.`,
+      )
+    }
     return block('NOT_PAID', 'Kunden måste ha betalat sin del av fakturan innan utbetalning kan begäras.')
   }
   const paidDate = invoice.paid_at ? String(invoice.paid_at).slice(0, 10) : null
   if (!paidDate) {
     return block('MISSING_PAYMENT_DATE', 'Fakturan saknar betalningsdatum.')
+  }
+  if (options.today && paidDate > options.today) {
+    return block(
+      'FUTURE_PAYMENT_DATE',
+      `Fakturans betalningsdatum (${paidDate}) ligger i framtiden och kan inte skickas till Skatteverket ännu.`,
+    )
   }
 
   if (!invoice.deduction_personnummer_encrypted) {
@@ -307,7 +378,15 @@ export function evaluateInvoiceForFile(
   const prisForArbete = Math.round(
     typeLines.reduce((sum, l) => sum + toSek(l.line_total ?? 0) + toSek(l.vat_amount ?? 0), 0),
   )
-  const begartBelopp = Math.round(
+  // BegartBelopp rounds DOWN (truncateToWholeKronor, the Skatteverket-bound
+  // amount rule): skattereduktionen is capped at a share of the work price
+  // (HUSFL: 50 % RUT / 30 % ROT), so a deduction with öre, 62,50 or 187,50,
+  // must become 62 / 187, never 63 / 188. Half-up rounding requested more
+  // than the cap and the 1513 fordran: at the exact RUT cap it manufactured
+  // begärt > betalt and blocked a correct invoice; below the cap (ROT 30 %)
+  // it over-requested by up to a krona. The helper öre-rounds before
+  // truncating so float noise (62.499999...) cannot drop a whole krona.
+  const begartBelopp = truncateToWholeKronor(
     typeLines.reduce((sum, l) => sum + toSek(l.deduction_amount ?? 0), 0),
   )
   const betaltBelopp = prisForArbete - begartBelopp
@@ -320,9 +399,11 @@ export function evaluateInvoiceForFile(
     return block('ZERO_DEDUCTION', 'Fakturans ROT/RUT-avdrag är 0 kr: det finns inget belopp att begära.')
   }
   // The buyer must have paid at least as much as is being requested
-  // (skattereduktionen är max 50 % av arbetskostnaden). Independent rounding
-  // of pris/begärt could otherwise even push BetaltBelopp negative, which
-  // Skatteverkets schema rejects outright.
+  // (skattereduktionen är max 50 % av arbetskostnaden). With begärt floored,
+  // any invoice whose ledger deduction respects the cap passes by
+  // construction (2*floor(D) is an integer <= pris <= round(pris)); this
+  // guard now only catches corrupted deduction data, where BetaltBelopp
+  // could even go negative, which Skatteverkets schema rejects outright.
   if (begartBelopp > betaltBelopp) {
     return block(
       'DEDUCTION_EXCEEDS_PAYMENT',
@@ -386,9 +467,29 @@ export function buildRotRutFile(params: {
   const warnings: string[] = []
 
   for (const invoice of invoices) {
-    const result = evaluateInvoiceForFile(type, invoice)
+    const result = evaluateInvoiceForFile(type, invoice, { today })
     if (!result.ok) {
       blockers.push(result.blocker)
+      continue
+    }
+    const paymentYear = result.value.arende.betalnings_datum.slice(0, 4)
+    const filePaymentYear = evaluated[0]?.arende.betalnings_datum.slice(0, 4)
+    if (filePaymentYear && paymentYear !== filePaymentYear) {
+      blockers.push({
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number ?? null,
+        code: 'MIXED_PAYMENT_YEARS',
+        message: `Fakturan betalades ${paymentYear}, men filen innehåller redan betalningar från ${filePaymentYear}. Skatteverket kräver en separat fil per betalningsår.`,
+      })
+      continue
+    }
+    if (evaluated.length >= 100) {
+      blockers.push({
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number ?? null,
+        code: 'TOO_MANY_CASES',
+        message: 'Skatteverket tillåter högst 100 ärenden per fil. Skapa ytterligare en fil för resten.',
+      })
       continue
     }
     evaluated.push(result.value)

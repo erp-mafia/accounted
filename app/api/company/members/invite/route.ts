@@ -5,6 +5,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getEmailService } from '@/lib/email/service'
 import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
 import {
@@ -12,6 +13,7 @@ import {
   generateInviteEmailHtml,
   generateInviteEmailText,
 } from '@/lib/email/invite-templates'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 
 // Loads the email extension so getEmailService() returns the Resend
 // implementation instead of the noop default. Without this, the invite email
@@ -23,6 +25,19 @@ const InviteSchema = z.object({
   email: z.string().trim().toLowerCase().pipe(z.string().email('Ogiltig e-postadress.')),
   role: z.enum(['admin', 'member', 'viewer']).default('viewer'),
 })
+
+/**
+ * First local-part character + *** + domain, e.g. "j***@example.com".
+ * Keeps invitee PII out of the log record while leaving enough to tell
+ * WHICH invite failed. The logger's own redaction would otherwise replace
+ * a raw address with [REDACTED_EMAIL] (lib/observability/redact.ts); the
+ * masked form does not match that email pattern, so it survives intact.
+ */
+function maskEmail(email: string): string {
+  const at = email.indexOf('@')
+  if (at <= 0) return '***'
+  return `${email[0]}***${email.slice(at)}`
+}
 
 /**
  * POST /api/company/members/invite
@@ -98,6 +113,70 @@ export const POST = withRouteContext(
     const { token, hash } = generateInviteToken()
     const expiresAt = getInviteExpiry()
 
+    // The request host is used only when it is the canonical app host or an
+    // exact registered white-label domain. A spoofed Host header falls back to
+    // NEXT_PUBLIC_APP_URL, so neither the email nor GoTrue gets an open
+    // redirect target.
+    const appOrigin = resolveRequestAppOrigin(request)
+
+    // Self-hosted installations that turn public signup off in GoTrue
+    // (disable_signup) set AUTH_SIGNUPS_DISABLED=true to mirror that config:
+    // GoTrue offers no clean server-side read of the setting. Without this,
+    // an invitee with no account is routed to /register, where
+    // supabase.auth.signUp is rejected with "Signups not allowed for this
+    // instance" and the invite dead-ends. Provision the account via the auth
+    // admin invite API instead. Hosted keeps the flag unset: nothing in this
+    // block runs and behavior is unchanged.
+    const signupsDisabled = process.env.AUTH_SIGNUPS_DISABLED === 'true'
+    let userProvisioned = false
+    if (signupsDisabled) {
+      const { data: emailExists, error: existsError } = await serviceClient.rpc(
+        'check_email_exists',
+        { email_to_check: email },
+      )
+      if (existsError) {
+        // GoTrue is the authority: attempt provisioning anyway and let a
+        // duplicate surface there instead of silently skipping the invitee.
+        log.warn('check_email_exists failed; attempting provisioning anyway', {
+          message: existsError.message,
+        })
+      }
+
+      if (!emailExists) {
+        // Provision BEFORE the invitation row is written: a failure here
+        // leaves nothing half-created behind, so the admin can retry cleanly
+        // after fixing the cause (typically GoTrue SMTP configuration).
+        // The redirect lands the invitee back on the invite page with a
+        // session; /auth/callback routes type=invite verifications to the
+        // set-password surface first.
+        const { error: provisionError } = await serviceClient.auth.admin.inviteUserByEmail(
+          email,
+          { redirectTo: `${appOrigin}/invite/${token}` },
+        )
+
+        if (provisionError) {
+          const alreadyRegistered =
+            provisionError.code === 'email_exists' ||
+            /already been registered/i.test(provisionError.message)
+          if (!alreadyRegistered) {
+            // Never report a silently-successful invite when the invitee
+            // cannot actually get an account.
+            log.error('invitee auth provisioning failed', new Error(provisionError.message), {
+              to: maskEmail(email),
+            })
+            return NextResponse.json(
+              { error: getErrorMessage(provisionError, { context: 'auth', statusCode: 502 }) },
+              { status: 502 },
+            )
+          }
+          // The account exists after all (stale check_email_exists answer):
+          // proceed exactly as for an existing user.
+        } else {
+          userProvisioned = true
+        }
+      }
+    }
+
     // Upsert invitation
     if (existingInvite) {
       const { error } = await serviceClient
@@ -137,9 +216,10 @@ export const POST = withRouteContext(
     // previously a send failure was invisible (invite looked sent).
     // Brand mail (WL-13): sender identity and the invite link follow the
     // brand of the company the invite concerns; a company without a brand
-    // gets the canonical URL and sender exactly as before.
+    // uses the validated request origin (appOrigin) and sender exactly as
+    // before.
     const sender = await getSenderForCompany(companyId)
-    const appUrl = getBaseUrlForBrand(sender.brand)
+    const appUrl = sender.brand ? getBaseUrlForBrand(sender.brand) : appOrigin
     const emailService = getEmailService()
     let emailSent = false
     if (emailService.isConfigured()) {
@@ -181,6 +261,7 @@ export const POST = withRouteContext(
         email,
         status: 'pending',
         email_sent: emailSent,
+        user_provisioned: userProvisioned,
         ...(isDev && { inviteUrl: devInviteUrl }),
       },
     })

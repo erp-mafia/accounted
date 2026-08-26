@@ -30,6 +30,10 @@ vi.mock('@/lib/auth/api-keys', async () => {
   }
 })
 
+vi.mock('@/lib/salary/ytd', () => ({
+  refreshRunYtd: vi.fn().mockResolvedValue({ ok: true, updated: 0 }),
+}))
+
 vi.mock('@supabase/supabase-js', async () => {
   const actual = await vi.importActual<typeof import('@supabase/supabase-js')>('@supabase/supabase-js')
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
@@ -63,6 +67,7 @@ vi.mock('@/lib/salary/agi/generate-declaration', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as calculate } from '../calculate/route'
 import { POST as approve } from '../approve/route'
+import { refreshRunYtd } from '@/lib/salary/ytd'
 import { POST as markPaid } from '../mark-paid/route'
 import { POST as book } from '../book/route'
 import { POST as generateAgi } from '../generate-agi/route'
@@ -296,6 +301,12 @@ describe('POST /salary-runs/:id/approve', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.status).toBe('approved')
+    // Parity with the dashboard approve route: the payslip's Ackumulerat
+    // snapshot is refreshed at the first status lönebesked can be sent from.
+    expect(refreshRunYtd).toHaveBeenCalledWith(expect.anything(), {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+    })
   })
 
   it('returns SALARY_RUN_APPROVE_VALIDATION_FAILED for missing bank details', async () => {
@@ -421,6 +432,7 @@ describe('POST /salary-runs/:id/book', () => {
     total_net: 25500,
     total_avgifter: 10997,
     total_vacation_accrual: 0,
+    calculation_params: { slpRate: 0.2426 },
   }
 
   const employeeRow = {
@@ -478,6 +490,91 @@ describe('POST /salary-runs/:id/book', () => {
     expect(body.data.entry_ids).toEqual(['je_salary', 'je_avg'])
     expect(body.meta.audit.voucher_number).toBe('L2026-0023')
     expect(body.meta.audit.voucher_url).toContain('je_salary')
+    expect(mocks.createSalaryRunEntries).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      USER_ID,
+      expect.objectContaining({ calculation_params: { slpRate: 0.2426 } }),
+    )
+  })
+
+  it('applies review overrides with book-run parity (tax/net reconciled, F-skatt avgifter override ignored)', async () => {
+    // Overrides set during dashboard review must reach the ledger the same
+    // way no matter which surface books the run: v1 previously ignored them,
+    // so the booked 2710/2731 diverged from the AGI by the override delta.
+    const overriddenRow = {
+      ...employeeRow,
+      tax_withheld_override: 9000,
+      avgifter_amount_override: 10000,
+      avgifter_basis: 35000,
+      avgifter_category: 'standard',
+    }
+    const fSkattRow = {
+      ...employeeRow,
+      employee_id: 'emp_2',
+      employee: { employment_type: 'employee', f_skatt_status: 'f_skatt' },
+      gross_salary: 15000,
+      tax_withheld: 0,
+      net_salary: 15000,
+      avgifter_amount: 0,
+      // An avgifter override on an F-skatt row must be ignored (the AGI's
+      // isFSkattRow invariant), and the underlag zeroed.
+      avgifter_amount_override: 500,
+      avgifter_basis: 15000,
+      avgifter_category: 'standard',
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          { data: paidRun, error: null },
+          {
+            data: {
+              id: RUN_ID, status: 'booked',
+              booked_at: '2026-05-26T09:15:00Z', booked_by: USER_ID,
+              salary_entry_id: 'je_salary', avgifter_entry_id: 'je_avg',
+              vacation_entry_id: null, pension_entry_id: null,
+            },
+            error: null,
+          },
+        ],
+        salary_run_employees: { data: [overriddenRow, fSkattRow], error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    mocks.checkPeriodLock.mockResolvedValue({ locked: false })
+    mocks.createSalaryRunEntries.mockResolvedValue({
+      salaryEntry: { id: 'je_salary', voucher_number: 'L2026-0024' },
+      avgifterEntry: { id: 'je_avg' },
+      vacationEntry: null,
+      pensionEntry: null,
+    })
+
+    const res = await book(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/book`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const payload = mocks.createSalaryRunEntries.mock.calls[0][3] as {
+      employees: Array<Record<string, unknown>>
+    }
+    const [regular, fSkatt] = payload.employees
+    expect(regular).toMatchObject({
+      tax_withheld: 9000,
+      // net reconciles by the withheld difference: 25 500 + (9 500 - 9 000).
+      net_salary: 26000,
+      avgifter_amount: 10000,
+      avgifter_amount_overridden: true,
+      avgifter_basis: 35000,
+    })
+    expect(fSkatt).toMatchObject({
+      avgifter_amount: 0,
+      avgifter_amount_overridden: false,
+      avgifter_basis: 0,
+    })
   })
 
   it('returns PERIOD_LOCKED before invoking the engine when payment_date is locked', async () => {

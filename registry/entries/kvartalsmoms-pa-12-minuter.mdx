@@ -1,0 +1,161 @@
+---
+title: "Kvartalsmoms på 12 minuter"
+description: "SKILL.md som stänger ett kvartals moms från okategoriserat till 'redo att lämna in' i 12 minuter. Identifierar blockers via gnubok_vat_close_check, föreslår kategorisering, returnerar ifyllt SKV 4700 från gnubok_get_vat_report."
+slug: "kvartalsmoms-pa-12-minuter"
+kind: "skill"
+author: "gnubok"
+status: "live"
+lang: "sv"
+personas: ["founder", "finance"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/skills-v1/kvartalsmoms-pa-12-minuter.zip"
+repoUrl: "https://github.com/erp-mafia/accounted/tree/main/skills/kvartalsmoms-pa-12-minuter"
+gnubokTools:
+  - "gnubok_vat_close_check"
+  - "gnubok_get_vat_report"
+  - "gnubok_list_uncategorized_transactions"
+  - "gnubok_categorize_transaction"
+  - "gnubok_query_journal"
+  - "gnubok_vat_review_widget"
+oauthScopes:
+  - "reports:read"
+  - "transactions:read"
+  - "transactions:write"
+requiresWriteScope: true
+version: "1.0.0"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vad är skillnaden mellan ruta 30 och ruta 60? Jag har importmoms från Stripe."
+    a: "Ruta 30 är reverse-charge utgående moms på EU-tjänster (AWS, Linear, Stripe-avgifter, Vercel). Ruta 60 är beräknad importmoms på varor från länder utanför EU. Stripe-avgiften är ett EU-tjänsteinköp om Stripe-bolaget är i Irland, då hamnar det i ruta 30, inte 60. Skillen läser leverantörens land från extracted_data och mappar enligt din kontomappning."
+  - q: "Min reverse-charge är inte balanserad, vad menas det?"
+    a: "Reverse-charge ska spegla sig: 2614 (utgående 25%) ska motsvaras av 2645 (beräknad ingående) på samma belopp. Är de inte lika är något bokfört fel. `gnubok_vat_close_check` returnerar blockern `reverse_charge_input_missing` med peklänk till transaktionen."
+  - q: "Hur ofta råkar man flytta 2641 till 2645 för EU-tjänster?"
+    a: "Det är den vanligaste momsfel-typen för svenska SaaS-grundare. Generic AI-kategoriserare lär sig inte skillnaden mellan 2641 (vanlig ingående) och 2645 (omvänd skattskyldighet). När du kör skillen för Q1 kommer den retroaktivt flagga rader från tidigare kvartal som hamnat fel via blockern `reverse_charge_input_missing`."
+  - q: "Behöver jag stänga kvartalet manuellt efteråt?"
+    a: "Nej. Skillen stagar inte close_period. Den producerar bara SKV 4700-paketet och säger 'redo att lämna in'. Själva inlämningen sker manuellt i Skatteverkets e-tjänst (BankID). Skatteverket har ingen MCP-yta för momsinlämning idag."
+  - q: "Vad händer om jag har en pågående tvist om kreditfaktura?"
+    a: "Skillen flaggar omtvistade fakturor som blockers. De räknas inte in i den föreslagna ruta 49-summan. När tvisten löser sig kör du skillen igen och ruta 49 uppdateras. BFL 5 kap 1§: moms får inte rapporteras på något du själv inte håller med om."
+---
+
+## Stegen
+
+Skillen stänger ett kvartals moms i ett anrop till
+`gnubok_vat_close_check`. Inte fem separata rapporter, utan en
+strukturerad förfrågan som returnerar exakt vad du behöver veta
+för att fylla i SKV 4700.
+
+Stegen, mestadels parallella:
+
+1. `gnubok_vat_close_check(period: "2026-Q1")`. Drar blocker-rapport.
+2. Om `uncategorized_transactions`: `gnubok_list_uncategorized_transactions(period: ...)` följt av `gnubok_categorize_transaction` per post.
+3. Om `unapproved_supplier_invoices`: peklänk till godkännandekön i appen.
+4. Om `reverse_charge_input_missing`: `gnubok_query_journal(accounts: [2614, 2624, 2634, 2645], period: ...)`. Visar felaktiga rader.
+5. Om `missing_high_value_receipts`: peklänk till transaktioner saknande underlag ≥ 4 000 kr.
+6. Om `bank_unreconciled`: peklänk till bankavstämningen i appen.
+7. När blockers = 0: `gnubok_get_vat_report(period: ...)`. Returnerar fyllt SKV 4700.
+8. Skillen visar rutornas värden mot förra kvartalets snitt (drift-check via warnings: `output_vat_ratio_drift`, `input_vat_ratio_drift`, `revenue_drop`, `revenue_spike`).
+9. Skillen flaggar ruta 49 = att betala/återfå.
+10. Returnerar SKV 4700-värdena. Inlämning sker manuellt i Skatteverkets e-tjänst.
+
+Inget skrivs till huvudboken utan godkännande. Skatteverket-inlämning
+sker manuellt; ingen MCP-bro för momsdeklaration finns idag.
+
+## SKV 4700: rutorna skillen fyller i
+
+| Ruta | Vad det är | accounted-konto |
+|---|---|---|
+| 05 | Försäljning Sverige | 3001, 3002, 3041 |
+| 10 | Utgående moms 25% | 2611 |
+| 11 | Utgående moms 12% | 2621 |
+| 12 | Utgående moms 6% | 2631 |
+| 20 | Försäljning av varor till annat EU-land | 3105 |
+| 21 | Försäljning av tjänster till annat EU-land | 3106 |
+| 22 | Försäljning av varor utanför EU | 3108 |
+| 23 | Försäljning av tjänster utanför EU | 3109 |
+| 30 | Inköp av tjänster från EU (reverse-charge utg) | 2614 |
+| 31 | Inköp av varor från EU (reverse-charge utg) | 2624 |
+| 32 | Inköp från annat EU-land (övrigt) | 2634 |
+| 35 | Inköp från konsument | 2680 |
+| 39 | Vinstmarginalbeskattning utgående moms | 2616 |
+| 40 | Vinstmarginalbeskattning beskattningsunderlag | — |
+| 48 | Ingående moms att dra av | 2641, 2645 |
+| 49 | Att betala / få tillbaka | (beräknad) |
+| 60 | Beräknad importmoms 25% (varor icke-EU) | 2615 |
+| 61 | Beräknad importmoms 12% | 2625 |
+| 62 | Beräknad importmoms 6% | 2635 |
+
+Konton hänvisar till BAS 2026. Om du använder en avvikande kontoplan
+läser skillen den via `gnubok_list_accounts` och anpassar mappningen.
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/accounted
+cd gnubok/skills/kvartalsmoms-pa-12-minuter
+```
+
+I Claude Desktop:
+
+```
+Cmd-Shift-P → Skills: Add from folder → välj mappen
+```
+
+Kräver att [accounted MCP](/community/registry/gnubok-mcp) är ansluten med
+scopes `reports:read`, `transactions:read`, `transactions:write`.
+
+## Köra skillen
+
+```
+@kvartalsmoms-pa-12-minuter stäng Q1 2026
+```
+
+Agenten:
+
+1. Kör `vat_close_check`, listar blockers (säg 12 `uncategorized_transactions`, 2 `reverse_charge_input_missing`, 0 övriga).
+2. Föreslår kategoriseringar för okategoriserade.
+3. Peklänkar reverse-charge-obalanserna.
+4. Du godkänner i appen.
+5. Skillen kör om `vat_close_check`. Blockers = 0.
+6. Returnerar `get_vat_report` med fyllda rutor.
+7. Visar diff mot Q4 2025 om någon av warnings triggar.
+8. Frågar: "Filen är klar för upload."
+
+Tar 9–14 minuter beroende på antal blockers. Snittet vi ser är
+12 minuter på en period med 200 transaktioner.
+
+## Blockers och vad de betyder
+
+`uncategorized_transactions`: transaktioner i perioden som inte är
+bokförda. Skillen erbjuder en kategoriseringssession.
+
+`unapproved_supplier_invoices`: leverantörsfaktura i status
+"registered" men inte "approved". Räknas inte in i ingående moms
+förrän approved.
+
+`bank_unreconciled`: bankavstämningen i perioden har diff. Måste
+balansera innan moms-snapshot är trovärdig.
+
+`missing_high_value_receipts`: BFL 5 kap 6§ kräver originalverifikat
+för utgift ≥ 4 000 kr inkl moms. Saknas det blir det
+revisor-anmärkning.
+
+`reverse_charge_input_missing`: en EU-leverantörsfaktura kategoriserades
+som 2641 + 4010 istället för split 2614/2645 + 4010. Utgående (2614)
+saknar speglande ingående (2645) på samma belopp.
+
+## Begränsningar
+
+* Skillen lämnar inte in moms till Skatteverket. Det sker manuellt i e-tjänsten med BankID.
+* Skillen räknar inte om historiska perioder. Den jobbar med en period i taget.
+* Skillen försöker inte minska din moms-att-betala. Det är skatteplanering, inte momshantering.
+* Skillen hanterar inte vinstmarginalbeskattning (begagnade varor, konst, antikviteter). Använd `gnubok_create_voucher` manuellt för det.
+
+## Vad du får
+
+Momsstängning som tar 12 minuter istället för 90. Och en
+audit-logg per anrop, så att när Skatteverket frågar "varför
+hamnade den här på ruta 48?", svaret finns på rad i
+`gnubok_audit_package`-zippen: actor, scope, tidsstämpel, before/after.
+
+Inte snabbare moms. Moms som är revisionsbar.

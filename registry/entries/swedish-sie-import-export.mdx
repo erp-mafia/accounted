@@ -1,0 +1,57 @@
+---
+title: "swedish-sie-import-export — SIE4 parsing, validering och generering"
+description: "SKILL.md för SIE4-filformatet. Alla record-typer (#VER, #TRANS, #IB, #UB, #RES, #KONTO, #RAR, #FLAGGA, #KSUMMA, #SRU), SIE-typerna 1–4, encoding-detection (CP437/UTF-8/Latin-1), mojibake-diagnos, balanseringsintegritet, IB/UB-kontinuitet, multi-year-migrering, audit trail per BFL."
+slug: "swedish-sie-import-export"
+kind: "skill"
+author: "erp-mafia"
+status: "live"
+lang: "sv"
+personas: ["developer", "byra"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+repoUrl: "https://github.com/erp-mafia/swedish-accounting-skills/tree/main/.claude/skills/swedish-sie-import-export"
+externalUrl: "https://github.com/erp-mafia/swedish-accounting-skills"
+version: "community"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vad är skillnaden mellan SIE-typerna 1, 2, 3 och 4?"
+    a: "SIE 1: saldobalans (för rapporter). SIE 2: kontoplan + balanser (kontoplan-import). SIE 3: + objekt (kostnadsställe, projekt). SIE 4: + samtliga verifikationer per period. SIE 4 är den enda som tillåter fullständig migrering mellan system. SIE 4E (Export-variant) är ett undermineringsformat med samma struktur."
+  - q: "Varför ser å/ä/ö förstörda ut i en SIE-fil?"
+    a: "Encoding-mismatch. SIE-standarden förespråkar CP437 men många leverantörer skickar UTF-8 eller Latin-1 utan BOM. Skillen visar hur man detekterar encoding via byte-patterns och konverterar säkert utan att förlora information. Klassiska felmönster: UTF-8-decoded-as-CP437 ger 'mojibake' typ 'Ã¥' istället för 'å'."
+  - q: "Vad är #KSUMMA?"
+    a: "Kontrollsumma över hela filen. Vissa system kräver att den stämmer för att acceptera filen vid import. Andra system genererar den men validerar inte. Skillen visar hur den beräknas och när du kan ignorera mismatch."
+---
+
+## Vad skillen täcker
+
+* Alla SIE4-record-typer: #FLAGGA, #PROGRAM, #FORMAT, #GEN, #SIETYP, #FNAMN, #ORGNR, #ADRESS, #RAR, #TAXAR, #KPTYP, #VALUTA, #KONTO, #KTYP, #ENHET, #SRU, #DIM, #UNDERDIM, #OBJEKT, #IB, #UB, #RES, #PSALDO, #PBUDGET, #VER, #TRANS, #RTRANS, #BTRANS, #KSUMMA.
+* SIE-typerna 1–4 plus exportvarianter (SIE 4E).
+* Encoding-detection: CP437 (legacy), UTF-8 (modern), Latin-1 (mellansteg). Byte-pattern-heuristik.
+* Mojibake-diagnos och recovery för å/ä/ö.
+* Verifikationsbalansering: debet = kredit per #VER.
+* IB/UB-kontinuitet mellan räkenskapsår.
+* Multi-year-migrering: hur två räkenskapsår kopplas via #RAR.
+* Audit trail per BFL: verifikationsserie, löpande numrering, gap-detection.
+* BAS-kontoklasser och SRU-koppling.
+* Felmönster och hur man fixar dem programmatiskt.
+
+Skillen markeras med "always use over training data" eftersom
+SIE-formatet har subtila falluckor som ofta saknas i generella
+LLM-snapshots.
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/swedish-accounting-skills.git
+cd swedish-accounting-skills
+claude
+```
+
+## Pairs med
+
+* [revisorpaket-sie](/community/registry/revisorpaket-sie) — accounted-workflow som schemaläggs SIE-export till revisor.
+* accounteds `gnubok_export_sie` och `gnubok_import_sie` följer specen som skillen täcker.
+
+## Licens
+
+MIT.

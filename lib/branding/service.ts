@@ -75,7 +75,10 @@ const DEFAULT_BRANDING: BrandingConfig = {
   faviconPath: '/favicon.ico',
   appleTouchIconPath: '/icons/icon-192.png',
   pwaIconBasePath: '/icons',
-  themeColor: '#304D83',
+  // SSR-initial browser-chrome color (iOS status bar / Android address bar).
+  // Matches light --background; after hydration ThemeColorSync keeps the meta
+  // tag in step with the active theme and palette.
+  themeColor: '#ffffff',
   manifestThemeColor: '#1a1a1a',
   manifestBackgroundColor: '#ffffff',
   hiddenNavHrefs: [],

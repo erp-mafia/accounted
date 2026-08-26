@@ -279,6 +279,16 @@ export function evaluateAnnualReportEligibility(
     }
   }
 
+  if (profile.reporting_currency !== 'SEK') {
+    issues.push(
+      issue(
+        'AR-SCOPE-CURRENCY',
+        'Accounteds årsredovisningsflöde stöder ännu endast SEK som redovisningsvaluta.',
+        'Upprätta årsredovisningen i ett system som stöder euro som redovisningsvaluta.',
+      ),
+    )
+  }
+
   const k2Eligible = input.framework === 'k2' && issues.every((item) => item.severity !== 'error')
   const digitalIssues = [...issues]
   if (input.framework !== 'k2') {
@@ -287,14 +297,6 @@ export function evaluateAnnualReportEligibility(
         'AR-DIGITAL-FRAMEWORK',
         'Accounteds digitala Bolagsverket-flöde stöder ännu endast K2 för aktiebolag.',
         'Använd pappersflödet tills K3-taxonomin är implementerad och godkänd.',
-      ),
-    )
-  }
-  if (profile.reporting_currency !== 'SEK') {
-    digitalIssues.push(
-      issue(
-        'AR-DIGITAL-CURRENCY',
-        'Digital inlämning stöds ännu endast för årsredovisningar i SEK.',
       ),
     )
   }

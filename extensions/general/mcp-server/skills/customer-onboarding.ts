@@ -21,8 +21,9 @@ later: much cheaper to ask the customer once at onboarding.
 
 | Customer | customer_type | Required fields | VAT treatment |
 |---|---|---|---|
-| Swedish private person | \`individual\` | name | 25/12/6 % standard, no reverse charge |
-| Swedish AB / HB / KB / EF | \`swedish_business\` | name, org_number | 25/12/6 % standard |
+| Swedish private person | \`individual\` | name, personal_number (optional; encrypted, masked on read) | 25/12/6 % standard, no reverse charge |
+| Swedish AB / HB / KB | \`swedish_business\` | name, org_number | 25/12/6 % standard |
+| Swedish enskild firma (EF) | \`individual\` | name, personal_number (an EF's org number IS the owner's personnummer; a business type refuses it) | 25/12/6 % standard |
 | EU company (VAT-registered) | \`eu_business\` | name, vat_number (validated) | Reverse charge (varor + tjänster): invoice has 0 % VAT, customer pays VAT in their country |
 | EU company (no VAT number) | \`eu_business\` | name, country | Treated as individual: 25 % charged, no reverse charge |
 | Non-EU company | \`non_eu_business\` | name, country | Export 0 % (varor) or reverse charge per service rules |
@@ -30,7 +31,7 @@ later: much cheaper to ask the customer once at onboarding.
 
 **Special cases:**
 
-- **B2G (Swedish municipality/agency)**: still \`swedish_business\`, but the invoice must be Peppol-formatted (legal requirement since 2019-04-01). Accounted handles Peppol when the customer record has a Peppol endpoint configured.
+- **B2G (Swedish municipality/agency)**: still \`swedish_business\`. If the customer requires Peppol or another e-invoice format, deliver the invoice through an external e-invoice provider, then use \`gnubok_mark_invoice_as_sent\` to record delivery. Accounted currently creates PDF/email invoices and does not generate or send Peppol invoices.
 - **Consumer customer in another EU country (B2C distance sale)**: \`eu_business\` does NOT apply. Charge Swedish VAT (25/12/6 %) below the OSS threshold; above the threshold the company must register for OSS. This is rare for sole traders: flag the user if turnover suggests they're approaching the threshold.
 
 ## Workflow
@@ -102,7 +103,7 @@ ROT/RUT-avdrag applies to physical persons receiving home-services
 required on the invoice. Update the customer record with:
 
 - \`fastighetsbeteckning\` (property identifier, for ROT)
-- \`personnummer\` (encrypted at rest)
+- \`personal_number\` (set at creation via \`gnubok_create_customer\` or in the web form; encrypted at rest, masked on read)
 
 Then create the invoice with ROT/RUT flag set. See the \`invoicing-rules\` skill
 for the booking details (BAS accounts 1513 + 3740).

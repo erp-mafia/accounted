@@ -10,9 +10,11 @@
  * the reconciliation cron) untouched.
  */
 import { describe, it, expect } from 'vitest'
-import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from './setup'
-import { seedCompany } from './fixtures'
+import {
+  insertPostedJournalEntry as insertAtomicPostedJournalEntry,
+  seedCompany,
+} from './fixtures'
 
 async function insertPostedJournalEntry(params: {
   userId: string
@@ -22,23 +24,20 @@ async function insertPostedJournalEntry(params: {
   voucherNumber: number
   amount?: number
 }): Promise<string> {
-  const id = randomUUID()
   const amount = params.amount ?? 1500
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', $6, 'Bank tx', 'bank_transaction', 'posted')`,
-    [id, params.userId, params.companyId, params.fiscalPeriodId, params.voucherNumber, params.entryDate],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
-       (journal_entry_id, account_number, debit_amount, credit_amount)
-     VALUES ($1, '1930', $2, 0),
-            ($1, '2091', 0, $2)`,
-    [id, amount],
-  )
-  return id
+  return insertAtomicPostedJournalEntry({
+    userId: params.userId,
+    companyId: params.companyId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    voucherNumber: params.voucherNumber,
+    entryDate: params.entryDate,
+    description: 'Bank tx',
+    sourceType: 'bank_transaction',
+    lines: [
+      { accountNumber: '1930', debitAmount: amount, creditAmount: 0 },
+      { accountNumber: '2091', debitAmount: 0, creditAmount: amount },
+    ],
+  })
 }
 
 const UNLINKED = `SELECT journal_entry_id FROM public.get_unlinked_gl_lines($1)`

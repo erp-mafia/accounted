@@ -22,7 +22,7 @@ import { Loader2, Plus, X } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { formatCurrency } from '@/lib/utils'
-import type { AssetCategory, DepreciationMethod, K3Component } from '@/types'
+import type { AssetCategory, K3Component } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface CreateAssetDialogProps {
@@ -67,28 +67,12 @@ const CATEGORY_OPTIONS: { value: AssetCategory; label: string; defaultYears: num
   { value: 'other_tangible', label: 'Övrig materiell tillgång', defaultYears: 5 },
 ]
 
-const DEPRECIATION_METHOD_OPTIONS: { value: DepreciationMethod; label: string; hint: string }[] = [
-  {
-    value: 'linear',
-    label: 'Linjär',
-    hint: 'Planenlig raklinje över nyttjandeperioden (ÅRL 4 kap 4§).',
-  },
-  {
-    value: 'declining_balance_30',
-    label: 'Räkenskapsenlig 30 %',
-    hint: 'Huvudregeln (IL 18 kap 13§): 30 % degressivt på avskrivningsunderlaget.',
-  },
-  {
-    value: 'declining_balance_20',
-    label: 'Räkenskapsenlig 20 %',
-    hint: 'Kompletteringsregeln (IL 18 kap 17§): 20 % degressivt. Vanlig för byggnader.',
-  },
-  {
-    value: 'restvardesavskrivning_25',
-    label: 'Restvärdeavskrivning 25 %',
-    hint: 'IL 18 kap 13§ st.3: 25 % degressivt ner till angivet restvärde.',
-  },
-]
+// No account override here on purpose. The server resolves the immaterial
+// default per framework (defaultAccountsForCategory in
+// lib/bokslut/assets/asset-service.ts): 1090/1099 for K2, 1010/1019 for K3.
+// Sending an explicit pair from this dialog would duplicate that rule on a
+// second surface, and the edit dialog (which has no account inputs at all)
+// could never mirror it. The hint below just tells the user where it lands.
 
 export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAssetDialogProps) {
   const { toast } = useToast()
@@ -104,8 +88,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
   )
   const [acquisitionCost, setAcquisitionCost] = useState('')
   const [usefulLifeYears, setUsefulLifeYears] = useState('5')
-  const [depreciationMethod, setDepreciationMethod] = useState<DepreciationMethod>('linear')
-  const [restvardeTarget, setRestvardeTarget] = useState('')
   // K3 component depreciation. `useComponents` toggles the advanced section;
   // null when disabled, an array (possibly empty during editing) when enabled.
   const [useComponents, setUseComponents] = useState(false)
@@ -118,10 +100,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
     const option = CATEGORY_OPTIONS.find((o) => o.value === next)
     if (option) setUsefulLifeYears(option.defaultYears.toString())
   }
-
-  const isRestvarde = depreciationMethod === 'restvardesavskrivning_25'
-  const methodHint =
-    DEPRECIATION_METHOD_OPTIONS.find((o) => o.value === depreciationMethod)?.hint ?? ''
 
   const totalComponentCost = useMemo(() => {
     return componentRows.reduce((sum, row) => {
@@ -160,19 +138,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
     if (!name.trim() || !Number.isFinite(cost) || cost <= 0 || !Number.isFinite(years) || years <= 0) {
       setError('Fyll i namn, anskaffningsvärde och avskrivningstid.')
       return
-    }
-    let restvardeTargetNumber: number | null = null
-    if (isRestvarde) {
-      const parsed = parseFloat(restvardeTarget)
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        setError('Ange ett restvärde (0 kr eller högre).')
-        return
-      }
-      if (parsed >= cost) {
-        setError('Restvärdet måste vara lägre än anskaffningsvärdet.')
-        return
-      }
-      restvardeTargetNumber = parsed
     }
     // K3 components: only when both the framework permits (gate at API)
     // and the user opted into the section. Empty array is invalid (the
@@ -239,10 +204,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
           acquisition_date: acquisitionDate,
           acquisition_cost: cost,
           useful_life_months: years * 12,
-          depreciation_method: depreciationMethod,
-          ...(restvardeTargetNumber !== null
-            ? { restvarde_target: restvardeTargetNumber }
-            : {}),
           ...(componentsPayload !== null ? { k3_components: componentsPayload } : {}),
         }),
       })
@@ -255,8 +216,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       // Reset form for next entry
       setName('')
       setAcquisitionCost('')
-      setDepreciationMethod('linear')
-      setRestvardeTarget('')
       setUseComponents(false)
       setComponentRows([])
       onCreated()
@@ -298,6 +257,19 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                 ))}
               </SelectContent>
             </Select>
+            {category === 'immaterial' && !isK3 && (
+              <p className="text-xs text-muted-foreground">
+                Bokförs som förvärvad immateriell tillgång (konto 1090). Egenupparbetad
+                utveckling får inte aktiveras enligt K2 (BFNAR 2016:10 punkt 10.4): det kräver K3.
+              </p>
+            )}
+            {category === 'immaterial' && isK3 && (
+              <p className="text-xs text-muted-foreground">
+                För aktiebolag medför aktivering av egenupparbetad utveckling (konto 1010) att
+                motsvarande belopp sätts av till fond för utvecklingsutgifter (konto 2089) enligt
+                ÅRL 4 kap. 2 §.
+              </p>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
@@ -340,46 +312,8 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               För skattemässig avskrivning kan annan livslängd gälla (IL 18-20 kap).
             </p>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="asset-method">Avskrivningsmetod</Label>
-            <Select
-              value={depreciationMethod}
-              onValueChange={(v) => setDepreciationMethod(v as DepreciationMethod)}
-            >
-              <SelectTrigger id="asset-method">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DEPRECIATION_METHOD_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">{methodHint}</p>
-          </div>
-          {isRestvarde && (
-            <div className="space-y-1.5">
-              <Label htmlFor="asset-restvarde">Restvärde (kr)</Label>
-              <Input
-                id="asset-restvarde"
-                type="number"
-                min="0"
-                step="1"
-                value={restvardeTarget}
-                onChange={(e) => setRestvardeTarget(e.target.value)}
-                placeholder="t.ex. 5000"
-                className="tabular-nums"
-              />
-              <p className="text-xs text-muted-foreground">
-                Avskrivningen stannar när bokfört värde når restvärdet. Restvärdet
-                måste vara lägre än anskaffningsvärdet.
-              </p>
-            </div>
-          )}
           {isK3 && (
-            <div className="space-y-3 rounded-md border border-border bg-muted/20 p-4">
+            <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
                   <Label className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
@@ -406,7 +340,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                   {componentRows.map((row, idx) => (
                     <div
                       key={row.id}
-                      className="grid grid-cols-12 items-end gap-2 rounded-md border border-border bg-background p-2"
+                      className="grid grid-cols-12 items-end gap-2 rounded-lg border border-border bg-background p-2"
                     >
                       <div className="col-span-12 sm:col-span-4 space-y-1">
                         <Label
@@ -530,14 +464,14 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               )}
             </div>
           )}
-          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
             <strong className="text-foreground">Tips:</strong> Anskaffningen måste redan vara
             bokförd (debet på 1xxx-kontot mot t.ex. 1930/2440): registret bokför inte
             själva köpet. Det här registret styr enbart de planenliga avskrivningarna under
             bokslutet.
           </div>
           {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
               {error}
             </div>
           )}

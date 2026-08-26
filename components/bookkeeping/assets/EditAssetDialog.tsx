@@ -18,11 +18,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { AlertTriangle, Loader2, Lock } from 'lucide-react'
+import { Loader2, Lock } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import type { Asset, AssetCategory, DepreciationMethod } from '@/types'
+import type { Asset, AssetCategory } from '@/types'
 
 /** The list route annotates each asset with whether any depreciation has been
  *  posted against it. When true, the acquisition-basis fields are locked. */
@@ -35,8 +35,7 @@ interface EditAssetDialogProps {
   onSaved: () => void
 }
 
-// Same category labels and depreciation hints as CreateAssetDialog (kept in
-// sync deliberately: this register surface is Swedish-only, like creation).
+// Same category labels as CreateAssetDialog.
 const CATEGORY_OPTIONS: { value: AssetCategory; label: string }[] = [
   { value: 'computer', label: 'Dator / IT-utrustning' },
   { value: 'equipment', label: 'Inventarier' },
@@ -46,29 +45,6 @@ const CATEGORY_OPTIONS: { value: AssetCategory; label: string }[] = [
   { value: 'land_improvement', label: 'Markanläggning' },
   { value: 'immaterial', label: 'Immateriell tillgång' },
   { value: 'other_tangible', label: 'Övrig materiell tillgång' },
-]
-
-const DEPRECIATION_METHOD_OPTIONS: { value: DepreciationMethod; label: string; hint: string }[] = [
-  {
-    value: 'linear',
-    label: 'Linjär',
-    hint: 'Planenlig raklinje över nyttjandeperioden (ÅRL 4 kap 4§).',
-  },
-  {
-    value: 'declining_balance_30',
-    label: 'Räkenskapsenlig 30 %',
-    hint: 'Huvudregeln (IL 18 kap 13§): 30 % degressivt på avskrivningsunderlaget.',
-  },
-  {
-    value: 'declining_balance_20',
-    label: 'Räkenskapsenlig 20 %',
-    hint: 'Kompletteringsregeln (IL 18 kap 17§): 20 % degressivt. Vanlig för byggnader.',
-  },
-  {
-    value: 'restvardesavskrivning_25',
-    label: 'Restvärdeavskrivning 25 %',
-    hint: 'IL 18 kap 13§ st.3: 25 % degressivt ner till angivet restvärde.',
-  },
 ]
 
 export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAssetDialogProps) {
@@ -86,18 +62,8 @@ export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAsse
   const [usefulLifeYears, setUsefulLifeYears] = useState(
     String(Math.round(asset.useful_life_months / 12)),
   )
-  const [depreciationMethod, setDepreciationMethod] = useState<DepreciationMethod>(
-    asset.depreciation_method,
-  )
-  const [restvardeTarget, setRestvardeTarget] = useState(
-    asset.restvarde_target != null ? String(asset.restvarde_target) : '',
-  )
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  const isRestvarde = depreciationMethod === 'restvardesavskrivning_25'
-  const methodHint =
-    DEPRECIATION_METHOD_OPTIONS.find((o) => o.value === depreciationMethod)?.hint ?? ''
 
   const handleSubmit = async () => {
     setError(null)
@@ -132,31 +98,6 @@ export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAsse
     }
     const months = years * 12
     if (months !== asset.useful_life_months) patch.useful_life_months = months
-
-    if (depreciationMethod !== asset.depreciation_method) {
-      patch.depreciation_method = depreciationMethod
-    }
-
-    if (isRestvarde) {
-      const target = parseFloat(restvardeTarget)
-      const cost = !basisLocked ? parseFloat(acquisitionCost) : Number(asset.acquisition_cost)
-      if (!Number.isFinite(target) || target < 0) {
-        setError('Ange ett restvärde (0 kr eller högre).')
-        return
-      }
-      if (Number.isFinite(cost) && target >= cost) {
-        setError('Restvärdet måste vara lägre än anskaffningsvärdet.')
-        return
-      }
-      // Send the target when switching into restvärde or when it changed, so
-      // the method/target biconditional always holds.
-      if (
-        depreciationMethod !== asset.depreciation_method ||
-        target !== Number(asset.restvarde_target)
-      ) {
-        patch.restvarde_target = target
-      }
-    }
 
     if (Object.keys(patch).length === 0) {
       toast({ title: 'Inga ändringar', description: 'Inget att spara.' })
@@ -250,12 +191,12 @@ export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAsse
           </div>
 
           {basisLocked && (
-            <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+            <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
               <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
                 Anskaffningsdatum, anskaffningsvärde och kategori är låsta eftersom avskrivningar
                 redan har bokförts. Återför avskrivningen (storno) eller använd avyttring för att
-                ändra grunduppgifterna. Namn, avskrivningstid och metod kan fortfarande justeras.
+                ändra grunduppgifterna. Namn och avskrivningstid kan fortfarande justeras.
               </span>
             </div>
           )}
@@ -274,60 +215,8 @@ export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAsse
             />
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="edit-asset-method">Avskrivningsmetod</Label>
-            <Select
-              value={depreciationMethod}
-              onValueChange={(v) => setDepreciationMethod(v as DepreciationMethod)}
-            >
-              <SelectTrigger id="edit-asset-method">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DEPRECIATION_METHOD_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">{methodHint}</p>
-          </div>
-
-          {basisLocked && depreciationMethod !== asset.depreciation_method && (
-            <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>
-                Byte av avskrivningsmetod efter att avskrivning påbörjats. Enligt K2
-                (BFNAR 2016:10 p. 10.26) ska vald metod tillämpas konsekvent: ändra
-                bara vid särskilda skäl och lämna i så fall upplysning i bokslutet.
-                Ändringen gäller framåt; redan bokförda avskrivningar påverkas inte.
-              </span>
-            </div>
-          )}
-
-          {isRestvarde && (
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-asset-restvarde">Restvärde (kr)</Label>
-              <Input
-                id="edit-asset-restvarde"
-                type="number"
-                min="0"
-                step="1"
-                value={restvardeTarget}
-                onChange={(e) => setRestvardeTarget(e.target.value)}
-                placeholder="t.ex. 5000"
-                className="tabular-nums"
-              />
-              <p className="text-xs text-muted-foreground">
-                Avskrivningen stannar när bokfört värde når restvärdet. Restvärdet måste vara lägre
-                än anskaffningsvärdet.
-              </p>
-            </div>
-          )}
-
           {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
               {error}
             </div>
           )}

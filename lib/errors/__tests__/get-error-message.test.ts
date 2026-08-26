@@ -374,6 +374,17 @@ describe('getErrorMessage: API response body vs new Error(body.error)', () => {
     expect(msg).not.toBe('Något gick fel. Försök igen.')
   })
 
+  // A body the platform rejects never reaches a route, and the 413 it answers
+  // with is plain text: the status is the only thing left to translate.
+  it('a payload-too-large rejection says so, with no body to read', () => {
+    expect(getErrorMessage(null, { statusCode: 413 })).toBe(
+      'Filen är för stor för att skickas. Försök igen med en mindre fil.',
+    )
+    expect(getErrorMessage(null, { statusCode: 413, locale: 'en' })).toBe(
+      'The file is too large to send. Try again with a smaller file.',
+    )
+  })
+
   it('new Error(body.error) stringifies the envelope to "[object Object]"', () => {
     // The defect in one line: the Error constructor calls String() on the object.
     expect(new Error(envelope.error as unknown as string).message).toBe('[object Object]')
@@ -458,6 +469,50 @@ describe('getErrorMessage: Swedish heuristic covers real route sentences', () =>
   it('an English body still falls to the status map, not passthrough', () => {
     expect(getErrorMessage({ error: 'Extension context required' }, { statusCode: 500 })).toBe(
       'Ett oväntat serverfel uppstod. Försök igen senare.',
+    )
+  })
+
+  // The CashLeads Fortnox migration (2026-08-06): the sie-import finalizer's
+  // guard message reached the wizard as a thrown Error, matched none of the
+  // patterns, and the user saw the generic fallback instead of the reason the
+  // migration stopped. Pins the added patterns: verifikation / importen.
+  it('the 0-verifikationer import guard sentence passes through verbatim', () => {
+    const thrown = new Error(
+      'Importen skapade 0 verifikationer: markerar som misslyckad så filen kan importeras om utan replace/undo. Granska varningarna för att se vilka konton som behöver mappas.',
+    )
+    const msg = getErrorMessage(thrown)
+    expect(msg).toContain('0 verifikationer')
+    expect(msg).not.toBe('Något gick fel. Försök igen.')
+  })
+})
+
+describe('getErrorMessage: GoTrue auth error patterns', () => {
+  it('maps "Signups not allowed for this instance" to the closed-installation message', () => {
+    // Shape mirrors a real AuthApiError: an Error instance carrying a GoTrue
+    // error code that the structured registry does not know.
+    const authError = Object.assign(new Error('Signups not allowed for this instance'), {
+      code: 'signup_disabled',
+      status: 422,
+    })
+    const msg = getErrorMessage(authError, { context: 'auth' })
+    expect(msg).toBe(
+      'Kontoregistrering är avstängd på den här installationen. Kontakta den som bjöd in dig eller din administratör för att få ett konto.',
+    )
+  })
+
+  it('maps a plain "Signups not allowed" string as well', () => {
+    const msg = getErrorMessage('Signups not allowed for this instance', { context: 'auth' })
+    expect(msg).toContain('avstängd på den här installationen')
+  })
+
+  it('maps GoTrue "Error sending invite email" to the SMTP guidance message', () => {
+    const authError = Object.assign(new Error('Error sending invite email'), {
+      code: 'unexpected_failure',
+      status: 500,
+    })
+    const msg = getErrorMessage(authError, { context: 'auth', statusCode: 502 })
+    expect(msg).toBe(
+      'E-postmeddelandet kunde inte skickas av autentiseringstjänsten. Kontrollera installationens SMTP-inställningar och försök igen.',
     )
   })
 })

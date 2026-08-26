@@ -13,14 +13,14 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { executeSIEImport } from '../sie-import'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { createJournalEntry, replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
 import { findUntransferredResults } from '@/lib/reports/imbalance-diagnosis'
 import type { ParsedSIEFile, AccountMapping } from '../types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: vi.fn(async () => ({ id: 'ob-entry-1' })),
-  reverseEntry: vi.fn(),
+  replaceOpeningBalanceEntry: vi.fn(),
 }))
 
 vi.mock('@/lib/reports/imbalance-diagnosis', () => ({
@@ -131,7 +131,7 @@ function makeMapping(source: string, target: string): AccountMapping {
   }
 }
 
-function standardQueues() {
+function standardQueues(): Record<string, QueuedResult[]> {
   return {
     sie_imports: [
       { data: null }, // checkDuplicateImport: no duplicate
@@ -252,10 +252,13 @@ describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
     expect(createJournalEntry).not.toHaveBeenCalled()
     expect(result.openingBalanceEntryId).toBeNull()
     expect(result.warnings.join(' ')).toMatch(/hoppades över eftersom bolaget redan har bokförda verifikationer/)
-    // Zero entries created → the finalizer safety net downgrades the run so
-    // the file slot stays free for a retry (existing behavior).
-    expect(result.success).toBe(false)
-    expect(result.errors.join(' ')).toMatch(/0 verifikationer/)
+    // Zero entries from a file with no vouchers is a deliberate no-op (the
+    // continuation guard skipped the IB), not a failure: the finalizer
+    // downgrade only fires when the file contained vouchers that could not
+    // be imported. Re-running the same file could never produce a different
+    // outcome, so failing it would just dead-end the user.
+    expect(result.success).toBe(true)
+    expect(result.errors).toEqual([])
   })
 
   it('creates no IB entry when the file has neither #IB 0 nor #UB -1', async () => {
@@ -279,6 +282,228 @@ describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
 
     expect(createJournalEntry).not.toHaveBeenCalled()
     expect(result.openingBalanceEntryId).toBeNull()
+  })
+
+  it('keeps an earlier-year IB and resyncs the already-imported successor', async () => {
+    const queues = standardQueues()
+    queues.fiscal_periods = [
+      { data: { id: 'fp-2025' } },
+      { data: { opening_balances_set: false, opening_balance_entry_id: null } },
+      {}, // Link the new 2025 IB.
+      {
+        data: {
+          id: 'fp-2026',
+          name: 'Räkenskapsår 2026',
+          period_start: '2026-01-01',
+          period_end: '2026-12-31',
+          is_closed: false,
+          locked_at: null,
+          opening_balance_entry_id: 'ib-2026-old',
+          opening_balances_set: true,
+        },
+      },
+    ]
+    queues.journal_entries = [
+      // The chronological activity check excludes the already-imported 2026
+      // entries when deciding whether the 2025 #IB is legitimate.
+      { count: 0 },
+    ]
+
+    vi.mocked(createJournalEntry).mockResolvedValueOnce({
+      id: 'ib-2025',
+    } as Awaited<ReturnType<typeof createJournalEntry>>)
+    vi.mocked(replaceOpeningBalanceEntry).mockResolvedValueOnce({
+      newEntryId: 'ib-2026-new',
+      stornoEntryId: 'storno-2026-old',
+      newVoucherNumber: 2,
+      stornoVoucherNumber: 3,
+    })
+
+    const parsed = makeParsedFile({
+      header: {
+        ...makeParsedFile().header,
+        fiscalYears: [{ yearIndex: 0, start: '2025-01-01', end: '2025-12-31' }],
+      },
+      openingBalances: [
+        { yearIndex: 0, account: '1930', amount: 100 },
+        { yearIndex: 0, account: '2010', amount: -100 },
+      ],
+      closingBalances: [
+        { yearIndex: 0, account: '1930', amount: 150 },
+        { yearIndex: 0, account: '2010', amount: -150 },
+      ],
+      stats: {
+        totalAccounts: 2,
+        totalVouchers: 0,
+        totalTransactionLines: 0,
+        fiscalYearStart: '2025-01-01',
+        fiscalYearEnd: '2025-12-31',
+      },
+    })
+
+    const result = await executeSIEImport(
+      buildRoutingSupabase(queues),
+      'company-1',
+      'user-1',
+      parsed,
+      standardMappings,
+      standardOptions,
+    )
+
+    expect(result.success).toBe(true)
+    expect(result.openingBalanceEntryId).toBe('ib-2025')
+    expect(result.nextPeriodIBResync).toEqual({
+      nextPeriodId: 'fp-2026',
+      nextPeriodName: 'Räkenskapsår 2026',
+      stornoEntryId: 'storno-2026-old',
+      newOpeningBalanceEntryId: 'ib-2026-new',
+    })
+    expect(result.warnings.join(' ')).toMatch(/Räkenskapsår 2026.*synkades om/)
+
+    expect(vi.mocked(createJournalEntry).mock.calls[0][3]).toMatchObject({
+      fiscal_period_id: 'fp-2025',
+      source_type: 'opening_balance',
+      entry_date: '2025-01-01',
+    })
+    expect(replaceOpeningBalanceEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'ib-2026-old',
+      expect.objectContaining({
+      fiscal_period_id: 'fp-2026',
+      source_type: 'opening_balance',
+      entry_date: '2026-01-01',
+      }),
+    )
+    expect(vi.mocked(replaceOpeningBalanceEntry).mock.calls[0]?.[4]).not.toHaveProperty(
+      'voucher_series',
+    )
+  })
+
+  it('warns without changing a locked successor opening balance', async () => {
+    const queues = standardQueues()
+    queues.fiscal_periods = [
+      { data: { id: 'fp-2025' } },
+      { data: { opening_balances_set: false, opening_balance_entry_id: null } },
+      {}, // Link the new 2025 IB.
+      {
+        data: {
+          id: 'fp-2026',
+          name: 'Räkenskapsår 2026',
+          period_start: '2026-01-01',
+          period_end: '2026-12-31',
+          is_closed: false,
+          locked_at: '2026-07-01T00:00:00Z',
+          opening_balance_entry_id: 'ib-2026-old',
+          opening_balances_set: true,
+        },
+      },
+    ]
+    queues.journal_entries = [{ count: 0 }]
+    vi.mocked(createJournalEntry).mockResolvedValueOnce({
+      id: 'ib-2025',
+    } as Awaited<ReturnType<typeof createJournalEntry>>)
+
+    const parsed = makeParsedFile({
+      header: {
+        ...makeParsedFile().header,
+        fiscalYears: [{ yearIndex: 0, start: '2025-01-01', end: '2025-12-31' }],
+      },
+      openingBalances: [
+        { yearIndex: 0, account: '1930', amount: 100 },
+        { yearIndex: 0, account: '2010', amount: -100 },
+      ],
+      closingBalances: [
+        { yearIndex: 0, account: '1930', amount: 150 },
+        { yearIndex: 0, account: '2010', amount: -150 },
+      ],
+      stats: {
+        totalAccounts: 2,
+        totalVouchers: 0,
+        totalTransactionLines: 0,
+        fiscalYearStart: '2025-01-01',
+        fiscalYearEnd: '2025-12-31',
+      },
+    })
+
+    const result = await executeSIEImport(
+      buildRoutingSupabase(queues),
+      'company-1',
+      'user-1',
+      parsed,
+      standardMappings,
+      standardOptions,
+    )
+
+    expect(result.success).toBe(true)
+    expect(result.openingBalanceEntryId).toBe('ib-2025')
+    expect(result.nextPeriodIBResync).toBeUndefined()
+    expect(result.nextPeriodIBResyncSkipped).toEqual({
+      reason: 'locked',
+      nextPeriodName: 'Räkenskapsår 2026',
+    })
+    expect(result.warnings.join(' ')).toMatch(/Räkenskapsår 2026.*är låst/)
+    expect(createJournalEntry).toHaveBeenCalledTimes(1)
+    expect(replaceOpeningBalanceEntry).not.toHaveBeenCalled()
+  })
+
+  it('still rejects a file whose vouchers cross the target fiscal-period boundary', async () => {
+    const queues = standardQueues()
+    queues.fiscal_periods = [
+      { data: { id: 'fp-2025' } },
+      { data: { opening_balances_set: false, opening_balance_entry_id: null } },
+      {}, // Link the 2025 IB before transaction-range validation.
+      { data: { period_start: '2025-01-01', period_end: '2025-12-31' } },
+    ]
+    queues.journal_entries = [{ count: 0 }]
+    vi.mocked(createJournalEntry).mockResolvedValueOnce({
+      id: 'ib-2025',
+    } as Awaited<ReturnType<typeof createJournalEntry>>)
+
+    const parsed = makeParsedFile({
+      header: {
+        ...makeParsedFile().header,
+        fiscalYears: [{ yearIndex: 0, start: '2025-01-01', end: '2025-12-31' }],
+      },
+      openingBalances: [
+        { yearIndex: 0, account: '1930', amount: 100 },
+        { yearIndex: 0, account: '2010', amount: -100 },
+      ],
+      closingBalances: [],
+      vouchers: [
+        {
+          series: 'A',
+          number: 1,
+          date: new Date(2026, 0, 2),
+          description: 'Voucher from another fiscal year',
+          lines: [
+            { account: '1930', amount: 10 },
+            { account: '2010', amount: -10 },
+          ],
+        },
+      ],
+      stats: {
+        totalAccounts: 2,
+        totalVouchers: 1,
+        totalTransactionLines: 2,
+        fiscalYearStart: '2025-01-01',
+        fiscalYearEnd: '2025-12-31',
+      },
+    })
+
+    const result = await executeSIEImport(
+      buildRoutingSupabase(queues),
+      'company-1',
+      'user-1',
+      parsed,
+      standardMappings,
+      standardOptions,
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/datum utanför räkenskapsåret/)
+    expect(result.errors.join(' ')).toMatch(/flera år i samma fil stöds inte/)
   })
 })
 

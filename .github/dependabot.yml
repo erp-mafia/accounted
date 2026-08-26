@@ -1,0 +1,19 @@
+# Security-updates-only posture: open-pull-requests-limit: 0 disables scheduled
+# version-bump PRs while keeping Dependabot security PRs, and `ignore` applies
+# to both kinds.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
+    ignore:
+      # @anthropic-ai/bedrock-sdk 0.30.0+ broke invoice OCR and the assistant in
+      # prod (empty Bedrock streams, 2026-07 outage; see DECISIONS.md). The
+      # dependency is pinned to 0.29.1 in package.json; a bump must be a
+      # deliberate, verified change, never an automated PR.
+      - dependency-name: "@anthropic-ai/bedrock-sdk"
+        versions: [">=0.30.0"]

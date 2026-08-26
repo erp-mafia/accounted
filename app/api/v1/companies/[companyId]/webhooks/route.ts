@@ -21,33 +21,12 @@ import { generateWebhookSecret } from '@/lib/webhooks/signing'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 import { hasScope } from '@/lib/auth/api-keys'
+import { PUBLIC_WEBHOOK_EVENTS } from '@/lib/webhooks/public-events'
 
-const WEBHOOK_EVENT_TYPES = z.enum([
-  'invoice.created',
-  'invoice.sent',
-  'invoice.paid',
-  'credit_note.created',
-  'customer.created',
-  'supplier.created',
-  'supplier_invoice.registered',
-  'supplier_invoice.approved',
-  'supplier_invoice.paid',
-  'supplier_invoice.credited',
-  'supplier_invoice.uncredited',
-  'transaction.categorized',
-  'transaction.reconciled',
-  'journal_entry.committed',
-  'journal_entry.reversed',
-  'journal_entry.corrected',
-  'period.locked',
-  'period.unlocked',
-  'period.year_closed',
-  'salary_run.created',
-  'salary_run.approved',
-  'salary_run.booked',
-  'agi.generated',
-  'document.uploaded',
-])
+// Derived from the single catalogue the fan-out handler and the docs page
+// also read, so the events an agent can subscribe to are exactly the events
+// that get delivered.
+const WEBHOOK_EVENT_TYPES = z.enum(PUBLIC_WEBHOOK_EVENTS)
 
 const CreateWebhookSchema = z.object({
   event_type: WEBHOOK_EVENT_TYPES,
@@ -175,7 +154,7 @@ registerEndpoint({
   doNotUseFor:
     'Subscribing to internal MCP telemetry events (mcp.tool_called etc. are not delivered as webhooks). Replacing an existing webhook URL: use PATCH instead.',
   pitfalls: [
-    'The secret is returned exactly once. If lost, delete and recreate the webhook.',
+    'The secret is returned exactly once. If lost, rotate it with POST /webhooks/{id}/rotate-secret: a fresh secret is issued in place, the webhook id and delivery history are kept.',
     'Delivery is at-least-once with exponential backoff (1m / 5m / 30m / 2h / 12h / 24h / 48h). Receivers MUST be idempotent.',
     'HTTP 410 from your receiver auto-disables the webhook (sets active=false + disabled_reason).',
   ],

@@ -1,3 +1,4 @@
+import { roundOre } from '@/lib/money'
 import type { PayrollConfig } from './payroll-config'
 
 /**
@@ -31,6 +32,34 @@ export interface LoneVaxlingStep {
   output: number
 }
 
+export interface LoneVaxlingPensionProvision {
+  salaryReduction: number
+  pensionContribution: number
+  slpOnPension: number
+}
+
+/**
+ * Calculate the journal amounts created by a pension salary exchange.
+ *
+ * Kept separate from the warning calculation so the booking path can use the
+ * exact same 1.058 factor and SLP rounding without inventing a current salary
+ * solely to call calculateLoneVaxling().
+ */
+export function calculateLoneVaxlingPensionProvision(
+  reductionAmount: number,
+  slpRate: number,
+): LoneVaxlingPensionProvision {
+  if (!Number.isFinite(slpRate) || slpRate < 0 || slpRate > 1) {
+    throw new Error('Payroll configuration has an invalid SLP rate')
+  }
+
+  const salaryReduction = roundOre(Math.abs(reductionAmount))
+  const pensionContribution = roundOre(salaryReduction * 1.058)
+  const slpOnPension = roundOre(pensionContribution * slpRate)
+
+  return { salaryReduction, pensionContribution, slpOnPension }
+}
+
 /**
  * Calculate löneväxling impact.
  *
@@ -50,7 +79,10 @@ export function calculateLoneVaxling(
   const warnings: string[] = []
 
   const factor = 1.058
-  const pensionContribution = r(reductionAmount * factor)
+  const { pensionContribution, slpOnPension } = calculateLoneVaxlingPensionProvision(
+    reductionAmount,
+    config.slpRate,
+  )
   steps.push({
     label: 'Pensionsavsättning',
     formula: 'reduction × 1.058',
@@ -76,7 +108,6 @@ export function calculateLoneVaxling(
   })
 
   // SLP (Särskild löneskatt) on pension: 24.26%
-  const slpOnPension = r(pensionContribution * config.slpRate)
   steps.push({
     label: 'Särskild löneskatt på pension',
     formula: 'pension × SLP_rate',

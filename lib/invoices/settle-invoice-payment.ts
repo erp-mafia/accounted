@@ -4,11 +4,13 @@ import {
   createInvoiceCashEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
 
@@ -79,6 +81,7 @@ export type SettleInvoicePaymentResult =
       paidAt: string | null
     }
   | { ok: false; code: 'MATCH_AMOUNT_EXCEEDS_REMAINING'; details: Record<string, unknown> }
+  | { ok: false; code: 'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_LINES_UNBALANCED'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_NO_FISCAL_PERIOD'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_BOOK_FAILED'; details: Record<string, unknown> }
@@ -111,8 +114,6 @@ export async function settleInvoicePayment(
       details: { reason: 'credit_note' },
     }
   }
-
-  const now = new Date().toISOString()
 
   // Drive the JE shape from the invoice's actual booking state, not from
   // the current accounting_method setting. If the invoice was booked at
@@ -147,8 +148,37 @@ export async function settleInvoicePayment(
     }
   }
   const { newPaidAmount, newRemaining, newStatus } = payment.plan
+  const paidAt = newStatus === 'paid' ? paidAtFromDate(paymentDate) : null
 
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
+
+  // The generated cash entry (createInvoiceCashEntry) books the FULL invoice
+  // and takes no payment amount, so a never-booked kontantmetoden invoice can
+  // only be settled in full from a fully unpaid state. Partials used to book
+  // the entire revenue + moms against a smaller bank movement (bokslutsmetoden
+  // reports moms at payment, per installment), and completing a
+  // prior partial would book the full total a second time. Custom lines are
+  // NOT exempt: the dialog pre-fills the same full-invoice shape, so lines
+  // would book the identical error under a user-shaped label.
+  const cashBlock = cashPartialBlockReason({
+    invoiceAlreadyBooked,
+    accountingMethod,
+    priorPaidAmount: invoice.paid_amount,
+    paysRemainingInFull: newStatus === 'paid',
+  })
+  if (isRealInvoice && cashBlock) {
+    return {
+      ok: false,
+      code: 'INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED',
+      details: {
+        reason: cashBlock,
+        payment_amount: paymentAmountInInvoiceCurrency,
+        paid_amount: invoice.paid_amount ?? 0,
+        invoice_total: invoice.total,
+      },
+    }
+  }
+
   let journalEntryId: string | null = null
 
   if (isRealInvoice) {
@@ -249,7 +279,7 @@ export async function settleInvoicePayment(
       status: newStatus,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
-      ...(newStatus === 'paid' ? { paid_at: now } : {}),
+      ...(paidAt ? { paid_at: paidAt } : {}),
     })
     .eq('id', invoice.id)
     .eq('company_id', companyId)
@@ -305,7 +335,7 @@ export async function settleInvoicePayment(
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? now : invoice.paid_at,
+          paid_at: paidAt ?? invoice.paid_at,
         } as Invoice,
         companyId,
         userId,
@@ -323,6 +353,6 @@ export async function settleInvoicePayment(
     newPaidAmount,
     newRemaining,
     journalEntryId,
-    paidAt: newStatus === 'paid' ? now : null,
+    paidAt,
   }
 }

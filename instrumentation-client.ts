@@ -1,6 +1,7 @@
 import posthog from 'posthog-js'
 import { isAnalyticsEnabled, warnIfAnalyticsMisconfigured } from '@/lib/analytics/enabled'
 import { purgeLegacyAnalyticsStorage } from '@/lib/analytics/purge-legacy-storage'
+import { replayMaskText } from '@/lib/analytics/replay-masking'
 
 // Clear anything Recapt left on the device. Runs unconditionally, BEFORE the
 // analytics gate: a browser carrying `__recapt_record_engine` must get cleaned
@@ -53,12 +54,22 @@ function tracingHosts(): string[] {
  *    `seenSurvey_*` flags straight to localStorage, bypassing this setting:
  *    that is functional UI state ("don't ask again"), not tracking.
  *
- * 3. `maskTextSelector: '*'` (PostHog's documented way to mask ALL text) on
- *    top of the default `maskAllInputs`. This is an accounting app: org
- *    numbers (which for an enskild firma ARE the owner's personnummer),
- *    customer names, balances and invoice amounts are rendered as ordinary
- *    text, and PostHog masks inputs but NOT text by default. Replays are for
- *    seeing WHERE a user gets stuck, never WHAT their books say.
+ * 3. Deny-by-default replay masking (founder-approved 2026-08-17, supersedes
+ *    the 2026-08-06 pattern-based default where user content was visible).
+ *    Replays exist so support can see WHERE a user gets stuck: layout,
+ *    clicks and static chrome (headers, nav, labels, placeholders), never
+ *    what the user typed or what their books say.
+ *
+ *    Inputs: `maskAllInputs: true` with NO `maskInputFn` means rrweb masks
+ *    every input value to asterisks, no exceptions. Placeholder text is an
+ *    attribute, not an input value, so it stays visible.
+ *
+ *    Text: `lib/analytics/replay-masking.ts` masks every text node unless
+ *    it sits under chrome (`data-ph-unmask`, tagged on the shared UI
+ *    primitives, or a `<th>`); chrome is still pattern-scrubbed for
+ *    currency-shaped spans and person-/organisationsnummer. `data-ph-mask`
+ *    force-masks a subtree and beats `data-ph-unmask`: the NEAREST tagged
+ *    ancestor wins, and mask wins when both land on the same element.
  */
 if (warnIfAnalyticsMisconfigured() && isAnalyticsEnabled()) {
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN!, {
@@ -74,6 +85,7 @@ if (warnIfAnalyticsMisconfigured() && isAnalyticsEnabled()) {
     session_recording: {
       maskAllInputs: true,
       maskTextSelector: '*',
+      maskTextFn: replayMaskText,
     },
     debug: process.env.NODE_ENV === 'development',
   })

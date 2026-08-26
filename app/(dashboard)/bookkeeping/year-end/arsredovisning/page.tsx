@@ -94,6 +94,7 @@ export default function ArsredovisningPage() {
   const [signerName, setSignerName] = useState('')
   const [signerRole, setSignerRole] = useState('Styrelseledamot')
   const [versions, setVersions] = useState<AnnualReportVersionSummary[]>([])
+  const [blockingCount, setBlockingCount] = useState<number | null>(null)
   const [selectedSignatureVersionId, setSelectedSignatureVersionId] = useState('')
   const [signingMethod, setSigningMethod] = useState<
     'paper_original' | 'advanced_e_signature' | 'bankid'
@@ -509,14 +510,45 @@ export default function ArsredovisningPage() {
   // table. The save button below writes overrides; the URL stays clean.
   const pdfUrl = `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf`
 
+  // Only versions locked via "Lås version för underskrift" can be signed. An
+  // empty "Låst version" select with no explanation was a dead end for a real
+  // user (2026-08-20): say what is missing and where the button lives.
+  const lockedVersions = versions.filter((version) => version.status === 'ready_for_signature')
+  const draftVersionCount = versions.filter((version) => version.status === 'draft').length
+  const noLockedVersionHint = (() => {
+    if (lockedVersions.length > 0) return null
+    const draftNote = draftVersionCount > 0 ? 'Versionsutkast kan inte signeras. ' : ''
+    if (blockingCount === null) {
+      return `${draftNote}Lås en version under Fullständighetskontroll så dyker den upp här.`
+    }
+    if (blockingCount > 0) {
+      const what = blockingCount === 1 ? 'det blockerande felet' : `de ${blockingCount} blockerande felen`
+      const done = blockingCount === 1 ? 'åtgärdat' : 'åtgärdade'
+      return `${draftNote}Knappen Lås version för underskrift är grå tills ${what} under Fullständighetskontroll är ${done}.`
+    }
+    return `${draftNote}Klicka på Lås version för underskrift under Fullständighetskontroll så dyker versionen upp här.`
+  })()
+  const pendingSignatureCount = signatures.filter(
+    (sig) => sig.status !== 'signed' && sig.status !== 'declined',
+  ).length
+  const signReadinessHint = !selectedSignatureVersionId
+    ? 'Välj en låst version ovan, sedan går det att markera underskrifter.'
+    : !SIGNATURE_EVIDENCE_REFERENCE_PATTERN.test(signatureEvidence.trim())
+      ? 'Ange en bevisreferens (t.ex. archive:AR-2026-001) så aktiveras Markera som signerad.'
+      : !signatureDate
+        ? 'Ange underskriftsdatum så aktiveras Markera som signerad.'
+        : null
+
   return (
     <div className="space-y-8">
       <PageHeader
         title={`Årsredovisning ${data.fiscal_period.name}`}
         description={
-          data.company.org_number
-            ? `${data.company.name} · ${data.company.org_number}`
-            : data.company.name
+          <span data-ph-mask="">
+            {data.company.org_number
+              ? `${data.company.name} · ${data.company.org_number}`
+              : data.company.name}
+          </span>
         }
         action={
           <Button variant="outline" asChild>
@@ -530,10 +562,20 @@ export default function ArsredovisningPage() {
       {data.accounting_framework === 'k3' && (
         <div className="px-1 text-sm">
           <p className="font-medium">Årsredovisning enligt K3 (BFNAR 2012:1)</p>
+          {/* Enumerate only what buildK3Noter and buildArsredovisningData
+              actually emit. The uppskjuten skatt-noten needs a 2240/8940
+              balance (which the engine no longer creates: K3 29.37 gross in
+              juridisk person), the anläggningsnoter need assets in the
+              register, and the kassaflödesanalys is dropped with a warning
+              when it cannot be generated. Promising any of them
+              unconditionally is false in the normal case. */}
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Dokumentet innehåller kassaflödesanalys, förändring av eget kapital och
-            utökade noter (uppskjuten skatt, redovisningsprinciper, materiella
-            anläggningstillgångar): krav som följer K3 men inte K2.
+            {data.kassaflodesanalys
+              ? 'Dokumentet följer K3-mallen: kassaflödesanalys, förändring av eget kapital som egen räkning och noter enligt K3.'
+              : 'Dokumentet följer K3-mallen: förändring av eget kapital som egen räkning och noter enligt K3. Kassaflödesanalysen kunde inte beräknas för perioden: se varningarna längre ner.'}{' '}
+            Vilka noter som kommer med styrs av bokföringen: noten Uppskjutna skatter tas
+            med först när konto 2240 eller 8940 har ett saldo, och anläggningsnoterna när
+            det finns tillgångar i anläggningsregistret.
           </p>
         </div>
       )}
@@ -546,6 +588,7 @@ export default function ArsredovisningPage() {
         hasUnsavedNarrative={hasUnsavedNarrative}
         narrativeRevision={narrativeRevision}
         onVersionsChanged={handleVersionsChanged}
+        onBlockingCountChanged={setBlockingCount}
       />
 
       <section>
@@ -739,8 +782,12 @@ export default function ArsredovisningPage() {
                   id="ar-parent-orgnr"
                   value={parentOrgNr}
                   onChange={(e) => setParentOrgNr(e.target.value)}
-                  placeholder="556677-8899"
+                  placeholder="556677-8899 eller CHE-123.456.789"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Svenskt org.nr NNNNNN-NNNN. Utländskt moderföretag: registreringsnumret som
+                  det står i hemlandets register.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="ar-parent-city">Moderföretagets säte</Label>
@@ -748,7 +795,7 @@ export default function ArsredovisningPage() {
                   id="ar-parent-city"
                   value={parentCity}
                   onChange={(e) => setParentCity(e.target.value)}
-                  placeholder="Stockholm"
+                  placeholder="Stockholm eller Zug, Schweiz"
                 />
               </div>
             </div>
@@ -846,20 +893,32 @@ export default function ArsredovisningPage() {
               <Select
                 value={selectedSignatureVersionId}
                 onValueChange={setSelectedSignatureVersionId}
+                disabled={lockedVersions.length === 0}
               >
                 <SelectTrigger id="signature-version">
-                  <SelectValue placeholder="Välj version" />
+                  <SelectValue
+                    placeholder={lockedVersions.length === 0 ? 'Ingen låst version ännu' : 'Välj version'}
+                  />
                 </SelectTrigger>
                 <SelectContent>
-                  {versions
-                    .filter((version) => version.status === 'ready_for_signature')
-                    .map((version) => (
-                      <SelectItem key={version.id} value={version.id}>
-                        Version {version.version_number}: {version.content_hash.slice(0, 12)}
-                      </SelectItem>
-                    ))}
+                  {lockedVersions.map((version) => (
+                    <SelectItem key={version.id} value={version.id}>
+                      Version {version.version_number}: {version.content_hash.slice(0, 12)}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
+              {noLockedVersionHint && (
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {noLockedVersionHint}{' '}
+                  <a
+                    href="#ar-fullstandighetskontroll"
+                    className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground"
+                  >
+                    Gå till Fullständighetskontroll
+                  </a>
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="signature-method">Underskriftsmetod</Label>
@@ -912,6 +971,9 @@ export default function ArsredovisningPage() {
             <p className="text-sm text-muted-foreground italic">
               Inga undertecknare tillagda än.
             </p>
+          )}
+          {pendingSignatureCount > 0 && signReadinessHint && (
+            <p className="text-xs leading-5 text-muted-foreground">{signReadinessHint}</p>
           )}
           {signatures.map((sig) => (
             <div
@@ -1035,15 +1097,12 @@ export default function ArsredovisningPage() {
               </Button>
             </span>
           </div>
-          <div
-            inert={INLAMNING_COMING_SOON}
-            aria-hidden={INLAMNING_COMING_SOON}
-            className={
-              INLAMNING_COMING_SOON
-                ? 'pointer-events-none select-none blur-[3px] opacity-60 space-y-4'
-                : 'space-y-4'
-            }
-          >
+          {/* The warning list stays SHARP even while direct submission is
+              gated: the warnings describe problems in the user's own report
+              (unmapped accounts, resultat vs 2099, AGM dates) and apply to
+              the paper PDF just as much as to digital inlämning. Blurring
+              them alongside the coming-soon Bolagsverket parts made the
+              pre-submission checklist unreadable in the default config. */}
           {data.warnings.length > 0 && (
             <div className="space-y-1 border-t border-border/60 pt-3 text-xs">
               <p className="font-medium">Innan inlämning till Bolagsverket:</p>
@@ -1054,13 +1113,20 @@ export default function ArsredovisningPage() {
               </ul>
             </div>
           )}
-          <p className="text-xs text-muted-foreground">
+          <p
+            inert={INLAMNING_COMING_SOON}
+            aria-hidden={INLAMNING_COMING_SOON}
+            className={
+              INLAMNING_COMING_SOON
+                ? 'pointer-events-none select-none blur-[3px] opacity-60 text-xs text-muted-foreground'
+                : 'text-xs text-muted-foreground'
+            }
+          >
             <strong className="text-foreground">Digital inlämning är frivillig.</strong> Den görs som iXBRL genom en
             ansluten programvara. Accounteds direktinlämning förblir stängd tills avtal,
             certifikat och Bolagsverkets acceptanstest är klara. PDF-flödet ovan är den
             separata vägen för pappersinlämning.
           </p>
-          </div>
         </div>
       </section>
 

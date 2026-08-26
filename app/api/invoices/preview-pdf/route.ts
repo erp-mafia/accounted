@@ -1,13 +1,16 @@
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { InvoicePDF, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getVatRules } from '@/lib/invoices/vat-rules'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { contentDisposition } from '@/lib/api/content-disposition'
-import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
+import type { InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { computeDeduction, computeInvoiceDeductionTotal, type DeductionType } from '@/lib/invoices/rot-rut-rules'
+import { expandPersonnummerTo12, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
+import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
@@ -18,6 +21,51 @@ const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
 function privateNoStore(response: NextResponse): NextResponse {
   response.headers.set('Cache-Control', 'private, no-store')
   return response
+}
+
+/** The per-line ROT/RUT fields the editor posts alongside the amounts. */
+interface PreviewItemInput {
+  description: string
+  quantity: number
+  unit: string
+  unit_price: number
+  vat_rate?: number
+  deduction_type?: DeductionType | null
+  labor_hours?: number | null
+  work_type?: string | null
+  housing_designation?: string | null
+  apartment_number?: string | null
+  brf_org_number?: string | null
+}
+
+function optionalTrimmed(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+/**
+ * The masked personnummer the deduction info box shows (`YYYYMMDD-XXXX`, the
+ * same convention as the stored-invoice PDF and the payroll roster), resolved
+ * the same way the write path does (lib/invoices/build-invoice-write.ts): the
+ * value typed on the claim card wins; otherwise an individual customer's
+ * kundkort personnummer, if it expands to a valid 12-digit number. Only the
+ * masked form leaves this function; the plaintext is never stored or logged.
+ */
+function resolvePreviewPersonnummerMasked(typed: string | null, customer: Customer): string | null {
+  if (typed) {
+    // A 10-digit form (YYMMDD-NNNN) is expanded first so the mask shows the
+    // full birth date; a half-typed value that does not expand shows nothing.
+    const expanded = expandPersonnummerTo12(typed)
+    return expanded ? maskPersonnummer(expanded) : null
+  }
+  if (customer.customer_type !== 'individual') return null
+  try {
+    const revealed = revealStoredCustomerPersonalNumber(customer.personal_number)
+    const expanded = revealed ? expandPersonnummerTo12(revealed) : null
+    if (expanded && validatePersonnummer(expanded).valid) return maskPersonnummer(expanded)
+  } catch {
+    // Undecryptable customer value: same as absent.
+  }
+  return null
 }
 
 /**
@@ -34,7 +82,11 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
   requestId,
 }) => {
   const body = await request.json()
-  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number, payment_link_url } = body
+  const {
+    customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes,
+    document_type, invoice_number, payment_link_url,
+    deduction_personnummer, deduction_housing_designation, deduction_apartment_number, deduction_brf_org_number,
+  } = body
 
   // Preview-only https gate, mirroring CreateInvoiceSchema: the value is
   // rendered as a clickable link + QR in the preview PDF.
@@ -124,6 +176,9 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
       vat_number_validated: false,
       vat_number_validated_at: null,
       personal_number: null,
+      contact_person: null,
+      invoice_email_cc_addresses: null,
+      invoice_email_bcc_addresses: null,
       language: 'sv',
       default_payment_terms: 30,
       notes: null,
@@ -160,10 +215,31 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
   const notVatRegistered = (company as { vat_registered?: boolean }).vat_registered === false
   const zeroVat = notVatRegistered && !isDeliveryNote
 
-  // Build items with line totals and per-item VAT
-  const invoiceItems: InvoiceItem[] = items.map((item: { description: string; quantity: number; unit: string; unit_price: number; vat_rate?: number }, index: number) => {
+  // ROT/RUT (fakturamodellen) only exists on real invoices: the write path
+  // zeroes deduction fields on proformas, delivery notes and quotes, so the
+  // preview must too or it would show an avdrag the created document lacks.
+  const deductionsApply = docType === 'invoice'
+  const claimHousing = optionalTrimmed(deduction_housing_designation)
+  const claimApartment = optionalTrimmed(deduction_apartment_number)
+  const claimBrf = optionalTrimmed(deduction_brf_org_number)
+
+  // Build items with line totals, per-item VAT and the per-line ROT/RUT
+  // deduction, mirroring build-invoice-write.ts so the preview states the
+  // same avdrag row, info box and "Att betala" as the invoice it becomes.
+  const invoiceItems: InvoiceItem[] = items.map((item: PreviewItemInput, index: number) => {
     const lineTotal = Math.round(item.quantity * item.unit_price * 100) / 100
     const rate = zeroVat ? 0 : (item.vat_rate ?? vatRules.rate)
+    const deductionType = deductionsApply ? (item.deduction_type ?? null) : null
+    // Same base as the write path: the line total inkl. moms at the rate the
+    // line is rendered with (HUSFL 6-9 §§).
+    const deductionAmount = deductionType
+      ? computeDeduction({
+          unit_price: item.unit_price,
+          quantity: item.quantity,
+          deduction_type: deductionType,
+          vat_rate: rate,
+        })
+      : 0
     return {
       id: `preview-${index}`,
       invoice_id: 'preview',
@@ -175,6 +251,15 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
       line_total: lineTotal,
       vat_rate: rate,
       vat_amount: isDeliveryNote ? 0 : Math.round(lineTotal * (rate / 100) * 100) / 100,
+      deduction_type: deductionType,
+      deduction_amount: deductionAmount,
+      labor_hours: deductionType ? (item.labor_hours ?? null) : null,
+      work_type: deductionType ? (item.work_type ?? null) : null,
+      // Property info: per-line value wins, else the invoice-level claim-card
+      // value is stamped onto every deduction line (same as the write path).
+      housing_designation: deductionType ? (optionalTrimmed(item.housing_designation) ?? claimHousing) : null,
+      apartment_number: deductionType ? (optionalTrimmed(item.apartment_number) ?? claimApartment) : null,
+      brf_org_number: deductionType ? (optionalTrimmed(item.brf_org_number) ?? claimBrf) : null,
       created_at: new Date().toISOString(),
     }
   })
@@ -182,6 +267,22 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
   const subtotal = invoiceItems.reduce((sum, item) => sum + item.line_total, 0)
   const vatAmount = isDeliveryNote ? 0 : invoiceItems.reduce((sum, item) => sum + item.vat_amount, 0)
   const total = isDeliveryNote ? 0 : subtotal + vatAmount
+
+  // Invoice-level deduction: the sum of the per-line amounts, computed with
+  // the same helper the write path stores on invoices.deduction_total.
+  const deductionTotal = deductionsApply
+    ? computeInvoiceDeductionTotal(
+        invoiceItems.map((item) => ({
+          unit_price: item.unit_price,
+          quantity: item.quantity,
+          deduction_type: item.deduction_type ?? null,
+          vat_rate: item.vat_rate,
+        })),
+      )
+    : 0
+  const deductionPersonnummerMasked = deductionTotal > 0
+    ? resolvePreviewPersonnummerMasked(optionalTrimmed(deduction_personnummer), customer)
+    : null
 
   // Derive vat_rate from items: single rate → that rate, mixed → null
   const itemRates = new Set(invoiceItems.map((item) => item.vat_rate))
@@ -221,9 +322,13 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     converted_from_id: null,
     paid_at: null,
     paid_amount: null,
+    deduction_total: deductionTotal,
+    // Preview invoices have no stored ciphertext: the template renders the
+    // masked value passed here instead of deriving one.
+    deduction_personnummer_masked: deductionPersonnummerMasked,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  } as Invoice
+  } as InvoicePdfInvoice
 
   try {
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(

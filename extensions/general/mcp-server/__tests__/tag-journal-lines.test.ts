@@ -132,6 +132,43 @@ describe('gnubok_tag_journal_lines: filter gates', () => {
     ).rejects.toThrow(/Inga bokförda rader matchade filtret[\s\S]*gnubok_query_journal/)
   })
 
+  it('rejects non-account filter values instead of silently widening the retag scope', async () => {
+    // Hosts don't always enforce inputSchema. A mangled account filter on a
+    // bulk WRITE path must fail fast, never fall through to "no account
+    // filter" and retag more lines than asked.
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      tagJournalLines.execute(
+        { dimensions: { '6': 'P01' }, reason: 'Retro-taggning', filters: { accounts: 'kontorsmaterial' } },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/accounts must be an account number/)
+    await expect(
+      tagJournalLines.execute(
+        { dimensions: { '6': 'P01' }, reason: 'Retro-taggning', filters: { account_from: { x: 1 } } },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/filters\.account_from must be an account number/)
+  })
+
+  it('accepts a bare number for filters.accounts and applies it as a filter', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: false }, error: null })
+    enqueue({ data: [], error: null }) // entry match query runs, so normalization passed
+    await expect(
+      tagJournalLines.execute(
+        { dimensions: { '6': 'P01' }, reason: 'Retro-taggning', filters: { accounts: 4010 } },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/Inga bokförda rader matchade filtret/)
+  })
+
   it('throws asking to narrow the filter when more than 500 lines match', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { dimensions_enabled: false }, error: null })

@@ -10,11 +10,13 @@ import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-documents'
-import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, AlertTriangle, Inbox, FileText, X } from 'lucide-react'
 import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
-import { getVatRate } from '@/lib/bookkeeping/vat-entries'
+import { computeProposalLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
+import type { ProposalLine, ProposalLinesInput } from '@/lib/bookkeeping/proposal-lines'
 import type { ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
+import { resolveExplicitVat } from '@/lib/transactions/quick-review-defaults'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import JournalEntryPreview from './JournalEntryPreview'
@@ -22,8 +24,11 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
+import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
+import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import VatTreatmentSelect from './VatTreatmentSelect'
+import AiCategorizeProposal, { type AiProposalMeta } from './AiCategorizeProposal'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { TransactionCategory, VatTreatment, BASAccount, EntityType, LinePatternEntry } from '@/types'
@@ -57,6 +62,15 @@ interface QuickReviewDialogProps {
     dimensions?: Record<string, string>
   ) => Promise<string | null>
   onChangeTemplate?: () => void
+  /**
+   * "Andra rader": hand the COMPUTED proposal lines (exactly what the
+   * verifikation preview shows) to the parent, which routes them into
+   * TransactionBookingDialog as an editable prefill. The transaction passed
+   * back is the dialog's ENRICHED row (with any in-dialog SEK conversion
+   * backfill): the parent must hand that one to the booking dialog so the
+   * settlement leg's FX metadata carries the same rate the amounts used.
+   */
+  onEditLines?: (lines: ProposalLine[], transaction: TransactionWithInvoice) => void
 }
 
 export default function QuickReviewDialog({
@@ -74,6 +88,7 @@ export default function QuickReviewDialog({
   counterpartyDefaultDimensions,
   onConfirm,
   onChangeTemplate,
+  onEditLines,
 }: QuickReviewDialogProps) {
   const t = useTranslations('tx_quick_review')
   const tCat = useTranslations('tx_categories')
@@ -87,9 +102,18 @@ export default function QuickReviewDialog({
   const [accountOverride, setAccountOverride] = useState(defaultAccount ?? '')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'none'>(defaultVat)
   const [accounts, setAccounts] = useState<BASAccount[]>([])
+  // The AI proposal shown this session, kept so we can log a calibration sample
+  // (proposed vs actually booked) once the user confirms.
+  const [aiProposal, setAiProposal] = useState<AiProposalMeta | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  // Underlag already sitting in the inkorg, picked instead of re-uploaded. The
+  // journal entry does not exist yet at pick time, so these are held here and
+  // linked (with their inbox_item_id, which consumes the inbox item) once the
+  // booking returns a verifikat: same select-mode contract TransactionBookingDialog uses.
+  const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
+  const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
   const [showUploadZone, setShowUploadZone] = useState(false)
   const [showVatDropdown, setShowVatDropdown] = useState(false)
   // Mirror of `transaction` so we can patch in a freshly-fetched SEK conversion
@@ -139,6 +163,9 @@ export default function QuickReviewDialog({
     setEnrichedTx(transaction)
     setRateError(null)
     setDims({ ...(counterpartyDefaultDimensions ?? {}) })
+    // A document picked for the previous row must never follow the dialog to
+    // the next one: it would attach that underlag to the wrong verifikat.
+    setPickedInboxDocs([])
     // Re-seeding on counterpartyDefaultDimensions alone would clobber in-
     // flight edits; the bag only changes together with the transaction.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -227,6 +254,8 @@ export default function QuickReviewDialog({
     tx.currency,
     tx.exchange_rate
   )
+  const attachedCount =
+    uploadedFiles.filter((f) => f.status === 'uploaded').length + pickedInboxDocs.length
   const isForeign = !!(tx.currency && tx.currency !== 'SEK')
   const sekConversionMissing = isForeign && (tx.amount_sek == null || tx.exchange_rate == null)
 
@@ -244,13 +273,86 @@ export default function QuickReviewDialog({
     .map(([, code]) => code)
     .join(' · ')
 
+  // Static templates carry AB-specific accounts; the engine substitutes them
+  // at booking time, so the preview and the prefill must show the same
+  // substitution (an aktiebolag must never be handed 2013-style EF accounts).
+  const entityAccounts = resolveTemplateAccountsForEntity(template ?? {}, entityType)
+
+  // The one proposal definition: rendered by JournalEntryPreview and, via
+  // "Andra rader", computed into editable prefill lines. Building it once
+  // guarantees the user edits exactly the lines they were shown, and every
+  // branch mirrors the engine path that books the proposal (see
+  // lib/bookkeeping/proposal-lines.ts).
+  const proposalInput: ProposalLinesInput = {
+    amount: tx.amount,
+    amountSek: sekAmount,
+    ...(hasCounterpartyPattern
+      ? {
+          linePattern: counterpartyLinePattern ?? undefined,
+          // Engine parity for the money leg: buildTransactionEntryLines books
+          // the settlement on the learned template's legacy pair (credit
+          // account for an expense, debit for an income, mirror-swapped), not
+          // on a default 1930. Raw accounts, not entity-resolved: learned
+          // counterparty templates carry no _ab variants and the engine uses
+          // them as stored.
+          templateDebitAccount: template?.debit_account,
+          templateCreditAccount: template?.credit_account,
+        }
+      : isTemplateBooking && template?.debit_account && template?.credit_account
+        ? isCounterpartyTemplate
+          ? {
+              // Legacy counterparty pair: computeProposalLines mirrors the
+              // legacy booking path (VAT incl. the 2645/2614 fiktiv-moms
+              // pair on expenses only, no basbelopp, mismatches mirrored).
+              templateDebitAccount: template.debit_account,
+              templateCreditAccount: template.credit_account,
+              templateVatTreatment: template.vat_treatment ?? null,
+              counterpartyLegacy: true,
+            }
+          : {
+              templateDebitAccount: entityAccounts.debitAccount ?? template.debit_account,
+              templateCreditAccount: entityAccounts.creditAccount ?? template.credit_account,
+              templateVatRate: template.vat_rate,
+              templateVatTreatment: template.vat_treatment,
+              templateSupplierType: template.reverse_charge_supplier_type,
+            }
+        : {
+            category,
+            // Send the WIRE value, not the UI sentinel: 'none' as a seeded
+            // default stays undefined (server derives, no VAT for exempt
+            // categories), 'none' as a deviation becomes explicit 'exempt'.
+            // Passing raw 'none' made the mapping re-derive the category
+            // default and preview (and, worse, prefill) 25% moms against an
+            // explicit no-VAT choice: the exact collapse resolveExplicitVat
+            // exists to prevent on the confirm path.
+            vatTreatment: resolveExplicitVat(isLiabilityAccount ? 'none' : vatTreatment, defaultVat),
+            accountOverride,
+            entityType,
+          }
+    ),
+  }
+
+  // Computed once per render: gates the affordance (no lines, no link) and is
+  // the exact payload the link hands over.
+  const proposalLines = onEditLines ? computeProposalLines(proposalInput) : []
+
+  function handleEditLines() {
+    if (!onEditLines || proposalLines.length === 0) return
+    onEditLines(proposalLines, tx)
+  }
+
   async function handleConfirm() {
     if (!category || !transaction) return
 
     setIsProcessing(true)
     setError(null)
     try {
-      const resolvedVat = vatTreatment === 'none' ? undefined : vatTreatment
+      // 'none' as the seeded default stays off the wire (server derives, no
+      // VAT line); 'none' as a user deviation goes as explicit 'exempt'. The
+      // old unconditional collapse re-derived the default server-side and
+      // booked 25% moms against an explicit "Ingen moms" while the preview
+      // showed none. See resolveExplicitVat.
+      const resolvedVat = resolveExplicitVat(vatTreatment, defaultVat)
       const catDefault = getDefaultAccountForCategory(category)
       const override = accountOverride && accountOverride !== catDefault
         ? accountOverride
@@ -271,16 +373,44 @@ export default function QuickReviewDialog({
         Object.keys(cleanedDims).length > 0 ? cleanedDims : undefined,
       )
 
+      // Calibration telemetry: what the model proposed vs what was actually
+      // booked. Best-effort and fire-and-forget — never blocks the booking.
+      if (journalEntryId && aiProposal) {
+        void fetch('/api/agent/categorize/outcome', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            confidence: aiProposal.confidence,
+            agreement: aiProposal.agreement,
+            model_confidence: aiProposal.modelConfidence,
+            source: aiProposal.source,
+            proposed_account: aiProposal.account,
+            booked_account: override ?? catDefault,
+            amount: Math.abs(sekAmount),
+          }),
+        }).catch(() => {})
+      }
+
       // Attach the uploaded underlag to the verifikat the booking just created.
       // BFL 5 kap 7 § requires the verifikation to reference its underlag and
       // BFL 7 kap requires that underlag to be archived with it; the verifikat
       // is already committed here, so a failed link can only be reported, not
       // undone. The parent's "Bokförd" toast must not be the last word when a
       // receipt never made it onto the books.
-      if (journalEntryId && uploadedFiles.length > 0) {
-        const targets = uploadedFiles
-          .filter((f) => f.status === 'uploaded' && f.id)
-          .map((f) => ({ documentId: f.id as string, fileName: f.fileName }))
+      if (journalEntryId && (uploadedFiles.length > 0 || pickedInboxDocs.length > 0)) {
+        const targets = [
+          ...uploadedFiles
+            .filter((f) => f.status === 'uploaded' && f.id)
+            .map((f) => ({ documentId: f.id as string, fileName: f.fileName })),
+          // inboxItemId stamps the inbox item as consumed so the underlag drops
+          // out of "Underlag att hantera" instead of lingering as a duplicate of
+          // the verifikat it now belongs to: see app/api/documents/[id]/link/route.ts.
+          ...pickedInboxDocs.map((doc) => ({
+            documentId: doc.document_id,
+            fileName: doc.supplier_name ?? doc.file_name,
+            inboxItemId: doc.inbox_item_id,
+          })),
+        ]
         const { failed } = await linkDocuments(targets, journalEntryId)
         if (failed.length > 0) {
           toast({
@@ -304,11 +434,19 @@ export default function QuickReviewDialog({
           // is invisible either way: the toast above, with its open-entry
           // action, is the user's actual pointer to the underlag that did not
           // attach. The early return just skips the redundant cleanup below.
+          //
+          // Picks are still dropped: the dialog instance is reused across rows,
+          // and a pick that DID link is already consumed, so carrying it into
+          // the next transaction would re-link a spent document. Nothing is lost
+          // by clearing, unlike uploadedFiles: an underlag that failed to link
+          // was never stamped, so it is still sitting in the inkorg to re-pick.
+          setPickedInboxDocs([])
           return
         }
       }
 
       setUploadedFiles([])
+      setPickedInboxDocs([])
       setShowUploadZone(false)
     } catch {
       setError(t('generic_error'))
@@ -325,6 +463,7 @@ export default function QuickReviewDialog({
     <Dialog open={open} onOpenChange={isProcessing ? undefined : (o) => {
       if (!o) {
         setUploadedFiles([])
+        setPickedInboxDocs([])
         setShowUploadZone(false)
       }
       onOpenChange(o)
@@ -401,6 +540,23 @@ export default function QuickReviewDialog({
           </div>
         )}
 
+        {/* AI booking proposal: pre-fills account + VAT and explains why.
+            Falls back silently to the deterministic defaults on error. */}
+        {tx.id && (
+          <AiCategorizeProposal
+            key={tx.id}
+            transactionId={tx.id}
+            open={open}
+            onProposal={setAiProposal}
+            onApply={(account, vat) => {
+              handleAccountChange(account)
+              // handleAccountChange clears VAT for class-2 accounts; for the
+              // rest, apply the proposed treatment.
+              if (!account.startsWith('2')) setVatTreatment(vat)
+            }}
+          />
+        )}
+
         {/* Template or Category */}
         <div>
           <label className="text-sm font-medium text-muted-foreground">
@@ -411,7 +567,7 @@ export default function QuickReviewDialog({
               {template ? template.name_sv : categoryLabel}
             </span>
             {patternDimsLabel && (
-              <Badge variant="secondary" className="font-mono tabular-nums">
+              <Badge data-ph-mask="" variant="secondary" className="font-mono tabular-nums">
                 {patternDimsLabel}
               </Badge>
             )}
@@ -428,17 +584,17 @@ export default function QuickReviewDialog({
           {/* Only when there IS a single debit/credit pair to show: a
               multi-line counterparty pattern has none, and a template that
               never carried accounts would render "D:  → K: ". */}
-          {!hasCounterpartyPattern && template?.debit_account && template?.credit_account && (
+          {!hasCounterpartyPattern && entityAccounts.debitAccount && entityAccounts.creditAccount && (
             <p className="mt-1.5 text-xs font-mono text-muted-foreground">
-              D: {formatAccountWithName(template.debit_account)} → K: {formatAccountWithName(template.credit_account)}
+              D: {formatAccountWithName(entityAccounts.debitAccount)} → K: {formatAccountWithName(entityAccounts.creditAccount)}
             </p>
           )}
         </div>
 
         {/* Template special rules */}
         {template?.special_rules_sv && (
-          <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
-            <p className="text-xs text-warning-foreground leading-snug">
+          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+            <p className="text-xs text-attn leading-snug">
               {template.special_rules_sv}
             </p>
           </div>
@@ -455,10 +611,10 @@ export default function QuickReviewDialog({
 
         {/* Reverse charge warning */}
         {template?.requires_vat_registration_data && (
-          <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
+          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-warning-foreground leading-snug">
+              <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-attn leading-snug">
                 {t('reverse_charge_warning')}
               </p>
             </div>
@@ -468,33 +624,24 @@ export default function QuickReviewDialog({
         {/* Journal entry preview: hidden until we have a SEK conversion;
             otherwise we'd render a verifikation in the wrong currency. */}
         {!sekConversionMissing && !rateLoading && (
-          <JournalEntryPreview
-            amount={tx.amount}
-            amountSek={sekAmount}
-            {...(hasCounterpartyPattern
-              ? { linePattern: counterpartyLinePattern ?? undefined }
-              : isTemplateBooking && template?.debit_account && template?.credit_account
-                ? {
-                    templateDebitAccount: template.debit_account,
-                    templateCreditAccount: template.credit_account,
-                    // A counterparty template carries a treatment but no rate,
-                    // and its legacy booking path emits an input-VAT leg from
-                    // that treatment only (no basbelopp pair), so it gets the
-                    // rate alone: passing the treatment too would preview
-                    // reverse-charge lines the engine never books.
-                    templateVatRate: isCounterpartyTemplate
-                      ? (template.vat_treatment ? getVatRate(template.vat_treatment) : 0)
-                      : template.vat_rate,
-                    ...(isCounterpartyTemplate
-                      ? {}
-                      : {
-                          templateVatTreatment: template.vat_treatment,
-                          templateSupplierType: template.reverse_charge_supplier_type,
-                        }),
-                  }
-                : { category, vatTreatment: isLiabilityAccount ? 'none' : vatTreatment, accountOverride, entityType }
+          <div>
+            <JournalEntryPreview {...proposalInput} />
+            {/* "Andra rader": send the computed lines into the manual booking
+                dialog for per-line editing. Offered on every proposal surface
+                (AI suggestion, static template, counterparty pattern). */}
+            {onEditLines && proposalLines.length > 0 && (
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  className="text-xs text-primary hover:underline disabled:pointer-events-none disabled:opacity-50"
+                  disabled={isProcessing}
+                  onClick={handleEditLines}
+                >
+                  {t('edit_lines')}
+                </button>
+              </div>
             )}
-          />
+          </div>
         )}
 
         {/* Account & VAT: hidden for template bookings (accounts defined by the template) */}
@@ -580,9 +727,9 @@ export default function QuickReviewDialog({
               <div className="flex items-center gap-2">
                 <Paperclip className="h-4 w-4 text-muted-foreground" />
                 <span className="font-medium">{t('doc_label')}</span>
-                {uploadedFiles.filter((f) => f.status === 'uploaded').length > 0 && (
+                {attachedCount > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    {t('doc_attached_count', { count: uploadedFiles.filter((f) => f.status === 'uploaded').length })}
+                    {t('doc_attached_count', { count: attachedCount })}
                   </span>
                 )}
               </div>
@@ -593,12 +740,51 @@ export default function QuickReviewDialog({
               )}
             </button>
             {showUploadZone && (
-              <div className="px-3 pb-3">
+              <div className="px-3 pb-3 space-y-2">
                 <DocumentUploadZone
                   files={uploadedFiles}
                   onFilesChange={setUploadedFiles}
                   compact
                 />
+                {pickedInboxDocs.map((doc) => (
+                  <div
+                    key={doc.document_id}
+                    className="flex items-center gap-2 rounded-sm bg-muted/50 px-2 py-1.5 text-sm"
+                  >
+                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="flex-1 truncate">{doc.supplier_name ?? doc.file_name}</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 shrink-0 p-0"
+                      aria-label={t('doc_picked_remove')}
+                      disabled={isProcessing}
+                      onClick={() =>
+                        setPickedInboxDocs((prev) =>
+                          prev.filter((d) => d.document_id !== doc.document_id),
+                        )
+                      }
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
+                {/* Locked while the booking is in flight: handleConfirm captured
+                    pickedInboxDocs when it started, so anything picked now would
+                    never be linked and would then be cleared on completion,
+                    vanishing from the list with no error to explain it.
+                    Styled as the dropzone's footer (same treatment as
+                    TransactionBookingDialog) so upload and inbox-pick read as
+                    one underlag surface. */}
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  onClick={() => setInboxPickerOpen(true)}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/25 px-3 py-2 text-[13px] text-muted-foreground transition-colors duration-150 hover:border-primary/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <Inbox className="h-4 w-4" />
+                  <span>{t('doc_pick_existing_inline')}</span>
+                </button>
               </div>
             )}
           </div>
@@ -636,6 +822,18 @@ export default function QuickReviewDialog({
         </div>
           </div>
         </div>
+
+        {/* Select mode: the verifikat does not exist yet, so the pick is held in
+            state and linked in handleConfirm once the booking returns its id. */}
+        <InboxDocumentPicker
+          open={inboxPickerOpen}
+          onClose={() => setInboxPickerOpen(false)}
+          onSelect={(doc) =>
+            setPickedInboxDocs((prev) =>
+              prev.some((d) => d.document_id === doc.document_id) ? prev : [...prev, doc],
+            )
+          }
+        />
       </DialogContent>
     </Dialog>
   )

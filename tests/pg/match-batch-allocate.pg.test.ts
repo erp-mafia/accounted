@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import {
   insertAuthUser,
@@ -9,12 +10,16 @@ import {
 import { getPool, withUserContext } from '@/tests/pg/setup'
 
 /**
- * Covers 20260529120100_match_batch_allocate:
+ * Covers 20260529120100_match_batch_allocate (latest body:
+ * 20260824120000_match_batch_allocate_ore_settlement):
  *   - 1 bank tx → N supplier invoices: builds ONE combined verifikat with
  *     N × Dr 2440 + 1 × Cr 1930, inserts N supplier_invoice_payments rows
  *     all pointing at the same JE.
  *   - Per-invoice paid_amount/remaining_amount/status advance correctly.
- *   - Overshoot guard returns BATCH_OVERSHOOT cleanly (no partial state).
+ *   - Overshoot guard returns BATCH_OVERSHOOT cleanly (no partial state)
+ *     for a >= 1 kr excess; a sub-krona excess is öresavrundning (#1717).
+ *   - Sub-krona |remaining - allocation| settles the invoice in full with a
+ *     3740 line carrying the residual (#1717).
  *   - Already-booked tx rejection.
  *   - Direction mismatch rejection.
  *   - Mixed customer + supplier kinds rejection.
@@ -100,6 +105,48 @@ async function insertTransaction(params: {
       'Bank transfer',
       params.amount,
       params.currency ?? 'SEK',
+    ],
+  )
+  return id
+}
+
+async function insertCustomer(params: {
+  userId: string
+  companyId: string
+}): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.customers
+       (id, user_id, company_id, name, customer_type, country)
+     VALUES ($1, $2, $3, 'Kund AB', 'swedish_business', 'SE')`,
+    [id, params.userId, params.companyId],
+  )
+  return id
+}
+
+async function insertCustomerInvoice(params: {
+  userId: string
+  companyId: string
+  customerId: string
+  total: number
+  status?: string
+}): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.invoices
+       (id, user_id, company_id, customer_id, invoice_number, invoice_date, due_date,
+        status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount,
+        vat_treatment)
+     VALUES ($1, $2, $3, $4, $5, '2026-06-01', '2026-07-01', $6, 'SEK',
+             $7, 0, $7, 0, $7, 'standard_25')`,
+    [
+      id,
+      params.userId,
+      params.companyId,
+      params.customerId,
+      `F-${id.slice(0, 8)}`,
+      params.status ?? 'sent',
+      params.total,
     ],
   )
   return id
@@ -204,21 +251,35 @@ describe('match_batch_allocate', () => {
       expect(apSum).toBe(6500)
 
       // Verify all 3 supplier invoices flipped to 'paid'.
-      const inv1 = await client.query<{ status: string; paid_amount: string; remaining_amount: string }>(
-        `SELECT status, paid_amount, remaining_amount FROM public.supplier_invoices WHERE id = $1`,
+      const inv1 = await client.query<{
+        status: string
+        paid_amount: string
+        remaining_amount: string
+        paid_at_matches: boolean
+      }>(
+        `SELECT status, paid_amount, remaining_amount,
+                paid_at = TIMESTAMPTZ '2026-06-05 12:00:00+00' AS paid_at_matches
+           FROM public.supplier_invoices WHERE id = $1`,
         [si1],
       )
       expect(inv1.rows[0]!.status).toBe('paid')
       expect(Number(inv1.rows[0]!.paid_amount)).toBe(2000)
       expect(Number(inv1.rows[0]!.remaining_amount)).toBe(0)
+      expect(inv1.rows[0]!.paid_at_matches).toBe(true)
 
       // Verify 3 supplier_invoice_payments rows all reference the same JE.
-      const payments = await client.query<{ journal_entry_id: string; supplier_invoice_id: string }>(
-        `SELECT journal_entry_id, supplier_invoice_id
+      const payments = await client.query<{
+        journal_entry_id: string
+        supplier_invoice_id: string
+        payment_date_matches: boolean
+      }>(
+        `SELECT journal_entry_id, supplier_invoice_id,
+                payment_date = DATE '2026-06-05' AS payment_date_matches
            FROM public.supplier_invoice_payments WHERE transaction_id = $1`,
         [txId],
       )
       expect(payments.rows).toHaveLength(3)
+      expect(payments.rows.every((payment) => payment.payment_date_matches)).toBe(true)
       const jeIds = new Set(payments.rows.map((p) => p.journal_entry_id))
       expect(jeIds.size).toBe(1)
       expect(jeIds.has(result.journal_entry_id!)).toBe(true)
@@ -248,7 +309,66 @@ describe('match_batch_allocate', () => {
     })
   })
 
-  it('rejects with BATCH_OVERSHOOT when allocation exceeds invoice remaining', async () => {
+  it('anchors customer paid_at at UTC noon on the bank transaction date', async () => {
+    const { userId, companyId } = await seedTenant()
+    const customerId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.customers
+         (id, user_id, company_id, name, customer_type, country)
+       VALUES ($1, $2, $3, 'Kund AB', 'swedish_business', 'SE')`,
+      [customerId, userId, companyId],
+    )
+
+    const invoiceId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.invoices
+         (id, user_id, company_id, customer_id, invoice_number, invoice_date, due_date,
+          status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount,
+          vat_treatment)
+       VALUES ($1, $2, $3, $4, $5, '2026-06-01', '2026-07-01', 'sent', 'SEK',
+               1000, 0, 1000, 0, 1000, 'standard_25')`,
+      [invoiceId, userId, companyId, customerId, `F-${invoiceId.slice(0, 8)}`],
+    )
+    const txId = await insertTransaction({
+      userId,
+      companyId,
+      amount: 1000,
+      date: '2026-06-07',
+    })
+
+    await withUserContext(userId, async (client) => {
+      const response = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [
+          txId,
+          JSON.stringify([{ kind: 'customer_invoice', invoice_id: invoiceId, amount: 1000 }]),
+          companyId,
+        ],
+      )
+      expect(response.rows[0]!.match_batch_allocate.ok).toBe(true)
+
+      const invoice = await client.query<{ paid_at_matches: boolean }>(
+        `SELECT paid_at = TIMESTAMPTZ '2026-06-07 12:00:00+00' AS paid_at_matches
+           FROM public.invoices WHERE id = $1`,
+        [invoiceId],
+      )
+      expect(invoice.rows[0]!.paid_at_matches).toBe(true)
+
+      const payment = await client.query<{ payment_date_matches: boolean }>(
+        `SELECT payment_date = DATE '2026-06-07' AS payment_date_matches
+           FROM public.invoice_payments
+          WHERE invoice_id = $1 AND transaction_id = $2`,
+        [invoiceId, txId],
+      )
+      expect(payment.rows).toHaveLength(1)
+      expect(payment.rows[0]!.payment_date_matches).toBe(true)
+    })
+  })
+
+  // #1717 deliberately relaxed this guard: a SUB-krona excess is
+  // öresavrundning (absorbed to 3740, see the öre suite below); only an
+  // excess of >= 1.00 kr is still a real overshoot.
+  it('rejects with BATCH_OVERSHOOT when allocation exceeds invoice remaining by >= 1 kr', async () => {
     const { userId, companyId } = await seedTenant()
     const supplier = await insertSupplier({ userId, companyId })
     const si = await insertSupplierInvoice({
@@ -284,6 +404,29 @@ describe('match_batch_allocate', () => {
       )
       expect(Number(inv.rows[0]!.paid_amount)).toBe(0)
       expect(Number(inv.rows[0]!.remaining_amount)).toBe(1000)
+    })
+  })
+
+  it('rejects with BATCH_OVERSHOOT at exactly 1 kr excess (band boundary)', async () => {
+    const { userId, companyId } = await seedTenant()
+    const supplier = await insertSupplier({ userId, companyId })
+    const si = await insertSupplierInvoice({
+      userId, companyId, supplierId: supplier, total: 1000,
+    })
+    const txId = await insertTransaction({ userId, companyId, amount: -1001 })
+
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [
+          txId,
+          JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1001 }]),
+          companyId,
+        ],
+      )
+      const result = r.rows[0]!.match_batch_allocate
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('BATCH_OVERSHOOT')
     })
   })
 
@@ -612,6 +755,297 @@ describe('match_batch_allocate', () => {
         [txId],
       )
       expect(txRow.rows[0]!.journal_entry_id).toBeNull()
+    })
+  })
+
+  // #1717: öresavrundning. A whole-krona settlement of an öre-bearing
+  // remaining (|diff| < 1 kr) must settle the invoice in FULL: the AR/AP leg
+  // clears the whole remaining, 3740 carries the residual, status flips to
+  // 'paid'. A diff of >= 1 kr keeps the legacy behaviour (real partial /
+  // BATCH_OVERSHOOT above).
+  describe('öresavrundning settlement (#1717)', () => {
+    async function fetchLines(client: PoolClient, journalEntryId: string) {
+      const lines = await client.query<{
+        account_number: string
+        debit_amount: string
+        credit_amount: string
+      }>(
+        `SELECT account_number, debit_amount, credit_amount
+           FROM public.journal_entry_lines
+          WHERE journal_entry_id = $1
+          ORDER BY sort_order`,
+        [journalEntryId],
+      )
+      return lines.rows
+    }
+
+    function assertBalanced(rows: Array<{ debit_amount: string; credit_amount: string }>) {
+      const debits = rows.reduce((s, l) => s + Number(l.debit_amount), 0)
+      const credits = rows.reduce((s, l) => s + Number(l.credit_amount), 0)
+      expect(Math.round(debits * 100)).toBe(Math.round(credits * 100))
+    }
+
+    it('customer invoice paid a whole krona short settles to paid with Dr 3740', async () => {
+      const { userId, companyId } = await seedTenant()
+      const customerId = await insertCustomer({ userId, companyId })
+      const invoiceId = await insertCustomerInvoice({
+        userId, companyId, customerId, total: 1000.4,
+      })
+      const txId = await insertTransaction({ userId, companyId, amount: 1000 })
+
+      await withUserContext(userId, async (client) => {
+        const r = await client.query<{ match_batch_allocate: RpcResult }>(
+          `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+          [
+            txId,
+            JSON.stringify([{ kind: 'customer_invoice', invoice_id: invoiceId, amount: 1000 }]),
+            companyId,
+          ],
+        )
+        const result = r.rows[0]!.match_batch_allocate
+        expect(result.ok).toBe(true)
+        expect(result.allocations![0]!.status).toBe('paid')
+        expect(result.allocations![0]!.paid_amount).toBe(1000.4)
+        expect(result.allocations![0]!.remaining_amount).toBe(0)
+
+        const rows = await fetchLines(client, result.journal_entry_id!)
+        // Cr 1510 1000.40 (full remaining), Dr 3740 0.40, Dr 1930 1000.
+        expect(rows).toHaveLength(3)
+        const ar = rows.find((l) => l.account_number === '1510')!
+        expect(Number(ar.credit_amount)).toBe(1000.4)
+        const ore = rows.find((l) => l.account_number === '3740')!
+        expect(Number(ore.debit_amount)).toBe(0.4)
+        expect(Number(ore.credit_amount)).toBe(0)
+        const bank = rows.find((l) => l.account_number === '1930')!
+        expect(Number(bank.debit_amount)).toBe(1000)
+        assertBalanced(rows)
+
+        const inv = await client.query<{
+          status: string; paid_amount: string; remaining_amount: string; paid_at: string | null
+        }>(
+          `SELECT status, paid_amount, remaining_amount, paid_at FROM public.invoices WHERE id = $1`,
+          [invoiceId],
+        )
+        expect(inv.rows[0]!.status).toBe('paid')
+        expect(Number(inv.rows[0]!.paid_amount)).toBe(1000.4)
+        expect(Number(inv.rows[0]!.remaining_amount)).toBe(0)
+        expect(inv.rows[0]!.paid_at).not.toBeNull()
+
+        // The payment row records the FULL remaining (planInvoicePayment
+        // convention), not the raw bank allocation.
+        const pay = await client.query<{ amount: string }>(
+          `SELECT amount FROM public.invoice_payments WHERE invoice_id = $1`,
+          [invoiceId],
+        )
+        expect(Number(pay.rows[0]!.amount)).toBe(1000.4)
+      })
+    })
+
+    it('customer invoice over-paid by öre is accepted with Cr 3740', async () => {
+      const { userId, companyId } = await seedTenant()
+      const customerId = await insertCustomer({ userId, companyId })
+      const invoiceId = await insertCustomerInvoice({
+        userId, companyId, customerId, total: 1000.6,
+      })
+      const txId = await insertTransaction({ userId, companyId, amount: 1001 })
+
+      await withUserContext(userId, async (client) => {
+        const r = await client.query<{ match_batch_allocate: RpcResult }>(
+          `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+          [
+            txId,
+            JSON.stringify([{ kind: 'customer_invoice', invoice_id: invoiceId, amount: 1001 }]),
+            companyId,
+          ],
+        )
+        const result = r.rows[0]!.match_batch_allocate
+        expect(result.ok).toBe(true)
+        expect(result.allocations![0]!.status).toBe('paid')
+
+        const rows = await fetchLines(client, result.journal_entry_id!)
+        // Cr 1510 1000.60, Cr 3740 0.40 (vinst), Dr 1930 1001.
+        expect(rows).toHaveLength(3)
+        expect(Number(rows.find((l) => l.account_number === '1510')!.credit_amount)).toBe(1000.6)
+        const ore = rows.find((l) => l.account_number === '3740')!
+        expect(Number(ore.credit_amount)).toBe(0.4)
+        expect(Number(ore.debit_amount)).toBe(0)
+        expect(Number(rows.find((l) => l.account_number === '1930')!.debit_amount)).toBe(1001)
+        assertBalanced(rows)
+
+        const inv = await client.query<{ status: string; paid_amount: string }>(
+          `SELECT status, paid_amount FROM public.invoices WHERE id = $1`,
+          [invoiceId],
+        )
+        expect(inv.rows[0]!.status).toBe('paid')
+        expect(Number(inv.rows[0]!.paid_amount)).toBe(1000.6)
+      })
+    })
+
+    it('supplier invoice paid öre short settles to paid with Cr 3740 (mirror polarity)', async () => {
+      const { userId, companyId } = await seedTenant()
+      const supplier = await insertSupplier({ userId, companyId })
+      const si = await insertSupplierInvoice({
+        userId, companyId, supplierId: supplier, total: 2000.3,
+      })
+      const txId = await insertTransaction({ userId, companyId, amount: -2000 })
+
+      await withUserContext(userId, async (client) => {
+        const r = await client.query<{ match_batch_allocate: RpcResult }>(
+          `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+          [
+            txId,
+            JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 2000 }]),
+            companyId,
+          ],
+        )
+        const result = r.rows[0]!.match_batch_allocate
+        expect(result.ok).toBe(true)
+        expect(result.allocations![0]!.status).toBe('paid')
+
+        const rows = await fetchLines(client, result.journal_entry_id!)
+        // Dr 2440 2000.30 (full remaining), Cr 3740 0.30 (vinst: paid less
+        // than owed), Cr 1930 2000.
+        expect(rows).toHaveLength(3)
+        expect(Number(rows.find((l) => l.account_number === '2440')!.debit_amount)).toBe(2000.3)
+        const ore = rows.find((l) => l.account_number === '3740')!
+        expect(Number(ore.credit_amount)).toBe(0.3)
+        expect(Number(ore.debit_amount)).toBe(0)
+        expect(Number(rows.find((l) => l.account_number === '1930')!.credit_amount)).toBe(2000)
+        assertBalanced(rows)
+
+        const inv = await client.query<{
+          status: string; paid_amount: string; remaining_amount: string
+        }>(
+          `SELECT status, paid_amount, remaining_amount FROM public.supplier_invoices WHERE id = $1`,
+          [si],
+        )
+        expect(inv.rows[0]!.status).toBe('paid')
+        expect(Number(inv.rows[0]!.paid_amount)).toBe(2000.3)
+        expect(Number(inv.rows[0]!.remaining_amount)).toBe(0)
+      })
+    })
+
+    it('supplier invoice over-paid by öre gets Dr 3740 (förlust)', async () => {
+      const { userId, companyId } = await seedTenant()
+      const supplier = await insertSupplier({ userId, companyId })
+      const si = await insertSupplierInvoice({
+        userId, companyId, supplierId: supplier, total: 1999.6,
+      })
+      const txId = await insertTransaction({ userId, companyId, amount: -2000 })
+
+      await withUserContext(userId, async (client) => {
+        const r = await client.query<{ match_batch_allocate: RpcResult }>(
+          `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+          [
+            txId,
+            JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 2000 }]),
+            companyId,
+          ],
+        )
+        const result = r.rows[0]!.match_batch_allocate
+        expect(result.ok).toBe(true)
+        expect(result.allocations![0]!.status).toBe('paid')
+
+        const rows = await fetchLines(client, result.journal_entry_id!)
+        expect(rows).toHaveLength(3)
+        expect(Number(rows.find((l) => l.account_number === '2440')!.debit_amount)).toBe(1999.6)
+        const ore = rows.find((l) => l.account_number === '3740')!
+        expect(Number(ore.debit_amount)).toBe(0.4)
+        expect(Number(ore.credit_amount)).toBe(0)
+        assertBalanced(rows)
+      })
+    })
+
+    it('a shortfall of exactly 1 kr stays a real partial (no 3740)', async () => {
+      const { userId, companyId } = await seedTenant()
+      const supplier = await insertSupplier({ userId, companyId })
+      const si = await insertSupplierInvoice({
+        userId, companyId, supplierId: supplier, total: 1000,
+      })
+      const txId = await insertTransaction({ userId, companyId, amount: -999 })
+
+      await withUserContext(userId, async (client) => {
+        const r = await client.query<{ match_batch_allocate: RpcResult }>(
+          `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+          [
+            txId,
+            JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 999 }]),
+            companyId,
+          ],
+        )
+        const result = r.rows[0]!.match_batch_allocate
+        expect(result.ok).toBe(true)
+        expect(result.allocations![0]!.status).toBe('partially_paid')
+
+        const rows = await fetchLines(client, result.journal_entry_id!)
+        expect(rows).toHaveLength(2)
+        expect(rows.some((l) => l.account_number === '3740')).toBe(false)
+        expect(Number(rows.find((l) => l.account_number === '2440')!.debit_amount)).toBe(999)
+
+        const inv = await client.query<{
+          status: string; paid_amount: string; remaining_amount: string
+        }>(
+          `SELECT status, paid_amount, remaining_amount FROM public.supplier_invoices WHERE id = $1`,
+          [si],
+        )
+        expect(inv.rows[0]!.status).toBe('partially_paid')
+        expect(Number(inv.rows[0]!.paid_amount)).toBe(999)
+        expect(Number(inv.rows[0]!.remaining_amount)).toBe(1)
+      })
+    })
+
+    it('samlingsbetalning: whole-krona clump over two öre-bearing invoices settles both', async () => {
+      const { userId, companyId } = await seedTenant()
+      const customerId = await insertCustomer({ userId, companyId })
+      // 500.25 + 499.75 = 1000.00 owed; the batch dialog splits a 1000 kr
+      // payment 500/500, leaving +0.25 short on one and 0.25 over on the
+      // other: both absorb to 3740 and both invoices reach 'paid'.
+      const inv1 = await insertCustomerInvoice({
+        userId, companyId, customerId, total: 500.25,
+      })
+      const inv2 = await insertCustomerInvoice({
+        userId, companyId, customerId, total: 499.75,
+      })
+      const txId = await insertTransaction({ userId, companyId, amount: 1000 })
+
+      await withUserContext(userId, async (client) => {
+        const r = await client.query<{ match_batch_allocate: RpcResult }>(
+          `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+          [
+            txId,
+            JSON.stringify([
+              { kind: 'customer_invoice', invoice_id: inv1, amount: 500 },
+              { kind: 'customer_invoice', invoice_id: inv2, amount: 500 },
+            ]),
+            companyId,
+          ],
+        )
+        const result = r.rows[0]!.match_batch_allocate
+        expect(result.ok).toBe(true)
+        expect(result.allocations).toHaveLength(2)
+        for (const alloc of result.allocations!) {
+          expect(alloc.status).toBe('paid')
+          expect(alloc.remaining_amount).toBe(0)
+        }
+
+        const rows = await fetchLines(client, result.journal_entry_id!)
+        // 2 × Cr 1510 (full remainings) + Dr 3740 0.25 + Cr 3740 0.25
+        // + Dr 1930 1000.
+        expect(rows).toHaveLength(5)
+        const arSum = rows
+          .filter((l) => l.account_number === '1510')
+          .reduce((s, l) => s + Number(l.credit_amount), 0)
+        expect(Math.round(arSum * 100)).toBe(100000)
+        const oreRows = rows.filter((l) => l.account_number === '3740')
+        expect(oreRows).toHaveLength(2)
+        assertBalanced(rows)
+
+        const invoices = await client.query<{ status: string }>(
+          `SELECT status FROM public.invoices WHERE id IN ($1, $2)`,
+          [inv1, inv2],
+        )
+        expect(invoices.rows.every((row) => row.status === 'paid')).toBe(true)
+      })
     })
   })
 })

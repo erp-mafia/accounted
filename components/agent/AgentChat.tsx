@@ -145,9 +145,16 @@ interface StagedOperation {
   operation_id?: string
   risk_level: 'low' | 'medium' | 'high'
   message: string
-  // The originating tool name (e.g. 'gnubok_categorize_transaction'). Lets
-  // ApprovalCard pick the right structured-preview renderer.
+  // The originating tool name (e.g. 'gnubok_categorize_transaction'), as
+  // carried by live staged_operation stream events.
   tool_name?: string
+  // The stored pending_operations.operation_type (e.g.
+  // 'categorize_transaction'), set on hydrated cards. ApprovalCard prefers
+  // this for preview dispatch and derives it from tool_name otherwise.
+  operation_type?: string
+  // pending_operations.params (the staging tool's input): some previews
+  // read it (attach_document's DocumentViewButton needs params.document_id).
+  params?: Record<string, unknown>
   // The structured operation preview from the staged envelope. Shape varies
   // by tool; ApprovalCard's renderers do the type-narrowing.
   preview?: unknown
@@ -199,6 +206,26 @@ export default function AgentChat({
   onStatus,
 }: AgentChatProps) {
   const [conversationId, setConversationId] = useState<string | null>(initialConversationId ?? null)
+  // "Clear the proposals I didn't approve" — rejects the conversation's
+  // still-pending staged operations in one call so they don't linger in
+  // Granskning, then drops the cards from view.
+  const [clearingProposals, setClearingProposals] = useState(false)
+  async function handleClearProposals() {
+    const convId = conversationId
+    if (!convId || clearingProposals) return
+    setClearingProposals(true)
+    try {
+      await fetch(`/api/agent/conversations/${convId}/reject-pending`, { method: 'POST' })
+      // Committed proposals are already booked (their card was only a
+      // confirmation); pending ones the server just rejected. Either way, drop
+      // the cards so the conversation reads as resolved.
+      setMessages((prev) => prev.map((m) => (m.staged ? { ...m, staged: undefined } : m)))
+    } catch {
+      // best-effort: leave the cards if the request failed
+    } finally {
+      setClearingProposals(false)
+    }
+  }
   // Track whether the first-turn callback has fired so the bootstrap
   // starters get exactly one notification even if a turn fires before
   // the conversation_id event (defensive: order shouldn't matter).
@@ -249,6 +276,10 @@ export default function AgentChat({
     }
   }, [streaming, onStatus])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  // True between a stream_restart event and the retried stream's first sign of
+  // life: renders a discreet "Försöker igen…" line so the reset bubble doesn't
+  // read as the assistant silently going blank.
+  const [retryNotice, setRetryNotice] = useState(false)
   const scrollerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // Active turn's controller, kept in a ref (not state) so the stop button
@@ -370,6 +401,7 @@ export default function AgentChat({
 
     setStreaming(true)
     setErrorMessage(null)
+    setRetryNotice(false)
 
     let response: Response
     try {
@@ -426,6 +458,11 @@ export default function AgentChat({
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
+    // Whether the stream delivered a terminal event (turn_complete or error).
+    // A serverless function killed at its duration cap closes the stream
+    // cleanly (done: true, nothing thrown), which used to look identical to
+    // success: "Tänker" collapsed with no answer and no error.
+    let sawTerminalEvent = false
     try {
       while (true) {
         const { done, value } = await reader.read()
@@ -448,6 +485,9 @@ export default function AgentChat({
           // First user-visible event lazily mounts the bubble. `conversation`
           // is a metadata event with no visible payload so it does not.
           const ev = parsed as { kind?: string } | null
+          if (ev && (ev.kind === 'turn_complete' || ev.kind === 'error')) {
+            sawTerminalEvent = true
+          }
           if (
             ev &&
             typeof ev.kind === 'string' &&
@@ -458,6 +498,12 @@ export default function AgentChat({
           }
           handleEvent(parsed)
         }
+      }
+      // The stream ended without throwing. If no terminal event arrived and
+      // the user did not abort, the function was cut off mid-turn (duration
+      // cap, proxy drop): say so instead of presenting silence as success.
+      if (!sawTerminalEvent && !signal.aborted) {
+        setErrorMessage('Anslutningen bröts innan svaret blev klart. Försök igen.')
       }
     } catch (err) {
       if (!signal.aborted) {
@@ -591,7 +637,31 @@ export default function AgentChat({
           })),
         )
         break
+      case 'stream_restart': {
+        // The server's model stream died on a transient error and is being
+        // retried. Nothing from the dead attempt was persisted: reset the
+        // in-progress bubble to the server's pre-attempt snapshot, drop tool
+        // chips that never completed (eager chips from the dead stream), and
+        // discard the dead attempt's reasoning so the retried attempt's
+        // thinking doesn't render twice. The post-tool paragraph break is
+        // re-armed only when restored text exists: the snapshot always ends
+        // at an iteration boundary (after tool results), so the retried
+        // continuation should open its own paragraph there.
+        setRetryNotice(true)
+        const restored = typeof ev.assistant_text === 'string' ? ev.assistant_text : ''
+        breakBeforeNextTextRef.current = restored.length > 0
+        setMessages((prev) =>
+          updateLastAssistant(prev, (m) => ({
+            ...m,
+            text: restored,
+            reasoning: undefined,
+            toolCalls: m.toolCalls?.filter((tc) => tc.completed),
+          })),
+        )
+        break
+      }
       case 'text_delta':
+        setRetryNotice(false)
         // Insert a paragraph break ONCE when text resumes after a tool
         // call, so post-tool narration starts on its own line instead of
         // gluing onto the previous sentence ("kategoriseras.Inget historik").
@@ -686,6 +756,7 @@ export default function AgentChat({
               {
                 tool_use_id: ev.tool_use_id as string,
                 tool_name: (ev.tool_name as string | undefined) ?? undefined,
+                params: (ev.params as Record<string, unknown> | undefined) ?? undefined,
                 operation_id: stagedRaw.operation_id,
                 risk_level: stagedRaw.risk_level,
                 message: stagedRaw.message,
@@ -698,9 +769,11 @@ export default function AgentChat({
         break
       }
       case 'error':
+        setRetryNotice(false)
         setErrorMessage(ev.message as string)
         break
       case 'turn_complete': {
+        setRetryNotice(false)
         if (!firstTurnFiredRef.current && conversationIdRef.current) {
           firstTurnFiredRef.current = true
           onFirstTurnComplete?.(conversationIdRef.current)
@@ -803,6 +876,12 @@ export default function AgentChat({
           </div>
         ))}
 
+        {retryNotice && !errorMessage && (
+          <div className="text-xs text-muted-foreground px-1">
+            Anslutningen bröts, försöker igen…
+          </div>
+        )}
+
         {errorMessage && (
           <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             {errorMessage}
@@ -821,6 +900,22 @@ export default function AgentChat({
         </button>
       )}
       </div>
+
+      {/* One-tap cleanup: when the assistant staged several proposals and the
+          user only approved some, clear the rest here instead of rejecting each
+          one in Granskning. */}
+      {conversationId && messages.some((m) => m.staged && m.staged.length > 0) && (
+        <div className="flex justify-end border-t border-border px-5 py-2">
+          <button
+            type="button"
+            onClick={() => void handleClearProposals()}
+            disabled={clearingProposals}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+          >
+            {clearingProposals ? 'Rensar…' : 'Rensa förslag som inte godkänts'}
+          </button>
+        </div>
+      )}
 
       {/* Paywall: /api/agent/invoke 403s without the ai capability. Replace
           the composer with an upsell so an already-open conversation (or a
@@ -933,7 +1028,7 @@ function MessageBubble({
         {isUser ? (
           message.text || (streamingTail ? <Cursor /> : '')
         ) : message.text ? (
-          <div className="prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[10px] [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0">
+          <div className="prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[10px] [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0">
             {markdownLoaded ? (
               <MarkdownMessage text={message.text} />
             ) : (
@@ -999,6 +1094,8 @@ function MessageBubble({
                 riskLevel={s.risk_level}
                 message={s.message}
                 toolName={s.tool_name}
+                operationType={s.operation_type}
+                params={s.params}
                 preview={s.preview}
                 periodStatus={s.period_status}
                 onRequestCorrection={onCorrection}
@@ -1077,7 +1174,7 @@ function MessageActions({
   }
 
   const btn =
-    'inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors'
+    'inline-flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors'
 
   return (
     <div className="flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/msg:opacity-100 transition-opacity">
@@ -1288,18 +1385,6 @@ function prettyToolName(name: string): string {
  * on the last assistant message so they read as that turn's proposal, which is
  * where they were when the turn streamed.
  */
-/**
- * `pending_operations.operation_type` stores the bare action name
- * ('categorize_transaction'), while the live streamed card carries the MCP tool
- * name ('gnubok_categorize_transaction') and ApprovalCard's PreviewBlock
- * dispatches on that. Without this, every hydrated card fell through to the
- * flat generic preview instead of the journal-line one, so a resumed proposal
- * looked materially worse than the same proposal did live.
- */
-export function toolNameFor(operationType: string): string {
-  return operationType.startsWith('gnubok_') ? operationType : `gnubok_${operationType}`
-}
-
 export function attachStagedOperations(
   messages: ChatMessage[],
   staged: StoredStagedOperation[],
@@ -1314,7 +1399,12 @@ export function attachStagedOperations(
     risk_level:
       op.risk_level === 'high' || op.risk_level === 'medium' ? op.risk_level : 'low',
     message: op.title ?? 'Förslag väntar på granskning.',
-    tool_name: toolNameFor(op.operation_type),
+    // The stored bare operation_type drives the preview dispatch directly.
+    // Its predecessor mapped it onto an MCP tool name here ('gnubok_' +
+    // type) for ApprovalCard's old 4-case tool-name switch, so every other
+    // hydrated type silently lost its specialized preview.
+    operation_type: op.operation_type,
+    params: (op.params ?? undefined) as Record<string, unknown> | undefined,
     preview: op.preview_data,
   }))
 

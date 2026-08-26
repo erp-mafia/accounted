@@ -21,8 +21,13 @@ ensureInitialized()
 
 function errorResponse(code: string, details?: Record<string, unknown>): NextResponse {
   const entry = getErrorEntry(code)
+  // Only the 24h-cap trigger's Swedish text is user-facing detail; for every
+  // other code details.message is raw Postgres text and must not reach the
+  // client (the registry message is shown instead).
   const message =
-    (details?.message as string | undefined) ?? entry?.message_sv ?? 'Något gick fel'
+    (code === 'ABSENCE_HOURS_CONFLICT' ? (details?.message as string | undefined) : undefined) ??
+    entry?.message_sv ??
+    'Något gick fel'
   return NextResponse.json({ error: message, code }, { status: entry?.httpStatus ?? 500 })
 }
 

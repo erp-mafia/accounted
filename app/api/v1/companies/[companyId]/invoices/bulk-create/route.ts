@@ -194,6 +194,21 @@ async function createOneInvoice(
   )
   const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
+  // VAT registration gate, mirroring buildInvoiceWriteData (issue #1719): a
+  // non-momsregistrerad company books no output VAT, so every line is forced
+  // to 0% (momsfri) server-side no matter what the batch payload carries,
+  // explicitly or via the customer-default fallback below. 0% is a permitted
+  // rate for every customer type, so the allowedRates gate still passes.
+  const { data: vatSettings } = await supabase
+    .from('company_settings')
+    .select('vat_registered')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const notVatRegistered = vatSettings?.vat_registered === false
+  if (notVatRegistered && documentType !== 'delivery_note') {
+    for (const item of input.items) item.vat_rate = 0
+  }
+
   const subtotal = input.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
   let vatAmount = 0
   if (documentType !== 'delivery_note') {
@@ -315,10 +330,13 @@ async function createOneInvoice(
       total,
       total_sek: documentType === 'delivery_note' ? null : totalSek,
       remaining_amount: documentType === 'invoice' ? total : 0,
-      vat_treatment: vatRules.treatment,
+      // Header VAT fields mirror buildInvoiceWriteData: a not-VAT-registered
+      // company stamps the sale as momsfri (treatment 'exempt', no ruta, no
+      // reverse-charge notation); every line rate is already zeroed above.
+      vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
       vat_rate: headerVatRate,
-      moms_ruta: vatRules.momsRuta,
-      reverse_charge_text: vatRules.reverseChargeText || null,
+      moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
+      reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
       your_reference: input.your_reference,
       our_reference: input.our_reference,
       notes: input.notes,

@@ -1,0 +1,161 @@
+---
+title: "Periodiseringsfond — strategi och bokning för AB:s årsbokslut"
+description: "SKILL.md som beräknar maximal periodiseringsfond (25% av skattemässigt resultat före avsättning för AB), beräknar skatteeffekt med 20.6% bolagsskatt, och stager gnubok_create_voucher med 8811 mot 2125–2127 (sjuårsserien)."
+slug: "periodiseringsfond-strategi"
+kind: "skill"
+author: "gnubok"
+status: "live"
+lang: "sv"
+personas: ["founder"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/skills-v1/periodiseringsfond-strategi.zip"
+repoUrl: "https://github.com/erp-mafia/accounted/tree/main/skills/periodiseringsfond-strategi"
+gnubokTools:
+  - "gnubok_get_income_statement"
+  - "gnubok_year_end_readiness"
+  - "gnubok_create_voucher"
+  - "gnubok_query_journal"
+oauthScopes:
+  - "reports:read"
+  - "bookkeeping:write"
+requiresWriteScope: true
+version: "1.0.0"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Borde jag verkligen göra avsättning om jag förväntar mig lägre vinst nästa år?"
+    a: "Beror på likviditeten. Periodiseringsfonden flyttar skatt 6 år framåt. Om du förväntar dig att ha lägre eller ingen vinst nästa år har avsättningen särskilt värde eftersom återföringen då beskattas lägre (eller noll). Skillen visar break-even-året: vid vilken framtida resultatnivå blir avsättningen lönsam eller olönsam."
+  - q: "Vilken serie kontonummer ska jag använda, 2125, 2126 eller 2127?"
+    a: "BAS 2026 har sjuårsserie 2125–2131, ett konto per avsättningsår. För räkenskapsår 2025 (kalenderår 2025) används 2125. För 2026 blir det 2126. Skillen läser fiskalperiodens slutdatum från accounted och väljer rätt konto automatiskt. Återföring sker mot samma konto, så 2125 från 2025 återförs senast år 2031."
+  - q: "Kan jag återföra periodiseringsfonden frivilligt om jag har förlust?"
+    a: "Ja, alltid. Återföring i förlustår är en av huvudfördelarna: du minskar förlusten och kan kvitta mot framtida vinster med högre marginal. Skillen detekterar 2125-saldon vid årsbokslut och föreslår återföring om årets resultat är negativt. Bokning: 2125 mot 8811 (i samma år, motsatt riktning)."
+  - q: "Vad händer med periodiseringsfonden om bolaget likvideras?"
+    a: "Vid likvidation måste hela kvarvarande periodiseringsfond återföras till beskattning i likvidationsårets resultat. Det är skattepliktigt. Det finns ingen möjlighet att 'rulla över' till ägarna. Sätter du periodiseringsfond bör du ha en plan för hur den ska användas innan likvidation blir aktuell."
+  - q: "Räknas periodiseringsfond mot K10 eller är det enbart bolagsfråga?"
+    a: "Periodiseringsfond ligger på bolaget, inte på ägaren. K10 påverkas indirekt: lägre redovisat resultat ett enskilt år ger lägre lönebaserat utrymme för fåmansbolagsutdelning de kommande åren. En faktor i bedömningen, inte ett knockout-skäl. Skillen visar K10-effekten som sidoinformation om bolaget är fåmansbolag."
+---
+
+## Sex steg
+
+Periodiseringsfond är AB:s enda återstående tidsförskjutning av
+bolagsskatt. Skillen läser årets resultat, beräknar maximal
+avsättning, jämför skatteeffekt mellan avsättning och icke-avsättning,
+och stager bokningen om du godkänner.
+
+1. `gnubok_year_end_readiness(period: "2025")`. Kollar att perioden är klar för bokslut.
+2. `gnubok_get_income_statement(period: "2025")`. Drar årets resultat före skatt.
+3. Beräknar `max_avsattning = resultat_före_skatt × 0.25`.
+4. Beräknar skatteeffekt vid avsättning vs ej: skillnaden är `max_avsattning × 0.206` SEK i likviditet.
+5. Visar break-even-året (vid vilken framtida resultatnivå avsättningen blir olönsam).
+6. Stager `gnubok_create_voucher(date: 2025-12-31, lines: [debet 8811 X kr, kredit 2125 X kr])`.
+
+Inget skrivs utan godkännande. Skillen visar konsekvensen, du
+bestämmer om den ska göras.
+
+## Beräkningen
+
+För räkenskapsår 2025 med resultat före skatt 480 000 SEK:
+
+```
+Max avsättning:       480 000 × 0.25 = 120 000 SEK
+Bolagsskatt utan:     480 000 × 0.206 = 98 880 SEK
+Bolagsskatt med:      360 000 × 0.206 = 74 160 SEK
+Likviditet kvar:      24 720 SEK extra i bolaget
+```
+
+24 720 SEK stannar i bolaget i upp till 6 år. Vid återföring år
+2031 (om inte tidigare) beskattas det med då gällande skattesats.
+Är skattesatsen densamma (20.6%) blir effekten av periodiseringen
+en räntefri kredit på 24 720 SEK i 6 år.
+
+För räntenivå 5% är värdet av 6 års räntefri kredit på 24 720 SEK
+ungefär 6 600 SEK i nuvärde. Även med konstant skatt är
+periodiseringen lönsam, bara mindre dramatisk än "spara 24 720 SEK".
+
+## Sjuårsserien
+
+BAS 2026 har en separat konto per avsättningsår:
+
+| Konto | Avsättningsår | Senaste återföring |
+|---|---|---|
+| 2125 | 2025 | 2031 |
+| 2126 | 2026 | 2032 |
+| 2127 | 2027 | 2033 |
+| 2128 | 2028 | 2034 |
+| 2129 | 2029 | 2035 |
+| 2130 | 2030 | 2036 |
+| 2131 | 2031 | 2037 |
+
+Detta är inte bara kosmetik. Skatteverket kräver att man kan visa
+vilket år en specifik avsättning gjorts, för att kunna räkna
+6-årsfönstret. Använder du fel konto blir det rättelseår.
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/accounted
+cd gnubok/skills/periodiseringsfond-strategi
+```
+
+I Claude Desktop:
+
+```
+Cmd-Shift-P → Skills: Add from folder → välj mappen
+```
+
+Kräver `reports:read` (för läsning) och `bookkeeping:write` (för att
+stagas bokningsförslag).
+
+## Köra skillen
+
+```
+@periodiseringsfond-strategi för 2025
+```
+
+Agenten:
+
+```
+Årets resultat:      480 000 SEK
+Max avsättning:      120 000 SEK (25%)
+Likviditetseffekt:   24 720 SEK
+Break-even-vinst:    240 000 SEK år 2031
+
+Föreslagen bokning:
+  Debet  8811 Avsättning periodiseringsfond     120 000
+  Kredit 2125 Periodiseringsfond år 2025        120 000
+  Datum: 2025-12-31
+
+Vill du stagas? (yes / partial / no)
+```
+
+Skillen tar emot `partial 60000` om du vill avsätta mindre än maxbeloppet.
+
+## Återföringsbeslut
+
+Skillen detekterar gamla 2125-saldon vid varje årsbokslut. Vid
+förlustår föreslår den återföring för att kvitta. Bokning för
+återföring:
+
+```
+Debet  2125 Periodiseringsfond år 2025       120 000
+Kredit 8811 Avsättning periodiseringsfond    120 000
+Datum: bokslutsdatum (t.ex. 2027-12-31)
+```
+
+Återföring är frivillig. Du kan vänta hela 6-årsfönstret. Men i
+år 7 (2031 för 2025-avsättningen) är återföring obligatorisk.
+
+## Begränsningar
+
+* Skillen gör ingen skatteplanering över bolagsstrukturer. Den jobbar bara med ett bolags egen kontoplan.
+* Skillen tar inte hänsyn till outnyttjat förlustavdrag. Om bolaget har gamla förluster ska man kanske inte avsätta alls. Det är revisor-bedömning.
+* Skillen är inte K10-skattare. Den noterar K10-effekten på fåmansbolag men beräknar inte själva K10-deklarationen.
+* Skillen avsätter inte automatiskt. Bara förslag, alltid staged, du godkänner.
+
+## Vad du får
+
+En beräkning på 5 minuter som annars hamnar på revisorns bord till
+2 500 kr/timme. Och en bokföring där periodiseringsfondsärenden går
+in i samma audit-spår som allt annat. När revisor nästa år frågar
+"varför hamnade 120 000 på 2125 i december?", svaret finns på rad i
+`gnubok_audit_package`-zippen: vem, när, scope, before/after.

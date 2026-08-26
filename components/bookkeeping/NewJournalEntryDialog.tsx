@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { Copy, Loader2, MessageCircle } from 'lucide-react'
+import { Copy, Link2, Loader2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -9,7 +9,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import JournalEntryForm, { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 
 export interface CopyPrefill {
   sourceId: string
@@ -19,13 +18,28 @@ export interface CopyPrefill {
   notes: string
 }
 
+/** Prefill for the skattekonto "Skapa verifikat manuellt" deep link. */
+export interface SkvLinkPrefill {
+  transactionId: string
+  /** Row summary for the banner: date, text and amount, built by the caller. */
+  bannerLabel: string
+  lines: FormLine[]
+  description: string
+  date: string
+}
+
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Fired after a verifikat is created/saved as draft. */
   onCreated: () => void
+  /** Fired with the created entry's id (both posted and draft saves). */
+  onEntryCreated?: (entryId: string) => void
   /** When set, the form is pre-filled from a copied verifikat. */
   copyPrefill?: CopyPrefill | null
+  /** When set, the form is pre-filled from a skattekonto row and the caller
+   *  links the created entry back to it. copyPrefill wins if both are set. */
+  skvPrefill?: SkvLinkPrefill | null
   /** True while the copy source is being fetched. */
   isLoading?: boolean
 }
@@ -39,11 +53,13 @@ export default function NewJournalEntryDialog({
   open,
   onOpenChange,
   onCreated,
+  onEntryCreated,
   copyPrefill,
+  skvPrefill,
   isLoading,
 }: Props) {
   const t = useTranslations('bookkeeping')
-  const { openAgentSheet, identity } = useAgentSheet()
+  const activeSkvPrefill = copyPrefill ? null : (skvPrefill ?? null)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -62,24 +78,6 @@ export default function NewJournalEntryDialog({
         <DialogHeader>
           <DialogTitle>{t('new_entry_dialog_title')}</DialogTitle>
         </DialogHeader>
-
-        {identity.isVerified && !copyPrefill && (
-          // Hand off to the assistant: it reads the underlag (the figures the
-          // user often can't see), suggests accounts, and stages a balanced
-          // verifikat to approve: no copy-paste. Close the modal first so its
-          // focus trap doesn't fight the (non-modal) agent sheet.
-          <button
-            type="button"
-            onClick={() => {
-              onOpenChange(false)
-              openAgentSheet({ intentId: 'verifikation.draft', contextRef: 'verifikation:new' })
-            }}
-            className="inline-flex w-fit items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <MessageCircle className="h-3.5 w-3.5" />
-            {t('ask_assistant_handoff')}
-          </button>
-        )}
 
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
@@ -101,12 +99,25 @@ export default function NewJournalEntryDialog({
                 </div>
               </div>
             )}
+            {activeSkvPrefill && (
+              <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
+                <Link2 className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+                <div className="flex-1">
+                  <p className="font-medium">
+                    {t('skv_link_banner_title', { label: activeSkvPrefill.bannerLabel })}
+                  </p>
+                  <p className="text-muted-foreground mt-0.5">{t('skv_link_banner_body')}</p>
+                </div>
+              </div>
+            )}
             <JournalEntryForm
-              key={copyPrefill?.sourceId ?? 'fresh'}
+              key={copyPrefill?.sourceId ?? activeSkvPrefill?.transactionId ?? 'fresh'}
               bare
               onCreated={onCreated}
-              initialLines={copyPrefill?.lines}
-              initialDescription={copyPrefill?.description}
+              onEntryCreated={onEntryCreated}
+              initialLines={copyPrefill?.lines ?? activeSkvPrefill?.lines}
+              initialDate={activeSkvPrefill?.date}
+              initialDescription={copyPrefill?.description ?? activeSkvPrefill?.description}
               initialNotes={copyPrefill?.notes}
             />
           </>

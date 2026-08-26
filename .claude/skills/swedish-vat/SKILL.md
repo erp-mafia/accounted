@@ -36,7 +36,7 @@ Always read the full reference before answering ANY question about:
 |------|-----------|
 | 25% | Default rate, most goods and services |
 | 12% | Food, hotel, restaurant, camping (drops to 6% for food from April 2026) |
-| 6% | Books, newspapers, transport, cultural events, sports, repairs (bicycles/shoes/clothing) |
+| 6% | Books, newspapers, transport, cultural events, sports, repairs (bicycles/shoes/clothing), dance events (tillträde till danstillställningar, from 1 July 2026; 25% through 30 June 2026) |
 | 0% | Exports outside EU, intra-EU supplies (with conditions) |
 
 ## Quick reference: Key BAS accounts

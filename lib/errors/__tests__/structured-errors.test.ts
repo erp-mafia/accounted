@@ -39,11 +39,31 @@ describe('structured-errors registry', () => {
     }
   })
 
+  it('has an entry for every code the link-transaction service can emit', () => {
+    for (const code of [
+      'LINK_TX_JE_NOT_FOUND',
+      'LINK_TX_JE_NOT_POSTED',
+      'LINK_TX_TX_ALREADY_LINKED',
+      'LINK_TX_INVOICE_NOT_FOUND',
+      'LINK_TX_INVOICE_NOT_OPEN',
+      'LINK_TX_INVOICE_CREDIT_NOTE',
+      'LINK_TX_INVOICE_RACE',
+      'LINK_TX_INVOICE_CURRENCY_MISMATCH',
+      'LINK_TX_DB_ERROR',
+    ]) {
+      const entry = getErrorEntry(code)
+      expect(entry, `missing entry for ${code}`).toBeDefined()
+      expect(entry?.message_sv).toBeTruthy()
+      expect(entry?.message_en).toBeTruthy()
+    }
+  })
+
   it('listErrorCodes returns at least the bookkeeping + generic + provider codes', () => {
     const codes = listErrorCodes()
     expect(codes.length).toBeGreaterThan(20)
     expect(codes).toContain('JOURNAL_ENTRY_NOT_BALANCED')
     expect(codes).toContain('PROVIDER_AUTH_EXPIRED')
+    expect(codes).toContain('BOKIO_COMPANY_NOT_FOUND')
     expect(codes).toContain('CANNOT_EDIT_NON_DRAFT')
     expect(codes).toContain('MANDATORY_DIMENSION_MISSING')
     // Node network system codes registered as retryable transients (#337).
@@ -99,6 +119,40 @@ describe('errorResponse', () => {
     const body = await readEnvelope(res)
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(body.error.details).toMatchObject({ pgCode: '23505' })
+  })
+
+  it('maps the ignored-transaction journal constraint to a typed conflict', async () => {
+    const pgErr = Object.assign(
+      new Error(
+        'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"',
+      ),
+      { code: '23514' },
+    )
+    const res = errorResponse(pgErr, noopLogger, { requestId: 'req_ignored_tx' })
+
+    expect(res.status).toBe(409)
+    const body = await readEnvelope(res)
+    expect(body.error.code).toBe('TX_CATEGORIZE_IGNORED_CONFLICT')
+    expect(body.error.message).not.toContain('check constraint')
+    expect(body.error.details).toMatchObject({ pgCode: '23514' })
+  })
+
+  it('does not apply unrelated message heuristics to Postgres errors', async () => {
+    const pgErr = Object.assign(new Error('Invoice not found'), { code: 'P0001' })
+    const res = errorResponse(pgErr, noopLogger, { requestId: 'req_pg_unrelated' })
+
+    expect(res.status).toBe(500)
+    const body = await readEnvelope(res)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
+  })
+
+  it('maps Postgres no-data-found to NOT_FOUND with pgCode', async () => {
+    const pgErr = Object.assign(new Error('invoice not found'), { code: 'P0002' })
+    const res = errorResponse(pgErr, noopLogger, { requestId: 'req_pg_not_found' })
+    expect(res.status).toBe(404)
+    const body = await readEnvelope(res)
+    expect(body.error.code).toBe('NOT_FOUND')
+    expect(body.error.details).toMatchObject({ pgCode: 'P0002' })
   })
 
   it('falls back to INTERNAL_ERROR for unknown shapes', async () => {

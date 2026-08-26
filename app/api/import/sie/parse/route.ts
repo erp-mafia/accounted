@@ -7,6 +7,7 @@ import {
   calculateFileHash,
 } from '@/lib/import/sie-parser'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
+import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import { generateImportPreview, checkDuplicateImport, checkDuplicatePeriodImport } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -69,6 +70,29 @@ export const POST = withRouteContext(
       }
 
       const parsed = parseSIEFile(content)
+
+      // Mojibake tripwire (warn, never block): CP437 bytes decoded as
+      // windows-1252 somewhere upstream leave C1 specials mid-word in account
+      // names and voucher texts. Surface it as a parse-issue warning, the
+      // preview's existing warnings card, so the user can abort before import.
+      const artifactScan = scanSieForCp1252Artifacts(parsed)
+      if (artifactScan.flagged) {
+        const contentLines = content.split(/\r?\n/)
+        const firstSample = artifactScan.samples[0]
+        const sampleLine = firstSample
+          ? contentLines.findIndex((l) => l.includes(firstSample))
+          : -1
+        parsed.issues.push({
+          severity: 'warning',
+          line: sampleLine >= 0 ? sampleLine + 1 : 1,
+          message: formatSieArtifactWarning(artifactScan),
+        })
+        opLog.warn('sie parse: CP1252 mojibake artifacts in decoded content', {
+          encoding,
+          artifactCount: artifactScan.artifactCount,
+          samples: artifactScan.samples,
+        })
+      }
 
       if (parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd) {
         const periodDuplicate = await checkDuplicatePeriodImport(

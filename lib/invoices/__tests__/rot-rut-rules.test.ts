@@ -10,6 +10,18 @@ import {
   validateInvoice,
   deductionSekConverter,
   deductionToSek,
+  deductionTypeForWorkType,
+  parseArticleHouseworkType,
+  normalizeHouseworkType,
+  workTypeLabel,
+  HOUSEWORK_TYPE_VALUES,
+  ROT_WORK_TYPES,
+  RUT_WORK_TYPES,
+
+  validateDeductionLines,
+  deductionCapWarnings,
+  COMBINED_MAX,
+  DEDUCTION_LINE_ERRORS,
   type ItemForDeduction,
   type ValidateInvoiceItem,
 } from '../rot-rut-rules'
@@ -251,7 +263,7 @@ describe('validateInvoice', () => {
 
   it('RUT without housing_designation → no error (RUT does not require it)', () => {
     const items: ValidateInvoiceItem[] = [
-      { unit_price: 5000, quantity: 1, deduction_type: 'rut' },
+      { unit_price: 5000, quantity: 1, deduction_type: 'rut', work_type: 'STAD', labor_hours: 4 },
     ]
     const result = validateInvoice(items, true, false)
     expect(result.errors).toHaveLength(0)
@@ -266,7 +278,7 @@ describe('validateInvoice', () => {
 
   it('warns about ROT cap when invoice alone exceeds 50 000', () => {
     const items: ValidateInvoiceItem[] = [
-      { unit_price: 200000, quantity: 1, deduction_type: 'rot' }, // 60 000 deduction
+      { unit_price: 200000, quantity: 1, deduction_type: 'rot', work_type: 'BYGG', labor_hours: 100 }, // 60 000 deduction
     ]
     const result = validateInvoice(items, true, true)
     expect(result.errors).toHaveLength(0)
@@ -310,7 +322,7 @@ describe('validateInvoice: foreign currency vs the kronor ceilings', () => {
   it('warns when the SEK value breaches the cap even though the foreign figure does not', () => {
     // 6 000 EUR avdrag looks tiny next to 50 000, but is 68 400 kr.
     const items: ValidateInvoiceItem[] = [
-      { unit_price: 20000, quantity: 1, deduction_type: 'rot' },
+      { unit_price: 20000, quantity: 1, deduction_type: 'rot', work_type: 'BYGG', labor_hours: 10 },
     ]
     const result = validateInvoice(items, true, true, { currency: 'EUR', exchangeRate: 11.4 })
     expect(result.warnings).toHaveLength(1)
@@ -338,7 +350,7 @@ describe('validateInvoice: foreign currency vs the kronor ceilings', () => {
 
   it('says the cap could not be checked when the invoice has no rate', () => {
     const items: ValidateInvoiceItem[] = [
-      { unit_price: 20000, quantity: 1, deduction_type: 'rot' },
+      { unit_price: 20000, quantity: 1, deduction_type: 'rot', work_type: 'BYGG', labor_hours: 10 },
     ]
     const result = validateInvoice(items, true, true, { currency: 'EUR' })
     expect(result.errors).toHaveLength(0)
@@ -358,5 +370,169 @@ describe('validateInvoice: foreign currency vs the kronor ceilings', () => {
     expect(result.warnings).toHaveLength(2)
     expect(result.warnings[0]).toContain('ROT-avdraget')
     expect(result.warnings[1]).toContain('RUT-avdraget')
+  })
+})
+
+describe('deductionTypeForWorkType', () => {
+  it('maps ROT codes to rot and RUT codes to rut', () => {
+    expect(deductionTypeForWorkType('BYGG')).toBe('rot')
+    expect(deductionTypeForWorkType('VVS')).toBe('rot')
+    expect(deductionTypeForWorkType('STAD')).toBe('rut')
+    // IT-tjänster moved from the rot list to rut 2026-07: the mapping must
+    // follow the lists, never a hardcoded copy.
+    expect(deductionTypeForWorkType('IT')).toBe('rut')
+    expect(deductionTypeForWorkType('TVATT')).toBe('rut')
+  })
+
+  it('maps unknown or absent codes to null', () => {
+    expect(deductionTypeForWorkType(null)).toBeNull()
+    expect(deductionTypeForWorkType(undefined)).toBeNull()
+    expect(deductionTypeForWorkType('')).toBeNull()
+    expect(deductionTypeForWorkType('SNICKERI')).toBeNull()
+  })
+})
+
+describe('parseArticleHouseworkType (articles.housework_type vocabularies)', () => {
+  it('a Skatteverket code decides both kind and work type', () => {
+    expect(parseArticleHouseworkType('STAD')).toEqual({ deductionType: 'rut', workType: 'STAD' })
+    expect(parseArticleHouseworkType('BYGG')).toEqual({ deductionType: 'rot', workType: 'BYGG' })
+    // Case-insensitive: the API stores upper-case, but older writers did not.
+    expect(parseArticleHouseworkType(' malning ')).toEqual({ deductionType: 'rot', workType: 'MALNING' })
+  })
+
+  it('the bare kind (what the article form stored before it offered work types) decides the kind only', () => {
+    // This is the exact prod value behind the 2026-08-17 report: picking a
+    // "RUT" article pre-filled nothing because only codes were recognised.
+    expect(parseArticleHouseworkType('RUT')).toEqual({ deductionType: 'rut', workType: null })
+    expect(parseArticleHouseworkType('rot')).toEqual({ deductionType: 'rot', workType: null })
+  })
+
+  it('anything else is not a housework flag', () => {
+    // '0'/'1' are what a boolean "Rot" CSV column produced on prod.
+    for (const v of ['0', '1', 'Ja', 'SNICKERI', '', null, undefined]) {
+      expect(parseArticleHouseworkType(v)).toEqual({ deductionType: null, workType: null })
+    }
+  })
+})
+
+describe('normalizeHouseworkType / HOUSEWORK_TYPE_VALUES', () => {
+  it('canonicalises to the code, the bare kind, or null', () => {
+    expect(normalizeHouseworkType('stad')).toBe('STAD')
+    expect(normalizeHouseworkType('Rut')).toBe('RUT')
+    expect(normalizeHouseworkType('1')).toBeNull()
+    expect(normalizeHouseworkType('')).toBeNull()
+    expect(normalizeHouseworkType(null)).toBeNull()
+  })
+
+  it('accepts exactly the two kinds plus every code in both lists', () => {
+    expect(HOUSEWORK_TYPE_VALUES).toHaveLength(2 + ROT_WORK_TYPES.length + RUT_WORK_TYPES.length)
+    for (const v of HOUSEWORK_TYPE_VALUES) expect(normalizeHouseworkType(v)).toBe(v)
+  })
+})
+
+describe('workTypeLabel', () => {
+  it('returns the Skatteverket label for known codes and null otherwise', () => {
+    expect(workTypeLabel('STAD')).toBe('Städning')
+    expect(workTypeLabel('VVS')).toBe('VVS-arbete')
+    expect(workTypeLabel('RUT')).toBeNull()
+    expect(workTypeLabel(null)).toBeNull()
+  })
+})
+
+describe('validateDeductionLines (claim completeness at creation)', () => {
+  it('requires an arbetstyp and hours on every deduction line, once per message', () => {
+    const errors = validateDeductionLines([
+      { unit_price: 500, quantity: 2, deduction_type: 'rut' },
+      { unit_price: 500, quantity: 2, deduction_type: 'rot' },
+    ])
+    expect(errors).toEqual([DEDUCTION_LINE_ERRORS.workTypeMissing, DEDUCTION_LINE_ERRORS.hoursMissing])
+  })
+
+  it('a work type from the other list is a mismatch, not a pass', () => {
+    const errors = validateDeductionLines([
+      { unit_price: 500, quantity: 2, deduction_type: 'rut', work_type: 'BYGG', labor_hours: 2 },
+    ])
+    expect(errors).toEqual([DEDUCTION_LINE_ERRORS.workTypeMismatch])
+  })
+
+  it('schablontjänster need no hours; everything else needs hours > 0', () => {
+    expect(validateDeductionLines([
+      { unit_price: 500, quantity: 1, deduction_type: 'rut', work_type: 'TVATT' },
+    ])).toEqual([])
+    expect(validateDeductionLines([
+      { unit_price: 500, quantity: 1, deduction_type: 'rut', work_type: 'STAD', labor_hours: 0 },
+    ])).toEqual([DEDUCTION_LINE_ERRORS.hoursMissing])
+    expect(validateDeductionLines([
+      { unit_price: 500, quantity: 1, deduction_type: 'rut', work_type: 'STAD', labor_hours: 2.5 },
+    ])).toEqual([])
+  })
+
+  it('non-deduction lines are ignored', () => {
+    expect(validateDeductionLines([{ unit_price: 500, quantity: 1 }])).toEqual([])
+  })
+
+  it('validateInvoice folds the line errors in', () => {
+    const result = validateInvoice(
+      [{ unit_price: 5000, quantity: 1, deduction_type: 'rut' }],
+      true,
+      false,
+    )
+    expect(result.errors).toContain(DEDUCTION_LINE_ERRORS.workTypeMissing)
+    expect(result.errors).toContain(DEDUCTION_LINE_ERRORS.hoursMissing)
+  })
+})
+
+describe('deductionCapWarnings: combined ceiling and prior-year accumulation', () => {
+  it('COMBINED_MAX is the shared 75 000 kr ceiling', () => {
+    expect(COMBINED_MAX).toBe(75000)
+  })
+
+  it('ROT 40 000 + RUT 40 000 on one invoice: neither per-kind cap trips, the combined one does', () => {
+    const warnings = deductionCapWarnings({ rot: 40000, rut: 40000 })
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain(`gemensamma årsmaximum ${COMBINED_MAX.toLocaleString('sv-SE')} kr`)
+    expect(warnings[0]).toContain(`${sv(80000)} kr`)
+  })
+
+  it('a RUT breach alone does not add a redundant combined warning', () => {
+    const warnings = deductionCapWarnings({ rot: 1000, rut: 80000 })
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toMatch(/^RUT-avdraget/)
+  })
+
+  it('ROT alone above 50 000 trips ROT only (combined not applicable to one kind)', () => {
+    const warnings = deductionCapWarnings({ rot: 60000, rut: 0 })
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toMatch(/^ROT-avdraget/)
+  })
+
+  it('prior deductions this year push a modest invoice over the ceiling', () => {
+    // 3 x 20 000 kr ROT to the same person: the third invoice is the one that breaks 50 000.
+    expect(deductionCapWarnings({ rot: 20000, rut: 0 }, undefined, { rot: 40000, rut: 0 })).toEqual([
+      expect.stringContaining(`plus tidigare avdrag i år (${sv(40000)} kr)`),
+    ])
+    expect(deductionCapWarnings({ rot: 20000, rut: 0 }, undefined, { rot: 20000, rut: 0 })).toEqual([])
+    // Prior RUT + this ROT: the combined ceiling binds across kinds.
+    expect(deductionCapWarnings({ rot: 20000, rut: 0 }, undefined, { rot: 0, rut: 60000 })).toEqual([
+      expect.stringContaining('gemensamma årsmaximum'),
+    ])
+  })
+
+  it('foreign currency without a rate says so and never fabricates a combined check', () => {
+    const warnings = deductionCapWarnings({ rot: 4000, rut: 4000 }, { currency: 'EUR' })
+    expect(warnings).toHaveLength(2)
+    expect(warnings.every((w) => w.includes('saknar växelkurs'))).toBe(true)
+  })
+
+  it('validateInvoice forwards prior-year totals', () => {
+    const result = validateInvoice(
+      [{ unit_price: 20000, quantity: 1, deduction_type: 'rot', work_type: 'BYGG', labor_hours: 10 }],
+      true,
+      true,
+      undefined,
+      { rot: 48000, rut: 0 },
+    )
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain('plus tidigare avdrag')
   })
 })

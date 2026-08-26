@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: aktieagarlan-aterbetalning
+  order: 9
+  name: 'Aktieägarlån — återbetalning'
+  category: private_transfer
+  entity_type: aktiebolag
+  description: >-
+    Bolaget betalar tillbaka lån till ägaren.
+lines:
+  - account: '2893'
+    label: 'Skuld till aktieägare'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '1930'
+    label: 'Företagskonto'
+    side: credit
+    type: settlement
+    ratio: 1.0

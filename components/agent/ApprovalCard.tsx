@@ -10,8 +10,11 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { PendingOperationRejectionCategory } from '@/types'
 import { cn } from '@/lib/utils'
-import { formatCurrency } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { OperationPreview, AccountNamesContext } from '@/components/pending-operations/OperationPreview'
+import { useAccountNamesSource } from '@/components/pending-operations/use-account-names'
+import { REJECTION_CATEGORY_LABELS } from '@/components/pending-operations/vocabulary'
+import { operationTypeFromToolName } from '@/lib/pending-operations/tool-name'
 
 // Inline approval card for an agent-staged pending_operation.
 //
@@ -29,9 +32,11 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 // exactly one approval source of record.
 //
 // Structured preview: when the staged envelope carries a preview object, we
-// render a scannable summary block under the prose. Each common tool has its
-// own renderer; unknown tools fall through to a flat key/value list so a new
-// tool can ship without an ApprovalCard change.
+// render the shared OperationPreview (components/pending-operations), the
+// same renderers /pending uses, dispatched on operation_type. Live streamed
+// cards carry the MCP tool name; hydrated cards carry the stored
+// operation_type directly. Unknown types fall through to the generic
+// key/value renderer so a new tool can ship without an ApprovalCard change.
 
 interface PeriodStatus {
   period_id?: string | null
@@ -44,6 +49,13 @@ interface Props {
   riskLevel: 'low' | 'medium' | 'high'
   message: string
   toolName?: string
+  // The stored pending_operations.operation_type. Preferred over deriving it
+  // from toolName: hydrated cards pass it straight from the DB row, so every
+  // operation type keeps its specialized preview on resume.
+  operationType?: string
+  // pending_operations.params (the staging tool's input). Some previews read
+  // it: attach_document's DocumentViewButton needs params.document_id.
+  params?: Record<string, unknown>
   preview?: unknown
   periodStatus?: PeriodStatus
   // Fired after a reject that carries a reason: the chat feeds this synthetic
@@ -52,17 +64,6 @@ interface Props {
 }
 
 type State = 'pending' | 'committing' | 'committed' | 'rejecting' | 'rejected' | 'error'
-
-// Mirrors the granskning (/pending) reject dialog so chat rejections capture
-// the same structured feedback. Stored on the op + surfaced to the agent via
-// gnubok_get_recent_rejections.
-const REJECTION_CATEGORY_LABELS: Record<PendingOperationRejectionCategory, string> = {
-  wrong_category: 'Fel kategori / konto',
-  wrong_amount: 'Fel belopp',
-  duplicate: 'Dubblett',
-  wrong_period: 'Fel period',
-  other: 'Annat',
-}
 
 // Subset of fields the commit response may return that the success state
 // uses to deep-link to the freshly-created artifact. Different
@@ -86,6 +87,8 @@ export default function ApprovalCard({
   riskLevel,
   message,
   toolName,
+  operationType,
+  params,
   preview,
   periodStatus,
   onRequestCorrection,
@@ -95,6 +98,8 @@ export default function ApprovalCard({
   // What's paid is feeding a rejection back so the agent generates a *new*
   // proposal (an LLM call): that's suppressed when the company lacks `ai`.
   const hasAi = useCapability(CAPABILITY.ai)
+  // Chart names for the preview lines (same source as /pending).
+  const accountNames = useAccountNamesSource()
   const [state, setState] = useState<State>('pending')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [confirmText, setConfirmText] = useState('')
@@ -116,6 +121,14 @@ export default function ApprovalCard({
   const requiresTextConfirm = riskLevel === 'high'
   const canCommit =
     !requiresTextConfirm || confirmText.trim().toLowerCase() === 'godkänn'
+
+  // Render key for the shared preview. Hydrated cards pass operation_type
+  // straight from the pending_operations row; live streamed cards carry the
+  // MCP tool name, which maps to the bare operation_type by stripping the
+  // wire prefix. The old dispatch keyed on 4 hardcoded tool names, so every
+  // other hydrated type silently lost its specialized preview.
+  const previewOperationType =
+    operationType ?? (toolName ? operationTypeFromToolName(toolName) : '')
 
   async function handleCommit() {
     setState('committing')
@@ -341,7 +354,19 @@ export default function ApprovalCard({
         {periodStatus && <PeriodBadge status={periodStatus} />}
       </div>
 
-      <PreviewBlock toolName={toolName} preview={preview} />
+      {preview != null && typeof preview === 'object' && (
+        <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+          <AccountNamesContext.Provider value={accountNames}>
+            <OperationPreview
+              op={{
+                operation_type: previewOperationType,
+                preview_data: preview as Record<string, unknown>,
+                params,
+              }}
+            />
+          </AccountNamesContext.Provider>
+        </div>
+      )}
 
       {requiresTextConfirm && (
         <div className="space-y-1">
@@ -354,7 +379,7 @@ export default function ApprovalCard({
             value={confirmText}
             onChange={(e) => setConfirmText(e.target.value)}
             disabled={isBusy}
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             autoComplete="off"
             aria-label="Bekräfta med ordet godkänn"
           />
@@ -364,7 +389,7 @@ export default function ApprovalCard({
       {errorMessage && <p className="text-xs text-destructive">{errorMessage}</p>}
 
       {showRejectForm ? (
-        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+        <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
           <p className="text-xs font-medium">Vad är fel?</p>
           <Select
             value={rejectCategory}
@@ -428,7 +453,7 @@ export default function ApprovalCard({
           </div>
         </div>
       ) : accountsToActivate ? (
-        <div className="space-y-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+        <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
           <p className="text-xs leading-5">
             Bokningen använder konton som inte är aktiva i din kontoplan:{' '}
             <strong className="tabular-nums">{accountsToActivate.join(', ')}</strong>. Aktivera dem för att godkänna bokningen.
@@ -487,321 +512,6 @@ export default function ApprovalCard({
       )}
     </div>
   )
-}
-
-// ─── Structured preview block ──────────────────────────────────────────────
-//
-// Dispatches on tool_name. Adding a new tool: write a specialized renderer
-// here. Falling back to the generic flat list is fine for low-volume tools.
-
-interface PreviewBlockProps {
-  toolName?: string
-  preview?: unknown
-}
-
-function PreviewBlock({ toolName, preview }: PreviewBlockProps) {
-  if (!preview || typeof preview !== 'object') return null
-  const p = preview as Record<string, unknown>
-
-  if (toolName === 'gnubok_categorize_transaction') {
-    return <CategorizeTransactionPreview preview={p} />
-  }
-  if (toolName === 'gnubok_create_invoice') {
-    return <CreateInvoicePreview preview={p} />
-  }
-  if (toolName === 'gnubok_create_voucher' || toolName === 'gnubok_correct_entry') {
-    return <VoucherPreview preview={p} />
-  }
-
-  return <GenericPreview preview={p} />
-}
-
-// 20 categories from types/index.ts TransactionCategory. Kept inline so the
-// component has no cross-module enum import; sync if the type changes.
-const CATEGORY_OPTIONS: { value: string; label: string }[] = [
-  { value: 'income_services', label: 'Intäkt: tjänster' },
-  { value: 'income_products', label: 'Intäkt: produkter' },
-  { value: 'income_other', label: 'Intäkt: övrigt' },
-  { value: 'expense_software', label: 'Kostnad: mjukvara' },
-  { value: 'expense_equipment', label: 'Kostnad: utrustning' },
-  { value: 'expense_office', label: 'Kostnad: kontor' },
-  { value: 'expense_travel', label: 'Kostnad: resor' },
-  { value: 'expense_marketing', label: 'Kostnad: marknadsföring' },
-  { value: 'expense_professional_services', label: 'Kostnad: konsult/tjänster' },
-  { value: 'expense_education', label: 'Kostnad: utbildning' },
-  { value: 'expense_representation', label: 'Kostnad: representation' },
-  { value: 'expense_consumables', label: 'Kostnad: förbrukning' },
-  { value: 'expense_vehicle', label: 'Kostnad: fordon' },
-  { value: 'expense_telecom', label: 'Kostnad: telefon/internet' },
-  { value: 'expense_bank_fees', label: 'Kostnad: bankavgifter' },
-  { value: 'expense_card_fees', label: 'Kostnad: kortavgifter' },
-  { value: 'expense_currency_exchange', label: 'Kostnad: valutaväxling' },
-  { value: 'expense_other', label: 'Kostnad: övrigt' },
-  { value: 'private', label: 'Privat uttag' },
-]
-
-function CategorizeTransactionPreview({
-  preview,
-}: {
-  preview: Record<string, unknown>
-}) {
-  const debit = preview.debit_account as string | undefined
-  const credit = preview.credit_account as string | undefined
-  const amount = preview.amount as number | undefined
-  const currency = (preview.currency as string | undefined) ?? 'SEK'
-  const category = preview.category as string | undefined
-  // The exact journal lines the approval will post (net cost line, VAT line,
-  // gross bank line, SEK), staged by the server since the preview-lines fix.
-  const lines = (preview.lines as
-    | {
-        account_number?: string
-        debit_amount?: number
-        credit_amount?: number
-        description?: string
-      }[]
-    | undefined) ?? []
-  // Legacy summary fields, rendered only for operations staged before the
-  // preview carried full lines. Pairing the gross amount with the cost
-  // account reads as an unbalanced entry: never show it when lines exist.
-  const vatLines = (preview.vat_lines as
-    | {
-        account_number?: string
-        debit_amount?: number
-        credit_amount?: number
-        description?: string
-      }[]
-    | undefined) ?? []
-
-  return (
-    <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1.5">
-      <div className="flex items-baseline gap-3">
-        <span className="w-20 shrink-0 text-muted-foreground text-[10px] uppercase tracking-wider">
-          Kategori
-        </span>
-        <span className="flex-1 min-w-0 leading-5 text-foreground">
-          {prettyCategory(category)}
-        </span>
-      </div>
-      {lines.length > 0 ? (
-        <div className="pt-1 mt-1 border-t border-border space-y-0.5">
-          {lines.map((l, i) => {
-            const debitAmt = typeof l.debit_amount === 'number' ? l.debit_amount : 0
-            const creditAmt = typeof l.credit_amount === 'number' ? l.credit_amount : 0
-            const side: 'D' | 'K' = debitAmt > 0 ? 'D' : 'K'
-            return (
-              <Row
-                key={i}
-                label={i === 0 ? 'Verifikat' : ''}
-                value={
-                  <span className="tabular-nums">
-                    <span className="text-muted-foreground">{side} </span>
-                    <strong className="font-medium">{l.account_number ?? '?'}</strong>
-                    <span className="ml-2">
-                      {formatCurrency(side === 'D' ? debitAmt : creditAmt)}
-                    </span>
-                  </span>
-                }
-              />
-            )
-          })}
-        </div>
-      ) : (
-        <>
-          {debit && credit && amount != null && (
-            <Row
-              label="Bokning"
-              value={
-                <span className="tabular-nums">
-                  <span className="text-muted-foreground">D </span>
-                  <strong className="font-medium">{debit}</strong>
-                  <span className="text-muted-foreground"> / K </span>
-                  <strong className="font-medium">{credit}</strong>
-                  <span className="ml-2">{formatCurrency(amount, currency)}</span>
-                </span>
-              }
-            />
-          )}
-          {vatLines.length > 0 && (
-            <div className="pt-1 mt-1 border-t border-border">
-              {vatLines.map((v, i) => {
-                const debit = typeof v.debit_amount === 'number' ? v.debit_amount : 0
-                const credit = typeof v.credit_amount === 'number' ? v.credit_amount : 0
-                const side: 'D' | 'K' | null = debit > 0 ? 'D' : credit > 0 ? 'K' : null
-                const amount = side === 'D' ? debit : side === 'K' ? credit : 0
-                return (
-                  <Row
-                    key={i}
-                    label={i === 0 ? 'Moms' : ''}
-                    value={
-                      <span className="tabular-nums">
-                        {side && <span className="text-muted-foreground">{side} </span>}
-                        <span className="text-muted-foreground">{v.account_number ?? ''} </span>
-                        {formatCurrency(amount, currency)}
-                      </span>
-                    }
-                  />
-                )
-              })}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  )
-}
-
-// Pull a human message out of an API error body that may be either a bare
-// string ({ error: "…" }) or the structured envelope ({ error: { message } }).
-function prettyCategory(value: string | undefined): string {
-  if (!value) return '(saknas)'
-  return CATEGORY_OPTIONS.find((o) => o.value === value)?.label ?? value
-}
-
-function CreateInvoicePreview({ preview }: { preview: Record<string, unknown> }) {
-  const customer = preview.customer_name as string | undefined
-  const subtotal = preview.subtotal as number | undefined
-  const vatAmount = preview.vat_amount as number | undefined
-  const total = preview.total as number | undefined
-  const currency = (preview.currency as string | undefined) ?? 'SEK'
-  const items =
-    (preview.items as { description?: string; line_total?: number }[] | undefined) ?? []
-
-  return (
-    <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1.5">
-      {customer && (
-        <Row label="Kund" value={<span className="text-foreground">{customer}</span>} />
-      )}
-      {items.length > 0 && (
-        <div className="space-y-0.5 max-h-32 overflow-y-auto">
-          {items.slice(0, 5).map((it, i) => (
-            <Row
-              key={i}
-              label={i === 0 ? 'Rader' : ''}
-              value={
-                <span className="tabular-nums truncate">
-                  <span className="text-muted-foreground">
-                    {it.description ?? '(rad)'}
-                  </span>
-                  {it.line_total != null && (
-                    <span className="ml-2">{formatCurrency(it.line_total, currency)}</span>
-                  )}
-                </span>
-              }
-            />
-          ))}
-          {items.length > 5 && (
-            <p className="pl-[88px] text-muted-foreground/70">
-              + {items.length - 5} ytterligare rader
-            </p>
-          )}
-        </div>
-      )}
-      <div className="pt-1 mt-1 border-t border-border space-y-0.5">
-        {subtotal != null && (
-          <Row
-            label="Netto"
-            value={
-              <span className="tabular-nums">{formatCurrency(subtotal, currency)}</span>
-            }
-          />
-        )}
-        {vatAmount != null && (
-          <Row
-            label="Moms"
-            value={
-              <span className="tabular-nums">{formatCurrency(vatAmount, currency)}</span>
-            }
-          />
-        )}
-        {total != null && (
-          <Row
-            label="Totalt"
-            value={
-              <span className="tabular-nums font-medium text-foreground">
-                {formatCurrency(total, currency)}
-              </span>
-            }
-          />
-        )}
-      </div>
-    </div>
-  )
-}
-
-function VoucherPreview({ preview }: { preview: Record<string, unknown> }) {
-  const lines = (preview.lines as { account?: string; debit?: number; credit?: number; description?: string }[] | undefined) ?? []
-  const date = preview.date as string | undefined
-  const description = preview.description as string | undefined
-
-  if (lines.length === 0) return <GenericPreview preview={preview} />
-
-  return (
-    <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1.5">
-      {date && <Row label="Datum" value={<span className="tabular-nums">{date}</span>} />}
-      {description && (
-        <Row label="Notering" value={<span className="text-foreground">{description}</span>} />
-      )}
-      <div className="pt-1 mt-1 border-t border-border space-y-0.5">
-        {lines.map((l, i) => (
-          <Row
-            key={i}
-            label={i === 0 ? 'Rader' : ''}
-            value={
-              <span className="tabular-nums">
-                <strong className="font-medium">{l.account ?? '?'}</strong>
-                <span className="text-muted-foreground"> · </span>
-                {l.debit != null && l.debit !== 0 && <span>D {formatCurrency(l.debit)}</span>}
-                {l.credit != null && l.credit !== 0 && <span>K {formatCurrency(l.credit)}</span>}
-                {l.description && (
-                  <span className="text-muted-foreground/70 ml-2 truncate">{l.description}</span>
-                )}
-              </span>
-            }
-          />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// Fallback: render the top-level key/value pairs from any preview object.
-// Strips internal-looking keys, formats numbers tabular, truncates long
-// strings. Caps at 8 rows to keep the card compact.
-function GenericPreview({ preview }: { preview: Record<string, unknown> }) {
-  const rows: { key: string; value: string }[] = []
-  for (const [k, v] of Object.entries(preview)) {
-    if (rows.length >= 8) break
-    if (k.startsWith('_') || k === 'period_status') continue
-    if (v == null) continue
-    if (typeof v === 'object') continue
-    rows.push({ key: prettyKey(k), value: String(v) })
-  }
-  if (rows.length === 0) return null
-  return (
-    <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1">
-      {rows.map((r) => (
-        <Row key={r.key} label={r.key} value={<span className="tabular-nums">{r.value}</span>} />
-      ))}
-    </div>
-  )
-}
-
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex gap-3 items-baseline">
-      <span className="w-20 shrink-0 text-muted-foreground text-[10px] uppercase tracking-wider">
-        {label}
-      </span>
-      <span className="flex-1 min-w-0 leading-5">{value}</span>
-    </div>
-  )
-}
-
-function prettyKey(k: string): string {
-  // 'customer_name' → 'Customer name' → keep Swedish-leaning by capitalising
-  // first letter only; lots of preview keys are already short.
-  const spaced = k.replace(/_/g, ' ')
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
 }
 
 function PeriodBadge({ status }: { status: PeriodStatus }) {

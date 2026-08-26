@@ -166,7 +166,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
                       <p className="font-medium text-foreground/80 mb-0.5">
                         {t('settings_formula_label')}
                       </p>
-                      <p className="font-mono text-[11px] bg-muted/50 rounded px-2 py-1">
+                      <p className="font-mono text-[11px] bg-muted/50 rounded-sm px-2 py-1">
                         {t(`def_${def.id}_formula`)}
                       </p>
                     </div>
@@ -189,7 +189,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
                             setAccountOverride(def.id, e.target.value)
                           }
                           placeholder={def.defaultAccounts.join(', ')}
-                          className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs font-mono tabular-nums placeholder:text-muted-foreground/50"
+                          className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs font-mono tabular-nums placeholder:text-muted-foreground/50"
                         />
                         <p className="mt-1 text-[10px] text-muted-foreground/70">
                           {t('settings_account_hint', { example: def.defaultAccounts.slice(0, 3).join(', ') })}

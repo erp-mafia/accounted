@@ -106,6 +106,54 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
     expect(body.data.accounts[0].account_number).toBe('1930')
   })
 
+  it('returns all rows when the chart exceeds the 1000-row PostgREST page', async () => {
+    const makeAccount = (n: number, sortOrder: number | null = n) => ({
+      account_number: String(n),
+      account_name: `Konto ${n}`,
+      account_class: Math.floor(n / 1000),
+      account_group: String(n).slice(0, 2),
+      account_type: 'asset',
+      normal_balance: 'debit',
+      is_system_account: false,
+      is_active: true,
+      description: null,
+      default_vat_code: null,
+      sru_code: null,
+      sort_order: sortOrder,
+    })
+    // Page 1: exactly 1000 rows (forces a second range request). Account 1000
+    // gets sort_order 99999 and account 9998 (page 2) a null sort_order, so the
+    // response order proves the sort_order re-sort with nulls last.
+    const page1 = [
+      makeAccount(1000, 99999),
+      ...Array.from({ length: 999 }, (_, i) => makeAccount(1001 + i)),
+    ]
+    const page2 = [
+      ...Array.from({ length: 289 }, (_, i) => makeAccount(2000 + i)),
+      makeAccount(9998, null),
+    ]
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        chart_of_accounts: [
+          { data: page1, error: null },
+          { data: page2, error: null },
+        ],
+      }),
+    )
+    const res = await listAccounts(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/accounts`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.accounts).toHaveLength(1290)
+    expect(body.data.accounts[0].account_number).toBe('1001')
+    // sort_order 99999 lands second-to-last; null sort_order lands last.
+    expect(body.data.accounts[1288].account_number).toBe('1000')
+    expect(body.data.accounts[1289].account_number).toBe('9998')
+  })
+
   it('rejects invalid class filter', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

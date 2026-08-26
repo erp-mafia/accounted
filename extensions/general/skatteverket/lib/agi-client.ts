@@ -85,11 +85,13 @@ async function readErrorBody(response: Response): Promise<{ error: string; body?
 export async function agiPostUnderlag(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   xml: string,
 ): Promise<Result<SkatteverketAGIUnderlagResponse>> {
   const response = await skvRequest(
     supabase,
     userId,
+    companyId,
     'POST',
     '/underlag',
     xml,
@@ -118,11 +120,13 @@ export async function agiPostUnderlag(
 export async function agiGetKontrollresultat(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   inlamningId: number,
 ): Promise<Result<SkatteverketAGIKontrollresultat>> {
   const response = await skvRequest(
     supabase,
     userId,
+    companyId,
     'GET',
     `/underlag/${inlamningId}/kontrollresultat`,
     undefined,
@@ -155,11 +159,13 @@ export async function agiGetKontrollresultat(
 export async function agiSparaUnderlag(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   inlamningId: number,
 ): Promise<Result<unknown>> {
   const response = await skvRequest(
     supabase,
     userId,
+    companyId,
     'POST',
     `/underlag/${inlamningId}/spara`,
     undefined,
@@ -185,11 +191,13 @@ export async function agiSparaUnderlag(
 export async function agiAvbrytUnderlag(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   inlamningId: number,
 ): Promise<Result<unknown>> {
   const response = await skvRequest(
     supabase,
     userId,
+    companyId,
     'DELETE',
     `/underlag/${inlamningId}`,
     undefined,
@@ -213,6 +221,7 @@ export async function agiAvbrytUnderlag(
 export async function agiTaBortSparadInlamning(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   arbetsgivare: string,
   period: string,
   inlamningId: number,
@@ -220,6 +229,7 @@ export async function agiTaBortSparadInlamning(
   const response = await skvRequest(
     supabase,
     userId,
+    companyId,
     'DELETE',
     `${periodPath(arbetsgivare, period)}/inlamningar/${inlamningId}`,
     undefined,
@@ -245,6 +255,7 @@ export async function agiTaBortSparadInlamning(
 export async function agiSkapaGranskningsunderlag(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   arbetsgivare: string,
   period: string,
   options: { lasPeriod?: boolean } = {},
@@ -253,6 +264,7 @@ export async function agiSkapaGranskningsunderlag(
   const response = await skvRequest(
     supabase,
     userId,
+    companyId,
     'POST',
     `${periodPath(arbetsgivare, period)}/skapaGranskningsunderlag${qs}`,
     undefined,
@@ -317,12 +329,14 @@ export async function agiGetKvittenser(
 export async function agiLasPeriod(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   arbetsgivare: string,
   period: string,
 ): Promise<Result<unknown>> {
   const response = await skvRequest(
     supabase,
     userId,
+    companyId,
     'POST',
     `${periodPath(arbetsgivare, period)}/las`,
     undefined,
@@ -340,12 +354,14 @@ export async function agiLasPeriod(
 export async function agiLasUppPeriod(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   arbetsgivare: string,
   period: string,
 ): Promise<Result<unknown>> {
   const response = await skvRequest(
     supabase,
     userId,
+    companyId,
     'POST',
     `${periodPath(arbetsgivare, period)}/lasUpp`,
     undefined,
@@ -372,11 +388,13 @@ export async function agiLasUppPeriod(
 export async function agiKontrolleraHU(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   hu: Record<string, unknown>,
 ): Promise<Result<SkatteverketAGIKontrollsvar>> {
   const response = await skvRequest(
     supabase,
     userId,
+    companyId,
     'POST',
     '/underlag/huvuduppgift/kontrollera',
     hu,
@@ -401,11 +419,13 @@ export async function agiKontrolleraHU(
 export async function agiKontrolleraIU(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   iu: Record<string, unknown>,
 ): Promise<Result<SkatteverketAGIKontrollsvar>> {
   const response = await skvRequest(
     supabase,
     userId,
+    companyId,
     'POST',
     '/underlag/individuppgift/kontrollera',
     iu,

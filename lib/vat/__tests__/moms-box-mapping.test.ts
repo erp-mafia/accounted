@@ -26,6 +26,12 @@ describe('ACCOUNT_TO_BOX', () => {
     expect(ACCOUNT_TO_BOX['3305']).toBe('40')
   })
 
+  it('maps domestic reverse-charge sales accounts to ruta 41', () => {
+    expect(ACCOUNT_TO_BOX['3231']).toBe('41')
+    expect(ACCOUNT_TO_BOX['3232']).toBe('41')
+    expect(ACCOUNT_TO_BOX['3233']).toBe('41')
+  })
+
   it('maps all output VAT accounts including parent/summary and vilande', () => {
     expect(ACCOUNT_TO_BOX['2610']).toBe('10')
     expect(ACCOUNT_TO_BOX['2611']).toBe('10')
@@ -42,6 +48,7 @@ describe('ACCOUNT_TO_BOX', () => {
     expect(ACCOUNT_TO_BOX['2641']).toBe('48')
     expect(ACCOUNT_TO_BOX['2645']).toBe('48')
     expect(ACCOUNT_TO_BOX['2647']).toBe('48')
+    expect(ACCOUNT_TO_BOX['2648']).toBe('48')
     expect(ACCOUNT_TO_BOX['2649']).toBe('48')
   })
 

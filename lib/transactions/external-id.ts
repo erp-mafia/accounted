@@ -139,7 +139,9 @@ export function contentBucketKey(date: string, amount: number | string): string 
  * ("TIC" → "TIC  BG 0000005786439 Bg-bet. via internet", "UTBETALNING" →
  * "UTBETALNING Insättning"), so prefix-containment bridges the two where a
  * fixed-length prefix *equality* check (the pre-June-2026 scheme) missed and
- * re-imported. A blank description carries no signal, so it never bridges a
+ * re-imported. Whitespace is not part of the signal: both sides are compared
+ * with ALL whitespace stripped, because banks reformat spacing between API
+ * sessions (see the inline comment). A blank description carries no signal, so it never bridges a
  * *described* row: otherwise an empty title would wildcard-match any
  * same-(date,öre) transaction and could silently consume a real one; only two
  * blanks bridge each other (date+öre identity). In practice every caller
@@ -158,8 +160,19 @@ export function descriptionsBridge(
   a: string | null | undefined,
   b: string | null | undefined
 ): boolean {
-  const x = (a ?? '').toLowerCase().trim()
-  const y = (b ?? '').toLowerCase().trim()
+  // Whitespace is stripped ENTIRELY (not collapsed) before comparing: the same
+  // bank renders the same transaction with drifting whitespace between API
+  // sessions ("BaBylissURSPRUNGLIGT" vs "BaByliss URSPRUNGLIGT", CRLF vs
+  // space), and a collapse-only normalization still misses the dropped-space
+  // form. Observed in the 2026-08-18 reconnect incident: five historical rows
+  // re-imported as twins whose descriptions differed only in whitespace, and
+  // every dedup layer missed them. Stripping is safe for the title-prefix
+  // bridge too: char-filtering is concatenation-homomorphic, so every existing
+  // prefix relation is preserved (it can only ADD bridges, never remove one).
+  // The compare stays confined to a (date, öre) bucket, so the widened match
+  // can only collapse same-day same-amount rows.
+  const x = (a ?? '').toLowerCase().replace(/\s+/g, '')
+  const y = (b ?? '').toLowerCase().replace(/\s+/g, '')
   // A blank never wildcards a described row; only two blanks bridge each other.
   if (x === '' || y === '') return x === y
   return x.startsWith(y) || y.startsWith(x)

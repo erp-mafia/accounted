@@ -29,6 +29,8 @@ import {
 } from 'lucide-react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -95,8 +97,8 @@ interface AbsenceTypeMeta {
 //   neutral    = the rest (study, unpaid, other)
 const TYPE_META: Record<AbsenceType, AbsenceTypeMeta> = {
   sick:          { labelKey: 'type_sick',          shortLabelKey: 'type_sick_short',          icon: HeartPulse,   pillClass: 'bg-destructive/10 text-destructive' },
-  vab:           { labelKey: 'type_vab',           shortLabelKey: 'type_vab_short',           icon: Baby,         pillClass: 'bg-warning/15 text-warning-foreground' },
-  care_relative: { labelKey: 'type_care_relative', shortLabelKey: 'type_care_relative_short', icon: Heart,        pillClass: 'border border-warning/40 text-warning-foreground' },
+  vab:           { labelKey: 'type_vab',           shortLabelKey: 'type_vab_short',           icon: Baby,         pillClass: 'bg-muted text-attn' },
+  care_relative: { labelKey: 'type_care_relative', shortLabelKey: 'type_care_relative_short', icon: Heart,        pillClass: 'border border-border text-attn' },
   parental:      { labelKey: 'type_parental',      shortLabelKey: 'type_parental_short',      icon: Heart,        pillClass: 'bg-success/10 text-success' },
   pregnancy:     { labelKey: 'type_pregnancy',     shortLabelKey: 'type_pregnancy_short',     icon: Heart,        pillClass: 'border border-success/40 text-success' },
   study:         { labelKey: 'type_study',         shortLabelKey: 'type_study_short',         icon: Activity,     pillClass: 'bg-secondary text-secondary-foreground' },
@@ -351,7 +353,7 @@ export function SalaryCalendar({
   }
 
   return (
-    <div className="rounded-md border bg-card">
+    <div className="rounded-lg border bg-card">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="flex items-center gap-2">
@@ -696,7 +698,7 @@ function BulkWorkedDialog({
         <div className="space-y-3">
           <div className="space-y-1.5">
             <label className="text-xs font-medium" htmlFor="bulk-w-hours">{t('hours_per_day')}</label>
-            <input
+            <Input
               id="bulk-w-hours"
               type="number"
               min={0}
@@ -705,7 +707,7 @@ function BulkWorkedDialog({
               value={hours}
               onChange={(e) => setHours(e.target.value)}
               autoFocus
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm tabular-nums shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="tabular-nums"
             />
             <p className="text-[11px] text-muted-foreground">
               {t('hours_zero_hint')}
@@ -714,29 +716,29 @@ function BulkWorkedDialog({
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium" htmlFor="bulk-w-notes">{t('notes_label')}</label>
-            <textarea
+            <Textarea
               id="bulk-w-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
               maxLength={2000}
-              className="flex w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="min-h-0"
             />
           </div>
 
           {conflicts.length > 0 && (
-            <div className="space-y-1 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs">
-              <div className="font-medium text-warning-foreground">
+            <div className="space-y-1 rounded-lg border border-border bg-muted/30 p-2 text-xs">
+              <div className="font-medium text-attn">
                 {t('conflicts_worked', { count: conflicts.length })}
               </div>
-              <ul className="list-disc space-y-0.5 pl-4 text-warning-foreground tabular-nums">
+              <ul className="list-disc space-y-0.5 pl-4 text-attn tabular-nums">
                 {conflicts.map(c => <li key={c.date}>{c.date}</li>)}
               </ul>
             </div>
           )}
 
           {error && (
-            <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
+            <div className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
           )}
         </div>
 
@@ -853,7 +855,7 @@ function BulkAbsenceDialog({
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium" htmlFor="bulk-a-hours">{t('hours_per_day')}</label>
-            <input
+            <Input
               id="bulk-a-hours"
               type="number"
               min={0.5}
@@ -861,35 +863,35 @@ function BulkAbsenceDialog({
               step={0.5}
               value={hours}
               onChange={(e) => setHours(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm tabular-nums shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="tabular-nums"
             />
           </div>
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium" htmlFor="bulk-a-notes">{t('notes_label')}</label>
-            <textarea
+            <Textarea
               id="bulk-a-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
               maxLength={2000}
-              className="flex w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="min-h-0"
             />
           </div>
 
           {conflicts.length > 0 && (
-            <div className="space-y-1 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs">
-              <div className="font-medium text-warning-foreground">
+            <div className="space-y-1 rounded-lg border border-border bg-muted/30 p-2 text-xs">
+              <div className="font-medium text-attn">
                 {t('conflicts_absence', { count: conflicts.length })}
               </div>
-              <ul className="list-disc space-y-0.5 pl-4 text-warning-foreground tabular-nums">
+              <ul className="list-disc space-y-0.5 pl-4 text-attn tabular-nums">
                 {conflicts.map(c => <li key={c.date}>{c.date}</li>)}
               </ul>
             </div>
           )}
 
           {error && (
-            <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
+            <div className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
           )}
         </div>
 
@@ -993,7 +995,7 @@ function DayInspectorDialog({
 
         <div className="space-y-2">
           {isHourly && worked && (
-            <div className="flex items-center justify-between rounded-md border bg-secondary/50 px-3 py-2">
+            <div className="flex items-center justify-between rounded-lg border bg-secondary/50 px-3 py-2">
               <div className="flex items-center gap-2 text-sm">
                 <Clock className="h-4 w-4 text-muted-foreground" />
                 <div>
@@ -1018,7 +1020,7 @@ function DayInspectorDialog({
             const meta = TYPE_META[a.absence_type]
             const Icon = meta.icon
             return (
-              <div key={a.id} className={cn('flex items-center justify-between rounded-md border px-3 py-2', meta.pillClass)}>
+              <div key={a.id} className={cn('flex items-center justify-between rounded-lg border px-3 py-2', meta.pillClass)}>
                 <div className="flex items-center gap-2 text-sm">
                   <Icon className="h-4 w-4" />
                   <div>
@@ -1047,7 +1049,7 @@ function DayInspectorDialog({
           )}
 
           {error && (
-            <div className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
+            <div className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{error}</div>
           )}
         </div>
 

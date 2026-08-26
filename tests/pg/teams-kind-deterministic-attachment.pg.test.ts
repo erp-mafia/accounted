@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 import { insertAuthUser } from '@/tests/pg/fixtures'
 
-// Tests for 20260804110000_teams_kind_and_deterministic_attachment.sql
+// Tests for 20260826130100_teams_kind_and_deterministic_attachment.sql
 // (white-label foundation, WL-08 resolution):
 //
 //   1. teams.kind: default 'personal', CHECK ('personal' | 'byra')

@@ -22,6 +22,8 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
+import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
+import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
 import type { Customer } from '@/types'
@@ -56,7 +58,7 @@ const BulkCreateResponse = z.object({
 // Same projection as the single-create endpoint: keeps response shapes
 // identical so callers can union the two surfaces transparently.
 const CUSTOMER_RESPONSE_COLUMNS =
-  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 registerEndpoint({
   operation: 'customers.bulk-create',
@@ -117,6 +119,7 @@ async function createOneCustomer(
   input: z.infer<typeof CreateCustomerSchema>,
   dryRun: boolean,
   log: Logger,
+  fallbackPaymentTerms: number,
 ): Promise<ResultItem> {
   if (dryRun) {
     return {
@@ -127,8 +130,11 @@ async function createOneCustomer(
           id: null,
           name: input.name,
           customer_type: input.customer_type,
+          contact_person: input.contact_person ?? null,
           email: input.email ?? null,
           phone: input.phone ?? null,
+          invoice_email_cc_addresses: input.invoice_email_cc_addresses ?? null,
+          invoice_email_bcc_addresses: input.invoice_email_bcc_addresses ?? null,
           address_line1: input.address_line1 ?? null,
           address_line2: input.address_line2 ?? null,
           postal_code: input.postal_code ?? null,
@@ -137,7 +143,7 @@ async function createOneCustomer(
           org_number: input.org_number ?? null,
           vat_number: input.vat_number ?? null,
           vat_number_validated: false,
-          default_payment_terms: input.default_payment_terms ?? 30,
+          default_payment_terms: input.default_payment_terms ?? fallbackPaymentTerms,
           notes: input.notes ?? null,
           archived_at: null,
           created_at: null,
@@ -172,8 +178,11 @@ async function createOneCustomer(
       company_id: companyId,
       name: input.name,
       customer_type: input.customer_type,
+      contact_person: input.contact_person ?? null,
       email: input.email ?? null,
       phone: input.phone ?? null,
+      invoice_email_cc_addresses: input.invoice_email_cc_addresses ?? null,
+      invoice_email_bcc_addresses: input.invoice_email_bcc_addresses ?? null,
       address_line1: input.address_line1 ?? null,
       address_line2: input.address_line2 ?? null,
       postal_code: input.postal_code ?? null,
@@ -183,7 +192,10 @@ async function createOneCustomer(
       vat_number: input.vat_number ?? null,
       vat_number_validated: vatValidated,
       vat_number_validated_at: vatValidatedAt,
-      default_payment_terms: input.default_payment_terms ?? 30,
+      // Stored as ciphertext (customers_personal_number_check). The response
+      // projection deliberately excludes it; nothing here leaks it.
+      personal_number: encryptCustomerPersonalNumber(input.personal_number),
+      default_payment_terms: input.default_payment_terms ?? fallbackPaymentTerms,
       notes: input.notes ?? null,
     })
     .select(CUSTOMER_RESPONSE_COLUMNS)
@@ -290,6 +302,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
+    // Items without explicit payment terms follow the company's own default,
+    // not a hardcoded 30. Resolved once for the whole batch.
+    const fallbackPaymentTerms = await resolveDefaultPaymentTerms(
+      ctx.supabase,
+      ctx.companyId!,
+      undefined,
+    )
+
     // Sequential processing: matches /invoices/bulk-create. VIES has its own
     // upstream throughput limits; running a batch of 50 in parallel can trip
     // them. The 50-item cap keeps the worst-case latency bounded.
@@ -303,6 +323,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         body.customers[i],
         ctx.dryRun,
         ctx.log,
+        fallbackPaymentTerms,
       )
       results.push(item)
     }

@@ -152,5 +152,5 @@ All P&L accounts (classes 3-8) net to **8999** (Årets resultat).
 
 ### Enskild firma equity flow
 1. Year-end: Debit 8999 / Credit **2019** (Årets resultat, delägare 1)
-2. New year start: Zero all sub-accounts (**2011** egna varuuttag, **2012** avräkning skatter, **2013** övriga egna uttag, **2017** årets kapitaltillskott, **2018** övriga egna insättningar, **2019** årets resultat) → net into **2010** (Eget kapital)
+2. New year start: Zero all sub-accounts (**2011** egna varuuttag, **2013** övriga egna uttag inklusive ägarens egna skatter, **2017** årets kapitaltillskott, **2018** övriga egna insättningar, **2019** årets resultat) → net into **2010** (Eget kapital). Note: some programs (Visma, Bokio) add a non-standard **2012** "Avräkning för skatter och avgifter" for owner taxes; official BAS has no 2012, and Accounted books owner taxes on 2013.
 3. No bolagsstämma required

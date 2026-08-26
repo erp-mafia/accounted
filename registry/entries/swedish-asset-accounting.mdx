@@ -1,0 +1,63 @@
+---
+title: "swedish-asset-accounting — anläggningstillgångar och avskrivningar"
+description: "SKILL.md för svensk anläggningsredovisning. Planenlig avskrivning, överavskrivning (2150/8850), räkenskapsenlig 30%/20% vs restvärdeavskrivning 25%, BAS 10xx–12xx/78xx-mapping, inventarieregister per BFL, förbrukningsinventarier (halva PBB), leasing K2/K3/IFRS 16, komponentavskrivning, avyttring med moms."
+slug: "swedish-asset-accounting"
+kind: "skill"
+author: "erp-mafia"
+status: "live"
+lang: "sv"
+personas: ["finance", "byra", "developer"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-08-08"
+repoUrl: "https://github.com/erp-mafia/swedish-accounting-skills/tree/main/.claude/skills/swedish-asset-accounting"
+externalUrl: "https://github.com/erp-mafia/swedish-accounting-skills"
+version: "community"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "När laddas skillen automatiskt?"
+    a: "Vid frågor om avskrivning, anläggningstillgång, överavskrivning, inventarieregister, förbrukningsinventarier, BAS 10xx–12xx eller 78xx, leasing K2/K3, avyttring/utrangering, komponentavskrivning, eller liknande. Skillen flaggar att området har hög felfrekvens i träningsdata och alltid bör konsulteras istället för LLM:ens egen kunskap."
+  - q: "Vad är skillnaden mellan räkenskapsenlig och restvärdeavskrivning?"
+    a: "Räkenskapsenlig: skattemässigt 30% av kvarvarande värde + tillkommande inventarier (huvudregeln), eller 20% av anskaffningsvärdet (kompletteringsregeln). Restvärdeavskrivning: 25% av kvarvarande värde, ingen koppling till räkenskaperna. Skillen förklarar när vilken metod är tillåten och hur bokningen ser ut mot 2150/8850 (överavskrivning) eller 1229/7832 (planenlig)."
+  - q: "Hanterar skillen leasing?"
+    a: "Ja. K2 (operationell modell), K3 (operationell eller finansiell), IFRS 16 (alltid finansiell, balansförd). Med BAS-konton (1240, 2840, 7831) och break-points mellan regelverken."
+---
+
+## Vad skillen täcker
+
+* Planenlig avskrivning vs överavskrivning (BAS 2150 / 8850).
+* Räkenskapsenlig avskrivning: 30%-regel och 20%-regel, växling.
+* Restvärdeavskrivning: 25%, när den är att föredra.
+* BAS-mappning: 10xx (immateriella), 11xx (byggnader/mark), 12xx (maskiner/inventarier), 78xx (avskrivningar).
+* Inventarieregister enligt BFL 6 kap.
+* Förbrukningsinventarier: halva prisbasbeloppet (29 600 SEK 2026), kortlivat under 3 år, direkt kostnadsföring 5xxx.
+* Leasing per K2, K3 och IFRS 16.
+* Komponentavskrivning: K3-krav för byggnader och större anläggningar.
+* Avyttring och utrangering: vinst/förlust, moms, BAS 3973/7973.
+
+Hög-felfrekvens-område där LLM-träningsdata ofta är skev eller
+inaktuell. Skillen markeras med "always use over training data".
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/swedish-accounting-skills.git
+cd swedish-accounting-skills
+claude
+```
+
+Eller selektivt:
+
+```bash
+cp -r path/to/swedish-accounting-skills/.claude/skills/swedish-asset-accounting \
+      ./.claude/skills/
+```
+
+## Pairs med
+
+Naturlig kombination med [swedish-year-end-closing](/community/registry/swedish-year-end-closing)
+(avskrivningar bokas vanligen vid bokslut) och [swedish-tax-planning](/community/registry/swedish-tax-planning)
+(överavskrivning som planeringsverktyg).
+
+## Licens
+
+MIT.

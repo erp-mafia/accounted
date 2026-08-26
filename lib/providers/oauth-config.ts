@@ -38,9 +38,18 @@ export function getOAuthConfig(provider: string): OAuthConfig {
       redirectUri: '',
     };
   }
+  if (provider === 'wint') {
+    // No app-level credentials: WINT has no OAuth. The user's login is
+    // exchanged once for a token pair at submit (loginWint). No env vars.
+    return {
+      clientId: '',
+      clientSecret: '',
+      redirectUri: '',
+    };
+  }
   throw new Error(`Unknown provider: ${provider}`);
 }
 
 export function validateProvider(provider: string): boolean {
-  return provider === 'fortnox' || provider === 'visma' || provider === 'briox' || provider === 'bokio' || provider === 'bjornlunden';
+  return provider === 'fortnox' || provider === 'visma' || provider === 'briox' || provider === 'bokio' || provider === 'bjornlunden' || provider === 'wint';
 }

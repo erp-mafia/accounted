@@ -92,7 +92,7 @@ export function AppErrorBoundary({
 
   return (
     <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4 px-6 text-center">
-      <h2 className="text-xl font-semibold">Något gick fel</h2>
+      <h2 className="text-xl">Något gick fel</h2>
       <p className="max-w-md text-sm text-muted-foreground">
         Ett oväntat fel uppstod. Försök igen eller{' '}
         <SupportLink variant="inline" subject="Oväntat fel">

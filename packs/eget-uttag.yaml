@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: eget-uttag
+  order: 11
+  name: 'Eget uttag'
+  category: private_transfer
+  entity_type: enskild_firma
+  description: >-
+    Privat uttag från företagskontot (enskild firma).
+lines:
+  - account: '2013'
+    label: 'Egna uttag'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '1930'
+    label: 'Företagskonto'
+    side: credit
+    type: settlement
+    ratio: 1.0

@@ -1,0 +1,54 @@
+---
+title: "swedish-sru-filing — SRU-filer för INK2-inlämning till Skatteverket"
+description: "SKILL.md för SRU-filgenerering. Två-filsstruktur INFO.SRU + BLANKETTER.SRU, SRU-fältkoder för INK2/INK2R/INK2S, BAS-till-SRU-kontomappning för räkenskapsschema, ISO 8859-1-encoding, beloppsformatering (hela kronor, inga öre), 12-siffrigt organisationsnummer, blankett-perioder (P1–P4), #BLANKETT/#BLANKETTSLUT, #UPPGIFT."
+slug: "swedish-sru-filing"
+kind: "skill"
+author: "erp-mafia"
+status: "live"
+lang: "sv"
+personas: ["developer", "byra", "finance"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-08-08"
+repoUrl: "https://github.com/erp-mafia/swedish-accounting-skills/tree/main/.claude/skills/swedish-sru-filing"
+externalUrl: "https://github.com/erp-mafia/swedish-accounting-skills"
+version: "community"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vad är skillnaden mellan SRU och SIE?"
+    a: "SIE är bokföringssystemets eget exportformat (verifikat, balanser). SRU är Skatteverkets inlämningsformat för deklarationsblanketter (INK2, INK2R, INK2S). En SRU-fil innehåller fältvärden mappade mot specifika rader på blanketterna, inte huvudbokens kontosaldon direkt. BAS-konton mappas via SRU-koder."
+  - q: "Varför två filer (INFO.SRU + BLANKETTER.SRU)?"
+    a: "Skatteverket vill ha metadata separat från data. INFO.SRU innehåller deklarationsperiod, organisationsnummer, kontaktuppgifter. BLANKETTER.SRU innehåller själva fältvärdena per blankett. Båda filerna laddas upp samtidigt i Skatteverkets e-tjänst SKV269."
+  - q: "Vad händer om validering misslyckas?"
+    a: "Skatteverket returnerar fel-koder. Vanligaste: 'Felaktig encoding' (ska vara ISO 8859-1, inte UTF-8), 'Ogiltigt belopp' (öre inkluderade — ska vara hela kronor), 'Felaktigt organisationsnummer' (måste vara 12 siffror utan bindestreck). Skillen täcker varje vanlig felmodell."
+---
+
+## Vad skillen täcker
+
+* Två-filsstruktur: INFO.SRU (deklarationsmetadata) + BLANKETTER.SRU (fältdata).
+* SRU-fältkoder för INK2, INK2R, INK2S.
+* BAS-till-SRU-mappning för räkenskapsschemat i INK2R.
+* ISO 8859-1-encoding (inte UTF-8).
+* Beloppsformatering: hela kronor, ingen decimal, inga tusentalsavgränsare.
+* 12-siffrigt organisationsnummer utan bindestreck eller mellanslag.
+* Blankett-perioder efter räkenskapsårets slutmånad: P1 (jan-apr), P2 (maj-aug), P4 (sep-dec, kalenderår), P3 (specialfall).
+* Recordstruktur: #BLANKETT, #UPPGIFT, #BLANKETTSLUT, blank rad mellan blanketter.
+* Avrundnings- och truncerings-regler per SFL 22:1 (skatteförfarandelagen).
+* Validerings-felmönster och hur man undviker dem.
+* SKV269 (Skatteverkets e-tjänst för SRU-upload).
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/swedish-accounting-skills.git
+cd swedish-accounting-skills
+claude
+```
+
+## Pairs med
+
+* [swedish-financial-reporting](/community/registry/swedish-financial-reporting) — INK2-fältvärdena som SRU-filen rapporterar.
+* [swedish-year-end-closing](/community/registry/swedish-year-end-closing) — bokslutet som genererar siffrorna SRU-filen rapporterar.
+
+## Licens
+
+MIT.

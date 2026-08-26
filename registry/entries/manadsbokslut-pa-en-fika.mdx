@@ -1,0 +1,127 @@
+---
+title: "Månadsbokslut på en fika"
+description: "SKILL.md-paket som kör månadsbokslut via accounted MCP. Auto-matchar transaktioner, förklarar verifikatluckor, stagar close-period. ~12 minuter på en månad med 200 transaktioner."
+slug: "manadsbokslut-pa-en-fika"
+kind: "skill"
+author: "gnubok"
+status: "live"
+lang: "sv"
+personas: ["founder", "byra"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/skills-v1/manadsbokslut-pa-en-fika.zip"
+repoUrl: "https://github.com/erp-mafia/accounted/tree/main/skills/manadsbokslut-pa-en-fika"
+gnubokTools:
+  - "gnubok_list_uncategorized_transactions"
+  - "gnubok_suggest_categories"
+  - "gnubok_categorize_transaction"
+  - "gnubok_auto_match_period"
+  - "gnubok_list_voucher_gaps"
+  - "gnubok_explain_voucher_gap"
+  - "gnubok_get_reconciliation_status"
+  - "gnubok_close_period"
+oauthScopes:
+  - "transactions:read"
+  - "transactions:write"
+  - "reports:read"
+  - "bookkeeping:write"
+requiresWriteScope: true
+version: "1.0.0"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vad är en SKILL.md?"
+    a: "Ett paketformat för agent-skills som Anthropic donerade och OpenAI antog i december 2025. En SKILL.md är en markdown-fil med instruktioner och referenser till verktyg som en LLM-agent kan ladda när uppgiften behöver det. Tvärs över Claude, Codex och andra agentmiljöer."
+  - q: "Hur lång tid tar ett månadsbokslut?"
+    a: "Beror på volym. En månad med 200 transaktioner går på ~12 minuter, varav agenten gör ~10 och du tittar igenom de svåra fallen. En månad med 30 transaktioner är ~3 minuter. Klippet ligger inte i hastigheten utan i att du inte behöver hålla i tråden."
+  - q: "Måste jag godkänna varje kategorisering?"
+    a: "Som default ja, eftersom skillen sätter `confidence_threshold: 0.85`. Allt under godkänner du i en batch i appen. Över: agenten stagar och du kan trycka 'godkänn alla' om du litar på den. Du bestämmer var ribban går."
+  - q: "Vad händer om bankavstämningen inte balanserar?"
+    a: "`gnubok_explain_voucher_gap` kallas automatiskt och returnerar en strukturerad förklaring per gap: saknad transaktion, dubblerad inläsning, fel datum. Agenten skickar den till dig som en lista, inte som en lång prosaförklaring."
+  - q: "Funkar det för byråer med många klienter?"
+    a: "Idag krävs en MCP-anslutning per klient. En API-nyckel (eller OAuth-grant) är bunden till ett företag. Multi-tenant via `companies:read`-scopen finns på roadmap för v1 REST API men exponeras inte i MCP än. För en byrå med 23 klienter blir det 23 connectors i Claude eller 23 API-nycklar i stdio-fallback."
+---
+
+## Stegen i ordning
+
+Skillen är ett SKILL.md-paket plus en liten resurs-bundle. Den
+orkestrerar åtta MCP-anrop i ordning, hanterar fallback per steg, och
+stagar allt skriv för mänskligt godkännande.
+
+1. `gnubok_list_uncategorized_transactions(period: "2026-04")`. Drar de okategoriserade.
+2. `gnubok_suggest_categories(transaction_ids: [...])`. Får förslag med confidence score.
+3. För varje förslag över tröskeln: `gnubok_categorize_transaction(...)` (stagas).
+4. `gnubok_auto_match_period(period: "2026-04")`. Matchar transaktioner mot fakturor.
+5. `gnubok_list_voucher_gaps(period: "2026-04")`. Listar luckor.
+6. För varje lucka: `gnubok_explain_voucher_gap(gap_id: ...)`. Strukturerad förklaring.
+7. `gnubok_get_reconciliation_status(period: "2026-04")`. Sista checken.
+8. Om allt är grönt: `gnubok_close_period(period: "2026-04", dry_run: true)`. Stagas i appen.
+
+Allt skriv stagar `pending_operation`. Inget postas innan du godkänner.
+
+## Installera
+
+Ladda ner ZIP-paketet ovan, eller klona repot:
+
+```bash
+git clone https://github.com/erp-mafia/accounted
+cd gnubok/skills/manadsbokslut-pa-en-fika
+```
+
+I Claude Desktop:
+
+```
+Cmd-Shift-P → Skills: Add from folder → välj mappen
+```
+
+I Codex:
+
+```
+codex skill add ./manadsbokslut-pa-en-fika
+```
+
+Skillen kräver att accounted MCP är ansluten, se
+[accounted MCP-server](/community/registry/gnubok-mcp).
+
+## Köra skillen
+
+```
+@manadsbokslut-pa-en-fika kör för april 2026
+```
+
+Agenten kommer:
+
+* Visa antalet okategoriserade poster (säg 47).
+* Föreslå kategoriseringar med confidence per post.
+* Stagas i appen (du ser dem under "Väntar på godkännande").
+* Köra auto-match och visa antalet matchningar.
+* Förklara varje lucka i klartext.
+* Stagas close-period som dry-run så du kan jämföra resultaträkning mot förra månaden.
+
+Du godkänner allt i ett svep.
+
+## Konfigurera tröskeln
+
+`SKILL.md`-paketet exponerar två parametrar:
+
+```yaml
+confidence_threshold: 0.85
+explain_voucher_gaps: true
+```
+
+Sätter du tröskeln lägre kategoriseras mer automatiskt men du
+godkänner fortfarande allt. Tröskeln styr vad agenten *föreslår*, inte
+vad som postar utan godkännande.
+
+## Begränsningar
+
+* Skillen postar ingen riktig period-stängning. `dry_run: true` stagar bara förändringarna.
+* Skillen rättar inte fel i tidigare perioder. Använd `gnubok_correct_entry` för det. Den skapar en rättelsepost, inte en redigering.
+* Skillen tolkar inga kvitton. Använd inbox + [Leverantörsfaktura från inbox](/community/registry/leverantorsfaktura-fran-inbox) för det.
+* Skillen jobbar på ett företag i taget. För byrå-volym, kör skillen separat per klient med deras MCP-anslutning.
+
+## Resultatet
+
+En månadsstängning som tar lika lång tid som att dricka kaffet
+någon annan brygger åt dig. Och en audit-logg som faller ut i
+`gnubok_audit_package`-zippen, samma data du visar revisorn när
+hen kommer.

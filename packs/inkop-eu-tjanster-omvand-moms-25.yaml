@@ -1,0 +1,31 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: inkop-eu-tjanster-omvand-moms-25
+  order: 3
+  name: 'Inköp EU-tjänster, omvänd moms 25%'
+  category: eu_trade
+  entity_type: all
+  description: >-
+    Köp av tjänster från annat EU-land. Omvänd skattskyldighet — du redovisar både utgående och ingående moms.
+lines:
+  - account: '6540'
+    label: 'IT-tjänster'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '2614'
+    label: 'Utgående moms omvänd skattskyldighet 25%'
+    side: credit
+    type: vat
+    vat_rate: 0.25
+  - account: '2645'
+    label: 'Beräknad ingående moms 25%'
+    side: debit
+    type: vat
+    vat_rate: 0.25
+  - account: '1930'
+    label: 'Företagskonto'
+    side: credit
+    type: settlement
+    ratio: 1.0

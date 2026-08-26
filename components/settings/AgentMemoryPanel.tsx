@@ -389,7 +389,7 @@ export function AgentMemoryPanel() {
                       onClick={() => patch(row.id, { is_pinned: !row.is_pinned })}
                       disabled={isBusy}
                       className={cn(
-                        'mt-0.5 shrink-0 rounded-md p-1.5 transition-colors duration-150',
+                        'mt-0.5 shrink-0 rounded-sm p-1.5 transition-colors duration-150',
                         row.is_pinned
                           ? 'bg-secondary text-foreground'
                           : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',

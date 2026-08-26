@@ -44,6 +44,13 @@ jobs:
         # so drift here means filings tagged against a stale concept set.
         run: npm run taxonomy:check
 
+      - name: Verify the accounted-api agent skill is in sync with the registry
+        # Fails if a v1 endpoint / registry schema / overlay changed without
+        # regenerating skills/accounted-api (npm run apiskill:generate). The
+        # skill is the installable API reference for external coding agents;
+        # drift here means agents integrate against stale endpoint contracts.
+        run: npm run apiskill:check
+
       - name: Lint ratchet (no new ESLint errors)
         # `npm run lint` was never wired into CI, so ~60 legacy errors
         # accumulated. This ratchet (sibling of check:guards) fails only when
@@ -57,6 +64,24 @@ jobs:
         # Baseline lives in scripts/checks/antipatterns-baseline.json and ratchets
         # down as the A1 (route auth) and D1 (rounding) migrations land.
         run: npm run check:guards
+
+      - name: Validate konteringspaket catalogue
+        # The system booking templates are data files under packs/ rather than
+        # rows frozen inside a migration. This gate is what makes that safe: it
+        # checks the schema, that every BAS account actually exists in the 2026
+        # chart, and that each pack BALANCES when applied through the real
+        # applyTemplate(). PR #1321 shipped seeded reference data that
+        # contradicted the engine; that class of bug is structurally valid and
+        # only a semantic check catches it.
+        run: npm run validate:packs
+
+      - name: Validate community registry
+        # registry/ is the public source of truth for gnubok.se/community/registry
+        # and takes entries by PR from outside the team. The gate checks the
+        # frontmatter the website build consumes, and rejects JSX/import/export
+        # in entry bodies: the site renders bodies through MDX, which would
+        # execute those at build time.
+        run: npm run validate:registry
 
       - name: Check no core imports from extensions
         run: |
@@ -82,6 +107,12 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-core
       - run: npm run build
+        env:
+          # The Next.js build worker OOMs on the runner's default Node heap
+          # since 2026-08-19 (bundle growth crossed the default old-space
+          # ceiling; the first branch containing the whole day's merges was the
+          # first to hit it). Public-repo runners have 16 GB, give the build 8.
+          NODE_OPTIONS: --max-old-space-size=8192
 
   test:
     # 897 unit test files (11,341 tests) take 3m31s in one process. Measured

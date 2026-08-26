@@ -15,7 +15,7 @@ export const GET = withRouteContext(
   async (request, { supabase, companyId }) => {
     const result = validateQuery(request, PendingOperationsQuerySchema)
     if (!result.success) return result.response
-    const { status, limit, offset } = result.data
+    const { status, limit, offset, order } = result.data
 
     // Terminal tabs (Godkända/Avvisade) order by when the op was RESOLVED, not
     // created: auto-expired ops are ≥30 days old by construction, so a
@@ -36,7 +36,7 @@ export const GET = withRouteContext(
       .select('*', { count: 'exact' })
       .eq('company_id', companyId)
       .in('status', statusesFor(status))
-      .order(orderColumn, { ascending: false, nullsFirst: false })
+      .order(orderColumn, { ascending: order === 'asc', nullsFirst: false })
       .range(offset, offset + limit - 1)
 
     // Return every tab count with the active list. The browser previously

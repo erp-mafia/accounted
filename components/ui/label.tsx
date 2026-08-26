@@ -14,8 +14,13 @@ const Label = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root> &
     VariantProps<typeof labelVariants>
 >(({ className, ...props }, ref) => (
+  // data-ph-unmask: form field labels are static i18n chrome, readable under
+  // the deny-by-default replay masking (see lib/analytics/replay-masking.ts).
+  // A call site whose label text is user data must add data-ph-mask, which
+  // wins over this default.
   <LabelPrimitive.Root
     ref={ref}
+    data-ph-unmask=""
     className={cn(labelVariants(), className)}
     {...props}
   />

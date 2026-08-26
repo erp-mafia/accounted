@@ -11,6 +11,9 @@ import {
   fetchActiveDimensionRules,
 } from '@/lib/bookkeeping/dimension-rules'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { BookingTemplateLibraryLine, Transaction } from '@/types'
@@ -87,7 +90,7 @@ export const POST = withRouteContext(
     // need the currencies for the homogeneity gate below.
     const { data: txs, error: txError } = await supabase
       .from('transactions')
-      .select('id, amount, currency, description, date')
+      .select('id, amount, currency, description, date, amount_sek, exchange_rate, cash_account_id')
       .in('id', body.tx_ids)
       .eq('company_id', companyId)
 
@@ -101,7 +104,10 @@ export const POST = withRouteContext(
       })
     }
 
-    const txTyped = txs as Pick<Transaction, 'id' | 'amount' | 'currency' | 'description' | 'date'>[]
+    const txTyped = txs as Pick<
+      Transaction,
+      'id' | 'amount' | 'currency' | 'description' | 'date' | 'amount_sek' | 'exchange_rate' | 'cash_account_id'
+    >[]
 
     // Currency homogeneity, enforced BEFORE the branch split so it covers
     // all three paths (template, manual_lines, existing_journal_entry_id).
@@ -140,6 +146,100 @@ export const POST = withRouteContext(
         requestId,
         details: { currency },
       })
+    }
+
+    // Booking-time duplicate guard, parity with /categorize and /book: each
+    // selected tx is about to be anchored to a verifikat, and a twin already
+    // in the ledger means one affärshändelse gets booked twice (felaktig
+    // bokföring per BFL). Per-tx detection with intra-batch exclusions: the
+    // OTHER selected txs are distinct events the user explicitly picked, and
+    // the link-existing target voucher is the batch's own destination, so
+    // neither may flag. Checked in tx_ids order so the flagged tx is
+    // deterministic. Soft guard: the caller re-runs with force=true after the
+    // user reviews the candidate; detection failures never block a booking.
+    const txById = new Map(txTyped.map((tx) => [tx.id, tx]))
+    const duplicateExclusions = {
+      excludeTransactionIds: body.tx_ids,
+      excludeJournalEntryIds: body.existing_journal_entry_id ? [body.existing_journal_entry_id] : [],
+    }
+    const detectForTx = (tx: (typeof txTyped)[number]) =>
+      detectBookingDuplicate(
+        supabase,
+        companyId!,
+        {
+          id: tx.id,
+          date: tx.date,
+          // `amount` is denominated in `currency`; the guard's FX contract
+          // needs the row's own conversion fields alongside.
+          amount: tx.amount,
+          currency: tx.currency ?? null,
+          amount_sek: tx.amount_sek ?? null,
+          exchange_rate: tx.exchange_rate ?? null,
+          cash_account_id: tx.cash_account_id ?? null,
+        },
+        duplicateExclusions,
+      )
+    if (body.force !== true) {
+      for (const txId of body.tx_ids) {
+        const tx = txById.get(txId)
+        if (!tx) continue
+        let candidate = null
+        try {
+          candidate = await detectForTx(tx)
+        } catch (err) {
+          opLog.warn('bulk-book duplicate detection failed (continuing)', { err, txId })
+        }
+        if (candidate) {
+          return errorResponseFromCode('TRANSACTION_BOOK_POSSIBLE_DUPLICATE', opLog, {
+            requestId,
+            details: { candidate, transaction_id: txId },
+          })
+        }
+      }
+    } else {
+      // force=true bypassed the guard. Booking over a DETECTED possible
+      // double-booking is a bookkeeping decision that needs a durable
+      // behandlingshistorik record (BFNAR 2013:2 kap 8), parity with the
+      // /categorize and agent bypass paths. Best-effort; never blocks.
+      for (const txId of body.tx_ids) {
+        const tx = txById.get(txId)
+        if (!tx) continue
+        try {
+          const dismissed = await detectForTx(tx)
+          if (!dismissed) continue
+          opLog.warn('bulk-book duplicate guard bypassed', {
+            reason: 'force=true',
+            requestId,
+            txId,
+            dismissedJournalEntryId: dismissed.journal_entry_id,
+          })
+          await appendProcessingHistory({
+            companyId: companyId!,
+            correlationId: txId,
+            aggregateType: 'BankTransaction',
+            aggregateId: txId,
+            eventType: 'BankTransactionDuplicateDismissed',
+            payload: {
+              transaction_id: txId,
+              dismissed_transaction_id: dismissed.transaction_id,
+              dismissed_journal_entry_id: dismissed.journal_entry_id,
+              // Null when the candidate's SEK value could not be established;
+              // the foreign figures below then carry the durable record.
+              amount_ore: dismissed.amount != null ? Math.round(dismissed.amount * 100) : null,
+              dismissed_currency: dismissed.currency,
+              dismissed_amount_in_currency: dismissed.amount_in_currency,
+              entry_date: dismissed.entry_date,
+              amount_verified: dismissed.amount_verified,
+              unverified_reason: dismissed.unverified_reason,
+              via: 'bulk_book_force',
+            },
+            actor: { type: 'user', id: user.id },
+            occurredAt: new Date(),
+          })
+        } catch (err) {
+          opLog.error('failed to append duplicate-dismissal behandlingshistorik', err as Error)
+        }
+      }
     }
 
     // Three paths now (PR #608):
@@ -322,6 +422,20 @@ export const POST = withRouteContext(
       const code = (result as RpcErr | null)?.code ?? 'BULK_BOOK_RPC_FAILED'
       const details = (result as RpcErr | null)?.details
       return errorResponseFromCode(code, opLog, { requestId, details })
+    }
+
+    // Complete any matched inbox items against the samlingsverifikat: link
+    // their underlag and stamp them consumed so they leave the active inbox.
+    // Best-effort, logged inside; created_journal_entry_id is UNIQUE so at
+    // most one item can carry the stamp; the inbox list derives "booked"
+    // from the voucher links for the rest.
+    for (const txId of body.tx_ids) {
+      await propagateUnderlagForBookedTransaction(
+        supabase,
+        companyId!,
+        txId,
+        result.journal_entry_id,
+      )
     }
 
     // Emit one transaction.reconciled event per tx so existing subscribers

@@ -234,7 +234,9 @@ describe('detectPeriodisering', () => {
           id: 'sup-high',
           supplier_invoice_number: 'LF-B',
           invoice_date: '2025-12-01',
-          subtotal: 3000, // smaller, but high confidence
+          // Smaller, but high confidence. Kept above the 5 000 kr materiality
+          // floor so the floor's low-confidence downgrade doesn't apply here.
+          subtotal: 6000,
           notes: 'Mjukvara perioden 2026-01-01 till 2026-12-31',
           suppliers: { name: 'B' },
           supplier_invoice_items: [{ description: 'License', account_number: '5800' }],
@@ -287,5 +289,282 @@ describe('detectPeriodisering', () => {
     )
     // Suggesting it again would periodisera the same belopp twice.
     expect(result).toEqual([])
+  })
+
+  it('tags a suggestion under 5 000 kr as low confidence citing K2 by default', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    // 1 200 kr domain renewal fully in next year: below the materiality floor.
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-small',
+          supplier_invoice_number: 'LF-500',
+          invoice_date: '2025-12-15',
+          subtotal: 1200,
+          currency: 'SEK',
+          subtotal_sek: 1200,
+          notes: 'Domänförnyelse period 2026-01-01 till 2026-12-31',
+          suppliers: { name: 'Registrar AB' },
+          supplier_invoice_items: [{ description: 'Domän', account_number: '6540' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+    )
+    expect(result).toHaveLength(1)
+    // Downgraded so the wizard does NOT pre-tick it (only 'high' is pre-ticked).
+    expect(result[0].confidence).toBe('low')
+    expect(result[0].reason).toContain('Under 5 000 kr: behöver normalt inte periodiseras (K2).')
+  })
+
+  it('cites K1 in the under-floor reason for an enskild firma', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-small-ef',
+          supplier_invoice_number: 'LF-501',
+          invoice_date: '2025-12-15',
+          subtotal: 1200,
+          notes: 'Domänförnyelse period 2026-01-01 till 2026-12-31',
+          suppliers: { name: 'Registrar AB' },
+          supplier_invoice_items: [{ description: 'Domän', account_number: '6540' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+      { entityType: 'enskild_firma' },
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe('low')
+    expect(result[0].reason).toContain('Under 5 000 kr: behöver normalt inte periodiseras (K1).')
+  })
+
+  it('keeps a suggestion at or above 5 000 kr at its original confidence', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-large',
+          supplier_invoice_number: 'LF-502',
+          invoice_date: '2025-07-01',
+          subtotal: 12000,
+          notes: 'Mjukvarulicens period: 2025-07-01 till 2026-06-30',
+          suppliers: { name: 'Acme SaaS AB' },
+          supplier_invoice_items: [{ description: 'Årslicens', account_number: '5800' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+      { entityType: 'enskild_firma' },
+    )
+    expect(result).toHaveLength(1)
+    // 12000 * 181/365 = 5950.68: above the floor, stays high with no K1 note.
+    expect(result[0].confidence).toBe('high')
+    expect(result[0].reason).not.toContain('Under 5 000 kr')
+  })
+
+  it('compares the floor against the SEK amount for a foreign-currency invoice', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    // 460 EUR is numerically under 5 000, but its SEK equivalent (5 200 kr)
+    // is ABOVE the floor: comparing the raw EUR number would wrongly tag it.
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-eur',
+          supplier_invoice_number: 'LF-510',
+          invoice_date: '2025-12-15',
+          subtotal: 460,
+          currency: 'EUR',
+          subtotal_sek: 5200,
+          notes: 'SaaS-licens period 2026-01-01 till 2026-12-31',
+          suppliers: { name: 'Euro SaaS GmbH' },
+          supplier_invoice_items: [{ description: 'License', account_number: '5800' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe('high')
+    expect(result[0].reason).not.toContain('Under 5 000 kr')
+  })
+
+  it('skips the floor entirely for a foreign-currency invoice without subtotal_sek', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    // No SEK amount is resolvable, so the floor must not tag on the raw EUR
+    // number (wrong currency): the suggestion keeps its confidence.
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-eur-nosek',
+          supplier_invoice_number: 'LF-511',
+          invoice_date: '2025-12-15',
+          subtotal: 120,
+          currency: 'EUR',
+          subtotal_sek: null,
+          notes: 'SaaS-licens period 2026-01-01 till 2026-12-31',
+          suppliers: { name: 'Euro SaaS GmbH' },
+          supplier_invoice_items: [{ description: 'License', account_number: '5800' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe('high')
+    expect(result[0].reason).not.toContain('Under 5 000 kr')
+  })
+
+  it('never applies the floor to personnel-cost (70xx-76xx) lines', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    // Personnel costs must ALWAYS be accrued regardless of amount, so a
+    // 1 500 kr post on a 7xxx account keeps its confidence.
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-personnel',
+          supplier_invoice_number: 'LF-503',
+          invoice_date: '2025-12-15',
+          subtotal: 1500,
+          notes: 'Utbildning personal period 2026-01-01 till 2026-03-31',
+          suppliers: { name: 'Kursbolaget AB' },
+          supplier_invoice_items: [{ description: 'Kurs', account_number: '7610' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+      { entityType: 'enskild_firma' },
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe('high')
+    expect(result[0].reason).not.toContain('Under 5 000 kr')
+  })
+
+  it('applies the floor to a 79xx line: not a personnel cost', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    // 7990 (övriga rörelsekostnader) is in the 7xxx class but is NOT a
+    // personnel cost: the exemption is BAS 70xx-76xx only, so a small 7990
+    // post gets the normal under-floor downgrade.
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-7990',
+          supplier_invoice_number: 'LF-504',
+          invoice_date: '2025-12-15',
+          subtotal: 1500,
+          notes: 'Diverse kostnad period 2026-01-01 till 2026-03-31',
+          suppliers: { name: 'Diverse AB' },
+          supplier_invoice_items: [{ description: 'Övrigt', account_number: '7990' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe('low')
+    expect(result[0].reason).toContain('Under 5 000 kr')
+  })
+
+  it('applies the floor to a small customer-invoice revenue deferral', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({
+      data: [
+        {
+          id: 'inv-small',
+          invoice_number: 'F-3001',
+          invoice_date: '2025-12-01',
+          subtotal: 2400,
+          notes: 'Supportavtal för period 2026-01-01 till 2026-12-31',
+          customers: { name: 'Kund AB' },
+          invoice_items: [{ description: 'Support' }],
+        },
+      ],
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // supplier_invoices
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0].confidence).toBe('low')
+    expect(result[0].reason).toContain('Under 5 000 kr')
   })
 })

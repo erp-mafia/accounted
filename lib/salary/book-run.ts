@@ -25,8 +25,10 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
+import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
+import { refreshRunYtd } from '@/lib/salary/ytd'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
 import { eventBus } from '@/lib/events'
 
@@ -88,6 +90,17 @@ async function bookLoadedRun(
   run: Record<string, unknown>,
   roster: RosterRow[],
 ): Promise<BookRunResult<BookedRunData>> {
+  // Refresh the payslip's "Ackumulerat" snapshot before the status flip. The
+  // snapshot was written at calculation time from the months authorized back
+  // then; a month authorized since (the normal case when next month's run is
+  // prepared early) is missing from it. Non-fatal: YTD is display only and
+  // never reaches a verifikation, so a refresh failure must not block a
+  // booking.
+  const ytdRefresh = await refreshRunYtd(supabase, { companyId, salaryRunId })
+  if (!ytdRefresh.ok) {
+    log.warn('YTD refresh failed before booking', { salaryRunId, message: ytdRefresh.message })
+  }
+
   // Nollkörning: a run with no monetary effect (employees set to 0 kr, or no
   // roster at all) has nothing to post. The bookkeeping engine forbids
   // zero-amount vouchers (every entry must balance with debit & credit > 0),
@@ -151,6 +164,9 @@ async function bookLoadedRun(
       total_net: run.total_net as number,
       total_avgifter: run.total_avgifter as number,
       total_vacation_accrual: run.total_vacation_accrual as number,
+      // Use the exact payroll-rate snapshot approved with this run. Reading
+      // current config here could change SLP between calculation and booking.
+      calculation_params: run.calculation_params as Record<string, unknown> | null,
       employees: roster.map((sre) => ({
         employee_id: sre.employee_id,
         employment_type: sre.employee?.employment_type || 'employee',
@@ -162,9 +178,28 @@ async function bookLoadedRun(
           (sre.net_salary as number) +
           ((sre.tax_withheld as number) -
             ((sre.tax_withheld_override as number | null) ?? (sre.tax_withheld as number))),
+        // F-skatt payees form no underlag for arbetsgivaravgifter: the AGI
+        // hard-ignores avgifter overrides on such rows (isFSkattRow), so the
+        // booking must too, or the ledger would carry social charges the
+        // declaration provably excludes.
         avgifter_amount:
-          (sre.avgifter_amount_override as number | null) ?? (sre.avgifter_amount as number),
+          isFSkattStatus(sre.employee?.f_skatt_status)
+            ? (sre.avgifter_amount as number)
+            : (sre.avgifter_amount_override as number | null) ?? (sre.avgifter_amount as number),
         avgifter_rate: sre.avgifter_rate as number,
+        // Declared-avgifter inputs: the 2731 liability books the whole-krona
+        // amount Skatteverket computes from the underlag (declared-avgifter.ts).
+        // Deliberately the UN-overridden basis: a basis override never
+        // reaches the filed IU fields, so Skatteverket computes from these
+        // values regardless. Zeroed for F-skatt rows (the AGI's isFSkattRow
+        // invariant: their pay forms no underlag). An amount override is
+        // flagged instead: the split then mirrors the AGI's override path.
+        avgifter_basis:
+          isFSkattStatus(sre.employee?.f_skatt_status) ? 0 : (sre.avgifter_basis as number),
+        avgifter_category: (sre.avgifter_category as string | null) ?? null,
+        avgifter_amount_overridden:
+          !isFSkattStatus(sre.employee?.f_skatt_status) &&
+          (sre.avgifter_amount_override as number | null) != null,
         vacation_accrual: sre.vacation_accrual as number,
         vacation_accrual_avgifter: sre.vacation_accrual_avgifter as number,
         // Dimensions PR8: read-at-book from the employee row, the run

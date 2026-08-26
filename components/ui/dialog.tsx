@@ -31,13 +31,25 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, onInteractOutside, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      // Companion overlays (AccountCombobox's dropdown, HelpPopover panels)
+      // are portaled to document.body so this content's overflow-y-auto can
+      // never clip them. DOM-wise that puts them OUTSIDE the dialog, so Radix
+      // would otherwise dismiss the dialog on a pointerdown inside them:
+      // anything marked data-dialog-companion counts as inside.
+      onInteractOutside={(event) => {
+        onInteractOutside?.(event)
+        const target = event.target
+        if (target instanceof Element && target.closest('[data-dialog-companion]')) {
+          event.preventDefault()
+        }
+      }}
       className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-[var(--shadow-md)] max-h-[calc(100dvh-2rem)] overflow-y-auto scrollbar-visible data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-98 data-[state=open]:zoom-in-98 sm:rounded-lg",
+        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-[var(--shadow-md)] max-h-[calc(100dvh-2rem)] overflow-y-auto scrollbar-visible data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-98 data-[state=open]:zoom-in-98 sm:rounded-xl",
         className
       )}
       {...props}
@@ -51,6 +63,22 @@ const DialogContent = React.forwardRef<
   </DialogPortal>
 ))
 DialogContent.displayName = DialogPrimitive.Content.displayName
+
+/**
+ * Backdrop for non-modal dialogs. Radix renders no Overlay when the root has
+ * `modal={false}`, so dialogs that opt out of modality (to keep the agent
+ * sheet interactive above them) render this alongside DialogContent to keep
+ * the standard veil. z-40 sits under DialogContent (z-50) and the agent
+ * sheet (z-60).
+ */
+const DialogVeil = () => (
+  <DialogPortal>
+    <div
+      aria-hidden="true"
+      className="fixed inset-0 z-40 bg-black/50 dark:bg-black/60 animate-in fade-in-0"
+    />
+  </DialogPortal>
+)
 
 const DialogHeader = ({
   className,
@@ -84,10 +112,13 @@ const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
 >(({ className, ...props }, ref) => (
+  // data-ph-unmask: dialog titles are static i18n chrome in session replays;
+  // a title carrying user data adds data-ph-mask at the call site.
   <DialogPrimitive.Title
     ref={ref}
+    data-ph-unmask=""
     className={cn(
-      "text-lg font-semibold leading-none tracking-tight",
+      "break-words text-lg leading-none tracking-tight",
       className
     )}
     {...props}
@@ -101,7 +132,8 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn("text-sm text-muted-foreground", className)}
+    data-ph-unmask=""
+    className={cn("break-words text-sm text-muted-foreground", className)}
     {...props}
   />
 ))
@@ -114,6 +146,7 @@ export {
   DialogClose,
   DialogTrigger,
   DialogContent,
+  DialogVeil,
   DialogHeader,
   DialogFooter,
   DialogTitle,

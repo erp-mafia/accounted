@@ -217,6 +217,209 @@ describe('POST /items/:id/book-direct', () => {
     expect(createJournalEntryMock).not.toHaveBeenCalled()
   })
 
+  // ── WhatsApp channel-context notes default ──────────────────
+  // The chat answers (representation deltagare + syfte, sender note) reach
+  // the verifikat even through callers that never saw the chat: absent/empty
+  // request notes default server-side to the rendered channel_context.
+
+  const WA_CONTEXT = {
+    channel: 'whatsapp' as const,
+    caption: 'Kvitto lunch',
+    representation: {
+      participants: [
+        { name: 'Anna Berg', company: 'Volvo' },
+        { name: 'Jakob W', company: null },
+      ],
+      purpose: 'uppföljning av avtal',
+      event_date: null,
+      raw_answer: 'Anna Berg Volvo och jag, uppföljning av avtal',
+      answered_at: '2026-08-01T12:00:00Z',
+    },
+  }
+
+  it('defaults notes to the rendered channel context when the request sends none', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        document_id: 'doc-1',
+        source: 'whatsapp',
+        channel_context: WA_CONTEXT,
+      }),
+    })
+    enqueue({ data: null }) // inbox item update
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY, // no notes field
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        notes: 'Representation: Anna Berg (Volvo), Jakob W · Syfte: uppföljning av avtal',
+      }),
+    )
+  })
+
+  it('lets caller-supplied notes win over the channel context', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        document_id: 'doc-1',
+        source: 'whatsapp',
+        channel_context: WA_CONTEXT,
+      }),
+    })
+    enqueue({ data: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, notes: 'Min egen anteckning' },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ notes: 'Min egen anteckning' }),
+    )
+  })
+
+  // Regression (adversarial review): the dialog prefills the chat note, so a
+  // user who reads it, disagrees and DELETES it submits notes:''. Falling back
+  // to the rendered context on any falsy value re-attached the deleted text to
+  // a posted verifikat, where only a formal rättelse can remove it. Presence
+  // of the field, not its truthiness, decides.
+  it('honors an explicitly cleared notes field instead of resurrecting the chat context', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        document_id: 'doc-1',
+        source: 'whatsapp',
+        channel_context: WA_CONTEXT,
+      }),
+    })
+    enqueue({ data: null }) // inbox item update
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, notes: '' },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ notes: undefined }),
+    )
+    const [, , , input] = createJournalEntryMock.mock.calls[0] as [unknown, string, string, { notes?: string }]
+    expect(input.notes ?? '').not.toContain('Representation')
+  })
+
+  // Whitespace is a cleared field too, not "no opinion".
+  it('treats a whitespace-only notes value as cleared', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        document_id: 'doc-1',
+        source: 'whatsapp',
+        channel_context: WA_CONTEXT,
+      }),
+    })
+    enqueue({ data: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, notes: '   ' },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ notes: undefined }),
+    )
+  })
+
+  // The photo caption is unreviewed chat text: this default runs for callers
+  // that never saw it (MCP, API), so it must not reach the verifikat.
+  it('never defaults an unreviewed caption onto the verifikat', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        document_id: 'doc-1',
+        source: 'whatsapp',
+        channel_context: {
+          channel: 'whatsapp',
+          caption: 'kvittot från igår, Annas sjukbesök, hon betalade',
+        },
+      }),
+    })
+    enqueue({ data: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY, // no notes field: the server default applies
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ notes: undefined }),
+    )
+  })
+
+  it('leaves notes undefined when the item has no channel context', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+    enqueue({ data: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ notes: undefined }),
+    )
+  })
+
   it('books with transaction link: source_type=bank_transaction, source_id=transaction.id', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
@@ -246,5 +449,47 @@ describe('POST /items/:id/book-direct', () => {
         source_id: TX_UUID,
       }),
     )
+  })
+
+  it('keeps an existing match when the caller omits transaction_id', async () => {
+    // A caller that merely forgets the field used to unpick a match somebody
+    // had already made: the verifikat posted standalone, the bank line stayed
+    // unbooked, and nothing on screen said so. Forgetting a field must not
+    // undo work.
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({ document_id: 'doc-1', matched_transaction_id: TX_UUID }),
+    })
+    enqueue({ data: null }) // inbox item update
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY, // no transaction_id
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    expect(res.status).toBe(200)
+
+    // The preserved match must also be BOOKED. Keeping the link while leaving
+    // the bank line open is the worse half of the bug: the item looks resolved
+    // and the transaction stays outstanding forever.
+    const txUpdate = calls.find(
+      (c: { method: string; args?: unknown[] }) =>
+        c.method === 'update' &&
+        typeof c.args?.[0] === 'object' &&
+        c.args?.[0] !== null &&
+        'journal_entry_id' in (c.args[0] as Record<string, unknown>),
+    )
+    expect(txUpdate, 'the preserved transaction was never booked').toBeTruthy()
+
+    const update = calls.find(
+      (c: { method: string; args?: unknown[] }) =>
+        c.method === 'update' &&
+        typeof c.args?.[0] === 'object' &&
+        c.args?.[0] !== null &&
+        'created_journal_entry_id' in (c.args[0] as Record<string, unknown>),
+    )
+    expect((update?.args?.[0] as Record<string, unknown>).matched_transaction_id).toBe(TX_UUID)
   })
 })

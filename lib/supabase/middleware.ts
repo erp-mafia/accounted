@@ -6,6 +6,27 @@ import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
+import {
+  apiRequestSkipsSessionTimeout,
+  createSessionTimeoutState,
+  evaluateSessionTimeout,
+  fetchAutoLogoutPreference,
+  getSessionTimeoutConfig,
+  sessionStateMatchesUser,
+  sessionStateNeedsRemint,
+  sessionTimeoutClearCookieOptions,
+  sessionTimeoutCookieOptions,
+  signSessionTimeoutState,
+  verifySessionTimeoutState,
+} from '@/lib/auth/session-timeout'
+import {
+  isSessionAuthMethod,
+  SESSION_AUTH_METHOD_HINT_COOKIE,
+  SESSION_TIMEOUT_COOKIE,
+  SESSION_TIMEOUT_REASON_HEADER,
+  type SessionAuthMethod,
+  type SessionTimeoutReason,
+} from '@/lib/auth/session-timeout-shared'
 
 /**
  * Host-scoped marker that the signed-in user is on their home domain, so the
@@ -71,6 +92,88 @@ export async function updateSession(request: NextRequest) {
     }
   }
 
+  const timeoutConfig = getSessionTimeoutConfig()
+  const hasAuthorizationHeader = request.headers.get('authorization') !== null
+
+  if (!user) {
+    clearSessionTimeoutCookies(request, supabaseResponse)
+  } else if (
+    timeoutConfig.enabled &&
+    !apiRequestSkipsSessionTimeout(pathname, hasAuthorizationHeader)
+  ) {
+    const encodedState = request.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+    const sessionId = await getSupabaseSessionId(supabase)
+    const verifiedState = await verifySessionTimeoutState(encodedState)
+
+    if (encodedState && !verifiedState) {
+      await signOutTimedOutSession(supabase)
+      return sessionTimeoutResponse(
+        request,
+        supabaseResponse,
+        'absolute',
+        'password',
+      )
+    }
+
+    const stateMatches =
+      verifiedState !== null &&
+      sessionStateMatchesUser(verifiedState, user.id, sessionId)
+
+    if (
+      !verifiedState ||
+      !stateMatches ||
+      sessionStateNeedsRemint(verifiedState)
+    ) {
+      const hintedMethod = request.cookies.get(
+        SESSION_AUTH_METHOD_HINT_COOKIE,
+      )?.value
+      const method = isSessionAuthMethod(hintedMethod)
+        ? hintedMethod
+        : 'password'
+      const autoLogout = await fetchAutoLogoutPreference(supabase, user.id)
+
+      // Unknown preference (failed read): mint nothing, so no fail-open
+      // snapshot gets persisted; the next request retries the read.
+      if (autoLogout !== null) {
+        // A matching pre-toggle cookie keeps its timers: upgrading the shape
+        // must not restart the absolute window.
+        const state = verifiedState && stateMatches
+          ? { ...verifiedState, autoLogout }
+          : createSessionTimeoutState({
+              userId: user.id,
+              sessionId,
+              method,
+              autoLogout,
+            })
+        const signedState = await signSessionTimeoutState(state)
+
+        if (signedState) {
+          request.cookies.set(SESSION_TIMEOUT_COOKIE, signedState)
+          supabaseResponse.cookies.set(
+            SESSION_TIMEOUT_COOKIE,
+            signedState,
+            sessionTimeoutCookieOptions(),
+          )
+          clearAuthMethodHint(request, supabaseResponse)
+        }
+      }
+    } else {
+      const timeoutReason = evaluateSessionTimeout(
+        verifiedState,
+        timeoutConfig,
+      )
+      if (timeoutReason) {
+        await signOutTimedOutSession(supabase)
+        return sessionTimeoutResponse(
+          request,
+          supabaseResponse,
+          timeoutReason,
+          verifiedState.method,
+        )
+      }
+    }
+  }
+
   // ── API routes ──────────────────────────────────────────────────────────
   // API routes authenticate themselves (requireAuth, API-key Bearer, cron
   // secret, webhook signatures). Middleware runs on them for ONE reason: to
@@ -87,7 +190,7 @@ export async function updateSession(request: NextRequest) {
   if (pathname.startsWith('/api')) {
     const skipMfaGate = apiPathSkipsMfaGate(
       pathname,
-      request.headers.get('authorization') !== null,
+      hasAuthorizationHeader,
     )
     if (!skipMfaGate && user && shouldEnforceMfa(user)) {
       const { data: aal } =
@@ -123,6 +226,23 @@ export async function updateSession(request: NextRequest) {
   // fails. An already-logged-in user typing /reset-password directly just gets
   // the same "change password" experience as in settings: no security loss.
   if (pathname.startsWith('/reset-password')) {
+    return supabaseResponse
+  }
+
+  // Public agent-discovery + API docs surfaces. /llms.txt and /llms-full.txt
+  // exist FOR anonymous consumers (the llms.txt convention targets logged-out
+  // crawlers and IDE agents), and /docs is the public API documentation the
+  // OpenAPI spec and the installable accounted-api skill link to. None of it
+  // reads the session. Without this branch every anonymous hit 307-bounced to
+  // /login, which silently broke agent discovery on the hosted product
+  // (openapi.json only escaped because the proxy matcher skips .json paths).
+  // Logged-in users fall through to the same content: no redirect either way.
+  if (
+    pathname === '/llms.txt' ||
+    pathname === '/llms-full.txt' ||
+    pathname === '/docs' ||
+    pathname.startsWith('/docs/')
+  ) {
     return supabaseResponse
   }
 
@@ -362,6 +482,112 @@ export async function updateSession(request: NextRequest) {
   }
 
   return supabaseResponse
+}
+
+async function getSupabaseSessionId(
+  supabase: ReturnType<typeof createServerClient>,
+): Promise<string | null> {
+  if (typeof supabase.auth.getClaims !== 'function') return null
+
+  try {
+    const { data } = await supabase.auth.getClaims()
+    return typeof data?.claims?.session_id === 'string'
+      ? data.claims.session_id
+      : null
+  } catch (error) {
+    console.warn('[middleware] could not resolve Supabase session id', error)
+    return null
+  }
+}
+
+async function signOutTimedOutSession(
+  supabase: ReturnType<typeof createServerClient>,
+): Promise<void> {
+  try {
+    await supabase.auth.signOut({ scope: 'local' })
+  } catch (error) {
+    console.warn('[middleware] timed-out session revocation failed', error)
+  }
+}
+
+function clearAuthMethodHint(
+  request: NextRequest,
+  response: NextResponse,
+): void {
+  if (!request.cookies.has(SESSION_AUTH_METHOD_HINT_COOKIE)) return
+  request.cookies.delete(SESSION_AUTH_METHOD_HINT_COOKIE)
+  response.cookies.set(SESSION_AUTH_METHOD_HINT_COOKIE, '', {
+    path: '/',
+    maxAge: 0,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+  })
+}
+
+function clearSessionTimeoutCookies(
+  request: NextRequest,
+  response: NextResponse,
+): void {
+  if (request.cookies.has(SESSION_TIMEOUT_COOKIE)) {
+    request.cookies.delete(SESSION_TIMEOUT_COOKIE)
+    response.cookies.set(
+      SESSION_TIMEOUT_COOKIE,
+      '',
+      sessionTimeoutClearCookieOptions(),
+    )
+  }
+  clearAuthMethodHint(request, response)
+}
+
+function copyResponseCookies(from: NextResponse, to: NextResponse): void {
+  for (const cookie of from.cookies.getAll()) {
+    to.cookies.set(cookie)
+  }
+}
+
+function sessionTimeoutResponse(
+  request: NextRequest,
+  authResponse: NextResponse,
+  reason: SessionTimeoutReason,
+  method: SessionAuthMethod,
+): NextResponse {
+  clearSessionTimeoutCookies(request, authResponse)
+
+  if (request.nextUrl.pathname.startsWith('/api')) {
+    const response = NextResponse.json(
+      {
+        error: {
+          code: 'SESSION_EXPIRED',
+          message: reason === 'idle'
+            ? 'Sessionen har upphört på grund av inaktivitet.'
+            : 'Sessionen har upphört av säkerhetsskäl.',
+          message_en: reason === 'idle'
+            ? 'The session expired due to inactivity.'
+            : 'The session expired for security reasons.',
+          reason,
+        },
+      },
+      { status: 401 },
+    )
+    response.headers.set(SESSION_TIMEOUT_REASON_HEADER, reason)
+    response.headers.set('Cache-Control', 'no-store')
+    copyResponseCookies(authResponse, response)
+    return response
+  }
+
+  const url = new URL('/login', request.url)
+  url.searchParams.set('reason', reason)
+  url.searchParams.set('method', method)
+  const destination = safeReturnTo(
+    request.nextUrl.pathname + request.nextUrl.search,
+    '/',
+  )
+  if (destination !== '/') url.searchParams.set('next', destination)
+
+  const response = NextResponse.redirect(url)
+  response.headers.set('Cache-Control', 'no-store')
+  copyResponseCookies(authResponse, response)
+  return response
 }
 
 /**

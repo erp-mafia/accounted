@@ -104,6 +104,7 @@ describe('toDeliveryReport', () => {
       status: 'bounced',
       occurredAt: '2026-07-24T08:00:00.000Z',
       detail: '550 5.1.1 Recipient address rejected Permanent/General',
+      recipients: ['customer@example.com'],
     })
   })
 
@@ -141,7 +142,33 @@ describe('toDeliveryReport', () => {
       status: 'bounced',
       occurredAt: '2026-07-24T08:00:00.000Z',
       detail: null,
+      recipients: ['customer@example.com'],
     })
+  })
+
+  it('normalizes and deduplicates impacted recipients defensively', () => {
+    const event = {
+      type: 'email.delivered',
+      created_at: '2026-07-24T08:00:00.000Z',
+      data: baseData({
+        to: [' Customer@example.com ', 'customer@example.com', 42, '', 'copy@example.org'],
+      }),
+    } as unknown as WebhookEventPayload
+
+    expect(toDeliveryReport(event)?.recipients).toEqual([
+      'Customer@example.com',
+      'copy@example.org',
+    ])
+  })
+
+  it('keeps a valid outcome when the impacted-recipient list is malformed', () => {
+    const event = {
+      type: 'email.bounced',
+      created_at: '2026-07-24T08:00:00.000Z',
+      data: baseData({ to: 'customer@example.com' }),
+    } as unknown as WebhookEventPayload
+
+    expect(toDeliveryReport(event)?.recipients).toEqual([])
   })
 
   it('drops an event without a provider message id', () => {
@@ -235,12 +262,13 @@ describe('POST /api/extensions/ext/email/delivery-status', () => {
 
     expect(response.status).toBe(200)
     expect(body.data).toEqual({ applied: true })
-    expect(rpcMock).toHaveBeenCalledWith('apply_invoice_delivery_provider_status', {
+    expect(rpcMock).toHaveBeenCalledWith('apply_invoice_delivery_provider_event', {
       p_provider: 'resend',
       p_provider_message_id: 'msg-1',
       p_status: 'bounced',
       p_occurred_at: '2026-07-24T08:00:00.000Z',
       p_detail: 'Mailbox unavailable Permanent/General',
+      p_recipient_addresses: ['customer@example.com'],
     })
   })
 

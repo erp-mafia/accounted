@@ -21,23 +21,49 @@ async function insertStornoOf(params: {
   sourceType?: string
 }): Promise<string> {
   const id = randomUUID()
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status, reverses_id)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2026-12-31', 'Makulering', $6, $7, $8)`,
-    [
-      id,
-      params.userId,
-      params.companyId,
-      params.fiscalPeriodId,
-      params.voucherNumber,
-      params.sourceType ?? 'storno',
-      params.status ?? 'posted',
-      params.reversesId,
-    ],
-  )
-  return id
+  const status = params.status ?? 'posted'
+  const client = await getPool().connect()
+
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status, reverses_id)
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-12-31', 'Makulering', $6, $7, $8)`,
+      [
+        id,
+        params.userId,
+        params.companyId,
+        params.fiscalPeriodId,
+        params.voucherNumber,
+        params.sourceType ?? 'storno',
+        status,
+        params.reversesId,
+      ],
+    )
+
+    if (status === 'posted') {
+      // Mirror the default closing-entry fixture so the storno is a valid,
+      // balanced voucher while this suite focuses on the reversal chain.
+      await client.query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount)
+         VALUES ($1, '3001', 1000, 0),
+                ($1, '1930', 0, 1000)`,
+        [id],
+      )
+      await client.query('SET CONSTRAINTS check_balance_on_posted_insert IMMEDIATE')
+    }
+
+    await client.query('COMMIT')
+    return id
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 describe('closing_entry_id detach escape hatch', () => {

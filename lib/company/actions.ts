@@ -3,13 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
-import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
-import { normalizeVatNumber, isValidSwedishVatNumber, deriveSwedishVatNumber } from '@/lib/vat/vat-number'
-import {
-  regenerateTaxDeadlinesForUser,
-  toDeadlineSettings,
-} from '@/lib/tax/deadline-generator'
-import type { CompanySettingsForDeadlines } from '@/lib/tax/deadline-config'
+import { createCompanyCore } from '@/lib/company/create-company'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -101,25 +95,11 @@ async function createCompanyFromOnboardingImpl(params: {
 
   const companyName = (params.settings.company_name as string | undefined) || 'Mitt företag'
 
-  // Org-number format validation. We intentionally do NOT enforce
-  // uniqueness: the same org number may legitimately appear on multiple
-  // companies (a separate test copy of your real company, or a consultant
-  // and the owner each tracking the same entity). Tenant isolation
-  // (RLS + company_id) is the real boundary, not org-number uniqueness.
-  //
-  // normalizeOrgNumber returns null for malformed input: we refuse rather
-  // than storing a value that would break SIE/SRU exports later.
-  const rawOrgNumber = params.settings.org_number as string | undefined
-  const cleanedOrgNumber = normalizeOrgNumber(rawOrgNumber)
-  if (rawOrgNumber && rawOrgNumber.trim() && !cleanedOrgNumber) {
-    return { error: 'org_number_invalid' }
-  }
-
   // Creating a company under a BYRÅ team is admin-gated (WL-15): every
   // created client company is +1 on the byrå's monthly invoice, so only team
   // owner/admin may do it. Personal-team creation is untouched. The
   // create_company_with_owner RPC enforces the same rule in the database
-  // (migration 20260804113000); this check exists to return a readable error
+  // (migration 20260826130400); this check exists to return a readable error
   // instead of a raw 42501. A team the caller cannot read via RLS resolves
   // to null kind here and falls through to the RPC's own membership check.
   const { data: teamRow } = await supabase
@@ -140,160 +120,30 @@ async function createCompanyFromOnboardingImpl(params: {
     }
   }
 
-  // 1. Create company + owner membership atomically via RPC
-  const { data: newCompanyId, error: companyError } = await supabase.rpc('create_company_with_owner', {
-    p_name: companyName,
-    p_entity_type: entityType,
-    p_team_id: params.teamId,
-  })
-
-  if (companyError || !newCompanyId) {
-    console.error('[createCompanyFromOnboarding] company creation failed', companyError)
-    return { error: 'Kunde inte skapa företag. Försök igen.' }
-  }
-
-  // Helper: roll back the company if a subsequent step fails. Deletes in FK
-  // order. Each delete is error-checked so a failed cleanup leaves a trace
-  // instead of silently stranding partial company data behind a generic
-  // "try again" message.
-  const rollback = async (reason: string, err: unknown) => {
-    console.error(`[createCompanyFromOnboarding] rolling back ${newCompanyId}: ${reason}`, err)
-    const deletions: Array<[table: string, run: () => PromiseLike<{ error: unknown }>]> = [
-      ['company_settings', () => supabase.from('company_settings').delete().eq('company_id', newCompanyId)],
-      ['fiscal_periods', () => supabase.from('fiscal_periods').delete().eq('company_id', newCompanyId)],
-      ['chart_of_accounts', () => supabase.from('chart_of_accounts').delete().eq('company_id', newCompanyId)],
-      ['company_members', () => supabase.from('company_members').delete().eq('company_id', newCompanyId)],
-      ['companies', () => supabase.from('companies').delete().eq('id', newCompanyId)],
-    ]
-    for (const [table, run] of deletions) {
-      const { error: deleteError } = await run()
-      if (deleteError) {
-        console.error(
-          `[createCompanyFromOnboarding] rollback delete failed for ${table} (company ${newCompanyId})`,
-          deleteError,
-        )
-      }
-    }
-  }
-
-  // Mirror the normalized org_number onto the companies row so future
-  // duplicate checks and cross-references are reliable. MUST be error-checked
-  // and rolled back on failure: otherwise the freshly-created company would
-  // exist without an org_number and the duplicate guard would never match it
-  // for any future user (the very guard this code is enforcing).
-  if (cleanedOrgNumber) {
-    const { error: orgUpdateError } = await supabase
-      .from('companies')
-      .update({ org_number: cleanedOrgNumber })
-      .eq('id', newCompanyId)
-    if (orgUpdateError) {
-      await rollback('org_number update failed', orgUpdateError)
-      return { error: 'Kunde inte spara organisationsnummer. Försök igen.' }
-    }
-  }
-
-  // Persist whatever lookup data the wizard already gathered. Do NOT call
-  // /profile here: that handler fans out to 13 Lens calls and the 5 s
-  // timeout in tic-fetch.ts ate ~530 wasted calls in May before yielding
-  // zero snapshots (every signup's /profile timed out, but the in-flight
-  // upstream fetches still counted against quota). The agent build path
-  // (app/(onboarding)/onboarding/agent/page.tsx) calls ensureTicSnapshot
-  // with upgradeV1: true lazily, which is the right place: only companies
-  // that actually reach agent onboarding spend the budget.
-  if (params.ticLookup) {
-    const { error: ticErr } = await supabase
-      .from('companies')
-      .update({
-        tic_snapshot: params.ticLookup,
-        tic_snapshot_fetched_at: new Date().toISOString(),
-      })
-      .eq('id', newCompanyId)
-    if (ticErr) {
-      console.warn('[createCompanyFromOnboarding] tic snapshot persist failed', ticErr)
-    }
-  }
-
-  // 2. Seed chart of accounts
-  const { error: coaError } = await supabase.rpc('seed_chart_of_accounts', {
-    p_company_id: newCompanyId,
-    p_entity_type: entityType,
-  })
-  if (coaError) {
-    await rollback('COA seeding failed', coaError)
-    return { error: 'Kunde inte skapa kontoplan. Försök igen.' }
-  }
-
-  // 3. Save settings (strip UI-only and managed fields)
-  const {
-    id: _id,
-    user_id: _uid,
-    company_id: _cid,
-    created_at: _ca,
-    updated_at: _ua,
-    is_first_fiscal_year: _ify,
-    first_year_start: _fys,
-    first_year_end: _fye,
-    ...settingsToSave
-  } = params.settings
-
-  // Defence in depth: this upsert bypasses UpdateSettingsSchema, so never persist
-  // a VAT number blind. Normalise to the canonical SE+12 form; if it isn't
-  // structurally valid (e.g. the legacy SE+14 personnummer derivation), re-derive
-  // it from the org number, falling back to null rather than storing a malformed
-  // momsregistreringsnummer.
-  if (typeof settingsToSave.vat_number === 'string' && settingsToSave.vat_number) {
-    const normalized = normalizeVatNumber(settingsToSave.vat_number)
-    settingsToSave.vat_number = isValidSwedishVatNumber(normalized)
-      ? normalized
-      : deriveSwedishVatNumber(settingsToSave.org_number as string | null | undefined)
-  }
-
-  const { error: settingsError } = await supabase
-    .from('company_settings')
-    .upsert(
-      {
-        ...settingsToSave,
-        company_id: newCompanyId,
-        onboarding_complete: true,
-        onboarding_step: 4,
-      },
-      { onConflict: 'company_id' },
-    )
-
-  if (settingsError) {
-    await rollback('settings upsert failed', settingsError)
-    return { error: 'Kunde inte spara inställningar. Försök igen.' }
-  }
-
-  // 4. Create fiscal period
-  const { error: periodError } = await supabase.from('fiscal_periods').upsert(
+  // Steps 1-5 (company + owner via RPC, org number, TIC snapshot, chart,
+  // settings, fiscal period, tax deadlines, with rollback) are shared with
+  // the MCP and v1 creation paths: lib/company/create-company.ts.
+  const created = await createCompanyCore(
+    supabase,
     {
-      company_id: newCompanyId,
-      name: params.fiscalPeriod.name,
-      period_start: params.fiscalPeriod.startDate,
-      period_end: params.fiscalPeriod.endDate,
+      entityType,
+      companyName,
+      orgNumber: params.settings.org_number as string | undefined,
+      settings: params.settings,
+      fiscalPeriod: params.fiscalPeriod,
+      ticLookup: params.ticLookup,
     },
-    { onConflict: 'company_id,period_start,period_end' },
+    () =>
+      supabase.rpc('create_company_with_owner', {
+        p_name: companyName,
+        p_entity_type: entityType,
+        p_team_id: params.teamId,
+      }),
   )
-
-  if (periodError) {
-    await rollback('fiscal period upsert failed', periodError)
-    return { error: 'Kunde inte skapa räkenskapsår. Försök igen.' }
+  if (created.error !== undefined) {
+    return { error: created.error }
   }
-
-  // 5. Create the automatic tax deadlines while the onboarding data is still
-  // available. Treat this as part of company creation so a new company never
-  // starts in the broken state where valid settings exist without deadlines.
-  try {
-    await regenerateTaxDeadlinesForUser(
-      supabase,
-      newCompanyId,
-      toDeadlineSettings(settingsToSave as Partial<CompanySettingsForDeadlines>),
-    )
-  } catch (deadlineError) {
-    await rollback('tax deadline generation failed', deadlineError)
-    return { error: 'Kunde inte skapa skattedeadlines. Försök igen.' }
-  }
+  const newCompanyId = created.companyId
 
   // 6. Set as active company
   try {

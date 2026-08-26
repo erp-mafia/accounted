@@ -33,6 +33,7 @@ import { loadAndDeriveAbsence } from './derive-absence-line-items'
 import { getLineItemAccount } from './account-mapping'
 import { computePremiumLines } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
+import { computePriorYtd, loadOpeningBalances } from './ytd'
 import { dailyDivisor, hourlyDivisor } from './work-schedule'
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
@@ -146,6 +147,19 @@ export async function runSalaryCalculation(
   // 2. Load year config.
   const config = await loadPayrollConfig(supabase, paymentYear)
 
+  // 2b. Company-level öresavrundning toggle: round each net payout up to a
+  //     whole krona (banks that reject öre in salary files). maybeSingle: a
+  //     company without a settings row keeps the default (off).
+  const { data: companySettings, error: settingsError } = await supabase
+    .from('company_settings')
+    .select('salary_net_rounding')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (settingsError) {
+    return { ok: false, code: 'DATABASE_ERROR', details: settingsError }
+  }
+  const roundNetToWholeKrona = companySettings?.salary_net_rounding === true
+
   // 3. Load roster: `salary_run_employees` joined with employees + line items.
   // Defense-in-depth: filter by company_id too even though salary_run_id is a
   // foreign key. RLS already constrains the table per-company, but per
@@ -238,101 +252,52 @@ export async function runSalaryCalculation(
     }
   }
 
-  // 6. YTD aggregation across prior BOOKED runs in the same period_year.
-  //    Drives the engine's progressive-tax + capped-avgift calculations.
-  const { data: priorRuns } = await supabase
-    .from('salary_run_employees')
-    .select(
-      'employee_id, gross_salary, tax_withheld, net_salary, salary_run:salary_runs!inner(period_year, period_month, status)',
-    )
-    .eq('company_id', companyId)
-    .eq('salary_run.period_year', run.period_year)
-    .eq('salary_run.status', 'booked')
-    .lt('salary_run.period_month', run.period_month)
-
-  // 6b. Cutover opening balances (payroll gap-closure 2.2): a company that
-  //     switched to Accounted mid-year has YTD state from its previous
-  //     payroll system that no booked run here carries. Fetched BEFORE the
-  //     prior-run aggregation because the cutover month also decides which
-  //     booked runs count (see the exclusion in the loop below). YTD is
-  //     payslip display + reporting only: per-month tax lookup and the
-  //     per-month avgifter caps never read it.
-  const rosterEmployeeIds = runEmployees
-    .map((sre) => sre.employee?.id)
-    .filter((id): id is string => !!id)
+  // 6. Cutover opening balances (payroll gap-closure 2.2): a company that
+  //    switched to Accounted mid-year has YTD state from its previous
+  //    payroll system that no run in this system carries. Loaded here
+  //    because the karensavdrag adjustment further down reads the same rows.
+  const rosterEmployeeIds = runEmployees.map((sre) => sre.employee_id as string)
   const openingByEmployee = new Map<
     string,
     { cutoverDate: string; karensPeriodsAdjustment: number }
   >()
-  const openingRowsTyped: Array<{
-    employee_id: string
-    cutover_date: string
-    ytd_gross: number
-    ytd_tax: number
-    ytd_net: number
-    karens_periods_adjustment: number
-  }> = []
-  if (rosterEmployeeIds.length > 0) {
-    const { data: openingRows } = await supabase
-      .from('employee_opening_balances')
-      .select('employee_id, cutover_date, ytd_gross, ytd_tax, ytd_net, karens_periods_adjustment')
-      .eq('company_id', companyId)
-      .in('employee_id', rosterEmployeeIds)
 
-    for (const opening of (openingRows || []) as typeof openingRowsTyped) {
-      openingRowsTyped.push(opening)
+  // 6b. YTD carried into this period (prior counted runs + any pre-cutover
+  //     balance). Stored on the roster rows below as the payslip's
+  //     "Ackumulerat" block, and refreshed again when the run is approved
+  //     and booked: calculating a run before an earlier month is authorized
+  //     would otherwise freeze a YTD that is missing that month forever.
+  //     YTD is display + reporting only: the per-month tax lookup and the
+  //     per-month avgifter caps never read it.
+  //
+  //     A failed read throws rather than yielding an empty carry-in. Silently
+  //     dropping every prior month (and, from the same rows, the karensavdrag
+  //     adjustment that reaches sjuklön) is worse than failing the
+  //     calculation, and matches how this function treats every other query
+  //     error.
+  let ytdByEmployee: Map<string, { gross: number; tax: number; net: number }>
+  try {
+    const openingRows = await loadOpeningBalances(supabase, companyId, rosterEmployeeIds)
+    for (const opening of openingRows) {
       openingByEmployee.set(opening.employee_id, {
         cutoverDate: opening.cutover_date,
         karensPeriodsAdjustment: opening.karens_periods_adjustment ?? 0,
       })
     }
-  }
 
-  const ytdByEmployee = new Map<string, { gross: number; tax: number; net: number }>()
-  // Cast via unknown: supabase-js infers the to-one `salary_run` embed as an
-  // array, but PostgREST returns an object for a many-to-one relationship.
-  for (const prior of (priorRuns || []) as unknown as Array<{
-    employee_id: string
-    gross_salary: number
-    tax_withheld: number
-    net_salary: number
-    salary_run: { period_year: number; period_month: number }
-  }>) {
-    // The opening balance is authoritative for pre-cutover YTD: a booked run
-    // backdated before the cutover month covers a month the opening already
-    // carries, so counting both would double the YTD.
-    const opening = openingByEmployee.get(prior.employee_id)
-    if (opening) {
-      const cutoverYear = Number(opening.cutoverDate.slice(0, 4))
-      const cutoverMonth = Number(opening.cutoverDate.slice(5, 7))
-      if (
-        prior.salary_run.period_year === cutoverYear &&
-        prior.salary_run.period_month < cutoverMonth
-      ) {
-        continue
-      }
+    ytdByEmployee = await computePriorYtd(supabase, {
+      companyId,
+      periodYear: run.period_year as number,
+      periodMonth: run.period_month as number,
+      employeeIds: rosterEmployeeIds,
+      openingRows,
+    })
+  } catch (err) {
+    return {
+      ok: false,
+      code: 'DATABASE_ERROR',
+      details: { reason: err instanceof Error ? err.message : 'YTD aggregation failed' },
     }
-    const current = ytdByEmployee.get(prior.employee_id) || { gross: 0, tax: 0, net: 0 }
-    current.gross += prior.gross_salary
-    current.tax += prior.tax_withheld
-    current.net += prior.net_salary
-    ytdByEmployee.set(prior.employee_id, current)
-  }
-
-  // Merge the opening YTD when the run's period is in the cutover year, on
-  // or after the cutover month (the month gate prevents double-count if
-  // someone backdates an in-system run before cutover).
-  for (const opening of openingRowsTyped) {
-    const cutoverYear = Number(opening.cutover_date.slice(0, 4))
-    const cutoverMonth = Number(opening.cutover_date.slice(5, 7))
-    const runOnOrAfterCutover =
-      run.period_year === cutoverYear && run.period_month >= cutoverMonth
-    if (!runOnOrAfterCutover) continue
-    const current = ytdByEmployee.get(opening.employee_id) || { gross: 0, tax: 0, net: 0 }
-    current.gross = roundOre(current.gross + (opening.ytd_gross || 0))
-    current.tax = roundOre(current.tax + (opening.ytd_tax || 0))
-    current.net = roundOre(current.net + (opening.ytd_net || 0))
-    ytdByEmployee.set(opening.employee_id, current)
   }
 
   // 7. Pay period bounds: used to load per-day absence + worked-day records.
@@ -642,6 +607,7 @@ export async function runSalaryCalculation(
         if (DERIVED_PREMIUM_TYPES.includes(li.item_type as ShiftPremiumItemType)) return false
         if (li.source_benefit_id) return false
         if (li.item_type === 'semesterersattning') return false
+        if (li.item_type === 'oresavrundning') return false
         return true
       })
       .map((li: Record<string, unknown>) => ({
@@ -715,16 +681,10 @@ export async function runSalaryCalculation(
         periodEnd,
         employmentStart: emp.employment_start,
         employmentEnd: emp.employment_end,
+        roundNetToWholeKrona,
       },
       config,
-      taxRates.map((r) => ({
-        tableYear: r.tableYear,
-        tableNumber: r.tableNumber,
-        columnNumber: r.columnNumber,
-        incomeFrom: r.incomeFrom,
-        incomeTo: r.incomeTo,
-        taxAmount: r.taxAmount,
-      })),
+      taxRates.map((r) => ({ ...r })),
     )
 
     // Aggregated absence counts derived from per-day records.
@@ -770,18 +730,9 @@ export async function runSalaryCalculation(
         parental_days: parentalDays,
         vacation_days_taken: vacationDays,
         calculation_breakdown: { steps: result.steps },
-        ytd_gross:
-          Math.round(
-            ((ytdByEmployee.get(sre.employee_id)?.gross || 0) + result.grossSalary) * 100,
-          ) / 100,
-        ytd_tax:
-          Math.round(
-            ((ytdByEmployee.get(sre.employee_id)?.tax || 0) + result.taxWithheld) * 100,
-          ) / 100,
-        ytd_net:
-          Math.round(
-            ((ytdByEmployee.get(sre.employee_id)?.net || 0) + result.netSalary) * 100,
-          ) / 100,
+        ytd_gross: roundOre((ytdByEmployee.get(sre.employee_id)?.gross || 0) + result.grossSalary),
+        ytd_tax: roundOre((ytdByEmployee.get(sre.employee_id)?.tax || 0) + result.taxWithheld),
+        ytd_net: roundOre((ytdByEmployee.get(sre.employee_id)?.net || 0) + result.netSalary),
       })
       .eq('id', sre.id)
 
@@ -817,6 +768,40 @@ export async function runSalaryCalculation(
       })
       if (insSemErr) {
         return { ok: false, code: 'DATABASE_ERROR', details: insSemErr }
+      }
+    }
+
+    // 8i. Replace the derived 'oresavrundning' line item. All flags false: the
+    //     rounding is not pay, not tax base, not avgift basis; it exists so
+    //     the payslip shows the whole-krona step and the booking gets its 3740
+    //     debit. Deleted unconditionally so toggling the setting off (or a net
+    //     that lands on a whole krona) leaves no stale row behind.
+    const { error: delRoundErr } = await supabase
+      .from('salary_line_items')
+      .delete()
+      .eq('salary_run_employee_id', sre.id)
+      .eq('item_type', 'oresavrundning')
+    if (delRoundErr) {
+      return { ok: false, code: 'DATABASE_ERROR', details: delRoundErr }
+    }
+    if (result.netRounding > 0) {
+      const { error: insRoundErr } = await supabase.from('salary_line_items').insert({
+        salary_run_employee_id: sre.id,
+        company_id: companyId,
+        item_type: 'oresavrundning',
+        description: 'Öresavrundning',
+        quantity: 1,
+        amount: Math.round(result.netRounding * 100) / 100,
+        is_taxable: false,
+        is_avgift_basis: false,
+        is_vacation_basis: false,
+        is_gross_deduction: false,
+        is_net_deduction: false,
+        account_number: getLineItemAccount('oresavrundning', emp.employment_type),
+        sort_order: 900,
+      })
+      if (insRoundErr) {
+        return { ok: false, code: 'DATABASE_ERROR', details: insRoundErr }
       }
     }
 

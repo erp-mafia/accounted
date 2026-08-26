@@ -165,6 +165,11 @@ export default function PaymentBookingDialog({
             items: invoice.items,
             default_dimensions: invoice.default_dimensions,
             ore_rounding: invoice.ore_rounding,
+            deduction_total: invoice.deduction_total,
+            // #1717: lets the proposal clear the actual remaining on a
+            // partially_paid invoice (öre write-off when < 1 kr remains).
+            paid_amount: invoice.paid_amount,
+            remaining_amount: invoice.remaining_amount,
           },
           accountingMethod,
           entityType,
@@ -321,7 +326,10 @@ export default function PaymentBookingDialog({
       <DialogContent className="sm:max-w-[680px]">
         <DialogHeader>
           <DialogTitle>
-            {t('title')}{invoice.invoice_number ? t('title_suffix', { number: invoice.invoice_number }) : ''}
+            {/* data-ph-mask: the invoice number is user data */}
+            {t('title')}{invoice.invoice_number ? (
+              <span data-ph-mask="">{t('title_suffix', { number: invoice.invoice_number })}</span>
+            ) : ''}
             {nextVoucher && (
               <span className="ml-1 text-muted-foreground tabular-nums">
                 ({nextVoucher.series}{nextVoucher.next})

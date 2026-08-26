@@ -238,6 +238,49 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect(result.preview.vat_amount).toBe(250)
   })
 
+  it('resolves a foreign supplier by VAT number when the document carries no org number', async () => {
+    // The extractor leaves orgNumber null for non-Swedish entities by design,
+    // so momsregistreringsnumret is the only exact key an EU supplier has.
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-vat',
+        status: 'received',
+        extracted_data: {
+          ...baseExtracted,
+          supplier: {
+            name: 'Adobe Systems Software Ireland Ltd',
+            orgNumber: null,
+            vatNumber: 'IE6364992H',
+          },
+        },
+        matched_supplier_id: null,
+        created_supplier_invoice_id: null,
+        document_id: 'doc-vat',
+      },
+      supplierByOrg: null,
+      supplierByName: null,
+      supplierList: [
+        { id: 'other-supplier', name: 'Some GmbH', org_number: null, vat_number: 'DE123456789' },
+        {
+          id: 'adobe-supplier',
+          name: 'ADOBE SYSTEMS SOFTWARE IRELAND LTD',
+          org_number: null,
+          vat_number: 'IE6364992H',
+        },
+      ],
+      supplierRecord: { id: 'adobe-supplier', default_expense_account: null },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-vat', dry_run: true },
+      'company-1', 'user-1', supabase,
+    )) as { preview: { supplier_id: string; supplier_resolution: string; extracted_vat_number: string | null } }
+
+    expect(result.preview.supplier_id).toBe('adobe-supplier')
+    expect(result.preview.supplier_resolution).toBe('lookup_vat_number')
+    expect(result.preview.extracted_vat_number).toBe('IE6364992H')
+  })
+
   it('falls through to org_number lookup when no matched supplier', async () => {
     const supabase = makeMock({
       inbox: {
@@ -331,6 +374,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect(result.preview.unresolved_supplier).toEqual({
       extracted_name: 'Acme AB',
       extracted_org_number: '5566778899',
+      extracted_vat_number: null,
     })
     // Next hint prefills gnubok_create_supplier from the extraction.
     expect(result.next.tool).toBe('gnubok_create_supplier')
@@ -608,6 +652,69 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect(params.items[1].vat_rate).toBe(0)
     expect(params.items[1].vat_amount).toBe(0)
     expect(params.vat_amount).toBe(120)
+  })
+
+  it('rejects apply_slp when the line resolves to a non-741x account (staging-time guard)', async () => {
+    // The executor (commitCreateSupplierInvoiceFromInbox) refuses the same
+    // combination at commit time; rejecting at staging means the agent learns
+    // immediately instead of a human approving a doomed operation.
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-slp-1',
+        status: 'received',
+        extracted_data: baseExtracted, // line resolves to supplier default / 4000
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-slp-1',
+      },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    await expect(
+      tool.execute(
+        {
+          inbox_item_id: 'inbox-slp-1',
+          line_overrides: [{ line_number: 1, apply_slp: true }],
+        },
+        'company-1', 'user-1', supabase,
+      ),
+    ).rejects.toThrow(/7410-7419/)
+  })
+
+  it('stages apply_slp into the operation items when the line resolves to a 741x account', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-slp-2',
+        status: 'received',
+        extracted_data: {
+          ...baseExtracted,
+          lineItems: [
+            { description: 'Tjänstepension', quantity: 1, unit_price: 10000, line_total: 10000, vat_rate: 0, vat_amount: 0 },
+          ],
+        },
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-slp-2',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      {
+        inbox_item_id: 'inbox-slp-2',
+        line_overrides: [{ line_number: 1, account_number: '7412', apply_slp: true }],
+      },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const params = inserts[0].params as {
+      items: Array<{ account_number: string; apply_slp?: boolean }>
+    }
+    // The executor reads item.apply_slp === true to book the 7533/2514 pair:
+    // without this plumbing the flag was unreachable from MCP.
+    expect(params.items[0].account_number).toBe('7412')
+    expect(params.items[0].apply_slp).toBe(true)
   })
 
   it('invoice_date_override rescues an inbox item with no extracted invoiceDate', async () => {

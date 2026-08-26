@@ -14,6 +14,7 @@ import { createLogger, type Logger } from '@/lib/logger'
 export type ProviderCallErrorCode =
   | 'PROVIDER_AUTH_EXPIRED'
   | 'PROVIDER_LICENSE_MISSING'
+  | 'PROVIDER_API_MODULE_INACTIVE'
   | 'PROVIDER_RATE_LIMITED'
   | 'PROVIDER_UNREACHABLE'
   | 'PROVIDER_UPSTREAM_ERROR'
@@ -198,6 +199,18 @@ export function classifyProviderError(error: unknown): ProviderCallErrorCode | n
     (error as Error & { statusCode?: number; status?: number }).statusCode ??
     (error as Error & { statusCode?: number; status?: number }).status
 
+  // Provider clients (e.g. VismaApiError) carry the response body separately
+  // from the Error message; both can hold the discriminating string.
+  const body = (error as Error & { body?: unknown }).body
+  const haystack = typeof body === 'string' ? `${error.message} ${body}` : error.message
+
+  // Order matters: 401/403 with a module/license body is a subscription
+  // problem, not a dead token. Mapping it to AUTH_EXPIRED would send the user
+  // into a reconnect loop that can never succeed (the exact failure mode this
+  // classification exists to prevent).
+  if (isApiModuleInactiveError(haystack)) return 'PROVIDER_API_MODULE_INACTIVE'
+  if (isMissingLicenseError(haystack)) return 'PROVIDER_LICENSE_MISSING'
+
   if (typeof status === 'number') {
     if (status === 401 || status === 403) return 'PROVIDER_AUTH_EXPIRED'
     if (status === 429) return 'PROVIDER_RATE_LIMITED'
@@ -231,4 +244,23 @@ export function isMissingLicenseError(message: string): boolean {
     haystack.includes('missing license') ||
     haystack.includes('not have enough licenses')
   )
+}
+
+/**
+ * True when a provider 403 means the customer's subscription has API access
+ * switched off or not included, NOT an expired/revoked grant.
+ *
+ * Visma eAccounting (Spiris) answers every data endpoint with
+ * `ForbiddenRequestException - No access to module: api_standard`
+ * (ErrorCode 4002) when the company's plan lacks the API module or it is not
+ * activated under "Appar och tillägg". OAuth still succeeds (the identity
+ * server is shared), so the stored tokens are valid; re-authorizing loops
+ * forever. The fix is on the customer's side: activate the API module (an
+ * add-on on smaller plans) and clear any "standardföretag" selection.
+ *
+ * Matches the raw provider body/message string, same approach as
+ * isMissingLicenseError above.
+ */
+export function isApiModuleInactiveError(message: string): boolean {
+  return /no access to module/i.test(message)
 }

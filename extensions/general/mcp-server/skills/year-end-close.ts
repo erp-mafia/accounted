@@ -28,15 +28,23 @@ Before running year-end, post any year-end adjusting entries via the web app:
 
 These are not staged via MCP today: direct in web UI. The skill is to remind the user.
 
-### Step 2: Currency revaluation (if multi-currency)
+### Step 2: Cash-method cut-off (kontantmetoden only)
+
+For a company using kontantmetoden, first run
+
+\`gnubok_post_kontantmetod_cutoff({ fiscal_period_id })\`.
+
+It stages the exact customer-receivable and supplier-payable entries dated on the fiscal year end, plus their reversals on day one of the next period. Review every proposed line and approve with \`confirmed=true\`. The next fiscal period must already exist and be open. Re-run \`gnubok_year_end_readiness\` after approval: BFL 5 kap 2 § makes this a blocker, not an optional reminder.
+
+### Step 3: Currency revaluation (if multi-currency)
 
 If the company has open foreign-currency receivables/payables (1510/2440 in EUR/USD/etc.), revalue to closing-date FX rate via \`gnubok_run_currency_revaluation({ fiscal_period_id, closing_date })\`. Posts to **3960** (kursvinster) and **7960** (kursförluster). One revaluation per period.
 
-### Step 3: Lock the period
+### Step 4: Lock the period
 
 \`gnubok_lock_period(fiscal_period_id)\`. Required before year-end. Refuses if business transactions are unbooked.
 
-### Step 4: Run year-end
+### Step 5: Run year-end
 
 \`gnubok_run_year_end(fiscal_period_id)\`: stages a high-risk operation. After approval:
 
@@ -44,11 +52,11 @@ If the company has open foreign-currency receivables/payables (1510/2440 in EUR/
 - Period flagged \`is_year_end_complete\`
 - Next period created automatically
 
-### Step 5: Set opening balances
+### Step 6: Set opening balances
 
 \`gnubok_set_opening_balances({ closed_period_id, next_period_id })\`. Copies class 1-2 closing balances into the next period as opening balances. Stage → approve.
 
-### Step 6: Close (final, irreversible)
+### Step 7: Close (final, irreversible)
 
 \`gnubok_close_period(fiscal_period_id)\`. Once approved, the period is sealed forever. **No more entries possible, not even via storno.**
 
@@ -85,6 +93,7 @@ These compute with \`gnubok_get_kpi_report\` for inputs but the actual tax JE is
 ## Tools
 
 - \`gnubok_lock_period\`: pre-flight before year-end
+- \`gnubok_post_kontantmetod_cutoff\`: stage the mandatory cash-method cut-off and reversals
 - \`gnubok_run_year_end\`: zero result accounts
 - \`gnubok_set_opening_balances\`: seed next period
 - \`gnubok_run_currency_revaluation\`: FX revaluation

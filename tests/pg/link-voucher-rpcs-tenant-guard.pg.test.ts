@@ -13,7 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from './setup'
-import { seedCompany } from './fixtures'
+import { insertPostedJournalEntry, seedCompany } from './fixtures'
 
 let arrivalSeq = 0
 
@@ -79,33 +79,27 @@ async function seedPostedVoucher(params: {
   side: 'ar' | 'ap'
   amount?: number
 }): Promise<string> {
-  const id = randomUUID()
   const amount = params.amount ?? 1000
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Betalning', 'manual', 'posted')`,
-    [id, params.userId, params.companyId, params.fiscalPeriodId, Math.floor(Math.random() * 100000)],
-  )
-  if (params.side === 'ar') {
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount)
-       VALUES ($1, '1930', $2, 0),
-              ($1, '1510', 0, $2)`,
-      [id, amount],
-    )
-  } else {
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount)
-       VALUES ($1, '2440', $2, 0),
-              ($1, '1930', 0, $2)`,
-      [id, amount],
-    )
-  }
-  return id
+  const lines = params.side === 'ar'
+    ? [
+        { accountNumber: '1930', debitAmount: amount, creditAmount: 0 },
+        { accountNumber: '1510', debitAmount: 0, creditAmount: amount },
+      ]
+    : [
+        { accountNumber: '2440', debitAmount: amount, creditAmount: 0 },
+        { accountNumber: '1930', debitAmount: 0, creditAmount: amount },
+      ]
+
+  return insertPostedJournalEntry({
+    userId: params.userId,
+    companyId: params.companyId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    voucherNumber: Math.floor(Math.random() * 100000),
+    entryDate: '2026-05-05',
+    description: 'Betalning',
+    sourceType: 'manual',
+    lines,
+  })
 }
 
 const LINK_INVOICE = `SELECT public.link_invoice_to_voucher($1, $2, $3, $4, $5) AS result`

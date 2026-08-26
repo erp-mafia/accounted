@@ -157,8 +157,8 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
   lines.push(`#UPPGIFT 7012 ${declaration.ink2['7012']}`)
 
   // Överskott/underskott
-  if (declaration.ink2['7113'] > 0) {
-    lines.push(`#UPPGIFT 7113 ${formatAmount(declaration.ink2['7113'])}`)
+  if (declaration.ink2['7104'] > 0) {
+    lines.push(`#UPPGIFT 7104 ${formatAmount(declaration.ink2['7104'])}`)
   }
   if (declaration.ink2['7114'] > 0) {
     lines.push(`#UPPGIFT 7114 ${formatAmount(declaration.ink2['7114'])}`)

@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { ArrowRight, Loader2, Plus, Trash2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import { useCompany } from '@/contexts/CompanyContext'
 import type { AccrualsProposal } from '@/lib/bokslut/accruals/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -41,6 +42,11 @@ function makeId() {
 
 export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps) {
   const { toast } = useToast()
+  const { company } = useCompany()
+  // An enskild firma has no revisor and normally closes under K1 (BFNAR
+  // 2006:1, förenklat årsbokslut): its arvode row is the bokslutsarvode
+  // (2991), and posts under 5 000 kr normally need not be accrued.
+  const isEF = company?.entity_type === 'enskild_firma'
   const [proposal, setProposal] = useState<AccrualsProposal | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -73,21 +79,25 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
     }
   }, [periodId])
 
-  const addManual = useCallback((kind: ManualEntry['kind']) => {
-    setManual((prev) => [
-      ...prev,
-      {
-        id: makeId(),
-        kind,
-        amount: '',
-        description: '',
-        expenseAccount: kind === 'audit_fee' ? '6420' : '',
-        prepaidAccount: '',
-        accruedAccount: '',
-        liabilityAccount: '2992',
-      },
-    ])
-  }, [])
+  const addManual = useCallback(
+    (kind: ManualEntry['kind']) => {
+      setManual((prev) => [
+        ...prev,
+        {
+          id: makeId(),
+          kind,
+          amount: '',
+          description: '',
+          expenseAccount: kind === 'audit_fee' ? '6420' : '',
+          prepaidAccount: '',
+          accruedAccount: '',
+          // EF defaults to 2991 (bokslut): it has no revision to accrue for.
+          liabilityAccount: isEF ? '2991' : '2992',
+        },
+      ])
+    },
+    [isEF],
+  )
 
   const removeManual = useCallback((id: string) => {
     setManual((prev) => prev.filter((m) => m.id !== id))
@@ -192,6 +202,12 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
             ska vändas på första dagen av nästa räkenskapsår: datumet visas per
             verifikation. Automatisk omvändning är planerad till en kommande version.
           </p>
+          {isEF && (
+            <p className="text-xs text-muted-foreground">
+              Enskild firma med förenklat årsbokslut (K1) behöver normalt inte
+              periodisera poster under 5 000 kr.
+            </p>
+          )}
         </CardHeader>
       </Card>
 
@@ -236,8 +252,9 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
         <CardHeader>
           <CardTitle className="text-base">Manuella periodiseringar</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Lägg till revisionsarvode, hyra som löper över årsskiftet, förutbetalda
-            försäkringar m.m.
+            {isEF
+              ? 'Lägg till bokslutsarvode, hyra som löper över årsskiftet, förutbetalda försäkringar m.m.'
+              : 'Lägg till revisionsarvode, hyra som löper över årsskiftet, förutbetalda försäkringar m.m.'}
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -248,13 +265,15 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
             <ManualEntryEditor
               key={m.id}
               entry={m}
+              isEF={isEF}
               onChange={(patch) => updateManual(m.id, patch)}
               onRemove={() => removeManual(m.id)}
             />
           ))}
           <div className="flex flex-wrap gap-2 pt-2">
             <Button variant="outline" size="sm" onClick={() => addManual('audit_fee')}>
-              <Plus className="mr-1 h-3.5 w-3.5" /> Revisions-/bokslutsarvode
+              <Plus className="mr-1 h-3.5 w-3.5" />{' '}
+              {isEF ? 'Bokslutsarvode' : 'Revisions-/bokslutsarvode'}
             </Button>
             <Button variant="outline" size="sm" onClick={() => addManual('manual_prepaid_expense')}>
               <Plus className="mr-1 h-3.5 w-3.5" /> Förutbetald kostnad
@@ -294,18 +313,20 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
 
 function ManualEntryEditor({
   entry,
+  isEF,
   onChange,
   onRemove,
 }: {
   entry: ManualEntry
+  isEF: boolean
   onChange: (patch: Partial<ManualEntry>) => void
   onRemove: () => void
 }) {
   return (
-    <div className="rounded-md border border-border p-3 space-y-3">
+    <div className="rounded-lg border border-border p-3 space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">
-          {entry.kind === 'audit_fee' && 'Revisions-/bokslutsarvode'}
+          {entry.kind === 'audit_fee' && (isEF ? 'Bokslutsarvode' : 'Revisions-/bokslutsarvode')}
           {entry.kind === 'manual_prepaid_expense' && 'Förutbetald kostnad'}
           {entry.kind === 'manual_accrued_expense' && 'Upplupen kostnad'}
         </p>
@@ -329,7 +350,7 @@ function ManualEntryEditor({
           <div className="space-y-1">
             <Label className="text-xs">Konto</Label>
             <select
-              className="border border-border rounded-md h-8 text-sm px-2 w-full bg-background"
+              className="border border-border rounded-lg h-8 text-sm px-2 w-full bg-background"
               value={entry.liabilityAccount}
               onChange={(e) =>
                 onChange({ liabilityAccount: e.target.value as '2991' | '2992' })

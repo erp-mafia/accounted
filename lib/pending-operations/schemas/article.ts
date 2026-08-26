@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import { HOUSEWORK_TYPE_VALUES, normalizeHouseworkType } from '@/lib/invoices/rot-rut-rules'
 
 // Commit-boundary re-validation for staged article operations. A staged
 // pending_operations row is re-parsed here before it touches the articles table
@@ -15,6 +16,31 @@ const vatRatePercent = z.union([z.literal(0), z.literal(6), z.literal(12), z.lit
 /** Empty string / null → undefined, then bounded string. */
 const optString = (max: number) =>
   z.preprocess((v) => (v == null || v === '' ? undefined : v), z.string().max(max).optional())
+
+// Same vocabulary as HouseworkTypeSchema in lib/api/schemas.ts: work-type code
+// or bare ROT/RUT, upper-cased; empty → undefined; anything else rejected.
+const houseworkCode = z.string().max(64).transform((v, ctx) => {
+  const normalized = normalizeHouseworkType(v)
+  if (!normalized) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Invalid housework_type. Allowed: ${HOUSEWORK_TYPE_VALUES.join(', ')}`,
+    })
+    return z.NEVER
+  }
+  return normalized
+})
+// Create: empty / null / omitted all mean "no flag" (column stays NULL).
+const houseworkTypeCreate = z.preprocess(
+  (v) => (v == null || (typeof v === 'string' && v.trim() === '') ? undefined : v),
+  houseworkCode.optional(),
+)
+// Update: commitUpdateArticle drops undefined keys, so a clear must arrive as
+// null. Omitted stays undefined (untouched); null / '' / whitespace clear.
+const houseworkTypeUpdate = z.preprocess(
+  (v) => (v == null || (typeof v === 'string' && v.trim() === '') ? (v === undefined ? undefined : null) : v),
+  houseworkCode.nullable().optional(),
+)
 
 const trimmedName = z.preprocess(
   (v) => (typeof v === 'string' ? v.trim() : v),
@@ -39,7 +65,7 @@ export const CreateArticleParamsSchema = z.object({
   revenue_account: invoicePostingAccount.nullable().optional(),
   cost_price: z.number().nonnegative().nullable().optional(),
   ean: optString(32),
-  housework_type: optString(64),
+  housework_type: houseworkTypeCreate,
   name_en: optString(200),
   notes: optString(2000),
   article_number: optString(64),
@@ -56,7 +82,7 @@ export const UpdateArticleParamsSchema = z.object({
   revenue_account: invoicePostingAccount.nullable().optional(),
   cost_price: z.number().nonnegative().nullable().optional(),
   ean: optString(32),
-  housework_type: optString(64),
+  housework_type: houseworkTypeUpdate,
   name_en: optString(200),
   notes: optString(2000),
   article_number: optString(64),

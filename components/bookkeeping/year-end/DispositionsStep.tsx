@@ -25,6 +25,7 @@ interface DispositionsStepProps {
   periodId: string
   onBack: () => void
   onContinue: () => void
+  onNavigationBlockedChange?: (blocked: boolean) => void
 }
 
 interface UiState {
@@ -47,7 +48,12 @@ interface TaxAdjustmentDraft {
  * EF companies get an empty `proposals` array from the server, so this step
  * renders a short pass-through note and lets the user continue.
  */
-export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsStepProps) {
+export function DispositionsStep({
+  periodId,
+  onBack,
+  onContinue,
+  onNavigationBlockedChange,
+}: DispositionsStepProps) {
   const { toast } = useToast()
   const [proposal, setProposal] = useState<DispositionsProposal | null>(null)
   const [loading, setLoading] = useState(true)
@@ -58,6 +64,13 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
   const [savingAdjustments, setSavingAdjustments] = useState(false)
   const [adjustmentError, setAdjustmentError] = useState<string | null>(null)
   const [taxAdjustmentDraft, setTaxAdjustmentDraft] = useState<TaxAdjustmentDraft>(emptyTaxDraft)
+  const [taxDepreciationDirty, setTaxDepreciationDirty] = useState(false)
+
+  useEffect(() => {
+    onNavigationBlockedChange?.(taxDepreciationDirty)
+  }, [onNavigationBlockedChange, taxDepreciationDirty])
+
+  useEffect(() => () => onNavigationBlockedChange?.(false), [onNavigationBlockedChange])
 
   // ---- Fetch proposals ----
   const loadProposals = useCallback(async () => {
@@ -136,6 +149,10 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
   // ---- POST accepted dispositions ----
   const handleCommit = useCallback(async () => {
     if (!proposal) return
+    if (taxDepreciationDirty) {
+      setPostError('Spara eller återställ ändringarna i skattemässig avskrivning innan du fortsätter.')
+      return
+    }
     if (proposal.completedDispositions?.some((item) => item.status === 'needs_correction')) {
       setPostError('Rätta den bokförda bolagsskatten och ladda om sidan innan du fortsätter.')
       return
@@ -172,7 +189,7 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
     } finally {
       setPosting(false)
     }
-  }, [proposal, ui, periodId, onContinue, toast])
+  }, [proposal, ui, periodId, onContinue, toast, taxDepreciationDirty])
 
   // ---- Render branches ----
   if (loading) {
@@ -209,17 +226,41 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
     const fiscalYear = parseInt(proposal.fiscalPeriod.period_end.slice(0, 4), 10)
     return (
       <div className="space-y-6">
-        <DepreciationPanel periodId={periodId} onPosted={() => void loadProposals()} />
+        <DepreciationPanel
+          periodId={periodId}
+          onPosted={() => void loadProposals()}
+          onTaxDirtyChange={setTaxDepreciationDirty}
+        />
         <EfDeclarationSection
           fiscalPeriodId={periodId}
           bookedSurplus={proposal.netResultBefore}
           fiscalYear={fiscalYear}
         />
+        {taxDepreciationDirty && (
+          <p className="text-sm text-attn" role="status">
+            Spara eller återställ ändringarna i skattemässig avskrivning innan du lämnar steget.
+          </p>
+        )}
         <div className="flex justify-between">
-          <Button variant="outline" size="sm" onClick={onBack}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onBack}
+            disabled={taxDepreciationDirty}
+          >
             ← Tillbaka
           </Button>
-          <Button variant="outline" size="sm" onClick={onContinue}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onContinue}
+            disabled={taxDepreciationDirty}
+            title={
+              taxDepreciationDirty
+                ? 'Spara ändringarna i skattemässig avskrivning innan du fortsätter.'
+                : undefined
+            }
+          >
             Nästa: Förhandsgranska →
           </Button>
         </div>
@@ -229,7 +270,11 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
 
   return (
     <div className="space-y-6">
-      <DepreciationPanel periodId={periodId} onPosted={() => void loadProposals()} />
+      <DepreciationPanel
+        periodId={periodId}
+        onPosted={() => void loadProposals()}
+        onTaxDirtyChange={setTaxDepreciationDirty}
+      />
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Bokslutsdispositioner</CardTitle>
@@ -254,6 +299,15 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
           onSave={() => void handleSaveAdjustments()}
         />
       )}
+
+      {proposal.warnings?.map((warning) => (
+        <Card key={warning}>
+          <CardContent className="p-4 text-sm text-attn flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>{warning}</span>
+          </CardContent>
+        </Card>
+      ))}
 
       {(proposal.completedDispositions ?? []).map((completed) => (
         <Card key={`completed-${completed.kind}`}>
@@ -281,7 +335,7 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
           {completed.warnings.length > 0 && (
             <CardContent className="space-y-2">
               {completed.warnings.map((warning) => (
-                <p key={warning} className="text-sm text-warning-foreground">{warning}</p>
+                <p key={warning} className="text-sm text-attn">{warning}</p>
               ))}
             </CardContent>
           )}
@@ -323,11 +377,30 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
         </Card>
       )}
 
+      {taxDepreciationDirty && (
+        <p className="text-sm text-attn" role="status">
+          Spara eller återställ ändringarna i skattemässig avskrivning innan du lämnar steget.
+        </p>
+      )}
+
       <div className="flex justify-between">
-        <Button variant="outline" size="sm" onClick={onBack} disabled={posting}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onBack}
+          disabled={posting || taxDepreciationDirty}
+        >
           ← Tillbaka
         </Button>
-        <Button onClick={handleCommit} disabled={posting || hasCorrectionRequired}>
+        <Button
+          onClick={handleCommit}
+          disabled={posting || hasCorrectionRequired || taxDepreciationDirty}
+          title={
+            taxDepreciationDirty
+              ? 'Spara ändringarna i skattemässig avskrivning innan du fortsätter.'
+              : undefined
+          }
+        >
           {posting ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
@@ -486,7 +559,7 @@ function ProposalCard({
   lockedSkip: boolean
   onChange: (next: { accept?: boolean; overrideAmount?: number }) => void
 }) {
-  const overridable = isOverridable(proposal.kind)
+  const overridable = isOverridable(proposal)
   const displayedAmount = overridable ? overrideAmount ?? proposal.amount : proposal.amount
 
   return (
@@ -509,7 +582,7 @@ function ProposalCard({
       </CardHeader>
       <CardContent className="space-y-3">
         {proposal.warnings.map((w, i) => (
-          <p key={i} className="text-sm text-warning-foreground">
+          <p key={i} className="text-sm text-attn">
             {w}
           </p>
         ))}
@@ -553,14 +626,20 @@ function ProposalCard({
   )
 }
 
-function isOverridable(kind: DispositionKind): boolean {
+function isOverridable(proposal: ProposedDisposition): boolean {
   // Bolagsskatt and SLP are derived from posted entries: overriding the amount
   // would silently break the journal posting (the calculator would still
   // recompute server-side). p-fond avsättning and överavskrivningar take a
   // desired amount as input, so editing is meaningful. p-fond återföring is
   // composed of mandatory cohorts and isn't safely editable from a single
   // amount field.
-  return kind === 'periodiseringsfond_avsattning' || kind === 'overavskrivningar'
+  return (
+    proposal.kind === 'periodiseringsfond_avsattning'
+    || (
+      proposal.kind === 'overavskrivningar'
+      && (proposal.signedAmount ?? proposal.amount) > 0
+    )
+  )
 }
 
 function proposalKey(p: ProposedDisposition, index = 0): string {
@@ -605,16 +684,16 @@ function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[]
         if (account) ateforingReturns[account] = p.amount
         break
       }
-      case 'overavskrivningar':
+      case 'overavskrivningar': {
+        const signedDefault = p.signedAmount ?? p.amount
+        const selectedAmount = sel.overrideAmount ?? p.amount
         items.push({
           kind: 'overavskrivningar',
-          additionalAmount: sel.overrideAmount ?? p.amount,
+          additionalAmount:
+            signedDefault < 0 ? -Math.abs(selectedAmount) : selectedAmount,
         })
         break
-      case 'uppskjuten_skatt':
-        // K3 only: server recomputes the amount; client just signals intent.
-        items.push({ kind: 'uppskjuten_skatt' })
-        break
+      }
     }
   }
   if (Object.keys(ateforingReturns).length > 0) {

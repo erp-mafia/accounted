@@ -1,7 +1,11 @@
-import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool } from './setup'
-import { insertAuthUser, insertCompany, insertFiscalPeriod } from './fixtures'
+import {
+  insertAuthUser,
+  insertCompany,
+  insertFiscalPeriod,
+  insertPostedJournalEntry,
+} from './fixtures'
 
 async function insertEntry(params: {
   userId: string
@@ -11,31 +15,20 @@ async function insertEntry(params: {
   entryDate: string
   lines: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
-  const entryId = randomUUID()
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', $6, 'Production regression test', 'manual', 'posted')`,
-    [
-      entryId,
-      params.userId,
-      params.companyId,
-      params.fiscalPeriodId,
-      params.voucherNumber,
-      params.entryDate,
-    ],
-  )
-
-  for (const line of params.lines) {
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount)
-       VALUES ($1, $2, $3, $4)`,
-      [entryId, line.account, line.debit, line.credit],
-    )
-  }
-  return entryId
+  return insertPostedJournalEntry({
+    userId: params.userId,
+    companyId: params.companyId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    voucherNumber: params.voucherNumber,
+    entryDate: params.entryDate,
+    description: 'Production regression test',
+    sourceType: 'manual',
+    lines: params.lines.map((line) => ({
+      accountNumber: line.account,
+      debitAmount: line.debit,
+      creditAmount: line.credit,
+    })),
+  })
 }
 
 async function seedCompany() {
@@ -59,6 +52,24 @@ describe('production error regressions', () => {
     )
 
     expect(rows).toEqual([{ event_type: 'PendingOperationApproved' }])
+  })
+
+  it('registers the WhatsApp channel question events in the processing history catalog', async () => {
+    // appendQuestionHistory() swallows FK failures so the reply to the sender
+    // still goes out, so an unregistered type is invisible outside the logs.
+    const { rows } = await getPool().query(
+      `SELECT event_type
+       FROM public.processing_event_types
+       WHERE event_type = ANY($1::text[])
+       ORDER BY event_type`,
+      [['ChannelQuestionAsked', 'ChannelQuestionAnswered', 'ChannelQuestionExpired']],
+    )
+
+    expect(rows.map((row) => row.event_type)).toEqual([
+      'ChannelQuestionAnswered',
+      'ChannelQuestionAsked',
+      'ChannelQuestionExpired',
+    ])
   })
 
   it('aggregates period activity and excludes a specified opening entry', async () => {

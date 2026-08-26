@@ -5,6 +5,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
+import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailText,
@@ -226,6 +227,8 @@ export const POST = withRouteContext(
       to: customer.email,
       configuredCc: company.invoice_email_cc_addresses,
       configuredBcc: company.invoice_email_bcc_addresses,
+      customerCc: customer.invoice_email_cc_addresses,
+      customerBcc: customer.invoice_email_bcc_addresses,
       // This value comes from company settings or the authenticated sender. It
       // is fixed routing, not an arbitrary request-controlled recipient.
       legacyCc: company.email || user.email,
@@ -260,7 +263,7 @@ export const POST = withRouteContext(
     if (invoice.credited_invoice_id) {
       const { data: original } = await supabase
         .from('invoices')
-        .select('id, invoice_number, status, journal_entry_id, paid_at, paid_amount, total')
+        .select('id, invoice_number, external_invoice_number, status, journal_entry_id, paid_at, paid_amount, total')
         .eq('id', invoice.credited_invoice_id)
         .eq('company_id', companyId)
         .single()
@@ -270,7 +273,12 @@ export const POST = withRouteContext(
       }
 
       originalInvoice = original as CreditNoteOriginalInvoice
-      originalInvoiceNumber = original.invoice_number ?? undefined
+      // Self-billed originals carry their number in external_invoice_number
+      // (invoice_number is null by design); without the fallback the
+      // credit-note PDF loses its ML 17 kap 22 reference to the original
+      // (issue #1820).
+      originalInvoiceNumber =
+        original.invoice_number ?? original.external_invoice_number ?? undefined
     }
 
     // Preflight render: validate the PDF pipeline BEFORE consuming an F-series
@@ -479,6 +487,7 @@ export const POST = withRouteContext(
         text,
         replyTo: company.email || undefined,
         fromName: company.company_name,
+        from: await resolveInvoiceSender(supabase, companyId!, company.company_name),
         filename,
         pdfBuffer,
       })

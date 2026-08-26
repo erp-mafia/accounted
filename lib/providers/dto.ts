@@ -108,7 +108,17 @@ export interface PaginatedResponse<T> {
 export type InvoiceStatusCode = 'draft' | 'sent' | 'booked' | 'paid' | 'overdue' | 'cancelled' | 'credited';
 
 export interface LegalMonetaryTotalDto {
-  lineExtensionAmount: AmountType;
+  /**
+   * Sum of the line amounts, excluding VAT.
+   *
+   * Optional because several providers omit it from their list payloads
+   * (Fortnox `Net`, Briox `net_amount`) and one never exposes it at all.
+   * Absent means "the net was not established", NOT "the net equals the
+   * gross": mappers must leave it undefined rather than fall back to
+   * `payableAmount`, which silently turns every such invoice into a 0 kr VAT
+   * record that still balances and so goes unnoticed.
+   */
+  lineExtensionAmount?: AmountType;
   taxExclusiveAmount?: AmountType;
   taxInclusiveAmount?: AmountType;
   allowanceTotalAmount?: AmountType;
@@ -219,6 +229,8 @@ export interface CustomerDto {
   customerNumber: string;
   type?: CustomerType;
   party: PartyDto;
+  invoiceEmailCcAddresses?: string[];
+  invoiceEmailBccAddresses?: string[];
   deliveryAddresses?: PostalAddress[];
   financialDimensions?: FinancialDimensionRef[];
   active: boolean;

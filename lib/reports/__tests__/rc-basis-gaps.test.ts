@@ -21,6 +21,11 @@ vi.mock('@/lib/bookkeeping/entry-lines', () => ({
   fetchLinesByEntryIds: (...args: unknown[]) => fetchLinesByEntryIdsMock(...args),
 }))
 
+const fetchDynamicVatAccountsMock = vi.fn()
+vi.mock('../vat-revenue-accounts', () => ({
+  fetchDynamicVatAccounts: (...args: unknown[]) => fetchDynamicVatAccountsMock(...args),
+}))
+
 import { findRcBasisGaps } from '../rc-basis-gaps'
 
 const supabase = {} as SupabaseClient
@@ -47,6 +52,10 @@ describe('findRcBasisGaps', () => {
     resolvePeriodDatesMock.mockResolvedValue({ start: '2025-07-17', end: '2026-12-31' })
     fetchEntryLinesMock.mockResolvedValue([])
     fetchLinesByEntryIdsMock.mockResolvedValue([])
+    fetchDynamicVatAccountsMock.mockResolvedValue({
+      explicitAccounts: new Set(),
+      rcBasisRateByAccount: new Map(),
+    })
   })
 
   it('resolves the period via resolvePeriodDates with the fiscal period id', async () => {
@@ -123,5 +132,33 @@ describe('findRcBasisGaps', () => {
     const gaps = await findRcBasisGaps(supabase, 'company-1', 'monthly', 2026, 5)
     expect(gaps).toHaveLength(1)
     expect(gaps[0].expectedBasisAmount).toBe(10000)
+  })
+
+  it('accepts a custom EU purchase basis account at the matching rate', async () => {
+    fetchDynamicVatAccountsMock.mockResolvedValue({
+      explicitAccounts: new Set(['4056']),
+      rcBasisRateByAccount: new Map([['4056', 0.25]]),
+    })
+    fetchEntryLinesMock.mockResolvedValue([rcLine('entry-1', 8, 250)])
+    fetchLinesByEntryIdsMock.mockResolvedValue([{
+      id: 'l-1', journal_entry_id: 'entry-1', account_number: '4056',
+      debit_amount: 1000, credit_amount: 0,
+    }])
+    await expect(findRcBasisGaps(supabase, 'company-1', 'monthly', 2026, 5))
+      .resolves.toEqual([])
+  })
+
+  it('does not let a 25 percent basis cover 12 percent output VAT', async () => {
+    fetchEntryLinesMock.mockResolvedValue([{
+      ...rcLine('entry-1', 8, 120),
+      account_number: '2624',
+    }])
+    fetchLinesByEntryIdsMock.mockResolvedValue([{
+      id: 'l-1', journal_entry_id: 'entry-1', account_number: '4535',
+      debit_amount: 1000, credit_amount: 0,
+    }])
+    const gaps = await findRcBasisGaps(supabase, 'company-1', 'monthly', 2026, 5)
+    expect(gaps).toHaveLength(1)
+    expect(gaps[0].rate).toBe(0.12)
   })
 })

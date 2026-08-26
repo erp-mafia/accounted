@@ -1,5 +1,6 @@
 import crypto from 'crypto'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { type SupabaseClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { createLogger } from '@/lib/logger'
 import type { SkatteverketTokens } from '../types'
 import { SkatteverketAuthError } from './api-client'
@@ -32,7 +33,7 @@ function getServiceClient(): SupabaseClient {
   if (!url || !key) {
     throw new Error('skatteverket token-store requires NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY')
   }
-  _serviceClient = createClient(url, key, { auth: { persistSession: false } })
+  _serviceClient = createServiceRoleClient(url, key)
   return _serviceClient
 }
 
@@ -65,63 +66,41 @@ function decrypt(ciphertext: string): string {
 }
 
 /**
- * Store (replace) Skatteverket tokens for a user.
+ * Store (replace) Skatteverket tokens for a user + company pair.
  * Both access_token and refresh_token are encrypted at rest.
  *
- * Implemented as DELETE + INSERT instead of UPSERT because some environments
- * are missing the UNIQUE(user_id) constraint that ON CONFLICT requires. The
- * delete-then-insert pattern is safe because OAuth callbacks for a given user
- * are not concurrent (the user can only sign in with BankID once at a time).
+ * Connections are per (user_id, company_id): the OAuth token is the person's
+ * BankID session, but which company it is wired to is an explicit product
+ * choice, and a multi-company operator holds one row per company. The
+ * DELETE + INSERT (instead of UPSERT) predates the UNIQUE constraint and is
+ * safe because OAuth callbacks and refreshes for a given pair are coalesced.
  */
 export async function storeTokens(
   _supabase: SupabaseClient,
   userId: string,
   tokens: SkatteverketTokens,
-  companyId?: string,
+  companyId: string,
 ): Promise<void> {
   const encryptedAccess = encrypt(tokens.access_token)
   const encryptedRefresh = tokens.refresh_token ? encrypt(tokens.refresh_token) : null
   const db = getServiceClient()
 
-  // The multi-tenant refactor (migration 20260330130000) put a NOT NULL
-  // company_id on every table. Tokens are conceptually user-scoped (one
-  // BankID identity), but the schema requires a company_id. The OAuth
-  // callback passes one explicitly. Token-refresh flows (called from
-  // skvRequest) don't pass one, so before we DELETE the existing row we
-  // remember its company_id and reuse it on INSERT.
-  let resolvedCompanyId = companyId
-  if (!resolvedCompanyId) {
-    const { data: existing, error: selectError } = await db
-      .from('skatteverket_tokens')
-      .select('company_id')
-      .eq('user_id', userId)
-      .maybeSingle()
-    // Throw before the destructive DELETE: a transient read failure here
-    // would otherwise wipe the existing row and then fail the INSERT on the
-    // NOT NULL company_id, leaving the user with no token at all.
-    if (selectError) {
-      throw new Error(`Failed to read existing token row: ${selectError.message}`)
-    }
-    if (existing?.company_id) resolvedCompanyId = existing.company_id
-  }
-
   const { error: deleteError } = await db
     .from('skatteverket_tokens')
     .delete()
     .eq('user_id', userId)
+    .eq('company_id', companyId)
   if (deleteError) throw new Error(`Failed to clear existing tokens: ${deleteError.message}`)
 
-  const row: Record<string, unknown> = {
+  const { error: insertError } = await db.from('skatteverket_tokens').insert({
     user_id: userId,
+    company_id: companyId,
     access_token: encryptedAccess,
     refresh_token: encryptedRefresh,
     expires_at: new Date(tokens.expires_at).toISOString(),
     refresh_count: tokens.refresh_count,
     scope: tokens.scope,
-  }
-  if (resolvedCompanyId) row.company_id = resolvedCompanyId
-
-  const { error: insertError } = await db.from('skatteverket_tokens').insert(row)
+  })
   if (insertError) throw new Error(`Failed to store tokens: ${insertError.message}`)
 }
 
@@ -131,14 +110,16 @@ export async function storeTokens(
  */
 export async function getTokens(
   _supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  companyId: string
 ): Promise<SkatteverketTokens | null> {
   const db = getServiceClient()
   const { data, error } = await db
     .from('skatteverket_tokens')
     .select('access_token, refresh_token, expires_at, refresh_count, scope')
     .eq('user_id', userId)
-    .single()
+    .eq('company_id', companyId)
+    .maybeSingle()
 
   if (error || !data) return null
 
@@ -159,6 +140,7 @@ export async function getTokens(
   } catch (err) {
     log.error('decryption failed for stored tokens', {
       userId,
+      companyId,
       error: err instanceof Error ? err.message : String(err),
     })
     throw new SkatteverketAuthError(
@@ -173,13 +155,15 @@ export async function getTokens(
  */
 export async function deleteTokens(
   _supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  companyId: string
 ): Promise<void> {
   const db = getServiceClient()
   await db
     .from('skatteverket_tokens')
     .delete()
     .eq('user_id', userId)
+    .eq('company_id', companyId)
 }
 
 /**
@@ -204,6 +188,7 @@ export const RECONSENT_ERROR_CODES = [
 export async function markNeedsReconsent(
   _supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   errorCode: string,
 ): Promise<void> {
   const db = getServiceClient()
@@ -215,6 +200,7 @@ export async function markNeedsReconsent(
       last_error_at: new Date().toISOString(),
     })
     .eq('user_id', userId)
+    .eq('company_id', companyId)
   if (error) {
     log.warn('failed to mark token row needs_reconsent', {
       userId,
@@ -231,12 +217,14 @@ export async function markNeedsReconsent(
 export async function getTokenHealth(
   _supabase: SupabaseClient,
   userId: string,
+  companyId: string,
 ): Promise<{ status: string; last_error_code: string | null; last_error_at: string | null } | null> {
   const db = getServiceClient()
   const { data, error } = await db
     .from('skatteverket_tokens')
     .select('status, last_error_code, last_error_at')
     .eq('user_id', userId)
+    .eq('company_id', companyId)
     .maybeSingle()
   if (error || !data) return null
   return {

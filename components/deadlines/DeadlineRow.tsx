@@ -130,7 +130,7 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
     <div
       onClick={() => onEdit?.(deadline)}
       className={cn(
-        'group flex items-start gap-3 rounded-md py-3 -mx-2 px-2 transition-colors duration-150',
+        'group flex items-start gap-3 rounded-sm py-3 -mx-2 px-2 transition-colors duration-150',
         onEdit && 'cursor-pointer hover:bg-secondary/35',
         completed && 'opacity-60',
       )}

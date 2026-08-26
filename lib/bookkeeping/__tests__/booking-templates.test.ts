@@ -184,6 +184,38 @@ describe('searchTemplates', () => {
     const results = searchTemplates('annonsering EU')
     expect(results.some((t) => t.id === 'marketing_online_ads_eu')).toBe(true)
   })
+
+  // Account-number matching (issue #1877): an all-digit token prefix-matches
+  // the template's business account, so typing a konto in the booking
+  // dialog's search field surfaces the templates that book to it.
+  it('finds an expense template by its debit (business) account number', () => {
+    const results = searchTemplates('5010')
+    expect(results.some((t) => t.id === 'premises_rent')).toBe(true)
+  })
+
+  it('finds an income template by its credit (business) account number', () => {
+    const results = searchTemplates('3001')
+    expect(results.some((t) => t.id === 'revenue_standard_25')).toBe(true)
+  })
+
+  it('matches both legs of a transfer template', () => {
+    const results = searchTemplates('1630')
+    expect(results.some((t) => t.id === 'financial_tax_account')).toBe(true)
+  })
+
+  it('does not match the settlement leg (1930 must not light up every template)', () => {
+    const results = searchTemplates('1930')
+    expect(results.some((t) => t.id === 'premises_rent')).toBe(false)
+    expect(results.some((t) => t.id === 'revenue_standard_25')).toBe(false)
+    // Transfers legitimately involve the bank account on a business leg.
+    expect(results.every((t) => t.direction === 'transfer')).toBe(true)
+  })
+
+  it('prefix-matches account numbers (partial konto narrows, text does not match accounts)', () => {
+    expect(searchTemplates('501').some((t) => t.id === 'premises_rent')).toBe(true)
+    // A non-digit token never matches via accounts.
+    expect(searchTemplates('501x').some((t) => t.id === 'premises_rent')).toBe(false)
+  })
 })
 
 // ============================================================
@@ -426,7 +458,10 @@ describe('buildMappingResultFromTemplate', () => {
     const tx = makeTransaction({ amount: -1120 })
     const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
 
-    expect(result.debit_account).toBe('5820')
+    // 5830 Kost och logi, not 5820 Hyrbilskostnader. This assertion used to
+    // read 5820, which pinned a real bug: the Hotell template posted hotel
+    // nights into car hire. It balanced, so nothing ever complained.
+    expect(result.debit_account).toBe('5830')
     expect(result.vat_lines).toHaveLength(1)
     expect(result.vat_lines[0].account_number).toBe('2641')
     expect(result.vat_lines[0].debit_amount).toBe(120) // 1120 * 0.12 / 1.12 = 120

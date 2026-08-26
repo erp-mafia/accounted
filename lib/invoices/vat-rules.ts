@@ -49,6 +49,24 @@ export function getAvailableVatRates(
 }
 
 /**
+ * The set of VAT rates an article's stored rate may be ADOPTED from when the
+ * article prefills an invoice line (web line picker parity: the picker only
+ * adopts a rate the customer could have picked themselves). Empty when the
+ * customer is locked to a single rate (foreign business 0% reverse charge /
+ * export): an article's stored rate is its DOMESTIC rate, and adopting it
+ * there would silently put Swedish VAT on a reverse-charge or export invoice
+ * even though the wider permitted set would accept it. This governs PREFILL
+ * only; every validation gate keeps using getPermittedVatRates().
+ */
+export function getArticleVatRateAdoptionSet(
+  customerType: CustomerType,
+  vatNumberValidated: boolean = false,
+): ReadonlySet<number> {
+  const offered = getAvailableVatRates(customerType, vatNumberValidated)
+  return new Set(offered.length > 1 ? offered.map((r) => r.rate) : [])
+}
+
+/**
  * Get the VAT rates that may LEGALLY appear on an invoice line for this
  * customer type. This is the set validation must gate on.
  *

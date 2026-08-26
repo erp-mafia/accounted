@@ -94,6 +94,8 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // (BFL 5 kap 6 §) and becomes immutable once the JE is posted. Medium so a
   // human confirms the doc-to-verifikat pairing before it locks.
   link_document_to_voucher: 'medium',
+  // Same rationale as link_document_to_voucher, N rows in one staged op.
+  link_documents_to_vouchers: 'medium',
   // Dimension-only diff on posted lines (verifikat stays immutable), fully
   // audited via dimension_retag_log, but it rewrites reporting history, so
   // it crosses a human at medium.
@@ -110,6 +112,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   unlock_period: 'high',
   set_opening_balances: 'high',
   run_year_end: 'high',
+  post_kontantmetod_cutoff: 'high',
   run_currency_revaluation: 'high',
   // Planenlig avskrivning: one journal entry per asset, each independently
   // reversible (storno). Mid-stakes bokslut posting: staged and human-reviewed,
@@ -197,6 +200,31 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // invoice_payments row: sits next to link_invoice_voucher semantically;
   // both attach an existing booking to a different entity.
   link_transaction_journal_entry: 'medium',
+  // Account-keyed reconciliation (lib/reconciliation/actions.ts). A match
+  // pairs outside rows with existing verifikat across any reconcilable
+  // account (bank or skattekonto); it writes nothing to the ledger and is
+  // undone by reconciliation_unmatch, so 'medium' like its single-bank-tx
+  // sibling above. Unmatch only clears a pointer: 'low'.
+  reconciliation_match: 'medium',
+  reconciliation_unmatch: 'low',
+  // Sign-off writes the attestation row others rely on (overview, Hem, auditor)
+  // but nothing in the ledger, and reopen undoes it: 'medium'.
+  reconciliation_signoff: 'medium',
+  // Residual booking writes one small verifikat (bank fee / interest /
+  // rounding, capped at RESIDUAL_MAX_AMOUNT) against the bank account and
+  // links the selection: a typed, bounded booking like categorize_transaction,
+  // undone by storno + unmatch, so 'medium' rather than create_voucher's 'high'.
+  reconciliation_residual: 'medium',
+
+  // ── Körjournal (mileage) ───────────────────────────────────────────
+  // A trip row is pure travel documentation: no booking impact until a
+  // separate book operation. Same tier as create_customer.
+  log_mileage_trip: 'low',
+  // Books one verifikat with fixed lines derived from logged trips (7331 +
+  // whitelisted counter account) at the DB-configured schablon rate: not the
+  // arbitrary-line surface that makes create_voucher 'high'. Reversible via
+  // storno: same tier as post_annual_depreciation.
+  book_mileage_period: 'medium',
 
   // ── Skatteverket filing (PR5) ──────────────────────────────────────
   // External + irreversible once signed. Commit sends the declaration for

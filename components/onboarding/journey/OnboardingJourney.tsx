@@ -12,6 +12,13 @@ import { fetchCompanyLookup } from '@/lib/company-lookup/fetch-company-lookup'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useBranding } from '@/lib/branding/brand-context'
+import posthog from 'posthog-js'
+import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import {
+  BRANCH_PROVIDERS,
+  branchDestination,
+  type BranchChoice,
+} from '@/lib/onboarding-journey/branch'
 import {
   initJourney,
   journeyReducer,
@@ -56,6 +63,20 @@ function logError(message: string, extra?: Record<string, unknown>) {
   }).catch(() => {})
 }
 
+/**
+ * Branch-question funnel event. Anonymous by design: AnalyticsIdentify only
+ * mounts in the dashboard layout, so this measures choice distribution, not
+ * people. Guarded + swallowed like every product capture.
+ */
+function captureBranch(choice: BranchChoice) {
+  if (!isAnalyticsEnabled()) return
+  try {
+    posthog.capture('onboarding_branch_chosen', { choice })
+  } catch {
+    // Telemetry must never affect the journey.
+  }
+}
+
 interface OnboardingJourneyProps {
   teamId: string
   mode?: 'first' | 'add'
@@ -89,6 +110,8 @@ export default function OnboardingJourney({
   )
 
   const bandRef = useRef<HTMLDivElement | null>(null)
+  // Latches after the first done-screen branch choice (see onBranch below).
+  const branchChosenRef = useRef(false)
   const [orgInput, setOrgInput] = useState(initialOrgNumber ?? '')
   const [orgShake, setOrgShake] = useState(false)
   const [thinking, setThinking] = useState(false)
@@ -159,12 +182,36 @@ export default function OnboardingJourney({
     if (initialOrgNumber) submitOrg(initialOrgNumber)
   }, [initialOrgNumber, submitOrg])
 
+  // One choice only: rapid clicks on different chips must not race two
+  // PATCHes (last-write-wins could persist the wrong path after navigation).
+  const onBranch = useCallback(
+    (choice: BranchChoice) => {
+      if (branchChosenRef.current) return
+      branchChosenRef.current = true
+      const dest = branchDestination(choice)
+      if (dest.path) {
+        // Fire-and-forget: the checklist path is a nicety, routing is
+        // the point. A lost PATCH just leaves the Hem checklist
+        // unpathed; it must never block or delay the navigation.
+        fetch('/api/onboarding/state', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: dest.path }),
+          keepalive: true,
+        }).catch(() => logError('branch path persist failed', { choice }))
+      }
+      captureBranch(choice)
+      router.push(dest.href)
+    },
+    [router],
+  )
+
   // A short thinking beat between questions.
   const prevStep = useRef(state.step)
   useEffect(() => {
     if (prevStep.current === state.step) return
     prevStep.current = state.step
-    if (state.step === 'done' || state.submitting) return
+    if (state.step === 'done' || state.step === 'source' || state.submitting) return
     setThinking(true)
     const timer = window.setTimeout(() => setThinking(false), 420)
     return () => window.clearTimeout(timer)
@@ -236,7 +283,7 @@ export default function OnboardingJourney({
 
   /* ── derived display ──────────────────────────────────────────── */
 
-  const orbState: OrbState = state.step === 'done'
+  const orbState: OrbState = state.step === 'done' || state.step === 'source'
     ? 'check'
     : state.submitting
       ? narration === null
@@ -636,12 +683,17 @@ export default function OnboardingJourney({
           <DoneStep
             t={t}
             state={state}
+            mode={mode}
             fyAnswer={fyAnswer}
             momsAnswer={momsAnswer}
             methodAnswer={methodAnswer}
             onOpen={() => router.push('/')}
+            onContinue={() => dispatch({ type: 'DONE_CONTINUE' })}
           />
         )
+
+      case 'source':
+        return <SourceStep t={t} onBranch={onBranch} />
     }
   }
 
@@ -719,7 +771,10 @@ export default function OnboardingJourney({
 
         <div className="jny-balance" aria-hidden="true" />
         <div className="jny-backrow">
-          {state.history.length > 0 && state.step !== 'done' && !state.submitting ? (
+          {state.history.length > 0 &&
+          state.step !== 'done' &&
+          state.step !== 'source' &&
+          !state.submitting ? (
             <button type="button" className="jny-btn-quiet" onClick={() => dispatch({ type: 'BACK' })}>
               &lsaquo; {t('back')}
             </button>
@@ -959,17 +1014,21 @@ function FyEndStep({
 function DoneStep({
   t,
   state,
+  mode,
   fyAnswer,
   momsAnswer,
   methodAnswer,
   onOpen,
+  onContinue,
 }: {
   t: TFn
   state: JourneyState
+  mode: 'first' | 'add'
   fyAnswer: string | null
   momsAnswer: string | null
   methodAnswer: string | null
   onOpen: () => void
+  onContinue: () => void
 }) {
   const { appName } = useBranding()
   const s = state.settings
@@ -1020,13 +1079,72 @@ function DoneStep({
           ))}
         </div>
       ) : null}
-      <div className="jny-qactions">
-        <button type="button" className="jny-btn" onClick={onOpen}>
-          {t('journey_open_app', { appName })}
-        </button>
-      </div>
+      {mode === 'first' ? (
+        <Reveal delay={notes.length > 0 ? 1400 + notes.length * 260 : 1200}>
+          <div className="jny-qactions">
+            <button type="button" className="jny-btn" onClick={onContinue}>
+              {t('journey_done_continue')}
+            </button>
+          </div>
+        </Reveal>
+      ) : (
+        <div className="jny-qactions">
+          <button type="button" className="jny-btn" onClick={onOpen}>
+            {t('journey_open_app', { appName })}
+          </button>
+        </div>
+      )}
     </div>
   )
+}
+
+/**
+ * The branch question as its own step, sharing the Klart station with the
+ * welcome screen (same station grammar as momsyn/moms under Momsen).
+ * Providers and the SIE file share one grid of generously sized tiles; the
+ * provider tiles carry the real logo on a small white mark (the LogoMark
+ * grammar from NewUserChecklist), the text answers stay equal-weight tiles.
+ */
+function SourceStep({ t, onBranch }: { t: TFn; onBranch: (choice: BranchChoice) => void }) {
+  return (
+    <Question title={t('journey_done_source_title')} sub={t('journey_done_source_sub')}>
+      <div className="jny-srcgrid">
+        {BRANCH_PROVIDERS.map((p) => (
+          <button key={p.id} type="button" className="jny-srcpick" onClick={() => onBranch(p.id)}>
+            <span className="jny-srcmark">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={p.logo} alt="" />
+            </span>
+            {p.name}
+          </button>
+        ))}
+        <button type="button" className="jny-srcpick is-text" onClick={() => onBranch('sie')}>
+          {t('journey_done_source_sie')}
+        </button>
+        <button type="button" className="jny-srcpick is-text is-span" onClick={() => onBranch('fresh')}>
+          {t('journey_done_source_fresh')}
+        </button>
+      </div>
+      <div className="jny-qactions">
+        <button type="button" className="jny-btn-quiet" onClick={() => onBranch('skip')}>
+          {t('journey_done_source_skip')}
+        </button>
+      </div>
+    </Question>
+  )
+}
+
+/** Delayed mount so the continue action enters (with the standard .jny-qstep
+ *  rise) only after the profile card and notes have finished settling. */
+function Reveal({ delay, children }: { delay: number; children: React.ReactNode }) {
+  const [on, setOn] = useState(false)
+  useEffect(() => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const id = window.setTimeout(() => setOn(true), reduced ? 0 : delay)
+    return () => window.clearTimeout(id)
+  }, [delay])
+  if (!on) return null
+  return <div className="jny-qstep">{children}</div>
 }
 
 function CardRow({ label, value, delay }: { label: string; value: string; delay: number }) {

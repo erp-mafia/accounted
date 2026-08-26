@@ -1,5 +1,18 @@
 import type { Invoice, Customer, CompanySettings } from '@/types'
 import { formatCurrency, formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
+import { getAmountToPay } from '@/lib/invoices/rounding'
+import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+
+/**
+ * What the customer was asked to pay on the original invoice: the öre-rounded
+ * "Att betala" minus any ROT/RUT-avdrag (fakturamodellen: the deduction is a
+ * claim on Skatteverket, never on the customer). Reminders, dröjsmålsränta and
+ * the amount-to-pay line must all start from this figure, not invoice.total,
+ * or a privatperson is dunned for the SKV share and charged interest on it.
+ */
+export function reminderPrincipal(invoice: Invoice, company: CompanySettings): number {
+  return getAmountToPay(invoice, company).toPay
+}
 
 export interface ReminderEmailData {
   invoice: Invoice
@@ -119,7 +132,6 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
   const {
     invoice,
     customer,
-    company,
     reminderLevel,
     daysOverdue,
     actionUrl,
@@ -128,6 +140,9 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
     interestDays,
     reminderFee,
   } = data
+  // Payment details follow the invoice currency, same as the invoice email
+  // and PDF: a EUR reminder must never print the SEK account's IBAN.
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
   const config = REMINDER_CONFIG[reminderLevel]
   const interestRatePercent = (interestRate * 100).toLocaleString('sv-SE', {
     minimumFractionDigits: 0,
@@ -137,7 +152,7 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
   const hasFee = reminderFee > 0
   const hasSurcharges = hasInterest || hasFee
   const amounts = calculateReminderAmounts({
-    invoiceTotal: invoice.total,
+    invoiceTotal: reminderPrincipal(invoice, company),
     interestAmount,
     reminderFee,
     currency: invoice.currency,
@@ -226,7 +241,7 @@ export function generateReminderEmailHtml(data: ReminderEmailData): string {
           </tr>
           <tr>
             <td style="padding: 8px 0; color: #666; font-size: 14px;">Ursprungligt belopp:</td>
-            <td style="padding: 8px 0; text-align: right; font-weight: 500;">${formatCurrency(invoice.total, invoice.currency)}</td>
+            <td style="padding: 8px 0; text-align: right; font-weight: 500;">${formatCurrency(reminderPrincipal(invoice, company), invoice.currency)}</td>
           </tr>
           ${hasInterest ? `
           <tr>
@@ -345,7 +360,6 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
   const {
     invoice,
     customer,
-    company,
     reminderLevel,
     daysOverdue,
     actionUrl,
@@ -354,6 +368,9 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
     interestDays,
     reminderFee,
   } = data
+  // Payment details follow the invoice currency, same as the invoice email
+  // and PDF: a EUR reminder must never print the SEK account's IBAN.
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
   const config = REMINDER_CONFIG[reminderLevel]
   const interestRatePercent = (interestRate * 100).toLocaleString('sv-SE', {
     minimumFractionDigits: 0,
@@ -362,7 +379,7 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
   const hasInterest = interestAmount > 0
   const hasFee = reminderFee > 0
   const amounts = calculateReminderAmounts({
-    invoiceTotal: invoice.total,
+    invoiceTotal: reminderPrincipal(invoice, company),
     interestAmount,
     reminderFee,
     currency: invoice.currency,
@@ -391,7 +408,7 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
   text += `Fakturanummer: ${invoice.invoice_number}\n`
   text += `Fakturadatum: ${formatDate(invoice.invoice_date)}\n`
   text += `Förfallodatum: ${formatDate(invoice.due_date)}\n`
-  text += `Ursprungligt belopp: ${formatCurrency(invoice.total, invoice.currency)}\n`
+  text += `Ursprungligt belopp: ${formatCurrency(reminderPrincipal(invoice, company), invoice.currency)}\n`
   if (hasInterest) {
     text += `Dröjsmålsränta (${interestRatePercent}% per år, ${interestDays} dagar): ${formatCurrency(interestAmount, invoice.currency)}\n`
   }
@@ -438,14 +455,14 @@ export function generateReminderEmailText(data: ReminderEmailData): string {
  * the email.
  */
 export function generateReminderEmailSubject(data: ReminderEmailData): string {
-  const { invoice, reminderLevel, interestAmount, reminderFee } = data
+  const { invoice, company, reminderLevel, interestAmount, reminderFee } = data
   const config = REMINDER_CONFIG[reminderLevel]
   const hasSurcharges = interestAmount > 0 || reminderFee > 0
 
   // A SEK fee on a foreign-currency invoice renders as "1 010,00 € + 60 kr":
   // two amounts in two currencies, never one mixed scalar.
   const amounts = calculateReminderAmounts({
-    invoiceTotal: invoice.total,
+    invoiceTotal: reminderPrincipal(invoice, company),
     interestAmount,
     reminderFee,
     currency: invoice.currency,

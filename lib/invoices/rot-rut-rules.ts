@@ -1,3 +1,5 @@
+import { roundOre } from '@/lib/money'
+
 /**
  * ROT/RUT-avdrag rules.
  *
@@ -45,6 +47,13 @@ export const ROT_MAX = 50000
 
 /** Maximum yearly RUT deduction per person. SEK, same caveat as ROT_MAX. 2026 rule. */
 export const RUT_MAX = 75000
+
+/**
+ * ROT and RUT share one yearly ceiling per person: 75 000 kr in total, with
+ * ROT capped at 50 000 kr inside it (the 2024 H2 separation was temporary).
+ * SEK, same caveat as ROT_MAX.
+ */
+export const COMBINED_MAX = 75000
 
 export type DeductionType = 'rot' | 'rut'
 
@@ -133,6 +142,70 @@ export const RUT_WORK_TYPES = [
   { code: 'TVATT', label: 'Tvätt vid tvättinrättning (schablon)' },
 ] as const
 
+/**
+ * Which deduction kind a Skatteverket work-type code belongs to. The two code
+ * lists are disjoint, so the code alone decides ROT vs RUT: this is what lets
+ * an article's housework_type pre-fill both the invoice line's work_type and
+ * its deduction_type. Unknown or absent codes map to null (no deduction).
+ */
+export function deductionTypeForWorkType(code: string | null | undefined): DeductionType | null {
+  if (!code) return null
+  if (ROT_WORK_TYPES.some((w) => w.code === code)) return 'rot'
+  if (RUT_WORK_TYPES.some((w) => w.code === code)) return 'rut'
+  return null
+}
+
+/** Human label for a Skatteverket work-type code, or null for unknown codes. */
+export function workTypeLabel(code: string | null | undefined): string | null {
+  if (!code) return null
+  const hit = [...ROT_WORK_TYPES, ...RUT_WORK_TYPES].find((w) => w.code === code)
+  return hit ? hit.label : null
+}
+
+/**
+ * The two vocabularies `articles.housework_type` has been written in:
+ * - a Skatteverket work-type code (`BYGG`, `STAD`, ...): the intended value,
+ *   decides both the deduction kind and the line's arbetstyp;
+ * - the bare kind `ROT` / `RUT`: what the article form stored before it
+ *   offered real work types (legacy rows), decides the kind only.
+ * Anything else (free text, `0`/`1` from a mis-mapped CSV column) is not a
+ * housework flag at all and normalizes to null.
+ */
+export interface ArticleHousework {
+  deductionType: DeductionType | null
+  /** Skatteverket work-type code, or null when only the kind is known. */
+  workType: string | null
+}
+
+export function parseArticleHouseworkType(value: string | null | undefined): ArticleHousework {
+  const raw = value?.trim().toUpperCase() ?? ''
+  if (!raw) return { deductionType: null, workType: null }
+  const kindFromCode = deductionTypeForWorkType(raw)
+  if (kindFromCode) return { deductionType: kindFromCode, workType: raw }
+  if (raw === 'ROT' || raw === 'RUT') return { deductionType: raw.toLowerCase() as DeductionType, workType: null }
+  return { deductionType: null, workType: null }
+}
+
+/**
+ * Canonical stored form of a housework_type input: the work-type code, the
+ * bare kind (`ROT`/`RUT`), or null. Case-insensitive; unknown values are
+ * null so the column never accumulates a third vocabulary again.
+ */
+export function normalizeHouseworkType(value: string | null | undefined): string | null {
+  const parsed = parseArticleHouseworkType(value)
+  if (parsed.workType) return parsed.workType
+  if (parsed.deductionType) return parsed.deductionType.toUpperCase()
+  return null
+}
+
+/** Accepted housework_type values: every work-type code plus the bare kinds. */
+export const HOUSEWORK_TYPE_VALUES: readonly string[] = [
+  'ROT',
+  'RUT',
+  ...ROT_WORK_TYPES.map((w) => w.code),
+  ...RUT_WORK_TYPES.map((w) => w.code),
+]
+
 export interface ItemForDeduction {
   /** Unit price (per `quantity`). Same field as invoice_items.unit_price. */
   unit_price: number
@@ -216,6 +289,47 @@ export function computeDeductionTotalsByKind(items: ItemForDeduction[]): {
 
 export interface ValidateInvoiceItem extends ItemForDeduction {
   housing_designation?: string | null
+  /** Skatteverket arbetstypskod (ROT_WORK_TYPES / RUT_WORK_TYPES). */
+  work_type?: string | null
+}
+
+/**
+ * Schablontjänster are reported to Skatteverket as utförd/ej utförd, never
+ * with hours, so they are the one case where labor_hours is not required.
+ */
+export const SCHABLON_WORK_TYPES: readonly string[] = ['TRANSPORT', 'TVATT']
+
+export const DEDUCTION_LINE_ERRORS = {
+  workTypeMissing: 'Arbetstyp krävs på alla ROT/RUT-rader.',
+  workTypeMismatch: 'Arbetstypen på raden hör inte till vald skattereduktion (ROT/RUT).',
+  hoursMissing: 'Antal arbetstimmar krävs på ROT/RUT-rader (schablontjänster undantagna).',
+} as const
+
+/**
+ * Per-line claim completeness: what the begäran om utbetalning to Skatteverket
+ * needs from every deduction line (HUSFL 2009:194: art av arbete och antal
+ * arbetstimmar). Checked at invoice creation because that is the last moment
+ * the line is editable: once the invoice is numbered, booked and paid, a
+ * missing arbetstyp used to surface only as a file-generation blocker with
+ * no repair path short of a credit note. Returns each message at most once.
+ */
+export function validateDeductionLines(items: ValidateInvoiceItem[]): string[] {
+  const errors = new Set<string>()
+  for (const item of items) {
+    if (!item.deduction_type) continue
+    const workType = item.work_type?.trim() || null
+    if (!workType) {
+      errors.add(DEDUCTION_LINE_ERRORS.workTypeMissing)
+    } else if (deductionTypeForWorkType(workType) !== item.deduction_type) {
+      errors.add(DEDUCTION_LINE_ERRORS.workTypeMismatch)
+    }
+    const isSchablon = workType != null && SCHABLON_WORK_TYPES.includes(workType)
+    const hours = item.labor_hours
+    if (!isSchablon && !(typeof hours === 'number' && Number.isFinite(hours) && hours > 0)) {
+      errors.add(DEDUCTION_LINE_ERRORS.hoursMissing)
+    }
+  }
+  return [...errors]
 }
 
 export interface ValidationResult {
@@ -244,6 +358,7 @@ export function validateInvoice(
   personnummerProvided: boolean,
   housingDesignationProvided: boolean,
   money?: DeductionCurrencyContext,
+  priorYear?: PriorYearDeductions | null,
 ): ValidationResult {
   const errors: string[] = []
   const warnings: string[] = []
@@ -255,38 +370,65 @@ export function validateInvoice(
     errors.push('Personnummer krävs för ROT/RUT-avdrag.')
   }
 
+  // Arbetstyp + arbetstimmar per line: required by the Skatteverket claim,
+  // and only fixable while the invoice is still a draft.
+  errors.push(...validateDeductionLines(items))
+
   // ROT requires fastighetsbeteckning per Skatteverket's Husavdragstjänst.
   // RUT does not (in 2026 the Skatteverket file accepts RUT without it).
   if (hasAnyRot && !housingDesignationProvided) {
     errors.push('Fastighetsbeteckning krävs för ROT-avdrag.')
   }
 
-  const { rot, rut } = computeDeductionTotalsByKind(items)
+  warnings.push(...deductionCapWarnings(computeDeductionTotalsByKind(items), money, priorYear))
 
-  // computeDeductionTotalsByKind works in invoice currency; the ceilings are
-  // kronor. Convert before comparing, and never label a foreign figure "kr".
+  return { errors, warnings }
+}
+
+/** Deductions already claimed for the same person earlier in the year, in SEK. */
+export interface PriorYearDeductions {
+  rot: number
+  rut: number
+}
+
+/**
+ * Yearly-ceiling warnings for one invoice's deductions (invoice currency),
+ * optionally on top of what the same person has already been granted this
+ * year (SEK). Three ceilings: ROT 50 000, RUT 75 000, and the shared 75 000
+ * (COMBINED_MAX) that ROT + RUT together must not exceed. Warnings, never
+ * errors: we cannot see claims made through other providers, so the customer
+ * still has to check their own remaining headroom.
+ *
+ * `totals` works in invoice currency; the ceilings are kronor. Convert before
+ * comparing, and never label a foreign figure "kr".
+ */
+export function deductionCapWarnings(
+  totals: { rot: number; rut: number },
+  money?: DeductionCurrencyContext,
+  priorYear?: PriorYearDeductions | null,
+): string[] {
+  const warnings: string[] = []
   const currencyLabel = (money?.currency ?? 'SEK').toUpperCase()
   const toSek = deductionSekConverter(money)
   const advice = 'Kunden behöver kontrollera sitt återstående utrymme själv.'
+  const priorRot = Math.max(0, priorYear?.rot ?? 0)
+  const priorRut = Math.max(0, priorYear?.rut ?? 0)
 
   // Warning-text amounts: sv-SE digits, always two decimals, same convention
   // as maxText below.
   const svAmount = (n: number): string =>
     n.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const maxTextOf = (max: number): string => `${max.toLocaleString('sv-SE')} kr`
 
-  const pushCapWarning = (kind: 'ROT' | 'RUT', amount: number, max: number): void => {
+  const rotSek = toSek ? toSek(totals.rot) : null
+  const rutSek = toSek ? toSek(totals.rut) : null
+
+  const pushCapWarning = (kind: 'ROT' | 'RUT', amount: number, amountSek: number | null, prior: number, max: number): void => {
     if (amount <= 0) return
-    const maxText = `${max.toLocaleString('sv-SE')} kr`
+    const maxText = maxTextOf(max)
+    const priorText = prior > 0 ? ` plus tidigare avdrag i år (${svAmount(prior)} kr)` : ''
 
-    if (currencyLabel === 'SEK') {
-      if (amount <= max) return
-      warnings.push(
-        `${kind}-avdraget på denna faktura (${svAmount(amount)} kr) överstiger årsmaximum ${maxText}. ` + advice,
-      )
-      return
-    }
-
-    if (!toSek) {
+    if (amountSek === null) {
       // No booking rate: we cannot know whether the ceiling is breached.
       // Saying so beats both silence and a fabricated kronor comparison.
       warnings.push(
@@ -295,17 +437,37 @@ export function validateInvoice(
       )
       return
     }
-
-    const amountSek = toSek(amount)
-    if (amountSek <= max) return
+    if (amountSek + prior <= max) return
+    const figure = currencyLabel === 'SEK'
+      ? `${svAmount(amount)} kr`
+      : `${svAmount(amount)} ${currencyLabel} = ${svAmount(amountSek)} kr`
     warnings.push(
-      `${kind}-avdraget på denna faktura (${svAmount(amount)} ${currencyLabel} = ${svAmount(amountSek)} kr) ` +
-        `överstiger årsmaximum ${maxText}. ` + advice,
+      `${kind}-avdraget på denna faktura (${figure})${priorText} överstiger årsmaximum ${maxText}. ` + advice,
     )
   }
 
-  pushCapWarning('ROT', rot, ROT_MAX)
-  pushCapWarning('RUT', rut, RUT_MAX)
+  pushCapWarning('ROT', totals.rot, rotSek, priorRot, ROT_MAX)
+  pushCapWarning('RUT', totals.rut, rutSek, priorRut, RUT_MAX)
 
-  return { errors, warnings }
+  // The shared ceiling: only worth its own line when neither kind already
+  // tripped its own (a RUT breach of 75 000 implies the combined breach), and
+  // only when both kinds are in play across the year, otherwise the per-kind
+  // ceiling is the binding one (ROT alone caps at 50 000 anyway).
+  if (rotSek !== null && rutSek !== null) {
+    const rotYear = rotSek + priorRot
+    const rutYear = rutSek + priorRut
+    const combined = rotYear + rutYear
+    const bothKinds = rotYear > 0 && rutYear > 0
+    if (bothKinds && combined > COMBINED_MAX && rotYear <= ROT_MAX && rutYear <= RUT_MAX) {
+      const thisInvoice = roundOre(rotSek + rutSek)
+      const priorSum = priorRot + priorRut
+      const priorText = priorSum > 0 ? ` plus tidigare avdrag i år (${svAmount(priorSum)} kr)` : ''
+      warnings.push(
+        `ROT- och RUT-avdragen på denna faktura (${svAmount(thisInvoice)} kr)${priorText} överstiger tillsammans ` +
+          `det gemensamma årsmaximum ${maxTextOf(COMBINED_MAX)}. ` + advice,
+      )
+    }
+  }
+
+  return warnings
 }

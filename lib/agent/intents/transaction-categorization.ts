@@ -1,5 +1,11 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
+import {
+  renderClarificationLines,
+  summariseClarifications,
+} from '@/lib/agent-context/chat-clarifications'
+import { findUnderlagCandidates } from '@/lib/agent-context/underlag-candidates'
+import type { InboxChannelContext } from '@/types'
 
 // transaction.categorization: "Fråga om denna transaktion" on a transaction
 // row.
@@ -44,6 +50,32 @@ interface CapturedTransaction {
     // agent can paraphrase context-specific signals (line items, dates,
     // payment reference) without us pre-modeling every field.
     raw_extraction: Record<string, unknown> | null
+    /**
+     * Answers the user already gave about THIS underlag in another channel
+     * (today: the WhatsApp intake conversation). Verified human input, not
+     * OCR guesswork, so it outranks anything read off the image.
+     *
+     * Without it the assistant asked for participant names the user had
+     * typed into WhatsApp minutes earlier, which is the worst thing a
+     * system that already holds the answer can do.
+     */
+    chat_answers: InboxChannelContext | null
+    /**
+     * `linked` = tied to this transaction by a human or an explicit flow.
+     * `candidate` = scored as probably the same economic event but NOT linked.
+     *
+     * Candidates exist because WhatsApp intake writes neither
+     * matched_transaction_id nor transactions.document_id, so a chat-captured
+     * receipt reaches neither the matched query nor the document backfill and
+     * the assistant reports "UNDERLAG: saknas" about a receipt we hold.
+     */
+    match: 'linked' | 'candidate'
+    /** Only set for candidates: 0-1 from the shared receipt matcher. */
+    confidence?: number
+    /** Only set for candidates: Swedish reasons the match scored. */
+    match_reasons?: string[]
+    /** Set for inbox-sourced underlag so the agent can propose the match. */
+    inbox_item_id?: string | null
   }[]
 }
 
@@ -83,7 +115,11 @@ export const transactionCategorization = defineAgentIntent<
   capture: async ({ transaction_id }, { supabase, companyId }) => {
     const { data: tx } = await supabase
       .from('transactions')
-      .select('id, date, description, amount, currency, document_id, journal_entry_id')
+      .select(
+        // merchant_name / amount_sek / exchange_rate feed the candidate scorer
+        // (currency-aware amount comparison + merchant similarity).
+        'id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate, document_id, journal_entry_id',
+      )
       .eq('id', transaction_id)
       .eq('company_id', companyId)
       .single()
@@ -113,7 +149,7 @@ export const transactionCategorization = defineAgentIntent<
         .eq('matched_transaction_id', transaction_id),
       supabase
         .from('invoice_inbox_items')
-        .select('document_id, extracted_data')
+        .select('document_id, extracted_data, channel_context')
         .eq('company_id', companyId)
         .eq('matched_transaction_id', transaction_id),
       directDocumentId
@@ -157,11 +193,14 @@ export const transactionCategorization = defineAgentIntent<
         is_restaurant: r.is_restaurant,
         is_systembolaget: r.is_systembolaget,
         raw_extraction: r.raw_extraction,
+        chat_answers: null,
+        match: 'linked',
       })
     }
     for (const it of (inboxItems ?? []) as {
       document_id: string | null
       extracted_data: Record<string, unknown> | null
+      channel_context: InboxChannelContext | null
     }[]) {
       const ex = it.extracted_data ?? {}
       const supplier = (ex.supplier as { name?: string | null } | undefined) ?? null
@@ -178,6 +217,8 @@ export const transactionCategorization = defineAgentIntent<
         is_restaurant: null,
         is_systembolaget: null,
         raw_extraction: ex,
+        chat_answers: it.channel_context ?? null,
+        match: 'linked',
       })
     }
 
@@ -221,6 +262,8 @@ export const transactionCategorization = defineAgentIntent<
           is_restaurant: null,
           is_systembolaget: null,
           raw_extraction: null,
+          chat_answers: null,
+          match: 'linked',
         })
         continue
       }
@@ -238,7 +281,75 @@ export const transactionCategorization = defineAgentIntent<
         is_restaurant: null,
         is_systembolaget: null,
         raw_extraction: ex,
+        chat_answers: null,
+        match: 'linked',
       })
+    }
+
+    // Chat answers live on the inbox item, but an underlag can reach this
+    // point through the document paths above (the transaction's own
+    // document_id, or a doc anchored to the journal entry) without the
+    // inbox row ever being matched to the transaction. Backfill by
+    // document_id so the answers are found either way.
+    const missingContextDocIds = underlag
+      .filter((u) => u.chat_answers == null && u.document_id != null)
+      .map((u) => u.document_id as string)
+    if (missingContextDocIds.length > 0) {
+      const { data: byDoc } = await supabase
+        .from('invoice_inbox_items')
+        .select('document_id, channel_context')
+        .eq('company_id', companyId)
+        .in('document_id', missingContextDocIds)
+        .not('channel_context', 'is', null)
+      for (const row of (byDoc ?? []) as {
+        document_id: string | null
+        channel_context: InboxChannelContext | null
+      }[]) {
+        for (const u of underlag) {
+          if (u.document_id === row.document_id && u.chat_answers == null) {
+            u.chat_answers = row.channel_context ?? null
+          }
+        }
+      }
+    }
+
+    // Still nothing. That is the ordinary state for a receipt captured in
+    // WhatsApp: intake writes neither invoice_inbox_items.matched_transaction_id
+    // nor transactions.document_id (both are set only when a human matches in
+    // the picker), so the item reaches neither the matched query nor the
+    // backfill above, and the user is told "UNDERLAG: saknas" about a receipt
+    // we are holding. Score the unmatched items and offer the strongest for a
+    // human to confirm.
+    if (underlag.length === 0 && tx) {
+      const candidates = await findUnderlagCandidates(supabase, companyId, {
+        id: tx.id as string,
+        date: (tx.date as string | null) ?? null,
+        description: (tx.description as string | null) ?? null,
+        merchant_name: (tx.merchant_name as string | null) ?? null,
+        amount: tx.amount as number | null,
+        currency: (tx.currency as string | null) ?? null,
+        amount_sek: (tx.amount_sek as number | null) ?? null,
+        exchange_rate: (tx.exchange_rate as number | null) ?? null,
+      })
+      for (const c of candidates) {
+        underlag.push({
+          kind: 'invoice_inbox',
+          match: 'candidate',
+          confidence: c.confidence,
+          match_reasons: c.matchReasons,
+          inbox_item_id: c.inbox_item_id,
+          chat_answers: c.channelContext,
+          document_id: c.document_id,
+          merchant_name: c.merchant_name,
+          receipt_date: c.receipt_date,
+          total_amount: c.total_amount,
+          vat_amount: c.vat_amount,
+          currency: c.currency,
+          is_restaurant: null,
+          is_systembolaget: null,
+          raw_extraction: null,
+        })
+      }
     }
 
     return {
@@ -296,9 +407,23 @@ export const transactionCategorization = defineAgentIntent<
     } else {
       // Underlag IS attached: read the extracted metadata and use it
       // directly. Don't ask the user for things the extraction already nailed.
-      lines.push(`UNDERLAG: ${captured.underlag.length} st bifogat. Extraherade fält:`)
+      const linkedCount = captured.underlag.filter((u) => u.match === 'linked').length
+      const candidateCount = captured.underlag.length - linkedCount
+      lines.push(
+        linkedCount > 0
+          ? `UNDERLAG: ${linkedCount} st bifogat. Extraherade fält:`
+          : `UNDERLAG: inget är kopplat till transaktionen, men ${candidateCount} st i Dokumentinkorgen liknar den starkt (TROLIGT UNDERLAG, ej bekräftat). Extraherade fält:`,
+      )
+      // Set when at least one underlag actually contributed a clarification
+      // line, which is what the guidance paragraph below refers to.
+      let renderedClarifications = false
       for (const u of captured.underlag) {
         const parts: string[] = []
+        if (u.match === 'candidate') {
+          parts.push(`TROLIGT UNDERLAG (${Math.round((u.confidence ?? 0) * 100)}% säkerhet)`)
+          if (u.match_reasons?.length) parts.push(u.match_reasons.join(' + '))
+          if (u.inbox_item_id) parts.push(`inbox_item_id=${u.inbox_item_id}`)
+        }
         if (u.document_id) parts.push(`document_id=${u.document_id}`)
         if (u.merchant_name) parts.push(`leverantör=${u.merchant_name}`)
         if (u.receipt_date) parts.push(`datum=${u.receipt_date}`)
@@ -311,9 +436,38 @@ export const transactionCategorization = defineAgentIntent<
         if (u.is_restaurant) parts.push('restaurang=ja')
         if (u.is_systembolaget) parts.push('systembolaget=ja')
         lines.push(`  • ${u.kind}: ${parts.join(', ') || '(ingen extraherad data: läs underlaget med gnubok_get_document_content)'}`)
+
+        // Answers the user already typed in another channel. Own indented
+        // block so it reads as human input, not one more OCR field.
+        //
+        // Rendered from the structured summary rather than off the raw blob: a
+        // WhatsApp "nej" stores an EMPTY representation (participants: [],
+        // purpose: null, denied: true), so branching on `!rep.purpose` here
+        // read a settled denial as a half answer and told the agent to ask for
+        // the purpose of a meal the user had just said was not representation.
+        // The summary also flattens the free text and drops the caption.
+        const clarifications = summariseClarifications(u.chat_answers)
+        const clarificationLines = clarifications ? renderClarificationLines(clarifications) : []
+        if (clarificationLines.length > 0) renderedClarifications = true
+        for (const line of clarificationLines) {
+          lines.push(`    - ${line}`)
+        }
       }
       lines.push('')
       lines.push('VIKTIGT: extraktionen ovan är det vi REDAN VET. Återupprepa inte frågor som "vilken leverantör är det?" eller "vad var beloppet?": det står ovan. Använd uppgifterna direkt och föreslå kategori + moms-behandling.')
+      // Conditional: an unconditional line is prompt bloat on the common
+      // transaction that has no chat history. Gated on what was actually
+      // RENDERED, not on chat_answers being present: a context holding only a
+      // caption (or only an already-answered question) summarises to nothing,
+      // and this paragraph would then point at marked rows the prompt does not
+      // contain. Same failure as an instruction keyed to a marker the renderer
+      // never emits.
+      if (renderedClarifications) {
+        lines.push('Rader märkta "uppgivna av användaren" kommer från en tidigare konversation om samma underlag (t.ex. WhatsApp när kvittot skickades in). Det är MÄNSKLIGT bekräftade uppgifter och väger tyngre än vad du själv läser ut ur bilden. Fråga ALDRIG om något som redan står där; behöver du komplettera, fråga bara om den del som faktiskt saknas. Står det "OBESVARAD FRÅGA": ställ exakt den frågan och ingen annan. När du stagear: ta med deltagare och syfte i notes så de följer med till verifikationen.')
+      }
+      if (candidateCount > 0) {
+        lines.push('TROLIGT UNDERLAG är INTE kopplat ännu: en människa måste bekräfta kopplingen. Fråga kort om det är rätt underlag (nämn leverantör, datum, belopp) och be användaren koppla det i Dokumentinkorgen via "Matcha mot transaktion". Bokför inte mot ett troligt underlag som användaren inte bekräftat, men använd gärna dess uppgifter för att föreslå kategori under tiden.')
+      }
     }
     lines.push('')
     lines.push('Arbetssätt: hämta information via verktygsanrop FÖRST (tyst: statusraderna visar att du söker, och ditt resonemang sker i tankekanalen), föreslå sedan. Skriv din förklaring EN gång efteråt, inte i flera block runt anropen.')

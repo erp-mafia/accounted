@@ -3,11 +3,13 @@ import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type { Transaction } from '@/types'
@@ -16,7 +18,7 @@ ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.book',
-  async (request, { supabase, user, companyId, log }, { params }) => {
+  async (request, { supabase, user, companyId, log, requestId }, { params }) => {
     const { id } = await params
 
     const validation = await validateBody(request, BookTransactionSchema)
@@ -165,28 +167,57 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     // Link transaction to the journal entry
-    const { error: updateError } = await supabase
+    const { data: updateResult, error: updateError } = await supabase
       .from('transactions')
       .update({
         journal_entry_id: journalEntry.id,
         is_business: true,
+        is_ignored: false,
         category: 'uncategorized',
       })
       .eq('id', id)
+      .eq('company_id', companyId)
+      .is('journal_entry_id', null)
+      .select('*')
 
     if (updateError) {
-      return NextResponse.json(
-        { error: 'Failed to update transaction' },
-        { status: 500 }
+      await reverseOrphanedJournalEntry(
+        supabase,
+        companyId,
+        user.id,
+        journalEntry.id,
+        'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
       )
+      return errorResponse(updateError, log, { requestId })
     }
+
+    if (!updateResult || updateResult.length === 0) {
+      // CAS guard: another request linked this transaction after our read. The
+      // posted orphan is immutable, so compensate through the engine with a
+      // storno entry instead of overwriting the winning journal entry link.
+      await reverseOrphanedJournalEntry(
+        supabase,
+        companyId,
+        user.id,
+        journalEntry.id,
+        'Bokföringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
+      )
+      return errorResponseFromCode('TX_CATEGORIZE_RACE', log, { requestId })
+    }
+
+    const updatedTransaction = updateResult[0] as Transaction
+
+    // A hunt- or hand-matched inbox item is consumed by this booking even
+    // though the dialog never saw it: link its underlag to the verifikat and
+    // stamp it so it leaves the active inbox (best-effort, logged inside).
+    await propagateUnderlagForBookedTransaction(supabase, companyId, id, journalEntry.id)
 
     // Emit event (non-blocking)
     try {
       await eventBus.emit({
         type: 'transaction.categorized',
         payload: {
-          transaction: transaction as Transaction,
+          transaction: updatedTransaction,
           account: lines[0]?.account_number || '',
           taxCode: '',
           userId: user.id,

@@ -4,21 +4,40 @@ import { useState, useEffect, useCallback, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
 import { Textarea } from '@/components/ui/textarea'
-import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy, ChevronDown, CalendarClock, FileText, Link2, RotateCcw, Scissors, PenLine } from 'lucide-react'
+import {
+  Loader2,
+  ArrowLeft,
+  AlertTriangle,
+  Lock,
+  Pencil,
+  Copy,
+  CalendarClock,
+  FileText,
+  RotateCcw,
+  Scissors,
+  PenLine,
+  Bot,
+  MoreHorizontal,
+  Trash2,
+} from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { AttnLine } from '@/components/ui/attn-line'
+import { HelpPopover } from '@/components/ui/help-popover'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
@@ -27,7 +46,6 @@ import StrikeLinesDialog from '@/components/bookkeeping/StrikeLinesDialog'
 import CorrectMetadataDialog from '@/components/bookkeeping/CorrectMetadataDialog'
 import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -37,6 +55,9 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { fetchDimensions, type DimensionDto } from '@/components/dimensions/types'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 
@@ -63,12 +84,48 @@ type RattelseLogRow = {
   created_at: string
 }
 
+/**
+ * Human "who committed this" line from the committed_actor_* snapshot
+ * (WHO relayed the commit; commit_method records HOW). The claude.ai MCP
+ * connector mints a gnubok_sk_ API key, so MCP traffic arrives as
+ * actor_type='api_key' with the key name as the label.
+ */
+function committedByLabel(
+  actorType: string,
+  actorLabel: string | null,
+  t: (key: string, values?: Record<string, string>) => string,
+): string {
+  switch (actorType) {
+    case 'user':
+      return actorLabel || t('committed_by_user')
+    case 'api_key':
+    case 'mcp_oauth':
+      return actorLabel ? t('committed_by_ai', { label: actorLabel }) : t('committed_by_ai_plain')
+    case 'agent_chat':
+      return t('committed_by_agent_chat')
+    case 'cron':
+      return t('committed_by_cron')
+    case 'system':
+      return t('committed_by_system')
+    default:
+      return actorType
+  }
+}
+
+// Ledger amounts render as plain sv-SE numbers with two decimals (no currency
+// suffix), the same way the verifikat list's line tables do.
+const fmtAmount = (value: number | string): string =>
+  Number(value).toLocaleString('sv-SE', { minimumFractionDigits: 2 })
+
 export default function JournalEntryDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
   const { canWrite } = useCanWrite()
+  const company = useCompanyOptional()?.company ?? null
   const { toast } = useToast()
   const t = useTranslations('journal_detail')
+  const tCommon = useTranslations('common')
+  const tCorrection = useTranslations('journal_correction')
   const sourceTypeLabels = useSourceTypeLabels()
   const [entry, setEntry] = useState<JournalEntry | null>(null)
   const [chain, setChain] = useState<JournalEntry[]>([])
@@ -84,6 +141,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReverseConfirm, setShowReverseConfirm] = useState(false)
   const [isReversing, setIsReversing] = useState(false)
+  // Non-null when the server refused the storno with CORRECTION_CHAIN_TOO_DEEP:
+  // holds the reported chain depth and opens the bypass confirm ("Återför ändå").
+  const [reverseDeepChainDepth, setReverseDeepChainDepth] = useState<number | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
   // Confirm-before-posting (convention 10). The list already gates this exact
@@ -97,11 +157,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
   // Dimension registry, fetched once when any line carries a dimensions map:
-  // used to resolve display names for the line badges ('KS: Butik'); badges
-  // fall back to raw codes when the fetch fails or a code is unregistered.
+  // used to resolve display names for the per-line dimension text ('KS: Butik');
+  // it falls back to raw codes when the fetch fails or a code is unregistered.
   const [registryDims, setRegistryDims] = useState<DimensionDto[] | null>(null)
   // Tier-2 retro-tagging (dimensions plan PR6): pencil on posted lines opens
-  // the audited retag dialog; the log renders as a history disclosure below.
+  // the audited retag dialog; the log renders as a history section below.
   // Both render only when dimensions are enabled for the company.
   const { settings } = useCompanySettings()
   const dimensionsEnabled = settings?.dimensions_enabled === true
@@ -254,10 +314,18 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // no replacement, per BFL 5 kap 5§. Distinct from "Rätta", which always books
   // a replacement entry. Routes through the engine's reverseEntry (storno +
   // reverses_id link; original → 'reversed', never deleted).
-  const handleReverse = useCallback(async () => {
+  const handleReverse = useCallback(async (allowDeepChain = false) => {
     setIsReversing(true)
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/reverse`, { method: 'POST' })
+      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/reverse`, {
+        method: 'POST',
+        ...(allowDeepChain
+          ? {
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ allow_deep_chain: true }),
+            }
+          : {}),
+      })
       const result = await res.json()
       if (res.ok) {
         const storno = result.data
@@ -266,7 +334,13 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           description: t('toast_reverse_done_description', { voucher: formatVoucher(storno ?? {}) }),
         })
         setShowReverseConfirm(false)
+        setReverseDeepChainDepth(null)
         await fetchData()
+      } else if (result?.error?.code === 'CORRECTION_CHAIN_TOO_DEEP') {
+        // Chain-depth guard: swap into the bypass confirm instead of a
+        // dead-end toast. "Återför ändå" resubmits with allow_deep_chain.
+        setShowReverseConfirm(false)
+        setReverseDeepChainDepth(result.error?.details?.depth ?? 3)
       } else {
         toast({ title: t('toast_reverse_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
       }
@@ -292,7 +366,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
   if (error || !entry) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-8">
         <Link
           href="/bookkeeping"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -300,11 +374,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <ArrowLeft className="h-4 w-4" />
           {t('back')}
         </Link>
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <p className="text-sm text-muted-foreground">{error || t('error_not_found')}</p>
-          </CardContent>
-        </Card>
+        <p className="py-12 text-center text-sm text-muted-foreground">{error || t('error_not_found')}</p>
       </div>
     )
   }
@@ -371,85 +441,128 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // Include current entry in the chain for the visualization
   const fullChain = [entry, ...chain]
 
-  // SIE dimension badge prefixes. 'KS' is the market-standard abbreviation
-  // for kostnadsställe; projekt has no standard abbreviation (Fortnox/Visma
-  // show the dimension name, and 'PR' collides with prisnivå in some BAS
-  // setups, flagged in the #859 compliance review), so dim 6 falls through
-  // to the registry name below. Stays Swedish per .claude/rules/i18n.md.
+  // SIE dimension prefixes. 'KS' is the market-standard abbreviation for
+  // kostnadsställe; projekt has no standard abbreviation (Fortnox/Visma show
+  // the dimension name, and 'PR' collides with prisnivå in some BAS setups,
+  // flagged in the #859 compliance review), so dim 6 falls through to the
+  // registry name below. Stays Swedish per .claude/rules/i18n.md.
   const DIM_BADGE_PREFIX: Record<string, string> = { '1': 'KS' }
 
-  // Display-only dimension badges for a line (e.g. 'KS: Butik', 'PR: P001').
+  // Display-only dimension text for a line (e.g. 'KS: Butik · Projekt: P001').
   // Names resolve through the registry when loaded; raw codes otherwise.
-  const renderDimensionBadges = (line: JournalEntryLine) => {
+  // Muted text, not chips: dimensions are normal data on a line, and chips
+  // mark exceptions only.
+  const renderDimensions = (line: JournalEntryLine) => {
     const entries = Object.entries(line.dimensions ?? {})
       .filter(([, code]) => code)
       .sort(([a], [b]) => Number(a) - Number(b))
     if (entries.length === 0) return null
+    const text = entries
+      .map(([dimNo, code]) => {
+        const dim = registryDims?.find((d) => String(d.sie_dim_no) === dimNo)
+        const value = dim?.values.find((v) => v.code === code)
+        const prefix = DIM_BADGE_PREFIX[dimNo] ?? dim?.name ?? `Dim ${dimNo}`
+        const hasName = !!value && value.name !== '' && value.name !== value.code
+        return `${prefix}: ${hasName ? value.name : code}`
+      })
+      .join(' · ')
     return (
-      <div className="mt-1 flex flex-wrap gap-1">
-        {entries.map(([dimNo, code]) => {
-          const dim = registryDims?.find((d) => String(d.sie_dim_no) === dimNo)
-          const value = dim?.values.find((v) => v.code === code)
-          const prefix = DIM_BADGE_PREFIX[dimNo] ?? dim?.name ?? `Dim ${dimNo}`
-          const hasName = !!value && value.name !== '' && value.name !== value.code
-          return (
-            <Badge
-              key={dimNo}
-              variant="outline"
-              className="font-mono text-[11px] font-normal"
-              title={`${dim?.name ?? prefix} ${code}${hasName ? `: ${value.name}` : ''}`}
-            >
-              {prefix}: {hasName ? value.name : code}
-            </Badge>
-          )
-        })}
-      </div>
+      // data-ph-mask: dimension names and codes are user data. No title
+      // attribute: replay masking covers text nodes, not attributes, so
+      // a title tooltip would ship the masked content in the clear.
+      <span data-ph-mask="" className="block text-xs text-muted-foreground">
+        {text}
+      </span>
     )
   }
 
-  return (
-    <div className="space-y-8">
-      {/* Back link */}
-      <Link
-        href="/bookkeeping"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+  const retagButton = (line: JournalEntryLine) =>
+    dimensionsEnabled && canWrite && entry.status === 'posted' ? (
+      <button
+        type="button"
+        onClick={() => setRetagLine(line as unknown as RetagLine)}
+        className="rounded-sm p-1 text-muted-foreground/50 transition-colors hover:bg-secondary/60 hover:text-foreground"
+        aria-label="Ändra dimensioner"
+        title="Ändra dimensioner (påverkar endast internredovisningen)"
       >
-        <ArrowLeft className="h-4 w-4" />
-        {t('back')}
-      </Link>
+        <Pencil className="h-3 w-3" />
+      </button>
+    ) : null
 
-      {/* Header */}
+  // Title in the serif: the voucher label for posted entries, a plain
+  // "Utkast till verifikat" while the number is still unassigned.
+  const title = entry.status === 'draft' ? t('title_draft') : t('title', { label: formatVoucher(entry) })
+
+  const metaParts = [
+    formatDate(entry.entry_date),
+    entry.description,
+    entry.committed_at ? t('posted_on', { date: formatDate(entry.committed_at) }) : null,
+  ].filter(Boolean)
+
+  // Header actions (convention 9): the one next step as a filled button, at
+  // most a couple of quiet secondaries, everything else in the ⋯ menu. The
+  // old surface offered no actions at all on reversed/cancelled entries; keep
+  // that gate.
+  const showActions = entry.status === 'posted' || entry.status === 'draft'
+  const showDelete = entry.status === 'draft' || isLastInSeries
+  const showRattelseGroup = canCorrect && !isOpeningBalance
+
+  const underlagAside = (() => {
+    if (attachmentCount === 0 && references.length === 0) {
+      return <AttnLine>{t('no_attachments')}</AttnLine>
+    }
+    const parts = [
+      attachmentCount > 0 ? t('attachments_count', { count: attachmentCount }) : null,
+      references.length > 0 ? t('references_count', { count: references.length }) : null,
+    ].filter(Boolean)
+    return <span className="text-[11px] tabular-nums text-muted-foreground">{parts.join(' · ')}</span>
+  })()
+
+  return (
+    <div className="space-y-8 stagger-enter">
+      {/* Back link + prev/next record pager */}
+      <div className="flex items-center justify-between gap-4">
+        <Link
+          href="/bookkeeping"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('back')}
+        </Link>
+        <DetailPager
+          contextKey={listContextKey('bookkeeping', company?.id)}
+          basePath="/bookkeeping"
+          currentId={id}
+          // Arrow paging unmounts the page and would destroy an unsaved notes
+          // draft; the textarea only guards arrows while it has focus, so gate
+          // the keyboard bindings on the editing state itself.
+          keyboard={!editingNotes}
+        />
+      </div>
+
+      {/* Header: serif title, status chips only for deviations (a plain posted
+          verifikat carries none), a quiet meta line, the next step right. */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-2xl leading-8 tracking-tight font-mono">
-              {formatVoucher(entry)}
-            </h1>
-            <JournalEntryStatusBadge entry={entry} />
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* data-ph-mask: the title carries the voucher number */}
+            <h1 data-ph-mask="" className="font-display text-2xl leading-8 tracking-tight">{title}</h1>
+            <JournalEntryStatusBadge entry={entry} showStatus={entry.status !== 'posted'} />
             {rattelseLog.length > 0 && (
-              <Badge variant="outline" className="text-xs font-normal" title={t('rattelse_history_title')}>
+              <Badge variant="outline" title={t('rattelse_history_title')}>
                 Rättad
               </Badge>
             )}
           </div>
-          <p className="text-muted-foreground">{entry.description}</p>
+          {/* data-ph-mask: the meta line carries the entry description */}
+          <p data-ph-mask="" className="mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
         </div>
 
-        {(entry.status === 'posted' || entry.status === 'draft') && (
-          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-            {entry.status === 'draft' && (
-              <AgentSparkleButton
-                intentId="verifikation.draft"
-                intentArgs={{ journal_entry_id: id }}
-                contextRef={`verifikation:${id}`}
-                className="w-full sm:w-auto"
-              />
-            )}
+        {showActions && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
             {entry.status === 'draft' && (
               <Button
                 variant="outline"
-                size="sm"
-                className="w-full sm:w-auto"
                 onClick={() => setShowEdit(true)}
                 disabled={!canWrite}
                 title={!canWrite ? t('read_only_tooltip') : undefined}
@@ -460,8 +573,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             )}
             {entry.status === 'draft' && (
               <Button
-                size="sm"
-                className="w-full sm:w-auto"
                 onClick={openCommitConfirm}
                 disabled={!canWrite || isCommitting}
                 title={!canWrite ? t('read_only_tooltip') : undefined}
@@ -470,67 +581,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 {t('post')}
               </Button>
             )}
-            {(entry.status === 'draft' || isLastInSeries) && (
-              <Button
-                variant="destructive"
-                size="sm"
-                className="w-full sm:w-auto"
-                onClick={() => setShowDeleteConfirm(true)}
-                disabled={!canWrite}
-                title={!canWrite ? t('read_only_tooltip') : undefined}
-              >
-                {!canWrite && <Lock className="mr-2 h-4 w-4" />}
-                {entry.status === 'draft' ? t('delete_draft') : t('delete_entry')}
-              </Button>
-            )}
-            {canCorrect && !isOpeningBalance && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full sm:w-auto"
-                    disabled={!canWrite}
-                    title={!canWrite ? t('read_only_tooltip') : undefined}
-                  >
-                    {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
-                    {t('correct_menu')}
-                    <ChevronDown className="ml-2 h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  {canInlineRattelse && (
-                    <DropdownMenuItem onClick={() => setShowStrikeLines(true)}>
-                      <Scissors className="mr-2 h-4 w-4" />
-                      {t('strike_lines')}
-                    </DropdownMenuItem>
-                  )}
-                  <DropdownMenuItem onClick={() => setShowCorrectMetadata(true)}>
-                    <PenLine className="mr-2 h-4 w-4" />
-                    {t('correct_metadata')}
-                  </DropdownMenuItem>
-                  {canInlineRattelse && <DropdownMenuSeparator />}
-                  <DropdownMenuItem onClick={() => setShowCorrection(true)}>
-                    <Pencil className="mr-2 h-4 w-4" />
-                    {t('correct_lines')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setShowRecordate(true)}>
-                    <CalendarClock className="mr-2 h-4 w-4" />
-                    {t('correct_date')}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => setShowReverseConfirm(true)}>
-                    <RotateCcw className="mr-2 h-4 w-4" />
-                    {t('reverse_action')}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
             {canCorrect && isOpeningBalance && (
               <Button
                 variant="outline"
-                size="sm"
-                className="w-full sm:w-auto"
                 onClick={() => setShowCorrectIB(true)}
                 disabled={!canWrite}
                 title={!canWrite ? t('read_only_tooltip') : undefined}
@@ -539,455 +592,400 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 {t('correct_opening_balances')}
               </Button>
             )}
-            {/* Copy is not status-gated: it only prefills a fresh manual draft
-                (no voucher number, date or attachments carried over), so it is
-                offered on drafts too, matching the list surfaces. */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full sm:w-auto"
-              onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}
-              disabled={!canWrite}
-              title={!canWrite ? t('read_only_tooltip') : undefined}
-            >
-              {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
-              {t('copy_entry')}
-            </Button>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label={tCommon('more_options')}>
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[240px]">
+                {/* Copy is not status-gated: it only prefills a fresh manual
+                    draft (no voucher number, date or attachments carried over),
+                    so it is offered on drafts too, matching the list surfaces. */}
+                <DropdownMenuItem asChild disabled={!canWrite}>
+                  <Link href={`/bookkeeping?copy_from=${entry.id}`}>
+                    <Copy className="h-4 w-4" />
+                    {t('copy_entry')}
+                  </Link>
+                </DropdownMenuItem>
+                {showRattelseGroup && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>{t('correct_menu')}</DropdownMenuLabel>
+                    {canInlineRattelse && (
+                      <DropdownMenuItem onSelect={() => setShowStrikeLines(true)} disabled={!canWrite}>
+                        <Scissors className="h-4 w-4" />
+                        {t('strike_lines')}
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem onSelect={() => setShowCorrectMetadata(true)} disabled={!canWrite}>
+                      <PenLine className="h-4 w-4" />
+                      {t('correct_metadata')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setShowCorrection(true)} disabled={!canWrite}>
+                      <Pencil className="h-4 w-4" />
+                      {t('correct_lines')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => setShowRecordate(true)} disabled={!canWrite}>
+                      <CalendarClock className="h-4 w-4" />
+                      {t('correct_date')}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => setShowReverseConfirm(true)} disabled={!canWrite}>
+                      <RotateCcw className="h-4 w-4" />
+                      {t('reverse_action')}
+                    </DropdownMenuItem>
+                  </>
+                )}
+                {showDelete && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={() => setShowDeleteConfirm(true)}
+                      disabled={!canWrite}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      {entry.status === 'draft' ? t('delete_draft') : t('delete_entry')}
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         )}
       </div>
 
-      {/* Info cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">{t('details_title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('field_date')}</span>
-              <span>{formatDate(entry.entry_date)}</span>
-            </div>
-            {entry.committed_at && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('field_posted_at')}</span>
-                <span>{formatDate(entry.committed_at)}</span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('field_type')}</span>
-              <span>{sourceTypeLabels[entry.source_type] || entry.source_type}</span>
-            </div>
-            {entry.source_voucher_series && entry.source_voucher_number != null && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('field_source_voucher')}</span>
-                <span className="font-mono tabular-nums">
-                  {formatVoucher({ voucher_series: entry.source_voucher_series, voucher_number: entry.source_voucher_number })}
-                </span>
-              </div>
-            )}
-            {/* Notes: always editable (internal metadata, not BFL verifikation content) */}
-            <div className="border-t pt-2 mt-2">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-muted-foreground flex items-center gap-1">
-                  <MessageSquare className="h-3.5 w-3.5" />
-                  {t('field_note')}
-                </span>
-                {!editingNotes && canWrite && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => { setNotesValue(entry.notes || ''); setEditingNotes(true) }}
-                    aria-label={t('edit_note_aria')}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
-              {editingNotes ? (
-                <div className="space-y-2">
-                  <Textarea
-                    value={notesValue}
-                    onChange={(e) => setNotesValue(e.target.value)}
-                    placeholder={t('note_placeholder')}
-                    className="resize-none text-sm"
-                    rows={3}
-                    maxLength={2000}
-                    autoFocus
-                  />
-                  <div className="flex gap-1 justify-end">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 px-2"
-                      onClick={() => setEditingNotes(false)}
-                      disabled={savingNotes}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      size="sm"
-                      className="h-7 px-2"
-                      onClick={() => saveNotes(notesValue)}
-                      disabled={savingNotes}
-                    >
-                      {savingNotes ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground italic">
-                  {entry.notes || t('no_note')}
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">{t('summary_title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('summary_debit')}</span>
-              <span className="tabular-nums font-medium">
-                {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+      {/* Facts on the left, the internal note on the right. */}
+      <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
+        <DetailSection kicker={t('details_title')}>
+          <DefRow label={t('field_voucher')}>
+            {entry.status === 'draft' ? <DefEmpty /> : <span className="tabular-nums">{formatVoucher(entry)}</span>}
+          </DefRow>
+          <DefRow label={t('field_date')}>
+            <span className="tabular-nums">{formatDate(entry.entry_date)}</span>
+          </DefRow>
+          <DefRow label={t('field_type')}>{sourceTypeLabels[entry.source_type] || entry.source_type}</DefRow>
+          {entry.source_voucher_series && entry.source_voucher_number != null && (
+            <DefRow label={t('field_source_voucher')}>
+              <span className="tabular-nums">
+                {formatVoucher({ voucher_series: entry.source_voucher_series, voucher_number: entry.source_voucher_number })}
               </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('summary_credit')}</span>
-              <span className="tabular-nums font-medium">
-                {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+            </DefRow>
+          )}
+          {entry.committed_at && (
+            <DefRow label={t('field_posted_at')}>
+              <span className="tabular-nums">{formatDate(entry.committed_at)}</span>
+            </DefRow>
+          )}
+          {entry.committed_at && entry.committed_actor_type && (
+            <DefRow label={t('field_committed_by')}>
+              <span className="inline-flex items-center gap-1">
+                {entry.committed_actor_type !== 'user' && <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                {committedByLabel(entry.committed_actor_type, entry.committed_actor_label, t)}
               </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('summary_lines')}</span>
-              <span>{lines.length}</span>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">{t('attachments_title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm">
-            {attachmentCount === 0 && references.length === 0 ? (
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-warning-foreground" />
-                <span className="text-muted-foreground">{t('no_attachments')}</span>
-              </div>
-            ) : (
-              <div className="space-y-1">
-                {attachmentCount > 0 && (
-                  <div className="flex items-center gap-2">
-                    <Paperclip className="h-4 w-4 text-muted-foreground" />
-                    <span>{t('attachments_count', { count: attachmentCount })}</span>
-                  </div>
-                )}
-                {references.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <Link2 className="h-4 w-4 text-muted-foreground" />
-                    <span>{t('references_count', { count: references.length })}</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Foreign-currency conversion audit chip */}
-      {hasForeignCurrency && foreignCurrency && (
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
-              {t('currency_title')}
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-              <div className="flex justify-between sm:block">
-                <span className="text-muted-foreground">{t('currency_rate')}</span>
-                <span className="tabular-nums sm:block">
+            </DefRow>
+          )}
+          {/* Foreign-currency conversion audit: rate and original amount from
+              the settlement line, as plain facts beside the other details. */}
+          {hasForeignCurrency && foreignCurrency && (
+            <>
+              <DefRow label={t('currency_rate')}>
+                <span className="tabular-nums">
                   {foreignExchangeRate
                     ? `1 ${foreignCurrency} = ${foreignExchangeRate.toLocaleString('sv-SE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} SEK`
                     : '-'}
                 </span>
-              </div>
-              <div className="flex justify-between sm:block">
-                <span className="text-muted-foreground">{t('currency_original_amount')}</span>
-                <span className="tabular-nums sm:block">
-                  {foreignTotal.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} {foreignCurrency}
-                </span>
+              </DefRow>
+              <DefRow label={t('currency_original_amount')}>
+                <span className="tabular-nums">{fmtAmount(foreignTotal)} {foreignCurrency}</span>
+              </DefRow>
+            </>
+          )}
+        </DetailSection>
+
+        {/* Notes: always editable (internal metadata, not BFL verifikation content) */}
+        <DetailSection
+          kicker={t('field_note')}
+          aside={
+            !editingNotes && canWrite ? (
+              <button
+                type="button"
+                onClick={() => { setNotesValue(entry.notes || ''); setEditingNotes(true) }}
+                aria-label={t('edit_note_aria')}
+                className="text-xs text-muted-foreground transition-colors hover:text-foreground hover:underline"
+              >
+                {tCommon('edit')}
+              </button>
+            ) : undefined
+          }
+        >
+          {editingNotes ? (
+            <div className="space-y-2">
+              <Textarea
+                value={notesValue}
+                onChange={(e) => setNotesValue(e.target.value)}
+                placeholder={t('note_placeholder')}
+                className="resize-none text-sm"
+                rows={3}
+                maxLength={2000}
+                autoFocus
+              />
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setEditingNotes(false)}
+                  disabled={savingNotes}
+                >
+                  {tCommon('cancel')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => saveNotes(notesValue)}
+                  disabled={savingNotes}
+                >
+                  {savingNotes && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {tCommon('save')}
+                </Button>
               </div>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          ) : entry.notes ? (
+            <p className="py-2 text-sm whitespace-pre-wrap">{entry.notes}</p>
+          ) : (
+            <p className="py-2 text-sm text-muted-foreground">{t('no_note')}</p>
+          )}
+        </DetailSection>
+      </div>
 
-      {/* Lines table */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">{t('lines_title')}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {/* Desktop table */}
-          <div className="hidden sm:block">
-            <table className="w-full text-sm">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                <tr className="border-b text-left">
-                  <th className="py-2 w-48">{t('col_account')}</th>
-                  <th className="py-2">{t('col_description')}</th>
-                  <th className="py-2 w-28 text-right">{t('col_debit')}</th>
-                  <th className="py-2 w-28 text-right">{t('col_credit')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayRows.map((row) => {
-                  if (row.kind === 'struck') {
-                    const s = row.line
-                    return (
-                      <tr key={`struck-${s.id}`} className="border-b last:border-0 text-muted-foreground">
-                        <td className="py-2 line-through decoration-muted-foreground/70">
-                          <AccountNumber number={s.account_number} showName />
-                        </td>
-                        <td className="py-2">
-                          <span className="line-through decoration-muted-foreground/70">
-                            {s.line_description || ''}
-                          </span>
-                          <span className="ml-2 no-underline text-xs">
-                            {t('struck_marker', { date: formatDate(s.struck_at) })}
-                          </span>
-                        </td>
-                        <td className="py-2 text-right tabular-nums line-through decoration-muted-foreground/70">
-                          {Number(s.debit_amount) > 0 &&
-                            Number(s.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                        </td>
-                        <td className="py-2 text-right tabular-nums line-through decoration-muted-foreground/70">
-                          {Number(s.credit_amount) > 0 &&
-                            Number(s.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                        </td>
-                      </tr>
-                    )
-                  }
-                  const line = row.line
-                  const hasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
-                  return (
-                    <tr key={line.id} className="border-b last:border-0">
-                      <td className="py-2"><AccountNumber number={line.account_number} showName /></td>
-                      <td className="py-2 text-muted-foreground">
-                        <span className="inline-flex items-center gap-1">
-                          {line.line_description || ''}
-                          {dimensionsEnabled && canWrite && entry.status === 'posted' && (
-                            <button
-                              type="button"
-                              onClick={() => setRetagLine(line as unknown as RetagLine)}
-                              className="p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
-                              aria-label="Ändra dimensioner"
-                              title="Ändra dimensioner (påverkar endast internredovisningen)"
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </span>
-                        {renderDimensionBadges(line)}
-                      </td>
-                      <td className="py-2 text-right tabular-nums">
-                        {Number(line.debit_amount) > 0 && (
-                          <>
-                            {Number(line.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                            {hasForeignCurrency && Number(line.debit_amount) > 0 && (
-                              <span className="block text-xs text-muted-foreground">
-                                {Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} {line.currency}
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </td>
-                      <td className="py-2 text-right tabular-nums">
-                        {Number(line.credit_amount) > 0 && (
-                          <>
-                            {Number(line.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                            {hasForeignCurrency && Number(line.credit_amount) > 0 && (
-                              <span className="block text-xs text-muted-foreground">
-                                {Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} {line.currency}
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="font-semibold">
-                  <td colSpan={2} className="py-2">{t('sum')}</td>
-                  <td className="py-2 text-right tabular-nums">
-                    {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                  </td>
-                  <td className="py-2 text-right tabular-nums">
-                    {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-
-          {/* Mobile cards */}
-          <div className="sm:hidden space-y-2">
+      {/* Lines: the list-page table idiom straight on the panel. */}
+      <DetailSection
+        kicker={t('lines_title')}
+        aside={
+          <span className="text-[11px] tabular-nums text-muted-foreground">
+            {t('lines_count', { count: lines.length })}
+          </span>
+        }
+      >
+        <table className="hidden w-full border-collapse text-[13px] sm:table">
+          <thead>
+            <tr>
+              <th className={cn(TH_CLASS, 'pl-0')}>{t('col_account')}</th>
+              <th className={TH_CLASS}>{t('col_description')}</th>
+              <th className={cn(TH_CLASS, 'text-right')}>{t('col_debit')}</th>
+              <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('col_credit')}</th>
+            </tr>
+          </thead>
+          <tbody>
             {displayRows.map((row) => {
               if (row.kind === 'struck') {
                 const s = row.line
                 return (
-                  <div key={`struck-${s.id}`} className="flex items-center justify-between py-2 border-b last:border-0 gap-2 text-muted-foreground">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm line-through decoration-muted-foreground/70">
-                        <AccountNumber number={s.account_number} showName />
-                      </div>
-                      {s.line_description && (
-                        <p className="text-xs truncate line-through decoration-muted-foreground/70">{s.line_description}</p>
-                      )}
-                      <p className="text-xs">{t('struck_marker', { date: formatDate(s.struck_at) })}</p>
-                    </div>
-                    <div className="text-right shrink-0 text-sm tabular-nums line-through decoration-muted-foreground/70">
-                      {Number(s.debit_amount) > 0 && (
-                        <p>{Number(s.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} D</p>
-                      )}
-                      {Number(s.credit_amount) > 0 && (
-                        <p>{Number(s.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} K</p>
-                      )}
-                    </div>
-                  </div>
+                  <tr key={`struck-${s.id}`} className="text-muted-foreground">
+                    <td className={cn(TD_CLASS, 'pl-0 whitespace-nowrap line-through decoration-muted-foreground/70')}>
+                      <AccountNumber number={s.account_number} showName />
+                    </td>
+                    <td className={TD_CLASS}>
+                      <span className="line-through decoration-muted-foreground/70">
+                        {s.line_description || ''}
+                      </span>
+                      <span className="ml-2 text-xs">
+                        {t('struck_marker', { date: formatDate(s.struck_at) })}
+                      </span>
+                    </td>
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums whitespace-nowrap line-through decoration-muted-foreground/70')}>
+                      {Number(s.debit_amount) > 0 && fmtAmount(s.debit_amount)}
+                    </td>
+                    <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums whitespace-nowrap line-through decoration-muted-foreground/70')}>
+                      {Number(s.credit_amount) > 0 && fmtAmount(s.credit_amount)}
+                    </td>
+                  </tr>
                 )
               }
               const line = row.line
-              const hasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
+              const lineHasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
               return (
-                <div key={line.id} className="flex items-center justify-between py-2 border-b last:border-0 gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm flex items-center gap-1">
-                      <AccountNumber number={line.account_number} showName />
-                      {dimensionsEnabled && canWrite && entry.status === 'posted' && (
-                        <button
-                          type="button"
-                          onClick={() => setRetagLine(line as unknown as RetagLine)}
-                          className="p-1 rounded text-muted-foreground/50 hover:text-foreground transition-colors"
-                          aria-label="Ändra dimensioner"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-                    {line.line_description && (
-                      <p className="text-xs text-muted-foreground truncate">{line.line_description}</p>
-                    )}
-                    {renderDimensionBadges(line)}
-                  </div>
-                  <div className="text-right shrink-0 text-sm tabular-nums">
+                <tr key={line.id}>
+                  <td className={cn(TD_CLASS, 'pl-0 whitespace-nowrap')}>
+                    <AccountNumber number={line.account_number} showName />
+                  </td>
+                  <td className={cn(TD_CLASS, 'text-muted-foreground')}>
+                    <span className="inline-flex items-center gap-1">
+                      {line.line_description || ''}
+                      {retagButton(line)}
+                    </span>
+                    {renderDimensions(line)}
+                  </td>
+                  <td className={cn(TD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>
                     {Number(line.debit_amount) > 0 && (
-                      <p>
-                        {Number(line.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} D
-                        {hasForeignCurrency && (
+                      <>
+                        {fmtAmount(line.debit_amount)}
+                        {lineHasForeignCurrency && (
                           <span className="block text-xs text-muted-foreground">
-                            {Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} {line.currency}
+                            {fmtAmount(line.amount_in_currency!)} {line.currency}
                           </span>
                         )}
-                      </p>
+                      </>
                     )}
+                  </td>
+                  <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums whitespace-nowrap')}>
                     {Number(line.credit_amount) > 0 && (
-                      <p>
-                        {Number(line.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} K
-                        {hasForeignCurrency && (
+                      <>
+                        {fmtAmount(line.credit_amount)}
+                        {lineHasForeignCurrency && (
                           <span className="block text-xs text-muted-foreground">
-                            {Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} {line.currency}
+                            {fmtAmount(line.amount_in_currency!)} {line.currency}
                           </span>
                         )}
-                      </p>
+                      </>
                     )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+          <tfoot>
+            <tr className="font-medium">
+              <td colSpan={2} className="pl-0 pr-4 pt-3">{t('sum')}</td>
+              <td className="px-4 pt-3 text-right tabular-nums">{fmtAmount(totalDebit)}</td>
+              <td className="pl-4 pr-0 pt-3 text-right tabular-nums">{fmtAmount(totalCredit)}</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        {/* Mobile: one flat row per line, no numeric columns to cram. */}
+        <div className="divide-y divide-border text-sm sm:hidden">
+          {displayRows.map((row) => {
+            if (row.kind === 'struck') {
+              const s = row.line
+              return (
+                <div key={`struck-${s.id}`} className="flex items-start justify-between gap-4 py-3 text-muted-foreground">
+                  <div className="min-w-0 flex-1">
+                    <div className="line-through decoration-muted-foreground/70">
+                      <AccountNumber number={s.account_number} showName />
+                    </div>
+                    {s.line_description && (
+                      <p className="truncate text-xs line-through decoration-muted-foreground/70">{s.line_description}</p>
+                    )}
+                    <p className="text-xs">{t('struck_marker', { date: formatDate(s.struck_at) })}</p>
+                  </div>
+                  <div className="shrink-0 text-right tabular-nums line-through decoration-muted-foreground/70">
+                    {Number(s.debit_amount) > 0 && <p>{fmtAmount(s.debit_amount)} D</p>}
+                    {Number(s.credit_amount) > 0 && <p>{fmtAmount(s.credit_amount)} K</p>}
                   </div>
                 </div>
               )
-            })}
-            <div className="flex justify-between font-semibold text-sm pt-1">
-              <span>{t('sum')}</span>
-              <div className="flex gap-3 tabular-nums">
-                <span>D: {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}</span>
-                <span>K: {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}</span>
+            }
+            const line = row.line
+            const lineHasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
+            return (
+              <div key={line.id} className="flex items-start justify-between gap-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1">
+                    <AccountNumber number={line.account_number} showName />
+                    {retagButton(line)}
+                  </div>
+                  {line.line_description && (
+                    <p className="truncate text-xs text-muted-foreground">{line.line_description}</p>
+                  )}
+                  {renderDimensions(line)}
+                </div>
+                <div className="shrink-0 text-right tabular-nums">
+                  {Number(line.debit_amount) > 0 && (
+                    <p>
+                      {fmtAmount(line.debit_amount)} D
+                      {lineHasForeignCurrency && (
+                        <span className="block text-xs text-muted-foreground">
+                          {fmtAmount(line.amount_in_currency!)} {line.currency}
+                        </span>
+                      )}
+                    </p>
+                  )}
+                  {Number(line.credit_amount) > 0 && (
+                    <p>
+                      {fmtAmount(line.credit_amount)} K
+                      {lineHasForeignCurrency && (
+                        <span className="block text-xs text-muted-foreground">
+                          {fmtAmount(line.amount_in_currency!)} {line.currency}
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </div>
               </div>
+            )
+          })}
+          <div className="flex items-start justify-between gap-4 py-3 font-medium">
+            <span>{t('sum')}</span>
+            <div className="text-right tabular-nums">
+              <p>{t('summary_debit')} {fmtAmount(totalDebit)}</p>
+              <p>{t('summary_credit')} {fmtAmount(totalCredit)}</p>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </DetailSection>
 
-      {/* Attachments */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">{t('attachments_title')}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {references.length > 0 && (
-            <div className="mb-4 space-y-2">
-              <div>
-                <h4 className="text-sm font-medium">{t('references_title')}</h4>
-                <p className="text-xs text-muted-foreground">{t('references_subtitle')}</p>
-              </div>
-              <ul className="space-y-1">
-                {references.map((ref) => (
-                  <li key={`${ref.type}-${ref.id}`}>
-                    <Link
-                      href={ref.type === 'invoice' ? `/invoices/${ref.id}` : `/supplier-invoices/${ref.id}`}
-                      className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50 hover:bg-secondary/60 transition-colors"
-                    >
-                      <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <span className="truncate">
-                        {ref.type === 'invoice'
-                          ? t('reference_invoice', { number: ref.number })
-                          : t('reference_supplier_invoice', { number: ref.number })}
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <JournalEntryAttachments
-            journalEntryId={entry.id}
-            onCountChange={setAttachmentCount}
-          />
-        </CardContent>
-      </Card>
+      {/* Underlag: linked invoices as rows, then the document list. */}
+      <DetailSection kicker={t('attachments_title')} aside={underlagAside}>
+        {references.length > 0 && (
+          <DefRow label={t('references_title')} className="items-baseline">
+            <ul className="divide-y divide-border">
+              {references.map((ref) => (
+                <li key={`${ref.type}-${ref.id}`} className="py-1 first:pt-0 last:pb-0">
+                  <Link
+                    href={ref.type === 'invoice' ? `/invoices/${ref.id}` : `/supplier-invoices/${ref.id}`}
+                    className="inline-flex items-center gap-2 hover:underline"
+                  >
+                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate">
+                      {ref.type === 'invoice'
+                        ? t('reference_invoice', { number: ref.number })
+                        : t('reference_supplier_invoice', { number: ref.number })}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </DefRow>
+        )}
+        <JournalEntryAttachments
+          journalEntryId={entry.id}
+          onCountChange={setAttachmentCount}
+          variant="section"
+        />
+      </DetailSection>
 
-      {/* Correction chain */}
+      {/* Correction chain (storno/rättelse pairs). The explanatory copy sits
+          behind the kicker's "?" instead of an always-visible info box. */}
       {chain.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">{t('history_title')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <CorrectionChain currentEntryId={id} chain={fullChain} />
-          </CardContent>
-        </Card>
+        <DetailSection
+          kicker={t('history_title')}
+          help={
+            <HelpPopover>
+              <p>{tCorrection('info')}</p>
+            </HelpPopover>
+          }
+        >
+          <CorrectionChain currentEntryId={id} chain={fullChain} />
+        </DetailSection>
       )}
 
       {/* Rättelsehistorik (BFL 5 kap 5 § / 9 §): the immutable who/when trail
           behind inline rättelser. Stays Swedish (voucher detail surface). */}
       {rattelseLog.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">{t('rattelse_history_title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
+        <DetailSection kicker={t('rattelse_history_title')}>
+          <ul className="divide-y divide-border text-sm">
             {rattelseLog.map((row) => (
-              <div key={row.id} className="text-sm border-b last:border-0 pb-3 last:pb-0">
+              <li key={row.id} className="py-2">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-muted-foreground tabular-nums">{formatDate(row.created_at)}</span>
+                  <span className="tabular-nums text-muted-foreground">{formatDate(row.created_at)}</span>
                   <span className="text-xs text-muted-foreground">
                     {row.rattelse_type === 'metadata' ? t('rattelse_kind_metadata') : t('rattelse_kind_lines')}
                   </span>
                 </div>
                 {row.rattelse_type === 'metadata' ? (
-                  <div className="space-y-0.5">
+                  <div className="space-y-1">
                     {row.old_description !== row.new_description && (
                       <p>
                         <span className="text-muted-foreground line-through">{row.old_description}</span>
@@ -1004,15 +1002,15 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-0.5">
+                  <div className="space-y-1">
                     {(row.struck_lines ?? []).map((s) => (
                       <p key={s.id} className="tabular-nums text-muted-foreground">
                         <span className="line-through decoration-muted-foreground/70">
                           {s.account_number}
                           {' '}
                           {Number(s.debit_amount) > 0
-                            ? `${Number(s.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} D`
-                            : `${Number(s.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} K`}
+                            ? `${fmtAmount(s.debit_amount)} D`
+                            : `${fmtAmount(s.credit_amount)} K`}
                         </span>
                       </p>
                     ))}
@@ -1021,26 +1019,23 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                         {a.account_number}
                         {' '}
                         {Number(a.debit_amount) > 0
-                          ? `${Number(a.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} D`
-                          : `${Number(a.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} K`}
+                          ? `${fmtAmount(a.debit_amount)} D`
+                          : `${fmtAmount(a.credit_amount)} K`}
                       </p>
                     ))}
                   </div>
                 )}
-              </div>
+              </li>
             ))}
-          </CardContent>
-        </Card>
+          </ul>
+        </DetailSection>
       )}
 
       {/* Dimension retag history (dimensions plan PR6): the immutable
           before/after trail. Stays Swedish (voucher detail surface). */}
       {dimensionsEnabled && retagLog.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">Ändringshistorik för dimensioner</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
+        <DetailSection kicker="Ändringshistorik för dimensioner">
+          <ul className="divide-y divide-border text-sm">
             {retagLog.map((row) => {
               const lineForRow = lines.find((l) => l.id === row.line_id)
               const fmt = (dims: Record<string, string>) => {
@@ -1048,9 +1043,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 return entries.length > 0 ? entries.map(([no, code]) => `${no}: ${code}`).join(', ') : '-'
               }
               return (
-                <div key={row.id} className="text-sm border-b last:border-0 pb-3 last:pb-0">
+                <li key={row.id} className="py-2">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-muted-foreground tabular-nums">{formatDate(row.created_at)}</span>
+                    <span className="tabular-nums text-muted-foreground">{formatDate(row.created_at)}</span>
                     {lineForRow && <AccountNumber number={lineForRow.account_number} />}
                   </div>
                   <p className="tabular-nums">
@@ -1059,11 +1054,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                     <span>{fmt(row.new_dimensions)}</span>
                   </p>
                   <p className="text-xs text-muted-foreground">{row.reason}</p>
-                </div>
+                </li>
               )
             })}
-          </CardContent>
-        </Card>
+          </ul>
+        </DetailSection>
       )}
 
       {/* Retag dialog (Tier-2 retro-tagging) */}
@@ -1201,7 +1196,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       <ConfirmationDialog
         open={showReverseConfirm}
         onOpenChange={setShowReverseConfirm}
-        onConfirm={handleReverse}
+        onConfirm={() => handleReverse()}
         isSubmitting={isReversing}
         title={t('reverse_confirm_title')}
         warningText={t('reverse_warning')}
@@ -1212,6 +1207,26 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <div className="text-sm">
             <p className="font-medium mb-1">{t('reverse_dialog_heading', { voucher: formatVoucher(entry) })}</p>
             <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
+          </div>
+        </div>
+      </ConfirmationDialog>
+
+      {/* Chain-depth guard confirm: the storno was refused because this entry
+          already sits deep in a rättelse chain. Advisory, never a dead end. */}
+      <ConfirmationDialog
+        open={reverseDeepChainDepth != null}
+        onOpenChange={(next) => { if (!next) setReverseDeepChainDepth(null) }}
+        onConfirm={() => handleReverse(true)}
+        isSubmitting={isReversing}
+        title={t('deep_chain_title')}
+        warningText={t('deep_chain_body', { depth: reverseDeepChainDepth ?? 3 })}
+        confirmLabel={t('deep_chain_reverse_anyway')}
+      >
+        <div className="flex items-start gap-3 rounded-lg border bg-muted/50 p-4">
+          <RotateCcw className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
+          <div className="text-sm">
+            <p className="font-medium mb-1">{t('deep_chain_reverse_heading', { voucher: formatVoucher(entry) })}</p>
+            <p className="text-muted-foreground">{t('deep_chain_reverse_body')}</p>
           </div>
         </div>
       </ConfirmationDialog>

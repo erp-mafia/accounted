@@ -1,0 +1,119 @@
+---
+title: "Leverantörsfaktura från inbox — OCR till stagad verifikation"
+description: "SKILL.md som plockar PDF- eller bildfakturor ur accounted-inbox, kör OCR, matchar leverantör mot organisationsnummer, och stagar gnubok_create_supplier_invoice_from_inbox med rätt momsuppdelning och konto. Du godkänner i appen."
+slug: "leverantorsfaktura-fran-inbox"
+kind: "skill"
+author: "gnubok"
+status: "live"
+lang: "sv"
+personas: ["byra", "finance", "founder"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/skills-v1/leverantorsfaktura-fran-inbox.zip"
+repoUrl: "https://github.com/erp-mafia/accounted/tree/main/skills/leverantorsfaktura-fran-inbox"
+gnubokTools:
+  - "gnubok_list_inbox_items"
+  - "gnubok_get_inbox_item"
+  - "gnubok_list_suppliers"
+  - "gnubok_create_supplier_invoice_from_inbox"
+  - "gnubok_get_counterparty_templates"
+  - "gnubok_suggest_categories"
+oauthScopes:
+  - "transactions:read"
+  - "suppliers:read"
+  - "suppliers:write"
+requiresWriteScope: true
+version: "1.0.0"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vilka filformat funkar?"
+    a: "PDF, JPEG, PNG, WebP upp till 10 MB per dokument. Text-baserade PDF:er ger bäst extraktion eftersom OCR kan läsa fältnamn (Belopp, Moms, Förfallodatum). Skannade bilder fungerar men confidence är lägre."
+  - q: "Vad händer med Peppol-fakturor?"
+    a: "Peppol BIS Billing 3.0 (XML) stöds inte av `gnubok_create_supplier_invoice_from_inbox` idag. Verktyget kör OCR på dokumentet, inte XML-parsing. Native Peppol-ingestion är på roadmap i takt med EU:s VIDA-direktiv (Council Directive 2025/516, obligatoriskt 1 juli 2030 för gränsöverskridande B2B inom EU)."
+  - q: "Vad händer om OCR-extraktionen är fel?"
+    a: "Skillen visar extracted_data innan staging och frågar 'bokar in det här?'. Är något fel (säg moms-procenten lästes som 25% när det skulle vara 12%), backar du och kör en mer manuell väg via accounted-appens UI. Skillen försöker inte rätta OCR-fel automatiskt."
+  - q: "Vad händer om leverantören inte finns i registret?"
+    a: "Skillen stagar en kandidat baserat på OCR:ade säljaruppgifter (organisationsnummer om läsbart, annars namn och adress). Du klickar 'skapa leverantör' i appen och fakturan kategoriseras enligt mappingen från `gnubok_suggest_categories`."
+  - q: "Hur lär sig skillen mina kategoriseringspreferenser?"
+    a: "Den läser `gnubok_get_counterparty_templates(supplier_id: ...)` per leverantör. Har du bokfört tre fakturor från samma leverantör på konto 6212 (telefoni) kommer förslaget för nästa faktura också säga 6212. Templates uppdateras automatiskt vid varje godkännande."
+---
+
+## Stegen
+
+Skillen lyssnar på nya items i accounted-appens inbox och processar
+dem så här:
+
+1. `gnubok_list_inbox_items(status: "unprocessed")`. Drar nya fakturor.
+2. För varje item: `gnubok_get_inbox_item(item_id: ...)`. Hämtar extracted_data (OCR-resultat).
+3. Extraherar säljarens organisationsnummer (om läsbart) eller namn.
+4. `gnubok_list_suppliers(orgnr: ...)`. Matchar mot befintlig leverantör.
+5. Vid träff: hämtar `gnubok_get_counterparty_templates(supplier_id: ...)` för standardmappning.
+6. Vid miss: stagas ny leverantör för godkännande baserat på OCR-uppgifterna.
+7. Mappar fakturarader till konto plus moms via `gnubok_suggest_categories`, baserat på templates.
+8. `gnubok_create_supplier_invoice_from_inbox(inbox_item_id: ..., supplier_id: ..., line_mappings: [...])`. Stagas hela fakturan för godkännande.
+
+Du klickar 'godkänn' i appen. accounted skapar verifikat, arkiverar
+originalfilen som underlag, och skriver in anropet i audit-loggen.
+
+## Vad OCR:n läser
+
+Typiska fält som extraheras från en svensk leverantörsfaktura:
+
+| Fält | Källa i fakturan | OCR-confidence (typisk) |
+|---|---|---|
+| Säljarens namn | Sidhuvudet | hög |
+| Organisationsnummer | Sidfoten eller bredvid moms-info | medel — beror på fontstorlek |
+| Fakturanummer | "Fakturanr" / "Invoice no" | hög |
+| Fakturadatum | "Datum" / "Date" | hög |
+| Förfallodatum | "Förfallodatum" / "Due date" | hög |
+| Belopp exkl moms | Beloppsraden | hög |
+| Momsbelopp | "Moms 25%" / "VAT" | medel — om procenten är otydlig |
+| Total | Sista raden | hög |
+| OCR-referens | Streckkod nederst | hög |
+
+`extracted_data` är ett strukturerat objekt. Skillen läser de fält
+den behöver för att kunna stagas ett verifikat med rätt belopp och
+moms. Är fakturan från ett EU-land utan svensk moms (typ AWS, Linear)
+mappar skillen mot 4535/4536 (omvänd skattskyldighet) plus
+2614/2645-speglingen.
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/accounted
+cd gnubok/skills/leverantorsfaktura-fran-inbox
+```
+
+I Claude Desktop, Cursor eller Continue, se [accounted MCP-server](/community/registry/gnubok-mcp).
+
+Kräver scopes `transactions:read`, `suppliers:read`, `suppliers:write`.
+
+## Köra skillen
+
+Manuellt:
+
+```
+@leverantorsfaktura-fran-inbox processa alla nya
+```
+
+Automatiskt via en cron-trigger i n8n eller Make:
+
+```
+n8n → Schedule (var 30:e minut) → HTTP-anrop mot gnubok MCP → skillens flöde
+```
+
+Workflow-paket finns separat i registry (kommer snart).
+
+## Vad skillen inte gör
+
+* Skillen hanterar inte Peppol XML idag. `gnubok_create_supplier_invoice_from_inbox` är OCR-baserad. När EU:s VIDA-direktiv närmar sig 2030 ramps native Peppol-ingestion upp.
+* Skillen postar inte fakturor utan godkännande. Allt stagas, du klickar i appen.
+* Skillen autoreservar inte momsavdrag för representation, bilkostnader eller resor. Sådant kräver mänsklig bedömning. Skillen flaggar och låter dig välja.
+* Skillen skickar inte fakturan vidare till betalning. Det är en separat process via plusgiro/bankfil.
+
+## Vad du får
+
+Leverantörsfakturahantering på 30 sekunder per faktura istället för
+8 minuter. Och en audit-spår där varje OCR-extraktion + bokföringsbeslut
+ligger länkat: du kan svara revisorn varför något hamnade på 6541
+genom att peka på leverantörstemplaten plus OCR-confidence-värdet.

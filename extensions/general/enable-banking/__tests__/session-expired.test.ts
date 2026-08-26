@@ -23,6 +23,7 @@ import {
   SessionExpiredError,
   getAllTransactionsWithRaw,
   getPreferredAuthMethod,
+  getPreferredAuthMethodDetails,
   startAuthorization,
 } from '../lib/api-client'
 import { enableBankingExtension } from '../index'
@@ -104,6 +105,9 @@ function makeContext(connection: Record<string, unknown>, updateSpy: Mock, inser
   const chain: any = {}
   chain.select = vi.fn(() => chain)
   chain.eq = vi.fn(() => chain)
+  // The fresh-connect existing-connection guard chains .neq('status', 'revoked')
+  // and resolves via maybeSingle (null here: no established row).
+  chain.neq = vi.fn(() => chain)
   chain.gte = vi.fn(() => chain)
   chain.limit = vi.fn(() => chain)
   chain.order = vi.fn(() => chain)
@@ -404,9 +408,11 @@ describe('auth_method selection (Handelsbanken Mobile BankID)', () => {
     )
   }
 
-  it('picks the DECOUPLED (Mobile BankID) method when the bank exposes one', async () => {
-    // Handelsbanken's real shape: BankID is decoupled + hidden, Redirect is the
-    // visible default. We must pin BankID or corporate PSUs fail after BankID.
+  it('pins a hidden DECOUPLED method with no psu_types (Handelsbanken Mobile BankID)', async () => {
+    // Handelsbanken's real shape: BankID is decoupled + HIDDEN, Redirect is the
+    // visible default. Hidden methods are only used when requested explicitly,
+    // so we must pin BankID or corporate PSUs fail after approving in the app.
+    // No psu_types on the method = applies to every PSU type.
     stubAspsps([
       {
         name: 'Handelsbanken',
@@ -422,6 +428,73 @@ describe('auth_method selection (Handelsbanken Mobile BankID)', () => {
     expect(await getPreferredAuthMethod('Handelsbanken', 'SE', 'business')).toBe('BANKID')
   })
 
+  it('does NOT pin a VISIBLE decoupled method (Lunar-class regression from PR #854)', async () => {
+    // When the decoupled method is not hidden it is already part of the bank's
+    // own default flow. Force-pinning it overrode Lunar's working default:
+    // the user typed personnummer, was told to approve in the Lunar app, and
+    // the approval request never arrived. undefined = let the ASPSP default run.
+    stubAspsps([
+      {
+        name: 'Lunar',
+        country: 'SE',
+        auth_methods: [
+          { name: 'DECOUPLED', approach: 'DECOUPLED', hidden_method: false, title: 'App' },
+        ],
+      },
+    ])
+
+    expect(await getPreferredAuthMethod('Lunar', 'SE', 'business')).toBeUndefined()
+  })
+
+  it('does NOT pin a hidden decoupled method scoped to a different psu_type', async () => {
+    stubAspsps([
+      {
+        name: 'Testbank',
+        country: 'SE',
+        auth_methods: [
+          {
+            name: 'BANKID',
+            approach: 'DECOUPLED',
+            hidden_method: true,
+            psu_types: ['personal'],
+          },
+        ],
+      },
+    ])
+
+    expect(await getPreferredAuthMethod('Testbank', 'SE', 'business')).toBeUndefined()
+  })
+
+  it('pins a hidden decoupled method whose psu_types matches (or is empty)', async () => {
+    stubAspsps([
+      {
+        name: 'Testbank',
+        country: 'SE',
+        auth_methods: [
+          {
+            name: 'BANKID_BUSINESS',
+            approach: 'DECOUPLED',
+            hidden_method: true,
+            psu_types: ['business'],
+          },
+        ],
+      },
+    ])
+    expect(await getPreferredAuthMethod('Testbank', 'SE', 'business')).toBe('BANKID_BUSINESS')
+
+    // An empty psu_types array is treated like a missing one: applies to all.
+    stubAspsps([
+      {
+        name: 'Testbank',
+        country: 'SE',
+        auth_methods: [
+          { name: 'BANKID_ALL', approach: 'DECOUPLED', hidden_method: true, psu_types: [] },
+        ],
+      },
+    ])
+    expect(await getPreferredAuthMethod('Testbank', 'SE', 'personal')).toBe('BANKID_ALL')
+  })
+
   it('returns undefined (ASPSP default) when the bank has no decoupled method', async () => {
     stubAspsps([
       { name: 'Nordea', country: 'SE', auth_methods: [{ name: 'REDIRECT', approach: 'REDIRECT' }] },
@@ -433,6 +506,30 @@ describe('auth_method selection (Handelsbanken Mobile BankID)', () => {
   it('returns undefined when the bank is not found in the ASPSP list', async () => {
     stubAspsps([])
     expect(await getPreferredAuthMethod('Handelsbanken', 'SE', 'business')).toBeUndefined()
+  })
+
+  it('getPreferredAuthMethodDetails returns the full method so the connect log can record it', async () => {
+    stubAspsps([
+      {
+        name: 'Handelsbanken',
+        country: 'SE',
+        auth_methods: [
+          {
+            name: 'BANKID',
+            approach: 'DECOUPLED',
+            hidden_method: true,
+            psu_types: ['business'],
+          },
+        ],
+      },
+    ])
+
+    expect(await getPreferredAuthMethodDetails('Handelsbanken', 'SE', 'business')).toEqual({
+      name: 'BANKID',
+      approach: 'DECOUPLED',
+      hidden_method: true,
+      psu_types: ['business'],
+    })
   })
 
   it('startAuthorization sends auth_method in the request body when provided', async () => {

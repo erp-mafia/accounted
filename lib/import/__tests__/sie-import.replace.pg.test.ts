@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
+import { getClient, getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
 import { seedCompany, insertAuthUser, insertCompanyMember } from '@/tests/pg/fixtures'
 
 // Covers the Fortnox re-sync flow:
@@ -72,29 +72,39 @@ async function insertPostedEntry(params: {
   entryDate?: string
 }): Promise<string> {
   const id = randomUUID()
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'Test entry', $8, 'posted')`,
-    [
-      id,
-      params.userId,
-      params.companyId,
-      params.fiscalPeriodId,
-      params.voucherNumber,
-      params.voucherSeries ?? 'A',
-      params.entryDate ?? '2026-06-01',
-      params.sourceType,
-    ],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
-       (journal_entry_id, account_number, debit_amount, credit_amount)
-     VALUES ($1, '1930', 100, 0),
-            ($1, '3001', 0, 100)`,
-    [id],
-  )
+  const client = await getClient()
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'Test entry', $8, 'posted')`,
+      [
+        id,
+        params.userId,
+        params.companyId,
+        params.fiscalPeriodId,
+        params.voucherNumber,
+        params.voucherSeries ?? 'A',
+        params.entryDate ?? '2026-06-01',
+        params.sourceType,
+      ],
+    )
+    await client.query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount)
+       VALUES ($1, '1930', 100, 0),
+              ($1, '3001', 0, 100)`,
+      [id],
+    )
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
   return id
 }
 

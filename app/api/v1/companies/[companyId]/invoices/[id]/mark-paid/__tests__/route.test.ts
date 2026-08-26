@@ -141,7 +141,7 @@ const PAID_INVOICE = {
   status: 'paid',
   remaining_amount: 0,
   paid_amount: 12500,
-  paid_at: '2026-05-12',
+  paid_at: '2026-05-12T12:00:00Z',
 }
 
 beforeEach(() => {
@@ -159,6 +159,7 @@ beforeEach(() => {
 
 describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
   it('books a full payment under faktureringsmetoden (accrual default)', async () => {
+    const calls: RecordedCall[] = []
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -167,7 +168,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
           { data: PAID_INVOICE, error: null },
         ],
         company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
-      }),
+      }, calls),
     )
 
     const paidHandler = vi.fn()
@@ -185,14 +186,22 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     const body = await res.json()
     expect(body.data.status).toBe('paid')
     expect(body.data.remaining_amount).toBe(0)
+    expect(body.data.paid_at).toBe('2026-05-12T12:00:00Z')
     expect(body.data.journal_entry_id).toBe('jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj')
     expect(mockPayment).toHaveBeenCalled()
     expect(mockCash).not.toHaveBeenCalled()
     // invoice.paid must fire so registered webhooks fan out (issue #825).
     expect(paidHandler).toHaveBeenCalledTimes(1)
     expect(paidHandler).toHaveBeenCalledWith(
-      expect.objectContaining({ companyId: COMPANY_ID, userId: USER_ID, paymentAmount: 12500 }),
+      expect.objectContaining({
+        companyId: COMPANY_ID,
+        userId: USER_ID,
+        paymentAmount: 12500,
+        invoice: expect.objectContaining({ paid_at: '2026-05-12T12:00:00Z' }),
+      }),
     )
+    const invoiceUpdate = calls.find((call) => call.table === 'invoices' && call.method === 'update')
+    expect(invoiceUpdate?.args[0]).toMatchObject({ paid_at: '2026-05-12T12:00:00Z' })
     // Issue #1259: the invoice is settled, so no transaction may keep pointing
     // at it as a match suggestion.
     expect(mockClearSuggestions).toHaveBeenCalledTimes(1)

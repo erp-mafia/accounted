@@ -45,7 +45,7 @@ export default function SetupPrompt({ title, description, fields, onSave }: Setu
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-muted mb-3">
               <Settings className="h-6 w-6 text-muted-foreground" />
             </div>
-            <h3 className="font-semibold">{title}</h3>
+            <h3>{title}</h3>
             <p className="text-sm text-muted-foreground mt-1">{description}</p>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">

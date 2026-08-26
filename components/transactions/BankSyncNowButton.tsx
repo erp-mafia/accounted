@@ -141,9 +141,23 @@ export function useBankSync() {
       }
       toast({
         title: t('bank_sync_button_now'),
-        description: data.imported === 1
-          ? t('bank_sync_new_since_last_visit_one')
-          : t('bank_sync_new_since_last_visit_many', { count: data.imported ?? 0 }),
+        // Surface skipped duplicates too: a renewal that dedupes correctly
+        // imports 0 rows, which without this line reads as a broken sync.
+        // Joined with '. ' so the two sentences do not run together (the
+        // imported-count strings are shared with the BankSyncSinceLastVisit
+        // chip and deliberately carry no trailing period).
+        description: [
+          data.imported === 1
+            ? t('bank_sync_new_since_last_visit_one')
+            : t('bank_sync_new_since_last_visit_many', { count: data.imported ?? 0 }),
+          typeof data.duplicates === 'number' && data.duplicates > 0
+            ? data.duplicates === 1
+              ? t('bank_sync_duplicates_skipped_one')
+              : t('bank_sync_duplicates_skipped_many', { count: data.duplicates })
+            : null,
+        ]
+          .filter(Boolean)
+          .join('. '),
       })
       // Tell the neighbouring status chip to refetch so it doesn't keep showing
       // the pre-sync "synced Nd ago" until a hard reload.

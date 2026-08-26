@@ -62,17 +62,20 @@ export function DestructiveConfirmDialog({
                 'flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-full',
                 variant === 'destructive'
                   ? 'bg-destructive/10 text-destructive'
-                  : 'bg-warning/10 text-warning'
+                  : 'bg-muted text-attn'
               )}
             >
               <AlertTriangle className="h-5 w-5" />
             </div>
             <div className="space-y-1">
-              <DialogTitle>{title}</DialogTitle>
+              {/* data-ph-mask: confirm dialogs describe the object being
+                  acted on (convention 10), so title and description are user
+                  data in session replays, not chrome. */}
+              <DialogTitle data-ph-mask="">{title}</DialogTitle>
               {/* pre-line so callers can pass newline-separated paragraphs
                   (e.g. the salary unapprove confirm assembles its copy
                   dynamically); single-line descriptions render unchanged. */}
-              <DialogDescription className="whitespace-pre-line">
+              <DialogDescription data-ph-mask="" className="whitespace-pre-line">
                 {description}
               </DialogDescription>
             </div>
@@ -87,14 +90,13 @@ export function DestructiveConfirmDialog({
           >
             {cancelLabel}
           </Button>
+          {/* Warning-variant confirms use the default primary button: in
+              chrome only --destructive survives as a colored action. */}
           <Button
             variant={variant === 'destructive' ? 'destructive' : 'default'}
             onClick={handleConfirm}
             disabled={isLoading}
-            className={cn(
-              'min-h-11 w-full sm:w-auto',
-              variant === 'warning' && 'bg-warning hover:bg-warning/90 text-warning-foreground'
-            )}
+            className="min-h-11 w-full sm:w-auto"
           >
             {isLoading ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -117,21 +119,30 @@ interface ConfirmOptions {
 
 interface UseDestructiveConfirmReturn {
   dialogProps: DestructiveConfirmDialogProps
-  confirm: (options: ConfirmOptions) => Promise<boolean>
+  confirm: (options: ConfirmOptions, action?: () => void | Promise<void>) => Promise<boolean>
 }
 
 /**
  * Hook that returns a `confirm()` function as a drop-in replacement for `window.confirm()`.
  * Returns `Promise<boolean>`: true if user confirms, false if they cancel.
  *
+ * Pass the destructive operation itself as the second argument to run it
+ * INSIDE the confirm: the dialog stays open with its pending spinner (and
+ * blocks dismissal) until the action settles, instead of closing on click and
+ * leaving the fetch to run with no visible state anywhere. The action owns its
+ * own error feedback (toast); if it throws, `confirm` resolves `false` so a
+ * caller's success tail is skipped.
+ *
  * Usage:
  * ```
  * const { dialogProps, confirm } = useDestructiveConfirm()
  *
  * async function handleDelete() {
- *   const ok = await confirm({ title: '...', description: '...' })
+ *   const ok = await confirm({ title: '...', description: '...' }, async () => {
+ *     // the DELETE runs while the dialog shows its spinner
+ *   })
  *   if (!ok) return
- *   // proceed with deletion
+ *   // confirmed and the action completed
  * }
  *
  * return <><DestructiveConfirmDialog {...dialogProps} /></>
@@ -144,28 +155,57 @@ export function useDestructiveConfirm(): UseDestructiveConfirmReturn {
     description: '',
   })
   const resolveRef = useRef<((value: boolean) => void) | null>(null)
+  const actionRef = useRef<(() => void | Promise<void>) | null>(null)
+  const runningRef = useRef(false)
 
-  const confirm = useCallback((opts: ConfirmOptions): Promise<boolean> => {
-    setOptions(opts)
-    setOpen(true)
-    return new Promise<boolean>((resolve) => {
-      resolveRef.current = resolve
-    })
-  }, [])
+  const confirm = useCallback(
+    (opts: ConfirmOptions, action?: () => void | Promise<void>): Promise<boolean> => {
+      setOptions(opts)
+      actionRef.current = action ?? null
+      setOpen(true)
+      return new Promise<boolean>((resolve) => {
+        resolveRef.current = resolve
+      })
+    },
+    [],
+  )
 
   const handleOpenChange = useCallback((v: boolean) => {
     setOpen(v)
-    if (!v && resolveRef.current) {
-      resolveRef.current(false)
-      resolveRef.current = null
+    if (!v) {
+      actionRef.current = null
+      if (resolveRef.current) {
+        resolveRef.current(false)
+        resolveRef.current = null
+      }
     }
   }, [])
 
-  const handleConfirm = useCallback(() => {
+  const handleConfirm = useCallback(async () => {
+    // Re-entry guard: a second confirm firing while the action is still in
+    // flight must not resolve the promise early (the dialog disables its
+    // button on isLoading, this covers the same-tick edge).
+    if (runningRef.current) return
+    runningRef.current = true
+    const action = actionRef.current
+    actionRef.current = null
+    let completed = true
+    if (action) {
+      try {
+        // Awaited by the dialog's own handleConfirm, so its isLoading spinner
+        // shows for the duration and the dialog closes only when this settles.
+        await action()
+      } catch {
+        // The action surfaces its own error (toast); resolving false here
+        // keeps the caller's post-confirm tail from running on a failure.
+        completed = false
+      }
+    }
     if (resolveRef.current) {
-      resolveRef.current(true)
+      resolveRef.current(completed)
       resolveRef.current = null
     }
+    runningRef.current = false
   }, [])
 
   return {

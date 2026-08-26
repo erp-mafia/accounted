@@ -7,12 +7,14 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import { AccountNumber } from '@/components/ui/account-number'
 import { useToast } from '@/components/ui/use-toast'
@@ -220,18 +222,30 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Stryk rader i verifikatet</DialogTitle>
+          {/* Convention 7: the how-it-works copy lives behind the "?", not in
+              the dialog flow. */}
+          <div className="flex items-center gap-2">
+            <DialogTitle>Stryk rader i verifikatet</DialogTitle>
+            <RattelseExplainer>
+              <p>
+                Här stryks felaktiga rader och ersätts direkt i samma verifikat,
+                utan ändringsverifikation. Det fungerar bara i öppna, olåsta
+                perioder.
+              </p>
+              <p>
+                Varje rättelse loggas med vem och när, och de ursprungliga
+                raderna förblir synliga i verifikatets rättelsehistorik.
+              </p>
+              <p>
+                Om månaden redan är momsdeklarerad kan en ändring av momskonton
+                påverka den inlämnade deklarationen.
+              </p>
+            </RattelseExplainer>
+          </div>
+          <DialogDescription>
+            De strukna raderna förblir synliga (överstrukna) i verifikatet.
+          </DialogDescription>
         </DialogHeader>
-
-        <div className="rounded-lg bg-muted/50 border p-3 text-sm text-muted-foreground">
-          <p className="font-medium text-foreground mb-1">Rättelse i samma verifikat</p>
-          <p>
-            Felaktiga rader stryks och ersätts direkt i verifikatet, utan ändringsverifikation.
-            De strukna raderna förblir synliga (överstrukna) och rättelsen loggas med vem och när,
-            enligt bokföringslagen. Fungerar bara i öppna, olåsta perioder. Om månaden redan är
-            momsdeklarerad kan en ändring av momskonton påverka den inlämnade deklarationen.
-          </p>
-        </div>
 
         {/* Original lines with strike checkboxes */}
         <div className="space-y-1">
@@ -295,19 +309,25 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
 
           <div className="space-y-2">
             {newLines.map((line, index) => (
-              <div key={index} className="space-y-2 sm:space-y-0 sm:grid sm:grid-cols-[1fr_1fr_120px_120px_auto] sm:gap-2 sm:items-start border-b sm:border-0 pb-3 sm:pb-0 last:border-0">
-                <div className="grid grid-cols-[1fr_auto] sm:contents gap-2">
-                  <AccountCombobox
-                    value={line.account_number}
-                    accounts={activeAccounts}
-                    catalog={selectableCatalog}
-                    onChange={(v) => updateNewLineAccount(index, v)}
-                    onCreateAccount={(prefill) => {
-                      setCreatingAccountForLine(index)
-                      setCreateAccountPrefill(prefill)
-                    }}
-                    disabled={accountsStatus !== 'ready'}
-                  />
+              <div key={index} className="space-y-2 sm:space-y-0 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_auto] sm:gap-2 sm:items-start border-b sm:border-0 pb-3 sm:pb-0 last:border-0">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] sm:contents gap-2">
+                  {/* min-w-0: at sm: the sm:contents wrapper promotes this cell
+                      to a direct grid item; without it the combobox refuses to
+                      shrink below its content and overflows the dialog (same
+                      pattern as SendInvoiceDialog's desktop rows). */}
+                  <div className="min-w-0">
+                    <AccountCombobox
+                      value={line.account_number}
+                      accounts={activeAccounts}
+                      catalog={selectableCatalog}
+                      onChange={(v) => updateNewLineAccount(index, v)}
+                      onCreateAccount={(prefill) => {
+                        setCreatingAccountForLine(index)
+                        setCreateAccountPrefill(prefill)
+                      }}
+                      disabled={accountsStatus !== 'ready'}
+                    />
+                  </div>
                   <Button
                     variant="ghost"
                     size="icon"

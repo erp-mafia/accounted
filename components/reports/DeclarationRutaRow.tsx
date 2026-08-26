@@ -66,7 +66,7 @@ export function DeclarationRutaRow({
               aria-expanded={expanded}
               aria-controls={panelId}
               aria-label={expanded ? `Dölj konton för ${code}` : `Visa konton för ${code}`}
-              className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded align-middle hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded-sm align-middle hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={(e) => {
                 e.stopPropagation()
                 setExpanded((v) => !v)
@@ -79,7 +79,7 @@ export function DeclarationRutaRow({
               )}
             </button>
           )}
-          <span className="font-mono text-xs bg-muted px-1 rounded mr-2">{code}</span>
+          <span className="font-mono text-xs bg-muted px-1 rounded-sm mr-2">{code}</span>
           {label}
           {hasAccounts && (
             <span className="text-xs text-muted-foreground ml-2">

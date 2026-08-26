@@ -175,7 +175,10 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     const paidHandler = vi.fn()
     eventBus.on('invoice.paid', paidHandler)
 
-    const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-05-12' },
+    })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
     const { status, body } = await parseJsonResponse<{
       success: boolean
@@ -183,6 +186,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       paid_amount: number
       remaining_amount: number
       journal_entry_id: string | null
+      paid_at: string | null
     }>(response)
 
     expect(status).toBe(200)
@@ -191,6 +195,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     expect(body.paid_amount).toBe(12500)
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
+    expect(body.paid_at).toBe('2026-05-12T12:00:00Z')
     // invoice.paid must fire so registered webhooks fan out (issue #825).
     expect(paidHandler).toHaveBeenCalledTimes(1)
     expect(paidHandler).toHaveBeenCalledWith(
@@ -198,7 +203,13 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
         companyId: 'company-1',
         userId: 'user-1',
         paymentAmount: 12500,
-        invoice: expect.objectContaining({ id: 'inv-1', status: 'paid', paid_amount: 12500, remaining_amount: 0 }),
+        invoice: expect.objectContaining({
+          id: 'inv-1',
+          status: 'paid',
+          paid_amount: 12500,
+          remaining_amount: 0,
+          paid_at: '2026-05-12T12:00:00Z',
+        }),
       }),
     )
     expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalledWith(
@@ -554,6 +565,52 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     expect(body.paid_amount).toBe(1234.75)
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-ore')
+  })
+
+  it('accepts a partially_paid invoice and closes it with a bank-less öre write-off (#1717)', async () => {
+    // An invoice stuck with a sub-krona remaining (öresavrundning on an
+    // earlier payment path). The dialog proposes Dr 3740 / Cr 1510 for the
+    // remaining; booking it flips the invoice to paid. No customer →
+    // duplicate guard skips.
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'partially_paid',
+      total: 12500.4,
+      paid_amount: 12500,
+      remaining_amount: 0.4,
+    })
+
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS update matched
+
+    mockFindFiscalPeriod.mockResolvedValue('fp-1')
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-writeoff' })
+
+    const writeOffLines = [
+      { account_number: '3740', debit_amount: 0.4, credit_amount: 0 },
+      { account_number: '1510', debit_amount: 0, credit_amount: 0.4 },
+    ]
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: { lines: writeOffLines },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      status: string
+      paid_amount: number
+      remaining_amount: number
+      journal_entry_id: string
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.status).toBe('paid')
+    expect(body.paid_amount).toBe(12500.4)
+    expect(body.remaining_amount).toBe(0)
+    expect(body.journal_entry_id).toBe('je-writeoff')
   })
 
   it('returns 400 MATCH_AMOUNT_EXCEEDS_REMAINING when custom lines overpay the invoice', async () => {

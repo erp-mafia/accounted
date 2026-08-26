@@ -110,6 +110,43 @@ describe('PATCH /api/invoices/recurring/[id] reactivation', () => {
     expect(updatePayloads[0]).toMatchObject({ day_of_month: 20, name: 'Renamed' })
   })
 
+  it('keeps a quarterly schedule on its month grid when day_of_month is edited', async () => {
+    // Quarterly schedule anchored on October; editing the day must stay in
+    // October (a today-anchored recompute would bill a quarter early).
+    scheduleRow = { next_run_date: '2026-10-15', day_of_month: 15, interval_months: 3 }
+
+    await PATCH(patchReq({ day_of_month: 20 }), params)
+    expect(updatePayloads[0]).toMatchObject({ day_of_month: 20, next_run_date: '2026-10-20' })
+  })
+
+  it('rolls a stale quarterly schedule forward by whole quarters on reactivation', async () => {
+    // Jan/Apr/Jul/Oct schedule missed Apr 5; today is 2026-07-06, so Jul 5
+    // has also passed. Next strictly-future grid slot is Oct 5.
+    scheduleRow = { next_run_date: '2026-04-05', day_of_month: 5, interval_months: 3 }
+
+    await PATCH(patchReq({ status: 'active' }), params)
+    expect(updatePayloads[0]).toMatchObject({
+      status: 'active',
+      next_run_date: '2026-10-05',
+      last_run_warning: null,
+    })
+  })
+
+  it('reactivating a quarterly schedule on its own day rolls strictly past today', async () => {
+    scheduleRow = { next_run_date: '2026-01-06', day_of_month: 6, interval_months: 3 }
+
+    await PATCH(patchReq({ status: 'active' }), params)
+    // Grid: Jan 6 -> Apr 6 -> Jul 6 (today, excluded) -> Oct 6.
+    expect(updatePayloads[0].next_run_date).toBe('2026-10-06')
+  })
+
+  it('changing interval_months alone leaves next_run_date untouched', async () => {
+    scheduleRow = { next_run_date: '2026-07-20', day_of_month: 20, interval_months: 1 }
+
+    await PATCH(patchReq({ interval_months: 3 }), params)
+    expect(updatePayloads[0]).toEqual({ interval_months: 3 })
+  })
+
   it('does not touch next_run_date or warning when pausing', async () => {
     scheduleRow = { next_run_date: '2026-07-05', day_of_month: 5 }
 

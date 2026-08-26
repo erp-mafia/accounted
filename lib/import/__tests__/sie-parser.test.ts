@@ -1099,6 +1099,16 @@ describe('parseSIEFile: tab-separated fields (Bollbok export shape)', () => {
     )
   })
 
+  it('does not warn about a non-BAS kontoplan for `#KPTYP` EUBAS97', () => {
+    // EUBAS97 is a standard SIE kontoplanstyp (the spec routes every BAS2xxx
+    // chart through it): flagging it as non-BAS would put a false warning on
+    // every WINT-rendered and Bollbok file.
+    const parsed = parseSIEFile(BOLLBOK_TAB_2025_SHAPE)
+    const validation = validateSIEFile(parsed)
+    expect(parsed.header.kontoPlanType).toBe('EUBAS97')
+    expect(validation.warnings.filter((w) => w.includes('inte BAS-baserad'))).toEqual([])
+  })
+
   it('parses tab-separated #KONTO into accounts (2025 shape)', () => {
     const result = parseSIEFile(BOLLBOK_TAB_2025_SHAPE)
     expect(result.accounts.map((a) => a.number)).toEqual(

@@ -81,7 +81,7 @@ export function DeadlineGroupCard({ deadlines, onEdit, onRequestToggle }: Deadli
               key={deadline.id}
               onClick={() => onEdit?.(deadline)}
               className={cn(
-                'group flex items-center gap-3 rounded-md py-1.5 -mx-2 px-2 transition-colors duration-150',
+                'group flex items-center gap-3 rounded-sm py-1.5 -mx-2 px-2 transition-colors duration-150',
                 onEdit && 'cursor-pointer hover:bg-secondary/35',
               )}
             >

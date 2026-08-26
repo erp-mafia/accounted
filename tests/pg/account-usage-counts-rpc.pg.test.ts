@@ -11,7 +11,12 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
-import { insertAuthUser, insertCompany, insertFiscalPeriod } from './fixtures'
+import {
+  insertAuthUser,
+  insertCompany,
+  insertFiscalPeriod,
+  insertPostedJournalEntry,
+} from './fixtures'
 
 async function insertJournalEntry(params: {
   userId: string
@@ -21,6 +26,23 @@ async function insertJournalEntry(params: {
   status: 'draft' | 'posted'
   lines: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
+  if (params.status === 'posted') {
+    return insertPostedJournalEntry({
+      userId: params.userId,
+      companyId: params.companyId,
+      fiscalPeriodId: params.fiscalPeriodId,
+      voucherNumber: params.voucherNumber,
+      entryDate: '2026-03-15',
+      description: 'Usage test',
+      sourceType: 'manual',
+      lines: params.lines.map((line) => ({
+        accountNumber: line.account,
+        debitAmount: line.debit,
+        creditAmount: line.credit,
+      })),
+    })
+  }
+
   const id = randomUUID()
   // Insert directly, bypassing commit_journal_entry's voucher sequencing —
   // fine for a read-side RPC that only aggregates line/account references.

@@ -164,7 +164,9 @@ Electronics >100k SEK/invoice?
 
 ---
 
-## Peppol essentials (for Accounted e-invoice generation)
+## Peppol essentials for externally delivered e-invoices
+
+Accounted currently creates PDF invoices and can send them by email. It does not generate e-invoice XML or deliver invoices through Peppol. If a customer requires a structured e-invoice, use an external e-invoice provider for delivery, then record the delivery with `gnubok_mark_invoice_as_sent`.
 
 Format: UBL 2.1 XML, profile Peppol BIS Billing 3.0.
 TypeCodes: **380** = invoice, **381** = credit note, **389** = self-billing.

@@ -9,9 +9,54 @@ import type {
   PaymentDto,
   AmountType, PartyDto,
 } from '../dto';
+import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
+
+/**
+ * Fortnox splits its invoice payloads in two. `GET /3/invoices` answers with
+ * the short form (`InvoiceShort`): DocumentNumber, dates, customer, `Total`,
+ * `Balance` and the status flags, but no `Net`, no `TotalVAT` and no
+ * `InvoiceRows`. Those three live only on the detail form (`InvoiceFull`)
+ * behind `GET /3/invoices/{DocumentNumber}`.
+ *
+ * The migration used to map the list form alone, so `Net` was always absent
+ * and defaulted to `Total`; VAT, derived as gross minus net, came out 0 on
+ * every migrated Fortnox invoice. Hydrating the detail (see
+ * `hydrateSalesInvoiceDetails` in provider-data-fetcher.ts) is what makes
+ * these fields available; the readers below keep "absent" distinguishable
+ * from "zero" for the invoices that are not hydrated.
+ */
+const FORTNOX_NET_KEYS = ['Net'] as const;
+const FORTNOX_VAT_KEYS = ['TotalVAT'] as const;
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
   return { value: value ?? 0, currencyCode: currency };
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function providerEmailAddresses(
+  raw: Record<string, unknown>,
+  field: string,
+): string[] | undefined {
+  if (!(field in raw)) return undefined;
+
+  const value = raw[field];
+  const parts = Array.isArray(value)
+    ? value.flatMap((item) => typeof item === 'string' ? item.split(/[\n,;]+/) : [])
+    : typeof value === 'string'
+      ? value.split(/[\n,;]+/)
+      : [];
+  const seen = new Set<string>();
+
+  return parts.flatMap((part) => {
+    const address = part.trim();
+    const key = address.toLocaleLowerCase('en-US');
+    if (!key || seen.has(key)) return [];
+    seen.add(key);
+    return [address];
+  });
 }
 
 /**
@@ -52,8 +97,11 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
       companyIdSchemeId: 'SE:ORGNR',
     } : undefined,
     contact: {
-      email: (address?.['Email'] ?? address?.['EmailInvoice']) as string | undefined,
-      telephone: address?.['Phone1'] as string | undefined,
+      name: nonEmptyString(address?.['YourReference']),
+      // EmailInvoice is the delivery address. Email is the general contact
+      // fallback and must not override an invoice-specific address.
+      email: nonEmptyString(address?.['EmailInvoice']) ?? nonEmptyString(address?.['Email']),
+      telephone: nonEmptyString(address?.['Phone1']),
     },
   };
 }
@@ -71,21 +119,41 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
   const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
 
   const rows = (raw['InvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
-  const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => ({
-    id: String(row['RowId'] ?? idx + 1),
-    description: row['Description'] as string | undefined,
-    quantity: row['DeliveredQuantity'] as number | undefined,
-    unitCode: row['Unit'] as string | undefined,
-    unitPrice: row['Price'] != null ? amount(row['Price'] as number, currency) : undefined,
-    lineExtensionAmount: amount(row['Total'] as number ?? 0, currency),
-    taxPercent: row['VAT'] as number | undefined,
-    accountNumber: row['AccountNumber'] != null ? String(row['AccountNumber']) : undefined,
-    articleNumber: row['ArticleNumber'] as string | undefined,
-    itemName: row['Description'] as string | undefined,
-  }));
+  const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
+    // Fortnox `Total` on a row is the line amount excluding VAT; `VAT` is the
+    // rate in percent (25), not an amount.
+    const lineNet = readNumber(row, ['Total']) ?? 0;
+    const taxPercent = readNumber(row, ['VAT']);
+    const lineVat = lineVatFromPercent(lineNet, taxPercent);
+
+    return {
+      id: String(row['RowId'] ?? idx + 1),
+      description: row['Description'] as string | undefined,
+      quantity: row['DeliveredQuantity'] as number | undefined,
+      unitCode: row['Unit'] as string | undefined,
+      unitPrice: row['Price'] != null ? amount(row['Price'] as number, currency) : undefined,
+      lineExtensionAmount: amount(lineNet, currency),
+      taxPercent,
+      // Fortnox states the rate per row but not the money. Deriving it here is
+      // what lets the migration write a per-line vat_amount: the booking engine
+      // sums those to post 2611, so a line left at 0 posts no output VAT.
+      taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
+      accountNumber: row['AccountNumber'] != null ? String(row['AccountNumber']) : undefined,
+      articleNumber: row['ArticleNumber'] as string | undefined,
+      itemName: row['Description'] as string | undefined,
+    };
+  });
+
+  const vat = resolveVatTriple({
+    gross: total,
+    net: readNumber(raw, FORTNOX_NET_KEYS),
+    vat: readNumber(raw, FORTNOX_VAT_KEYS),
+  });
 
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(raw['Net'] as number ?? total, currency),
+    // Undefined when the payload is the list form: the net was not stated and
+    // must not be assumed equal to the gross.
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
     taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
@@ -112,6 +180,7 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
       raw as Record<string, unknown>,
     ),
     lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     paymentTerms: raw['TermsOfPayment'] as string | undefined,
@@ -137,18 +206,32 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
   const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
 
   const rows = (raw['SupplierInvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
-  const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => ({
-    id: String(row['RowId'] ?? idx + 1),
-    description: row['Description'] as string | undefined,
-    quantity: row['Quantity'] as number | undefined,
-    unitPrice: row['Price'] != null ? amount(row['Price'] as number, currency) : undefined,
-    lineExtensionAmount: amount(row['Total'] as number ?? 0, currency),
-    accountNumber: row['Account'] != null ? String(row['Account']) : undefined,
-    articleNumber: row['ArticleNumber'] as string | undefined,
-  }));
+  const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => {
+    const lineNet = readNumber(row, ['Total']) ?? 0;
+    const taxPercent = readNumber(row, ['VAT']);
+    const lineVat = lineVatFromPercent(lineNet, taxPercent);
+
+    return {
+      id: String(row['RowId'] ?? idx + 1),
+      description: row['Description'] as string | undefined,
+      quantity: row['Quantity'] as number | undefined,
+      unitPrice: row['Price'] != null ? amount(row['Price'] as number, currency) : undefined,
+      lineExtensionAmount: amount(lineNet, currency),
+      taxPercent,
+      taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
+      accountNumber: row['Account'] != null ? String(row['Account']) : undefined,
+      articleNumber: row['ArticleNumber'] as string | undefined,
+    };
+  });
+
+  const vat = resolveVatTriple({
+    gross: total,
+    net: readNumber(raw, FORTNOX_NET_KEYS),
+    vat: readNumber(raw, FORTNOX_VAT_KEYS),
+  });
 
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(raw['Net'] as number ?? total, currency),
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
     taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
@@ -171,6 +254,7 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
     ),
     buyer: buildParty(''),
     lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     ocrNumber: raw['OCR'] as string | undefined,
@@ -188,6 +272,8 @@ export function mapFortnoxToCustomer(raw: Record<string, unknown>): CustomerDto 
     customerNumber: String(raw['CustomerNumber'] ?? ''),
     type: raw['Type'] === 'PRIVATE' ? 'private' : 'company',
     party: buildParty(name, orgNumber, raw),
+    invoiceEmailCcAddresses: providerEmailAddresses(raw, 'EmailInvoiceCC'),
+    invoiceEmailBccAddresses: providerEmailAddresses(raw, 'EmailInvoiceBCC'),
     active: raw['Active'] !== false,
     vatNumber: raw['VATNumber'] as string | undefined,
     defaultPaymentTermsDays: raw['TermsOfPayment'] != null ? Number(raw['TermsOfPayment']) : undefined,

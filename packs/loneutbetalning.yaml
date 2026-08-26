@@ -1,0 +1,32 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: loneutbetalning
+  order: 15
+  name: 'Löneutbetalning'
+  category: salary
+  entity_type: aktiebolag
+  description: >-
+    Utbetalning av lön till anställd. Ange bruttolönen som belopp.
+  legal_note: >-
+    Bruttolön debiteras 7010, avdragen personalskatt krediteras 2710 och
+    nettolönen krediteras 1930. Skatteandelen här är schablonmässiga 30 %:
+    justera raderna efter det faktiska skatteavdraget enligt skattetabell.
+    Arbetsgivaravgifter (7510/2731) och semesterlöneskuld (7290/2920) bokas
+    som egna verifikat, inte i den här mallen.
+lines:
+  - account: '7010'
+    label: 'Löner'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '2710'
+    label: 'Personalskatt'
+    side: credit
+    type: business
+    ratio: 0.3
+  - account: '1930'
+    label: 'Företagskonto'
+    side: credit
+    type: settlement
+    ratio: 0.7

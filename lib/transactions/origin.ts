@@ -42,8 +42,10 @@ export type TransactionOrigin = {
  * `import_source` values produced by in-app creation flows. A `null` source
  * (with no bank connection) is also user-created: that's the plain manual-add
  * path. Anything NOT in this set is considered an external import feed.
+ * Exported for the ingest boundary: transaction_method classification and
+ * title stripping are feed-row concepts and must skip user-created sources.
  */
-const USER_CREATED_IMPORT_SOURCES: ReadonlySet<string> = new Set(['manual', 'mcp'])
+export const USER_CREATED_IMPORT_SOURCES: ReadonlySet<string> = new Set(['manual', 'mcp'])
 
 /**
  * True when the transaction was fetched via bank sync or uploaded via a

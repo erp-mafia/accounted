@@ -63,7 +63,7 @@ export function AgentKnowledgePanel() {
     // Mirrors the loaded layout: graph hero, section header, two profile cards.
     return (
       <div className="space-y-8">
-        <Skeleton className="h-96 w-full rounded-xl" />
+        <Skeleton className="h-96 w-full rounded-lg" />
         <div className="space-y-4">
           <Skeleton className="h-4 w-40" />
           <div className="grid gap-4 md:grid-cols-2">

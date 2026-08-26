@@ -627,16 +627,16 @@ describe('gnubok_create_invoice: dimensions bag', () => {
   it('stages resolved default_dimensions top-level and per-item bags (default NOT merged into items)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inserts = captureInserts(supabase)
+    // customers fetch (now FIRST: article-rate adoption needs the customer)
+    enqueue({
+      data: { id: 'cust-1', name: 'Acme AB', customer_type: 'swedish_business', vat_number_validated: false, default_payment_terms: 30 },
+      error: null,
+    })
     // resolveDimensionBags: settings → ensure rpc → dimensions → dimension_values
     enqueue({ data: { dimensions_enabled: true }, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: REGISTRY_ROWS, error: null })
     enqueue({ data: VALUE_ROWS, error: null })
-    // customers fetch
-    enqueue({
-      data: { id: 'cust-1', name: 'Acme AB', customer_type: 'swedish_business', vat_number_validated: false, default_payment_terms: 30 },
-      error: null,
-    })
     // resolvePeriodStatusForDate (auto-extracted from invoice_date): 2 layers
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
@@ -722,6 +722,41 @@ describe('gnubok_create_invoice: dimensions bag', () => {
 })
 
 describe('gnubok_categorize_transaction: dimensions bag', () => {
+  it('shows the linked cash account in the staged preview', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      cash_account_id: 'cash-1',
+    })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: { ledger_account: '1931' }, error: null }) // resolveSettlementAccount: explicit cash_account_id lookup
+    enqueue({ data: tx, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-cat-settlement' }, error: null })
+
+    const result = (await categorizeTransaction.execute(
+      { transaction_id: 'tx-1', category: 'expense_office', allow_duplicate: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      preview: {
+        credit_account: string
+        lines: Array<{ account_number: string; credit_amount: number }>
+      }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.credit_account).toBe('1931')
+    expect(result.preview.lines).toContainEqual(
+      expect.objectContaining({ account_number: '1931', credit_amount: 500 }),
+    )
+  })
+
   it('resolves the bag and stages it as params.dimensions with the echo in the preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inserts = captureInserts(supabase)
@@ -729,6 +764,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     // categorizeTransactionCore: transaction fetch + company_settings
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // transaction fetch for the title
     enqueue({ data: tx, error: null })
     // resolveDimensionBags: settings → ensure rpc → dimensions → dimension_values
@@ -785,6 +821,7 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     const tx = makeTransaction({ id: 'tx-1', amount: -500 })
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: tx, error: null })
     enqueue({ data: null, error: null }) // period status layer 1
     enqueue({ data: null, error: null }) // period status layer 2
@@ -819,6 +856,14 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
       data: [{ id: 'tx-1', amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }],
       error: null,
     })
+    // chart_of_accounts name lookup for the preview kontering
+    enqueue({
+      data: [
+        { account_number: '4010', account_name: 'Inköp material och varor' },
+        { account_number: '1930', account_name: 'Företagskonto' },
+      ],
+      error: null,
+    })
     // resolvePeriodStatusForDate: 2 layers
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
@@ -842,10 +887,35 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
       supabase as never,
     )) as {
       staged: boolean
-      preview: { dimension_resolutions?: Array<Record<string, unknown>> }
+      preview: {
+        dimension_resolutions?: Array<Record<string, unknown>>
+        lines?: Array<Record<string, unknown>>
+        currency?: string
+        entry_description?: string
+      }
     }
 
     expect(result.staged).toBe(true)
+
+    // The approval card renders the staged kontering: the exact lines the
+    // RPC will post, named, plus the bank rows' currency. Aggregates alone
+    // ("-400, 1 tx, expense") cannot tell a right booking from a wrong one.
+    expect(result.preview.currency).toBe('SEK')
+    expect(result.preview.entry_description).toBe('Samlingsverifikation material')
+    expect(result.preview.lines).toEqual([
+      expect.objectContaining({
+        account_number: '4010',
+        account_name: 'Inköp material och varor',
+        debit_amount: 400,
+        credit_amount: 0,
+      }),
+      expect.objectContaining({
+        account_number: '1930',
+        account_name: 'Företagskonto',
+        debit_amount: 0,
+        credit_amount: 400,
+      }),
+    ])
 
     // Contract: per-line `new_entry.lines[].dimensions` carries the MERGED
     // (line-over-default) resolved bags; the top-level default is dropped:
@@ -883,5 +953,63 @@ describe('gnubok_bulk_book_transactions: dimensions bag', () => {
       ),
     ).rejects.toThrow(/default_dimensions only applies/i)
     expect(supabase.from).not.toHaveBeenCalled()
+  })
+})
+
+describe('gnubok_bulk_book_transactions: approval-queue title', () => {
+  // Feedback seq 261545: "Samlingsverifikation: 1 transaktioner 2026-07-22"
+  // carried no amount, direction or counterparty, so the CEO approving from a
+  // phone could not tell what he was authorising.
+  it('carries direction, amount, currency, date and the lead counterparty', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const inserts = captureInserts(supabase)
+    enqueue({ data: { dimensions_enabled: true }, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: REGISTRY_ROWS, error: null })
+    enqueue({ data: VALUE_ROWS, error: null })
+    enqueue({
+      data: [
+        { id: 'tx-1', amount: -400, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
+        { id: 'tx-2', amount: -600, currency: 'SEK', date: '2026-05-12', journal_entry_id: null, description: 'NORDNET UTTAG', merchant_name: null },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: [
+        { account_number: '4010', account_name: 'Inköp material och varor' },
+        { account_number: '1930', account_name: 'Företagskonto' },
+      ],
+      error: null,
+    })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-bulk-title' }, error: null })
+
+    await bulkBookTransactions.execute(
+      {
+        tx_ids: ['tx-1', 'tx-2'],
+        default_dimensions: { '6': 'villa almgren tak' },
+        new_entry: {
+          description: 'Samlingsverifikation material',
+          lines: [
+            { account_number: '4010', debit_amount: 1000, credit_amount: 0, currency: 'SEK', dimensions: { '1': 'KS01' } },
+            { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
+          ],
+        },
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    const staged = inserts.find((i) => i.table === 'pending_operations')
+    expect(staged).toBeDefined()
+    const title = staged!.payload.title as string
+    expect(title).toContain('Samlingsverifikation')
+    expect(title).toContain('1 000,00 SEK')
+    expect(title).toMatch(/^Samlingsverifikation -/)
+    expect(title).toContain('2026-05-12')
+    expect(title).toContain('NORDNET UTTAG')
+    expect(title).toContain('(+1 till)')
   })
 })

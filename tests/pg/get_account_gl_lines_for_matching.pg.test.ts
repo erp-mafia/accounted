@@ -17,13 +17,13 @@
  * is covered in mark-entry-as-opening-balance.pg.test.ts.)
  */
 import { describe, it, expect } from 'vitest'
-import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
 import {
   insertAuthUser,
   insertCashAccount,
   insertCompany,
   insertFiscalPeriod,
+  insertPostedJournalEntry as insertAtomicPostedJournalEntry,
   insertTransaction,
 } from './fixtures'
 
@@ -38,37 +38,25 @@ async function insertPostedJournalEntry(params: {
   /** Line rows to book; defaults to the classic 1930 debit / 2091 credit pair. */
   lines?: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
-  const id = randomUUID()
   const amount = params.amount ?? 1000
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', $6, $7, $8, 'posted')`,
-    [
-      id,
-      params.userId,
-      params.companyId,
-      params.fiscalPeriodId,
-      params.voucherNumber,
-      params.entryDate,
-      `Test ${params.sourceType}`,
-      params.sourceType,
-    ],
-  )
   const lines = params.lines ?? [
     { account: '1930', debit: amount, credit: 0 },
     { account: '2091', debit: 0, credit: amount },
   ]
-  for (const line of lines) {
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount)
-       VALUES ($1, $2, $3, $4)`,
-      [id, line.account, line.debit, line.credit],
-    )
-  }
-  return id
+  return insertAtomicPostedJournalEntry({
+    userId: params.userId,
+    companyId: params.companyId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    voucherNumber: params.voucherNumber,
+    entryDate: params.entryDate,
+    description: `Test ${params.sourceType}`,
+    sourceType: params.sourceType,
+    lines: lines.map((line) => ({
+      accountNumber: line.account,
+      debitAmount: line.debit,
+      creditAmount: line.credit,
+    })),
+  })
 }
 
 describe('get_account_gl_lines_for_matching RPC: N:1 candidates', () => {

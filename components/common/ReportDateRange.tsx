@@ -22,6 +22,23 @@ interface Props {
   periodEnd: string
   value: DateRangeValue
   onChange: (next: DateRangeValue) => void
+  /**
+   * Preset to open on when this company has no stored choice yet. Defaults to
+   * YTD, which matches Fortnox/Visma for the resultat-/balansrapport family.
+   * Bank reconciliation passes 'full_year': a reconciliation is carried out
+   * over a whole räkenskapsår, and a part-year window makes its difference
+   * describe a period the user did not ask about.
+   */
+  defaultPreset?: Preset
+  /**
+   * localStorage prefix for the remembered preset (companyId is appended).
+   * Defaults to the range shared by the report family. Pass a page-specific
+   * prefix where inheriting another report's preset would be wrong rather than
+   * merely surprising: bank reconciliation opened on a "Denna månad" carried
+   * over from Resultatrapport would show an alarming difference for a window
+   * nobody chose.
+   */
+  storageKeyPrefix?: string
   className?: string
 }
 
@@ -121,31 +138,33 @@ export function ReportDateRange({
   periodEnd,
   value,
   onChange,
+  defaultPreset = 'ytd',
+  storageKeyPrefix = STORAGE_KEY_PREFIX,
   className,
 }: Props) {
   const t = useTranslations('reports')
   const { company } = useCompany()
-  const [preset, setPreset] = useState<Preset>('ytd')
+  const [preset, setPreset] = useState<Preset>(defaultPreset)
 
   // Restore last-used preset per company, then resolve it against the
   // current fiscal period. The period selector lives upstream: when it
   // changes, we re-resolve so the dates always sit inside the visible year.
   useEffect(() => {
     if (!company?.id || typeof window === 'undefined') return
-    const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + company.id) as Preset | null
-    const initial: Preset = stored && PRESETS.includes(stored) ? stored : 'ytd'
+    const stored = window.localStorage.getItem(storageKeyPrefix + company.id) as Preset | null
+    const initial: Preset = stored && PRESETS.includes(stored) ? stored : defaultPreset
     setPreset(initial)
     if (initial !== 'custom') {
       onChange(resolvePreset(initial, periodStart, periodEnd, todayIso()))
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id, periodStart, periodEnd])
+  }, [company?.id, periodStart, periodEnd, storageKeyPrefix, defaultPreset])
 
   const handlePreset = useCallback(
     (next: Preset) => {
       setPreset(next)
       if (company?.id && typeof window !== 'undefined') {
-        window.localStorage.setItem(STORAGE_KEY_PREFIX + company.id, next)
+        window.localStorage.setItem(storageKeyPrefix + company.id, next)
       }
       if (next === 'custom') {
         // Seed the custom inputs with whatever is currently active so the
@@ -157,7 +176,7 @@ export function ReportDateRange({
       }
       onChange(resolvePreset(next, periodStart, periodEnd, todayIso()))
     },
-    [company?.id, onChange, periodEnd, periodStart, value.fromDate, value.toDate],
+    [company?.id, onChange, periodEnd, periodStart, storageKeyPrefix, value.fromDate, value.toDate],
   )
 
   const handleFromChange = (raw: string) => {
@@ -195,7 +214,7 @@ export function ReportDateRange({
               type="button"
               onClick={() => handlePreset(p)}
               className={cn(
-                'px-3 py-1.5 text-xs rounded-md border transition-colors duration-150',
+                'px-3 py-1.5 text-xs rounded-full border transition-colors duration-150',
                 active
                   ? 'bg-secondary border-border text-foreground'
                   : 'bg-transparent border-border text-muted-foreground hover:bg-secondary/60 hover:text-foreground',

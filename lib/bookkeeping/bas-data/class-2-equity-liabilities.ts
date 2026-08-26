@@ -23,6 +23,11 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     sru_code: '7221',
     k2_excluded: false,
   },
+  // 2012 is deliberately absent: the official BAS kontoplan (bas.se, BAS 2026 v2)
+  // has no 2012; the enskild firma equity block runs 2010, 2011, 2013, 2017,
+  // 2018, 2019. "Avräkning för skatter och avgifter" as 2012 is a program
+  // convention (Visma, Bokio, Björn Lundén), not standard BAS; owner taxes are
+  // booked as eget uttag on 2013. Verified against the primary source in #1409.
   {
     account_number: '2013',
     account_name: 'Övriga egna uttag',

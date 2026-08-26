@@ -11,20 +11,23 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
+        // active: mirrors hover: on every variant. Tailwind 4 gates hover:
+        // behind (hover: hover), so on touch devices these are the only
+        // pointer-down feedback a button gives.
         default:
-          "bg-primary text-primary-foreground hover:bg-primary/90",
+          "bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/90",
         destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90 active:bg-destructive/90",
         outline:
-          "border border-input bg-transparent hover:bg-secondary",
+          "border border-input bg-transparent hover:bg-secondary active:bg-secondary",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/70",
+          "bg-secondary text-secondary-foreground hover:bg-secondary/70 active:bg-secondary/70",
         ghost:
-          "hover:bg-secondary hover:text-secondary-foreground",
+          "hover:bg-secondary hover:text-secondary-foreground active:bg-secondary active:text-secondary-foreground",
         link:
-          "text-primary underline-offset-4 hover:underline",
+          "text-primary underline-offset-4 hover:underline active:underline",
         success:
-          "bg-success text-success-foreground hover:bg-success/90",
+          "bg-success text-success-foreground hover:bg-success/90 active:bg-success/90",
       },
       size: {
         default: "px-4 py-[7px] text-[13px]",
@@ -49,8 +52,14 @@ export interface ButtonProps
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, asChild = false, ...props }, ref) => {
     const Comp = asChild ? Slot : "button"
+    // data-ph-unmask: button labels are static i18n chrome in session
+    // replays. Combobox-style triggers render a selected VALUE (user data),
+    // so they stay masked; a call site whose label carries user data adds
+    // data-ph-mask, which wins over unmask on the same element.
+    const phUnmask = props.role === "combobox" ? {} : { "data-ph-unmask": "" }
     return (
       <Comp
+        {...phUnmask}
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
         {...props}

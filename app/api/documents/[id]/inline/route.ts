@@ -76,10 +76,12 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     }
 
+    const contentType = resolveContentType(doc.file_name, doc.mime_type)
+
     return new NextResponse(blob, {
       status: 200,
       headers: {
-        'Content-Type': resolveContentType(doc.file_name, doc.mime_type),
+        'Content-Type': contentType,
         // RFC 5987 dual form: NFD filenames from macOS/iOS uploads contain
         // combining marks (> 0xFF), which undici Headers reject as non-
         // ByteString values; splicing the raw name here 500ed the route.
@@ -90,6 +92,20 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         // content. Without nosniff a tampered file_name extension could
         // serve a stored document under an attacker-chosen MIME type.
         'X-Content-Type-Options': 'nosniff',
+        // text/html documents are attacker-controlled mail bodies from the
+        // invoice inbox. Served inline on the app origin they would execute
+        // scripts with our origin's authority: CSP sandbox (no tokens) makes
+        // the rendered document opaque-origin and script-free wherever it is
+        // opened, iframe or direct tab. The source policy blocks outbound
+        // requests on top of that: sandbox alone still loads remote images,
+        // so a tracking pixel would notify the sender when the preview is
+        // opened. Inline styles and embedded data:/blob: images keep working.
+        ...(contentType === 'text/html'
+          ? {
+              'Content-Security-Policy':
+                "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:",
+            }
+          : {}),
       },
     })
   },

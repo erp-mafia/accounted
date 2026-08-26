@@ -19,6 +19,60 @@ export class BokioApiError extends Error {
   }
 }
 
+export class BokioResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BokioResponseError';
+  }
+}
+
+/**
+ * Accept either the integration token itself or a copied Authorization value.
+ * Only surrounding whitespace and one explicit Bearer scheme are removed:
+ * internal token characters are left untouched.
+ */
+export function normalizeBokioAccessToken(accessToken: string): string {
+  return accessToken.trim().replace(/^Bearer\s+/i, '').trim();
+}
+
+function bokioAuthorizationHeader(accessToken: string): string {
+  return `Bearer ${normalizeBokioAccessToken(accessToken)}`;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function looksLikeBokioCompany(value: unknown): value is Record<string, unknown> {
+  return (
+    isPlainObject(value) &&
+    (typeof value['id'] === 'string' ||
+      typeof value['name'] === 'string' ||
+      typeof value['organizationNumber'] === 'string')
+  );
+}
+
+/**
+ * Extract the company object from a company-information response body.
+ * If the documented `companyInformation` envelope key is present, the company
+ * must be inside it (a malformed envelope is rejected, never bypassed via
+ * outer fields); otherwise the flat object the live API returns is accepted.
+ * Either way the object must carry an identifying field, so `{}` or an
+ * unrelated JSON object is rejected. Returns null when no company is found.
+ */
+export function unwrapBokioCompanyInformation(
+  body: unknown,
+): Record<string, unknown> | null {
+  if (!isPlainObject(body)) return null;
+
+  if ('companyInformation' in body) {
+    const wrapped = body['companyInformation'];
+    return looksLikeBokioCompany(wrapped) ? wrapped : null;
+  }
+
+  return looksLikeBokioCompany(body) ? body : null;
+}
+
 function isRetryableError(error: unknown): boolean {
   if (isTimeoutError(error)) return true;
   if (error instanceof BokioApiError) {
@@ -54,7 +108,7 @@ export class BokioClient {
         const url = `${this.baseUrl}${path}`;
         const response = await fetch(url, {
           headers: {
-            Authorization: `Bearer ${accessToken}`,
+            Authorization: bokioAuthorizationHeader(accessToken),
             Accept: 'application/json',
           },
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -188,7 +242,7 @@ export class BokioClient {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}/companies/${companyId}${relativePath}`;
         const response = await fetch(url, {
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: { Authorization: bokioAuthorizationHeader(accessToken) },
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
 
@@ -214,12 +268,34 @@ export class BokioClient {
     );
   }
 
+  /**
+   * Probe one company via the documented v1 company-information endpoint.
+   *
+   * Bokio's published v1 spec wraps the body as `{ companyInformation: {...} }`,
+   * but the live api.bokio.se/v1 returns the company object flat
+   * (`{ id, name, organizationNumber, companyType, address, ... }`). Both are
+   * accepted: a valid token must never be reported as a failure because the
+   * spec and the deployed API disagree on the envelope.
+   */
   async getCompany<T>(
     accessToken: string,
     companyId: string,
   ): Promise<T | null> {
     try {
-      return await this.get<T>(accessToken, `/companies/${companyId}`);
+      const normalizedCompanyId = companyId.trim();
+      const response = await this.get<unknown>(
+        accessToken,
+        `/companies/${encodeURIComponent(normalizedCompanyId)}/company-information`,
+      );
+
+      const company = unwrapBokioCompanyInformation(response);
+      if (company == null) {
+        throw new BokioResponseError(
+          'Bokio company-information response contains no company object',
+        );
+      }
+
+      return company as T;
     } catch (err) {
       if (err instanceof BokioApiError && err.statusCode === 404) {
         return null;

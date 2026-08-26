@@ -1,34 +1,30 @@
 'use client'
 
 import { use, useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Loader2, Lock } from 'lucide-react'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
+import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { Label } from '@/components/ui/label'
 import { PageHeader } from '@/components/ui/page-header'
-import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Badge } from '@/components/ui/badge'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  SettingsInput,
+  SettingsRow,
+  SettingsRowNote,
+  SettingsSelect,
+} from '@/components/settings/SettingsRows'
+import { assessJamkning, assessJamkningEligibility } from '@/lib/bokslut/assets/jamkning'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
-import {
-  assessJamkningEligibility,
-  computeJamkningAmount,
-} from '@/lib/bokslut/assets/jamkning'
-import type { Asset, FiscalPeriod, VatTreatment } from '@/types'
+import type { Asset, AssetDisposalType, FiscalPeriod, VatTreatment } from '@/types'
 
 interface PeriodOption {
   id: string
@@ -39,21 +35,27 @@ interface PeriodOption {
   locked_at: string | null
 }
 
-const VAT_TREATMENT_OPTIONS: { value: VatTreatment; label: string; rate: number | null }[] = [
-  { value: 'standard_25', label: 'Standard 25 %', rate: 0.25 },
-  { value: 'reduced_12', label: 'Reducerad 12 %', rate: 0.12 },
-  { value: 'reduced_6', label: 'Reducerad 6 %', rate: 0.06 },
-  { value: 'reverse_charge', label: 'Omvänd skattskyldighet', rate: null },
-  { value: 'export', label: 'Export (utanför EU)', rate: null },
-  { value: 'exempt', label: 'Momsfri', rate: null },
-]
+const VAT_TREATMENTS = ['standard_25', 'reverse_charge', 'export', 'exempt'] as const
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
+// Flat Fönster inputs are sized by the row; amounts, dates and account
+// numbers get a fixed short width so the row does not stretch them.
+const FIELD_CLASS = 'max-w-44 flex-none tabular-nums'
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+// Accept Swedish-formatted amounts ("125 000,50") as well as dot decimals.
+function parseAmount(raw: string): number | null {
+  const normalized = raw.replace(/\s/g, '').replace(',', '.')
+  if (normalized === '') return null
+  const value = Number(normalized)
+  return Number.isFinite(value) ? value : null
 }
 
 export default function DisposeAssetPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
+  const t = useTranslations('assets.disposal')
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
@@ -62,511 +64,439 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   const [periods, setPeriods] = useState<PeriodOption[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
-
-  // Form state
-  const [disposalDate, setDisposalDate] = useState<string>(() => new Date().toISOString().slice(0, 10))
-  const [proceeds, setProceeds] = useState<string>('')
+  const [disposalType, setDisposalType] = useState<AssetDisposalType>('sale')
+  const [disposalDate, setDisposalDate] = useState(
+    () => new Date().toISOString().slice(0, 10),
+  )
+  const [proceeds, setProceeds] = useState('')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment>('standard_25')
-  const [vatAmount, setVatAmount] = useState<string>('')
-  const [vatAutoCalc, setVatAutoCalc] = useState(true)
-  const [periodId, setPeriodId] = useState<string>('')
-  const [proceedsAccount, setProceedsAccount] = useState<string>('1930')
+  const [periodId, setPeriodId] = useState('')
+  const [proceedsAccount, setProceedsAccount] = useState('1930')
+  const [originalInputVat, setOriginalInputVat] = useState('')
+  const [originalDeductionPercent, setOriginalDeductionPercent] = useState('100')
+  const [businessTransferConfirmed, setBusinessTransferConfirmed] = useState(false)
+  const [adjustmentDocumentConfirmed, setAdjustmentDocumentConfirmed] = useState(false)
 
-  // Jämkning state
-  const [jamkningEnabled, setJamkningEnabled] = useState(false)
-  const [originalInputVat, setOriginalInputVat] = useState<string>('')
-
-  // Load asset + periods
   useEffect(() => {
     let cancelled = false
     Promise.all([
-      fetch(`/api/assets`).then((r) => r.json()),
-      fetch('/api/bookkeeping/fiscal-periods').then((r) => r.json()),
+      fetch(`/api/assets/${id}`).then((response) => response.json()),
+      fetch('/api/bookkeeping/fiscal-periods').then((response) => response.json()),
     ])
-      .then(([assetsRes, periodsRes]) => {
+      .then(([assetResponse, periodsResponse]) => {
         if (cancelled) return
-        const assets: Asset[] = assetsRes.data ?? []
-        const found = assets.find((a) => a.id === id) ?? null
-        setAsset(found)
-        const periodList: PeriodOption[] = (periodsRes.data ?? []).map((p: FiscalPeriod) => ({
-          id: p.id,
-          name: p.name,
-          period_start: p.period_start,
-          period_end: p.period_end,
-          is_closed: p.is_closed,
-          locked_at: p.locked_at,
-        }))
-        setPeriods(periodList)
-        setLoading(false)
+        setAsset(assetResponse.data ?? null)
+        setPeriods(
+          (periodsResponse.data ?? []).map((period: FiscalPeriod) => ({
+            id: period.id,
+            name: period.name,
+            period_start: period.period_start,
+            period_end: period.period_end,
+            is_closed: period.is_closed,
+            locked_at: period.locked_at,
+          })),
+        )
       })
       .catch(() => {
         if (!cancelled) {
           toast({
-            title: 'Kunde inte ladda',
-            description: 'Försök igen.',
+            title: t('load_failed_title'),
+            description: t('try_again'),
             variant: 'destructive',
           })
-          setLoading(false)
         }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
       })
     return () => {
       cancelled = true
     }
-  }, [id, toast])
+  }, [id, t, toast])
 
-  // Auto-select matching fiscal period when disposalDate changes.
   useEffect(() => {
-    if (!disposalDate || periods.length === 0) return
     const match = periods.find(
-      (p) => disposalDate >= p.period_start && disposalDate <= p.period_end,
+      (period) => disposalDate >= period.period_start && disposalDate <= period.period_end,
     )
-    if (match && match.id !== periodId) setPeriodId(match.id)
-  }, [disposalDate, periods, periodId])
+    if (match) setPeriodId(match.id)
+  }, [disposalDate, periods])
 
-  // Derived: VAT rate from treatment
-  const selectedVatOpt = VAT_TREATMENT_OPTIONS.find((o) => o.value === vatTreatment)
-  const proceedsNum = Number(proceeds) || 0
-  const computedVat = useMemo(() => {
-    if (!selectedVatOpt || selectedVatOpt.rate === null) return 0
-    // Standard convention: proceeds is GROSS (incl VAT).
-    // vat = gross × rate / (1 + rate)
-    return round2((proceedsNum * selectedVatOpt.rate) / (1 + selectedVatOpt.rate))
-  }, [proceedsNum, selectedVatOpt])
-
-  // Auto-fill VAT amount when auto-calc is on.
   useEffect(() => {
-    if (vatAutoCalc) {
-      if (selectedVatOpt && selectedVatOpt.rate !== null) {
-        setVatAmount(String(computedVat))
-      } else {
-        setVatAmount('0')
-      }
+    if (disposalType === 'scrap') setProceeds('0')
+    if (disposalType !== 'business_transfer') {
+      setBusinessTransferConfirmed(false)
+      setAdjustmentDocumentConfirmed(false)
     }
-  }, [computedVat, selectedVatOpt, vatAutoCalc])
+  }, [disposalType])
 
-  // Jämkning eligibility, derived from asset + disposal date.
+  const parsedProceeds = parseAmount(proceeds)
+  const proceedsNumber = parsedProceeds ?? 0
+  const proceedsInvalid =
+    disposalType !== 'scrap' && proceeds.trim() !== '' && parsedProceeds === null
+  const vatAmount =
+    disposalType === 'sale' && vatTreatment === 'standard_25'
+      ? round2(proceedsNumber * (0.25 / 1.25))
+      : 0
+  const netProceeds = round2(proceedsNumber - vatAmount)
+  const selectedPeriod = periods.find((period) => period.id === periodId)
+  const periodLocked = Boolean(
+    selectedPeriod && (selectedPeriod.is_closed || selectedPeriod.locked_at !== null),
+  )
+
   const eligibility = useMemo(() => {
     if (!asset) return null
     return assessJamkningEligibility({
-      basAssetAccount: asset.bas_asset_account,
-      basExpenseAccount: asset.bas_expense_account,
-      category: asset.category,
       acquisitionDate: asset.acquisition_date,
       disposalDate,
+      basAssetAccount: asset.bas_asset_account,
+      category: asset.category,
     })
   }, [asset, disposalDate])
-
-  // Auto-enable jämkning toggle when disposal falls within the correction period.
-  useEffect(() => {
-    if (eligibility?.withinCorrectionPeriod && !jamkningEnabled) {
-      setJamkningEnabled(true)
-    }
-  }, [eligibility?.withinCorrectionPeriod, jamkningEnabled])
-
-  const originalInputVatNum = Number(originalInputVat) || 0
-  const jamkningAmount = useMemo(() => {
-    if (!jamkningEnabled || !eligibility) return 0
-    return computeJamkningAmount({
-      originalInputVat: originalInputVatNum,
-      totalCorrectionMonths: eligibility.totalCorrectionMonths,
-      remainingMonths: eligibility.remainingMonths,
-      disposalEvent: 'triggers_jamkning',
+  const possibleInvestmentGood = Boolean(
+    asset &&
+      eligibility?.withinAdjustmentPeriod &&
+      Number(asset.acquisition_cost) >= (eligibility.totalYears === 10 ? 400_000 : 200_000),
+  )
+  const jamkningAssessment = useMemo(() => {
+    if (!asset || originalInputVat === '' || originalDeductionPercent === '') return null
+    return assessJamkning({
+      acquisitionDate: asset.acquisition_date,
+      disposalDate,
+      category: asset.category,
+      basAssetAccount: asset.bas_asset_account,
+      originalInputVat: Number(originalInputVat) || 0,
+      originalDeductionPercent: Number(originalDeductionPercent) || 0,
+      disposalType,
+      vatTreatment: disposalType === 'sale' ? vatTreatment : undefined,
+      netProceeds,
     })
-  }, [jamkningEnabled, eligibility, originalInputVatNum])
+  }, [
+    asset,
+    disposalDate,
+    disposalType,
+    netProceeds,
+    originalDeductionPercent,
+    originalInputVat,
+    vatTreatment,
+  ])
 
   const handleSubmit = useCallback(async () => {
     if (!asset || !periodId) return
     setSubmitting(true)
-    const vatNum = Number(vatAmount) || 0
     const body: Record<string, unknown> = {
+      disposal_type: disposalType,
       disposed_at: disposalDate,
-      disposed_proceeds: proceedsNum,
+      disposed_proceeds: disposalType === 'scrap' ? 0 : proceedsNumber,
       fiscal_period_id: periodId,
       proceeds_account: proceedsAccount,
     }
-    if (vatNum > 0) {
-      body.proceeds_vat = vatNum
-      body.vat_treatment = vatTreatment
+    if (disposalType === 'sale') body.vat_treatment = vatTreatment
+    if (originalInputVat !== '' && originalDeductionPercent !== '') {
+      body.jamkning_original_input_vat = Number(originalInputVat)
+      body.jamkning_original_deduction_percent = Number(originalDeductionPercent)
     }
-    if (jamkningEnabled && jamkningAmount > 0 && eligibility) {
-      body.jamkning_amount = jamkningAmount
-      body.jamkning_remaining_months = eligibility.remainingMonths
-      body.jamkning_total_months = eligibility.totalCorrectionMonths
-      body.jamkning_original_input_vat = originalInputVatNum
+    if (disposalType === 'business_transfer') {
+      body.business_transfer_confirmed = businessTransferConfirmed
+      body.adjustment_document_confirmed = adjustmentDocumentConfirmed
     }
 
     try {
-      const res = await fetch(`/api/assets/${id}/dispose`, {
+      const response = await fetch(`/api/assets/${id}/dispose`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      const json = await res.json()
-      if (!res.ok) {
+      const json = await response.json()
+      if (!response.ok) {
         toast({
-          title: 'Avyttring misslyckades',
-          description: getErrorMessage(json?.error ?? json) || 'Försök igen.',
+          title: t('submit_failed_title'),
+          description: getErrorMessage(json?.error ?? json) || t('try_again'),
           variant: 'destructive',
         })
         return
       }
-      toast({
-        title: 'Tillgång avyttrad',
-        description: 'Verifikat skapat.',
-      })
+      toast({ title: t('success_title'), description: t('success_description') })
       router.push('/assets')
-    } catch (err) {
+    } catch (error) {
       toast({
-        title: 'Avyttring misslyckades',
-        description: getErrorMessage(err),
+        title: t('submit_failed_title'),
+        description: getErrorMessage(error),
         variant: 'destructive',
       })
     } finally {
       setSubmitting(false)
     }
   }, [
+    adjustmentDocumentConfirmed,
     asset,
+    businessTransferConfirmed,
     disposalDate,
-    eligibility,
+    disposalType,
     id,
-    jamkningAmount,
-    jamkningEnabled,
-    originalInputVatNum,
+    originalDeductionPercent,
+    originalInputVat,
     periodId,
     proceedsAccount,
-    proceedsNum,
+    proceedsNumber,
     router,
+    t,
     toast,
-    vatAmount,
     vatTreatment,
   ])
 
   if (loading) {
     return (
       <div className="space-y-8">
-        <PageHeader title="Avyttra tillgång" />
-        <Card>
-          <CardContent className="p-6 space-y-3">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-4 w-2/3" />
-            <Skeleton className="h-4 w-1/2" />
-          </CardContent>
-        </Card>
+        <PageHeader title={t('title')} />
+        <div className="space-y-3">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-4 w-2/3" />
+        </div>
       </div>
     )
   }
 
-  if (!asset) {
+  if (!asset || asset.disposed_at) {
     return (
       <div className="space-y-8">
-        <PageHeader title="Avyttra tillgång" />
-        <Card>
-          <CardContent className="p-6">
-            <p>Tillgången kunde inte hittas.</p>
-            <div className="mt-4">
-              <Link href="/assets">
-                <Button variant="secondary">
-                  <ArrowLeft className="mr-1 h-4 w-4" />
-                  Tillbaka
-                </Button>
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
+        <PageHeader title={t('title')} />
+        <p className="text-sm text-muted-foreground">
+          {!asset ? t('not_found') : t('already_disposed', { date: formatDate(asset.disposed_at!) })}
+        </p>
+        <Link href="/assets"><Button variant="secondary"><ArrowLeft className="mr-1 h-4 w-4" />{t('back')}</Button></Link>
       </div>
     )
   }
 
-  if (asset.disposed_at) {
-    return (
-      <div className="space-y-8">
-        <PageHeader title="Avyttra tillgång" />
-        <Card>
-          <CardContent className="p-6">
-            <p className="mb-4">
-              Tillgången är redan avyttrad ({formatDate(asset.disposed_at)}).
-            </p>
-            <Link href="/assets">
-              <Button variant="secondary">
-                <ArrowLeft className="mr-1 h-4 w-4" />
-                Tillbaka
-              </Button>
-            </Link>
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
+  const transferNeedsDocument = jamkningAssessment?.direction === 'transferred'
+  const missingJamkningData = possibleInvestmentGood &&
+    (originalInputVat === '' || originalDeductionPercent === '')
 
-  const netProceeds = round2(proceedsNum - (Number(vatAmount) || 0))
-  const isVatLineTreatment = selectedVatOpt?.rate !== null
-  const selectedPeriod = periods.find((p) => p.id === periodId)
-  const periodLocked = selectedPeriod
-    ? selectedPeriod.is_closed || selectedPeriod.locked_at !== null
-    : false
+  // Which rows the adjustment section shows, so the last one can drop its
+  // hairline and the section never ends on a dangling rule.
+  const showJamkningInputs = Boolean(eligibility?.withinAdjustmentPeriod)
+  const showAssessment = jamkningAssessment !== null
+  const showTransferConfirm = disposalType === 'business_transfer'
+  const showDocumentConfirm = showTransferConfirm && transferNeedsDocument
+  const assessmentIsLast = showAssessment && !showTransferConfirm
+  const inputsAreLast = showJamkningInputs && !showAssessment && !showTransferConfirm
 
   return (
-    <div className="space-y-8">
-      <PageHeader
-        title="Avyttra tillgång"
-        action={
-          <Link href="/assets">
-            <Button variant="secondary">
-              <ArrowLeft className="mr-1 h-4 w-4" />
-              Tillbaka
-            </Button>
-          </Link>
-        }
-      />
+    <div className="space-y-8 stagger-enter">
+      {/* Back link on its own quiet row, same as the register documents */}
+      <Link
+        href="/assets"
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        {t('back')}
+      </Link>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{asset.name}</CardTitle>
-        </CardHeader>
-        <CardContent className="p-6 pt-0 space-y-2 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Anskaffningsvärde</span>
-            <span className="tabular-nums">{formatCurrency(Number(asset.acquisition_cost))}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Anskaffat</span>
-            <span className="tabular-nums">{formatDate(asset.acquisition_date)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Konton (BAS)</span>
-            <span className="tabular-nums">
-              {asset.bas_asset_account} / {asset.bas_accumulated_account} / {asset.bas_expense_account}
-            </span>
-          </div>
-        </CardContent>
-      </Card>
+      {/* data-ph-mask: the asset name is user data */}
+      <PageHeader title={t('title')} description={<span data-ph-mask="">{asset.name}</span>} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Avyttringsuppgifter</CardTitle>
-        </CardHeader>
-        <CardContent className="p-6 pt-0 space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="disposalDate">Avyttringsdatum</Label>
-              <Input
-                id="disposalDate"
-                type="date"
-                value={disposalDate}
-                onChange={(e) => setDisposalDate(e.target.value)}
-                className="tabular-nums"
-              />
-            </div>
+      {/* The asset being disposed: read-only context as plain rows */}
+      <DetailSection kicker={t('asset_section')}>
+        <DefRow label={t('acquisition_cost')}>
+          <span className="tabular-nums">{formatCurrency(Number(asset.acquisition_cost))}</span>
+        </DefRow>
+        <DefRow label={t('acquired')}>
+          <span className="tabular-nums">{formatDate(asset.acquisition_date)}</span>
+        </DefRow>
+        <DefRow label={t('bas_accounts')}>
+          <span className="tabular-nums">
+            {`${asset.bas_asset_account} / ${asset.bas_accumulated_account} / ${asset.bas_expense_account}`}
+          </span>
+        </DefRow>
+      </DetailSection>
 
-            <div className="space-y-2">
-              <Label htmlFor="period">Räkenskapsperiod</Label>
-              <Select value={periodId} onValueChange={setPeriodId}>
-                <SelectTrigger id="period">
-                  <SelectValue placeholder="Välj period" />
-                </SelectTrigger>
-                <SelectContent>
-                  {periods.map((p) => {
-                    const locked = p.is_closed || p.locked_at !== null
-                    return (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.name}
-                        {locked ? ' (låst)' : ''}
-                      </SelectItem>
-                    )
-                  })}
-                </SelectContent>
-              </Select>
-              {periodLocked && (
-                <p className="text-xs text-destructive">
-                  Vald period är låst eller stängd: välj en öppen period.
-                </p>
-              )}
-            </div>
+      {/* The disposal itself: flat hairline rows, label left, control right */}
+      <DetailSection kicker={t('details_title')}>
+        <SettingsRow label={t('type_label')} htmlFor="disposalType">
+          <SettingsSelect
+            id="disposalType"
+            value={disposalType}
+            onChange={(event) => setDisposalType(event.target.value as AssetDisposalType)}
+          >
+            <option value="sale">{t('type_sale')}</option>
+            <option value="scrap">{t('type_scrap')}</option>
+            <option value="business_transfer">{t('type_business_transfer')}</option>
+          </SettingsSelect>
+        </SettingsRow>
+        <SettingsRow label={t('date_label')} htmlFor="disposalDate" align="baseline">
+          <SettingsInput
+            id="disposalDate"
+            type="date"
+            value={disposalDate}
+            onChange={(event) => setDisposalDate(event.target.value)}
+            className={FIELD_CLASS}
+          />
+        </SettingsRow>
+        <SettingsRow label={t('period_label')} htmlFor="period">
+          <SettingsSelect id="period" value={periodId} onChange={(event) => setPeriodId(event.target.value)}>
+            <option value="" disabled>{t('period_placeholder')}</option>
+            {periods.map((period) => (
+              <option key={period.id} value={period.id}>
+                {period.name}{period.is_closed || period.locked_at ? ` (${t('locked')})` : ''}
+              </option>
+            ))}
+          </SettingsSelect>
+          {periodLocked && <p className="basis-full text-xs text-destructive">{t('period_locked')}</p>}
+        </SettingsRow>
+        <SettingsRow
+          label={disposalType === 'business_transfer' ? t('consideration_label') : t('proceeds_label')}
+          htmlFor="proceeds"
+          align="baseline"
+          borderless={disposalType === 'scrap'}
+        >
+          <SettingsInput
+            id="proceeds"
+            inputMode="decimal"
+            value={proceeds}
+            onChange={(event) => setProceeds(event.target.value)}
+            disabled={disposalType === 'scrap'}
+            className={FIELD_CLASS}
+          />
+        </SettingsRow>
+        {disposalType !== 'scrap' && (
+          <SettingsRow label={t('proceeds_account_label')} htmlFor="proceedsAccount" align="baseline" borderless>
+            <SettingsInput
+              id="proceedsAccount"
+              value={proceedsAccount}
+              onChange={(event) => setProceedsAccount(event.target.value)}
+              className={FIELD_CLASS}
+            />
+          </SettingsRow>
+        )}
+      </DetailSection>
 
-            <div className="space-y-2">
-              <Label htmlFor="proceeds">Erhållet belopp (inkl. moms)</Label>
-              <Input
-                id="proceeds"
-                inputMode="decimal"
-                value={proceeds}
-                onChange={(e) => setProceeds(e.target.value)}
-                placeholder="0,00"
-                className="tabular-nums"
-              />
-            </div>
+      {disposalType === 'sale' && (
+        <DetailSection kicker={t('vat_title')}>
+          <SettingsRow label={t('vat_treatment_label')} htmlFor="vatTreatment">
+            <SettingsSelect
+              id="vatTreatment"
+              value={vatTreatment}
+              onChange={(event) => setVatTreatment(event.target.value as VatTreatment)}
+            >
+              {VAT_TREATMENTS.map((value) => (
+                <option key={value} value={value}>{t(`vat_${value}`)}</option>
+              ))}
+            </SettingsSelect>
+          </SettingsRow>
+          <SettingsRow label={t('gross')}>
+            <span className="tabular-nums">{formatCurrency(proceedsNumber)}</span>
+          </SettingsRow>
+          <SettingsRow label={t('vat')}>
+            <span className="tabular-nums">{formatCurrency(vatAmount)}</span>
+          </SettingsRow>
+          <SettingsRow label={t('net')} borderless>
+            <span className="font-medium tabular-nums">{formatCurrency(netProceeds)}</span>
+          </SettingsRow>
+        </DetailSection>
+      )}
 
-            <div className="space-y-2">
-              <Label htmlFor="proceedsAccount">Mottagarkonto</Label>
-              <Input
-                id="proceedsAccount"
-                value={proceedsAccount}
-                onChange={(e) => setProceedsAccount(e.target.value)}
-                placeholder="1930"
-                className="tabular-nums"
-              />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Moms vid avyttring (ML 3 kap 3 §)</CardTitle>
-        </CardHeader>
-        <CardContent className="p-6 pt-0 space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="vatTreatment">Momsbehandling</Label>
-              <Select
-                value={vatTreatment}
-                onValueChange={(v) => setVatTreatment(v as VatTreatment)}
-              >
-                <SelectTrigger id="vatTreatment">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {VAT_TREATMENT_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="vatAmount">Utgående moms</Label>
-              <Input
-                id="vatAmount"
-                inputMode="decimal"
-                value={vatAmount}
-                onChange={(e) => {
-                  setVatAutoCalc(false)
-                  setVatAmount(e.target.value)
-                }}
-                placeholder="0,00"
-                disabled={!isVatLineTreatment}
-                className="tabular-nums"
-              />
-              {isVatLineTreatment && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Switch
-                    checked={vatAutoCalc}
-                    onCheckedChange={setVatAutoCalc}
-                    aria-label="Räkna ut moms automatiskt"
-                  />
-                  <span>Räkna ut moms automatiskt</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-md bg-secondary/40 p-3 text-xs space-y-1">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Brutto</span>
-              <span className="tabular-nums">{formatCurrency(proceedsNum)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Moms</span>
-              <span className="tabular-nums">{formatCurrency(Number(vatAmount) || 0)}</span>
-            </div>
-            <div className="flex justify-between font-medium">
-              <span>Netto</span>
-              <span className="tabular-nums">{formatCurrency(netProceeds)}</span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Jämkning av ingående moms (ML 8a kap)</CardTitle>
-        </CardHeader>
-        <CardContent className="p-6 pt-0 space-y-4">
-          {eligibility?.withinCorrectionPeriod ? (
+      {/* Input VAT adjustment: the period status sits on the kicker line
+          (a chip only when the asset is still inside the period), the
+          underlag as rows, the assessment as read-only rows below. */}
+      <DetailSection
+        kicker={t('adjustment_title')}
+        aside={
+          eligibility?.withinAdjustmentPeriod ? (
             <Badge variant="warning">
-              Inom korrigeringstid ({eligibility.remainingMonths} mån kvar av{' '}
-              {eligibility.totalCorrectionMonths})
+              {t('within_adjustment_period', { years: eligibility.remainingYears, total: eligibility.totalYears })}
             </Badge>
           ) : (
-            <Badge variant="secondary">Utanför korrigeringstid: ingen jämkning behövs</Badge>
-          )}
-
-          <div className="flex items-center gap-3">
+            <span className="text-[11px] text-muted-foreground">{t('outside_adjustment_period')}</span>
+          )
+        }
+      >
+        {showJamkningInputs && eligibility && (
+          <>
+            <SettingsRow
+              label={t('original_vat_label')}
+              htmlFor="originalInputVat"
+              help={t('original_vat_hint', { threshold: eligibility.threshold })}
+              align="baseline"
+            >
+              <SettingsInput
+                id="originalInputVat"
+                inputMode="decimal"
+                value={originalInputVat}
+                onChange={(event) => setOriginalInputVat(event.target.value)}
+                className={FIELD_CLASS}
+              />
+            </SettingsRow>
+            <SettingsRow
+              label={t('original_percent_label')}
+              htmlFor="originalDeductionPercent"
+              align="baseline"
+              borderless={inputsAreLast}
+            >
+              <SettingsInput
+                id="originalDeductionPercent"
+                type="number"
+                min={0}
+                max={100}
+                value={originalDeductionPercent}
+                onChange={(event) => setOriginalDeductionPercent(event.target.value)}
+                className={FIELD_CLASS}
+              />
+            </SettingsRow>
+          </>
+        )}
+        {jamkningAssessment && (
+          <>
+            <SettingsRow label={t('adjustment_direction')}>
+              {t(`direction_${jamkningAssessment.direction}`)}
+            </SettingsRow>
+            <SettingsRow label={t('adjustment_amount')} borderless={assessmentIsLast}>
+              <span className="font-medium tabular-nums">{formatCurrency(jamkningAssessment.amount)}</span>
+              {jamkningAssessment.capped && (
+                <SettingsRowNote className="basis-full">{t('adjustment_capped')}</SettingsRowNote>
+              )}
+            </SettingsRow>
+          </>
+        )}
+        {showTransferConfirm && (
+          <SettingsRow label={t('type_business_transfer')} borderless={!showDocumentConfirm}>
             <Switch
-              id="jamkningEnabled"
-              checked={jamkningEnabled}
-              onCheckedChange={setJamkningEnabled}
-              disabled={!eligibility?.withinCorrectionPeriod}
+              id="businessTransfer"
+              checked={businessTransferConfirmed}
+              onCheckedChange={setBusinessTransferConfirmed}
             />
-            <Label htmlFor="jamkningEnabled" className="cursor-pointer">
-              Bokför jämkning
+            <Label htmlFor="businessTransfer" className="min-w-0 flex-1 cursor-pointer font-normal leading-5">
+              {t('business_transfer_confirm')}
             </Label>
-          </div>
+          </SettingsRow>
+        )}
+        {showDocumentConfirm && (
+          <SettingsRow label={t('adjustment_document_label')} borderless>
+            <Switch
+              id="adjustmentDocument"
+              checked={adjustmentDocumentConfirmed}
+              onCheckedChange={setAdjustmentDocumentConfirmed}
+            />
+            <Label htmlFor="adjustmentDocument" className="min-w-0 flex-1 cursor-pointer font-normal leading-5">
+              {t('adjustment_document_confirm')}
+            </Label>
+          </SettingsRow>
+        )}
+        {missingJamkningData && (
+          <p className="mt-3 text-xs text-destructive">{t('adjustment_data_required')}</p>
+        )}
+      </DetailSection>
 
-          {jamkningEnabled && eligibility?.withinCorrectionPeriod && (
-            <div className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="originalInputVat">Ursprungligt ingående momsavdrag</Label>
-                  <Input
-                    id="originalInputVat"
-                    inputMode="decimal"
-                    value={originalInputVat}
-                    onChange={(e) => setOriginalInputVat(e.target.value)}
-                    placeholder="0,00"
-                    className="tabular-nums"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Korrigeringstid</Label>
-                  <div className="rounded-md border border-border bg-secondary/40 px-3 py-2 text-sm tabular-nums">
-                    {eligibility.totalCorrectionMonths} mån
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Återstående månader</Label>
-                  <div className="rounded-md border border-border bg-secondary/40 px-3 py-2 text-sm tabular-nums">
-                    {eligibility.remainingMonths} mån
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Beräknad jämkning</Label>
-                  <div className="rounded-md border border-border bg-secondary/40 px-3 py-2 text-sm tabular-nums font-medium">
-                    {formatCurrency(jamkningAmount)}
-                  </div>
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Jämkningen bokförs som kredit på 2641 (återförd ingående moms) och debet på
-                förlustkontot för tillgångsklassen.
-              </p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="flex justify-end gap-2">
-        <Link href="/assets">
-          <Button variant="secondary" disabled={submitting}>
-            Avbryt
-          </Button>
-        </Link>
+      {/* Actions: one footer row, so the flow ends on the button it arms */}
+      <div className="flex flex-wrap justify-end gap-2">
+        <Link href="/assets"><Button variant="secondary" disabled={submitting}>{t('cancel')}</Button></Link>
         <Button
           onClick={handleSubmit}
-          disabled={
-            !canWrite ||
-            submitting ||
-            !periodId ||
-            periodLocked ||
-            proceedsNum < 0 ||
-            (proceeds !== '' && Number.isNaN(proceedsNum))
-          }
-          title={!canWrite ? 'Endast användare med skrivrättigheter kan avyttra tillgångar.' : undefined}
+          disabled={!canWrite || submitting || !periodId || periodLocked || proceedsInvalid || missingJamkningData || (disposalType === 'business_transfer' && !businessTransferConfirmed) || (transferNeedsDocument && !adjustmentDocumentConfirmed)}
+          title={!canWrite ? t('write_required') : undefined}
         >
           {!canWrite && <Lock className="mr-1 h-4 w-4" />}
           {submitting && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-          Avyttra
+          {t('submit')}
         </Button>
       </div>
     </div>

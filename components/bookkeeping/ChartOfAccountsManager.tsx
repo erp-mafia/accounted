@@ -4,8 +4,10 @@ import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'rea
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Switch } from '@/components/ui/switch'
+import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -17,7 +19,6 @@ import { AddAccountDialog } from './AddAccountDialog'
 import { EditAccountDialog } from './EditAccountDialog'
 import { PruneAccountsDialog } from './PruneAccountsDialog'
 import {
-  Search,
   ChevronRight,
   Plus,
   Pencil,
@@ -465,46 +466,20 @@ export default function ChartOfAccountsManager() {
 
       {/* Toolbar: seg + search; the K2 filter rides far right in catalog view */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view === 'my-accounts'}
-            onClick={() => switchView('my-accounts')}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-              view === 'my-accounts'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t('tab_my_accounts')}
-            <span className="font-normal text-muted-foreground tabular-nums">{accounts.length}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view === 'bas-catalog'}
-            onClick={() => switchView('bas-catalog')}
-            className={cn(
-              'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-              view === 'bas-catalog'
-                ? 'border border-border bg-card font-medium text-foreground'
-                : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            {t('tab_bas_catalog')}
-          </button>
-        </div>
-        <div className="relative min-w-[190px] max-w-xs flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder={t('search_placeholder')}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-9 pl-10"
-          />
-        </div>
+        <SegmentedControl
+          value={view}
+          onChange={switchView}
+          options={[
+            { value: 'my-accounts', label: t('tab_my_accounts'), count: accounts.length },
+            { value: 'bas-catalog', label: t('tab_bas_catalog') },
+          ]}
+        />
+        <ToolbarSearch
+          placeholder={t('search_placeholder')}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          containerClassName="min-w-[190px] max-w-xs flex-1"
+        />
         {view === 'my-accounts' && (
           <label className="ml-auto flex items-center gap-2 text-sm">
             <Switch
@@ -528,9 +503,10 @@ export default function ChartOfAccountsManager() {
       </div>
 
       {loading ? (
-        <div className="p-8 text-center text-muted-foreground">
-          <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
-          {t('loading')}
+        <div className="space-y-2 py-2">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Skeleton key={i} className="h-8 w-full" />
+          ))}
         </div>
       ) : view === 'my-accounts' ? (
         filteredAccounts.length === 0 ? (
@@ -669,9 +645,10 @@ export default function ChartOfAccountsManager() {
       ) : (
         <div>
           {referenceLoading && referenceAccounts.length === 0 ? (
-            <div className="p-8 text-center text-muted-foreground">
-              <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
-              {t('loading')}
+            <div className="space-y-2 py-2">
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
             </div>
           ) : filteredReference.length === 0 ? (
             <p className="px-1 py-12 text-center text-sm text-muted-foreground">{t('no_matches')}</p>

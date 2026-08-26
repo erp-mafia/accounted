@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: eget-insattning
+  order: 10
+  name: 'Eget insättning'
+  category: private_transfer
+  entity_type: enskild_firma
+  description: >-
+    Privat insättning till företagskontot (enskild firma).
+lines:
+  - account: '1930'
+    label: 'Företagskonto'
+    side: debit
+    type: settlement
+    ratio: 1.0
+  - account: '2018'
+    label: 'Egna insättningar'
+    side: credit
+    type: business
+    ratio: 1.0

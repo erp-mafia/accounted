@@ -16,6 +16,7 @@ import { getPool } from './setup'
 import {
   seedCompany,
   insertDraftJournalEntry,
+  insertPostedJournalEntry,
 } from './fixtures'
 
 async function insertLines(
@@ -79,22 +80,21 @@ async function bookMerchant(params: {
   voucherNumber: number
   sourceType?: string
 }): Promise<string> {
-  const entryId = await insertDraftJournalEntry({
+  const entryId = await insertPostedJournalEntry({
     userId: params.userId,
     companyId: params.companyId,
     fiscalPeriodId: params.fiscalPeriodId,
     entryDate: params.date,
-    status: 'posted',
     voucherNumber: params.voucherNumber,
     sourceType: params.sourceType ?? 'bank_transaction',
     // Booked 3 days after the transaction: exercises the committed_at-based
     // lag (entry_date == transaction date would give 0).
     committedAt: plusDays(params.date, 3),
+    lines: [
+      { accountNumber: params.expenseAccount, debitAmount: 500, creditAmount: 0 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 500 },
+    ],
   })
-  await insertLines(entryId, [
-    { account: params.expenseAccount, debit: 500, credit: 0 },
-    { account: '1930', debit: 0, credit: 500 },
-  ])
   await insertBookedTransaction({
     companyId: params.companyId,
     userId: params.userId,
@@ -274,15 +274,15 @@ describe('get_ledger_usage_stats', () => {
       { account: '4010', debit: 300, credit: 0 },
       { account: '1930', debit: 0, credit: 300 },
     ])
-    const stornoId = await insertDraftJournalEntry({
+    const stornoId = await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
-      entryDate: '2026-06-15', status: 'posted', voucherNumber: 9,
+      entryDate: '2026-06-15', voucherNumber: 9,
       sourceType: 'storno',
+      lines: [
+        { accountNumber: '1930', debitAmount: 300, creditAmount: 0 },
+        { accountNumber: '4010', debitAmount: 0, creditAmount: 300 },
+      ],
     })
-    await insertLines(stornoId, [
-      { account: '1930', debit: 300, credit: 0 },
-      { account: '4010', debit: 0, credit: 300 },
-    ])
     // Legacy shape: a transaction still linked to the storno entry (predates
     // reverseEntry() unlinking). Must not create a counterparty pattern.
     await insertBookedTransaction({
@@ -313,18 +313,18 @@ describe('get_ledger_usage_stats', () => {
     // (regression for 20260708110000; observed on prod as 2614).
     let rcVoucher = 20
     for (const d of ['2026-05-20', '2026-06-18']) {
-      const rcEntry = await insertDraftJournalEntry({
+      const rcEntry = await insertPostedJournalEntry({
         userId, companyId, fiscalPeriodId,
-        entryDate: d, status: 'posted',
+        entryDate: d,
         voucherNumber: rcVoucher++, sourceType: 'bank_transaction',
         committedAt: plusDays(d, 3),
+        lines: [
+          { accountNumber: '5420', debitAmount: 500, creditAmount: 0 },
+          { accountNumber: '2645', debitAmount: 125, creditAmount: 0 },
+          { accountNumber: '2614', debitAmount: 0, creditAmount: 125 },
+          { accountNumber: '1930', debitAmount: 0, creditAmount: 500 },
+        ],
       })
-      await insertLines(rcEntry, [
-        { account: '5420', debit: 500, credit: 0 },
-        { account: '2645', debit: 125, credit: 0 },
-        { account: '2614', debit: 0, credit: 125 },
-        { account: '1930', debit: 0, credit: 500 },
-      ])
       await insertBookedTransaction({
         companyId, userId, journalEntryId: rcEntry,
         merchantName: 'GOOGLE WO', category: 'expense_software', date: d,

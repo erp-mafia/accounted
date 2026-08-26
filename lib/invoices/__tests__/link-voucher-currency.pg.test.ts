@@ -21,7 +21,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { getPool } from '@/tests/pg/setup'
+import { getClient, getPool } from '@/tests/pg/setup'
 import {
   insertAuthUser,
   insertCompany,
@@ -137,27 +137,37 @@ async function seedVoucher(params: {
   amountInCurrency?: number | null
 }): Promise<string> {
   const id = randomUUID()
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Betalning', 'manual', 'posted')`,
-    [id, params.userId, params.companyId, params.fiscalPeriodId, nextSeq() % 2_000_000_000],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
-       (journal_entry_id, account_number, debit_amount, credit_amount, currency, amount_in_currency)
-     VALUES ($1, $2, $3, 0, $5, $6),
-            ($1, $4, 0, $3, $5, $6)`,
-    [
-      id,
-      params.debitAccount,
-      params.sekAmount,
-      params.creditAccount,
-      params.lineCurrency ?? 'SEK',
-      params.amountInCurrency ?? null,
-    ],
-  )
+  const client = await getClient()
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Betalning', 'manual', 'posted')`,
+      [id, params.userId, params.companyId, params.fiscalPeriodId, nextSeq() % 2_000_000_000],
+    )
+    await client.query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount, currency, amount_in_currency)
+       VALUES ($1, $2, $3, 0, $5, $6),
+              ($1, $4, 0, $3, $5, $6)`,
+      [
+        id,
+        params.debitAccount,
+        params.sekAmount,
+        params.creditAccount,
+        params.lineCurrency ?? 'SEK',
+        params.amountInCurrency ?? null,
+      ],
+    )
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
   return id
 }
 
@@ -562,21 +572,31 @@ describe('link_supplier_invoice_to_voucher: amount resolved in the invoice curre
       total: 1000,
     })
     const voucherId = randomUUID()
-    await getPool().query(
-      `INSERT INTO public.journal_entries
-         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-          entry_date, description, source_type, status)
-       VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Betalning', 'manual', 'posted')`,
-      [voucherId, userId, companyId, fiscalPeriodId, nextSeq() % 2_000_000_000],
-    )
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount, currency, amount_in_currency)
-       VALUES ($1, '2440', 6900, 0, 'EUR', 600),
-              ($1, '2441', 4600, 0, 'EUR', 400),
-              ($1, '1930', 0, 11500, 'EUR', 1000)`,
-      [voucherId],
-    )
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        `INSERT INTO public.journal_entries
+           (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+            entry_date, description, source_type, status)
+         VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Betalning', 'manual', 'posted')`,
+        [voucherId, userId, companyId, fiscalPeriodId, nextSeq() % 2_000_000_000],
+      )
+      await client.query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount, currency, amount_in_currency)
+         VALUES ($1, '2440', 6900, 0, 'EUR', 600),
+                ($1, '2441', 4600, 0, 'EUR', 400),
+                ($1, '1930', 0, 11500, 'EUR', 1000)`,
+        [voucherId],
+      )
+      await client.query('COMMIT')
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw error
+    } finally {
+      client.release()
+    }
 
     const result = await callLinkSupplierInvoice({
       supplierInvoiceId,
