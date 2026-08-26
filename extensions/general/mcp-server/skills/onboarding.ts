@@ -32,14 +32,16 @@ inget konto skapar du det där (BankID eller e-post), det tar en minut." The
 call is retried automatically once connected. Do not send the user to the web
 app to sign up first.
 
-## Step 1: TWO opening questions, then look up
+## Step 1: THREE opening questions, then look up
 
-Open with exactly two questions, together:
+Open with exactly three questions, together:
 
 1. **Organisationsnummer?** (10 digits; an enskild firma's org number is the
    owner's personnummer, fine to use here)
 2. **Har du bokfört i ett annat system tidigare?** (Fortnox, Visma, Bokio,
    Björn Lundén, Briox, Wint, annat system, eller helt nytt bolag)
+3. **Vilken bank har företaget?** (so the bank connect link later opens that
+   bank's consent directly instead of a picker)
 
 Then call \`gnubok_lookup_company\` with the org number. The registry answers
 most of the form; present the facts as a SHORT summary to confirm ("Jag
@@ -101,7 +103,8 @@ reaches far enough back anyway.
 
 ## Step 4: connect bank and Skatteverket (together, no pause)
 
-Call \`gnubok_connect_bank\` AND \`gnubok_connect_skatteverket\` in the same
+Call \`gnubok_connect_bank\` (pass \`bank\` from step 1 so the link opens that
+bank's consent directly) AND \`gnubok_connect_skatteverket\` in the same
 turn; on claude.ai/Desktop both render connect cards with buttons.
 
 - Bank: BankID + PSD2 consent, then an **account selection dialog** in the
