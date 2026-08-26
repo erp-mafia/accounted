@@ -11,8 +11,11 @@
  *   1. raw-route-auth : an `app/api/**\/route.ts` that calls
  *      `supabase.auth.getUser()` directly instead of going through
  *      `requireAuth()` / `withRouteContext()` (the only guards that enforce
- *      MFA AAL2 on hosted). Tracked as a file-set so a NEW offending route
- *      fails CI even if an old one was fixed in the same PR.
+ *      MFA AAL2 on hosted). Judged per exported handler, not per file: a
+ *      wrapped PATCH next to a hand-rolled DELETE in the same file is still
+ *      a violation (that exact shape hid two MFA bypasses until 2026-08-26).
+ *      Tracked as a file-set so a NEW offending route fails CI even if an
+ *      old one was fixed in the same PR.
  *   2. naive-ore-round: `Math.round(x * 100) / 100`, which is subtly wrong on
  *      exact-half values (see lib/money.ts `roundOre`). Tracked as a count.
  *      The canonical rounding modules are excluded.
@@ -137,6 +140,10 @@ const RAW_AUTH_RE = /\.auth\.getUser\(/
 // flagged. withRouteContext is usually called with a generic (`withRouteContext<…>(`),
 // so accept either `<` or `(` after the name.
 const GUARD_RE = /requireAuth\(|withRouteContext[<(]/
+// Each top-level `export` starts a new segment, so every handler (and the
+// preamble of shared helpers above the first export) is judged on its own.
+// Without this split, one wrapped handler exempted the whole file.
+const TOP_LEVEL_EXPORT_RE = /^(?=export\s)/m
 const NAIVE_ROUND_RE = /Math\.round\([^\n]*\*\s*100\s*\)\s*\/\s*100/
 
 // 8. hand-rolled-invariant. Shared format contracts live in lib/invariants/
@@ -179,14 +186,18 @@ function walk(dir, exts, out = []) {
 
 const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/')
 
+/** True when any handler segment calls getUser() without an MFA-enforcing guard. */
+function handRollsRouteAuth(src) {
+  return src
+    .split(TOP_LEVEL_EXPORT_RE)
+    .some((segment) => RAW_AUTH_RE.test(segment) && !GUARD_RE.test(segment))
+}
+
 /** Route files that hand-roll auth instead of the MFA-enforcing guard. */
 function findRawRouteAuth() {
   const apiDir = path.join(ROOT, 'app', 'api')
   return walk(apiDir, ['route.ts'])
-    .filter((f) => {
-      const src = fs.readFileSync(f, 'utf8')
-      return RAW_AUTH_RE.test(src) && !GUARD_RE.test(src)
-    })
+    .filter((f) => handRollsRouteAuth(fs.readFileSync(f, 'utf8')))
     .map(rel)
     .sort()
 }

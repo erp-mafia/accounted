@@ -1,6 +1,6 @@
 ---
 title: "accounted MCP-server"
-description: "MCP-server för svensk dubbel bokföring. Över 120 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter. OAuth 2.1 med PKCE och dynamisk klientregistrering. Installeras som connector i Claude.ai, Claude Desktop, Cursor och Continue."
+description: "MCP-server för svensk dubbel bokföring. Över 150 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter. OAuth 2.1 med PKCE och dynamisk klientregistrering. Installeras som connector i Claude.ai, Claude Desktop, Cursor och Continue."
 slug: "gnubok-mcp"
 kind: "mcp"
 author: "gnubok"
@@ -8,7 +8,7 @@ status: "live"
 lang: "sv"
 personas: ["developer", "founder", "byra"]
 publishedAt: "2026-05-12"
-updatedAt: "2026-07-18"
+updatedAt: "2026-08-26"
 featured: true
 externalUrl: "https://app.gnubok.se/api/extensions/ext/mcp-server/mcp"
 repoUrl: "https://github.com/erp-mafia/accounted"
@@ -27,7 +27,7 @@ version: "1.0.1"
 ogImageEyebrow: "MCP-server"
 faq:
   - q: "Vad är accounted MCP-server?"
-    a: "En HTTP-baserad MCP-server som ger en AI-agent åtkomst till en svensk huvudbok: verifikat, kunder, fakturor, moms, lön, SIE-export. OAuth 2.1 med PKCE och dynamisk klientregistrering. Över 120 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter."
+    a: "En HTTP-baserad MCP-server som ger en AI-agent åtkomst till en svensk huvudbok: verifikat, kunder, fakturor, moms, lön, SIE-export. OAuth 2.1 med PKCE och dynamisk klientregistrering. Över 150 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter."
   - q: "Hur funkar OAuth-flödet?"
     a: "MCP-klienten upptäcker accounteds autentiseringsserver via `.well-known/oauth-protected-resource`. Klienten registrerar sig dynamiskt (RFC 7591) på `/api/mcp-oauth/register`, öppnar `/api/mcp-oauth/authorize` i webbläsaren, du loggar in på accounted och godkänner anslutningen, klienten utbyter authorization code mot en access token via `/api/mcp-oauth/token` med PKCE S256."
   - q: "Vilka klienter funkar?"
@@ -42,7 +42,7 @@ faq:
 
 ## Servern i korthet
 
-Bryggan exponerar över 120 verktyg som en MCP-klient kan kalla. De grupperas
+Bryggan exponerar över 150 verktyg som en MCP-klient kan kalla. De grupperas
 ungefär så här:
 
 | Område | Exempel-verktyg | Server-side scope |

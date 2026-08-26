@@ -5,7 +5,7 @@ Issue #546 requires two separable capabilities:
 1. Produce a correctly structured Peppol BIS Billing 3 invoice from Accounted data.
 2. Deliver and receive documents through the Peppol network.
 
-The first slice implemented the invoice profile. The second slice adds an immutable staged-delivery and audit foundation. Neither slice claims network delivery.
+The first slice implemented the invoice profile. The second slice added an immutable staged-delivery and audit foundation. Neither of those two slices claimed network delivery; since 2026-08-21 both sending and receiving run over the Peppol network through Qvalia (see the Qvalia and Receiving (PR2) sections below). The sections up to "Access point: Qvalia" describe the foundation those slices left behind and the requirements the Qvalia work had to meet.
 
 ## Implemented scope
 
@@ -74,7 +74,7 @@ No invoice status should change merely because XML was generated or accepted by 
 
 ### Receiving
 
-Inbound invoices are a separate acceptance slice. It requires provider webhook authentication, raw XML retention, duplicate detection, supplier matching, safe attachment handling, and mapping into the supplier-invoice inbox without treating received content as trusted. Nothing in this foundation claims inbound support.
+Inbound invoices are a separate acceptance slice. It requires provider webhook authentication, raw XML retention, duplicate detection, supplier matching, safe attachment handling, and mapping into the supplier-invoice inbox without treating received content as trusted. The original foundation did not claim inbound support; that slice has since shipped (`peppol_registrations`, `peppol_inbound_documents`, the inbound cron and inbox delivery) and is described under "Receiving (PR2)" below.
 
 ### UI and API
 

@@ -16,7 +16,8 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/erp-mafia/gnubok"
+    "url": "git+https://github.com/erp-mafia/accounted.git",
+    "directory": "packages/gnubok-mcp"
   },
   "engines": {
     "node": ">=18"
