@@ -6,9 +6,10 @@ import { Input } from '@/components/ui/input'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   DIMENSION_CODE_PATTERN,
-  fetchDimensions,
   type DimensionValueDto,
 } from '@/components/dimensions/types'
+import { useDimensions } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 interface DimensionComboboxProps {
   /** SIE dimension number as a string ('1' = kostnadsställe, '6' = projekt). */
@@ -47,9 +48,23 @@ export default function DimensionCombobox({
   const [search, setSearch] = useState(value ?? '')
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
-  const [loadState, setLoadState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle')
-  const [dimensionId, setDimensionId] = useState<string | null>(null)
-  const [values, setValues] = useState<DimensionValueDto[]>([])
+  // Registry from the session cache (lib/reference-data): every combobox on
+  // the page shares one entry, so opening a picker costs no request.
+  const { dimensions, isLoading: registryLoading, error: registryError } = useDimensions()
+  const loadState: 'loading' | 'loaded' | 'error' = registryLoading
+    ? 'loading'
+    : registryError
+      ? 'error'
+      : 'loaded'
+  const dimension = useMemo(
+    () => dimensions.find((d) => String(d.sie_dim_no) === sieDimNo) ?? null,
+    [dimensions, sieDimNo],
+  )
+  const dimensionId = dimension?.id ?? null
+  const values = useMemo(
+    () => dimension?.values.filter((v) => v.is_active) ?? [],
+    [dimension],
+  )
   const [isCreating, setIsCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -72,24 +87,10 @@ export default function DimensionCombobox({
     valuesRef.current = values
   }, [values])
 
-  const loadValues = useCallback(async () => {
-    setLoadState('loading')
-    try {
-      const dims = await fetchDimensions()
-      const dim = dims.find((d) => String(d.sie_dim_no) === sieDimNo)
-      setDimensionId(dim?.id ?? null)
-      setValues(dim?.values.filter((v) => v.is_active) ?? [])
-      setLoadState('loaded')
-    } catch {
-      setLoadState('error')
-    }
-  }, [sieDimNo])
-
   const openDropdown = useCallback(() => {
     setIsOpen(true)
     setCreateError(null)
-    if (loadState === 'idle') void loadValues()
-  }, [loadState, loadValues])
+  }, [])
 
   const filteredValues = useMemo(() => {
     const term = search.trim().toLowerCase()
@@ -169,7 +170,8 @@ export default function DimensionCombobox({
           start_date: null,
           end_date: null,
         }
-        setValues((prev) => [...prev, created].sort((a, b) => a.code.localeCompare(b.code, 'sv')))
+        // Refresh the shared registry so every picker offers the new value.
+        await invalidateReferenceData('ref:dimensions')
         selectValue(created.code)
       } finally {
         setIsCreating(false)

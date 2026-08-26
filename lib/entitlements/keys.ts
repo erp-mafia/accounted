@@ -82,8 +82,9 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
  * The document upload tools invoke AI (Bedrock document OCR via
  * extractInvoiceFields), so they are gated on CAPABILITY.ai: the same paywall
  * the HTTP inbox upload/attach/retry paths enforce. Without these entries a
- * free-tier API key could trigger paid AI extraction. bank_sync has no MCP
- * tool (bank sync is cron/HTTP only).
+ * free-tier API key could trigger paid AI extraction. bank_sync gates only
+ * gnubok_connect_bank (the onboarding connect link); the sync itself is
+ * cron/HTTP only.
  */
 export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
   gnubok_send_invoice: CAPABILITY.email_send,

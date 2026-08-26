@@ -1,6 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -17,11 +19,10 @@ import {
 import { ChevronDown, Loader2, Lock } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { useCompany } from '@/contexts/CompanyContext'
 import { createClient } from '@/lib/supabase/client'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
-import type { BASAccount, CreateArticleInput } from '@/types'
+import type { CreateArticleInput } from '@/types'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import {
   ROT_WORK_TYPES,
@@ -70,7 +71,6 @@ export default function ArticleForm({
   onCancel,
 }: ArticleFormProps) {
   const { canWrite } = useCanWrite()
-  const { company } = useCompany()
   const supabase = createClient()
   const t = useTranslations('form_article')
   const tCommon = useTranslations('common')
@@ -78,33 +78,27 @@ export default function ArticleForm({
   // unknown 4-digit numbers optimistically: the API answers with
   // ACCOUNTS_NOT_IN_CHART for activatable BAS accounts, and the host page's
   // ActivateAccountsDialog flow takes over (same UX as the journal entry form).
-  const [postingAccounts, setPostingAccounts] = useState<BASAccount[]>([])
+  // Balance-sheet and revenue accounts for the posting override, from the
+  // session cache (lib/reference-data): populated on the first paint.
+  const { accounts: activeAccounts } = useAccounts()
+  const postingAccounts = useMemo(
+    () => activeAccounts.filter((account) => account.account_class >= 1 && account.account_class <= 3),
+    [activeAccounts],
+  )
   // Inline account creation: what the user typed in the combobox when they hit
   // "Skapa konto": non-null opens AddAccountDialog prefilled with it.
   const [createAccountPrefill, setCreateAccountPrefill] = useState<string | null>(null)
   // Momsregistrerad? A non-VAT-registered company never charges moms, so the
   // VAT field is hidden and the rate forced to 0: mirrors the invoice editor.
-  const [vatRegistered, setVatRegistered] = useState(true)
+  // Icke momsregistrerad verksamhet: VAT controls hidden and lines at 0 %.
+  // Derived from the session-cached settings row (lib/reference-data); a
+  // missing column keeps the registered-company behaviour, as before.
+  const { settings: companySettings } = useCompanySettings()
+  const vatRegistered = typeof companySettings?.vat_registered === 'boolean' ? companySettings.vat_registered : true
   // Supported currencies, fetched from the currencies reference table rather
   // than hard-coded. Falls back to the article's own currency (or SEK) if the
   // fetch fails so the Select is never empty.
   const [currencies, setCurrencies] = useState<CurrencyOption[]>([])
-
-  async function fetchRevenueAccounts() {
-    try {
-      const res = await fetch('/api/bookkeeping/accounts')
-      const body = await res.json()
-      const accounts = ((body?.data as BASAccount[]) || [])
-        .filter((account) => account.account_class >= 1 && account.account_class <= 3)
-      setPostingAccounts(accounts)
-    } catch {
-      // Non-fatal: the combobox degrades to free 4-digit entry.
-    }
-  }
-
-  useEffect(() => {
-    fetchRevenueAccounts()
-  }, [])
 
   // Currency options come from the currencies reference table: one source of
   // truth, no hard-coded list.
@@ -123,25 +117,6 @@ export default function ArticleForm({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  useEffect(() => {
-    if (!company?.id) return
-    let cancelled = false
-    supabase
-      .from('company_settings')
-      .select('vat_registered')
-      .eq('company_id', company.id)
-      .single()
-      .then(({ data }) => {
-        if (!cancelled && typeof data?.vat_registered === 'boolean') {
-          setVatRegistered(data.vat_registered)
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id])
 
   // Open "Fler fält" by default when it already holds data, so an edit never
   // hides a value the user previously set. Currency and posting account are no
@@ -604,7 +579,8 @@ export default function ArticleForm({
             : undefined
         }
         onCreated={async (account) => {
-          await fetchRevenueAccounts()
+          // The new account must be in the shared chart before the field points at it.
+          await invalidateReferenceData('ref:accounts')
           setValue('revenue_account', account.account_number, { shouldDirty: true })
           setCreateAccountPrefill(null)
         }}

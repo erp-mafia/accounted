@@ -1,7 +1,9 @@
 import 'server-only'
 
 import { cache } from 'react'
+import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
+import { claimsPinned, userFromClaims } from '@/lib/auth/claims'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 
@@ -11,9 +13,27 @@ import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
  */
 export const getDashboardAuthContext = cache(async () => {
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  // Local JWT verification first (same pinning + mapping as requireAuth,
+  // lib/auth/claims.ts): the proxy already performed the per-request
+  // revocation check with getUser() before this layout runs, so a second
+  // network round trip to Supabase Auth on every hard load, refresh and
+  // router.refresh() bought nothing. getUser() stays as the authoritative
+  // fallback when claims are missing, unpinned or unverifiable.
+  let user: User | null = null
+  if (typeof supabase.auth.getClaims === 'function') {
+    try {
+      const { data } = await supabase.auth.getClaims()
+      if (data?.claims?.sub && claimsPinned(data.claims)) user = userFromClaims(data.claims)
+    } catch {
+      // Fall through to the network check.
+    }
+  }
+  if (!user) {
+    const {
+      data: { user: fetched },
+    } = await supabase.auth.getUser()
+    user = fetched
+  }
 
   return { supabase, user }
 })
@@ -35,9 +55,13 @@ export const getDashboardSettings = cache(async () => {
   ])
   if (!companyId) return { data: null, error: null }
 
+  // Full row: the layout hands it to the client reference-data cache as the
+  // seed for useCompanySettings (which reads select('*') itself), so the
+  // narrow column list this once carried would have been refetched on the
+  // first mount anyway. The other consumers read a subset of the row.
   return supabase
     .from('company_settings')
-    .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox, dimensions_enabled, mileage_enabled, ore_rounding, initial_setup_path, initial_setup_completed_at, initial_setup_dismissed_at, vat_registered, moms_period')
+    .select('*')
     .eq('company_id', companyId)
     .maybeSingle()
 })

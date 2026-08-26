@@ -68,12 +68,13 @@ import {
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/invoices/matchable-statuses'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary, CashAccount } from '@/types'
+import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -534,7 +535,10 @@ export default function TransactionsPage() {
   }, [companyId])
   // Registered cash accounts (cash_accounts): the account chooser's rows,
   // with PSD2 balances when the bank reports them.
-  const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
+  // Registered, enabled cash accounts for the account chooser: session-cached
+  // and seeded by the dashboard layout (lib/reference-data), so the chooser
+  // renders populated on the first paint. Bank sync invalidates the entry.
+  const { cashAccounts } = useCashAccounts({ enabledOnly: true })
 
   const { toast } = useToast()
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
@@ -882,24 +886,6 @@ export default function TransactionsPage() {
 
   const PAGE_SIZE = 200
 
-  // Account chooser rows: the registered, enabled cash accounts. One fetch
-  // per company; balances refresh with the page (bank sync triggers a
-  // router.refresh via the sync toast flow).
-  useEffect(() => {
-    if (!companyId) return
-    let cancelled = false
-    fetch('/api/cash-accounts?enabled_only=true')
-      .then((res) => (res.ok ? res.json() : { data: [] }))
-      .then((json: { data?: CashAccount[] }) => {
-        if (!cancelled) setCashAccounts(json.data ?? [])
-      })
-      .catch(() => {
-        if (!cancelled) setCashAccounts([])
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [companyId])
 
   // Same sequence-guard pattern as fetchGenerationRef: only the newest
   // skattekonto fetch may write rows. A company switch bumps the sequence so a

@@ -1,6 +1,7 @@
 'use client'
 
 import { getAccountDescription, type AccountType } from '@/lib/bookkeeping/account-descriptions'
+import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import {
   Tooltip,
   TooltipTrigger,
@@ -41,6 +42,9 @@ export function AccountNumber({
   size = 'default',
   className,
 }: AccountNumberProps) {
+  // Loads the BAS chart chunk after mount and re-renders once names and
+  // descriptions for non-hardcoded accounts are available.
+  useBasReference()
   const desc = getAccountDescription(number)
   const displayName = desc?.name ?? name
 

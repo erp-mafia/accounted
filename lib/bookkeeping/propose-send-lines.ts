@@ -9,7 +9,7 @@ import {
   getRevenueAccount,
   getOutputVatAccount,
   InvoiceFxRateMissingError,
-} from './invoice-entries'
+} from './invoice-accounts'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
 import { roundOre } from '@/lib/money'

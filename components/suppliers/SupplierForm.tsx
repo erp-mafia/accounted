@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import { useAccounts } from '@/lib/reference-data/hooks'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -13,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Loader2, Lock, X } from 'lucide-react'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import type { BASAccount, CreateSupplierInput } from '@/types'
+import type { CreateSupplierInput } from '@/types'
 
 interface SupplierFormProps {
   onSubmit: (data: CreateSupplierInput) => Promise<void>
@@ -28,25 +29,10 @@ export default function SupplierForm({
 }: SupplierFormProps) {
   const { canWrite } = useCanWrite()
   const t = useTranslations('form_supplier')
-  const [accounts, setAccounts] = useState<BASAccount[]>([])
-
-  useEffect(() => {
-    let cancelled = false
-    async function fetchAccounts() {
-      try {
-        const res = await fetch('/api/bookkeeping/accounts')
-        if (!res.ok) return
-        const { data } = await res.json()
-        if (!cancelled) setAccounts(data || [])
-      } catch {
-        // Without the chart the combobox still accepts a typed 4-digit number.
-      }
-    }
-    fetchAccounts()
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  // Chart of accounts from the session cache (lib/reference-data): the
+  // konto combobox is populated on the first paint; without the chart it
+  // still accepts a typed 4-digit number.
+  const { accounts } = useAccounts()
 
   // The default account seeds expense lines on supplier invoices, so the
   // browsable list is cost classes 4-7. Any other 4-digit number can still be

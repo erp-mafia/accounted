@@ -36,7 +36,7 @@ When we ship a new dated version that breaks an existing shape:
 1. The new version is dated forward (e.g. \`2026-08-01\`) and made the default for newly-created keys + webhooks.
 2. The previous version stays available for at least **6 months** after the new version ships.
 3. Deprecation appears in the [changelog](/docs/api/changelog) with the retirement date and a migration guide.
-4. Three months before retirement, every response from a deprecated version stamps \`Gnubok-Deprecation: <ISO date>\` in headers.
+4. Three months before retirement, responses from the deprecated version will carry a \`Gnubok-Deprecation: <ISO date>\` header. Planned alongside request pinning: no version has been deprecated yet and nothing emits the header today.
 5. Calls to a retired version receive HTTP 410 with code \`API_VERSION_RETIRED\`.
 
 We will not break a shape inside an active dated version. Additive changes (new optional response fields, new request fields with defaults, new endpoints) ship as patch updates and are always backwards-compatible.
@@ -75,7 +75,7 @@ Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key
 
 ### Required vs supported
 
-Most write endpoints **require** an Idempotency-Key — not only the obvious creates (invoices, customers, supplier-invoices, webhooks) but also journal-entry and salary-run creation, invoice \`send\`, period \`lock\`/\`close\`/\`year-end\`, bank reconciliation runs, dimension-value creation, PATCH/DELETE on customers, and more. Each endpoint's reference page states whether the key is required. Calls that omit a required key return \`400 VALIDATION_ERROR\` with field \`Idempotency-Key\`.
+Most write endpoints **require** an Idempotency-Key: not only the obvious creates (invoices, customers, supplier-invoices, webhooks) but also journal-entry and salary-run creation, invoice \`send\`, period \`lock\`/\`close\`/\`year-end\`, bank reconciliation runs, dimension-value creation, PATCH/DELETE on customers, and more. Each endpoint's reference page states whether the key is required. Calls that omit a required key return \`400 VALIDATION_ERROR\` with field \`Idempotency-Key\`.
 
 Other endpoints **support** but don't require it. Sending one is always safe.
 
@@ -95,11 +95,11 @@ In an agent loop, generate the key once at the *start* of an attempt and reuse i
 
 ## Dry-run
 
-Every state-changing endpoint that supports dry-run (\`x-dry-run-supported: true\` in the OpenAPI spec) accepts \`?dry_run=true\` query param **or** \`X-Dry-Run: true\` header. The endpoint executes its full validation pipeline (Zod, business rules, period-lock checks, VAT-rate compatibility, cross-tenant guards, ...) but does NOT commit. A dry-run always returns **HTTP 200** with the \`X-Dry-Run: true\` response header — never the resource's normal success status (201, 204). The body wraps a preview, not the resource itself:
+Every state-changing endpoint that supports dry-run (\`x-dry-run-supported: true\` in the OpenAPI spec) accepts \`?dry_run=true\` query param **or** \`X-Dry-Run: true\` header. The endpoint executes its full validation pipeline (Zod, business rules, period-lock checks, VAT-rate compatibility, cross-tenant guards, ...) but does NOT commit. A dry-run always returns **HTTP 200** with the \`X-Dry-Run: true\` response header, never the resource's normal success status (201, 204). The body wraps a preview, not the resource itself:
 
-- All **local** \`validation_error\` shapes that a real commit would produce surface here (Zod, business rules, period locks, cross-tenant guards). Failures that depend on external providers do **not** surface — dry-run skips them (see below), so a VIES/BankID/Skatteverket rejection only appears on the real commit.
+- All **local** \`validation_error\` shapes that a real commit would produce surface here (Zod, business rules, period locks, cross-tenant guards). Failures that depend on external providers do **not** surface: dry-run skips them (see below), so a VIES/BankID/Skatteverket rejection only appears on the real commit.
 - \`data.preview\` holds the would-be record (same shape as the success response).
-- For **financial** writes (invoices, journal entries, period ops, salary) the preview also carries \`staged_operation_id\`, the \`journal_lines\` that would be posted, \`account_deltas\`, and \`voucher_number_assigned_on_commit\` (a projection — the committed number can differ by one or two if another writer takes the next number first).
+- For **financial** writes (invoices, journal entries, period ops, salary) the preview also carries \`staged_operation_id\`, the \`journal_lines\` that would be posted, \`account_deltas\`, and \`voucher_number_assigned_on_commit\` (a projection: the committed number can differ by one or two if another writer takes the next number first).
 
 \`\`\`json
 {

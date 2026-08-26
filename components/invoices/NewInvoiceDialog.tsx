@@ -1,6 +1,5 @@
 'use client'
 
-import dynamic from 'next/dynamic'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogTitle, DialogVeil } from '@/components/ui/dialog'
@@ -16,19 +15,13 @@ import {
   type InvoiceCopySource,
 } from '@/lib/invoices/copy-invoice'
 
-// Deferred: the editor (and its framer-motion dependency) is a large chunk
-// that would otherwise ship with the invoice LIST bundle: it is only needed
-// once this dialog actually opens.
-const InvoiceEditor = dynamic(() => import('@/components/invoices/InvoiceEditor'), {
-  ssr: false,
-  loading: () => (
-    <div className="space-y-4 p-6">
-      <Skeleton className="h-8 w-1/3" />
-      <Skeleton className="h-32 w-full" />
-      <Skeleton className="h-32 w-full" />
-    </div>
-  ),
-})
+// The editor (and its framer-motion dependency) is a large chunk that must
+// not ship with the invoice LIST bundle. This dialog is itself loaded with
+// next/dynamic by app/(dashboard)/invoices/page.tsx, so a static import here
+// keeps the editor in the dialog's deferred chunk: ONE chunk download when
+// "Ny faktura" opens instead of the dialog chunk followed by a second,
+// dependent editor chunk (and then the editor's own data fetches).
+import InvoiceEditor from '@/components/invoices/InvoiceEditor'
 
 interface Props {
   open: boolean

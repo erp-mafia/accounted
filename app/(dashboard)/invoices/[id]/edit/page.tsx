@@ -5,10 +5,10 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2 } from 'lucide-react'
 import InvoiceEditor, { type InvoiceForEdit } from '@/components/invoices/InvoiceEditor'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import type { InvoiceItem } from '@/types'
+import { InvoiceEditorSkeleton } from '@/components/common/DetailPageSkeleton'
 
 /**
  * Edit an existing DRAFT invoice. Loads the invoice + items, guards that it is
@@ -76,11 +76,7 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
   }, [id])
 
   if (isLoading || !invoice) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
+    return <InvoiceEditorSkeleton />
   }
 
   return <InvoiceEditor mode="edit" initial={invoice} />

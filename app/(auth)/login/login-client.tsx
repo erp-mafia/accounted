@@ -24,7 +24,7 @@ import {
 } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { isBankIdEnabled } from '@/lib/auth/bankid'
+import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
 import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'

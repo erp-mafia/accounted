@@ -2,11 +2,13 @@ import type { UiWidget } from './types'
 import { receiptMatcherWidget } from './receipt-matcher'
 import { vatReviewWidget } from './vat-review'
 import { pendingOperationsWidget } from './pending-operations'
+import { connectCardWidget } from './connect-card'
 
 export const uiWidgets: UiWidget[] = [
   receiptMatcherWidget,
   vatReviewWidget,
   pendingOperationsWidget,
+  connectCardWidget,
 ]
 
 export function findUiWidget(uri: string): UiWidget | null {

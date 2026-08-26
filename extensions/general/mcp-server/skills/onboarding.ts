@@ -8,6 +8,14 @@ legally need a human with BankID: connecting (creating the account),
 approving the bank consent, and authorising Skatteverket. Everything else
 happens here.
 
+**Momentum rule: one confirmation, then keep going.** The only stop in this
+flow is the create-company preview ("stämmer detta? ja"). Never end a turn
+with "säg till när du vill fortsätta": after the confirm, call the connect
+tools immediately; when the user reports a connection done, verify it and
+continue straight into import or categorization. Staged writes still go
+through their normal approval, but that approval IS the conversation, not an
+extra pause around it.
+
 ## When to use
 
 - "Sätt upp bokföring för mitt AB / min enskilda firma"
@@ -24,83 +32,114 @@ inget konto skapar du det där (BankID eller e-post), det tar en minut." The
 call is retried automatically once connected. Do not send the user to the web
 app to sign up first.
 
-## Step 1: gather the facts (ask, never assume)
+## Step 1: THREE opening questions, then look up
 
-Collect these before creating anything. The order mirrors the in-app wizard.
+Open with exactly three questions, together:
 
-1. **Organisationsnummer** (10 digits). Required when the company is
-   VAT-registered (the momsregistreringsnummer on every invoice derives from
-   it) and strongly recommended otherwise: it drives Skatteverket/SIE exports. An enskild firma's
-   org number is the owner's personnummer; that is fine to store here.
-2. **Company form**: \`aktiebolag\` or \`enskild_firma\`. Only these two are
-   supported today; HB/KB/förening are not.
-3. **Company name** as registered.
-4. **F-skatt**: godkänd för F-skatt? Always ask; the tool refuses to assume it.
-   A brand-new company may still be waiting for Skatteverket's approval (then
-   false).
-5. **Fiscal year**: for enskild firma always the calendar year (do not ask);
-   its first year may be shorter or up to 18 months but always ends 31 December.
-   For an AB ask whether it is the calendar year or another 12-month period
-   (\`fiscal_year_start_month\`). For a company in its FIRST year ask for the
-   exact first fiscal year start and end (BFL 3 kap.: it may be shorter than
-   12 months or up to 18 months) and pass \`first_fiscal_year\`.
-6. **VAT**: momsregistrerad? If yes, which period: \`monthly\`, \`quarterly\` or
-   \`yearly\`. This is required when VAT-registered: without it Accounted
-   generates no VAT deadlines at all, silently. If the user does not know,
-   the rule of thumb: turnover under 1 MSEK may report yearly, under 40 MSEK
-   quarterly, above that monthly; Skatteverket's registration decision states
-   the actual period. Never guess it into the tool; ask.
-7. **Accounting method**: \`accrual\` (faktureringsmetoden) or \`cash\`
-   (kontantmetoden / bokslutsmetoden). Cash is only allowed under 3 MSEK
-   turnover and is common for small enskild firma; AB with invoices usually
-   run accrual.
+1. **Organisationsnummer?** (10 digits; an enskild firma's org number is the
+   owner's personnummer, fine to use here)
+2. **Har du bokfört i ett annat system tidigare?** (Fortnox, Visma, Bokio,
+   Björn Lundén, Briox, Wint, annat system, eller helt nytt bolag)
+3. **Vilken bank har företaget?** (so the bank connect link later opens that
+   bank's consent directly instead of a picker)
 
-## Step 2: preview, confirm, create
+Then call \`gnubok_lookup_company\` with the org number. The registry answers
+most of the form; present the facts as a SHORT summary to confirm ("Jag
+hittade Example AB, Storgatan 1 i Stockholm, godkänd för F-skatt och
+momsregistrerad. Stämmer det?") and ask ONLY what \`still_to_ask\` lists.
+Never re-ask what the registry answered.
 
-Call \`gnubok_create_company\` WITHOUT \`confirm\` first. Read the preview back
-to the user in plain Swedish: company form, org number, the fiscal period
-dates, VAT setup (registered + period), method. Only after an explicit "ja"
-call it again with the same arguments and \`confirm: true\`.
+Rules baked into that split (same as the web onboarding):
 
-What creation does in one step: company + owner membership, BAS chart of
-accounts for the company form, settings, the first fiscal period, and the
-automatic tax deadlines (moms, F-skatt, AGI, inkomstdeklaration). The 30-day
-trial with bank sync, Skatteverket, AI and e-mail starts immediately. This
-connection uses the new company automatically from the next call; no
-re-authentication.
+- **F-skatt** from the registry is a fact, both true and false.
+- **VAT** is a fact ONLY when positively registered. "No VAT registration
+  found" is a question, never an assumption (ML 17 kap 24 §).
+- **Moms period** is ALWAYS the user's answer when VAT-registered. Rules of
+  thumb if unsure: under 1 MSEK turnover may report VAT yearly, under 40
+  MSEK quarterly, above monthly.
+- **Accounting method is NOT a question**: it defaults by form (AB =
+  faktureringsmetoden, enskild firma = kontantmetoden) and the preview
+  flags the default. Name it in the readback ("faktureringsmetoden,
+  standard för AB, säg till om du vill ha kontantmetoden") so the user can
+  override in the same "ja". Cash requires turnover under 3 MSEK.
+- **Enskild firma name**: verksamhetsnamnet is freely choosable; suggest the
+  registered name but let the user pick. An AB's registered name is a fact.
+- **Fiscal year**: registry data becomes a confirm question, never an open
+  one. No closed period in the registry = FIRST räkenskapsår: suggest a
+  start at the registration date. The end differs by form: an enskild
+  firma MUST end 31 December; an AB may pick any end within 18 months of
+  the start (BFL 3 kap 3 §), with 31 December as the common default, so
+  present the AB's choice rather than assuming it.
 
-## Step 3: connect the bank
+\`not_found\`/\`unavailable\`: fall back to asking the \`still_to_ask\` list and
+continue. Only \`aktiebolag\` and \`enskild_firma\` are supported today.
 
-Call \`gnubok_connect_bank\`. It reports existing connections and returns a
-\`connect_url\`. The user opens it in a browser where they are logged in to
-Accounted, picks the bank and approves with BankID (PSD2 consent, up to 180
-days). Transactions start syncing within a minute. If they prefer not to
-connect a bank, they can import bank statements as files in the web app
-instead; do not block on this step.
+## Step 2: preview, ONE confirm, create, keep moving
 
-## Step 4: connect Skatteverket (optional but recommended)
+Call \`gnubok_create_company\` WITHOUT \`confirm\`. Read the preview back in
+plain Swedish (form, orgnr, fiscal period dates, VAT + period, method).
+After the user's "ja": call it again with \`confirm: true\`, and in the SAME
+turn continue with step 3 or 4. Creation sets up chart, settings, first
+fiscal period, tax deadlines, and starts the 30-day trial; the connection
+uses the new company automatically.
 
-Call \`gnubok_connect_skatteverket\`. Same pattern: the user opens the
-\`connect_url\`, identifies with BankID as firmatecknare at Skatteverket, and
-lands back in Accounted. This enables skattekonto sync and filing of
-momsdeklaration and arbetsgivardeklaration from here. Filing is never
-mandatory through Accounted: every declaration can be downloaded and filed
-manually.
+## Step 3 (existing bookkeeping): import it FIRST
 
-## Step 5: first bookkeeping
+When the user had a previous system, history comes before the bank: it is
+the fastest path to a ledger that shows real value, and bank history rarely
+reaches far enough back anyway.
 
-Once transactions arrive: \`gnubok_list_uncategorized_transactions\` and the
-categorize flow (\`gnubok_suggest_categories\`, \`gnubok_categorize_transaction\`,
-approval). For a company with history in another system, offer the SIE
-import (\`gnubok_import_sie\` in the search catalog) before categorizing.
+1. Tell them where to export: **Fortnox** Register → Exportera → SIE 4,
+   **Visma eEkonomi** Bokföring → Export SIE, **Bokio** Inställningar →
+   Exportera data → SIE, **Björn Lundén / Briox / Wint** under Export.
+   Every Swedish system exports SIE4 (.se/.sie); ask them to attach the
+   file here in the chat.
+2. When the file arrives, call \`gnubok_sie_preflight\` with its content
+   (\`file_content\` as read, or \`file_content_base64\` when exact bytes are
+   available: that preserves åäö in CP437 exports). Summarize the scan:
+   source system, fiscal years, verifikat count, balance status, org-number
+   match, warnings. This is the "does it look correct" moment: surface
+   problems BEFORE anything is written.
+3. On their go-ahead: \`gnubok_import_sie\` with the same file and the
+   preflight's \`mappings\`. It stages for approval; after commit verify with
+   \`gnubok_get_trial_balance\`.
+4. Multiple fiscal years = multiple files: import oldest first so IB/UB
+   chains. If the file is very large for chat, the web wizard at
+   \`/import?mode=sie\` is the fallback; Fortnox users can also run the full
+   API migration (invoices, customers, documents) at
+   \`/import?mode=migration&provider=fortnox\`.
+
+## Step 4: connect bank and Skatteverket (together, no pause)
+
+Call \`gnubok_connect_bank\` (pass \`bank\` from step 1 so the link opens that
+bank's consent directly) AND \`gnubok_connect_skatteverket\` in the same
+turn; on claude.ai/Desktop both render connect cards with buttons.
+
+- Bank: BankID + PSD2 consent, then an **account selection dialog** in the
+  browser: transactions start syncing when the user saves it. Banks cap
+  PSD2 history (often ~90 days); older history is the SIE import's job.
+- Skatteverket: BankID as firmatecknare; enables skattekonto sync and
+  moms/AGI filing. Optional, never block on it.
+
+When the user says they are done (or comes back), re-call
+\`gnubok_connect_bank\` to verify \`connected\`, then go DIRECTLY to step 5.
+
+## Step 5: first bookkeeping, immediately
+
+Call \`gnubok_list_uncategorized_transactions\` as soon as the bank is
+connected: do not ask whether to proceed. Walk the categorize flow
+(\`gnubok_suggest_categories\`, \`gnubok_categorize_transaction\`, approval).
+If nothing has synced yet, say so and check again on the user's next
+message instead of making them ask.
 
 ## Tools
 
+- \`gnubok_lookup_company\`: registry facts + prefill from the orgnr; call first
 - \`gnubok_create_company\`: preview (no confirm) then create (confirm=true)
-- \`gnubok_list_companies\`: see which companies this connection can reach
-- \`gnubok_connect_bank\`: status + connect link for PSD2 bank consent
-- \`gnubok_connect_skatteverket\`: status + connect link for Skatteverket
-- \`gnubok_get_agent_briefing\`: the company's settings and state once created
+- \`gnubok_sie_preflight\`: scan a shared SIE file, nothing written
+- \`gnubok_import_sie\`: staged import; use the preflight's mappings
+- \`gnubok_connect_bank\` / \`gnubok_connect_skatteverket\`: status + connect links
+- \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`: state checks
 - \`gnubok_list_uncategorized_transactions\`: the first real bookkeeping step
 
 ## Pitfalls
@@ -109,6 +148,8 @@ import (\`gnubok_import_sie\` in the search catalog) before categorizing.
   not work around it by claiming the company is not VAT-registered.
 - Do not create a company twice on a retry: check \`gnubok_list_companies\`
   if a create call was interrupted.
+- A preflight org-number mismatch means the file is another company's
+  bookkeeping: stop and confirm, never import across companies.
 - Bookkeeping duty starts when the company exists in Accounted with a fiscal
   period. Never create a company "to try things out" for a real
   organisation; use the sandbox in the web app for demos.
@@ -118,8 +159,8 @@ export const onboardingSkill: Skill = {
   slug: 'onboarding',
   name: 'Onboarding: New Company Setup',
   summary:
-    'Set up a company from the conversation: gather facts, preview and create with gnubok_create_company, then hand out the bank and Skatteverket connect links.',
-  tags: ['onboarding', 'setup', 'company', 'bank', 'skatteverket', 'agent-first'],
+    'Set up a company in chat: orgnr + previous system first, prefill via gnubok_lookup_company, one confirm to create, SIE history via preflight + staged import, then bank/Skatteverket cards.',
+  tags: ['onboarding', 'setup', 'company', 'bank', 'skatteverket', 'sie', 'migration', 'agent-first'],
   body,
   tier: 'workflow',
 }

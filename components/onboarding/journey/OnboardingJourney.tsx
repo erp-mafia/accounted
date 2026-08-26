@@ -514,7 +514,9 @@ export default function OnboardingJourney({
           ? parseStartMonthDay(state.ticLookup?.fiscalYear?.startMonthDay)
           : null
         const firstYearSuggested = state.lookupRan
-          ? deriveFirstYearDefaults(state.ticLookup?.registrationDate).isFirstFiscalYear
+          ? deriveFirstYearDefaults(state.ticLookup?.registrationDate, Date.now(), {
+              noClosedPeriod: state.ticLookup?.fiscalYear == null,
+            }).isFirstFiscalYear
           : false
         const confirmMode = startMonth !== null
         const title = confirmMode ? t('journey_fy_confirm_title') : t('journey_fy_ask_title')

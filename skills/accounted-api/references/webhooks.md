@@ -53,7 +53,7 @@ Creates a webhook subscription for one event type. The response includes a fresh
 **Do not use for:** Subscribing to internal MCP telemetry events (mcp.tool_called etc. are not delivered as webhooks). Replacing an existing webhook URL: use PATCH instead.
 
 **Pitfalls:**
-- The secret is returned exactly once. If lost, delete and recreate the webhook.
+- The secret is returned exactly once. If lost, rotate it with POST /webhooks/{id}/rotate-secret: a fresh secret is issued in place, the webhook id and delivery history are kept.
 - Delivery is at-least-once with exponential backoff (1m / 5m / 30m / 2h / 12h / 24h / 48h). Receivers MUST be idempotent.
 - HTTP 410 from your receiver auto-disables the webhook (sets active=false + disabled_reason).
 
@@ -64,7 +64,7 @@ Creates a webhook subscription for one event type. The response includes a fresh
 Request body:
 ```ts
 {
-  event_type: "invoice.created" | "invoice.sent" | "invoice.paid" | "credit_note.created" | "customer.created" | "supplier.created" | "supplier_invoice.registered" | "supplier_invoice.approved" | "supplier_invoice.paid" | "supplier_invoice.credited" | "supplier_invoice.uncredited" | "transaction.categorized" | "transaction.reconciled" | "journal_entry.committed" | "journal_entry.reversed" | "journal_entry.corrected" | "period.locked" | "period.unlocked" | "period.year_closed" | "salary_run.created" | "salary_run.approved" | "salary_run.booked" | "agi.generated" | "document.uploaded",
+  event_type: "invoice.created" | "invoice.sent" | "invoice.paid" | "credit_note.created" | "supplier.created" | "supplier_invoice.registered" | "supplier_invoice.approved" | "supplier_invoice.paid" | "supplier_invoice.credited" | "supplier_invoice.uncredited" | "customer.created" | "journal_entry.committed" | "journal_entry.reversed" | "journal_entry.corrected" | "transaction.categorized" | "transaction.reconciled" | "reconciliation.matched" | "reconciliation.unmatched" | "reconciliation.signed_off" | "reconciliation.reopened" | "period.locked" | "period.unlocked" | "period.year_closed" | "salary_run.created" | "salary_run.approved" | "salary_run.booked" | "agi.generated" | "document.uploaded",
   webhook_url: string,
   name: string,
   description?: string
@@ -150,7 +150,7 @@ Response `200`:
 Update the URL, name, description, or active flag. event_type is immutable: delete and recreate to change it. Setting active=false manually pauses delivery without deleting; setting active=true clears any disabled_at/disabled_reason set by the auto-disable on HTTP 410.
 
 **Use when:** You need to point an existing webhook at a new URL or temporarily pause delivery.
-**Do not use for:** Rotating the signing secret (delete and recreate). Changing event_type.
+**Do not use for:** Rotating the signing secret: use POST /webhooks/{id}/rotate-secret, which issues a fresh secret in place and keeps the webhook id and delivery history. Changing event_type: delete and recreate.
 
 **Pitfalls:**
 - Re-enabling a webhook (active: true) does NOT replay deliveries that went to dead status while it was disabled: those need POST /webhook-deliveries/{id}/retry.
