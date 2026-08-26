@@ -34,7 +34,7 @@
     ]
   },
   "rawReferenceFetch": {
-    "count": 51,
+    "count": 46,
     "files": [
       "app/(dashboard)/assets/[id]/dispose/page.tsx",
       "app/(dashboard)/bookkeeping/year-end/page.tsx",
@@ -48,18 +48,14 @@
       "app/(dashboard)/salary/runs/[id]/page.tsx",
       "app/(dashboard)/supplier-invoices/[id]/page.tsx",
       "components/articles/ArticleForm.tsx",
-      "components/bookkeeping/BookingTemplatePicker.tsx",
       "components/bookkeeping/ChartOfAccounts.tsx",
       "components/bookkeeping/ChartOfAccountsManager.tsx",
       "components/bookkeeping/CorrectionEntryDialog.tsx",
       "components/bookkeeping/EditAccountDialog.tsx",
-      "components/bookkeeping/JournalEntryForm.tsx",
       "components/bookkeeping/StrikeLinesDialog.tsx",
-      "components/bookkeeping/TemplateBookDialog.tsx",
       "components/common/CashAccountSelector.tsx",
       "components/dimensions/types.ts",
       "components/extensions/general/ArcimMigrationWorkspace.tsx",
-      "components/extensions/general/BookDirectlyDialog.tsx",
       "components/extensions/general/InvoiceInboxWorkspace.tsx",
       "components/extensions/general/TicWorkspace.tsx",
       "components/import/BankFileConfirmStep.tsx",
@@ -85,7 +81,6 @@
       "components/transactions/MatchVoucherDialog.tsx",
       "components/transactions/QuickReviewDialog.tsx",
       "components/transactions/TemplatePicker.tsx",
-      "components/transactions/TransactionBookingDialog.tsx",
       "extensions/general/enable-banking/components/AccountPickerDialog.tsx"
     ]
   }

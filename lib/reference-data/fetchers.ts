@@ -22,13 +22,13 @@ import { createClient } from '@/lib/supabase/client'
 import type {
   Article,
   BASAccount,
+  BookingTemplateLibrary,
   CashAccount,
   Customer,
   FiscalPeriod,
   Supplier,
 } from '@/types'
 import type { DimensionDto } from '@/components/dimensions/types'
-import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 
 export class ReferenceFetchError extends Error {
   readonly status: number
@@ -42,7 +42,8 @@ export class ReferenceFetchError extends Error {
   }
 }
 
-export type BookingTemplateWithUsage = BookingTemplate & { last_used_at: string | null }
+/** A booking_templates row as the list route returns it, with its last-used stamp. */
+export type BookingTemplateWithUsage = BookingTemplateLibrary & { last_used_at: string | null }
 
 export async function fetchFiscalPeriods(companyId: string): Promise<FiscalPeriod[]> {
   const supabase = createClient()
