@@ -51,7 +51,7 @@ import {
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { cashPartialBlockReason, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
+import { booksInvoicesOnIssue, cashPartialBlockReason, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
@@ -2554,7 +2554,9 @@ async function commitSendInvoice(
 
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
   let createdJournalEntryId: string | undefined
-  if (isRealInvoice && (company.accounting_method === 'accrual' || !company.accounting_method)) {
+  // #967: kontantmetoden and defer_invoice_booking companies send WITHOUT
+  // booking; the verifikat comes at payment or via the explicit Bokför step.
+  if (isRealInvoice && booksInvoicesOnIssue(company)) {
     try {
       const je = await createInvoiceJournalEntry(
         supabase, companyId, userId, invoice as Invoice, (company as CompanySettings).entity_type
@@ -2612,7 +2614,7 @@ async function commitMarkInvoiceSent(
 
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
-    .select('accounting_method, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic')
+    .select('accounting_method, defer_invoice_booking, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic')
     .eq('company_id', companyId)
     .single()
 
@@ -2653,7 +2655,8 @@ async function commitMarkInvoiceSent(
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
   let journalEntryId: string | null = null
 
-  if (isRealInvoice && (settings?.accounting_method === 'accrual' || !settings?.accounting_method)) {
+  // #967: same gate as the dashboard mark-sent path (issue-and-book-invoice.ts).
+  if (isRealInvoice && booksInvoicesOnIssue(settings)) {
     try {
       const je = await createInvoiceJournalEntry(
         supabase, companyId, userId, invoice as Invoice,
@@ -4163,14 +4166,15 @@ async function commitCreateSupplierInvoiceFromInbox(
 
   const { data: settings } = await supabase
     .from('company_settings')
-    .select('accounting_method')
+    .select('accounting_method, defer_invoice_booking')
     .eq('company_id', companyId)
     .single()
 
-  const accountingMethod = (settings?.accounting_method as AccountingMethod) || 'accrual'
   let registrationJournalEntryId: string | null = null
 
-  if (accountingMethod === 'accrual') {
+  // #967: deferred companies register WITHOUT booking (same gate as
+  // POST /api/supplier-invoices); ekonomi books later via the Bokför step.
+  if (booksInvoicesOnIssue(settings)) {
     try {
       const journalEntry = await createSupplierInvoiceRegistrationEntry(
         supabase,
