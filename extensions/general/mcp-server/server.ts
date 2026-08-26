@@ -16387,7 +16387,15 @@ export const tools: McpTool[] = [
     },
     _meta: { ui: { resourceUri: 'ui://sie-drop/app.html' } },
     annotations: {
-      readOnlyHint: false,
+      // readOnlyHint MUST stay true on widget-bearing tools: Claude.ai
+      // accepts always-render widgets only on read-only tools and DROPS a
+      // write-annotated one from the connector entirely (the tool flapped
+      // into the Interactive list and vanished, E2E #9 2026-08-26; every
+      // surviving widget tool was readOnly). Honest too: this only mints a
+      // short-lived upload URL; the actual write is the staged
+      // gnubok_import_sie, same shape as receipt_matcher (read-only tool,
+      // writes via separate approval-gated tools).
+      readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: false,
       openWorldHint: false,
