@@ -1,7 +1,7 @@
 'use client'
 
 import { useLocale, useTranslations } from 'next-intl'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -23,6 +23,7 @@ import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { useBookingTemplates } from '@/lib/reference-data/hooks'
 
 export function BookingTemplatesPanel() {
   const t = useTranslations('settings_booking_templates')
@@ -36,8 +37,10 @@ export function BookingTemplatesPanel() {
     aktiebolag: t('entity_aktiebolag'),
   }
 
-  const [templates, setTemplates] = useState<BookingTemplateLibrary[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // The panel renders the same session-cached list the pickers use
+  // (lib/reference-data); every write below invalidates it so registry and
+  // pickers can never disagree.
+  const { templates, isLoading, error: templatesError } = useBookingTemplates()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
@@ -47,19 +50,13 @@ export function BookingTemplatesPanel() {
   const [activeTemplate, setActiveTemplate] = useState<BookingTemplateLibrary | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
 
-  const fetchTemplates = useCallback(async () => {
-    try {
-      const res = await fetch('/api/settings/booking-templates')
-      const json = await res.json()
-      if (json.data) setTemplates(json.data)
-    } catch {
-      toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
-    } finally {
-      setIsLoading(false)
-    }
-  }, [toast, t])
+  useEffect(() => {
+    if (templatesError) toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
+  }, [templatesError, toast, t])
 
-  useEffect(() => { fetchTemplates() }, [fetchTemplates])
+  const refreshTemplates = () => {
+    void invalidateReferenceData('ref:booking-templates')
+  }
 
   async function handleDelete(id: string) {
     setDeletingId(id)
@@ -73,9 +70,7 @@ export function BookingTemplatesPanel() {
         toast({ title: t('toast_delete_failed'), variant: 'destructive' })
         return
       }
-      setTemplates((prev) => prev.filter((tt) => tt.id !== id))
-      // The pickers read the session cache (lib/reference-data): drop the
-      // deleted template there too, not just from this panel's own list.
+      // This list and every picker read the session cache: refresh it.
       void invalidateReferenceData('ref:booking-templates')
       toast({ title: t('toast_deleted') })
     } finally {
@@ -128,8 +123,7 @@ export function BookingTemplatesPanel() {
         return
       }
       toast({ title: t('toast_import_done'), description: t('toast_import_count', { count: json.imported }) })
-      fetchTemplates()
-      void invalidateReferenceData('ref:booking-templates')
+      refreshTemplates()
     } catch {
       toast({ title: t('toast_import_error'), description: t('toast_invalid_file'), variant: 'destructive' })
     } finally {
@@ -207,7 +201,7 @@ export function BookingTemplatesPanel() {
                   duplicateNamePool={companyTemplateNames}
                   onSaved={() => {
                     setShowCreate(false)
-                    fetchTemplates()
+                    refreshTemplates()
                   }}
                 />
               </DialogContent>
@@ -300,7 +294,7 @@ export function BookingTemplatesPanel() {
             duplicateNamePool={companyTemplateNames}
             onSaved={() => {
               setActiveTemplate(null)
-              fetchTemplates()
+              refreshTemplates()
             }}
           />
         )}

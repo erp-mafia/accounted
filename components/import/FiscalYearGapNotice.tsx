@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { AlertCircle } from 'lucide-react'
@@ -16,24 +17,10 @@ import { findFiscalYearGaps, type FiscalYearGap, type PeriodLike } from '@/lib/b
  */
 export function FiscalYearGapNotice() {
   const t = useTranslations('fiscal_year_gaps')
-  const [gaps, setGaps] = useState<FiscalYearGap[]>([])
-
-  useEffect(() => {
-    let cancelled = false
-    fetch('/api/bookkeeping/fiscal-periods')
-      .then(async (res) => {
-        if (!res.ok) return
-        const json = await res.json()
-        const periods = (Array.isArray(json) ? json : (json.data ?? [])) as PeriodLike[]
-        if (!cancelled) setGaps(findFiscalYearGaps(periods))
-      })
-      .catch(() => {
-        // Advisory only.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  // Session-cached period list (lib/reference-data): refreshed by the import
+  // flow's invalidation, so the notice reflects the years just imported.
+  const { periods } = useFiscalPeriods()
+  const gaps = useMemo<FiscalYearGap[]>(() => findFiscalYearGaps(periods as PeriodLike[]), [periods])
 
   if (gaps.length === 0) return null
 
