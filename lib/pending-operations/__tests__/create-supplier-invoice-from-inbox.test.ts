@@ -794,3 +794,44 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox: dimensions
     expect(captured.items![0]).toMatchObject({ dimensions: {} })
   })
 })
+
+describe('commitPendingOperation: create_supplier_invoice_from_inbox honours defer_invoice_booking (#967)', () => {
+  it('registers WITHOUT the registration JE when the company defers invoice booking', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockClear()
+    vi.mocked(linkToJournalEntry).mockClear()
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
+      error: null,
+    })
+    enqueue({ data: 42, error: null }) // arrival number
+    enqueue({
+      data: makeSupplierInvoice({ id: 'inv-deferred', supplier_invoice_number: 'INV-100' }),
+      error: null,
+    }) // invoice insert
+    enqueue({ data: null, error: null }) // items insert
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null }) // company_settings
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      supplier_invoice_id: 'inv-deferred',
+      registration_journal_entry_id: null,
+    })
+    expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
+  })
+})
