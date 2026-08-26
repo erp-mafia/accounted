@@ -22,16 +22,21 @@ export function parseStartMonthDay(value: string | null | undefined): number | n
 /**
  * Derive the first-year defaults from TIC's `registrationDate`.
  * A company is treated as "first year" when registered less than 12 months
- * ago: comfortably inside BFL's 18-month cap on a first räkenskapsår, which
- * has no minimum length. Returns both the toggle state and a seeded
- * `first_year_start` (always the 1st of the registration month, the format
- * the date inputs expect).
+ * ago, or less than 18 months ago when the registry shows NO closed fiscal
+ * period (`noClosedPeriod`): a company that has never filed an annual
+ * report is still in its first räkenskapsår, and BFL 3 kap 3 § allows that
+ * first year to run up to 18 months (no minimum). The 12-month floor alone
+ * missed exactly the extended-first-year companies the signal exists for
+ * (Arcim, registered 13 months before onboarding, first year to 31 Dec).
+ * Returns both the toggle state and a seeded `first_year_start` (always the
+ * 1st of the registration month, the format the date inputs expect).
  *
  * `now` exists for tests; production callers omit it.
  */
 export function deriveFirstYearDefaults(
   registrationDate: number | null | undefined,
   now: number = Date.now(),
+  opts?: { noClosedPeriod?: boolean },
 ): {
   isFirstFiscalYear: boolean
   firstYearStart: string | undefined
@@ -43,8 +48,9 @@ export function deriveFirstYearDefaults(
   if (Number.isNaN(regDate.getTime())) {
     return { isFirstFiscalYear: false, firstYearStart: undefined }
   }
+  const windowMonths = opts?.noClosedPeriod ? 18 : 12
   const monthsAgo = (now - regDate.getTime()) / (1000 * 60 * 60 * 24 * 30.44)
-  if (monthsAgo >= 12) return { isFirstFiscalYear: false, firstYearStart: undefined }
+  if (monthsAgo >= windowMonths) return { isFirstFiscalYear: false, firstYearStart: undefined }
   const year = regDate.getUTCFullYear()
   const month = String(regDate.getUTCMonth() + 1).padStart(2, '0')
   return { isFirstFiscalYear: true, firstYearStart: `${year}-${month}-01` }

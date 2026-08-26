@@ -1445,6 +1445,26 @@ export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'se
 }
 
 /**
+ * Resolve SIE file content from tool args: plain text (the model read the
+ * attachment) or base64 (exact bytes, e.g. from a code-execution sandbox).
+ * The base64 path runs the same encoding detection as the HTTP upload route,
+ * so CP437 exports keep their åäö instead of arriving pre-mangled through a
+ * host's UTF-8 read. Returns null when neither field is usable.
+ */
+async function decodeSieToolContent(args: Record<string, unknown>): Promise<string | null> {
+  if (typeof args.file_content === 'string' && args.file_content.length > 0) {
+    return args.file_content
+  }
+  if (typeof args.file_content_base64 === 'string' && args.file_content_base64.length > 0) {
+    const { detectEncoding, decodeBuffer } = await import('@/lib/import/sie-parser')
+    const buffer = Buffer.from(args.file_content_base64, 'base64')
+    const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+    return decodeBuffer(arrayBuffer, detectEncoding(arrayBuffer))
+  }
+  return null
+}
+
+/**
  * Absolute origin for links the user opens in a browser. A deployment
  * without NEXT_PUBLIC_APP_URL falls back to localhost in getCanonicalBaseUrl,
  * which would hand a remote user an unusable link: refuse instead.
@@ -3109,14 +3129,22 @@ export const tools: McpTool[] = [
       stillToAsk.push('accounting_method (accrual = faktureringsmetoden, cash = kontantmetoden; never guess)')
 
       const startMonth = parseStartMonthDay(lookup.fiscalYear?.startMonthDay)
-      const firstYear = deriveFirstYearDefaults(lookup.registrationDate)
+      // No closed fiscal period in the registry = no annual report filed yet
+      // = still in the first räkenskapsår, which BFL 3 kap 3 § lets run up to
+      // 18 months. The 12-month window alone misses extended first years.
+      const firstYear = deriveFirstYearDefaults(lookup.registrationDate, Date.now(), {
+        noClosedPeriod: lookup.fiscalYear == null,
+      })
+      const registrationIso = lookup.registrationDate
+        ? new Date(lookup.registrationDate).toISOString().slice(0, 10)
+        : null
       if (startMonth !== null) {
         stillToAsk.push(
           `fiscal year: registry shows ${lookup.fiscalYear?.startMonthDay} to ${lookup.fiscalYear?.endMonthDay}; ask "stämmer detta?" instead of an open question`
         )
       } else if (firstYear.isFirstFiscalYear) {
         stillToAsk.push(
-          `fiscal year: company registered recently; suggest a first fiscal year starting ${firstYear.firstYearStart} (first_fiscal_year start/end; an enskild firma's first year must end 31 December)`
+          `fiscal year: no closed period in the registry, so this is the FIRST räkenskapsår; suggest first_fiscal_year start ${registrationIso ?? firstYear.firstYearStart} (registration date) and end 31 December (max 18 months from start; an enskild firma's first year must end 31 December), ask only "stämmer det?"`
         )
       } else {
         stillToAsk.push('fiscal year: calendar year or broken year (no registry data)')
@@ -3325,7 +3353,7 @@ export const tools: McpTool[] = [
         instructions:
           active.length > 0
             ? 'At least one bank is connected and syncing. To add another bank, give the user the connect_url.'
-            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there, pick their bank and approve with BankID; consent lasts up to 180 days and the first transactions arrive within a minute. Tell them to come back here when done, then continue with gnubok_list_uncategorized_transactions.',
+            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there, pick their bank, approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.',
       }
     },
   },
@@ -16120,14 +16148,178 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_sie_preflight',
+    title: 'SIE Preflight Scan',
+    description:
+      'Scan a SIE file BEFORE import: parse, validate (balances, IB, encoding), duplicate check, orgnr match against the company, suggested account mappings. Read-only, stages nothing. Call FIRST when the user shares a SIE file; pass the returned mappings to gnubok_import_sie.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        file_content: { type: 'string', description: 'Full SIE file contents as text' },
+        file_content_base64: { type: 'string', description: 'Exact file bytes base64-encoded (preferred when available: preserves CP437 åäö)' },
+        filename: { type: 'string' },
+      },
+      required: ['filename'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        verdict: { type: 'string', enum: ['ok', 'ok_with_warnings', 'invalid', 'duplicate'] },
+        file: { type: 'object' },
+        validation: { type: 'object' },
+        org_number_match: { type: ['object', 'null'] },
+        duplicate: { type: ['object', 'null'] },
+        mappings: { type: 'array', items: { type: 'object' } },
+        mapping_stats: { type: 'object' },
+        instructions: { type: 'string' },
+      },
+      required: ['verdict', 'file', 'validation', 'org_number_match', 'duplicate', 'mappings', 'mapping_stats', 'instructions'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const content = await decodeSieToolContent(args)
+      if (!content) {
+        throw Object.assign(
+          new Error('Provide the SIE file as file_content (text) or file_content_base64 (exact bytes).'),
+          { code: 'VALIDATION_ERROR' }
+        )
+      }
+
+      const { parseSIEFile, validateSIEFile } = await import('@/lib/import/sie-parser')
+      const { suggestMappings, getMappingStats, isSystemAccount } = await import('@/lib/import/account-mapper')
+      const { scanSieForCp1252Artifacts, formatSieArtifactWarning } = await import('@/lib/import/sie-artifact-scan')
+      const { generateImportPreview, checkDuplicateImport, checkDuplicatePeriodImport } = await import('@/lib/import/sie-import')
+      const { BAS_REFERENCE } = await import('@/lib/bookkeeping/bas-data')
+
+      let parsed
+      try {
+        parsed = parseSIEFile(content)
+      } catch (e) {
+        throw Object.assign(
+          new Error(`SIE-filen kunde inte tolkas: ${e instanceof Error ? e.message : 'okänt fel'}`),
+          { code: 'VALIDATION_ERROR' }
+        )
+      }
+
+      // Mojibake tripwire (warn, never block): a host that read CP437 bytes
+      // as UTF-8/Latin-1 mangles åäö in names. Numbers and structure survive,
+      // so the import still balances; the user decides whether names matter.
+      const artifactScan = scanSieForCp1252Artifacts(parsed)
+      const encodingWarnings: string[] = []
+      if (artifactScan.flagged) {
+        encodingWarnings.push(
+          `${formatSieArtifactWarning(artifactScan)} Tip: re-share the file as file_content_base64 to preserve the original bytes.`
+        )
+      }
+
+      const validation = validateSIEFile(parsed)
+
+      // Wrong-company tripwire: importing another company's bookkeeping is
+      // the worst silent failure this flow can have. Digits-only comparison;
+      // missing on either side reports unverified instead of ok.
+      const { data: companyRow } = await supabase
+        .from('companies')
+        .select('org_number')
+        .eq('id', companyId)
+        .maybeSingle()
+      const companyOrg = ((companyRow as { org_number?: string | null } | null)?.org_number ?? '').replace(/\D/g, '')
+      const fileOrg = (parsed.header.orgNumber ?? '').replace(/\D/g, '')
+      const orgMatch =
+        companyOrg && fileOrg
+          ? { verified: true, match: companyOrg === fileOrg, company_org_number: companyOrg, file_org_number: fileOrg }
+          : { verified: false, match: null, company_org_number: companyOrg || null, file_org_number: fileOrg || null }
+
+      const duplicateFile = await checkDuplicateImport(supabase, companyId, content)
+      let duplicatePeriod = null
+      if (!duplicateFile && parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd) {
+        duplicatePeriod = await checkDuplicatePeriodImport(
+          supabase,
+          companyId,
+          parsed.stats.fiscalYearStart,
+          parsed.stats.fiscalYearEnd
+        )
+      }
+      const duplicate = duplicateFile
+        ? { kind: 'file', import_id: duplicateFile.id, imported_at: duplicateFile.imported_at }
+        : duplicatePeriod
+          ? {
+              kind: 'period',
+              import_id: duplicatePeriod.id,
+              fiscal_year_start: duplicatePeriod.fiscal_year_start,
+              fiscal_year_end: duplicatePeriod.fiscal_year_end,
+              imported_at: duplicatePeriod.imported_at,
+            }
+          : null
+
+      const bookkeepingAccounts = parsed.accounts.filter((a) => !isSystemAccount(a.number))
+      const { data: storedMappings } = await supabase
+        .from('sie_account_mappings')
+        .select('*')
+        .eq('company_id', companyId)
+      const mappings = suggestMappings(
+        bookkeepingAccounts,
+        BAS_REFERENCE,
+        (storedMappings as import('@/lib/import/types').SIEAccountMappingRecord[]) || undefined
+      )
+      const mappingStats = getMappingStats(mappings)
+      const preview = generateImportPreview(parsed, mappings)
+
+      const allWarnings = [...validation.warnings, ...encodingWarnings]
+      const verdict = !validation.valid
+        ? 'invalid'
+        : duplicate
+          ? 'duplicate'
+          : allWarnings.length > 0 || orgMatch.match === false
+            ? 'ok_with_warnings'
+            : 'ok'
+
+      return {
+        verdict,
+        file: {
+          filename: args.filename,
+          company_name: parsed.header.companyName,
+          org_number: parsed.header.orgNumber,
+          sie_type: parsed.header.sieType,
+          source_program: parsed.header.program ?? null,
+          fiscal_year: { start: parsed.stats.fiscalYearStart, end: parsed.stats.fiscalYearEnd },
+          account_count: bookkeepingAccounts.length,
+          voucher_count: parsed.stats.totalVouchers,
+          transaction_line_count: parsed.stats.totalTransactionLines,
+          opening_balance_total: preview.openingBalanceTotal ?? null,
+        },
+        validation: { valid: validation.valid, errors: validation.errors, warnings: allWarnings },
+        org_number_match: orgMatch,
+        duplicate,
+        mappings,
+        mapping_stats: mappingStats,
+        instructions:
+          verdict === 'invalid'
+            ? 'The file has blocking errors: report them to the user and do not import. A fresh export from the source system usually fixes them.'
+            : verdict === 'duplicate'
+              ? 'This file or fiscal year is already imported. Report it; use gnubok_undo_sie_import first if the user wants to replace it.'
+              : orgMatch.match === false
+                ? 'STOP: the file belongs to a different organisation than this company. Confirm with the user before any import.'
+                : 'Summarize the scan for the user (source system, fiscal year, voucher count, balance status, any warnings). On their go-ahead call gnubok_import_sie with this same file and the returned mappings; the import stages for approval.',
+      }
+    },
+  },
+
+  {
     name: 'gnubok_import_sie',
     title: 'Import SIE File',
-    description: 'Stage SIE-file import (types 1-4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. High-risk, always staged.',
+    description: 'Stage SIE-file import (types 1-4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. High-risk, always staged. Run gnubok_sie_preflight first for the scan and the mappings.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         file_content: { type: 'string', description: 'Full SIE file contents' },
+        file_content_base64: { type: 'string', description: 'Exact file bytes base64-encoded; alternative to file_content (preserves CP437 åäö)' },
         filename: { type: 'string', description: 'Original filename' },
         mappings: {
           type: 'array',
@@ -16141,17 +16333,19 @@ export const tools: McpTool[] = [
         opening_balance_series: { type: 'string', description: 'Series for the IB voucher; default avoids series used by the file' },
         update_account_names: { type: 'boolean', description: 'Use #KONTO names from the file for created and existing accounts (default true). Set false to keep BAS default names.' },
       },
-      required: ['file_content', 'filename', 'mappings'],
+      required: ['filename', 'mappings'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async execute(args, companyId, userId, supabase, actor) {
-      const fileContent = args.file_content as string
+      // Decoded once here; the staged params carry the decoded text so
+      // commitImportSie re-parses exactly what was previewed.
+      const fileContent = await decodeSieToolContent(args)
       const filename = args.filename as string
       const mappings = args.mappings as unknown[] | undefined
 
       if (!fileContent || !filename || !Array.isArray(mappings)) {
-        throw new Error('file_content, filename, and mappings are required')
+        throw new Error('file_content (or file_content_base64), filename, and mappings are required')
       }
 
       // Parse + validate at stage time so the approver sees real content (which
