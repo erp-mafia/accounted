@@ -246,7 +246,16 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     else hide('actions');
   }
 
+  // After staging, the same button becomes the approval: first click arms
+  // the BFL acknowledgment, second click commits (confirmed=true for the
+  // high-risk import). The human click IS the acknowledgment, exactly like
+  // the pending-operations widget. Keeping approval in the card closes the
+  // loop that previously stranded the staged import until the user prodded
+  // the agent ("kolla igen", E2E #10).
+  let stagedOp = null; // { id, risk, armed }
+
   el('import').addEventListener('click', function() {
+    if (stagedOp) { approveStaged(); return; }
     if (!fileState || !fileState.preflight) return;
     el('import').disabled = true;
     el('import').textContent = 'Importerar…';
@@ -260,10 +269,17 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       import_transactions: true
     }).then(function(res) {
       const sc = parseResult(res);
-      el('import').textContent = 'Import förberedd';
-      note('Importen är förberedd och väntar på godkännande: säg till i chatten eller godkänn i Accounted, så bokförs verifikationerna.');
+      if (sc && sc.operation_id) {
+        stagedOp = { id: sc.operation_id, risk: sc.risk_level || 'high', armed: false };
+        el('import').disabled = false;
+        el('import').textContent = 'Godkänn bokföringen';
+        note('Importen är förberedd. Godkänn här i kortet så bokförs verifikationerna, eller säg till i chatten.');
+      } else {
+        el('import').textContent = 'Import förberedd';
+        note('Importen är förberedd och väntar på godkännande i chatten eller i Accounted.');
+      }
       sendNotification('ui/updateContext', {
-        content: 'SIE-importen av ' + fileState.name + ' är stagead' + (sc && sc.operation_id ? ' (operation ' + sc.operation_id + ')' : '') + ' och väntar på godkännande.'
+        content: 'SIE-importen av ' + fileState.name + ' är stagead' + (sc && sc.operation_id ? ' (operation ' + sc.operation_id + ')' : '') + ' och väntar på godkännande i importkortet.'
       });
     }).catch(function(err) {
       el('import').disabled = false;
@@ -271,6 +287,31 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       note('Import misslyckades: ' + (err && err.message ? err.message : 'okänt fel'));
     });
   });
+
+  function approveStaged() {
+    if (stagedOp.risk === 'high' && !stagedOp.armed) {
+      stagedOp.armed = true;
+      el('import').textContent = 'Bekräfta: oåterkalleligt (BFL 5 kap 5 §)';
+      note('Bokförda verifikat kan inte raderas, endast rättas med storno. Klicka igen för att bokföra.');
+      return;
+    }
+    el('import').disabled = true;
+    el('import').textContent = 'Bokför…';
+    const args = { operation_id: stagedOp.id };
+    if (stagedOp.risk === 'high') args.confirmed = true;
+    callTool('gnubok_approve_pending_operation', args).then(function() {
+      el('import').textContent = 'Bokfört';
+      note('Importen är godkänd och bokförd. Fortsätt i chatten: verifiera med råbalansen och förklara eventuella verifikatluckor.');
+      sendNotification('ui/updateContext', {
+        content: 'SIE-importen är GODKÄND och bokförd via importkortet (operation ' + stagedOp.id + '). Nästa steg: gnubok_get_trial_balance för verifiering och gnubok_explain_voucher_gap för eventuella luckor.'
+      });
+    }).catch(function(err) {
+      el('import').disabled = false;
+      stagedOp.armed = false;
+      el('import').textContent = 'Godkänn bokföringen';
+      note('Godkännandet misslyckades: ' + (err && err.message ? err.message : 'okänt fel'));
+    });
+  }
 })();
 </script>
 </body>

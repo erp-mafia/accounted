@@ -18,6 +18,15 @@ describe('SIE drop widget', () => {
     expect(widget?.html).toContain("addEventListener('drop'")
   })
 
+  it('carries the approval in-card: two-click BFL confirm on the staged import', () => {
+    const html = widget!.html
+    expect(html).toContain("callTool('gnubok_approve_pending_operation'")
+    // High-risk approve arms confirmed=true only on the second, deliberate
+    // click: the human acknowledgment, never a default.
+    expect(html).toContain('args.confirmed = true')
+    expect(html).toContain('BFL 5 kap 5')
+  })
+
   it('passes exact bytes through tools/call with a sha256, never retyped or fetched', () => {
     const html = widget!.html
     expect(html).toContain("callTool('gnubok_sie_preflight'")
