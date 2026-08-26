@@ -216,9 +216,15 @@ describe('tools/list payload size guard', () => {
     //     trimmed to bare property names first (the two connect-link tools
     //     are search-only); headroom before the change was ~0 after the skatteverket_connection bump, so even the
     //     bare contract crossed by ~420.
+    //   * 60.7K to 60.8K with include_archived on gnubok_list_customers and
+    //     gnubok_list_suppliers: the v1 API soft-archives counterparties and
+    //     the MCP lists now hide them by default, mirroring the v1 flag. The
+    //     contract is a bare boolean (no property prose) and one clause in each
+    //     description; headroom before the change was ~6 tokens, so even that
+    //     crossed by ~30.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(60_700)
+    expect(approxTokens).toBeLessThan(60_800)
   })
 })
