@@ -40,6 +40,7 @@ import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment } from '@/types'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 interface EditableLine {
   account_number: string
@@ -510,12 +511,7 @@ export default function SupplierInvoiceDetailPage() {
   }
 
   if (isLoading) {
-    return (
-      <div className="space-y-8">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-48 w-full" />
-      </div>
-    )
+    return <DetailPageSkeleton cards={3} />
   }
 
   if (!invoice) {
