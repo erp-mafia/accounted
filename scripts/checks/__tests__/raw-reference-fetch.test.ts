@@ -56,6 +56,19 @@ describe('raw-reference-fetch: regex safety', () => {
   })
 })
 
+describe('raw-reference-fetch: use-client detection is linear too', () => {
+  it('handles a long run of unclosed block comments without backtracking', () => {
+    const source = `${'/* '.repeat(3000)}'use client'\n`
+    const start = performance.now()
+    expect(isClientSource(source)).toBe(false)
+    expect(performance.now() - start).toBeLessThan(200)
+  })
+
+  it('still sees the directive behind closed comments', () => {
+    expect(isClientSource(`/* a */ /* b */\n// c\n'use client'\n`)).toBe(true)
+  })
+})
+
 describe('raw-reference-fetch: browser-side table reads', () => {
   const clientRead = `'use client'\nimport x from 'y'\nconst { data } = await supabase.from('fiscal_periods').select('*').eq('company_id', id)`
 

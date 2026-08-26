@@ -80,7 +80,11 @@ const TABLE_SELECT_RE = new RegExp(
   'g',
 )
 
-const USE_CLIENT_RE = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*['"]use client['"]/
+// Leading whitespace and comments before the directive. A block comment body
+// is `(?:[^*]|\*(?!\/))*`, which cannot cross a `*/`, so each iteration of the
+// outer star has exactly one parse: the lazy `[\s\S]*?` form let an unclosed
+// `/*` be re-split at every later `/*` (CodeQL js/redos).
+const USE_CLIENT_RE = /^(?:\s+|\/\/[^\n]*\n|\/\*(?:[^*]|\*(?!\/))*\*\/)*['"]use client['"]/
 
 export function isClientSource(source) {
   return USE_CLIENT_RE.test(source)
