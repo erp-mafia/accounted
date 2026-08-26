@@ -100,15 +100,22 @@ export async function countInboxDocuments(
   // PostgREST serialises .in() into the GET query string: chunk the id list
   // so a large inbox can't push the URL past proxy limits (HTTP 414, which
   // would silently zero the badge via the error branch).
+  // The chunks are independent: one wave instead of N sequential round trips.
+  const chunks: string[][] = []
+  for (let i = 0; i < docIds.length; i += IN_CLAUSE_CHUNK) chunks.push(docIds.slice(i, i + IN_CLAUSE_CHUNK))
+  const results = await Promise.all(
+    chunks.map((ids) =>
+      supabase
+        .from('document_attachments')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .in('id', ids)
+        .is('journal_entry_id', null)
+        .eq('is_current_version', true),
+    ),
+  )
   let total = 0
-  for (let i = 0; i < docIds.length; i += IN_CLAUSE_CHUNK) {
-    const { count, error: docError } = await supabase
-      .from('document_attachments')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .in('id', docIds.slice(i, i + IN_CLAUSE_CHUNK))
-      .is('journal_entry_id', null)
-      .eq('is_current_version', true)
+  for (const { count, error: docError } of results) {
     if (docError) return logAndZero('inbox_document', companyId, docError)
     total += count ?? 0
   }
@@ -125,7 +132,7 @@ const SUGGESTED_MATCH_OR =
  * feeds are chunked (fetchCandidatesChunked), so the URL length stays bounded
  * regardless of this number.
  */
-const SUGGESTED_MATCH_SCAN_CAP = 200
+export const SUGGESTED_MATCH_SCAN_CAP = 200
 
 /**
  * Unbooked transactions with a still-actionable invoice/supplier-invoice match

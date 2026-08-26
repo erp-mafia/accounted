@@ -37,6 +37,16 @@ describe('getWorklistCounts', () => {
     })
   })
 
+  it('takes the suggested-match count from a caller-supplied list instead of rescanning', async () => {
+    const { countSuggestedMatches } = await import('../categories')
+    const matches = [{ transactionId: 't1' }, { transactionId: 't2' }, { transactionId: 't3' }] as never[]
+    const { counts } = await getWorklistCounts(supabase, 'company-1', {
+      suggestedMatches: Promise.resolve(matches),
+    })
+    expect(counts.suggested_match).toBe(3)
+    expect(countSuggestedMatches).not.toHaveBeenCalled()
+  })
+
   it('excludes suggested_match from the total (subset of book_transaction)', async () => {
     const { total } = await getWorklistCounts(supabase, 'company-1')
     // 4 + 6 + 1 + 3 + 5 + 1 + 2 + 1, without the 2 suggested matches.
