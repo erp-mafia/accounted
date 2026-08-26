@@ -38,6 +38,13 @@ need zero of these questions.
 - "Lägg till ett nytt bolag" (an existing user adding a second company)
 - A byrå/consultant onboarding a new client company (pass \`team_id\`)
 
+**Already set up? Deliver value immediately instead.** When
+\`gnubok_get_agent_briefing\` shows a company that already exists with
+data and connections (the user onboarded via the web app), do NOT walk
+the setup steps: go straight to the Step 4b reconciliation pass and the
+Att göra-list, and open with the findings: a numbered list with amounts
+in your FIRST reply. That first impression is the product.
+
 ## Step 0: connect
 
 If this session is not connected yet, the first company-scoped call (for
@@ -167,23 +174,39 @@ link, and duplicate raw URLs read as clutter.
 When the user says they are done (or comes back), re-call
 \`gnubok_connect_bank\` to verify \`connected\`, then go DIRECTLY to step 5.
 
-## Step 4b: after the import: efterkontroll (this is where trust is won)
+## Step 3b: DIRECTLY after the import: verify and PREPARE (before the bank)
 
-Run a short audit pass as soon as history + bank are in, and fix findings
-through the normal staged flow, a few lines per finding:
+The moment the import commits, run a fast pass so the connections land in
+a book that is READY for them: the user should feel value before the bank
+even connects.
 
-- \`gnubok_get_trial_balance\`: does the book balance and match the SIE?
-- Skattekonto vs 1630: if Skatteverket is connected, reconcile the
-  skattekonto events against the ledger. Common finds: paid payroll taxes
-  still standing as liabilities on 2710/2731, the 1630 account missing
-  entirely, unbooked ränta/avgifter (kostnadsränta 8423, skattefri
-  intäktsränta 8314, ej avdragsgill förseningsavgift 6992: never the
-  ordinary cost accounts, or the year-end tax computation goes wrong).
+- \`gnubok_get_trial_balance\`: balances, and matches the SIE's UB.
+- Sanity-read the content: no income accounts? liabilities that look
+  already-paid? Say so in one line each; do not fix yet.
+- PREPARE the chart for what the connections will bring: if the import
+  lacks 1630 (skattekonto), 8423 (kostnadsränta skattekonto), 8314
+  (skattefri intäktsränta) or 6992 (ej avdragsgilla avgifter), create
+  them NOW so tax payments and fees book correctly from the first sync.
+- Voucher gaps: explain each with \`gnubok_explain_voucher_gap\`.
+
+## Step 4b: after the connections: reconcile (this is where trust is won)
+
+Once bank + Skatteverket deliver data, run the reconciliation pass and
+fix findings through the normal staged flow, a few lines per finding:
+
+- Bank rows covered by the SIE period: MATCH them against existing
+  verifikat with \`gnubok_reconcile_match\` (per account; \`dry_run\`
+  first): never categorize them again, that double-books salaries and
+  everything else. Only rows after the SIE's last date get booked fresh.
+- Skattekonto vs 1630: reconcile the events against the ledger. Common
+  finds: paid payroll taxes still standing on 2710/2731, ränta/avgifter
+  unbooked (8423/8314/6992: never ordinary cost accounts, or the
+  year-end tax computation goes wrong). End state must match
+  Skatteverket's saldo to the öre.
 - Auto-created bank accounts (1930/1931/1935) named after the company:
   suggest proper names.
 - Underlag coverage: verifikat over ~5 000 kr without documents (BFL 5
   kap 6 §): list them, offer the receipt-matcher flow.
-- Voucher gaps: explain each with \`gnubok_explain_voucher_gap\`.
 
 Present findings as a short numbered list with amounts, fix in priority
 order on the user's go-ahead, and re-verify the reconciled balances match
