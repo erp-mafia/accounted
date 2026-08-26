@@ -14,6 +14,7 @@ import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import TrialExpiredDialog from '@/components/billing/TrialExpiredDialog'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
+import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import { getBranding } from '@/lib/branding/service'
 import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
@@ -148,7 +149,7 @@ export default async function DashboardLayout({
     { data: companyRow },
     { data: memberRow },
     { data: allMemberships },
-    { data: settings },
+    { data: settings, error: settingsError },
     agentProfileIdentity,
     { data: userProfile },
     entitlements,
@@ -156,6 +157,8 @@ export default async function DashboardLayout({
     { data: userPrefs },
     hasWebshop,
     hasMileageTrips,
+    { data: seedFiscalPeriods },
+    { data: seedCashAccounts },
   ] = await Promise.all([
     supabase.from('companies').select('*').eq('id', companyId).single(),
     supabase.from('company_members').select('role').eq('company_id', companyId).eq('user_id', user.id).single(),
@@ -209,6 +212,23 @@ export default async function DashboardLayout({
       .eq('company_id', companyId)
       .limit(1)
       .then((trips) => (trips.data?.length ?? 0) > 0),
+    // Reference-data seed (lib/reference-data/seed.ts): the two small lists
+    // that gate almost every form, fetched once here so the first picker a
+    // user opens renders populated with zero client round trips. Same
+    // ordering as period.list and listForCompany so the seed and the client
+    // refetch agree. The chart of accounts is deliberately NOT seeded: it
+    // can be hundreds of KB for large companies.
+    supabase
+      .from('fiscal_periods')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('period_start', { ascending: false }),
+    supabase
+      .from('cash_accounts')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('is_primary', { ascending: false })
+      .order('ledger_account', { ascending: true }),
   ])
 
   // company_id -> current display name for every company the user belongs to.
@@ -325,6 +345,12 @@ export default async function DashboardLayout({
 
   return (
     <CompanyProvider value={companyContextValue}>
+      <ReferenceDataSeed
+        companyId={companyId}
+        fiscalPeriods={seedFiscalPeriods ?? []}
+        cashAccounts={seedCashAccounts ?? []}
+        settings={settingsError ? undefined : settings}
+      >
       <SessionTimeoutController />
       <AgentSheetProvider
         identity={{
@@ -406,6 +432,7 @@ export default async function DashboardLayout({
           />
         )}
       </AgentSheetProvider>
+      </ReferenceDataSeed>
     </CompanyProvider>
   )
 }

@@ -118,6 +118,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { findSekLabelledFxAmounts } from './format-currency-sek-label.mjs'
+import { findRawReferenceFetches } from './raw-reference-fetch.mjs'
 import {
   findExtensionRouteFindings,
   UNGATED_EXTENSION_ROUTES,
@@ -1005,6 +1006,7 @@ const current = {
   foldedPublicFlags: findFoldedPublicFlags(),
   dialogOverflowRisk: findDialogOverflowRisks(),
   directAiClients: findDirectAiClients(),
+  rawReferenceFetch: findRawReferenceFetches(ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1025,6 +1027,10 @@ if (isUpdate) {
     dialogOverflowRisk: {
       count: dialogOverflowFiles.length,
       files: dialogOverflowFiles,
+    },
+    rawReferenceFetch: {
+      count: current.rawReferenceFetch.length,
+      files: current.rawReferenceFetch,
     },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
@@ -1264,6 +1270,31 @@ if (newLedgerScans.length) {
   )
 }
 
+// 1d. raw-reference-fetch: per-file ratchet. A file outside the baseline set
+// that fetches reference data raw (see raw-reference-fetch.mjs) is a NEW
+// violation; grandfathered files stay until they move to the hooks. Once the
+// baseline reaches 0, delete the entry so any new site is a hard failure.
+const rawRefBaseline = new Set(baseline.rawReferenceFetch?.files ?? [])
+const newRawRefs = current.rawReferenceFetch.filter((f) => !rawRefBaseline.has(f))
+const fixedRawRefs = (baseline.rawReferenceFetch?.files ?? []).filter(
+  (f) => !current.rawReferenceFetch.includes(f),
+)
+if (newRawRefs.length) {
+  failed = true
+  console.error(
+    `\n✗ raw-reference-fetch: ${newRawRefs.length} file(s) fetch reference data raw ` +
+      `(fiscal periods, settings, accounts, cash accounts, dimensions, templates, customers, suppliers, articles):`,
+  )
+  newRawRefs.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → read it through the hooks in lib/reference-data/hooks.ts (useFiscalPeriods, useAccounts,\n' +
+      '    useCashAccounts, useCompanySettings, useDimensions, useBookingTemplates, useCustomers,\n' +
+      '    useSuppliers, useArticles) and call invalidateReferenceData() after writes. Those hooks\n' +
+      '    share one session cache and are seeded by the dashboard layout, so the fields render\n' +
+      '    on first paint instead of after another round trip.',
+  )
+}
+
 // 1e3. dialog-overflow-risk: per-file ratchet, a finding in a file outside
 // the baseline set is a NEW violation. Grandfathered files stay until fixed.
 const dialogOverflowBaseline = new Set(baseline.dialogOverflowRisk?.files ?? [])
@@ -1304,6 +1335,7 @@ if (
   fixedAuthFiles.length ||
   fixedLedgerScans.length ||
   fixedDialogOverflow.length ||
+  fixedRawRefs.length ||
   current.naiveOreRound < baseline.naiveOreRound.count
 ) {
   console.log('\n✓ Progress since baseline:')
@@ -1312,6 +1344,8 @@ if (
     console.log(`    ledger-scanning-report: -${fixedLedgerScans.length} file(s)`)
   if (fixedDialogOverflow.length)
     console.log(`    dialog-overflow-risk: -${fixedDialogOverflow.length} file(s)`)
+  if (fixedRawRefs.length)
+    console.log(`    raw-reference-fetch: -${fixedRawRefs.length} file(s)`)
   if (current.naiveOreRound < baseline.naiveOreRound.count)
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
   console.log('    Run with --update to ratchet the baseline down and lock in the gains.')
@@ -1336,5 +1370,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )
