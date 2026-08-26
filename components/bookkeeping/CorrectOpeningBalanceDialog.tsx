@@ -14,7 +14,8 @@ import { AlertTriangle } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
+import { getBasLoadedByNumber } from '@/lib/bookkeeping/bas-lazy'
+import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import OpeningBalanceRowEditor, {
   type EditableRow,
   type OpeningBalanceEditorState,
@@ -33,14 +34,15 @@ let seedIdCounter = 0
 
 // Map the booked IB's lines into editable rows. account_name isn't stored on
 // the line, so resolve it from BAS for display (cosmetic: only account_number
-// + amounts are sent on save).
+// + amounts are sent on save). The chart is a lazily loaded chunk: the
+// caller re-seeds once it has arrived.
 function seedRowsFromEntry(entry: JournalEntry): EditableRow[] {
   const lines = ((entry.lines || []) as JournalEntryLine[])
     .slice()
     .sort((a, b) => a.sort_order - b.sort_order)
 
   return lines.map((l) => {
-    const bas = BAS_REFERENCE.find((a) => a.account_number === l.account_number)
+    const bas = getBasLoadedByNumber(l.account_number)
     return {
       id: l.id || `seed_${++seedIdCounter}`,
       account_number: l.account_number,
@@ -67,7 +69,10 @@ export default function CorrectOpeningBalanceDialog({
   onCorrected,
 }: Props) {
   const { toast } = useToast()
-  const initialRows = useMemo(() => seedRowsFromEntry(entry), [entry])
+  const basReady = useBasReference()
+  // basReady is a re-seed trigger: names fill in once the chart chunk lands.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const initialRows = useMemo(() => seedRowsFromEntry(entry), [entry, basReady])
   const [state, setState] = useState<OpeningBalanceEditorState | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 

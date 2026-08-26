@@ -28,7 +28,9 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { BASAccount } from '@/types'
-import { BAS_REFERENCE, isStandardBASAccount, type BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
+import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
+import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
+import { ensureBasLoaded } from '@/lib/bookkeeping/bas-lazy'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // ---------------------------------------------------------------------------
@@ -132,6 +134,9 @@ export default function ChartOfAccountsManager() {
         (a: { account_number: string; is_active: boolean; is_system_account: boolean }) => [a.account_number, a],
       ),
     )
+    // The full chart is a lazily loaded chunk: only the BAS-katalog tab pays
+    // for it, not every route that renders this component's parent.
+    const BAS_REFERENCE = await ensureBasLoaded()
     const merged: ReferenceAccount[] = BAS_REFERENCE.map((ref) => {
       const userAccount = userMap.get(ref.account_number)
       return {
@@ -566,7 +571,7 @@ export default function ChartOfAccountsManager() {
                                       {t('system_badge')}
                                     </span>
                                   )}
-                                  {!isStandardBASAccount(account.account_number) && (
+                                  {!isStandardBASAccountNumber(account.account_number) && (
                                     <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
                                       {t('own_badge')}
                                     </span>

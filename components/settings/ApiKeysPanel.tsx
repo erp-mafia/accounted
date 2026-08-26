@@ -31,8 +31,8 @@ import { cn, formatDateLong } from '@/lib/utils'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 import { getBranding } from '@/lib/branding/service'
 import { ILLUSTRATIONS, illustrationSrc } from '@/components/onboarding/onboarding-illustrations'
-import { STAGING_SCOPES } from '@/lib/auth/api-keys'
-import type { ApiKeyScope } from '@/lib/auth/api-keys'
+import { STAGING_SCOPES } from '@/lib/auth/api-key-scopes'
+import type { ApiKeyScope } from '@/lib/auth/api-key-scopes'
 
 const branding = getBranding()
 const connectorName = branding.appName.toLowerCase()

@@ -118,6 +118,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { findSekLabelledFxAmounts } from './format-currency-sek-label.mjs'
+import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import {
   findExtensionRouteFindings,
   UNGATED_EXTENSION_ROUTES,
@@ -1005,6 +1006,7 @@ const current = {
   foldedPublicFlags: findFoldedPublicFlags(),
   dialogOverflowRisk: findDialogOverflowRisks(),
   directAiClients: findDirectAiClients(),
+  clientNodeBuiltins: findClientNodeBuiltins(ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1069,6 +1071,26 @@ if (current.directJelInsert.length) {
     '  → route line writes through lib/bookkeeping/engine.ts, or derive cost_center/project via\n' +
       '    lineDimensionColumns() (lib/bookkeeping/dimension-resolver.ts) and add the file to\n' +
       '    JEL_INSERT_SANCTIONED in this script with a justification.',
+  )
+}
+
+// 1b3. client-node-builtin: a 'use client' module whose static import closure
+// reaches a Node builtin ships the browser polyfill chunk (~327 KB) with every
+// route that renders it. No baseline: 0 today, any reacher is a hard failure.
+if (current.clientNodeBuiltins.length) {
+  failed = true
+  console.error(
+    `\n✗ client-node-builtin: ${current.clientNodeBuiltins.length} client module(s) reach a Node builtin ` +
+      `through their static imports (this ships crypto-browserify/Buffer/vm polyfills to the browser):`,
+  )
+  current.clientNodeBuiltins.forEach((f) =>
+    console.error(`    ${f.file} -> ${f.builtin}\n        ${f.chain.join('\n        > ')}`),
+  )
+  console.error(
+    '  → move the pure part the client needs into a sibling module without the Node import\n' +
+      '    (see lib/auth/bankid-flags.ts, lib/import/bank-file/formats.ts, lib/salary/personnummer-format.ts,\n' +
+      '    lib/auth/api-key-scopes.ts) and import that from the client. scripts/perf/client-import-closure.mjs\n' +
+      '    prints the full chain for any module.',
   )
 }
 
@@ -1336,5 +1358,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )
