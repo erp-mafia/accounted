@@ -31,15 +31,26 @@ import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 
 ensureInitialized()
 
-const MAX_CONNECTIONS_PER_RUN = 50
+// Without this export the route runs under the platform default (60s), which
+// is why the sync loop used to self-limit to 50s and starve the queue: ~17
+// connections per day against 100+ entitled active connections, so any given
+// connection only got an automatic sync every 4-7 days.
+export const maxDuration = 300
+
+const MAX_CONNECTIONS_PER_RUN = 300
+// Connections synced concurrently within one wave. Enable Banking calls are
+// I/O-bound, so a small fan-out multiplies throughput without hammering the
+// ASPSPs; per-connection error isolation is preserved inside each wave.
+const SYNC_CONCURRENCY = 4
 
 /**
  * GET /api/extensions/enable-banking/sync/cron
  * Automatic daily bank transaction sync
  * Runs at 05:00 UTC (07:00 Swedish time)
  *
- * Processes up to 50 connections per run (Vercel Pro 300s timeout).
- * Prioritizes connections not synced for the longest time.
+ * Sized so one run covers every entitled active connection (Vercel Pro 300s
+ * timeout, 4-way concurrency). Prioritizes connections not synced for the
+ * longest time, so anything cut off by the time budget is first tomorrow.
  * Deduplication via external_id makes repeated runs safe.
  */
 export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
@@ -92,8 +103,8 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   }
 
   // Apply the batch limit only after entitlement filtering. Otherwise old
-  // free-tier rows can permanently occupy the first 50 queue positions and
-  // prevent every paying connection behind them from syncing.
+  // free-tier rows can permanently occupy the head of the queue and prevent
+  // every paying connection behind them from syncing.
   const connections = candidateConnections
     .filter(connection => entitledCompanyIds.has(connection.company_id))
     .slice(0, MAX_CONNECTIONS_PER_RUN)
@@ -108,7 +119,9 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   // do (a company whose only connection is parked in 'pending_selection' has
   // nothing to sync but can absolutely have a dead session).
   const startTime = Date.now()
-  const TIME_BUDGET_MS = 50_000 // 50s: leave 10s margin for Vercel timeout
+  // 230s of the 300s maxDuration for the sync loop; the rest is reserved for
+  // the health probe pass and response teardown below.
+  const TIME_BUDGET_MS = 230_000
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 
   const results: {
@@ -132,12 +145,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   const notifyKey = (c: { user_id: string; session_id: string | null }) =>
     `${c.user_id}:${c.session_id ?? 'none'}`
 
-  for (const connection of connections) {
-    if (Date.now() - startTime > TIME_BUDGET_MS) {
-      ctx.log.info('time budget reached', { processedSoFar: results.length })
-      break
-    }
-
+  const syncConnection = async (connection: (typeof connections)[number]) => {
     try {
       const daysLeft = getDaysUntilExpiry(connection.consent_expires)
       const isExpired = daysLeft !== null && daysLeft <= 0
@@ -166,7 +174,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
           status: 'expired',
           daysUntilExpiry: 0,
         })
-        continue
+        return
       }
 
       const expiringSoon = isConsentExpiringSoon(connection.consent_expires)
@@ -222,7 +230,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
           status: 'skipped',
           daysUntilExpiry: daysLeft,
         })
-        continue
+        return
       }
 
       // Detect SIE overlap: skip auto-categorization if the sync range
@@ -374,6 +382,17 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     }
   }
 
+  // Waves of SYNC_CONCURRENCY: the budget check sits between waves, and each
+  // connection keeps its own try/catch above, so one slow or failing bank
+  // affects at most its own wave slot.
+  for (let offset = 0; offset < connections.length; offset += SYNC_CONCURRENCY) {
+    if (Date.now() - startTime > TIME_BUDGET_MS) {
+      ctx.log.info('time budget reached', { processedSoFar: results.length })
+      break
+    }
+    await Promise.all(connections.slice(offset, offset + SYNC_CONCURRENCY).map(syncConnection))
+  }
+
   // Health probe for connections this run did NOT prove alive by syncing them.
   //
   // A sync failure is the only thing that used to move a connection off
@@ -385,7 +404,10 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   // user read old balances as current. Probing costs one cheap session call
   // per connection and only ever acts on a definite 'dead'.
   const probeResults: { connectionId: string; bankName: string }[] = []
-  const PROBE_BUDGET_MS = 100_000
+  // Total-elapsed ceiling (measured from startTime, like TIME_BUDGET_MS): the
+  // probe pass gets whatever the sync loop left of it, with 20s of maxDuration
+  // spare for teardown.
+  const PROBE_BUDGET_MS = 280_000
   const provenAlive = new Set(
     results.filter(r => r.status === 'synced' || r.status === 'expiring_soon').map(r => r.connectionId)
   )
