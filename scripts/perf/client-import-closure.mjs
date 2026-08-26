@@ -31,7 +31,11 @@ const EXTS = ['.ts', '.tsx', '.js', '.mjs', '.jsx']
 const USE_CLIENT_RE = /^(?:\s+|\/\/[^\n]*\n|\/\*(?:[^*]|\*(?!\/))*\*\/)*['"]use client['"]/
 // Static edges only. `import type {...} from` and `export type {...} from`
 // are skipped; `import x, { type Y } from` still counts (x is a value).
-const EDGE_RE = /^\s*(?:import|export)\s+(?!type\s)[^'"]*?\sfrom\s+['"]([^'"]+)['"]/gm
+// One quantifier per span (a greedy `[^'"]*` up to the specifier's opening
+// quote, which it cannot cross) so a run of whitespace has a single parse:
+// the earlier `\s+ ... [^'"]*? ... \s` shape backtracked exponentially
+// (CodeQL js/redos).
+const EDGE_RE = /^[ \t]*(?:import|export) (?!type\b)[^'"]*from[ \t]*['"]([^'"]+)['"]/gm
 const SIDE_EFFECT_IMPORT_RE = /^\s*import\s+['"]([^'"]+)['"]/gm
 
 export function walkFiles(root = ROOT) {
