@@ -28,6 +28,8 @@ import {
 } from './public-tools'
 import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
+import { currentAppVersion } from '@/lib/reports/app-version'
+import type { DayValueEmployee } from '@/lib/salary/semesterberedning'
 import {
   getVatDeadlineForPeriod,
   type VatDeadlineCalculationSettings,
@@ -5800,7 +5802,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_invoice',
     title: 'Create Customer Invoice',
-    description: 'Stage a new invoice. Validates inputs, calculates VAT preview. Items accept dims bags. Stages for user approval: invoice number assigned at approval.',
+    description: 'Stage a new invoice. Validates inputs, calculates VAT preview. Items accept dims bags. Approval creates a draft; the invoice number is assigned on send or mark-as-sent.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -14129,7 +14131,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_vacation_balance',
     title: 'Get Vacation Balance (Semestersaldo)',
-    description: 'Get one employee\'s current vacation balance: entitled/taken/remaining days, sparade dagar per origin year (5-year rule), forced payouts, and an estimated semesterlöneskuld in SEK. Ledger seeds on first booking. Use before gnubok_close_vacation_year.',
+    description: 'Get one employee\'s open vacation balance: entitled/taken/remaining days, sparade dagar per origin year, forced payouts and estimated semesterlöneskuld in SEK. Use before gnubok_close_vacation_year.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -14151,6 +14153,7 @@ export const tools: McpTool[] = [
         remaining_days: { type: 'number' },
         saved_days: { type: 'object', description: 'Origin year -> days' },
         forced_payout_days: { type: 'number' },
+        estimated_liability_sek: { type: 'number' },
       },
       required: ['employee_vacation_balance_id', 'employee_id', 'vacation_year_start', 'entitled_days', 'taken_days', 'remaining_days'],
     },
@@ -14172,10 +14175,31 @@ export const tools: McpTool[] = [
       const { id, ...rest } = balance as { id: string } & Record<string, unknown>
       const entitled = (rest.entitled_days as number) ?? 0
       const taken = (rest.taken_days as number) ?? 0
+      const remaining = roundOre(entitled - taken)
+
+      // Same simplified BFNAR 2016:10 day valuation the year-close and the v1
+      // vacation-balance route use, so the three surfaces agree on the SEK
+      // estimate. remaining + sparade dagar, floored at zero: an overdrawn
+      // balance is a receivable, not a negative skuld.
+      const { dayValueSek } = await import('@/lib/salary/semesterberedning')
+      const { data: employee, error: empErr } = await supabase
+        .from('employees')
+        .select('vacation_rule, vacation_days_per_year, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week')
+        .eq('id', employeeId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (empErr) throw new Error(`Database error: ${empErr.message}`)
+      if (!employee) throw new Error(`Employee ${employeeId} not found for this company`)
+      const savedTotal = Object.values((rest.saved_days as Record<string, number> | null) ?? {})
+        .reduce((s, d) => s + (Number(d) || 0), 0)
+      const liabilityDays = Math.max(0, remaining + savedTotal)
+      const estimatedLiability = roundOre(liabilityDays * dayValueSek(employee as DayValueEmployee))
+
       return {
         employee_vacation_balance_id: id,
         ...rest,
-        remaining_days: roundOre(entitled - taken),
+        remaining_days: remaining,
+        estimated_liability_sek: estimatedLiability,
       }
     },
   },
@@ -15619,7 +15643,7 @@ export const tools: McpTool[] = [
         .eq('id', id).eq('company_id', companyId).single()
       if (!inv) throw new Error('Invoice not found')
       if (inv.document_type !== 'proforma') throw new Error('Endast proformafakturor kan konverteras')
-      if (inv.status === 'cancelled') throw new Error('Denna proformafaktura har redan makuleras')
+      if (inv.status === 'cancelled') throw new Error('Denna proformafaktura har redan makulerats')
 
       const customerName = (inv.customer as { name?: string } | null)?.name ?? 'okänd kund'
       return stagePendingOperation(supabase, companyId, userId, 'convert_invoice',
@@ -16364,7 +16388,7 @@ export const tools: McpTool[] = [
         if (inbox.created_journal_entry_id) {
           throw new Error(
             `Inbox item is already booked as journal entry ${inbox.created_journal_entry_id}. ` +
-            'Use gnubok_correct_entry or gnubok_reverse_entry if it needs to be changed.'
+            'Use gnubok_correct_entry or gnubok_reverse_journal_entry if it needs to be changed.'
           )
         }
         if (inbox.created_supplier_invoice_id) {
@@ -16687,7 +16711,7 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         entry_id: { type: 'string', description: 'Journal entry UUID OR voucher ref like "A-113". Prefer voucher refs: UUIDs reused from earlier tool output are frequently hallucinated by LLM callers.' },
-        reversal_date: { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$', description: 'Optional ISO yyyy-MM-dd date for the storno verifikation. Defaults to today (Swedish timezone). Period attribution always follows the original entry, regardless of this date.' },
+        reversal_date: { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$', description: 'Optional ISO yyyy-MM-dd date for the storno verifikation. Defaults to the original entry date. Period attribution always follows the original entry, regardless of this date.' },
         reason: { type: 'string', maxLength: 500, description: 'Optional human-readable reason: shown in pending_operations review. Not stored on the storno itself. Max 500 chars.' },
         allow_deep_chain: {
           type: 'boolean',
@@ -18262,17 +18286,24 @@ assertRecommendedLoadoutsValid(new Set(tools.map((t) => t.name)))
 
 // ── MCP Protocol Handler ─────────────────────────────────────
 
+// Build identifier so MCP clients can tell deploys apart in `initialize`
+// serverInfo. Resolved once at module load (constant per process, so the
+// definitions layer stays deterministic); the same identifier /api/health
+// and the behandlingshistorik report stamp. '1.0.0' is the self-hosted
+// fallback when no commit SHA is inlined at build.
+const SERVER_VERSION = currentAppVersion() ?? '1.0.0'
+
 const SERVER_INFO_BY_NAMESPACE = {
   gnubok: {
     // Stable legacy identity for every existing connection.
     name: 'gnubok',
     title: 'Accounted',
-    version: '1.0.0',
+    version: SERVER_VERSION,
   },
   accounted: {
     name: 'accounted',
     title: 'Accounted',
-    version: '1.0.0',
+    version: SERVER_VERSION,
   },
 } as const
 
