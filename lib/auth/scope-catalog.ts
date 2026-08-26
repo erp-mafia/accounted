@@ -210,6 +210,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_lookup_company:                  'companies:read',
   gnubok_connect_bank:                    'companies:read',
   gnubok_connect_skatteverket:            'companies:read',
+  gnubok_connect_migration:               'companies:read',
   gnubok_get_company_settings:            'companies:read',
   gnubok_update_company_settings:         'companies:write',
   // Transactions

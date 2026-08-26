@@ -3558,6 +3558,72 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_connect_migration',
+    title: 'Connect Previous System',
+    description:
+      'Connect card into the migration wizard for a NAMED previous system. API systems (fortnox/bjornlunden/briox/wint) fetch all fiscal years plus invoices, customers and documents; visma/bokio complement AFTER a SIE import. Same one-click feel as the bank/Skatteverket cards.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        provider: {
+          type: 'string',
+          enum: ['fortnox', 'bjornlunden', 'briox', 'wint', 'visma', 'bokio'],
+          description: 'The previous system the user named',
+        },
+      },
+      required: ['provider'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        provider: { type: 'string' },
+        provider_name: { type: 'string' },
+        api_connected: { type: 'boolean', description: 'true = the wizard fetches SIE directly from the system; false = a SIE file import comes first' },
+        connect_url: { type: 'string' },
+        instructions: { type: 'string' },
+      },
+      required: ['provider', 'provider_name', 'api_connected', 'connect_url', 'instructions'],
+    },
+    _meta: { ui: { resourceUri: 'ui://connect-card/app.html' } },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args) {
+      const PROVIDERS: Record<string, { name: string; api: boolean }> = {
+        fortnox: { name: 'Fortnox', api: true },
+        bjornlunden: { name: 'Björn Lundén', api: true },
+        briox: { name: 'Briox', api: true },
+        wint: { name: 'Wint', api: true },
+        visma: { name: 'Visma eEkonomi', api: false },
+        bokio: { name: 'Bokio', api: false },
+      }
+      const provider = String(args.provider ?? '')
+      const info = PROVIDERS[provider]
+      if (!info) {
+        throw Object.assign(
+          new Error(`Unknown provider "${provider}". Supported: ${Object.keys(PROVIDERS).join(', ')}.`),
+          { code: 'VALIDATION_ERROR' }
+        )
+      }
+      const connectUrl = `${connectLinkBaseUrl()}/import?mode=migration&provider=${provider}`
+      return {
+        provider,
+        provider_name: info.name,
+        api_connected: info.api,
+        connect_url: connectUrl,
+        instructions: info.api
+          ? `On claude.ai/Claude Desktop a connect card with an open-in-browser button renders with this result; elsewhere give the user the connect_url. The wizard connects to ${info.name} (login there), fetches every fiscal year and imports bookkeeping PLUS invoices, customers, suppliers and documents. The user comes back here when the wizard reports done.`
+          : `${info.name} has no API export: run the SIE-file import FIRST (gnubok_create_sie_upload drop card). This wizard link then complements with invoices and customers. On claude.ai/Desktop a connect card renders; elsewhere give the user the connect_url.`,
+      }
+    },
+  },
+
+  {
     name: 'gnubok_get_company_settings',
     title: 'Get Company Settings',
     description: 'Get invoice payment details, company contact details and the custom invoice email texts. Use before creating invoices or staging a settings update.',
@@ -18917,7 +18983,13 @@ const JSONRPC_UNSUPPORTED_PROTOCOL_VERSION = -32022
 // change only on deploy; skills live in the DB and can change between
 // deploys; data resources are live ledger state and must never be cached.
 // Everything is served behind Authorization, so cacheScope stays private.
-const CACHE_STATIC = { ttlMs: 3_600_000, cacheScope: 'private' } as const
+// "Static" content (tools/list, widget HTML, prompts) is static only within
+// one deploy: every deploy can add tools and change widgets. The 1-hour hint
+// this used to carry made Claude.ai serve a pre-deploy catalog for up to an
+// hour after a release: a freshly shipped tool flapped in and out of the
+// connector's tool list depending on which fetch hit the client cache
+// (E2E #7/#8, 2026-08-26). 5 minutes bounds that window to one coffee sip.
+const CACHE_STATIC = { ttlMs: 300_000, cacheScope: 'private' } as const
 const CACHE_SKILLS = { ttlMs: 300_000, cacheScope: 'private' } as const
 const CACHE_LIVE = { ttlMs: 0, cacheScope: 'private' } as const
 

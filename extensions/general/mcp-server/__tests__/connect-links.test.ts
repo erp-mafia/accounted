@@ -132,3 +132,47 @@ describe('onboarding connect-link tools', () => {
     expect(result.connect_url).toBeNull()
   })
 })
+
+describe('gnubok_connect_migration', () => {
+  const migrationTool = tools.find((t) => t.name === 'gnubok_connect_migration')!
+
+  beforeEach(() => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.example.test')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('renders the connect card and deep-links the wizard for an API provider', async () => {
+    expect(
+      (migrationTool as { _meta?: { ui: { resourceUri: string } } })._meta
+    ).toEqual({ ui: { resourceUri: 'ui://connect-card/app.html' } })
+
+    const result = (await migrationTool.execute(
+      { provider: 'fortnox' },
+      COMPANY_ID,
+      'user-1',
+      {} as never
+    )) as Record<string, unknown>
+    expect(result.connect_url).toBe('https://app.example.test/import?mode=migration&provider=fortnox')
+    expect(result.api_connected).toBe(true)
+    expect(result.provider_name).toBe('Fortnox')
+  })
+
+  it('tells the agent SIE comes first for a file-only provider', async () => {
+    const result = (await migrationTool.execute(
+      { provider: 'bokio' },
+      COMPANY_ID,
+      'user-1',
+      {} as never
+    )) as Record<string, unknown>
+    expect(result.api_connected).toBe(false)
+    expect(result.instructions).toContain('gnubok_create_sie_upload')
+  })
+
+  it('rejects an unknown provider', async () => {
+    await expect(
+      migrationTool.execute({ provider: 'monopol' }, COMPANY_ID, 'user-1', {} as never)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+  })
+})
