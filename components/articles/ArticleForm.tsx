@@ -1,6 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useAccounts } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -21,7 +23,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { createClient } from '@/lib/supabase/client'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
-import type { BASAccount, CreateArticleInput } from '@/types'
+import type { CreateArticleInput } from '@/types'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import {
   ROT_WORK_TYPES,
@@ -78,7 +80,13 @@ export default function ArticleForm({
   // unknown 4-digit numbers optimistically: the API answers with
   // ACCOUNTS_NOT_IN_CHART for activatable BAS accounts, and the host page's
   // ActivateAccountsDialog flow takes over (same UX as the journal entry form).
-  const [postingAccounts, setPostingAccounts] = useState<BASAccount[]>([])
+  // Balance-sheet and revenue accounts for the posting override, from the
+  // session cache (lib/reference-data): populated on the first paint.
+  const { accounts: activeAccounts } = useAccounts()
+  const postingAccounts = useMemo(
+    () => activeAccounts.filter((account) => account.account_class >= 1 && account.account_class <= 3),
+    [activeAccounts],
+  )
   // Inline account creation: what the user typed in the combobox when they hit
   // "Skapa konto": non-null opens AddAccountDialog prefilled with it.
   const [createAccountPrefill, setCreateAccountPrefill] = useState<string | null>(null)
@@ -89,22 +97,6 @@ export default function ArticleForm({
   // than hard-coded. Falls back to the article's own currency (or SEK) if the
   // fetch fails so the Select is never empty.
   const [currencies, setCurrencies] = useState<CurrencyOption[]>([])
-
-  async function fetchRevenueAccounts() {
-    try {
-      const res = await fetch('/api/bookkeeping/accounts')
-      const body = await res.json()
-      const accounts = ((body?.data as BASAccount[]) || [])
-        .filter((account) => account.account_class >= 1 && account.account_class <= 3)
-      setPostingAccounts(accounts)
-    } catch {
-      // Non-fatal: the combobox degrades to free 4-digit entry.
-    }
-  }
-
-  useEffect(() => {
-    fetchRevenueAccounts()
-  }, [])
 
   // Currency options come from the currencies reference table: one source of
   // truth, no hard-coded list.
@@ -604,7 +596,8 @@ export default function ArticleForm({
             : undefined
         }
         onCreated={async (account) => {
-          await fetchRevenueAccounts()
+          // The new account must be in the shared chart before the field points at it.
+          await invalidateReferenceData('ref:accounts')
           setValue('revenue_account', account.account_number, { shouldDirty: true })
           setCreateAccountPrefill(null)
         }}
