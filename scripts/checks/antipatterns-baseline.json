@@ -34,7 +34,7 @@
     ]
   },
   "rawReferenceFetch": {
-    "count": 46,
+    "count": 45,
     "files": [
       "app/(dashboard)/assets/[id]/dispose/page.tsx",
       "app/(dashboard)/bookkeeping/year-end/page.tsx",
@@ -62,7 +62,6 @@
       "components/import/FiscalYearGapNotice.tsx",
       "components/import/ImportReviewStep.tsx",
       "components/import/OpeningBalancePeriodStep.tsx",
-      "components/invoices/InvoiceEditor.tsx",
       "components/invoices/PaymentBookingDialog.tsx",
       "components/invoices/SendInvoiceDialog.tsx",
       "components/pending-operations/use-account-names.ts",

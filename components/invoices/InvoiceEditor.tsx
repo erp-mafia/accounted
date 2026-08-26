@@ -59,6 +59,8 @@ import CustomerForm from '@/components/customers/CustomerForm'
 import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDialog'
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { useAccounts, useArticles, useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import {
@@ -87,7 +89,7 @@ import {
   buildSelfBilledPayload,
   hasDimensionValues,
 } from '@/lib/invoices/editor-payload'
-import type { Customer, Currency, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem, BASAccount } from '@/types'
+import type { Customer, Currency, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem } from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
@@ -377,8 +379,41 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   type FormData = z.infer<typeof schema>
 
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // Reference data from the session cache (lib/reference-data): customers,
+  // articles, posting accounts and company settings are read from SWR
+  // instead of four fetches per mount, so a cached editor renders every
+  // field populated on the first paint and reopening the dialog costs no
+  // requests. Customers come through /api/customers, which masks the
+  // personnummer column; nothing here rendered it.
+  const { customers: cachedCustomers, isLoading: customersLoading, error: customersError } = useCustomers()
+  // Archived customers (v1 API soft-delete) are not offered in the picker
+  // (/api/customers filters archived_at IS NULL). An existing draft or copied
+  // invoice may still point at one (archiving only refuses when open invoices
+  // exist, drafts do not count), so that single row is fetched on its own and
+  // kept in the list, or the select would render blank.
+  const keepCustomerId = initial?.customer_id ?? copyInitial?.customer_id ?? null
+  const [keptCustomer, setKeptCustomer] = useState<Customer | null>(null)
+  useEffect(() => {
+    if (!keepCustomerId || customersLoading) return
+    if (cachedCustomers.some((c) => c.id === keepCustomerId)) return
+    let cancelled = false
+    fetch(`/api/customers/${encodeURIComponent(keepCustomerId)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json: { data?: Customer } | null) => {
+        if (!cancelled && json?.data) setKeptCustomer(json.data)
+      })
+      .catch(() => {
+        // The picker simply shows no selection for a customer that no longer resolves.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [keepCustomerId, customersLoading, cachedCustomers])
+  const customers = useMemo(() => {
+    if (!keptCustomer || cachedCustomers.some((c) => c.id === keptCustomer.id)) return cachedCustomers
+    return [...cachedCustomers, keptCustomer].sort((a, b) => a.name.localeCompare(b.name))
+  }, [cachedCustomers, keptCustomer])
+  const { settings: companySettings } = useCompanySettings()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
@@ -403,11 +438,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [numberPreview, setNumberPreview] = useState<string | null>(null)
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   // Artikelregister: active articles for the line picker + which line is mid quick-create.
-  const [articles, setArticles] = useState<ArticleOption[]>([])
+  const { articles: articleRows } = useArticles()
+  // Numeric-aware order by article number ('2' before '10', unnumbered last):
+  // the picker should follow the user's own numbering, not the alphabet.
+  const articles = useMemo(() => sortArticles(articleRows as ArticleOption[]), [articleRows])
   const [savingArticleIndex, setSavingArticleIndex] = useState<number | null>(null)
   // Active balance-sheet and revenue accounts for the optional per-line
   // posting override, plus which rows currently show that picker.
-  const [postingAccounts, setPostingAccounts] = useState<BASAccount[]>([])
+  const { accounts: activeAccounts } = useAccounts()
+  const postingAccounts = useMemo(
+    () => activeAccounts.filter((account) => account.account_class >= 1 && account.account_class <= 3),
+    [activeAccounts],
+  )
   const [accountOverrideRows, setAccountOverrideRows] = useState<Set<number>>(new Set())
   // Dimension tagging (kostnadsställe/projekt, dimensions PR7). Affordances
   // render only when company_settings.dimensions_enabled: a UI-visibility
@@ -608,37 +650,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }, [customers, setValue])
 
   useEffect(() => {
-    if (!company?.id) return
-    fetchCustomers()
-    fetchDefaultNotes()
-    fetchArticles()
-    fetchRevenueAccounts()
-  }, [company?.id])
-
-  async function fetchArticles() {
-    if (!company?.id) return
-    const { data } = await supabase
-      .from('articles')
-      .select('id, article_number, name, unit, price_excl_vat, vat_rate, revenue_account, currency, housework_type')
-      .eq('company_id', company.id)
-      .eq('active', true)
-    // Numeric-aware order by article number ('2' before '10', unnumbered last):
-    // the picker should follow the user's own numbering, not the alphabet.
-    setArticles(sortArticles((data ?? []) as ArticleOption[]))
-  }
-
-  async function fetchRevenueAccounts() {
-    if (!company?.id) return
-    try {
-      const res = await fetch('/api/bookkeeping/accounts')
-      const body = await res.json()
-      const accounts = ((body?.data as BASAccount[]) || [])
-        .filter((account) => account.account_class >= 1 && account.account_class <= 3)
-      setPostingAccounts(accounts)
-    } catch {
-      // Non-fatal: the override picker degrades to free 4-digit entry.
-    }
-  }
+    if (!customersError) return
+    toast({
+      title: t('load_customers_failed_title'),
+      description: t('load_customers_failed_description'),
+      variant: 'destructive',
+    })
+  }, [customersError, toast, t])
 
   // Apply a chosen article's defaults onto a line. Selecting "none" detaches the
   // article link (and its account override) but keeps the typed text/price so the
@@ -762,7 +780,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         throw new Error(getErrorMessage(result, { context: 'article', statusCode: response.status }))
       }
       const created = result.data as ArticleOption
-      setArticles((prev) => sortArticles([...prev, created]))
+      // Every article picker on the page reads the shared cache: refresh it
+      // (awaited, so the new option resolves before the line points at it).
+      await invalidateReferenceData('ref:articles')
       setValue(`items.${index}.article_id`, created.id, { shouldDirty: true })
       toast({ title: t('article_saved_title'), description: created.name })
     } catch (error) {
@@ -913,13 +933,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     })
   }
 
-  async function fetchDefaultNotes() {
-    if (!company?.id) return
-    const { data } = await supabase
-      .from('company_settings')
-      .select('invoice_default_notes, default_our_reference, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url, vat_registered, dimensions_enabled, invoice_payment_links_enabled')
-      .eq('company_id', company.id)
-      .single()
+  // Apply the company settings ONCE per editor instance. The settings row is
+  // a live SWR value: a background revalidation must not re-run the
+  // create-mode prefills below over notes or a reference the user has since
+  // typed. The gates read each time (vatRegistered, dimensions, payment
+  // links) are cheap and deliberately re-applied too, they are not user input.
+  const settingsAppliedRef = useRef(false)
+  useEffect(() => {
+    const data = companySettings
+    if (!data || settingsAppliedRef.current) return
+    settingsAppliedRef.current = true
     if (data?.invoice_default_notes) {
       setDefaultNotes(data.invoice_default_notes)
       if (!isEditMode && !isCopyMode) {
@@ -950,7 +973,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     setDimensionsEnabled(data?.dimensions_enabled === true)
     // Gates the payment-link section (opt-in on the invoice settings page).
     setPaymentLinksEnabled(data?.invoice_payment_links_enabled === true)
-  }
+  // The initial-mode flags and the draft's own rounding are fixed for the
+  // editor's lifetime; setValue is stable (react-hook-form).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companySettings])
 
   // First-invoice detection (issue #520): captured at page load so the
   // post-create flow can offer the logo prompt for genuinely first-time
@@ -1040,31 +1066,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }, [watchCustomerId, customers, setValue])
 
-  async function fetchCustomers() {
-    if (!company?.id) return
-    // Archived customers (v1 API soft-delete) are not offered in the picker.
-    // An existing draft or copied invoice may still point at one (archiving
-    // only refuses when open invoices exist, drafts do not count), so that
-    // single row is kept in the list or the select would render blank.
-    const keepCustomerId = initial?.customer_id ?? copyInitial?.customer_id ?? null
-    const base = supabase.from('customers').select('*').eq('company_id', company.id)
-    const query = keepCustomerId
-      ? base.or(`archived_at.is.null,id.eq.${keepCustomerId}`)
-      : base.is('archived_at', null)
-    const { data, error } = await query.order('name', { ascending: true })
-
-    if (error) {
-      toast({
-        title: t('load_customers_failed_title'),
-        description: t('load_customers_failed_description'),
-        variant: 'destructive',
-      })
-    } else {
-      setCustomers(data || [])
-    }
-    setIsLoading(false)
-  }
-
   async function handleCreateCustomer(data: CreateCustomerInput) {
     setIsCreatingCustomer(true)
 
@@ -1088,7 +1089,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         description: t('customer_created_description', { name: data.name }),
       })
       pendingCustomerRef.current = result.data
-      setCustomers(prev => [...prev, result.data])
+      // The selection effect above picks the pending customer up as soon as
+      // the refreshed shared list contains it.
+      await invalidateReferenceData('ref:customers')
       setIsCreateCustomerOpen(false)
     }
 
@@ -1797,14 +1800,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
-  }
-
   const titleText = isEditMode
     ? t('title_edit')
     : isCopyMode
@@ -2006,7 +2001,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         sliver; give the zero-customer state real content. */}
                     {customers.length === 0 && (
                       <div className="px-3 py-2 text-[13px] text-muted-foreground">
-                        {t('no_customers_yet')}
+                        {customersLoading ? t('loading_customers') : t('no_customers_yet')}
                       </div>
                     )}
                     {customers.map((customer) => (
