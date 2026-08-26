@@ -18,12 +18,11 @@ const ACCOUNT_DESCRIPTIONS: Record<string, AccountDescription> = {
     type: 'asset',
     explanation: 'Pengar som kunder är skyldiga dig för skickade fakturor som inte betalats ännu.',
   },
-  '1580': {
-    name: 'Fordran för skatt',
-    classLabel: 'Tillgångar',
-    type: 'asset',
-    explanation: 'Pengar du har att fordra från Skatteverket, t.ex. överskjutande moms.',
-  },
+  // 1580 is intentionally absent: BAS moved card/coupon acquirer receivables
+  // from 1580 to 1686, and 1580 is excluded from the BAS 2026 catalog as
+  // non-standard (see bas-reference.test.ts). A hardcoded entry here once
+  // mislabeled it as a tax receivable (that is 1640/1650); companies with a
+  // legacy 1580 see their own account name instead.
   '1630': {
     name: 'Skattekonto',
     classLabel: 'Tillgångar',
