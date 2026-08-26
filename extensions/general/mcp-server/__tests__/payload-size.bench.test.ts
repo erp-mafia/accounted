@@ -221,9 +221,14 @@ describe('tools/list payload size guard', () => {
     //     tools/list, so catalogVisibility 'search' means discover-only there;
     //     the onboarding flow dead-ended on client-side tool-not-found when
     //     the skill pointed at them (SilverPark session, 2026-08-26).
+    //   * 61.2K to 61.5K with gnubok_lookup_company (org-number-first
+    //     onboarding): default-catalog for the same reason as the connect
+    //     tools; the onboarding skill's first instruction is to call it, and
+    //     a search-only tool is uncallable on Claude.ai. Descriptions were
+    //     trimmed first; the tool costs ~265 tokens against ~0 headroom.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(61_200)
+    expect(approxTokens).toBeLessThan(61_500)
   })
 })

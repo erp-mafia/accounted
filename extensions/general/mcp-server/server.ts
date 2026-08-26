@@ -20,6 +20,11 @@ import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { getCanonicalBaseUrl } from '@/lib/api/v1/base-url'
 import { createCompanyCore } from '@/lib/company/create-company'
 import { CompanySetupSchema, planCompanySetup } from '@/lib/company/onboarding-input'
+import { lookupCompanyByOrgNumber } from '@/extensions/general/tic/lib/lookup'
+import { TICAPIError } from '@/extensions/general/tic/lib/tic-types'
+import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
+import { deriveFirstYearDefaults, parseStartMonthDay } from '@/lib/company/first-year-defaults'
 import {
   ANONYMOUS_METHODS,
   ANONYMOUS_RATE_LIMIT,
@@ -2986,10 +2991,177 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_lookup_company',
+    title: 'Look Up Company',
+    description:
+      'Look up a Swedish company by organisationsnummer in the public registry (name, address, F-skatt, VAT, legal form, fiscal year). Call FIRST in onboarding: the user confirms facts instead of answering questions. Feeds gnubok_create_company; works before any company exists.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        org_number: {
+          type: 'string',
+          description: '10 digits (personnummer for enskild firma); hyphens/spaces OK',
+        },
+      },
+      required: ['org_number'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['found', 'not_found', 'unavailable'] },
+        company: { type: ['object', 'null'] },
+        suggested_create_company_input: { type: ['object', 'null'] },
+        still_to_ask: { type: 'array', items: { type: 'string' } },
+        warnings: { type: 'array', items: { type: 'string' } },
+        instructions: { type: 'string' },
+      },
+      required: ['status', 'company', 'suggested_create_company_input', 'still_to_ask', 'warnings', 'instructions'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    async execute(args) {
+      const raw = String((args as { org_number: string }).org_number ?? '')
+      const normalized = normalizeOrgNumber(raw)
+      if (!normalized) {
+        throw Object.assign(
+          new Error('Invalid organisationsnummer: expected 10 digits (hyphens and spaces are OK).'),
+          { code: 'VALIDATION_ERROR' }
+        )
+      }
+
+      const askEverything = [
+        'name',
+        'entity_type (enskild firma or aktiebolag)',
+        'f_skatt',
+        'vat_registered (and moms_period if yes)',
+        'accounting_method (accrual or cash)',
+        'fiscal year',
+        'address (optional)',
+      ]
+
+      let lookup
+      try {
+        lookup = await lookupCompanyByOrgNumber(normalized)
+      } catch (error) {
+        if (error instanceof TICAPIError) {
+          return {
+            status: 'unavailable',
+            company: null,
+            suggested_create_company_input: null,
+            still_to_ask: askEverything,
+            warnings: [`Registry lookup unavailable (${error.code}).`],
+            instructions:
+              'The registry lookup is unavailable right now. Fall back to asking the user each question in still_to_ask, then call gnubok_create_company (preview first, then confirm=true).',
+          }
+        }
+        throw error
+      }
+
+      if (!lookup) {
+        return {
+          status: 'not_found',
+          company: null,
+          suggested_create_company_input: null,
+          still_to_ask: askEverything,
+          warnings: [],
+          instructions:
+            'No company matched this organisationsnummer. Double-check the number with the user; a brand-new registration can take days to appear. If the number is right, ask each question in still_to_ask and call gnubok_create_company manually.',
+        }
+      }
+
+      const entityType = mapEntityType(lookup.legalEntityType)
+      const warnings: string[] = []
+      if (lookup.isCeased) {
+        warnings.push(
+          'The registry marks this company as CEASED (avregistrerat). Surface this to the user before continuing; they may still proceed.'
+        )
+      }
+      if (!entityType) {
+        warnings.push(
+          `Legal form "${lookup.legalEntityType ?? 'unknown'}" is not supported for automatic setup: only enskild firma and aktiebolag can be created here.`
+        )
+      }
+
+      // Mirror the web onboarding journey's fact-vs-question rules
+      // (lib/onboarding-journey/reducer.ts): facts from a successful lookup
+      // are presented for confirmation, not asked. F-skatt is a fact both
+      // ways; VAT is a fact ONLY when positively registered (ML 17 kap 24
+      // paragraf: never silently default vat_registered); moms period and
+      // accounting method are ALWAYS the user's answer.
+      const vatIsFact = lookup.registration.vat === true
+      const stillToAsk: string[] = []
+      if (!entityType) stillToAsk.push('entity_type (enskild firma or aktiebolag)')
+      if (entityType === 'enskild_firma') {
+        stillToAsk.push(
+          'name: for enskild firma the verksamhetsnamn is freely choosable; suggest the registered name but let the user pick'
+        )
+      }
+      if (!vatIsFact) stillToAsk.push('vat_registered (the registry shows no VAT registration; confirm with the user)')
+      if (vatIsFact) stillToAsk.push('moms_period (monthly, quarterly or yearly; never guess)')
+      else stillToAsk.push('moms_period IF vat_registered turns out true')
+      stillToAsk.push('accounting_method (accrual = faktureringsmetoden, cash = kontantmetoden; never guess)')
+
+      const startMonth = parseStartMonthDay(lookup.fiscalYear?.startMonthDay)
+      const firstYear = deriveFirstYearDefaults(lookup.registrationDate)
+      if (startMonth !== null) {
+        stillToAsk.push(
+          `fiscal year: registry shows ${lookup.fiscalYear?.startMonthDay} to ${lookup.fiscalYear?.endMonthDay}; ask "stämmer detta?" instead of an open question`
+        )
+      } else if (firstYear.isFirstFiscalYear) {
+        stillToAsk.push(
+          `fiscal year: company registered recently; suggest a first fiscal year starting ${firstYear.firstYearStart} (first_fiscal_year start/end; an enskild firma's first year must end 31 December)`
+        )
+      } else {
+        stillToAsk.push('fiscal year: calendar year or broken year (no registry data)')
+      }
+
+      const suggested: Record<string, unknown> = {
+        name: lookup.companyName || undefined,
+        entity_type: entityType ?? undefined,
+        org_number: normalized,
+        f_skatt: lookup.registration.fTax,
+        ...(vatIsFact ? { vat_registered: true } : {}),
+        ...(lookup.address?.street ? { address_line1: lookup.address.street } : {}),
+        ...(lookup.address?.postalCode ? { postal_code: lookup.address.postalCode } : {}),
+        ...(lookup.address?.city ? { city: lookup.address.city } : {}),
+        ...(startMonth !== null ? { fiscal_year_start_month: startMonth } : {}),
+      }
+
+      return {
+        status: 'found',
+        company: {
+          name: lookup.companyName,
+          org_number: normalized,
+          legal_entity_type: lookup.legalEntityType,
+          is_ceased: lookup.isCeased,
+          address: lookup.address,
+          f_skatt: lookup.registration.fTax,
+          vat_registered: lookup.registration.vat,
+          fiscal_year: lookup.fiscalYear ?? null,
+          registration_date: lookup.registrationDate
+            ? new Date(lookup.registrationDate).toISOString().slice(0, 10)
+            : null,
+          sni_codes: lookup.sniCodes,
+        },
+        suggested_create_company_input: suggested,
+        still_to_ask: stillToAsk,
+        warnings,
+        instructions:
+          'Present the company facts as a short summary for the user to CONFIRM (name, address, F-skatt, VAT status; do not re-ask them). Then ask ONLY the still_to_ask questions, merge the answers into suggested_create_company_input, and call gnubok_create_company (preview first, read it back, then confirm=true).',
+      }
+    },
+  },
+
+  {
     name: 'gnubok_create_company',
     title: 'Create Company',
     description:
-      'Create a NEW company for the connected user, set up for bookkeeping (chart, settings, first fiscal period, tax deadlines; 30-day trial). Preview first (no confirm), read it back, then confirm=true. Ask, never assume: form, orgnr, VAT + moms period, method. Skill: onboarding.',
+      'Create a NEW company for the connected user, set up for bookkeeping (chart, settings, first fiscal period, tax deadlines; 30-day trial). Call gnubok_lookup_company FIRST to prefill facts from the orgnr. Preview (no confirm), read it back, then confirm=true. Skill: onboarding.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
