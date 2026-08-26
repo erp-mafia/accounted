@@ -216,9 +216,14 @@ describe('tools/list payload size guard', () => {
     //     trimmed to bare property names first (the two connect-link tools
     //     are search-only); headroom before the change was ~0 after the skatteverket_connection bump, so even the
     //     bare contract crossed by ~420.
+    //   * 60.7K to 61.2K with the two connect-link tools moved into the default
+    //     catalog (issue #1814): Claude.ai can only CALL tools present in
+    //     tools/list, so catalogVisibility 'search' means discover-only there;
+    //     the onboarding flow dead-ended on client-side tool-not-found when
+    //     the skill pointed at them (SilverPark session, 2026-08-26).
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(60_700)
+    expect(approxTokens).toBeLessThan(61_200)
   })
 })
