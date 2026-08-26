@@ -65,8 +65,8 @@ These are all available on Supabase hosted. `pg_cron` requires a paid plan: if y
 **Option A: Setup script (recommended):**
 
 ```bash
-git clone https://github.com/erp-mafia/gnubok.git
-cd Accounted
+git clone https://github.com/erp-mafia/accounted.git
+cd accounted
 ./setup.sh
 ```
 
@@ -75,8 +75,8 @@ The script checks prerequisites, prompts for your Supabase credentials, auto-gen
 **Option B: Manual:**
 
 ```bash
-git clone https://github.com/erp-mafia/gnubok.git
-cd Accounted
+git clone https://github.com/erp-mafia/accounted.git
+cd accounted
 cp .env.docker.example .env
 ```
 
@@ -313,14 +313,9 @@ VAPID_SUBJECT=mailto:you@example.com
 
 Generate VAPID keys with `npx web-push generate-vapid-keys`. Push notifications require HTTPS.
 
-### Error Tracking (Sentry)
+### Error Tracking
 
-```bash
-SENTRY_DSN=https://...@sentry.io/...
-NEXT_PUBLIC_SENTRY_DSN=https://...@sentry.io/...
-```
-
-Sentry is disabled if these are not set. No errors are thrown.
+There is no Sentry integration. `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN` are not read by the app: setting them changes nothing. Error-level events go to the container logs (structured JSON on stdout/stderr); `lib/observability/sink.ts` is a provider-agnostic seam that stays a no-op until an adapter is registered with `registerObservabilitySink()`, so a self-hosted build carries no third-party error-tracking dependency. If you want alerting, ship the container logs to your log system and alert there. See [docs/security/logging-and-observability.md](security/logging-and-observability.md).
 
 ## Storage Buckets
 
@@ -341,7 +336,7 @@ If a new release includes database migrations, apply them before restarting:
 supabase db push
 ```
 
-Check the [release notes](https://github.com/erp-mafia/gnubok/releases) for migration instructions.
+Check the [release notes](https://github.com/erp-mafia/accounted/releases) for migration instructions.
 
 ## Architecture Overview
 
