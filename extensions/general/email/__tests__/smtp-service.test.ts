@@ -106,7 +106,8 @@ describe('SmtpEmailService', () => {
     })
     expect(result).toEqual({ success: true, provider: 'smtp', messageId: '<abc@relay>' })
     const mail = sendMailMock.mock.calls[0][0]
-    expect(mail.from).toBe('Nordvik ByggX-Injected: 1 via Accounted evilBcc: x <faktura@example.se>')
+    // The colon in the sanitized name makes RFC 5322 require quoting, as in Resend.
+    expect(mail.from).toBe('"Nordvik ByggX-Injected: 1 via Accounted evilBcc: x" <faktura@example.se>')
     expect(mail.from).not.toMatch(/[\r\n<>].*</)
     expect(mail.to).toEqual(['a@b.se', 'c@d.se'])
     expect(mail.cc).toEqual(['e@f.se'])
@@ -116,6 +117,66 @@ describe('SmtpEmailService', () => {
     expect(Buffer.isBuffer(mail.attachments[0].content)).toBe(true)
     expect(mail.attachments[0].content.toString()).toBe('PDF')
     expect(mail.attachments[1].content.toString()).toBe('PDF2')
+  })
+
+  it('sends from the company sender when options.from is given, with the same injection guard', async () => {
+    configure()
+    const service = new SmtpEmailService()
+    await service.sendEmail({
+      to: 'a@b.se',
+      subject: 'Faktura 1002',
+      html: '<p>Hej</p>',
+      fromName: 'ignored when from is explicit',
+      from: { name: 'Nordvik Bygg AB', address: ' Faktura@Nordvik.se ' },
+    })
+    expect(sendMailMock.mock.calls[0][0].from).toBe('Nordvik Bygg AB <faktura@nordvik.se>')
+
+    await service.sendEmail({
+      to: 'a@b.se',
+      subject: 'Faktura 1003',
+      html: '<p>Hej</p>',
+      from: { name: 'Nordvik, Bygg <AB>\r\nBcc: x', address: 'faktura@nordvik.se' },
+    })
+    const injected = sendMailMock.mock.calls[1][0].from
+    expect(injected).toBe('"Nordvik, Bygg ABBcc: x" <faktura@nordvik.se>')
+    expect(injected).not.toMatch(/[\r\n<>].*</)
+  })
+
+  it('falls back to the platform sender when options.from is malformed', async () => {
+    configure()
+    await new SmtpEmailService().sendEmail({
+      to: 'a@b.se',
+      subject: 'Faktura 1004',
+      html: '<p>Hej</p>',
+      fromName: 'Nordvik',
+      from: { name: 'Nordvik', address: 'not an address' },
+    })
+    expect(sendMailMock.mock.calls[0][0].from).toBe('"Nordvik via Accounted evilBcc: x" <faktura@example.se>')
+    expect(sendMailMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries once as the platform sender when the relay refuses the company sender', async () => {
+    configure()
+    sendMailMock.mockRejectedValueOnce(new Error('5.7.60 SMTP; Client does not have permissions to send as this sender'))
+    const result = await new SmtpEmailService().sendEmail({
+      to: 'a@b.se',
+      subject: 'Faktura 1005',
+      html: '<p>Hej</p>',
+      fromName: 'Nordvik',
+      from: { name: 'Nordvik Bygg AB', address: 'faktura@nordvik.se' },
+    })
+    expect(result).toEqual({ success: true, provider: 'smtp', messageId: '<abc@relay>' })
+    expect(sendMailMock).toHaveBeenCalledTimes(2)
+    expect(sendMailMock.mock.calls[0][0].from).toBe('Nordvik Bygg AB <faktura@nordvik.se>')
+    expect(sendMailMock.mock.calls[1][0].from).toBe('"Nordvik via Accounted evilBcc: x" <faktura@example.se>')
+  })
+
+  it('does not retry when the platform sender itself is refused', async () => {
+    configure()
+    sendMailMock.mockRejectedValueOnce(new Error('421 relay busy'))
+    const result = await new SmtpEmailService().sendEmail({ to: 'a@b.se', subject: 'x', html: 'x', fromName: 'Nordvik' })
+    expect(result).toEqual({ success: false, provider: 'smtp', error: '421 relay busy' })
+    expect(sendMailMock).toHaveBeenCalledTimes(1)
   })
 
   it('reuses one transport across sends and rebuilds it when settings change', async () => {

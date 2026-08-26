@@ -34,6 +34,55 @@ function sanitizeHeaderPart(s: string): string {
   return s.replace(/[\r\n<>]/g, '').trim()
 }
 
+// RFC 5322 "specials" that make a bare display name ambiguous (a comma splits
+// the mailbox list, a quote or parenthesis opens a token). Mirrors
+// resend-service.ts so both providers emit the same From shape.
+const DISPLAY_NAME_SPECIALS = /[()<>[\]:;@\\,."]/
+
+/** Quote a display name only when RFC 5322 requires it; escape `\` and `"`. */
+function encodeDisplayName(name: string): string {
+  if (!DISPLAY_NAME_SPECIALS.test(name)) return name
+  return `"${name.replace(/[\\"]/g, (c) => `\\${c}`)}"`
+}
+
+// Same conservative shape as resend-service.ts: a last-line guard against a
+// malformed company_sending_domains row, not an RFC 5322 parser.
+const FROM_ADDRESS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}@[a-z0-9.-]{4,253}$/
+
+/**
+ * Builds the From header exactly like resend-service.ts buildFromHeader().
+ * With an explicit `from` (the company's own verified sending domain, #1802)
+ * the mail leaves as "<name> <address>" and the relay's default sender is not
+ * involved; otherwise "<fromName> via <App> <SMTP_FROM_EMAIL>" or
+ * "<App> <SMTP_FROM_EMAIL>". A malformed explicit sender falls through to the
+ * platform default rather than failing the send.
+ *
+ * Mirrored rather than imported because the platform fallback address differs
+ * per provider (RESEND_FROM_EMAIL there, SMTP_FROM_EMAIL here). Same
+ * header-injection defence: CRLF and angle brackets are stripped from every
+ * name part. Exported for unit tests.
+ */
+export function buildSmtpFromHeader(input: {
+  fromName?: string
+  from?: { name: string; address: string }
+  defaultFromEmail: string
+}): string {
+  const safeAppName = sanitizeHeaderPart(getBranding().appName)
+
+  if (input.from) {
+    const address = input.from.address.trim().toLowerCase()
+    const name = sanitizeHeaderPart(input.from.name)
+    if (FROM_ADDRESS_PATTERN.test(address) && name) {
+      return `${encodeDisplayName(name)} <${address}>`
+    }
+  }
+
+  const safeFromName = input.fromName ? sanitizeHeaderPart(input.fromName) : null
+  return safeFromName
+    ? `${encodeDisplayName(`${safeFromName} via ${safeAppName}`)} <${input.defaultFromEmail}>`
+    : `${encodeDisplayName(safeAppName)} <${input.defaultFromEmail}>`
+}
+
 function optionalAddressList(addresses: string | string[] | undefined): string[] | undefined {
   if (!addresses) return undefined
   const list = Array.isArray(addresses) ? addresses : [addresses]
@@ -110,32 +159,42 @@ export class SmtpEmailService implements EmailService {
       return { success: false, error: 'Email service is not configured' }
     }
 
-    // Strip CRLF and angle brackets from name parts to prevent header
-    // injection: fromName is user-controlled (company settings), appName is
-    // admin-controlled (branding). Same defence as the Resend service.
-    const safeAppName = sanitizeHeaderPart(getBranding().appName)
-    const safeFromName = fromName ? sanitizeHeaderPart(fromName) : null
-    const from = safeFromName
-      ? `${safeFromName} via ${safeAppName} <${settings.fromEmail}>`
-      : `${safeAppName} <${settings.fromEmail}>`
+    const from = buildSmtpFromHeader({ fromName, from: options.from, defaultFromEmail: settings.fromEmail })
+    const platformFrom = buildSmtpFromHeader({ fromName, defaultFromEmail: settings.fromEmail })
+    const mail = {
+      to: Array.isArray(to) ? to : [to],
+      cc: optionalAddressList(cc),
+      bcc: optionalAddressList(bcc),
+      subject,
+      html,
+      text,
+      replyTo,
+      attachments: attachments?.map((att) => ({
+        filename: att.filename,
+        content:
+          typeof att.content === 'string' ? Buffer.from(att.content, 'base64') : Buffer.from(att.content),
+        contentType: att.contentType,
+      })),
+    }
 
     try {
-      const info = await getTransport(settings).sendMail({
-        from,
-        to: Array.isArray(to) ? to : [to],
-        cc: optionalAddressList(cc),
-        bcc: optionalAddressList(bcc),
-        subject,
-        html,
-        text,
-        replyTo,
-        attachments: attachments?.map((att) => ({
-          filename: att.filename,
-          content:
-            typeof att.content === 'string' ? Buffer.from(att.content, 'base64') : Buffer.from(att.content),
-          contentType: att.contentType,
-        })),
-      })
+      const transport = getTransport(settings)
+      let info: { messageId?: string }
+      try {
+        info = await transport.sendMail({ from, ...mail })
+      } catch (error) {
+        // Same fallback as the Resend service: a relay may refuse to send as
+        // an address it does not own (e.g. a Microsoft 365 "send as" policy).
+        // The relay rejected the message, so nothing went out: retry once as
+        // the platform sender rather than failing every invoice for that
+        // company.
+        if (from === platformFrom) throw error
+        log.warn('SMTP relay rejected the company sender, retrying as the platform sender', {
+          from,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        info = await transport.sendMail({ from: platformFrom, ...mail })
+      }
       return { success: true, provider: 'smtp', messageId: info.messageId }
     } catch (error) {
       log.error('Failed to send email over SMTP:', error)
