@@ -23,6 +23,10 @@ export const GET = withRouteContext(
     // hand the roster page a silently truncated customer list. Ordered on the
     // PK because paging is only stable under a unique total order; the
     // name sort callers expect is re-applied below.
+    //
+    // Archived rows (soft-deleted via the v1 API) stay in the table for BFL
+    // retention but are not part of the roster: same canonical
+    // `archived_at IS NULL` filter as the v1 list route.
     let rows: Customer[]
     try {
       rows = await fetchAllRows<Customer>(
@@ -31,6 +35,7 @@ export const GET = withRouteContext(
             .from('customers')
             .select('*')
             .eq('company_id', companyId)
+            .is('archived_at', null)
             .order('id', { ascending: true })
             .range(from, to),
         { dedupeBy: (row) => row.id },

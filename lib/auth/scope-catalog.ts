@@ -1,24 +1,26 @@
 /**
- * API key scopes: the catalogue, default sets, UI groups, the MCP tool to
- * scope map and the pure helpers. Kept free of Node imports: lib/auth/
- * api-keys.ts (which generates and hashes keys with `crypto`) re-exports all
- * of this for server callers, while components/settings/ApiKeysPanel.tsx
- * imports it directly so the settings bundle does not carry the browser
- * crypto polyfill.
+ * API-key scope catalogue: scope ids, labels, groups and the MCP tool map.
+ *
+ * Pure data with no server imports, so client components (the settings
+ * panel) can bundle it without dragging in crypto or the service-role
+ * Supabase client that lib/auth/api-keys.ts needs. api-keys.ts re-exports
+ * everything here; server code keeps importing from there.
  */
 
+// ── API Key Scopes ──────────────────────────────────────────
+
 export const API_KEY_SCOPES = {
-  'transactions:read':  { label: 'Transaktioner: läs',  description: 'Lista transaktioner, mallförslag, kategoriförslag (3 verktyg)' },
-  'transactions:write': { label: 'Transaktioner: skriv', description: 'Kategorisera, av-kategorisera, kvittomatchning, koppling mot faktura (4 verktyg)' },
-  'customers:read':     { label: 'Kunder: läs',         description: 'Lista kunder (1 verktyg)' },
-  'customers:write':    { label: 'Kunder: skriv',       description: 'Skapa och uppdatera kunder (2 verktyg)' },
-  'articles:read':      { label: 'Artiklar: läs',       description: 'Lista artiklar i artikelregistret (1 verktyg)' },
-  'articles:write':     { label: 'Artiklar: skriv',     description: 'Skapa och uppdatera artiklar (2 verktyg)' },
-  'invoices:read':      { label: 'Fakturor: läs',       description: 'Lista fakturor (1 verktyg)' },
-  'invoices:write':     { label: 'Fakturor: skriv',     description: 'Skapa, skicka, markera betald/skickad (4 verktyg)' },
-  'suppliers:read':     { label: 'Leverantörer: läs',   description: 'Lista leverantörer och leverantörsfakturor, hitta verifikat-kandidater (3 verktyg)' },
-  'suppliers:write':    { label: 'Leverantörer: skriv', description: 'Skapa leverantörer; godkänn, kreditera, betal-länka och hantera leverantörsfakturor (6 verktyg)' },
-  'reports:read':       { label: 'Rapporter: läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export (12 verktyg)' },
+  'transactions:read':  { label: 'Transaktioner: läs',  description: 'Lista transaktioner, mallförslag, kategoriförslag' },
+  'transactions:write': { label: 'Transaktioner: skriv', description: 'Kategorisera, av-kategorisera, kvittomatchning, koppling mot faktura' },
+  'customers:read':     { label: 'Kunder: läs',         description: 'Lista kunder' },
+  'customers:write':    { label: 'Kunder: skriv',       description: 'Skapa och uppdatera kunder' },
+  'articles:read':      { label: 'Artiklar: läs',       description: 'Lista artiklar i artikelregistret' },
+  'articles:write':     { label: 'Artiklar: skriv',     description: 'Skapa och uppdatera artiklar' },
+  'invoices:read':      { label: 'Fakturor: läs',       description: 'Lista fakturor' },
+  'invoices:write':     { label: 'Fakturor: skriv',     description: 'Skapa, skicka, markera betald/skickad' },
+  'suppliers:read':     { label: 'Leverantörer: läs',   description: 'Lista leverantörer och leverantörsfakturor, hitta verifikat-kandidater' },
+  'suppliers:write':    { label: 'Leverantörer: skriv', description: 'Skapa leverantörer; godkänn, kreditera, betal-länka och hantera leverantörsfakturor' },
+  'reports:read':       { label: 'Rapporter: läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export' },
   'bookkeeping:write':  { label: 'Bokföring: skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar, kontoplan (skapa/ändra konton), verifikat-anteckningar' },
   'payroll:read':       { label: 'Löner: läs',          description: 'Lista anställda, lönekörningar, lönejournal, körjournal' },
   'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI, logga körjournalresor' },
@@ -155,27 +157,57 @@ export function findStageApproveConflict(scopes: ApiKeyScope[]): ApiKeyScope | n
   return scopes.find((s) => STAGING_SCOPES.includes(s)) ?? null
 }
 
-/** Scope domain groups for UI rendering */
-export const SCOPE_GROUPS = [
-  { domain: 'companies',           label: 'Företag',              read: 'companies:read' as const,           write: 'companies:write' as const },
-  { domain: 'transactions',        label: 'Transaktioner',        read: 'transactions:read' as const,        write: 'transactions:write' as const },
-  { domain: 'customers',           label: 'Kunder',               read: 'customers:read' as const,           write: 'customers:write' as const },
-  { domain: 'articles',            label: 'Artiklar',             read: 'articles:read' as const,            write: 'articles:write' as const },
-  { domain: 'invoices',            label: 'Fakturor',             read: 'invoices:read' as const,            write: 'invoices:write' as const },
-  { domain: 'suppliers',           label: 'Leverantörer',         read: 'suppliers:read' as const,           write: 'suppliers:write' as const },
-  { domain: 'reports',             label: 'Rapporter',            read: 'reports:read' as const,             write: null },
-  { domain: 'bookkeeping',         label: 'Bokföring',            read: null,                                 write: 'bookkeeping:write' as const },
-  { domain: 'payroll',             label: 'Löner',                read: 'payroll:read' as const,             write: 'payroll:write' as const },
-  { domain: 'pending_operations',  label: 'Stagade operationer',  read: 'pending_operations:read' as const,  write: 'pending_operations:approve' as const },
-  { domain: 'agent',               label: 'Agent',                read: 'agent:read' as const,               write: 'agent:write' as const },
-  { domain: 'skatteverket',        label: 'Skatteverket',         read: null,                                 write: 'skatteverket:write' as const },
-] as const
+/**
+ * One entry per scope group, shared by every surface that lets a human pick
+ * scopes (settings panel, OAuth consent page). Every scope in API_KEY_SCOPES
+ * belongs to exactly one group: lib/auth/__tests__/scope-catalog.test.ts
+ * enforces it, so a scope added to the catalogue without a group fails CI
+ * instead of silently vanishing from the pickers.
+ */
+export type ScopeGroup = {
+  /** Stable id: React key and i18n suffix (`group_<domain>`) in the panel. */
+  domain: string
+  /** Swedish label for surfaces without next-intl (the OAuth consent page). */
+  label: string
+  /** Display order: the `:read` scope first, then the elevated ones. */
+  scopes: readonly ApiKeyScope[]
+}
+
+export const SCOPE_GROUPS: readonly ScopeGroup[] = [
+  { domain: 'companies',          label: 'Företag',             scopes: ['companies:read', 'companies:write'] },
+  { domain: 'transactions',       label: 'Transaktioner',       scopes: ['transactions:read', 'transactions:write'] },
+  { domain: 'reconciliation',     label: 'Avstämning',          scopes: ['reconciliation:read', 'reconciliation:write', 'reconciliation:signoff'] },
+  { domain: 'customers',          label: 'Kunder',              scopes: ['customers:read', 'customers:write'] },
+  { domain: 'articles',           label: 'Artiklar',            scopes: ['articles:read', 'articles:write'] },
+  { domain: 'invoices',           label: 'Fakturor',            scopes: ['invoices:read', 'invoices:write'] },
+  { domain: 'suppliers',          label: 'Leverantörer',        scopes: ['suppliers:read', 'suppliers:write'] },
+  { domain: 'reports',            label: 'Rapporter',           scopes: ['reports:read'] },
+  { domain: 'bookkeeping',        label: 'Bokföring',           scopes: ['bookkeeping:write'] },
+  { domain: 'payroll',            label: 'Löner',               scopes: ['payroll:read', 'payroll:write'] },
+  { domain: 'documents',          label: 'Dokument',            scopes: ['documents:read', 'documents:write'] },
+  { domain: 'pending_operations', label: 'Stagade operationer', scopes: ['pending_operations:read', 'pending_operations:approve'] },
+  { domain: 'agent',              label: 'Agent',               scopes: ['agent:read', 'agent:write'] },
+  { domain: 'skatteverket',       label: 'Skatteverket',        scopes: ['skatteverket:write'] },
+  { domain: 'compliance',         label: 'Compliance',          scopes: ['compliance:read'] },
+  { domain: 'events',             label: 'Händelser',           scopes: ['events:read'] },
+  { domain: 'webhooks',           label: 'Webhooks',            scopes: ['webhooks:manage'] },
+  { domain: 'operations',         label: 'Operationer',         scopes: ['operations:read'] },
+]
+
+/**
+ * Read scopes are the implicit baseline; everything else (write, manage,
+ * approve, signoff) is an elevated grant and is rendered as such.
+ */
+export function scopeKind(scope: ApiKeyScope): 'read' | 'write' {
+  return scope.endsWith(':read') ? 'read' : 'write'
+}
 
 /** Map MCP tool name → required scope. Tools omitted from this map are available to any authenticated key (e.g. discovery/search/skill loading). */
 export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Companies
   gnubok_list_companies:                  'companies:read',
   gnubok_create_company:                  'companies:write',
+  gnubok_lookup_company:                  'companies:read',
   gnubok_connect_bank:                    'companies:read',
   gnubok_connect_skatteverket:            'companies:read',
   gnubok_get_company_settings:            'companies:read',
@@ -376,15 +408,13 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // orient itself before its key's scopes are known.
 }
 
-export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
-  if (scopes === null || scopes === undefined) return null
-  if (!Array.isArray(scopes)) return null
-  const valid = scopes.filter((s): s is ApiKeyScope => s in API_KEY_SCOPES)
-  return valid.length > 0 ? valid : null
-}
 /**
- * Check if a given scope is allowed by the key's scopes.
+ * Number of MCP tools gated by each scope, derived from TOOL_SCOPE_MAP at
+ * module load. 0 means the scope only gates REST endpoints. Never hand-write
+ * these numbers into labels: they drift the moment a tool is added.
  */
-export function hasScope(keyScopes: ApiKeyScope[], required: ApiKeyScope): boolean {
-  return keyScopes.includes(required)
-}
+export const TOOL_COUNT_BY_SCOPE: Readonly<Record<ApiKeyScope, number>> = (() => {
+  const counts = Object.fromEntries(ALL_SCOPES.map((s) => [s, 0])) as Record<ApiKeyScope, number>
+  for (const scope of Object.values(TOOL_SCOPE_MAP)) counts[scope] += 1
+  return counts
+})()

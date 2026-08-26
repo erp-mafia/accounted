@@ -20,7 +20,8 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
-// PATCH (edit title) goes through withRouteContext → requireAuth.
+// Both handlers go through withRouteContext, which resolves the session via
+// requireAuth (the MFA-enforcing guard on hosted).
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: vi.fn(),
 }))
@@ -31,6 +32,7 @@ vi.mock('@/lib/sandbox/guard', () => ({
 
 import { DELETE, PATCH } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { requireWritePermission } from '@/lib/auth/require-write'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { NextResponse } from 'next/server'
 
@@ -40,11 +42,20 @@ describe('DELETE /api/transactions/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: mockSupabase as never,
+      error: null,
+    })
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null as never,
+      supabase: mockSupabase as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
     const request = new Request('http://localhost/api/transactions/tx-1', { method: 'DELETE' })
     const response = await DELETE(request, createMockRouteParams({ id: 'tx-1' }))
@@ -52,6 +63,29 @@ describe('DELETE /api/transactions/[id]', () => {
 
     expect(status).toBe(401)
     expect(body).toEqual({ error: 'Unauthorized' })
+  })
+
+  it('never calls supabase.auth.getUser() directly (MFA is enforced by the wrapper)', async () => {
+    const tx = makeTransaction({ journal_entry_id: null, bank_connection_id: null, import_source: null })
+    enqueue({ data: tx, error: null }) // fetch
+    enqueue({ data: null, error: null }) // delete
+
+    const request = new Request('http://localhost/api/transactions/tx-1', { method: 'DELETE' })
+    await DELETE(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(requireAuth).toHaveBeenCalledTimes(1)
+    expect(mockSupabase.auth.getUser).not.toHaveBeenCalled()
+  })
+
+  it('returns 403 for a viewer (requireWrite)', async () => {
+    vi.mocked(requireWritePermission).mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    } as never)
+
+    const request = new Request('http://localhost/api/transactions/tx-1', { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: 'tx-1' }))
+    expect(response.status).toBe(403)
   })
 
   it('returns 404 when transaction not found', async () => {

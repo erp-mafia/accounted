@@ -1042,11 +1042,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   async function fetchCustomers() {
     if (!company?.id) return
-    const { data, error } = await supabase
-      .from('customers')
-      .select('*')
-      .eq('company_id', company.id)
-      .order('name', { ascending: true })
+    // Archived customers (v1 API soft-delete) are not offered in the picker.
+    // An existing draft or copied invoice may still point at one (archiving
+    // only refuses when open invoices exist, drafts do not count), so that
+    // single row is kept in the list or the select would render blank.
+    const keepCustomerId = initial?.customer_id ?? copyInitial?.customer_id ?? null
+    const base = supabase.from('customers').select('*').eq('company_id', company.id)
+    const query = keepCustomerId
+      ? base.or(`archived_at.is.null,id.eq.${keepCustomerId}`)
+      : base.is('archived_at', null)
+    const { data, error } = await query.order('name', { ascending: true })
 
     if (error) {
       toast({

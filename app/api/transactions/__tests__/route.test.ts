@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   createMockRequest,
+  createMockRouteParams,
   parseJsonResponse,
   createQueuedMockSupabase,
   makeTransaction,
@@ -16,7 +17,14 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
+// GET goes through withRouteContext, which resolves the session via requireAuth.
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: vi.fn(),
+}))
+
 import { GET } from '../route'
+import { requireAuth } from '@/lib/auth/require-auth'
+import { NextResponse } from 'next/server'
 
 describe('GET /api/transactions', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -26,14 +34,22 @@ describe('GET /api/transactions', () => {
     vi.clearAllMocks()
     reset()
     mockSupabase.from = originalFrom
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: mockSupabase as never,
+      error: null,
+    })
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null as never,
+      supabase: mockSupabase as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
     const request = createMockRequest('/api/transactions')
-    const response = await GET(request)
+    const response = await GET(request, createMockRouteParams({}))
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
@@ -48,7 +64,7 @@ describe('GET /api/transactions', () => {
     enqueue({ data: txs, error: null })
 
     const request = createMockRequest('/api/transactions')
-    const response = await GET(request)
+    const response = await GET(request, createMockRouteParams({}))
     const { status, body } = await parseJsonResponse<{
       data: typeof txs
       has_more: boolean
@@ -70,7 +86,7 @@ describe('GET /api/transactions', () => {
     enqueue({ data: txs, error: null })
 
     const request = createMockRequest('/api/transactions')
-    const response = await GET(request)
+    const response = await GET(request, createMockRouteParams({}))
     const { status, body } = await parseJsonResponse<{
       data: typeof txs
       has_more: boolean
@@ -102,7 +118,7 @@ describe('GET /api/transactions', () => {
     mockSupabase.from = fromSpy as unknown as typeof mockSupabase.from
 
     const request = createMockRequest('/api/transactions?unmatched=true')
-    await GET(request)
+    await GET(request, createMockRouteParams({}))
 
     expect(fromSpy).toHaveBeenCalledWith('transactions')
     const chain = fromSpy.mock.results[0].value as { __calls: { method: string; args: unknown[] }[] }
@@ -129,7 +145,7 @@ describe('GET /api/transactions', () => {
     mockSupabase.from = fromSpy as unknown as typeof mockSupabase.from
 
     const request = createMockRequest('/api/transactions?reconciled=true')
-    await GET(request)
+    await GET(request, createMockRouteParams({}))
 
     const chain = fromSpy.mock.results[0].value as { __calls: { method: string; args: unknown[] }[] }
     const notCall = chain.__calls.find((c) => c.method === 'not')
@@ -160,7 +176,7 @@ describe('GET /api/transactions', () => {
     const request = createMockRequest(
       '/api/transactions?currency=SEK&date_from=2024-01-01&date_to=2024-12-31'
     )
-    await GET(request)
+    await GET(request, createMockRouteParams({}))
 
     const chain = fromSpy.mock.results[0].value as { __calls: { method: string; args: unknown[] }[] }
     const eqCalls = chain.__calls.filter((c) => c.method === 'eq')
@@ -183,7 +199,7 @@ describe('GET /api/transactions', () => {
     enqueue({ data: null, error: { message: 'boom' } })
 
     const request = createMockRequest('/api/transactions')
-    const response = await GET(request)
+    const response = await GET(request, createMockRouteParams({}))
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(500)

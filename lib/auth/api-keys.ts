@@ -9,12 +9,31 @@ import { getActiveCompanyId } from '@/lib/company/active-company'
 const KEY_PREFIX = 'gnubok_sk_'
 const REFRESH_TOKEN_PREFIX = 'gnubok_rt_'
 
-// Scope definitions, groups, the MCP tool→scope map and the pure scope
-// helpers live in ./api-key-scopes (no Node imports) so the settings UI can
-// render them without pulling this module's `crypto` import into the
-// browser bundle. Re-exported here for the many server callers.
-export * from './api-key-scopes'
-import { DEFAULT_SCOPES, validateScopes, type ApiKeyScope } from './api-key-scopes'
+// ── API Key Scopes ──────────────────────────────────────────
+// The catalogue lives in scope-catalog.ts (no server imports, safe for client
+// bundles) and is re-exported here so existing imports keep working.
+export {
+  API_KEY_SCOPES,
+  ALL_SCOPES,
+  DEFAULT_SCOPES,
+  DEFAULT_OAUTH_SCOPES,
+  PUBLIC_OAUTH_METADATA_SCOPES,
+  STAGING_SCOPES,
+  findStageApproveConflict,
+  SCOPE_GROUPS,
+  scopeKind,
+  TOOL_SCOPE_MAP,
+  TOOL_COUNT_BY_SCOPE,
+} from './scope-catalog'
+export type { ApiKeyScope, ScopeGroup } from './scope-catalog'
+import { API_KEY_SCOPES, DEFAULT_SCOPES, type ApiKeyScope } from './scope-catalog'
+
+export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
+  if (scopes === null || scopes === undefined) return null
+  if (!Array.isArray(scopes)) return null
+  const valid = scopes.filter((s): s is ApiKeyScope => s in API_KEY_SCOPES)
+  return valid.length > 0 ? valid : null
+}
 
 /**
  * Create a Supabase service client that doesn't require cookies.
@@ -199,3 +218,9 @@ async function bindUnboundKey(
   return companyId
 }
 
+/**
+ * Check if a given scope is allowed by the key's scopes.
+ */
+export function hasScope(keyScopes: ApiKeyScope[], required: ApiKeyScope): boolean {
+  return keyScopes.includes(required)
+}

@@ -28,7 +28,10 @@ const EXTS = ['.ts', '.tsx', '.js', '.mjs', '.jsx']
 
 // Block comment bodies are `(?:[^*]|\*(?!\/))*` so an unclosed `/*` cannot be
 // re-split at every later `/*` (CodeQL js/redos on the lazy form).
-const USE_CLIENT_RE = /^(?:\s+|\/\/[^\n]*\n|\/\*(?:[^*]|\*(?!\/))*\*\/)*['"]use client['"]/
+// Single-character whitespace alternative (not \s+): a `+` inside the outer
+// `*` is a nested quantifier on the same character, which CodeQL js/redos
+// flags as exponential on long runs of spaces.
+const USE_CLIENT_RE = /^(?:\s|\/\/[^\n]*\n|\/\*(?:[^*]|\*(?!\/))*\*\/)*['"]use client['"]/
 // Static edges only. `import type {...} from` and `export type {...} from`
 // are skipped; `import x, { type Y } from` still counts (x is a value).
 // One quantifier per span (a greedy `[^'"]*` up to the specifier's opening

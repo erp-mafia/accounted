@@ -52,7 +52,7 @@ if (rawClient && !CLIENT) {
 if (!API_KEY) {
   process.stderr.write(
     'Error: ACCOUNTED_API_KEY is required.\n' +
-      'Get your API key at: https://app.accounted.se/settings?tab=api\n' +
+      'Get your API key at: https://app.accounted.se/settings/api\n' +
       '\n' +
       'No API key (or no account yet)? Connect over OAuth instead; the sign-in\n' +
       'screen lets you create the account, and setup continues in the chat:\n' +

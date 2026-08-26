@@ -31,133 +31,28 @@ import { cn, formatDateLong } from '@/lib/utils'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 import { getBranding } from '@/lib/branding/service'
 import { ILLUSTRATIONS, illustrationSrc } from '@/components/onboarding/onboarding-illustrations'
-import { STAGING_SCOPES } from '@/lib/auth/api-key-scopes'
-import type { ApiKeyScope } from '@/lib/auth/api-key-scopes'
+import {
+  ALL_SCOPES,
+  SCOPE_GROUPS,
+  STAGING_SCOPES,
+  TOOL_COUNT_BY_SCOPE,
+  scopeKind,
+  type ApiKeyScope,
+  type ScopeGroup,
+} from '@/lib/auth/scope-catalog'
 
 const branding = getBranding()
 const connectorName = branding.appName.toLowerCase()
 
-type ScopeEntry = {
-  scope: ApiKeyScope
-  labelKey: string
-  /** Number of MCP tools gated by this scope. 0 = REST-API-only scope. */
-  tools: number
-}
-
-type ScopeGroup = {
-  domain: string
-  labelKey: string
-  read: ScopeEntry | null
-  write: ScopeEntry | null
-}
-
-const SCOPE_GROUPS: ScopeGroup[] = [
-  {
-    domain: 'transactions',
-    labelKey: 'group_transactions',
-    read: { scope: 'transactions:read', labelKey: 'scope_transactions_read', tools: 8 },
-    write: { scope: 'transactions:write', labelKey: 'scope_transactions_write', tools: 8 },
-  },
-  {
-    domain: 'customers',
-    labelKey: 'group_customers',
-    read: { scope: 'customers:read', labelKey: 'scope_customers_read', tools: 1 },
-    write: { scope: 'customers:write', labelKey: 'scope_customers_write', tools: 1 },
-  },
-  {
-    domain: 'invoices',
-    labelKey: 'group_invoices',
-    read: { scope: 'invoices:read', labelKey: 'scope_invoices_read', tools: 1 },
-    write: { scope: 'invoices:write', labelKey: 'scope_invoices_write', tools: 6 },
-  },
-  {
-    domain: 'suppliers',
-    labelKey: 'group_suppliers',
-    read: { scope: 'suppliers:read', labelKey: 'scope_suppliers_read', tools: 2 },
-    write: { scope: 'suppliers:write', labelKey: 'scope_suppliers_write', tools: 3 },
-  },
-  {
-    domain: 'reports',
-    labelKey: 'group_reports',
-    read: { scope: 'reports:read', labelKey: 'scope_reports_read', tools: 18 },
-    write: null,
-  },
-  {
-    domain: 'bookkeeping',
-    labelKey: 'group_bookkeeping',
-    read: null,
-    write: { scope: 'bookkeeping:write', labelKey: 'scope_bookkeeping_write', tools: 11 },
-  },
-  {
-    domain: 'payroll',
-    labelKey: 'group_payroll',
-    read: { scope: 'payroll:read', labelKey: 'scope_payroll_read', tools: 3 },
-    write: { scope: 'payroll:write', labelKey: 'scope_payroll_write', tools: 3 },
-  },
-  {
-    domain: 'pending_operations',
-    labelKey: 'group_pending_operations',
-    read: { scope: 'pending_operations:read', labelKey: 'scope_pending_operations_read', tools: 1 },
-    write: { scope: 'pending_operations:approve', labelKey: 'scope_pending_operations_approve', tools: 2 },
-  },
-  {
-    domain: 'agent',
-    labelKey: 'group_agent',
-    read: { scope: 'agent:read', labelKey: 'scope_agent_read', tools: 1 },
-    write: { scope: 'agent:write', labelKey: 'scope_agent_write', tools: 2 },
-  },
-  {
-    domain: 'documents',
-    labelKey: 'group_documents',
-    read: { scope: 'documents:read', labelKey: 'scope_documents_read', tools: 0 },
-    write: { scope: 'documents:write', labelKey: 'scope_documents_write', tools: 0 },
-  },
-  {
-    domain: 'companies',
-    labelKey: 'group_companies',
-    read: { scope: 'companies:read', labelKey: 'scope_companies_read', tools: 1 },
-    write: null,
-  },
-  {
-    domain: 'events',
-    labelKey: 'group_events',
-    read: { scope: 'events:read', labelKey: 'scope_events_read', tools: 0 },
-    write: null,
-  },
-  {
-    domain: 'webhooks',
-    labelKey: 'group_webhooks',
-    read: null,
-    write: { scope: 'webhooks:manage', labelKey: 'scope_webhooks_manage', tools: 0 },
-  },
-  {
-    domain: 'operations',
-    labelKey: 'group_operations',
-    read: { scope: 'operations:read', labelKey: 'scope_operations_read', tools: 0 },
-    write: null,
-  },
-  {
-    domain: 'compliance',
-    labelKey: 'group_compliance',
-    read: { scope: 'compliance:read', labelKey: 'scope_compliance_read', tools: 3 },
-    write: null,
-  },
-  {
-    domain: 'skatteverket',
-    labelKey: 'group_skatteverket',
-    read: null,
-    write: { scope: 'skatteverket:write', labelKey: 'scope_skatteverket_write', tools: 2 },
-  },
-]
-
 type Scope = ApiKeyScope
 
-const ALL_SCOPES: Scope[] = SCOPE_GROUPS.flatMap((g) => {
-  const out: Scope[] = []
-  if (g.read) out.push(g.read.scope)
-  if (g.write) out.push(g.write.scope)
-  return out
-})
+/** i18n key for a scope card: `scope_<domain>_<verb>`. */
+const scopeLabelKey = (scope: Scope) => `scope_${scope.replace(':', '_')}`
+/** i18n key for a group heading: `group_<domain>`. */
+const groupLabelKey = (group: ScopeGroup) => `group_${group.domain}`
+/** A group with no MCP tool behind any of its scopes only gates REST endpoints. */
+const isRestOnlyGroup = (group: ScopeGroup) =>
+  group.scopes.every((scope) => TOOL_COUNT_BY_SCOPE[scope] === 0)
 
 interface ApiKey {
   id: string
@@ -223,16 +118,17 @@ function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: strin
 }
 
 function ScopeCard({
-  entry,
+  scope,
   checked,
   onCheckedChange,
 }: {
-  entry: ScopeEntry
+  scope: Scope
   checked: boolean
   onCheckedChange: (checked: boolean) => void
 }) {
   const t = useTranslations('settings_api_keys')
-  const label = t(entry.labelKey)
+  const label = t(scopeLabelKey(scope))
+  const tools = TOOL_COUNT_BY_SCOPE[scope]
   const sepIdx = label.indexOf(': ')
   const verb = sepIdx > 0 ? label.slice(0, sepIdx) : label
   const description = sepIdx > 0 ? label.slice(sepIdx + 2) : ''
@@ -254,7 +150,7 @@ function ScopeCard({
         />
         <span className="flex-1 text-xs font-medium text-foreground">{verb}</span>
         <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-          {entry.tools > 0 ? t('tools_count', { count: entry.tools }) : t('rest_badge')}
+          {tools > 0 ? t('tools_count', { count: tools }) : t('rest_badge')}
         </span>
       </div>
       {description && (
@@ -296,6 +192,24 @@ export function ApiKeysPanel() {
   const sodConflictScope = STAGING_SCOPES.find((s) => newKeyScopes.has(s)) ?? null
   const hasSodConflict =
     newKeyScopes.has('pending_operations:approve') && sodConflictScope !== null
+
+  // Elevated scopes (write/approve/signoff) imply the group's read scope:
+  // ticking one ticks read, and unticking read clears the whole group.
+  function toggleScope(group: ScopeGroup, scope: Scope, checked: boolean) {
+    setNewKeyScopes((prev) => {
+      const next = new Set(prev)
+      const readScope = group.scopes.find((s) => scopeKind(s) === 'read')
+      if (checked) {
+        next.add(scope)
+        if (readScope) next.add(readScope)
+      } else if (scope === readScope) {
+        for (const s of group.scopes) next.delete(s)
+      } else {
+        next.delete(scope)
+      }
+      return next
+    })
+  }
 
   const fetchKeys = useCallback(async () => {
     try {
@@ -638,44 +552,20 @@ export function ApiKeysPanel() {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {SCOPE_GROUPS.map((group) => (
                   <div key={group.domain} className="space-y-2">
-                    <h4 className="text-sm font-medium">{t(group.labelKey)}</h4>
+                    <h4 className="text-sm font-medium">
+                      {isRestOnlyGroup(group)
+                        ? t('group_rest_only', { name: t(groupLabelKey(group)) })
+                        : t(groupLabelKey(group))}
+                    </h4>
                     <div className="space-y-2 px-2">
-                      {group.read && (
+                      {group.scopes.map((scope) => (
                         <ScopeCard
-                          entry={group.read}
-                          checked={newKeyScopes.has(group.read.scope)}
-                          onCheckedChange={(checked) => {
-                            setNewKeyScopes((prev) => {
-                              const next = new Set(prev)
-                              if (checked) {
-                                next.add(group.read!.scope)
-                              } else {
-                                next.delete(group.read!.scope)
-                                if (group.write) next.delete(group.write.scope)
-                              }
-                              return next
-                            })
-                          }}
+                          key={scope}
+                          scope={scope}
+                          checked={newKeyScopes.has(scope)}
+                          onCheckedChange={(checked) => toggleScope(group, scope, checked)}
                         />
-                      )}
-                      {group.write && (
-                        <ScopeCard
-                          entry={group.write}
-                          checked={newKeyScopes.has(group.write.scope)}
-                          onCheckedChange={(checked) => {
-                            setNewKeyScopes((prev) => {
-                              const next = new Set(prev)
-                              if (checked) {
-                                next.add(group.write!.scope)
-                                if (group.read) next.add(group.read.scope)
-                              } else {
-                                next.delete(group.write!.scope)
-                              }
-                              return next
-                            })
-                          }}
-                        />
-                      )}
+                      ))}
                     </div>
                   </div>
                 ))}
