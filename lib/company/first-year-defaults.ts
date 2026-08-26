@@ -28,6 +28,12 @@ export function parseStartMonthDay(value: string | null | undefined): number | n
  * first year to run up to 18 months (no minimum). The 12-month floor alone
  * missed exactly the extended-first-year companies the signal exists for
  * (Arcim, registered 13 months before onboarding, first year to 31 Dec).
+ *
+ * `noClosedPeriod` comes from TIC's `fiscalYear` being null, which is
+ * derived from `mostRecentFinancialSummary` (the latest filed report): a
+ * strong but not perfect signal (a filed report can lag in the data).
+ * Acceptable because every consumer only feeds a confirm-question
+ * suggestion; never auto-set first_fiscal_year from this.
  * Returns both the toggle state and a seeded `first_year_start` (always the
  * 1st of the registration month, the format the date inputs expect).
  *

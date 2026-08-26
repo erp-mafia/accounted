@@ -3144,7 +3144,7 @@ export const tools: McpTool[] = [
         )
       } else if (firstYear.isFirstFiscalYear) {
         stillToAsk.push(
-          `fiscal year: no closed period in the registry, so this is the FIRST räkenskapsår; suggest first_fiscal_year start ${registrationIso ?? firstYear.firstYearStart} (registration date) and end 31 December (max 18 months from start; an enskild firma's first year must end 31 December), ask only "stämmer det?"`
+          `fiscal year: no closed period in the registry, so this is likely the FIRST räkenskapsår; suggest first_fiscal_year start ${registrationIso ?? firstYear.firstYearStart} (registration date). End: an enskild firma MUST end 31 December; an AB may pick ANY end within 18 months of start (BFL 3 kap 3 §), 31 December is merely the common default. Ask "stämmer det?" with the choice visible`
         )
       } else {
         stillToAsk.push('fiscal year: calendar year or broken year (no registry data)')
@@ -3307,11 +3307,16 @@ export const tools: McpTool[] = [
     name: 'gnubok_connect_bank',
     title: 'Connect Bank',
     description:
-      'Bank connection status plus the browser link where the user connects a bank (PSD2, BankID consent; must be logged in to Accounted there). Use after gnubok_create_company or when transactions are missing because no bank is connected.',
+      'Bank connection status plus the browser link where the user connects a bank (PSD2, BankID consent; must be logged in to Accounted there). Ask WHICH bank they use first and pass it as bank: the link then starts that bank\'s consent directly instead of a picker.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: {},
+      properties: {
+        bank: {
+          type: 'string',
+          description: "The bank's name as the user said it (e.g. 'Swedbank', 'SEB'); the link auto-starts that bank's consent. Omit to show the picker.",
+        },
+      },
     },
     outputSchema: {
       type: 'object',
@@ -3330,7 +3335,7 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(_args, companyId, _userId, supabase) {
+    async execute(args, companyId, _userId, supabase) {
       const { data, error } = await supabase
         .from('bank_connections')
         .select('id, bank_name, status, created_at')
@@ -3340,7 +3345,12 @@ export const tools: McpTool[] = [
       if (error) throw error
       const connections = (data ?? []) as Array<{ id: string; bank_name: string | null; status: string; created_at: string }>
       const active = connections.filter((c) => c.status === 'active')
-      const connectUrl = `${connectLinkBaseUrl()}/import?mode=psd2`
+      // A named bank deep-links straight into that bank's consent (the page
+      // auto-starts it; unknown names fall back to the prefilled picker).
+      const requestedBank = typeof args.bank === 'string' ? args.bank.trim() : ''
+      const connectUrl = requestedBank
+        ? `${connectLinkBaseUrl()}/import?mode=psd2&bank=${encodeURIComponent(requestedBank)}`
+        : `${connectLinkBaseUrl()}/import?mode=psd2`
       return {
         connected: active.length > 0,
         connections: connections.map((c) => ({
@@ -3353,7 +3363,7 @@ export const tools: McpTool[] = [
         instructions:
           active.length > 0
             ? 'At least one bank is connected and syncing. To add another bank, give the user the connect_url.'
-            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there, pick their bank, approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.',
+            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. With bank passed, the link starts that bank\'s consent directly; otherwise they pick the bank first. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.',
       }
     },
   },

@@ -52,6 +52,28 @@ describe('onboarding connect-link tools', () => {
     expect(chain.eq).toHaveBeenCalledWith('company_id', COMPANY_ID)
   })
 
+  it('bank: a named bank deep-links straight into that bank\'s consent', async () => {
+    const { from } = listClient([])
+    const result = (await bankTool.execute(
+      { bank: 'Danske Bank' },
+      COMPANY_ID,
+      'user-1',
+      { from } as never
+    )) as Record<string, unknown>
+    expect(result.connect_url).toBe('https://app.example.test/import?mode=psd2&bank=Danske%20Bank')
+  })
+
+  it('bank: a blank bank argument falls back to the plain picker link', async () => {
+    const { from } = listClient([])
+    const result = (await bankTool.execute(
+      { bank: '   ' },
+      COMPANY_ID,
+      'user-1',
+      { from } as never
+    )) as Record<string, unknown>
+    expect(result.connect_url).toBe('https://app.example.test/import?mode=psd2')
+  })
+
   it('bank: reports an active connection', async () => {
     const { from } = listClient([
       { id: 'c1', bank_name: 'Swedbank', status: 'active', created_at: '2026-08-01T00:00:00Z' },
