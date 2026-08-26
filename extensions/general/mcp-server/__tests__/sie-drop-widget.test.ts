@@ -18,6 +18,15 @@ describe('SIE drop widget', () => {
     expect(widget?.html).toContain("addEventListener('drop'")
   })
 
+  it('carries the approval in-card: stage+arm in one click, BFL text on the commit button', () => {
+    const html = widget!.html
+    expect(html).toContain("callTool('gnubok_approve_pending_operation'")
+    // confirmed=true rides the deliberate click on a button whose label IS
+    // the irreversibility statement: the human acknowledgment, no default.
+    expect(html).toContain('args.confirmed = true')
+    expect(html).toContain('Bokför: oåterkalleligt (BFL 5 kap 5 §)')
+  })
+
   it('passes exact bytes through tools/call with a sha256, never retyped or fetched', () => {
     const html = widget!.html
     expect(html).toContain("callTool('gnubok_sie_preflight'")

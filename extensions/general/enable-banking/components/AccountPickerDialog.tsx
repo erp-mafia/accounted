@@ -133,7 +133,12 @@ export function AccountPickerDialog({
   const chartError = Boolean(chartLoadError)
   const [ledgerByUid, setLedgerByUid] = useState<Record<string, string>>({})
 
-  const [lookbackMode, setLookbackMode] = useState<LookbackMode>('fiscal-year')
+  // Default 'fast' (90 days): the known-good PSD2 window. The fiscal-year
+  // default used to send 365+-day requests that some banks (Swedbank) answer
+  // by TERMINATING the session: zero transactions, connection expired, no
+  // error surfaced (E2E 2026-08-26). Longer ranges stay available as explicit
+  // choices with the risk spelled out.
+  const [lookbackMode, setLookbackMode] = useState<LookbackMode>('fast')
   const [customSubMode, setCustomSubMode] = useState<CustomSubMode>('date')
   const [customDate, setCustomDate] = useState<string>('')
   // Newest transaction date this CONNECTION has already imported (date null on
@@ -161,7 +166,7 @@ export function AccountPickerDialog({
       )
       setSelected(initial)
       setSaveError(null)
-      setLookbackMode('fiscal-year')
+      setLookbackMode('fast')
       setCustomSubMode('date')
       setCustomDate('')
       lookbackTouched.current = false
@@ -716,7 +721,10 @@ export function AccountPickerDialog({
                   className="mt-1"
                 />
                 <span>
-                  <span className="block">Senaste 90 dagar <span className="text-muted-foreground">(snabbt)</span></span>
+                  <span className="block">Senaste 90 dagar{!gapFill && <span className="text-muted-foreground"> (rekommenderas)</span>}</span>
+                  <span className="text-xs text-muted-foreground">
+                    det längsta de flesta banker lämnar ut utan extra godkännande
+                  </span>
                 </span>
               </label>
 
@@ -734,6 +742,7 @@ export function AccountPickerDialog({
                   <span className="block">Sedan räkenskapsårets början</span>
                   <span className="text-xs text-muted-foreground tabular-nums">
                     från {settingsLoaded ? fiscalYearStart : '…'}
+                    {settingsLoaded && daysBetween(fiscalYearStart) > 90 && ': vissa banker avbryter kopplingen vid så långa förfrågningar'}
                   </span>
                 </span>
               </label>
@@ -793,13 +802,16 @@ export function AccountPickerDialog({
             )}
 
             {showLongRangeHelper && (
-              <p className="text-xs text-muted-foreground">
-                Din bank returnerar oftast max 90 dagar. Behöver du äldre transaktioner kan du{' '}
+              <p className="attn text-[12.5px]">
+                De flesta banker lämnar bara ut cirka 90 dagar utan extra godkännande, och vissa
+                (till exempel Swedbank) avbryter hela kopplingen vid längre förfrågningar: då hämtas
+                inget alls och banken måste kopplas om. Säkrast är 90 dagar här och äldre historik
+                via{' '}
                 <Link
                   href="/import?mode=sie"
                   className="text-foreground underline underline-offset-2"
                 >
-                  importera via SIE eller bankfil
+                  SIE eller kontoutdrag (CSV)
                 </Link>
                 . Vi visar exakt vad banken returnerade efter sparat val.
               </p>
