@@ -4911,8 +4911,6 @@
     "sending": "Sending...",
     "send_failed_title": "Could not send",
     "send_failed_fallback": "Please try again.",
-    "subject_label": "Subject",
-    "subject_placeholder": "What is it about?",
     "attach_label": "Attach file",
     "attach_hint": "Drag here, paste a screenshot or pick a file",
     "attach_too_many": "You can attach at most {count} files",

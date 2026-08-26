@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
-import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { getEmailService } from '@/lib/email/service'
 import { getSupportRecipientEmail } from '@/lib/support'
 import {
@@ -73,17 +72,6 @@ export async function POST(request: Request) {
 
   await requireCompanyId(supabase, user.id)
 
-  // The route now relays user-supplied files over our own sending domain. The
-  // cap is generous enough that nobody reporting a real problem meets it, and
-  // low enough that the support mailbox cannot be used as a file pipe.
-  const limit = await checkRateLimit({
-    prefix: 'support-contact',
-    identifier: user.id,
-    maxRequests: 10,
-    windowMs: 60 * 60 * 1000,
-  })
-  if (!limit.ok && limit.response) return limit.response
-
   let subjectRaw: string | undefined
   let messageRaw: string | undefined
   let files: File[] = []
@@ -121,9 +109,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Meddelandet får vara max 5000 tecken' }, { status: 400 })
   }
 
-  // Bounded before it reaches a mail header: the subject is user input now
-  // that the dialog lets people type their own.
-  const subject = subjectRaw?.trim().slice(0, 200) || 'Supportärende'
+  const subject = subjectRaw?.trim() || 'Supportärende'
 
   const parsed = await parseAttachments(files)
   if ('error' in parsed) {

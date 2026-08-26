@@ -4911,8 +4911,6 @@
     "sending": "Skickar...",
     "send_failed_title": "Kunde inte skicka",
     "send_failed_fallback": "Försök igen.",
-    "subject_label": "Ämne",
-    "subject_placeholder": "Vad gäller det?",
     "attach_label": "Bifoga fil",
     "attach_hint": "Dra hit, klistra in en skärmbild eller välj fil",
     "attach_too_many": "Du kan bifoga max {count} filer",

@@ -14,7 +14,6 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { submitFeedback } from '@/lib/support/submit-feedback'
@@ -53,10 +52,10 @@ export function SupportLink({
 }: SupportLinkProps) {
   const t = useTranslations('support_link')
   const [open, setOpen] = useState(false)
-  const [subjectValue, setSubjectValue] = useState(subject ?? '')
   const [message, setMessage] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [isDragging, setIsDragging] = useState(false)
+  const [isPreparing, setIsPreparing] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [sent, setSent] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -68,11 +67,13 @@ export function SupportLink({
   // with attachments still pending. The ref is what makes the unmount cleanup
   // see the current list instead of the empty one it closed over.
   const attachmentsRef = useRef<PendingAttachment[]>([])
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     attachmentsRef.current = attachments
   }, [attachments])
   useEffect(() => {
     return () => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
       attachmentsRef.current.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl))
     }
   }, [])
@@ -85,11 +86,11 @@ export function SupportLink({
    * message without ever becoming a file on disk.
    */
   async function addFiles(incoming: File[]) {
-    if (!incoming.length || isSending) return
-
-    // Read through the ref, not the closure: a paste landing while a dropped
-    // photo is still being re-encoded would otherwise start from the list as
-    // it was before the drop and silently discard it.
+    if (!incoming.length || isSending || isPreparing) return
+    // Re-encoding a photo takes a moment, and Send is disabled for as long as
+    // it does: submitting mid-shrink would mail the message without the file
+    // the user just watched land.
+    setIsPreparing(true)
     const next = [...attachmentsRef.current]
     let rejectedType = false
     let rejectedCount = false
@@ -143,6 +144,7 @@ export function SupportLink({
 
     attachmentsRef.current = next
     setAttachments(next)
+    setIsPreparing(false)
   }
 
   function removeAttachment(index: number) {
@@ -160,10 +162,15 @@ export function SupportLink({
   }
 
   function handlePaste(e: React.ClipboardEvent) {
-    const pasted = Array.from(e.clipboardData?.files ?? [])
+    const clipboard = e.clipboardData
+    const pasted = Array.from(clipboard?.files ?? [])
     if (!pasted.length) return
-    // Only take over the paste when it actually carries a file: pasting text
-    // into the message must keep working.
+    // Copying from Excel or Outlook puts a rendered bitmap on the clipboard
+    // NEXT TO the text, so a file being present does not mean the user pasted
+    // one. Text wins: swallowing a pasted invoice row would be worse than
+    // making them use the attach button for that screenshot.
+    const types = Array.from(clipboard?.types ?? [])
+    if (types.includes('text/plain') || types.includes('text/html')) return
     e.preventDefault()
     void addFiles(pasted)
   }
@@ -180,7 +187,7 @@ export function SupportLink({
 
     setIsSending(true)
     const result = await submitFeedback({
-      subject: subjectValue.trim() || subject,
+      subject,
       message: message.trim(),
       files: attachments.map((a) => a.file),
     })
@@ -188,7 +195,7 @@ export function SupportLink({
 
     if (result.ok) {
       setSent(true)
-      setTimeout(() => {
+      closeTimerRef.current = setTimeout(() => {
         setOpen(false)
         setSent(false)
         setMessage('')
@@ -205,11 +212,9 @@ export function SupportLink({
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
-    if (next) {
-      // The caller's subject is the starting point, not a fixed label: the
-      // user can retitle their own errand.
-      setSubjectValue(subject ?? '')
-    } else {
+    if (!next) {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
       setSent(false)
       setMessage('')
       setIsDragging(false)
@@ -274,15 +279,6 @@ export function SupportLink({
               isDragging && 'ring-2 ring-primary ring-offset-2 ring-offset-background'
             )}
           >
-            <Input
-              value={subjectValue}
-              onChange={(e) => setSubjectValue(e.target.value)}
-              placeholder={t('subject_placeholder')}
-              aria-label={t('subject_label')}
-              maxLength={200}
-              disabled={isSending}
-              className="mb-2"
-            />
             <Textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
@@ -350,7 +346,7 @@ export function SupportLink({
                 type="button"
                 variant="outline"
                 size="sm"
-                disabled={isSending || attachments.length >= SUPPORT_MAX_ATTACHMENTS}
+                disabled={isSending || isPreparing || attachments.length >= SUPPORT_MAX_ATTACHMENTS}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Paperclip className="mr-2 h-3.5 w-3.5" />
@@ -370,7 +366,7 @@ export function SupportLink({
               </Button>
               <Button
                 type="submit"
-                disabled={isSending || message.trim().length < 5}
+                disabled={isSending || isPreparing || message.trim().length < 5}
               >
                 {isSending ? (
                   <>

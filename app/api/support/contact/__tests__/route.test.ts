@@ -7,7 +7,6 @@ const mockSupabase = createMockSupabase()
 const requireAuthMock = vi.fn()
 const sendEmailMock = vi.fn()
 const isConfiguredMock = vi.fn()
-const checkRateLimitMock = vi.fn()
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -15,9 +14,6 @@ vi.mock('@/lib/auth/require-auth', () => ({
 }))
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
-}))
-vi.mock('@/lib/auth/rate-limit-http', () => ({
-  checkRateLimit: (...args: unknown[]) => checkRateLimitMock(...args),
 }))
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({
@@ -71,7 +67,6 @@ describe('POST /api/support/contact', () => {
     vi.clearAllMocks()
     isConfiguredMock.mockReturnValue(true)
     sendEmailMock.mockResolvedValue({ success: true })
-    checkRateLimitMock.mockResolvedValue({ ok: true })
     requireAuthMock.mockResolvedValue({ user, supabase: mockSupabase, error: null })
   })
 
@@ -83,16 +78,6 @@ describe('POST /api/support/contact', () => {
     })
     const response = await POST(jsonRequest({ message: 'Hjälp tack' }))
     expect(response.status).toBe(401)
-    expect(sendEmailMock).not.toHaveBeenCalled()
-  })
-
-  it('returns the rate limiter response when the user is over the cap', async () => {
-    checkRateLimitMock.mockResolvedValue({
-      ok: false,
-      response: NextResponse.json({ error: 'För många förfrågningar' }, { status: 429 }),
-    })
-    const response = await POST(jsonRequest({ message: 'Hjälp tack' }))
-    expect(response.status).toBe(429)
     expect(sendEmailMock).not.toHaveBeenCalled()
   })
 
