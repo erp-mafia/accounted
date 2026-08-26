@@ -72,6 +72,19 @@ vi.mock('@supabase/ssr', () => ({
   })),
 }))
 
+const logState = vi.hoisted(() => ({ info: vi.fn() }))
+
+vi.mock('@/lib/logger', () => {
+  const logger = {
+    info: (...args: unknown[]) => logState.info(...args),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    child: () => logger,
+  }
+  return { createLogger: () => logger }
+})
+
 import { updateSession } from '../middleware'
 import {
   createSessionTimeoutState,
@@ -103,6 +116,7 @@ describe('updateSession redirect destinations', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    logState.info.mockClear()
     state.user = null
     state.sessionId = 'session-1'
     state.authError = null
@@ -534,6 +548,67 @@ describe('updateSession redirect destinations', () => {
   })
 
   // ── MFA semantics that must not change ────────────────────────────────
+
+  describe('per-request timing header and log line', () => {
+    const TIMING_RE =
+      /^mw-auth;dur=\d+, mw-session;dur=\d+, mw-company;dur=\d+, mw-mfa;dur=\d+, mw-total;dur=\d+$/
+
+    function lastLog() {
+      expect(logState.info).toHaveBeenCalledTimes(1)
+      const [msg, ctx] = logState.info.mock.calls[0] as [string, Record<string, unknown>]
+      expect(msg).toBe('proxy completed')
+      return ctx
+    }
+
+    it('page responses carry Server-Timing and log kind=page with the route', async () => {
+      state.user = SIGNED_IN
+      const res = await run('/invoices')
+      expect(res.status).toBe(200)
+      expect(res.headers.get('server-timing')).toMatch(TIMING_RE)
+      expect(res.headers.get('x-proxy-timing')).toBeNull()
+      const ctx = lastLog()
+      expect(ctx.kind).toBe('page')
+      expect(ctx.route).toBe('/invoices')
+      expect(ctx.status).toBe(200)
+      expect(typeof ctx.totalMs).toBe('number')
+      expect(typeof ctx.authMs).toBe('number')
+      expect(typeof ctx.companyMs).toBe('number')
+    })
+
+    it('classifies prefetch and RSC requests from the app-router headers', async () => {
+      state.user = SIGNED_IN
+      await run('/invoices', { headers: { 'next-router-prefetch': '1', rsc: '1' } })
+      expect(lastLog().kind).toBe('prefetch')
+      logState.info.mockClear()
+      await run('/invoices', { headers: { rsc: '1' } })
+      expect(lastLog().kind).toBe('rsc')
+    })
+
+    it('/api responses use X-Proxy-Timing and leave Server-Timing to the route wrapper', async () => {
+      state.user = SIGNED_IN
+      const res = await run('/api/settings')
+      expect(res.headers.get('x-proxy-timing')).toMatch(TIMING_RE)
+      expect(res.headers.get('server-timing')).toBeNull()
+      expect(lastLog().kind).toBe('api')
+    })
+
+    it('redirect responses also carry the header and log their status', async () => {
+      const res = await run('/invoices')
+      expect(res.status).toBe(307)
+      expect(res.headers.get('server-timing')).toMatch(TIMING_RE)
+      expect(lastLog().status).toBe(307)
+    })
+
+    it('never logs a token-carrying path or a raw entity id', async () => {
+      const res = await run('/invite/9f8e7d6c5b4a3928171605f4e3d2c1b0')
+      expect(res.status).toBe(200)
+      expect(lastLog().route).toBe('/invite/*')
+      logState.info.mockClear()
+      state.user = SIGNED_IN
+      await run('/invoices/6f1c2a3e-1234-4bcd-9abc-0123456789ab')
+      expect(lastLog().route).toBe('/invoices/:id')
+    })
+  })
 
   describe('MFA-disabled and self-hosted paths are unchanged', () => {
     it('does not redirect when NEXT_PUBLIC_REQUIRE_MFA is unset', async () => {
