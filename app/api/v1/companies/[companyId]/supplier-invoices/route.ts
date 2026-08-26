@@ -39,6 +39,7 @@ import {
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -727,16 +728,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Determine accounting method: registration JE is only posted under accrual.
+    // Registration JE is only posted when the company books at issue:
+    // kontantmetoden books at payment, and defer_invoice_booking (#967)
+    // books via the explicit Bokför step. Same gate as POST /api/supplier-invoices.
     const { data: settings } = await ctx.supabase
       .from('company_settings')
-      .select('accounting_method')
+      .select('accounting_method, defer_invoice_booking')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
-    const accountingMethod = (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
+    const bookingSettings = settings as
+      | { accounting_method?: string | null; defer_invoice_booking?: boolean | null }
+      | null
 
     let registrationJournalEntryId: string | null = null
-    if (accountingMethod === 'accrual') {
+    if (booksInvoicesOnIssue(bookingSettings)) {
       try {
         const entry = await createSupplierInvoiceRegistrationEntry(
           ctx.supabase,
