@@ -3121,7 +3121,7 @@ export const tools: McpTool[] = [
       },
       required: ['connected', 'connections', 'connect_url', 'instructions'],
     },
-    catalogVisibility: 'search',
+    
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -3177,7 +3177,7 @@ export const tools: McpTool[] = [
       },
       required: ['available', 'connected', 'token_expires_at', 'connect_url', 'instructions'],
     },
-    catalogVisibility: 'search',
+    
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
