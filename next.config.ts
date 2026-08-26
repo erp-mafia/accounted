@@ -128,6 +128,17 @@ const nextConfig: NextConfig = {
     // (lib/reference-data) is independent of this and refreshes on its own.
     // Default was 0 (always refetch). Static routes keep the 5 min default.
     staleTimes: { dynamic: 30, static: 300 },
+    // Vercel's standard build container OOM-kills the build since 2026-08-26
+    // (the tree outgrew it; SIGKILL during "Creating an optimized production
+    // build"). Two knobs, disjoint phases:
+    // - compile phase (Turbopack, where the kills happen): evict finished
+    //   tasks to the on-disk cache after every snapshot instead of the lazier
+    //   'auto' default. Trades some compile speed for a bounded working set;
+    //   requires the persistent FS cache, which is on by default in Next 16.
+    turbopackMemoryEviction: 'full',
+    // - static-generation phase: cap prerender workers (default is cores-1;
+    //   each is a full Node process on the shared container RAM).
+    cpus: 2,
   },
   // PostHog reverse proxy. Keeping analytics same-origin buys three things:
   // the strict CSP below needs NO posthog hosts (`connect-src 'self'` already
