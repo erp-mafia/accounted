@@ -3,7 +3,7 @@
   "version": "1.1.0",
   "description": "Connect Claude Desktop to your Accounted bookkeeping account",
   "bin": {
-    "gnubok-mcp": "./index.mjs"
+    "gnubok-mcp": "index.mjs"
   },
   "type": "module",
   "license": "MIT",
@@ -16,7 +16,8 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/erp-mafia/gnubok"
+    "url": "git+https://github.com/erp-mafia/accounted.git",
+    "directory": "packages/gnubok-mcp"
   },
   "engines": {
     "node": ">=18"

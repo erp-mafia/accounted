@@ -1,0 +1,169 @@
+name: Publish MCP bridges to npm
+
+# Publishes the two stdio-to-HTTP MCP bridges, packages/accounted-mcp and
+# packages/gnubok-mcp, to the public npm registry.
+#
+# The trigger is a version bump, not a git tag: a push to main that touches a
+# packages/*/package.json runs one job per package, and each job publishes only
+# if the version in its package.json is not already on the registry. A package
+# whose version did not change is skipped, so a merge that bumps one bridge
+# never republishes the other, and re-running a finished workflow is a no-op.
+#
+# Auth is the repository secret NPM_TOKEN, an npm granular access token with
+# publish rights on both packages. A run without the secret fails at its first
+# step with a message naming it, rather than inside `npm publish` with an opaque
+# ENEEDAUTH. A token rather than OIDC trusted publishing because accounted-mcp
+# has never been published, and npm cannot bind a trusted publisher to a package
+# that does not exist yet.
+#
+# --provenance attaches a Sigstore attestation that ties the tarball to this
+# workflow run and commit; id-token: write exists for that. The registry rejects
+# the attestation unless package.json `repository.url` matches this repository,
+# which is why both package.jsons point at erp-mafia/accounted.
+#
+# workflow_dispatch runs the same job on demand, optionally for one package, and
+# with dry_run to exercise the version gate and `npm publish --dry-run` without
+# touching the registry. Dispatching from a branch is the way to test this file
+# before merging it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/*/package.json'
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to publish
+        type: choice
+        options: [all, accounted-mcp, gnubok-mcp]
+        default: all
+      dry_run:
+        description: Pack and validate only, do not publish
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# A dispatch overlapping a push could race to publish the same version; the
+# loser would only fail with a confusing E403. Queue instead of cancelling.
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # OIDC token for the --provenance attestation.
+      id-token: write
+    strategy:
+      # The packages are independent: a failure in one must not cancel the other.
+      fail-fast: false
+      matrix:
+        # On push both packages get a job and the version gate below skips the
+        # one that did not change. On dispatch the input narrows the matrix to
+        # one package. Done in the matrix rather than a job-level `if` because
+        # the matrix context is not available there.
+        package: ${{ (github.event_name == 'push' || inputs.package == 'all') && fromJSON('["accounted-mcp", "gnubok-mcp"]') || fromJSON(format('["{0}"]', inputs.package)) }}
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      DRY_RUN: ${{ inputs.dry_run == true }}
+      PACKAGE_DIR: packages/${{ matrix.package }}
+
+    steps:
+      - name: Require the NPM_TOKEN secret
+        # Before checkout, so a missing secret is the first line of the log.
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: NPM_TOKEN is not required."
+            exit 0
+          fi
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::Repository secret NPM_TOKEN is not set. Create an npm granular access token with read and write access to accounted-mcp and gnubok-mcp (see the Releasing section in packages/*/README.md) and add it under Settings > Secrets and variables > Actions as NPM_TOKEN."
+            exit 1
+          fi
+          echo "NPM_TOKEN is set."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes over git; the only credential this job needs is
+          # the npm token, and that never touches the checkout.
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+          # Writes an .npmrc that reads the auth token from NODE_AUTH_TOKEN.
+          registry-url: https://registry.npmjs.org
+
+      - name: Compare package.json version with the registry
+        id: gate
+        working-directory: ${{ env.PACKAGE_DIR }}
+        run: |
+          set -euo pipefail
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+
+          # `npm view` exits 1 with an E404 body when the package has never
+          # been published. That is the first-release case and counts as
+          # "nothing on the registry". Any other failure (network, registry
+          # outage, bad token) is an error: assuming "not published" there
+          # would only move the failure into `npm publish`.
+          set +e
+          VIEW=$(npm view "$NAME" versions --json 2>&1)
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            if grep -q 'E404' <<< "$VIEW"; then
+              echo "$NAME has never been published (E404): $VERSION would be its first release."
+              VIEW='[]'
+            else
+              echo "::error::npm view $NAME failed (exit $STATUS)."
+              echo "$VIEW"
+              exit 1
+            fi
+          fi
+
+          # `npm view <name> versions --json` prints a bare string, not a
+          # one-element array, when exactly one version exists.
+          ON_REGISTRY=$(VIEW="$VIEW" VERSION="$VERSION" node -e '
+            const raw = JSON.parse(process.env.VIEW);
+            const list = Array.isArray(raw) ? raw : [raw];
+            console.error("Versions on registry: " + (list.length ? list.join(", ") : "(none)"));
+            process.stdout.write(list.includes(process.env.VERSION) ? "yes" : "no");
+          ')
+
+          if [ "$ON_REGISTRY" = "yes" ]; then
+            echo "Skipping: $NAME@$VERSION is already on the registry."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "- \`$NAME@$VERSION\`: already on the registry, skipped" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Publishing: $NAME@$VERSION is not on the registry."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        if: steps.gate.outputs.publish == 'true'
+        working-directory: ${{ env.PACKAGE_DIR }}
+        env:
+          NAME: ${{ steps.gate.outputs.name }}
+          VERSION: ${{ steps.gate.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" = "true" ]; then
+            # --dry-run packs and validates but never contacts the registry, so
+            # it also runs without a token.
+            npm publish --dry-run --access public
+            echo "- \`$NAME@$VERSION\`: dry run, not published" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          npm publish --provenance --access public
+          echo "- \`$NAME@$VERSION\`: published, https://www.npmjs.com/package/$NAME/v/$VERSION" >> "$GITHUB_STEP_SUMMARY"

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Connect MCP clients to your Accounted bookkeeping account",
   "bin": {
-    "accounted-mcp": "./index.mjs"
+    "accounted-mcp": "index.mjs"
   },
   "type": "module",
   "license": "MIT",
@@ -16,7 +16,8 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/erp-mafia/accounted"
+    "url": "git+https://github.com/erp-mafia/accounted.git",
+    "directory": "packages/accounted-mcp"
   },
   "engines": {
     "node": ">=18"

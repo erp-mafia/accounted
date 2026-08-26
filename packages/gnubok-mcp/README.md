@@ -57,6 +57,27 @@ If you use **claude.ai** or Claude Desktop's custom-connector flow, you can skip
 
 Full setup, sample prompts, and a 10-minute reviewer test: **[Connect with Claude](https://app.gnubok.se/docs/api/connect-claude)**.
 
+## Releasing
+
+The package is published to npm by the `Publish MCP bridges to npm` workflow
+(`.github/workflows/npm-publish.yml`), never by hand:
+
+1. Bump `version` in `packages/gnubok-mcp/package.json`.
+   This is the legacy package: bump it only for compatibility fixes; new
+   functionality goes to `accounted-mcp`.
+2. Merge the change to `main`.
+3. The workflow compares the new version with the registry and, if it is not
+   there yet, runs `npm publish --provenance --access public`. A version that
+   already exists on npm is skipped, so other `package.json` edits are harmless.
+
+The workflow needs the repository secret `NPM_TOKEN`: an npm granular access
+token with read and write access to `accounted-mcp` and `gnubok-mcp`, with
+two-factor bypass enabled so CI can publish. npm caps the lifetime of such
+tokens (90 days at the time of writing), so rotate the secret before it lapses.
+Without the secret the run fails at its first step. The workflow can also be
+started from the Actions tab, for one package or both, with a dry-run option
+that packs and validates without publishing.
+
 ## License
 
 MIT
