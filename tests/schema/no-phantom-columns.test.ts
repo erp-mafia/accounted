@@ -122,9 +122,10 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * lands at once (WL queries + everything above). Count on the merged tree:
  * 383 (162 dynamic-payload, 125 dynamic-select, 50 dynamic-logical,
  * 39 spread-payload, 5 dynamic-column, 2 computed key); ceiling re-baselined
- * with the usual headroom.
+ * with the usual headroom. The later catch-up merge of #1954 (byte-exact SIE
+ * upload) brought the merged count to 386.
  */
-const UNRESOLVED_CEILING = 385
+const UNRESOLVED_CEILING = 388
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
