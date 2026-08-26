@@ -162,11 +162,11 @@ describe('GET /api/mcp-oauth/authorize: CSP', () => {
   })
 
   it('renders both read and write rows when client passes only the legacy `mcp` scope marker', async () => {
-    // Claude's connector sends scope=mcp today. The consent UI must render
-    // every scope group so the user can opt into write/approval rows if they
-    // want, but each write/approve row MUST start unchecked. Affirmative
-    // opt-in is the access-control gate (GDPR Art. 25(2), ISO 27001:2022
-    // A.5.18 / A.8.2, SOC 2 CC6.3, ASVS V10.2.2 / V2.3.1).
+    // Claude's connector sends scope=mcp today. The consent UI renders every
+    // scope group with ALL rows pre-checked (one-click consent, founder
+    // decision 2026-08-26): the affirmative act is the Allow click on a page
+    // that shows the full set, every write is staged for approval before it
+    // touches the ledger, and each row stays individually untickable.
     const request = new Request(
       buildAuthorizeUrl({
         response_type: 'code',
@@ -186,21 +186,21 @@ describe('GET /api/mcp-oauth/authorize: CSP', () => {
     expect(html).toMatch(/value="invoices:write"/)
     expect(html).toMatch(/value="pending_operations:approve"/)
 
-    // Write and approval scopes MUST render unchecked. Users have to make an
-    // affirmative, deliberate selection for each destructive permission.
+    // Every row starts checked: the deliberate act is the visible Allow
+    // click, and unticking stays available per row inside the details fold.
     const writeRow = html.match(/<input[^>]*value="transactions:write"[^>]*>/)?.[0]
     expect(writeRow).toBeDefined()
-    expect(writeRow!).not.toContain('checked')
+    expect(writeRow!).toContain('checked')
 
     const approveRow = html.match(/<input[^>]*value="pending_operations:approve"[^>]*>/)?.[0]
     expect(approveRow).toBeDefined()
-    expect(approveRow!).not.toContain('checked')
+    expect(approveRow!).toContain('checked')
 
     const bookkeepingRow = html.match(/<input[^>]*value="bookkeeping:write"[^>]*>/)?.[0]
     expect(bookkeepingRow).toBeDefined()
-    expect(bookkeepingRow!).not.toContain('checked')
+    expect(bookkeepingRow!).toContain('checked')
 
-    // The :read counterpart is pre-checked (safe default).
+    // The :read counterpart is pre-checked too.
     const readRow = html.match(/<input[^>]*value="transactions:read"[^>]*>/)?.[0]
     expect(readRow).toBeDefined()
     expect(readRow!).toContain('checked')
@@ -435,7 +435,7 @@ describe('account with no company yet (issue #1814)', () => {
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
-  it('pre-ticks companies:write so the agent can create the company, other writes stay unticked', async () => {
+  it('pre-ticks every scope for a companyless account (one-click consent covers the create flow)', async () => {
     mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1', email: 'ny@example.se' }))
 
     const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
@@ -446,7 +446,7 @@ describe('account with no company yet (issue #1814)', () => {
     expect(companiesWrite!).toContain('checked')
     const transactionsWrite = html.match(/<input[^>]*value="transactions:write"[^>]*>/)?.[0]
     expect(transactionsWrite).toBeDefined()
-    expect(transactionsWrite!).not.toContain('checked')
+    expect(transactionsWrite!).toContain('checked')
   })
 
   it('POST still issues an authorization code', async () => {
