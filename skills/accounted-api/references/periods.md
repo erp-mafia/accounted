@@ -2,7 +2,7 @@
 
 # Periods and registers endpoints
 
-Fiscal periods and their lock/close/year-end lifecycle (async operations), the BAS chart of accounts, cost-center/project dimensions, and the compliance pre-flight check.
+Fiscal periods and their lock/close/year-end lifecycle (async operations), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, and reading filed VAT declarations (and beslut) from Skatteverket.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -491,6 +491,42 @@ Response `200`:
     poll_url: string,
     webhook_event: "operation.completed"
   },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    partial_expansions?: string[]
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/skatteverket/vat-declarations`
+
+**Read a filed momsdeklaration (submitted and/or decided) from Skatteverket.**
+`scope:compliance:read · risk:low · idempotent`
+
+Fetches the momsdeklaration for one period as Skatteverket has it on file: `submitted` is the declaration as filed (SKV /inlamnat), `decided` is Skatteverket's beslut (SKV /beslutat). Either section is null when nothing is on file for the period (or when excluded via ?state=). Query params: period_type (monthly|quarterly|yearly), year, period (1-12 monthly, 1-4 quarterly, 1 yearly), optional state (submitted|decided|both, default both). Requires the company to have an active Skatteverket connection (any member's BankID connection, or a verified ombud grant). Live read against Skatteverket, not a cached copy.
+
+**Use when:** You want to verify what was actually filed for a VAT period, compare a period against last year's filed declaration, or check whether Skatteverket has decided a period.
+**Do not use for:** Computing the declaration from the books (use the VAT report), or filing: submission is a separate BankID-signed flow.
+
+**Pitfalls:**
+- This is a live Skatteverket read: it fails with SKATTEVERKET_NOT_CONNECTED (401) when the company has neither a member's BankID connection (made under Installningar) nor a verified ombud grant, and the response reflects SKV's state, not the books. Personal BankID sessions expire after ~1 hour by design, so an expired connection is normal: ask the user to reconnect; only a person can, so do not retry until they confirm.
+- submitted=null and decided=null with HTTP 200 means "nothing on file for the period": it is not an error.
+- A submitted declaration can lack a beslut for days: poll decided separately rather than assuming both appear together.
+- redovisningsperiod is SKV's YYYYMM format (the period's LAST month): quarterly period 1 is 03, not 01.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { redovisare: string, redovisningsperiod: string, submitted?: unknown, decided?: unknown },
   meta: {
     request_id: string,
     api_version: string,

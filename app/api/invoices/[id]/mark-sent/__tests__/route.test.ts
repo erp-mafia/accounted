@@ -353,6 +353,46 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     )
   })
 
+  // Issue #1820: a self-billed original has invoice_number null (its number
+  // lives in external_invoice_number); the credit-note PDF's ML 17 kap 22
+  // reference to the original used to be silently dropped.
+  it('falls back to the external number for the PDF reference on a self-billed original', async () => {
+    const creditNote = makeInvoice({
+      id: 'inv-4',
+      invoice_number: 'KR-SB-2026-17',
+      status: 'draft',
+      credited_invoice_id: 'inv-sb',
+      customer,
+      items: invoice.items,
+    })
+
+    enqueue({ data: creditNote, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({
+      data: {
+        id: 'inv-sb',
+        invoice_number: null,
+        external_invoice_number: 'SB-2026-17',
+        status: 'sent',
+        journal_entry_id: 'original-je-1',
+        paid_at: null,
+        paid_amount: null,
+        total: 12500,
+      },
+      error: null,
+    })
+    enqueue({ data: [{ id: 'inv-4' }], error: null })
+
+    const request = createMockRequest('/api/invoices/inv-4/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-4' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(InvoicePDF).toHaveBeenCalledWith(
+      expect.objectContaining({ originalInvoiceNumber: 'SB-2026-17' }),
+    )
+  })
+
   it('fails closed and restores the draft when credit-note booking cannot start', async () => {
     const creditNote = makeInvoice({
       id: 'credit-1',

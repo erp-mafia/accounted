@@ -99,6 +99,10 @@ const GENERIC_FALLBACK: Bilingual = { sv: 'Något gick fel. Försök igen.', en:
 // Known error patterns → user-friendly Swedish messages
 const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
   [
+    /reason must be 500 characters or fewer/i,
+    'Motiveringen får vara högst 500 tecken.',
+  ],
+  [
     /locked\/closed fiscal period/i,
     'Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.',
   ],
@@ -568,6 +572,75 @@ export function getErrorMessage(
 
   // 6. Generic fallback
   return pick(GENERIC_FALLBACK, locale)
+}
+
+// PSD2 bank-connection OAuth callback errors. The Enable Banking callback
+// route redirects the browser back to /settings/banking with a user-facing
+// message. The raw provider code/description used to be passed through
+// verbatim ("server_error", "invalid_state"), which left a stuck user with
+// nothing to act on and support with nothing to answer (issue #1716: the
+// Handelsbanken corporate fullmakt failures). Known codes get a Swedish
+// explanation; the raw provider description is appended in parentheses so
+// the underlying error still reaches the user (and a screenshot to support).
+const BANK_CONNECTION_ERROR_MAP: Record<string, string> = {
+  server_error:
+    'Banken kunde inte slutföra godkännandet på grund av ett fel på bankens sida. Försök igen om en stund. Gäller det företagskonton kan banken kräva en fullmakt innan kopplingen godkänns.',
+  temporarily_unavailable:
+    'Bankens anslutningstjänst är tillfälligt otillgänglig. Försök igen om en stund.',
+  invalid_request:
+    'Banken avvisade anslutningsförfrågan som ogiltig. Försök igen, och kontakta supporten om felet kvarstår.',
+  // Internal callback tokens (not from the bank) that were previously shown raw.
+  invalid_state:
+    'Anslutningsförsöket kunde inte matchas mot ett pågående försök. Det kan hända om försöket tog för lång tid eller om ett nytt försök startades under tiden. Starta bankkopplingen på nytt.',
+  missing_parameters:
+    'Banken skickade ett ofullständigt svar tillbaka. Starta bankkopplingen på nytt.',
+  invalid_code_format:
+    'Banken skickade ett ogiltigt svar tillbaka. Starta bankkopplingen på nytt.',
+}
+
+const BANK_CONNECTION_CANCELLED_MESSAGE =
+  'Anslutningen avbröts hos banken innan den slutfördes. Ingen bankkoppling skapades. Försök igen och slutför alla steg hos banken.'
+
+const BANK_CONNECTION_SESSION_EXPIRED_MESSAGE =
+  'Bankens inloggningssession hann gå ut innan anslutningen slutfördes. Starta bankkopplingen på nytt och slutför alla steg hos banken direkt.'
+
+const BANK_CONNECTION_FALLBACK_MESSAGE =
+  'Banken avvisade anslutningen. Försök igen, och kontakta supporten om felet kvarstår.'
+
+// Same shape the callback route keys its expired-vs-error decision on.
+const BANK_SESSION_EXPIRY_PATTERN =
+  /session.?expired|expired.?session|closed.?session|session.?closed|invalid.?session|session.?not.?found/i
+
+/**
+ * Map a PSD2 authorization callback outcome (OAuth error code plus optional
+ * provider description) to a Swedish user message. Always Swedish: the bank
+ * redirect carries no locale, and bank-connection surfaces follow the
+ * user-facing-errors-are-Swedish rule.
+ */
+export function getBankConnectionErrorMessage(
+  errorCode: string,
+  errorDescription?: string | null
+): string {
+  const code = errorCode.trim()
+  const description = errorDescription?.trim() || null
+  const combined = `${code} ${description ?? ''}`
+
+  // User cancelled at the bank: an expected outcome, keep it clean without
+  // echoing the provider text back.
+  if (code === 'access_denied' || /cancel/i.test(combined)) {
+    return BANK_CONNECTION_CANCELLED_MESSAGE
+  }
+
+  let base: string
+  if (BANK_SESSION_EXPIRY_PATTERN.test(combined)) {
+    base = BANK_CONNECTION_SESSION_EXPIRED_MESSAGE
+  } else {
+    base = BANK_CONNECTION_ERROR_MAP[code] ?? BANK_CONNECTION_FALLBACK_MESSAGE
+  }
+
+  // Surface the underlying provider error: without it the user (and support,
+  // via a screenshot) cannot tell one failure from another.
+  return description && description !== code ? `${base} (${description})` : base
 }
 
 /**

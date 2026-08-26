@@ -28,6 +28,10 @@ vi.mock('@supabase/ssr', () => {
   }
 })
 
+vi.mock('@/lib/email/invoice-sender', () => ({
+  resolveInvoiceSender: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({
     sendEmail: vi.fn().mockResolvedValue({ success: true }),
@@ -38,7 +42,9 @@ import {
   processOverdueReminders,
   determineReminderLevel,
   calculateDaysOverdue,
+  sendReminder,
 } from '../reminder-processor'
+import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { getReminderDaysConfig } from '@/lib/email/reminder-templates'
 
 describe('determineReminderLevel', () => {
@@ -167,5 +173,34 @@ describe('processOverdueReminders: credit-note filter', () => {
       (c) => c.method === 'in' && c.args[0] === 'status',
     )
     expect(inStatus?.args[1]).toContain('overdue')
+  })
+})
+
+describe('sendReminder payment-account gate', () => {
+  const customer = makeCustomer({ email: 'kund@example.se' })
+  const surcharges = { interestAmount: 0, interestRate: 0.1, interestDays: 0, reminderFee: 60 }
+
+  it('skips a EUR reminder when the company has no EUR payment account (no SEK fallback)', async () => {
+    const sekOnly = makeCompanySettings({ bankgiro: '123-4567', iban: 'SE4550000000058398257466' })
+    const invoice = { ...makeInvoice({ currency: 'EUR', total: 500 }), customer }
+    const result = await sendReminder(invoice, sekOnly, 1, 'tok', surcharges)
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('INVOICE_PAYMENT_ACCOUNT_MISSING:EUR')
+  })
+
+  it('sends a SEK reminder on legacy SEK details', async () => {
+    const sekOnly = makeCompanySettings({ bankgiro: '123-4567' })
+    const invoice = { ...makeInvoice({ currency: 'SEK', total: 500 }), customer }
+    const result = await sendReminder(invoice, sekOnly, 1, 'tok', surcharges)
+    expect(result.success).toBe(true)
+  })
+
+  it('sends a EUR reminder once a EUR account is configured', async () => {
+    const company = makeCompanySettings({
+      invoice_payment_accounts: { EUR: { iban: 'DE89370400440532013000', bic: 'DEUTDEFF' } } as never,
+    })
+    const invoice = { ...makeInvoice({ currency: 'EUR', total: 500 }), customer }
+    const result = await sendReminder(invoice, company, 1, 'tok', surcharges)
+    expect(result.success).toBe(true)
   })
 })

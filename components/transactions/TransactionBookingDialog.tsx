@@ -16,6 +16,8 @@ import type { AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPi
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import { resolveSekAmount, buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import type { BookingTemplateLibrary, CashAccount } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
@@ -33,12 +35,25 @@ interface TransactionBookingDialogProps {
     matched?: boolean,
   ) => void
   preselectedTemplate?: BookingTemplateLibrary | null
+  /**
+   * "Andra rader" hand-off from a proposal view (QuickReviewDialog): the
+   * COMPUTED lines the user was shown, prefilled for per-line editing. Takes
+   * precedence over preselectedTemplate. The settlement leg's account is
+   * swapped for the transaction's resolved cash account, same as the
+   * library-template path.
+   */
+  proposalLines?: ProposalLine[] | null
+  /** Account number (string, e.g. '5460') to prefill on the counter line:
+   *  set when the user picked an account from the template picker's "Konton"
+   *  search results. Ignored when a preselectedTemplate is present. */
+  preselectedAccount?: string | null
 }
 
 function buildInitialLines(
   transaction: TransactionWithInvoice,
   bankLineDescription: string,
   bankAccount: string = '1930',
+  counterAccount?: string | null,
 ): FormLine[] {
   const sekAmount = Math.round(Math.abs(resolveSekAmount(
     transaction.amount,
@@ -67,7 +82,7 @@ function buildInitialLines(
   }
 
   const counterLine: FormLine = {
-    account_number: '',
+    account_number: counterAccount ?? '',
     debit_amount: isExpense ? amountStr : '',
     credit_amount: isExpense ? '' : amountStr,
     line_description: '',
@@ -113,6 +128,8 @@ export default function TransactionBookingDialog({
   transaction,
   onBooked,
   preselectedTemplate,
+  proposalLines,
+  preselectedAccount,
 }: TransactionBookingDialogProps) {
   const t = useTranslations('tx_booking_dialog')
   const { toast } = useToast()
@@ -385,12 +402,19 @@ export default function TransactionBookingDialog({
           <div className="space-y-4">
             {bankAccount !== null && (
               <JournalEntryForm
-                key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
+                key={`${transaction.id}-${proposalLines && proposalLines.length > 0 ? 'proposal' : preselectedTemplate?.id ?? 'default'}-${preselectedAccount ?? 'none'}-${bankAccount}`}
                 embedded
                 initialLines={
-                  preselectedTemplate
-                    ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
-                    : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount)
+                  proposalLines && proposalLines.length > 0
+                    ? proposalLinesToFormLines(proposalLines, {
+                        settlementAccount: bankAccount,
+                        currency: transaction.currency,
+                        foreignAmount: Math.abs(transaction.amount),
+                        exchangeRate: transaction.exchange_rate,
+                      })
+                    : preselectedTemplate
+                      ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
+                      : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount, preselectedAccount)
                 }
                 initialDate={transaction.date}
                 initialDescription={transaction.description}

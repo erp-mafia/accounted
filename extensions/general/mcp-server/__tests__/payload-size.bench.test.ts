@@ -176,9 +176,49 @@ describe('tools/list payload size guard', () => {
     //     longer needs a second staged update after create. The property has
     //     no description (name + maxLength are the whole contract); headroom
     //     before the change was ~11 tokens, so even that minimal form crossed.
+    //   * 59.75K to 59.85K with personal_number on gnubok_create_customer: a
+    //     private person's personnummer had no input at all on the MCP path,
+    //     so agents put it in org_number, where nothing masks it (GDPR art.
+    //     5.1 c; 134 such rows across 10 companies on prod). The property is
+    //     the contract; its description and the org_number/payment_terms
+    //     descriptions were trimmed to one short sentence first; headroom
+    //     before the change was ~11 tokens, so even the trimmed form crossed.
+    //   * 59.85K to 59.9K with the bank account on transaction listings
+    //     (customer A4): cash_account_id + cash_account_ledger on
+    //     gnubok_list_uncategorized_transactions and
+    //     gnubok_list_transactions_without_documents, plus a cash_account_id
+    //     filter on the former, so per-account reconciliation can be driven
+    //     from outside. No property descriptions (names are the contract);
+    //     the tool description gained six words; headroom before the change
+    //     was ~50 tokens, so even the bare contract crossed by ~10.
+    //   * 59.9K to 59.95K with the vat_amount currency contract (MCP feedback
+    //     seq 254607): vat_amount on categorize + bulk_book now states its
+    //     denomination (transaction currency, booked in SEK), and
+    //     matched_supplier_id on the two upload tools became ['string','null']
+    //     so strict clients stop failing successful unmatched uploads (seq
+    //     261972). Prose trimmed to the floor first; headroom before the
+    //     change was ~19 tokens, so even the trimmed contract crossed.
+    //   * 59.95K to 60K with operation_status on gnubok_approve_pending_operation
+    //     (feedback seq 261545): a failed approve used to consume the op
+    //     silently, and agents inferred "consumed" from status 'failed' both
+    //     ways. The enum is the contract; the description is one clause;
+    //     headroom before the change was ~15 tokens, so even that crossed.
+    //   * 60K to 60.2K with skatteverket_connection on the briefing: the
+    //     connection-health block (status/source/connected_at) that lets an
+    //     agent warn the user about a dead 65-minute SKV session at session
+    //     start instead of mid-task. The runtime block is emitted only for
+    //     companies with a connection; this cost is the outputSchema contract
+    //     (~140 tokens), already trimmed to two short description strings.
+    //   * 60.2K to 60.7K with gnubok_create_company (issue #1814 PR 3): a
+    //     default-catalog tool by necessity, since a client that has not
+    //     connected yet can only call what tools/list shows and this is the
+    //     first protected call of agent-driven onboarding. Its contract was
+    //     trimmed to bare property names first (the two connect-link tools
+    //     are search-only); headroom before the change was ~0 after the skatteverket_connection bump, so even the
+    //     bare contract crossed by ~420.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(59_750)
+    expect(approxTokens).toBeLessThan(60_700)
   })
 })

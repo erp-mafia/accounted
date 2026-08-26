@@ -1,5 +1,10 @@
 import crypto from 'crypto'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
+// Not lib/company/context: that module imports next/headers for the legacy
+// company cookie, and this file is reachable from bundles where that import
+// is a build error.
+import { getActiveCompanyId } from '@/lib/company/active-company'
 
 const KEY_PREFIX = 'gnubok_sk_'
 const REFRESH_TOKEN_PREFIX = 'gnubok_rt_'
@@ -23,7 +28,7 @@ export const API_KEY_SCOPES = {
   'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI, logga körjournalresor' },
   // v1 REST API: added Phase 1
   'companies:read':     { label: 'Företag: läs',        description: 'Lista och visa företagsprofiler som API-nyckeln har tillgång till' },
-  'companies:write':    { label: 'Företag: skriv',      description: 'Uppdatera företagsinställningar via stagade verktyg eller REST-endpointen PATCH /api/v1/companies/{companyId}/settings' },
+  'companies:write':    { label: 'Företag: skriv',      description: 'Skapa nya företag och uppdatera företagsinställningar (gnubok_create_company, stagade verktyg, REST POST /api/v1/companies och PATCH /api/v1/companies/{companyId}/settings)' },
   'events:read':        { label: 'Händelser: läs',      description: 'Polla händelseloggen (event_log) som webhook-fallback' },
   'webhooks:manage':    { label: 'Webhooks: hantera',   description: 'Skapa, lista, uppdatera och radera webhook-prenumerationer' },
   'operations:read':    { label: 'Operationer: läs',    description: 'Hämta status för långkörande operationer (importer, bokslut, omvärdering)' },
@@ -35,6 +40,12 @@ export const API_KEY_SCOPES = {
   'agent:write':        { label: 'Agent: skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact)' },
   'pending_operations:read':    { label: 'Stagade operationer: läs',     description: 'Lista pending_operations (staged writes awaiting approval)' },
   'pending_operations:approve': { label: 'Stagade operationer: godkänn', description: 'Godkänn eller avvisa stagade operationer via API/MCP: agenten ersätter web-UI:s granskning' },
+  // Reconciliation (account-keyed: bank accounts + skattekonto). Reads cover
+  // the account list, the bridge and the item buckets; writes cover links
+  // (match/unmatch) and ignore flags. Links never touch the ledger.
+  'reconciliation:read':  { label: 'Avstämning: läs',   description: 'Konton att stämma av, bryggan per konto och raderna bakom den (bank + skattekonto)' },
+  'reconciliation:write': { label: 'Avstämning: skriv', description: 'Koppla och koppla bort händelser mot verifikat, ignorera rader (MCP stagar; REST skriver direkt)' },
+  'reconciliation:signoff': { label: 'Avstämning: signera', description: 'Markera ett konto som avstämt t.o.m. ett datum och öppna en signering igen (MCP stagar; REST skriver direkt)' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -125,6 +136,11 @@ export const STAGING_SCOPES: ApiKeyScope[] = [
   // key holding both this and pending_operations:approve is a SoD conflict:
   // findStageApproveConflict picks it up automatically from this list.
   'skatteverket:write',
+  // gnubok_reconcile_match / gnubok_reconcile_unmatch stage reconciliation_*
+  // operations; same SoD reasoning.
+  'reconciliation:write',
+  // gnubok_reconcile_signoff stages reconciliation_signoff.
+  'reconciliation:signoff',
 ]
 
 /**
@@ -163,10 +179,14 @@ export const SCOPE_GROUPS = [
 export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Companies
   gnubok_list_companies:                  'companies:read',
+  gnubok_create_company:                  'companies:write',
+  gnubok_connect_bank:                    'companies:read',
+  gnubok_connect_skatteverket:            'companies:read',
   gnubok_get_company_settings:            'companies:read',
   gnubok_update_company_settings:         'companies:write',
   // Transactions
   gnubok_list_uncategorized_transactions:     'transactions:read',
+  gnubok_list_cash_accounts:                  'transactions:read',
   gnubok_list_transactions_without_documents: 'transactions:read',
   gnubok_create_transactions:                 'transactions:write',
   gnubok_categorize_transaction:              'transactions:write',
@@ -176,6 +196,14 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_match_transaction_to_invoice:        'transactions:write',
   gnubok_link_transaction_to_journal_entry:   'transactions:write',
   gnubok_match_batch_allocate:                'transactions:write',
+  // Reconciliation (account-keyed). gnubok_get_reconciliation_status keeps its
+  // historical reports:read so existing keys are not cut off.
+  gnubok_list_reconciliation_items:           'reconciliation:read',
+  gnubok_reconcile_match:                     'reconciliation:write',
+  gnubok_reconcile_unmatch:                   'reconciliation:write',
+  gnubok_reconcile_signoff:                   'reconciliation:signoff',
+  // Residual booking writes a verifikat: the same scope that books a bank row.
+  gnubok_reconcile_residual:                  'transactions:write',
   gnubok_bulk_book_transactions:              'transactions:write',
   gnubok_bulk_book_inbox_items:               'transactions:write',
   gnubok_auto_match_period:                   'transactions:write',
@@ -453,7 +481,12 @@ export async function validateApiKey(
 ): Promise<
   | {
       userId: string
-      companyId: string
+      /**
+       * The key's default company. null only while the key's user has no
+       * company at all (minted from the OAuth popup before onboarding, issue
+       * #1814): the first validation after a company exists binds the key.
+       */
+      companyId: string | null
       apiKeyId?: string
       apiKeyName?: string
       scopes: ApiKeyScope[]
@@ -489,9 +522,12 @@ export async function validateApiKey(
     return { error: 'Rate limit exceeded', status: 429 }
   }
 
+  const companyId: string | null =
+    row.company_id ?? (await bindUnboundKey(supabase, row.user_id, row.api_key_id))
+
   return {
     userId: row.user_id,
-    companyId: row.company_id,
+    companyId,
     apiKeyId: row.api_key_id,
     apiKeyName: row.api_key_name,
     scopes: validateScopes(row.scopes) ?? DEFAULT_SCOPES,
@@ -500,6 +536,38 @@ export async function validateApiKey(
     // keys behave unchanged.
     mode: (row.mode === 'test' ? 'test' : 'live') as ApiKeyMode,
   }
+}
+
+/**
+ * Late binding for keys minted before the user's first company existed.
+ *
+ * The OAuth token endpoint stores company_id NULL for such keys. Company
+ * creation happens in the web app (a Server Action) which knows nothing about
+ * the user's keys, so the binding is healed here, on the first validation after
+ * a company exists: one place, regardless of how the company was created.
+ * Returns null while the user still has no company. The UPDATE is best-effort:
+ * a failed write only means the next call resolves again.
+ */
+async function bindUnboundKey(
+  supabase: SupabaseClient,
+  userId: string,
+  apiKeyId: string | undefined
+): Promise<string | null> {
+  let companyId: string | null
+  try {
+    companyId = await getActiveCompanyId(supabase, userId)
+  } catch {
+    return null
+  }
+  if (!companyId) return null
+  if (apiKeyId) {
+    await supabase
+      .from('api_keys')
+      .update({ company_id: companyId })
+      .eq('id', apiKeyId)
+      .is('company_id', null)
+  }
+  return companyId
 }
 
 /**

@@ -310,6 +310,9 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
 
   let assistantText = ''
   let iterations = 0
+  // stop_reason of the last completed model call: lets the post-loop check
+  // tell "finished" from "ran out of output budget before any visible text".
+  let lastStopReason: string | null = null
   // One automatic retry per TURN when the Bedrock stream dies on a transient
   // error (throttling, 5xx, transport cut, stream corruption). The failed
   // attempt persisted nothing (persist happens after finalMessage() succeeds),
@@ -482,6 +485,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     }
 
     const assistantContent: ContentBlock[] = response.content
+    lastStopReason = (response as { stop_reason?: string | null }).stop_reason ?? null
 
     // Persist the assistant turn (text + tool_use blocks). Thinking blocks are
     // stripped for storage but kept in `messages` below for the in-turn loop.
@@ -652,6 +656,27 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     } catch {
       // intentional: best-effort
     }
+  }
+
+  // A turn that hit the output ceiling before producing any visible text
+  // (thinking or tool churn spent the whole max_tokens budget) is a failure,
+  // not a completion. A bare turn_complete here is the silent-stop bug: the
+  // client hides the empty bubble and "Tänker" just disappears. A PARTIAL
+  // answer that hit the ceiling still completes; only the empty case errors.
+  if (lastStopReason === 'max_tokens' && assistantText.trim().length === 0) {
+    log.error('model hit max_tokens with no visible text', {
+      conversationId,
+      companyId,
+      model,
+      iterations,
+      thinking: Boolean(intent.thinking),
+      maxTokens,
+    })
+    emit({
+      kind: 'error',
+      message: 'Assistenten fick slut på utrymme innan svaret blev klart. Försök igen.',
+    })
+    return
   }
 
   emit({ kind: 'turn_complete', assistant_text: assistantText })

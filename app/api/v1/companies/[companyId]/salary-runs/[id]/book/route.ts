@@ -38,6 +38,7 @@ import { isFSkattStatus } from '@/lib/salary/declared-avgifter'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
+import { refreshRunYtd } from '@/lib/salary/ytd'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const SalaryRunBooked = z.object({
@@ -367,6 +368,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('SALARY_RUN_BOOK_FAILED', ctx.log, {
         requestId: ctx.requestId,
         details: { reason: 'row missing after engine commit', entry_ids: entryIds },
+      })
+    }
+
+    // Final refresh of the payslip's "Ackumulerat" snapshot, mirroring
+    // lib/salary/book-run.ts. Non-fatal: YTD is display only and never
+    // reaches a verifikation.
+    const ytdRefresh = await refreshRunYtd(ctx.supabase, {
+      companyId: ctx.companyId!,
+      salaryRunId,
+    })
+    if (!ytdRefresh.ok) {
+      ctx.log.warn('YTD refresh failed after booking', {
+        salaryRunId,
+        message: ytdRefresh.message,
       })
     }
 

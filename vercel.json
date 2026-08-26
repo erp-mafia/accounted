@@ -1,4 +1,5 @@
 {
+  "buildCommand": "NODE_OPTIONS=--max-old-space-size=6144 npm run build",
   "regions": ["arn1"],
   "crons": [
     {
@@ -92,6 +93,14 @@
     {
       "path": "/api/receipt-hunt/cron",
       "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/peppol/inbound/cron",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/peppol/outbound/status/cron",
+      "schedule": "5,20,35,50 * * * *"
     }
   ]
 }

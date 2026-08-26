@@ -12,6 +12,9 @@ export const PEPPOL_BIS_BILLING_CUSTOMIZATION_ID =
   'urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0'
 export const PEPPOL_BIS_BILLING_PROFILE_ID =
   'urn:fdc:peppol.eu:2017:poacc:billing:01:1.0'
+/** Peppol document type identifier for a BIS Billing 3 UBL 2.1 invoice (SMP capability key). */
+export const PEPPOL_BIS_BILLING_INVOICE_DOCUMENT_TYPE_ID =
+  'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2::Invoice##urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0::2.1'
 
 const SUPPORTED_VAT_RATES = new Set([6, 12, 25])
 const UNIT_CODES: Record<string, string> = {

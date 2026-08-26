@@ -53,6 +53,10 @@ vi.mock('@react-pdf/renderer', () => ({
 // Email service mock: configurable per test
 const mockSendEmail = vi.fn()
 const mockIsConfigured = vi.fn().mockReturnValue(true)
+vi.mock('@/lib/email/invoice-sender', () => ({
+  resolveInvoiceSender: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/lib/email/service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/email/service')>()
   return {

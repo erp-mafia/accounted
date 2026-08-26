@@ -16,6 +16,10 @@ vi.mock('@/lib/reports/ar-reconciliation', () => ({
   generateARReconciliation: vi.fn(),
 }))
 
+const listAccountsMock = vi.fn()
+vi.mock('@/lib/reconciliation/service', () => ({
+  listReconciliationAccounts: (...args: unknown[]) => listAccountsMock(...args),
+}))
 vi.mock('@/lib/reports/supplier-reconciliation', () => ({
   generateReconciliation: vi.fn(),
 }))
@@ -410,5 +414,52 @@ describe('buildBokslutReadinessReport', () => {
     await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
     expect(vi.mocked(generateARReconciliation)).toHaveBeenCalled()
     expect(vi.mocked(generateAPReconciliation)).toHaveBeenCalled()
+  })
+})
+
+describe('bokslutsbilagor reminder', () => {
+  beforeEach(() => {
+    listAccountsMock.mockReset()
+  })
+
+  it('counts balance accounts not signed off per balansdagen and links to the pärm', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    listAccountsMock.mockResolvedValue([
+      { account_key: 'bank:1', kind: 'bank', superseded_by: null, signed_off_through: '2025-12-31' },
+      { account_key: 'bank:2', kind: 'bank', superseded_by: 'bank:1', signed_off_through: null },
+      { account_key: 'manual:1510', kind: 'manual', superseded_by: null, signed_off_through: '2025-11-30' },
+      { account_key: 'manual:2350', kind: 'manual', superseded_by: null, signed_off_through: null },
+    ])
+    const report = await buildBokslutReadinessReport(
+      makeSupabase({ period: { data: PERIOD, error: null }, settings: { data: { entity_type: 'aktiebolag' }, error: null } }),
+      'company-1',
+      'user-1',
+      'fp-1',
+    )
+    const reminder = report.reminders.find((r) => r.code === 'bilagor_unsigned')
+    expect(reminder).toMatchObject({ severity: 'warning', href: '/reports/bokslutsbilagor' })
+    expect(reminder?.message).toMatch(/2 av 3 balanskonton/)
+    expect(listAccountsMock).toHaveBeenCalledWith(expect.anything(), 'company-1', expect.objectContaining({ withStatus: false, windowTo: PERIOD.period_end }))
+  })
+
+  it('says so when every account is signed, and stays silent when the read fails', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    listAccountsMock.mockResolvedValue([{ account_key: 'bank:1', kind: 'bank', superseded_by: null, signed_off_through: '2025-12-31' }])
+    const done = await buildBokslutReadinessReport(
+      makeSupabase({ period: { data: PERIOD, error: null }, settings: { data: { entity_type: 'aktiebolag' }, error: null } }),
+      'company-1',
+      'user-1',
+      'fp-1',
+    )
+    expect(done.reminders.find((r) => r.code === 'bilagor_unsigned')).toMatchObject({ severity: 'info' })
+
+    listAccountsMock.mockRejectedValue(new Error('down'))
+    const failed = await buildBokslutReadinessReport(
+      makeSupabase({ period: { data: PERIOD, error: null }, settings: { data: { entity_type: 'aktiebolag' }, error: null } }),
+      'company-1',
+      'user-1',
+      'fp-1',
+    )
+    expect(failed.reminders.find((r) => r.code === 'bilagor_unsigned')).toBeUndefined()
   })
 })

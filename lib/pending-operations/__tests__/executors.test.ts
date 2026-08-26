@@ -14,6 +14,7 @@ import {
   makeSupplierInvoice,
 } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
+import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
 
 vi.mock('@/lib/core/bookkeeping/period-service', async () => {
   const actual = await vi.importActual<typeof import('@/lib/core/bookkeeping/period-service')>(
@@ -93,6 +94,10 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
 })
+
+vi.mock('@/lib/email/invoice-sender', () => ({
+  resolveInvoiceSender: vi.fn().mockResolvedValue(undefined),
+}))
 
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({
@@ -276,6 +281,80 @@ describe('commitPendingOperation: create_customer', () => {
 
     expect(result.status).toBe('committed')
     expect(findCall('customers', 'insert')?.[0]).toMatchObject({ customer_number: null })
+  })
+
+  // Synthetic personnummer, never a real one. Ciphertext shape enforced by
+  // customers_personal_number_check (20260726110000).
+  const PERSONAL_NUMBER = '19900101-1234'
+  const CIPHERTEXT_SHAPE = /^[0-9a-f]{76,255}$/
+
+  it('stores the staged personal_number_encrypted as the customer personal_number, with the staged payment terms', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    // payment_terms were resolved at staging, so no company_settings read here
+    enqueue({ data: makeCustomer({ id: 'cust-1', customer_type: 'individual' }), error: null }) // customers insert
+    enqueue({ data: null, error: null }) // dispatcher's pending_operations update
+
+    const encrypted = encryptPersonnummer(PERSONAL_NUMBER)
+    const op = makePendingOp({
+      operation_type: 'create_customer',
+      params: {
+        name: 'Anna Andersson',
+        customer_type: 'individual',
+        payment_terms: 10,
+        personal_number_encrypted: encrypted,
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(findCall('customers', 'insert')?.[0]).toMatchObject({
+      personal_number: encrypted,
+      org_number: null,
+      default_payment_terms: 10,
+    })
+  })
+
+  it('moves a personnummer staged as org_number on an individual into personal_number, encrypted', async () => {
+    // An operation staged before gnubok_create_customer had a personal_number
+    // input, committed after this deploy.
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // company_settings read (payment-terms default)
+    enqueue({ data: makeCustomer({ id: 'cust-1', customer_type: 'individual' }), error: null }) // customers insert
+    enqueue({ data: null, error: null }) // dispatcher's pending_operations update
+
+    const op = makePendingOp({
+      operation_type: 'create_customer',
+      params: { name: 'Bertil Bengtsson', customer_type: 'individual', org_number: PERSONAL_NUMBER },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const inserted = findCall('customers', 'insert')?.[0] as { org_number: string | null; personal_number: string | null }
+    expect(inserted.org_number).toBeNull()
+    expect(inserted.personal_number).toMatch(CIPHERTEXT_SHAPE)
+    expect(decryptPersonnummer(inserted.personal_number!)).toBe(PERSONAL_NUMBER)
+    expect(JSON.stringify(inserted)).not.toContain(PERSONAL_NUMBER)
+  })
+
+  it('still refuses a personnummer-shaped org_number on a business customer', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      operation_type: 'create_customer',
+      params: { name: 'Enskild Firma X', customer_type: 'swedish_business', org_number: PERSONAL_NUMBER },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(findCall('customers', 'insert')).toBeUndefined()
   })
 })
 

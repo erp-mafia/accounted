@@ -27,6 +27,7 @@
     "test:pg": "vitest run --project pg-real"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "2.0.69",
     "@anthropic-ai/bedrock-sdk": "0.29.1",
     "@anthropic-ai/sdk": "0.95.0",
     "@hookform/resolvers": "^5.4.0",
@@ -50,6 +51,7 @@
     "@upstash/redis": "^1.38.0",
     "@use-gesture/react": "^10.3.1",
     "@vercel/speed-insights": "^2.0.0",
+    "ai": "6.0.259",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
@@ -60,7 +62,7 @@
     "jszip": "^3.10.1",
     "lucide-react": "^1.24.0",
     "mailparser": "^3.9.14",
-    "next": "16.2.12",
+    "next": "16.3.1",
     "next-intl": "^4.13.2",
     "next-themes": "^0.4.6",
     "pdf-lib": "^1.17.1",
@@ -96,13 +98,14 @@
     "@types/web-push": "^3.6.4",
     "dotenv": "^17.4.2",
     "eslint": "^9",
-    "eslint-config-next": "16.2.12",
+    "eslint-config-next": "16.3.1",
     "pg": "^8.22.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.9"
   },
   "overrides": {
+    "html-to-text": "10.0.1",
     "ws": "^8.21.0",
     "sharp": "^0.35.3",
     "postcss": "^8.5.18"

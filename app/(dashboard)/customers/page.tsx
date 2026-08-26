@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils'
 import Link from 'next/link'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
+import { customerListIdentifier } from '@/lib/customers/mask-personal-number'
 
 const CustomerForm = dynamic(
   () => import('@/components/customers/CustomerForm'),
@@ -53,8 +54,11 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
 ]
 const INITIAL_VISIBLE_ROWS = 100
 
+// Business rows show org_number; individual rows show the masked
+// personnummer the API returns, and a legacy individual row that still
+// carries its personnummer in org_number shows that masked too, never raw.
 function getIdentifier(customer: Customer): string {
-  return customer.org_number || customer.personal_number || ''
+  return customerListIdentifier(customer)
 }
 
 function compareStrings(a: string, b: string): number {

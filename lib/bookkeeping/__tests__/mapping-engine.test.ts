@@ -559,6 +559,123 @@ describe('mapping-engine', () => {
       expect(result.vat_lines[0].account_number).toBe('2645')
       expect(result.vat_lines[1].account_number).toBe('2614')
     })
+
+    // Journal entry lines are SEK; VAT from a rule match must be derived from
+    // the transaction's SEK value, not the raw foreign amount. Sibling of the
+    // buildMappingResultFromCategory FX fix (PR #1842).
+    it('derives rule input VAT from the SEK value for a foreign transaction', async () => {
+      const { evaluateMappingRules } = await import('../mapping-engine')
+
+      const tx = makeTransaction({
+        amount: -100,
+        currency: 'EUR',
+        exchange_rate: 11,
+        merchant_name: 'Adobe',
+        description: 'ADOBE SYSTEMS',
+      })
+
+      mockResult({
+        data: [
+          {
+            id: 'rule-fx-vat',
+            user_id: 'user-1',
+            rule_name: 'Adobe standard VAT',
+            rule_type: 'merchant_name',
+            priority: 10,
+            mcc_codes: null,
+            merchant_pattern: 'Adobe',
+            description_pattern: null,
+            amount_min: null,
+            amount_max: null,
+            debit_account: '5420',
+            credit_account: '1930',
+            vat_treatment: 'standard_25',
+            vat_debit_account: '2641',
+            vat_credit_account: null,
+            risk_level: 'LOW',
+            default_private: false,
+            requires_review: false,
+            confidence_score: 0.9,
+            capitalization_threshold: null,
+            capitalized_debit_account: null,
+            is_active: true,
+            source: 'system',
+            user_description: null,
+            template_id: null,
+            created_at: '2024-01-01',
+            updated_at: '2024-01-01',
+          },
+        ],
+        error: null,
+      })
+
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+
+      // 100 EUR at 11 = 1100 kr gross; 25% extraction = 220 kr, not 20
+      expect(result.vat_lines).toHaveLength(1)
+      expect(result.vat_lines[0].account_number).toBe('2641')
+      expect(result.vat_lines[0].debit_amount).toBe(220)
+    })
+
+    it('derives reverse-charge fiktiv moms and basbelopp from the SEK value (amount_sek wins)', async () => {
+      const { evaluateMappingRules } = await import('../mapping-engine')
+
+      const tx = makeTransaction({
+        amount: -100,
+        currency: 'USD',
+        // bank settlement wins over exchange_rate, matching the gross line
+        amount_sek: -950,
+        exchange_rate: 10,
+        merchant_name: 'AWS',
+        description: 'AWS EU-WEST-1',
+      })
+
+      mockResult({
+        data: [
+          {
+            id: 'rule-rc-fx',
+            user_id: 'user-1',
+            rule_name: 'AWS reverse charge',
+            rule_type: 'merchant_name',
+            priority: 10,
+            mcc_codes: null,
+            merchant_pattern: 'AWS',
+            description_pattern: null,
+            amount_min: null,
+            amount_max: null,
+            debit_account: '5421',
+            credit_account: '1930',
+            vat_treatment: 'reverse_charge',
+            vat_debit_account: null,
+            vat_credit_account: null,
+            risk_level: 'LOW',
+            default_private: false,
+            requires_review: false,
+            confidence_score: 0.9,
+            capitalization_threshold: null,
+            capitalized_debit_account: null,
+            is_active: true,
+            source: 'system',
+            user_description: null,
+            template_id: null,
+            created_at: '2024-01-01',
+            updated_at: '2024-01-01',
+          },
+        ],
+        error: null,
+      })
+
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+
+      // 950 kr gross: fiktiv moms 237.50, basbelopp 950 (not 25/100 off USD)
+      expect(result.vat_lines).toHaveLength(4)
+      expect(result.vat_lines[0].account_number).toBe('2645')
+      expect(result.vat_lines[0].debit_amount).toBe(237.5)
+      expect(result.vat_lines[1].account_number).toBe('2614')
+      expect(result.vat_lines[1].credit_amount).toBe(237.5)
+      expect(result.vat_lines[2].debit_amount).toBe(950)
+      expect(result.vat_lines[3].credit_amount).toBe(950)
+    })
   })
 
   // Both the halva-prisbasbeloppet threshold (IL 18 kap 4 §) and a rule's

@@ -63,7 +63,7 @@ describe('chart_of_accounts.default_vat_treatment', () => {
       'standard_25', 'reduced_12', 'reduced_6', 'exempt',
       'reverse_charge_domestic', 'reverse_charge_eu_goods',
       'reverse_charge_eu_services', 'export_goods', 'export_services',
-      'vmb', 'rental_voluntary', null,
+      'vmb', 'rental_voluntary', 'oss', null,
     ]
     for (const treatment of revenueTreatments) {
       await expect(setTreatment(companyId, '3001', treatment)).resolves.toBeDefined()
@@ -87,6 +87,14 @@ describe('chart_of_accounts.default_vat_treatment', () => {
     const { companyId, userId } = await seedCompany()
     await insertAccount(companyId, userId, '4010', 4)
     await expect(setTreatment(companyId, '4010', 'standard_25')).rejects.toThrow()
+  })
+
+  it('accepts oss only on revenue accounts (20260822093000_account_vat_treatment_oss)', async () => {
+    const { companyId, userId } = await seedCompany()
+    await insertAccount(companyId, userId, '3106', 3)
+    await insertAccount(companyId, userId, '4010', 4)
+    await expect(setTreatment(companyId, '3106', 'oss')).resolves.toBeDefined()
+    await expect(setTreatment(companyId, '4010', 'oss')).rejects.toThrow()
   })
 
   it('normalizes values accepted by the predecessor before enforcing classes', async () => {

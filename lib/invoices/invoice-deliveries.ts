@@ -25,6 +25,8 @@ export interface TrackedInvoiceEmailInput {
   bcc?: string | string[]
   replyTo?: string
   fromName?: string
+  /** Company's own verified sender (resolveInvoiceSender); platform sender when absent. */
+  from?: SendEmailOptions['from']
   subject: string
   html: string
   text: string
@@ -84,6 +86,7 @@ export async function sendTrackedInvoiceEmail(
     bcc,
     replyTo,
     fromName,
+    from,
     subject,
     html,
     text,
@@ -151,6 +154,7 @@ export async function sendTrackedInvoiceEmail(
     text,
     replyTo,
     fromName,
+    from,
     attachments: [
       {
         filename,

@@ -22,6 +22,9 @@ const DISPATCH_ONLY_MCP_TOOLS = new Set<string>([
   'gnubok_upload_document',
   'gnubok_create_document_upload',
   'gnubok_complete_document_upload',
+  // Onboarding connect-link tools: read status + hand out a browser link; no commit counterpart.
+  'gnubok_connect_bank',
+  'gnubok_connect_skatteverket',
 ])
 
 describe('MCP_TOOL_CAPABILITY_MAP', () => {
@@ -30,6 +33,8 @@ describe('MCP_TOOL_CAPABILITY_MAP', () => {
       gnubok_send_invoice: CAPABILITY.email_send,
       gnubok_vat_declaration_submit: CAPABILITY.skatteverket,
       gnubok_agi_submit: CAPABILITY.skatteverket,
+      gnubok_connect_bank: CAPABILITY.bank_sync,
+      gnubok_connect_skatteverket: CAPABILITY.skatteverket,
       // Dispatch-only AI tools: inline Bedrock OCR, no staged operation. The
       // signed-URL pair is gated at create AND complete so a free-tier key can
       // neither reserve nor finalize a paid extraction.

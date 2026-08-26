@@ -6,6 +6,7 @@ import { uploadDocument } from '@/lib/core/documents/document-service'
 import { createServiceClient } from '@/lib/supabase/server'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
+import { mirrorExtractionToDocument } from './lib/mirror-extraction'
 import {
   uploadAndExtract,
   sanitiseFilename,
@@ -697,6 +698,9 @@ export const invoiceInboxExtension: Extension = {
             type: file.type,
           }, {
             upload_source: 'file_upload',
+            // This route extracts below and mirrors the outcome onto the
+            // document row; the document-extraction extension must not race it.
+            extractionOwner: 'invoice-inbox',
           })
 
           // Same page handling as /upload (issue #553): long PDFs extract
@@ -726,16 +730,23 @@ export const invoiceInboxExtension: Extension = {
                   : null
           const skipExtraction = skipReason !== null
 
-          const { data: extracted } = skipExtraction
-            ? { data: emptyResult() }
+          const extraction = skipExtraction
+            ? { data: emptyResult(), rawText: null, model: null, skipped: null }
             : await extractInvoiceFields({
                 buffer: Buffer.from(slicedBuffer ?? buffer),
                 mimeType: file.type,
                 fileName: file.name,
               })
+          const { data: extracted } = extraction
           if (!skipExtraction && slicedBuffer != null && pageCount != null) {
             extracted.pages = { total: pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
           }
+          await mirrorExtractionToDocument(doc.id, {
+            data: extracted,
+            rawText: extraction.rawText,
+            model: extraction.model ?? null,
+            skipped: skipReason ?? extraction.skipped ?? null,
+          })
 
           const { error: linkError } = await ctx.supabase
             .from('invoice_inbox_items')
@@ -1088,10 +1099,17 @@ export const invoiceInboxExtension: Extension = {
 
         try {
           const buffer = Buffer.from(await blob.arrayBuffer())
-          const { data: extracted } = await extractInvoiceFields({
+          const extraction = await extractInvoiceFields({
             buffer,
             mimeType: doc.mime_type,
             fileName: doc.file_name,
+          })
+          const { data: extracted } = extraction
+          await mirrorExtractionToDocument(item.document_id, {
+            data: extracted,
+            rawText: extraction.rawText,
+            model: extraction.model ?? null,
+            skipped: extraction.skipped ?? null,
           })
 
           // Re-running the extraction has to re-run the match too, or the one
@@ -2633,6 +2651,7 @@ export const invoiceInboxExtension: Extension = {
             ctx.companyId,
             (tx as Transaction).cash_account_id,
             createLogger('invoice-inbox.suggest-booking'),
+            (tx as Transaction).currency,
           )
           // evaluateMappingRules applies the settlement account itself on every
           // return path. Applying it again rewrote a legitimate 1930 leg, which

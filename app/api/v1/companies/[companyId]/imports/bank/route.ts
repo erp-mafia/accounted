@@ -228,7 +228,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // upsert gives duplicate-rerun protection within one company. The
       // old (user_id, file_hash) key and its cross-company pre-check
       // (BANK_IMPORT_DUPLICATE_OTHER_COMPANY) are gone.
-      await ctx.supabase
+      // `.select('id')` so the inserted transactions can be stamped with the
+      // batch id (transactions.bank_file_import_id): the scope key for the
+      // owner/admin "undo this import" action. A missing id (upsert error) is
+      // non-fatal BY DESIGN: the import proceeds, its rows just stay
+      // unlinked, exactly like a pre-20260820071500 import. Without the row
+      // the batch never appears in the undo history, so nothing falsely
+      // advertises undo for it — but the failure is logged loudly, since an
+      // unattributed batch is permanently exempt from bulk undo.
+      const { data: importRow, error: importRowError } = await ctx.supabase
         .from('bank_file_imports')
         .upsert(
           {
@@ -244,6 +252,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           },
           { onConflict: 'company_id,file_hash' },
         )
+        .select('id')
+        .maybeSingle()
+
+      if (importRowError || !importRow?.id) {
+        ctx.log.warn('bank_file_imports upsert failed: batch will import without undo attribution', {
+          filename: file.name,
+          fileHash,
+          error: importRowError?.message ?? 'no row returned',
+        })
+      }
 
       // Convert parsed transactions to the RawTransaction shape that
       // ingestTransactions expects. external_id stays stable so re-imports
@@ -290,6 +308,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         ctx.companyId!,
         ctx.userId,
         raw,
+        importRow?.id ? { bankFileImportId: importRow.id as string } : undefined,
       )
 
       // Mark the bank_file_imports row complete. The unique constraint is

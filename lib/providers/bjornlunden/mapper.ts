@@ -9,6 +9,26 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto,
 } from '../dto';
+import { readNumber, resolveVatTriple } from '../amounts';
+
+/**
+ * BL's invoice list carries only gross amounts (`amountInLocalCurrency`) and
+ * no line items. Those grosses used to be reported as `lineExtensionAmount`,
+ * i.e. as the amount EXCLUDING VAT, so the migration derived 0 kr of VAT for
+ * every BL invoice while still labelling it 25 % moms.
+ *
+ * BL's list payload is not documented to carry a VAT total; the candidates
+ * below cover the spellings its endpoints use elsewhere. When none matches,
+ * the VAT stays unknown and the migration reports it, instead of the mapper
+ * asserting zero. Hydrating the detail endpoint (provider-data-fetcher) is
+ * what actually supplies line items for BL.
+ */
+const BL_VAT_KEYS = [
+  'vatAmountInLocalCurrency',
+  'vatAmount',
+  'vat',
+  'totalVat',
+] as const;
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
   return { value: value ?? 0, currencyCode: currency };
@@ -62,8 +82,15 @@ export function mapBLToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceD
     identifications: raw['customerId'] ? [{ id: String(raw['customerId']), schemeId: 'BL:CUSTOMER_ID' }] : [],
   };
 
+  const vat = resolveVatTriple({
+    gross: totalAmount,
+    vat: readNumber(raw, BL_VAT_KEYS),
+  });
+
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(totalAmount, currency),
+    // `amountInLocalCurrency` is the gross. Reporting it as the net is what
+    // made every BL invoice look like a 0 kr VAT sale.
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
     taxInclusiveAmount: amount(totalAmount, currency),
     payableAmount: amount(totalAmount, currency),
   };
@@ -83,6 +110,7 @@ export function mapBLToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceD
     supplier: { name: '', identifications: [] },
     customer,
     lines: [], // BL doesn't include line items in list responses
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     _raw: raw,
@@ -107,8 +135,15 @@ export function mapBLToSupplierInvoice(raw: Record<string, unknown>): SupplierIn
     identifications: raw['supplierId'] ? [{ id: String(raw['supplierId']), schemeId: 'BL:SUPPLIER_ID' }] : [],
   };
 
+  const vat = resolveVatTriple({
+    gross: totalAmount,
+    vat: readNumber(raw, BL_VAT_KEYS),
+  });
+
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(totalAmount, currency),
+    // `amountInLocalCurrency` is the gross. Reporting it as the net is what
+    // made every BL invoice look like a 0 kr VAT sale.
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
     taxInclusiveAmount: amount(totalAmount, currency),
     payableAmount: amount(totalAmount, currency),
   };
@@ -128,6 +163,7 @@ export function mapBLToSupplierInvoice(raw: Record<string, unknown>): SupplierIn
     supplier,
     buyer: { name: '', identifications: [] },
     lines: [], // BL doesn't include line items in list responses
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
     _raw: raw,

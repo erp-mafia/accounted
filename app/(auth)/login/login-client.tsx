@@ -35,7 +35,15 @@ import {
 import { buildPasswordResetRedirectTo } from '@/lib/domains/trusted-app-origin'
 import { AuthFormError } from '@/components/auth/AuthFormError'
 import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import {
+  TurnstileChallenge,
+  type TurnstileChallengeHandle,
+} from '@/components/auth/TurnstileChallenge'
 import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
+import {
+  captchaTokenOptions,
+  isTurnstileSubmissionBlocked,
+} from '@/lib/auth/turnstile'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
@@ -77,8 +85,12 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   // Consecutive credential failures; from the second one on, the error line
   // grows a reset-password action (extra help on repeated errors).
   const [failedAttempts, setFailedAttempts] = useState(0)
+  const [passwordCaptchaToken, setPasswordCaptchaToken] = useState<string | null>(null)
+  const [resetCaptchaToken, setResetCaptchaToken] = useState<string | null>(null)
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const emailInputRef = useRef<HTMLInputElement>(null)
+  const passwordTurnstileRef = useRef<TurnstileChallengeHandle>(null)
+  const resetTurnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -93,6 +105,10 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   // (/login?next=/api/mcp-oauth/authorize?...). Sanitized to a same-origin
   // relative path; '/' means no explicit destination.
   const nextPath = safeReturnTo(searchParams.get('next'), '/')
+  // A visitor who arrives here from the MCP consent page and has no account
+  // yet must be able to sign up without losing that destination (issue
+  // #1814). The register page re-sanitises it through safeReturnTo.
+  const registerHref = nextPath === '/' ? '/register' : `/register?next=${encodeURIComponent(nextPath)}`
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
   const googleAuthEnabled = isGoogleAuthEnabled()
@@ -141,11 +157,13 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
 
   const openResetForm = () => {
     setFormError(null)
+    setResetCaptchaToken(null)
     setShowResetPassword(true)
   }
 
   const closeResetForm = () => {
     setFormError(null)
+    setResetCaptchaToken(null)
     setShowResetPassword(false)
   }
 
@@ -244,6 +262,12 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   const handlePasswordLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setFormError(null)
+
+    if (isTurnstileSubmissionBlocked(passwordCaptchaToken)) {
+      setFormError({ kind: 'unknown', message: tAuth('turnstile_required') })
+      return
+    }
+
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -254,6 +278,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
       const { error } = await supabase.auth.signInWithPassword({
         email: emailValue,
         password: passwordValue,
+        options: captchaTokenOptions(passwordCaptchaToken),
       })
 
       if (error) {
@@ -313,6 +338,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
+      passwordTurnstileRef.current?.reset()
       setIsLoading(false)
     }
   }
@@ -320,6 +346,12 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
   const handleResetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setFormError(null)
+
+    if (isTurnstileSubmissionBlocked(resetCaptchaToken)) {
+      setFormError({ kind: 'unknown', message: tAuth('turnstile_required') })
+      return
+    }
+
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -328,6 +360,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(emailValue, {
         redirectTo: buildPasswordResetRedirectTo(window.location.origin),
+        ...captchaTokenOptions(resetCaptchaToken),
       })
 
       if (error) {
@@ -353,6 +386,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
+      resetTurnstileRef.current?.reset()
       setIsLoading(false)
     }
   }
@@ -461,7 +495,20 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                   className="h-11"
                 />
               </div>
-              <Button type="submit" className="w-full h-11" disabled={isLoading || !!resetCooldownUntil}>
+              <TurnstileChallenge
+                ref={resetTurnstileRef}
+                action="accounted_password_reset"
+                onTokenChange={setResetCaptchaToken}
+              />
+              <Button
+                type="submit"
+                className="w-full h-11"
+                disabled={
+                  isLoading ||
+                  !!resetCooldownUntil ||
+                  isTurnstileSubmissionBlocked(resetCaptchaToken)
+                }
+              >
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -548,7 +595,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
               <p className="mt-1 text-muted-foreground">{tAuth('bankid_no_account_body')}</p>
               <p className="mt-1">
                 <Link
-                  href="/register"
+                  href={registerHref}
                   className="text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors"
                 >
                   {tAuth('bankid_no_account_create')}
@@ -649,7 +696,16 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                     </p>
                   )}
                 </div>
-                <Button type="submit" className="w-full h-11" disabled={isLoading}>
+                <TurnstileChallenge
+                  ref={passwordTurnstileRef}
+                  action="accounted_login"
+                  onTokenChange={setPasswordCaptchaToken}
+                />
+                <Button
+                  type="submit"
+                  className="w-full h-11"
+                  disabled={isLoading || isTurnstileSubmissionBlocked(passwordCaptchaToken)}
+                >
                   {isLoading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -696,6 +752,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
                 {googleAuthEnabled && (
                   <GoogleAuthButton
                     compact
+                    next={nextPath}
                     onError={(message) => setFormError({ kind: 'oauth', message })}
                   />
                 )}
@@ -718,7 +775,7 @@ export function LoginClient({ initialMethod }: { initialMethod: LoginMethod | nu
         <p className="mt-6 text-center text-[13px] text-muted-foreground">
           {tAuth('login_new_here')}{' '}
           <Link
-            href="/register"
+            href={registerHref}
             className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
           >
             {tAuth('no_account')}

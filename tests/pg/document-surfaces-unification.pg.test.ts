@@ -4,6 +4,7 @@ import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
 import { getPool } from './setup'
 import {
   seedCompany,
+  insertCashAccount,
   insertDraftJournalEntry,
   insertPostedJournalEntry,
   insertBalancedLines,
@@ -353,6 +354,39 @@ describe('document surfaces unification', () => {
     expect((res.verifikat ?? []).map((v) => v.journal_entry_id).sort()).toEqual(expected.sort())
   })
 
+  it('webshop_order: flagged without underlag, silenced by the archived orderunderlag (#1881)', async () => {
+    // The book route archives a generated orderunderlag on the verifikat; a
+    // historical booking (or a failed attach) has no doc and must surface.
+    const s = await seedCompany()
+    const mkWebshopJe = (n: number) =>
+      insertPostedJournalEntry({
+        userId: s.userId,
+        companyId: s.companyId,
+        fiscalPeriodId: s.fiscalPeriodId,
+        voucherNumber: n,
+        entryDate: '2026-06-15',
+        description: `webshop order ${n}`,
+        sourceType: 'webshop_order',
+        lines: [
+          { accountNumber: '1930', debitAmount: 100 * n, creditAmount: 0 },
+          { accountNumber: '3001', debitAmount: 0, creditAmount: 100 * n },
+        ],
+      })
+    const jeWithUnderlag = await mkWebshopJe(1)
+    const jeWithoutUnderlag = await mkWebshopJe(2)
+    await attachDocument({
+      userId: s.userId,
+      companyId: s.companyId,
+      journalEntryId: jeWithUnderlag,
+    })
+
+    const res = await verifikatSurface(s.companyId)
+    expect(res.ok).toBe(true)
+    const ids = (res.verifikat ?? []).map((v) => v.journal_entry_id)
+    expect(ids).toContain(jeWithoutUnderlag)
+    expect(ids).not.toContain(jeWithUnderlag)
+  })
+
   it('tenant guard on the transactions surface (NULL + foreign company)', async () => {
     const { rows } = await getPool().query<{ r: TransactionsResult }>(
       `SELECT public.transactions_without_documents(NULL, NULL, 20, 0) AS r`,
@@ -695,5 +729,49 @@ describe('floating supplier-invoice document backfill (migration 20260727180000)
     await getPool().query(BACKFILL_SQL)
 
     expect(await anchorOf(doc)).toBeNull()
+  })
+})
+
+describe('transactions_without_documents: bank account on each row (A4)', () => {
+  it('returns cash_account_id and the cash account ledger, null when unbackfilled', async () => {
+    const s = await seedCompany()
+    const cashAccountId = await insertCashAccount({ companyId: s.companyId, ledgerAccount: '1940' })
+    const mkJe = (n: number) =>
+      insertPostedJournalEntry({
+        userId: s.userId,
+        companyId: s.companyId,
+        fiscalPeriodId: s.fiscalPeriodId,
+        voucherNumber: n,
+        entryDate: `2026-06-${String(n).padStart(2, '0')}`,
+        description: `bank ${n}`,
+        sourceType: 'bank_transaction',
+        lines: [
+          { accountNumber: '1940', debitAmount: 100, creditAmount: 0 },
+          { accountNumber: '3001', debitAmount: 0, creditAmount: 100 },
+        ],
+      })
+    const jeWithAccount = await mkJe(1)
+    const jeWithoutAccount = await mkJe(2)
+    const txWith = await insertTransaction({
+      companyId: s.companyId,
+      userId: s.userId,
+      journalEntryId: jeWithAccount,
+      cashAccountId,
+      date: '2026-06-01',
+    })
+    const txWithout = await insertTransaction({
+      companyId: s.companyId,
+      userId: s.userId,
+      journalEntryId: jeWithoutAccount,
+      cashAccountId: null,
+      date: '2026-06-02',
+    })
+
+    const { rows } = await getPool().query<{
+      r: { ok: boolean; transactions: Array<{ id: string; cash_account_id: string | null; cash_account_ledger: string | null }> }
+    }>(`SELECT public.transactions_without_documents($1, NULL, 100, 0) AS r`, [s.companyId])
+    const byId = new Map(rows[0].r.transactions.map((t) => [t.id, t]))
+    expect(byId.get(txWith)).toMatchObject({ cash_account_id: cashAccountId, cash_account_ledger: '1940' })
+    expect(byId.get(txWithout)).toMatchObject({ cash_account_id: null, cash_account_ledger: null })
   })
 })

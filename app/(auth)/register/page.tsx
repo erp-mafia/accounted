@@ -25,9 +25,18 @@ import {
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
 import { AuthFormError } from '@/components/auth/AuthFormError'
 import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import {
+  TurnstileChallenge,
+  type TurnstileChallengeHandle,
+} from '@/components/auth/TurnstileChallenge'
 import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
+import {
+  captchaTokenOptions,
+  isTurnstileSubmissionBlocked,
+} from '@/lib/auth/turnstile'
 import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
+import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { cn } from '@/lib/utils'
 
 const branding = getBranding()
@@ -46,18 +55,23 @@ export default function RegisterPage() {
 }
 
 function RegisterPageContent() {
-  // `invite` is the only query parameter this page reads. It deliberately does
-  // NOT read `next`: nothing links here with one (bounceToAuth in
-  // lib/supabase/middleware.ts targets /login and the two MFA pages only, and
-  // app/invite/[token]/page.tsx sends `?invite=`), the already-signed-in case
-  // is handled in the middleware behind safeReturnTo, and neither signup path
-  // has a destination to spend it on: the password path leaves through the
-  // confirmation mail and /auth/callback, and the BankID path must land a
-  // brand-new account on '/' or /select-company rather than a deep link it has
-  // no membership for. If a destination is ever wanted here it MUST go through
+  // `invite` and `next` are the only query parameters this page reads.
+  //
+  // `next` is the post-signup destination /login forwards when a visitor with
+  // no account arrives from the MCP OAuth consent page
+  // (/login?next=/api/mcp-oauth/authorize?…, issue #1814). It goes through
   // safeReturnTo (lib/auth/safe-return-to.ts); a hand-rolled check on this
-  // value is an open redirect.
+  // value is an open redirect. Without one ('/'), nothing changes: the
+  // password path leaves through the confirmation mail and /auth/callback,
+  // and the BankID path lands a brand-new account on /select-company. With
+  // one, every path resumes it: BankID hard-navigates (the consent page is a
+  // route handler returning raw HTML), while the confirmation link and Google
+  // OAuth carry it to /auth/callback, which honours only the consent
+  // destination. A new account has no membership to spend a deep link on, so
+  // nothing else may ever be forwarded here.
   const searchParams = useSearchParams()
+  const nextPath = safeReturnTo(searchParams.get('next'), '/')
+  const loginHref = nextPath === '/' ? '/login' : `/login?next=${encodeURIComponent(nextPath)}`
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -76,9 +90,11 @@ function RegisterPageContent() {
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [confirmError, setConfirmError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const confirmInputRef = useRef<HTMLInputElement>(null)
   const emailInputRef = useRef<HTMLInputElement>(null)
+  const turnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
   const router = useRouter()
   const supabase = createClient()
@@ -247,6 +263,13 @@ function RegisterPageContent() {
         return
       }
 
+      if (nextPath !== '/') {
+        // Resume the MCP consent flow: the account exists and the consent
+        // page accepts a user with no company yet.
+        window.location.assign(nextPath)
+        return
+      }
+
       router.push('/select-company')
       router.refresh()
     } catch (error) {
@@ -303,14 +326,24 @@ function RegisterPageContent() {
       return
     }
 
+    if (isTurnstileSubmissionBlocked(captchaToken)) {
+      setFormError({ kind: 'unknown', message: tAuth('turnstile_required') })
+      return
+    }
+
     setIsLoading(true)
 
     try {
+      // The confirmation link lands on /auth/callback; carry the consent
+      // destination along so the confirmed session resumes it.
+      const confirmationCallback = new URL('/auth/callback', window.location.origin)
+      if (nextPath !== '/') confirmationCallback.searchParams.set('next', nextPath)
       const { data, error } = await supabase.auth.signUp({
         email: emailValue,
         password: passwordValue,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: confirmationCallback.toString(),
+          ...captchaTokenOptions(captchaToken),
         },
       })
 
@@ -364,8 +397,9 @@ function RegisterPageContent() {
         }
 
         // Auto-confirmed but no invite or invite failed: go to onboarding
-        // (invite cookie is preserved so the onboarding fallback can retry)
-        window.location.href = '/'
+        // (invite cookie is preserved so the onboarding fallback can retry),
+        // or resume the MCP consent flow when that is where we came from.
+        window.location.href = nextPath
         return
       }
 
@@ -387,6 +421,7 @@ function RegisterPageContent() {
         message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
+      turnstileRef.current?.reset()
       setIsLoading(false)
     }
   }
@@ -424,7 +459,7 @@ function RegisterPageContent() {
               screen above, so nothing is lost by dropping it.
             */}
             <Button className="w-full" asChild>
-              <Link href="/login">
+              <Link href={loginHref}>
                 {t('sign_in')}
               </Link>
             </Button>
@@ -515,7 +550,7 @@ function RegisterPageContent() {
                 action={
                   formError.kind === 'email_exists' ? (
                     <Link
-                      href="/login"
+                      href={loginHref}
                       className="font-medium underline underline-offset-2"
                     >
                       {t('sign_in')}
@@ -737,7 +772,16 @@ function RegisterPageContent() {
                 </p>
               )}
             </div>
-            <Button type="submit" className="w-full h-11" disabled={isLoading}>
+            <TurnstileChallenge
+              ref={turnstileRef}
+              action="accounted_signup"
+              onTokenChange={setCaptchaToken}
+            />
+            <Button
+              type="submit"
+              className="w-full h-11"
+              disabled={isLoading || isTurnstileSubmissionBlocked(captchaToken)}
+            >
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -785,6 +829,7 @@ function RegisterPageContent() {
                 {googleAuthEnabled && (
                   <GoogleAuthButton
                     compact
+                    next={nextPath}
                     onError={(message) => setFormError({ kind: 'oauth', message })}
                   />
                 )}
@@ -807,7 +852,7 @@ function RegisterPageContent() {
         <p className="mt-6 text-center text-[13px] text-muted-foreground">
           {t('already_have_account')}{' '}
           <Link
-            href="/login"
+            href={loginHref}
             className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
           >
             {t('sign_in')}

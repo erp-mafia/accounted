@@ -139,16 +139,25 @@ describe('gnubok_undo_sie_import: stage-time validation', () => {
     ).rejects.toThrow(/import_id/i)
   })
 
-  it('rejects reason longer than 500 characters', async () => {
+  it('rejects reason longer than 500 characters as VALIDATION_ERROR with a Swedish message', async () => {
     const { supabase } = createQueuedMockSupabase()
-    await expect(
-      undoTool.execute(
+    const { getStructuredError } = await import('@/lib/errors/get-structured-error')
+    let thrown: unknown
+    try {
+      await undoTool.execute(
         { import_id: 'imp-1', reason: 'x'.repeat(501) },
         'company-1',
         'user-1',
         supabase as never,
         { type: 'api_key' },
-      ),
-    ).rejects.toThrow(/500/)
+      )
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    const envelope = getStructuredError(thrown)
+    expect(envelope.code).toBe('VALIDATION_ERROR')
+    expect(envelope.message_sv).toBe('Motiveringen får vara högst 500 tecken.')
+    expect(envelope.message_en).toMatch(/500 characters or fewer/)
   })
 })

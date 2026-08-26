@@ -3,9 +3,11 @@
 import { useTranslations } from 'next-intl'
 import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
 import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePaymentLinkSettings'
+import { PeppolReceiveSettings } from '@/components/settings/PeppolReceiveSettings'
 import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
 import { InvoiceEmailTextsSettings } from '@/components/settings/InvoiceEmailTextsSettings'
 import { InvoiceEmailRecipientsSettings } from '@/components/settings/InvoiceEmailRecipientsSettings'
+import { InvoiceSenderDomainSettings } from '@/components/settings/InvoiceSenderDomainSettings'
 import { InvoicePreviewCard } from '@/components/settings/InvoicePreviewCard'
 import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
@@ -65,11 +67,16 @@ export function InvoicingSettingsContent() {
       {/* Payment link opt-in: saves individually via toggle switch */}
       <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />
 
+      {/* Peppol receiving: one switch that publishes the company's Peppol id */}
+      <PeppolReceiveSettings />
+
       {/* PDF settings: saves individually via toggle switches */}
       <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
 
       {/* Fixed invoice email recipients: explicit save (owner/admin only) */}
       <InvoiceEmailRecipientsSettings settings={settings} onUpdate={updateSettings} />
+
+      <InvoiceSenderDomainSettings companyName={settings.company_name ?? null} />
 
       {/* Invoice email texts: autosaves on blur */}
       <InvoiceEmailTextsSettings settings={settings} onUpdate={updateSettings} />

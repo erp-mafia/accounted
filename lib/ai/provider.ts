@@ -2,17 +2,43 @@ import Anthropic from '@anthropic-ai/sdk'
 import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
 
 /**
- * Which backend Claude traffic goes to.
+ * Which backend AI traffic goes to.
  *
  * Hosted runs on AWS Bedrock: keeping inference inside eu-north-1 is a
  * deliberate BFL/GDPR posture for Swedish accounting data, not an
  * implementation detail. Self-hosted deployments generally have no AWS
  * account at all, so they get the direct Anthropic API with a plain
- * ANTHROPIC_API_KEY.
+ * ANTHROPIC_API_KEY, or any OpenAI-compatible endpoint (the Swedish inference
+ * providers a sovereign self-host points at, or a local model) via
+ * AI_BASE_URL (+ AI_API_KEY when the endpoint requires auth).
+ *
+ * The two Anthropic-family backends share the `messages.create/stream`
+ * surface this factory hands out. The OpenAI-compatible backend does not: it
+ * is reachable only through the job-shaped service in lib/ai (getAiService),
+ * and createAiClient() refuses it loudly rather than returning a client that
+ * would fail at call time.
  *
  * See https://github.com/erp-mafia/accounted/issues/1406.
  */
-export type AiProvider = 'bedrock' | 'anthropic'
+export type AiProvider = 'bedrock' | 'anthropic' | 'openai-compatible'
+
+/**
+ * Thrown by createAiClient() when the resolved backend has no Anthropic
+ * messages surface. Surfaces that still call the SDK directly (the chat loop,
+ * composer, receipt hunt, WhatsApp interpreter) are unavailable on such a
+ * backend until they move onto getAiService(); routes check
+ * getAiStatus().assistantAvailable first so users get a 503 instead of this.
+ */
+export class AiProviderUnsupportedError extends Error {
+  readonly provider: AiProvider
+  constructor(provider: AiProvider) {
+    super(
+      `AI provider "${provider}" has no Anthropic messages surface; use getAiService() from @/lib/ai instead of createAiClient()`
+    )
+    this.name = 'AiProviderUnsupportedError'
+    this.provider = provider
+  }
+}
 
 export type AiClient = Anthropic | AnthropicBedrock
 
@@ -29,6 +55,8 @@ export type AiClient = Anthropic | AnthropicBedrock
  *      silently move production inference out of eu-north-1.
  *   3. Otherwise an Anthropic key means the direct API. This is the
  *      self-hosted path.
+ *   3b. Otherwise an OpenAI-compatible base URL + key means that endpoint.
+ *      This is the sovereign self-hosted path (BYO Swedish provider).
  *   4. Otherwise Bedrock without static keys, so the AWS credential provider
  *      chain (instance profile, IRSA, EKS pod identity) still resolves on
  *      hosted infrastructure that injects credentials rather than setting env
@@ -38,10 +66,13 @@ export type AiClient = Anthropic | AnthropicBedrock
  */
 export function resolveAiProvider(): AiProvider {
   const explicit = (process.env.AI_PROVIDER ?? '').trim().toLowerCase()
-  if (explicit === 'bedrock' || explicit === 'anthropic') return explicit
+  if (explicit === 'bedrock' || explicit === 'anthropic' || explicit === 'openai-compatible') {
+    return explicit
+  }
 
   if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) return 'bedrock'
   if (process.env.ANTHROPIC_API_KEY) return 'anthropic'
+  if (process.env.AI_BASE_URL) return 'openai-compatible'
   return 'bedrock'
 }
 
@@ -55,18 +86,28 @@ export function resolveAiProvider(): AiProvider {
  * option existed.
  */
 export function hasAiCredentials(): boolean {
-  return resolveAiProvider() === 'anthropic'
-    ? !!process.env.ANTHROPIC_API_KEY
-    : !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
+  const provider = resolveAiProvider()
+  if (provider === 'anthropic') return !!process.env.ANTHROPIC_API_KEY
+  // AI_API_KEY is optional: a local OpenAI-compatible server (llama.cpp,
+  // Ollama, LM Studio, vLLM) usually has no auth, so a base URL alone counts
+  // as configured. When a hosted Swedish provider needs a key, the operator
+  // sets AI_API_KEY and the service sends it as a Bearer token.
+  if (provider === 'openai-compatible') return !!process.env.AI_BASE_URL
+  return !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
 }
 
 /**
- * Build a client for the resolved provider. Both expose the same
- * `messages.create` / `messages.stream` surface, which is all this codebase
- * uses of either SDK.
+ * Build a client for the resolved Anthropic-family provider. Both expose the
+ * same `messages.create` / `messages.stream` surface, which is all the direct
+ * SDK callers in this codebase use. Throws AiProviderUnsupportedError for the
+ * OpenAI-compatible backend: see the class doc. New code should not call this
+ * at all; go through getAiService() from @/lib/ai (antipattern guard
+ * direct-ai-client enforces that outside lib/ai/services).
  */
 export function createAiClient(): AiClient {
-  if (resolveAiProvider() === 'anthropic') {
+  const provider = resolveAiProvider()
+  if (provider === 'openai-compatible') throw new AiProviderUnsupportedError(provider)
+  if (provider === 'anthropic') {
     const apiKey = process.env.ANTHROPIC_API_KEY
     // Omit the key when unset so the SDK resolves it itself and fails at call
     // time: throwing here would take down every route that merely imports a
@@ -97,7 +138,7 @@ export function createAiClient(): AiClient {
  * operator-supplied override in either form keeps working.
  */
 export function toProviderModelId(bareModelId: string, provider = resolveAiProvider()): string {
-  if (provider === 'anthropic') return bareModelId
+  if (provider === 'anthropic' || provider === 'openai-compatible') return bareModelId
   if (bareModelId.startsWith('eu.') || bareModelId.startsWith('anthropic.')) return bareModelId
   return `eu.anthropic.${bareModelId}`
 }
@@ -110,8 +151,12 @@ export function toProviderModelId(bareModelId: string, provider = resolveAiProvi
  * any part of a secret.
  */
 export function aiCredentialPrefix(): string | null {
-  if (resolveAiProvider() === 'anthropic') {
+  const provider = resolveAiProvider()
+  if (provider === 'anthropic') {
     return process.env.ANTHROPIC_API_KEY?.slice(0, 12) ?? null
   }
+  // OpenAI-compatible keys have no standard public prefix, so there is no
+  // non-secret slice to log: identify the endpoint instead.
+  if (provider === 'openai-compatible') return null
   return process.env.AWS_ACCESS_KEY_ID?.slice(0, 4) ?? null
 }

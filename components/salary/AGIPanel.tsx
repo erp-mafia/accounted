@@ -63,6 +63,8 @@ interface ConnectionStatus {
   connected: boolean
   expired?: boolean
   canRefresh?: boolean
+  /** Persisted health flag: a cron hit a terminal auth state on this token. */
+  needsReconsent?: boolean
   scope?: string
   expiresAt?: string
 }
@@ -253,7 +255,8 @@ export function AGIPanel(props: AGIPanelProps) {
         // place even though the token is now fresh. This wipes the error
         // only when (a) there's currently an error and (b) the new status
         // says we're healthy: never silently swallowing unrelated errors.
-        const isHealthy = next.connected && !next.expired && next.canRefresh !== false
+        const isHealthy =
+          next.connected && !next.expired && next.canRefresh !== false && !next.needsReconsent
         if (isHealthy) {
           setError(prev =>
             prev && /sessionen har gått ut|logga in med bankid igen/i.test(prev)
@@ -917,10 +920,14 @@ export function AGIPanel(props: AGIPanelProps) {
     grantedScopes !== null && !missingAgdScope && !grantedScopes.includes('agdredovisningperiod')
 
   // Expired session: the token row exists (so status.connected is true) but
-  // the access token is past expiry and either has no refresh token or has
-  // burned through its 10-refresh budget. The only fix is a fresh BankID
-  // round-trip.
-  const sessionExpiredStatus = status?.expired === true || status?.canRefresh === false
+  // the access token is past expiry, has no refresh token or has burned
+  // through its 10-refresh budget, or a cron already parked it as
+  // needs_reconsent. The only fix is a fresh BankID round-trip. The
+  // needs_reconsent flag has to count on its own: it is set on terminal auth
+  // errors that can land while the access token is still inside its hour, and
+  // without it the panel reports a dead connection as healthy.
+  const sessionExpiredStatus =
+    status?.expired === true || status?.canRefresh === false || status?.needsReconsent === true
 
   // One attention sentence per section (convention 6). The expired session
   // outranks the missing inlämning scope: nothing can be filed until the
@@ -1089,7 +1096,9 @@ export function AGIPanel(props: AGIPanelProps) {
               awaitingSigning
                 ? draftIsStale
                   ? t('pending_stale_draft')
-                  : t('pending_awaiting_signature')
+                  : sessionExpiredStatus
+                    ? t('pending_signature_unverifiable')
+                    : t('pending_awaiting_signature')
                 : underlagSubmitted
                   ? t('pending_underlag_submitted')
                   : t('pending_not_submitted')

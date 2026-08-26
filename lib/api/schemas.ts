@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
+import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
 import {
   accountNumberSchema,
   isoDateSchema,
@@ -22,7 +23,12 @@ import {
 } from '@/lib/invoices/rot-rut-rules'
 import { NON_IBAN_CURRENCIES } from '@/lib/invoices/payment-accounts'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import {
+  looksLikeSwedishPersonalNumber,
+  normalizeReroutedPersonalNumber,
+  orgNumberHoldsPersonalNumber,
+  personalNumberDigits,
+} from '@/lib/customers/personal-number-shape'
 import type { AuditAction, Currency } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
@@ -951,6 +957,23 @@ export const CreateCustomerSchema = z.object({
         + 'instead, so it is stored encrypted and masked in list responses.',
     })
   }
+  // An individual's personnummer submitted as org_number is moved into
+  // personal_number by the transform below. Next to a DIFFERENT
+  // personal_number in the same body the two conflict, and guessing which
+  // one the caller meant is worse than a 400.
+  if (
+    customer.personal_number
+    && orgNumberHoldsPersonalNumber(customer.customer_type, customer.org_number)
+    && personalNumberDigits(customer.org_number!) !== personalNumberDigits(customer.personal_number)
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['org_number'],
+      message:
+        'org_number looks like a Swedish personal identity number (personnummer) and differs from '
+        + 'personal_number. An individual customer keeps its personnummer in personal_number; leave org_number empty.',
+    })
+  }
   if (
     (customer.invoice_email_cc_addresses?.length ?? 0)
     + (customer.invoice_email_bcc_addresses?.length ?? 0)
@@ -961,6 +984,21 @@ export const CreateCustomerSchema = z.object({
       path: ['invoice_email_cc_addresses'],
       message: `At most ${MAX_INVOICE_EMAIL_COPY_RECIPIENTS} customer invoice copy recipients are allowed in total`,
     })
+  }
+}).transform((customer) => {
+  // A personnummer-shaped org_number on customer_type='individual' IS the
+  // personnummer, submitted in the wrong field (the MCP create tool had no
+  // personal_number input until 2026-08-21, and the v1 docs long said
+  // "org_number accepted as input" for individuals). Nothing masks
+  // org_number, so it is moved into personal_number, where the routes
+  // encrypt it and every read returns ********-1234, and org_number is left
+  // empty. With an equal personal_number already present only the duplicate
+  // is dropped; an unequal one was refused above.
+  if (!orgNumberHoldsPersonalNumber(customer.customer_type, customer.org_number)) return customer
+  return {
+    ...customer,
+    org_number: undefined,
+    personal_number: customer.personal_number || normalizeReroutedPersonalNumber(customer.org_number!),
   }
 })
 
@@ -1587,9 +1625,64 @@ export const BookWebshopOrderSchema = z.object({
   notes: z.string().max(2000).optional(),
 })
 
+/**
+ * Bulk booking of webshop orders: each order books as its OWN verifikat
+ * through the same server-side flow as the single-order endpoint (never one
+ * combined journal write). Max 50 = one orders-page of selection.
+ */
+/**
+ * Revenue account for the bulk revenue template: class 3 only, and never
+ * 3740. The template routes the revenue side of the sweep; a non-revenue
+ * account here would put sales on a balance or cost account with no
+ * reviewing user per line. 3740 (öresavrundning) is excluded because the
+ * bulk route bounds the rounding residual by that account: a templated
+ * revenue line on 3740 would both misbook real revenue as rounding and
+ * blind that guard (skeptic finding). Orders needing an off-class-3 revenue
+ * leg go through the single-order dialog, which is fully line-editable.
+ */
+const webshopRevenueAccount = accountNumber
+  .refine((n) => n.startsWith('3'), {
+    message: 'Intäktskontot måste vara ett konto i klass 3 (3000-3999)',
+  })
+  .refine((n) => n !== '3740', {
+    message: 'Öresavrundningskontot 3740 kan inte användas som intäktskonto',
+  })
+
+export const BulkBookWebshopOrdersSchema = z.object({
+  order_ids: z.array(uuid).min(1).max(50),
+  /**
+   * Optional override: prefill every order's payment leg against this
+   * account instead of the per-store payment-method mapping.
+   */
+  payment_account: accountNumber.optional(),
+  /**
+   * Optional revenue template: revenue account per Swedish VAT rate, keyed
+   * by the rate as a string. A missing rate falls back to the standard
+   * 3001-series map. Output VAT accounts are never overridable: they are
+   * derived from the rate.
+   */
+  revenue_accounts: z
+    .object({
+      '25': webshopRevenueAccount.optional(),
+      '12': webshopRevenueAccount.optional(),
+      '6': webshopRevenueAccount.optional(),
+      '0': webshopRevenueAccount.optional(),
+    })
+    .strict()
+    .optional(),
+})
+
 export const CreateInvoiceFromWebshopOrderSchema = z.object({
   /** Omitted: match by email/orgnr within the company, else create. */
   customer_id: uuid.optional(),
+})
+
+/**
+ * Mark a webshop order as booked/handled outside the integration, with an
+ * optional reference to the existing (posted) verifikat that covers it.
+ */
+export const MarkWebshopOrderBookedSchema = z.object({
+  journal_entry_id: uuid.optional(),
 })
 
 /** {"<payment_method>": {mode:'book', account:'1930'} | {mode:'invoice'}} */
@@ -2270,12 +2363,9 @@ const defaultVatRate = z
   .nullable()
   .optional()
 
-export const AccountVatTreatmentSchema = z.enum([
-  'standard_25', 'reduced_12', 'reduced_6', 'exempt',
-  'reverse_charge_domestic', 'reverse_charge_eu_goods',
-  'reverse_charge_eu_services', 'reverse_charge_non_eu_services',
-  'export_goods', 'export_services', 'vmb', 'rental_voluntary',
-])
+// Single source of truth for treatments is lib/vat/account-vat-treatment.ts;
+// the DB CHECK on chart_of_accounts.default_vat_treatment mirrors it per class.
+export const AccountVatTreatmentSchema = z.enum(ACCOUNT_VAT_TREATMENTS)
 
 const defaultVatTreatment = AccountVatTreatmentSchema.nullable().optional()
 
@@ -2456,6 +2546,9 @@ export const PendingOperationsQuerySchema = z.object({
   status: z.enum(['pending', 'committed', 'rejected', 'failed_partial']).default('pending'),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().nonnegative().default(0),
+  // Newest first by default; a bokslut batch of fifty operations is worked
+  // oldest first, so the queue can be flipped.
+  order: z.enum(['asc', 'desc']).default('desc'),
 })
 
 export const PendingOperationsBulkSchema = z.object({
@@ -2493,6 +2586,21 @@ export const AuditTrailQuerySchema = z.object({
   to_date: isoDate.optional(),
   page: z.coerce.number().int().min(1).default(1),
   page_size: z.coerce.number().int().min(1).max(200).default(50),
+})
+
+/**
+ * GET /api/reports/behandlingshistorik (BFL 5 kap. 11 §). period_id is the
+ * fiscal period; from_date/to_date narrow to a sub-range inside it (validated
+ * against the period bounds by the route, like the other fiscal-range reports).
+ */
+export const BehandlingshistorikQuerySchema = z.object({
+  period_id: z.string().min(1),
+  from_date: isoDate.optional(),
+  to_date: isoDate.optional(),
+  category: z
+    .enum(['verifikation', 'kontoplan', 'installningar', 'period', 'import', 'atkomst', 'ovrigt'])
+    .optional(),
+  format: z.enum(['json', 'csv', 'xlsx', 'pdf']).default('json'),
 })
 
 // ============================================================
@@ -3581,6 +3689,11 @@ export const MileageSalaryPushSchema = z
     message: 'Milersättning bokförs per kalenderår: dela upp perioden per år',
   })
 
+export const MileageDistanceQuerySchema = z.object({
+  from: z.string().trim().min(2).max(200),
+  to: z.string().trim().min(2).max(200),
+})
+
 // ============================================================
 // Bank file import
 // ============================================================
@@ -3686,6 +3799,21 @@ export const CompanyMigrationResetSchema = z.object({
   confirm_retained_archive: z.literal(true, {
     error: 'Bekräfta att den tidigare företagskopian sparas som arkiv',
   }),
+})
+
+/**
+ * POST /api/bookkeeping/fiscal-periods/[id]/reset
+ *
+ * Typed confirmation for the destructive fiscal-year reset: the caller must
+ * restate the year's label (fiscal_periods.name) exactly. The RPC repeats
+ * the match server-side, so this only provides early Swedish feedback.
+ */
+export const FiscalYearResetSchema = z.object({
+  confirm_name: z
+    .string()
+    .trim()
+    .min(1, 'Ange räkenskapsårets namn exakt som det visas')
+    .max(200, 'Räkenskapsårets namn får vara högst 200 tecken'),
 })
 
 /**

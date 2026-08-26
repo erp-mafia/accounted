@@ -328,6 +328,23 @@ export default function JournalEntryForm({
     }
   }, [entryDate, periods])
 
+  // Earliest fiscal period, for the pre-FY affordance in the no_period block:
+  // a date before the company's first rakenskapsar (e.g. the aktiekapital
+  // deposit paid in before the Bolagsverket registration) must not lead to
+  // creating a pre-registration year. The correct remedy per BFL is to book
+  // the event on the first fiscal year's first day, so we offer exactly that
+  // when the earliest period is open and unlocked (issue #1825).
+  const preFyClampTarget = useMemo(() => {
+    const earliest = periods.reduce<FiscalPeriod | null>(
+      (min, p) => (min === null || p.period_start < min.period_start ? p : min),
+      null,
+    )
+    if (!earliest) return null
+    if (entryDate >= earliest.period_start) return null
+    if (earliest.is_closed || earliest.locked_at) return null
+    return earliest
+  }, [periods, entryDate])
+
   // Preview the upcoming voucher number for the selected period + series.
   // Read-only hint; the actual number is reserved atomically at commit time,
   // so this may shift by one if another entry lands first.
@@ -1514,17 +1531,37 @@ export default function JournalEntryForm({
             <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
             <div className="flex-1 text-sm text-attn">
               <p className="font-medium">{t('no_period_warning', { date: entryDate })}</p>
-              <p className="mt-0.5">{t('no_period_help')}</p>
+              <p className="mt-0.5">
+                {preFyClampTarget ? t('pre_fy_help') : t('no_period_help')}
+              </p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowCreatePeriod(true)}
-              className="shrink-0"
-            >
-              <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
-              {t('create_period')}
-            </Button>
+            {/* Pre-FY: the date predates the first rakenskapsar. Offering
+                "Skapa räkenskapsår" here would propose a pre-registration year
+                (legally wrong); the correct remedy is booking on the first
+                fiscal year's first day, so offer that instead. Setting the
+                entry date state drives the /book payload even in embedded mode
+                where the date input is hidden. */}
+            {preFyClampTarget ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEntryDate(preFyClampTarget.period_start)}
+                className="shrink-0"
+              >
+                <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
+                {t('pre_fy_book_on_first_day', { date: preFyClampTarget.period_start })}
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowCreatePeriod(true)}
+                className="shrink-0"
+              >
+                <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
+                {t('create_period')}
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -1951,7 +1988,9 @@ export default function JournalEntryForm({
           <div className="text-xs text-destructive space-y-0.5 text-right">
             {!description && <p>{t('validation_description')}</p>}
             {!selectedPeriod && <p>{t('validation_period')}</p>}
-            {periodMismatch === 'no_period' && <p>{t('validation_no_matching_period')}</p>}
+            {periodMismatch === 'no_period' && (
+              <p>{preFyClampTarget ? t('validation_pre_fy') : t('validation_no_matching_period')}</p>
+            )}
             {isUploading && <p>{t('validation_uploading')}</p>}
             {incompleteLineCount > 0 && (
               <p>{t('validation_incomplete_lines')}</p>

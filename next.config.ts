@@ -12,6 +12,13 @@ const isDev = process.env.NODE_ENV === "development";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 
+// Hosted builds only widen the CSP when Turnstile is prepared. The generic
+// Docker image builds with a site-key sentinel, so it always includes this
+// origin and can safely enable Turnstile later through runtime substitution.
+const turnstileOrigin = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY
+  ? " https://challenges.cloudflare.com"
+  : "";
+
 // WebSocket origin for Supabase Realtime. Hosted projects are covered by the
 // wss://*.supabase.co wildcard below, but a SELF-HOSTED Supabase URL is not:
 // Realtime opens wss://<supabase-host>/realtime/v1/websocket, and WebKit
@@ -36,7 +43,7 @@ const cspDirectives = [
   // re-widen the policy for no benefit and undo the ad-blocker resistance.
   `connect-src 'self' ${supabaseUrl} ${supabaseWsUrl} https://*.supabase.co wss://*.supabase.co https://*.enablebanking.com`,
   `style-src 'self' 'unsafe-inline' https://*.enablebanking.com`,
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com`,
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://*.enablebanking.com${turnstileOrigin}`,
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
   "worker-src 'self' blob:",
@@ -47,18 +54,35 @@ const cspDirectives = [
   // "Det här innehållet har blockerats" in Chrome. Firefox uses PDF.js and
   // Edge uses its own viewer, so neither hits this. See crbug.com/271452.
   "object-src 'self' blob:",
-  `frame-src 'self' blob: ${supabaseUrl}`,
+  `frame-src 'self' blob: ${supabaseUrl}${turnstileOrigin}`,
   "frame-ancestors 'none'",
 ].join("; ");
 
 const nextConfig: NextConfig = {
-  output: 'standalone',
+  // Standalone output feeds the Docker image (Dockerfile copies
+  // .next/standalone). Vercel never reads it: its build adapter
+  // (onBuildComplete) traces and packages functions itself, and as of Next
+  // 16.3 the adapter path no longer leaves the next-server.js.nft.json the
+  // standalone writer copies from, so the build failed with ENOENT right after
+  // "Running onBuildComplete from Vercel" (#1750 preview). VERCEL=1 is a
+  // system env var on every Vercel build; self-hosted and local builds keep
+  // the standalone directory.
+  output: process.env.VERCEL ? undefined : 'standalone',
   // Build id inlined into the client bundle so a running tab can tell when a
   // newer deploy is live (see components/system/DeployReloadPrompt). On Vercel
   // this is the commit SHA; empty elsewhere (dev / self-hosted), which disables
   // the check. The /api/version route reads the same var at runtime to compare.
   env: {
     NEXT_PUBLIC_BUILD_ID: process.env.VERCEL_GIT_COMMIT_SHA ?? '',
+  },
+  // The build type-checks what ships: tsconfig.build.json extends
+  // tsconfig.json and excludes tests. tsconfig.json stays the editor/ESLint
+  // view of the whole repo. Next 16.3's default CLI checker checks the complete
+  // project it is given and no longer drops test-file diagnostics the way the
+  // old API checker did, so without this the build would fail on test typing
+  // debt that vitest never type-checks (see DECISIONS.md 2026-08-20).
+  typescript: {
+    tsconfigPath: 'tsconfig.build.json',
   },
   // Multiple lockfiles exist above this project (e.g. a parent yarn.lock),
   // which makes Turbopack infer the wrong workspace root. Pin it explicitly.

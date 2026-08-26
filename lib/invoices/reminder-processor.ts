@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { getEmailService } from '@/lib/email/service'
+import { resolveInvoiceSender, type InvoiceSenderIdentity } from '@/lib/email/invoice-sender'
 import {
   generateReminderEmailHtml,
   generateReminderEmailText,
@@ -9,6 +10,10 @@ import {
   type ReminderDaysConfig,
 } from '@/lib/email/reminder-templates'
 import { calculateLatePaymentInterest } from '@/lib/invoices/late-payment-interest'
+import {
+  hasUsableInvoicePaymentAccount,
+  resolveInvoicePaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { createReminderFeeEntry } from '@/lib/bookkeeping/reminder-fee-entries'
 import { createLogger } from '@/lib/logger'
 import type { Invoice, Customer, CompanySettings } from '@/types'
@@ -110,11 +115,26 @@ export async function sendReminder(
   reminderLevel: 1 | 2 | 3,
   actionToken: string,
   surcharges: ReminderSurcharges,
+  sender?: InvoiceSenderIdentity,
 ): Promise<{ success: boolean; error?: string }> {
   const customer = invoice.customer
 
   if (!customer.email) {
     return { success: false, error: 'Customer has no email' }
+  }
+
+  // Backstop for direct callers: processOverdueReminders applies this same
+  // gate BEFORE booking the fee and inserting the reminder row. A reminder
+  // with no payment account for the invoice currency would print nothing to
+  // pay to, or (before this gate) the SEK account's IBAN on a EUR invoice.
+  const currency = invoice.currency
+  if (!hasUsableInvoicePaymentAccount(resolveInvoicePaymentAccount(company, currency), currency)) {
+    log.warn('Skipping reminder: no payment account configured for invoice currency', {
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoice_number,
+      currency,
+    })
+    return { success: false, error: `INVOICE_PAYMENT_ACCOUNT_MISSING:${currency}` }
   }
 
   const daysOverdue = calculateDaysOverdue(invoice.due_date)
@@ -139,7 +159,8 @@ export async function sendReminder(
     html: generateReminderEmailHtml(emailData),
     text: generateReminderEmailText(emailData),
     replyTo: company.email || undefined,
-    fromName: company.company_name || undefined
+    fromName: company.company_name || undefined,
+    from: sender,
   })
 
   return result
@@ -264,6 +285,35 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       continue
     }
 
+    // Payment-account gate, BEFORE any write: the fee journal entry and the
+    // invoice_reminders row below must not exist for a reminder that never
+    // goes out (that would book a 60 kr fee and burn the level for an email
+    // the customer never got). Same rule as invoice send: no usable account
+    // for the invoice currency means no reminder until the user configures
+    // one under Inställningar; the level stays open and fires next run.
+    const invoiceCurrency = invoice.currency
+    if (
+      !hasUsableInvoicePaymentAccount(
+        resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency),
+        invoiceCurrency,
+      )
+    ) {
+      log.warn('Skipping reminder: no payment account configured for invoice currency', {
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        currency: invoiceCurrency,
+      })
+      results.push({
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        customerEmail: customer.email,
+        reminderLevel,
+        success: false,
+        error: `INVOICE_PAYMENT_ACCOUNT_MISSING:${invoiceCurrency}`,
+      })
+      continue
+    }
+
     // Race-window guard: re-check invoice status immediately before sending.
     // The cron runs at 08:00; a payment match arriving during the run shouldn't
     // produce a reminder for an already-paid invoice.
@@ -385,6 +435,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
         interestDays: interest.days,
         reminderFee,
       },
+      await resolveInvoiceSender(supabase, invoice.company_id, company.company_name),
     )
 
     if (sendResult.success) {

@@ -39,6 +39,25 @@ describe('structured-errors registry', () => {
     }
   })
 
+  it('has an entry for every code the link-transaction service can emit', () => {
+    for (const code of [
+      'LINK_TX_JE_NOT_FOUND',
+      'LINK_TX_JE_NOT_POSTED',
+      'LINK_TX_TX_ALREADY_LINKED',
+      'LINK_TX_INVOICE_NOT_FOUND',
+      'LINK_TX_INVOICE_NOT_OPEN',
+      'LINK_TX_INVOICE_CREDIT_NOTE',
+      'LINK_TX_INVOICE_RACE',
+      'LINK_TX_INVOICE_CURRENCY_MISMATCH',
+      'LINK_TX_DB_ERROR',
+    ]) {
+      const entry = getErrorEntry(code)
+      expect(entry, `missing entry for ${code}`).toBeDefined()
+      expect(entry?.message_sv).toBeTruthy()
+      expect(entry?.message_en).toBeTruthy()
+    }
+  })
+
   it('listErrorCodes returns at least the bookkeeping + generic + provider codes', () => {
     const codes = listErrorCodes()
     expect(codes.length).toBeGreaterThan(20)

@@ -9,6 +9,7 @@
 
 import { Fragment, createContext, useContext } from 'react'
 import { cn, formatCurrency } from '@/lib/utils'
+import { AttnLine } from '@/components/ui/attn-line'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
@@ -54,6 +55,14 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
     const txAmount = typeof data.amount === 'number' && Number.isFinite(data.amount) ? data.amount : null
     return (
       <div className="space-y-1 text-sm">
+        {/* Entry date first: with two open fiscal years the approver could
+            not tell which year a categorization belonged to. */}
+        {typeof data.date === 'string' && data.date && (
+          <div className="flex justify-between gap-4 text-xs mb-1">
+            <span className="text-muted-foreground">Datum</span>
+            <span className="font-mono tabular-nums">{data.date}</span>
+          </div>
+        )}
         <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
         {txCurrency !== 'SEK' && txAmount !== null && (
           <div className="flex justify-between gap-4 text-xs text-muted-foreground mb-1">
@@ -174,6 +183,12 @@ function CustomerPreview({ data }: { data: Record<string, unknown> }) {
           <span className="font-mono">{String(data.org_number)}</span>
         </>
       ) : null}
+      {data.personal_number_masked ? (
+        <>
+          <span className="text-muted-foreground">Personnr</span>
+          <span className="font-mono">{String(data.personal_number_masked)}</span>
+        </>
+      ) : null}
     </div>
   )
 }
@@ -247,13 +262,22 @@ type VoucherLine = {
 }
 
 function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency?: string }) {
+  const accountNames = useContext(AccountNamesContext)
   return (
     <div className="border-t pt-2 space-y-1">
-      {lines.map((line, i) => (
+      {lines.map((line, i) => {
+        // The account's own name first (staged account_name, else the chart
+        // name); the line text only when it adds something.
+        const name = line.account_name || accountNames[line.account_number] || ''
+        const text = line.line_description || ''
+        return (
         <div key={i} className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs items-baseline">
           <span className="font-mono text-muted-foreground">{line.account_number}</span>
           <span className="truncate">
-            {line.account_name || line.line_description || '-'}
+            {name || text || '-'}
+            {name && text && text !== name ? (
+              <span className="text-muted-foreground"> · {text}</span>
+            ) : null}
           </span>
           <span className="font-mono tabular-nums text-right w-24">
             {line.debit_amount > 0 ? formatCurrency(line.debit_amount, currency || 'SEK') : ''}
@@ -262,7 +286,8 @@ function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency
             {line.credit_amount > 0 ? formatCurrency(line.credit_amount, currency || 'SEK') : ''}
           </span>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -271,9 +296,24 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
   const lines = (data.lines as VoucherLine[]) || []
   const totalDebit = data.total_debit as number | undefined
   const totalCredit = data.total_credit as number | undefined
+  // Advisory, mirrors the MCP staging warning: a verifikat for a received
+  // handling must carry the handling itself (BFL 5 kap 6 §). Gated on the
+  // staged compliance_warning, not on document_attached: the server decides
+  // when the warning applies (IB entries are exempt there), so this stays a
+  // mirror instead of a second, looser policy. Older ops without the field
+  // render unchanged. The wording stays conditional ("om ... avser en
+  // mottagen handling"): internal entries (accruals, FX) legitimately lack
+  // a kvitto, and flagging them as deficient would be wrong.
+  const missingUnderlag = typeof data.compliance_warning === 'string'
 
   return (
     <div className="space-y-3 text-sm">
+      {missingUnderlag && (
+        <AttnLine>
+          Underlag saknas: om verifikatet avser en mottagen handling ska handlingen användas som
+          verifikation (BFL 5 kap 6 §).
+        </AttnLine>
+      )}
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Datum</span>
         <span className="font-mono">{String(data.entry_date ?? '')}</span>
@@ -460,6 +500,7 @@ function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
 }
 
 function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
+  const accountNames = useContext(AccountNamesContext)
   const amount = (n: number | undefined) =>
     n && n > 0 ? n.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''
   return (
@@ -478,7 +519,9 @@ function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
             <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
               {line.account ?? line.account_number}
             </td>
-            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>{line.description ?? ''}</td>
+            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>
+              {line.description || accountNames[String(line.account ?? line.account_number ?? '')] || ''}
+            </td>
             <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
               {amount(line.debit ?? line.debit_amount)}
             </td>

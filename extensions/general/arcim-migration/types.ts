@@ -5,6 +5,8 @@
  * instead of being duplicated here.
  */
 
+import type { HydrationReport } from '@/lib/providers/provider-data-fetcher'
+
 // Re-export canonical DTOs used by entity-mapper and migration-orchestrator
 export type {
   AmountType,
@@ -89,12 +91,32 @@ export interface MigrationStepError {
  * set, and the migration reports them here instead of passing them off as
  * ordinary imports. Per-invoice detail goes to the server log.
  */
+/**
+ * Per-step outcome for the two invoice registers.
+ *
+ * `vatUnresolved` counts invoices whose provider payload established no VAT at
+ * all; they are imported with the gross as subtotal and a null rate, which is
+ * the only honest reading of "the source did not say". `hydration` reports how
+ * many detail payloads were fetched, and how many the time budget could not
+ * reach, so a partially hydrated run is visible rather than looking complete.
+ */
+export interface InvoiceStepResult {
+  total: number
+  imported: number
+  skipped: number
+  skipReasons?: SkipReasons
+  fxUnresolved?: number
+  vatUnresolved?: number
+  hydration?: HydrationReport
+  errorSample?: string
+}
+
 export interface MigrationResults {
   companyInfo?: { imported: boolean }
   customers?: { total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
-  salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; fxUnresolved?: number; errorSample?: string }
-  supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; fxUnresolved?: number; errorSample?: string }
+  salesInvoices?: InvoiceStepResult
+  supplierInvoices?: InvoiceStepResult
   /**
    * Auto-reconciliation of imported supplier invoices to the GL payment
    * vouchers that the separate SIE import already posted. `autoLinked` invoices

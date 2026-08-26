@@ -23,9 +23,20 @@ import {
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
+import { matchPairs, unmatchLink } from '@/lib/reconciliation/actions'
+import { signOffAccount } from '@/lib/reconciliation/signoff'
+import { bookResidualAndLink, ReconciliationResidualError } from '@/lib/reconciliation/residual'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { validateVatNumber } from '@/lib/vat/vies-client'
-import { looksLikeSwedishPersonalNumber } from '@/lib/customers/personal-number-shape'
+import {
+  looksLikeSwedishPersonalNumber,
+  normalizeReroutedPersonalNumber,
+  orgNumberHoldsPersonalNumber,
+} from '@/lib/customers/personal-number-shape'
+import {
+  encryptCustomerPersonalNumber,
+  maskStoredCustomerPersonalNumber,
+} from '@/lib/customers/protect-personal-number'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import {
   normalizeVatRateToDecimal,
@@ -99,6 +110,7 @@ import {
 } from '@/lib/pending-operations/skatteverket-commit'
 import { PartialCommitError } from '@/lib/pending-operations/errors'
 import { getEmailService } from '@/lib/email/service'
+import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
 import { hasCapability, CAPABILITY_BLOCKED_MESSAGE_SV } from '@/lib/entitlements/has-capability'
 import { PAID_OPERATION_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import {
@@ -199,6 +211,12 @@ export interface CommitResult {
   // callers that do not recognize the code fall back to `error`.
   code?: string
   account_numbers?: string[]
+  // Where the pending_operations row landed, independent of `status`:
+  // 'pending' means the op was NOT consumed and can be approved again
+  // (recoverable refusal: capability, chart accounts, Skatteverket, or an
+  // authorization failure that happened before any side-effect). Agents
+  // used to infer "consumed" from status 'failed' and were wrong both ways.
+  operation_status?: 'pending' | 'committed' | 'rejected' | 'failed_partial'
 }
 
 export interface CommitOptions {
@@ -359,7 +377,7 @@ async function commitCreateCustomer(
   // Same GDPR guard as CreateCustomerSchema: identifiers are only masked on
   // customer_type='individual' rows, so a personnummer stored as a business
   // org_number would be shown unmasked everywhere.
-  const orgNumber = (params.org_number as string) || null
+  let orgNumber = (params.org_number as string) || null
   if (
     orgNumber &&
     params.customer_type !== 'individual' &&
@@ -371,6 +389,21 @@ async function commitCreateCustomer(
         + '(customer_type=individual) i stället, så maskeras numret i listor.',
       status: 400,
     }
+  }
+
+  // The personnummer arrives from staging already encrypted
+  // (personal_number_encrypted; params never hold the plaintext). An
+  // operation staged before gnubok_create_customer had a personal_number
+  // input may still carry the personnummer in org_number on an individual:
+  // it is stored encrypted in personal_number and org_number is cleared,
+  // same as every other write path.
+  let personalNumberEncrypted =
+    typeof params.personal_number_encrypted === 'string' && params.personal_number_encrypted
+      ? params.personal_number_encrypted
+      : null
+  if (orgNumberHoldsPersonalNumber(params.customer_type as string, orgNumber)) {
+    personalNumberEncrypted ??= encryptCustomerPersonalNumber(normalizeReroutedPersonalNumber(orgNumber!))
+    orgNumber = null
   }
 
   // Unset payment terms follow the company's own default, not a hardcoded 30.
@@ -391,6 +424,7 @@ async function commitCreateCustomer(
       email: (params.email as string) || null,
       org_number: orgNumber,
       vat_number: (params.vat_number as string) || null,
+      personal_number: personalNumberEncrypted,
       default_payment_terms: defaultPaymentTerms,
       address_line1: (params.address as string) || null,
       postal_code: (params.postal_code as string) || null,
@@ -452,11 +486,31 @@ async function commitUpdateCustomer(
   if (currentError) return { error: currentError.message, status: 500 }
   if (!current) return { error: 'Customer not found', status: 404 }
 
-  const updateData: Record<string, unknown> = { ...changes }
+  // personal_number never travels in plaintext: staging validated the input
+  // and stored AES-256-GCM ciphertext under personal_number_encrypted (see
+  // CustomerChangesSchema). Map it onto the customers.personal_number column
+  // with the REST PATCH semantics: ciphertext sets the value, explicit null
+  // clears it, absent leaves the stored value untouched (a masked echo was
+  // already dropped at staging and never reaches this executor).
+  const { personal_number_encrypted: personalNumberEncrypted, ...columnChanges } = changes
+  const updateData: Record<string, unknown> = { ...columnChanges }
   if (changes.customer_number !== undefined) {
     updateData.customer_number = changes.customer_number || null
   }
   const effectiveType = changes.customer_type ?? current.customer_type
+  if (personalNumberEncrypted !== undefined) {
+    // Same guard as staging and the REST PATCH route: only individual rows
+    // get their identifiers masked on read (GDPR art. 5.1 c), so a
+    // personnummer on a business customer is refused, not stored. Re-checked
+    // here so a tampered pending_operations row cannot slip past it.
+    if (personalNumberEncrypted !== null && effectiveType !== 'individual') {
+      return {
+        error: 'personal_number is only allowed for customer_type "individual"',
+        status: 400,
+      }
+    }
+    updateData.personal_number = personalNumberEncrypted
+  }
   if (changes.customer_type !== undefined && effectiveType !== 'individual') {
     updateData.personal_number = null
   }
@@ -487,7 +541,7 @@ async function commitUpdateCustomer(
     .update(updateData)
     .eq('id', customerId)
     .eq('company_id', companyId)
-    .select('id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, language, default_payment_terms, notes')
+    .select('id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, language, default_payment_terms, notes, personal_number')
     .maybeSingle()
 
   if (error) {
@@ -517,6 +571,9 @@ async function commitUpdateCustomer(
       language: data.language ?? 'sv',
       default_payment_terms: data.default_payment_terms,
       notes: data.notes ?? null,
+      // Never the stored ciphertext, and never plaintext: result_data is
+      // persisted on the pending operation and rendered in approval UIs.
+      personal_number_masked: maskStoredCustomerPersonalNumber(data.personal_number),
     },
   }
 }
@@ -2468,6 +2525,7 @@ async function commitSendInvoice(
       text,
       replyTo: company.email || undefined,
       fromName: company.company_name,
+      from: await resolveInvoiceSender(supabase, companyId, company.company_name),
       filename,
       pdfBuffer,
     })
@@ -4663,6 +4721,12 @@ async function commitImportSie(
   const importOpeningBalances = Boolean(params.import_opening_balances)
   const importTransactions = Boolean(params.import_transactions)
   const voucherSeries = params.voucher_series as string | undefined
+  // Optional IB-voucher series (issue #1882). Absent on operations staged
+  // before the param existed: executeSIEImport then defaults to a series
+  // the file's own vouchers do not use. Type-checked, not cast: staged
+  // params are caller-supplied JSON.
+  const openingBalanceSeries =
+    typeof params.opening_balance_series === 'string' ? params.opening_balance_series : undefined
   // Default true (not Boolean(...): operations staged before this param
   // existed must keep the file's account names, matching the UI default).
   const updateAccountNames =
@@ -4687,6 +4751,7 @@ async function commitImportSie(
       importOpeningBalances,
       importTransactions,
       voucherSeries,
+      openingBalanceSeries,
       updateAccountNames,
     })
 
@@ -5848,6 +5913,7 @@ async function commitMatchBatchAllocate(
 
 async function commitBulkBookTransactions(
   supabase: SupabaseClient,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
@@ -5884,6 +5950,10 @@ async function commitBulkBookTransactions(
     p_existing_journal_entry_id: existingJeId,
     p_new_entry: newEntry,
     p_company_id: companyId,
+    // This path runs on the cookieless service client where auth.uid() is
+    // NULL; the RPC honors p_user_id only for service_role callers
+    // (migration 20260824170000), so the approving human is the actor.
+    p_user_id: userId,
   })
   if (error) {
     // Sanitised log (A.8.11, CC7.2): only error code + message.
@@ -5895,9 +5965,15 @@ async function commitBulkBookTransactions(
   }
   const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string; mode?: string; linked_tx_count?: number; docs_linked?: number }
   if (!result || !result.ok) {
+    const code = result?.code
+    const entry = code ? getErrorEntry(code) : undefined
     return {
-      error: result?.code || 'bulk_book_transactions failed',
-      status: 400,
+      error: code || 'bulk_book_transactions failed',
+      // Registry httpStatus so the dispatcher can tell an authorization
+      // refusal (403: nothing posted, op must stay pending) from bad input
+      // (400) or a vanished/already-booked tx (404/409: auto-reject).
+      status: entry?.httpStatus ?? 400,
+      ...(code ? { errorCode: code } : {}),
       data: result?.details as Record<string, unknown> | undefined,
     }
   }
@@ -5955,6 +6031,170 @@ async function commitBulkBookInboxItems(
   }
 }
 
+/**
+ * reconciliation_match: link the staged pairs on one account through the
+ * same service the page and the v1 API use. Every pair is re-validated at
+ * commit time (row still open, entry still posted and unlinked, amounts
+ * close); partial success is reported in data.applied / data.skipped rather
+ * than failing the whole operation, because the pairs are independent.
+ */
+async function commitReconciliationMatch(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const accountKey = params.account_key as string | undefined
+  const pairs = params.pairs as Array<{ external_ids: string[]; journal_entry_ids: string[] }> | undefined
+  if (!accountKey || !Array.isArray(pairs) || pairs.length === 0) {
+    return { error: 'account_key and pairs are required', status: 400 }
+  }
+  const result = await matchPairs(supabase, companyId, userId, accountKey, { pairs }, { dryRun: false })
+  if (!result) {
+    return { error: `Unknown account_key ${accountKey}`, status: 404 }
+  }
+  if (result.applied.length === 0) {
+    return {
+      error: `Ingen koppling kunde göras: ${result.skipped.map((s) => s.code).join(', ')}`,
+      errorCode: result.skipped[0]?.code,
+      status: 409,
+      data: { account_key: accountKey, applied: result.applied, skipped: result.skipped },
+    }
+  }
+  return {
+    data: {
+      account_key: accountKey,
+      applied: result.applied,
+      skipped: result.skipped,
+      applied_count: result.applied.length,
+      skipped_count: result.skipped.length,
+    },
+  }
+}
+
+/** reconciliation_unmatch: clear one link. The verifikat is untouched. */
+async function commitReconciliationUnmatch(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const accountKey = params.account_key as string | undefined
+  const externalId = params.external_id as string | undefined
+  if (!accountKey || !externalId) {
+    return { error: 'account_key and external_id are required', status: 400 }
+  }
+  try {
+    const result = await unmatchLink(supabase, companyId, userId, accountKey, externalId)
+    if (!result) return { error: `Unknown account_key ${accountKey}`, status: 404 }
+    return { data: { account_key: accountKey, ...result } }
+  } catch (err) {
+    const code = (err as { code?: string }).code
+    return {
+      error: err instanceof Error ? err.message : String(err),
+      errorCode: code,
+      status: code === 'TRANSACTION_NOT_FOUND' ? 404 : 400,
+    }
+  }
+}
+
+/** reconciliation_signoff: "avstämt t.o.m." on one account; policy in lib/reconciliation/signoff.ts. */
+async function commitReconciliationSignoff(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const accountKey = params.account_key as string | undefined
+  const throughDate = params.through_date as string | undefined
+  if (!accountKey || !throughDate) {
+    return { error: 'account_key and through_date are required', status: 400 }
+  }
+  try {
+    const result = await signOffAccount(
+      supabase,
+      companyId,
+      userId,
+      accountKey,
+      {
+        through_date: throughDate,
+        note: (params.note as string | null | undefined) ?? null,
+        force: params.force === true,
+        external_balance: typeof params.external_balance === 'number' ? params.external_balance : null,
+      },
+      { dryRun: false },
+    )
+    if (!result) return { error: `Unknown account_key ${accountKey}`, status: 404 }
+    if (result.dry_run) return { error: 'Unexpected dry-run result', status: 500 }
+    return { data: { account_key: accountKey, signoff: result.signoff } }
+  } catch (err) {
+    const code = (err as { code?: string }).code
+    return {
+      error: err instanceof Error ? err.message : String(err),
+      errorCode: code,
+      status: code === 'SIGNOFF_NOT_FOUND' ? 404 : code === 'ALREADY_SIGNED_OFF' || code === 'SIGNOFF_RACE' ? 409 : 400,
+    }
+  }
+}
+
+/**
+ * reconciliation_residual: book the remainder of a bank selection as a small
+ * fee / interest / rounding verifikat and link the selection, through the same
+ * service the page and the v1 API use (lib/reconciliation/residual.ts). The
+ * amount and direction are recomputed at commit time; a refusal (grown past
+ * the cap, rows linked meanwhile, locked period) leaves nothing half done.
+ */
+async function commitReconciliationResidual(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const accountKey = params.account_key as string | undefined
+  const externalIds = params.external_ids as string[] | undefined
+  const journalEntryId = params.journal_entry_id as string | undefined
+  const kind = params.kind as 'bank_fee' | 'rounding' | 'interest_income' | 'interest_expense' | undefined
+  if (!accountKey || !Array.isArray(externalIds) || externalIds.length === 0 || !journalEntryId || !kind) {
+    return { error: 'account_key, external_ids, journal_entry_id and kind are required', status: 400 }
+  }
+  try {
+    const result = await bookResidualAndLink(
+      supabase,
+      companyId,
+      userId,
+      accountKey,
+      {
+        external_ids: externalIds,
+        journal_entry_id: journalEntryId,
+        kind,
+        entry_date: (params.entry_date as string | undefined) ?? undefined,
+        description: (params.description as string | undefined) ?? undefined,
+      },
+      { dryRun: false },
+    )
+    if (!result) return { error: `Unknown account_key ${accountKey}`, status: 404 }
+    if (result.dry_run) return { error: 'Unexpected dry-run result', status: 500 }
+    return {
+      data: {
+        account_key: accountKey,
+        residual_journal_entry_id: result.residual_journal_entry_id,
+        residual_amount: result.residual_amount,
+        applied: result.applied,
+        skipped: result.skipped,
+      },
+    }
+  } catch (err) {
+    if (err instanceof ReconciliationResidualError) {
+      return {
+        error: err.message,
+        errorCode: err.code,
+        status: err.code === 'RESIDUAL_ROWS_NOT_FOUND' || err.code === 'RESIDUAL_ENTRY_NOT_FOUND' ? 404 : 400,
+      }
+    }
+    throw err
+  }
+}
+
 async function commitLinkTransactionJournalEntry(
   supabase: SupabaseClient,
   userId: string,
@@ -5978,8 +6218,17 @@ async function commitLinkTransactionJournalEntry(
   if (!outcome.ok) {
     const entry = getErrorEntry(outcome.code)
     const httpStatus = entry?.httpStatus ?? 500
+    // Carry the DB reason into the message itself: the dispatcher persists and
+    // returns `error`/`errorCode`, and the MCP approve result has no separate
+    // details slot, so a bare "database error" left the agent with nothing to
+    // act on.
+    const reason = outcome.details && typeof outcome.details.reason === 'string'
+      ? outcome.details.reason
+      : null
+    const baseMessage = entry?.message_en ?? outcome.code
     return {
-      error: entry?.message_en ?? outcome.code,
+      error: reason ? `${baseMessage} (${reason})` : baseMessage,
+      errorCode: outcome.code,
       status: httpStatus,
       data: outcome.details as Record<string, unknown> | undefined,
     }
@@ -6058,6 +6307,7 @@ async function commitPendingOperationInner(
       error: CAPABILITY_BLOCKED_MESSAGE_SV,
       http_status: 403,
       code: 'capability_blocked',
+      operation_status: 'pending',
     }
   }
 
@@ -6273,13 +6523,25 @@ async function commitPendingOperationInner(
         result = await commitMatchBatchAllocate(supabase, userId, companyId, pendingOp.params)
         break
       case 'bulk_book_transactions':
-        result = await commitBulkBookTransactions(supabase, companyId, pendingOp.params)
+        result = await commitBulkBookTransactions(supabase, userId, companyId, pendingOp.params)
         break
       case 'bulk_book_inbox_items':
         result = await commitBulkBookInboxItems(supabase, userId, companyId, pendingOp.params)
         break
       case 'link_transaction_journal_entry':
         result = await commitLinkTransactionJournalEntry(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'reconciliation_match':
+        result = await commitReconciliationMatch(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'reconciliation_unmatch':
+        result = await commitReconciliationUnmatch(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'reconciliation_signoff':
+        result = await commitReconciliationSignoff(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'reconciliation_residual':
+        result = await commitReconciliationResidual(supabase, userId, companyId, pendingOp.params)
         break
       case 'submit_vat_declaration':
         result = await commitSubmitVatDeclaration(supabase, userId, companyId, pendingOp.params)
@@ -6317,6 +6579,7 @@ async function commitPendingOperationInner(
         http_status: 500,
         code: 'partial_commit',
         data: { posted_ids: err.postedIds },
+        operation_status: 'failed_partial',
       }
     }
     // Accounts-not-in-chart is RECOVERABLE: the booking itself is valid; the
@@ -6335,6 +6598,7 @@ async function commitPendingOperationInner(
         http_status: 400,
         code: ACCOUNTS_NOT_IN_CHART,
         account_numbers: err.accountNumbers,
+        operation_status: 'pending',
       }
     }
     // Recoverable Skatteverket failure (extension disabled, no connection,
@@ -6351,6 +6615,7 @@ async function commitPendingOperationInner(
         error: err.message,
         http_status: err.httpStatus,
         code: err.code,
+        operation_status: 'pending',
       }
     }
     const isBkErr = isBookkeepingError(err)
@@ -6370,6 +6635,7 @@ async function commitPendingOperationInner(
       status: 'failed',
       error: message,
       http_status: isBkErr ? 400 : 500,
+      operation_status: 'rejected',
     }
   }
 
@@ -6402,29 +6668,77 @@ async function commitPendingOperationInner(
         http_status: result.status ?? 500,
         code: 'partial_commit',
         data: { posted_ids: partialPostedIds },
+        operation_status: 'failed_partial',
+      }
+    }
+    // Authorization refusals (401/403) happen BEFORE any side-effect and say
+    // nothing about the op's content: the credential, not the booking, was
+    // wrong. Release the claim back to 'pending' so the op survives for a
+    // caller that IS authorized (the /pending UI, or a key with the scope),
+    // instead of vanishing as 'rejected'. Feedback seq 261545: three
+    // samlingsverifikat were consumed this way and the user believed they
+    // had been approved.
+    if (result.status === 401 || result.status === 403) {
+      await supabase
+        .from('pending_operations')
+        .update({ status: 'pending' })
+        .eq('id', pendingOp.id)
+      return {
+        status: 'failed',
+        error: result.error,
+        http_status: result.status,
+        ...(result.errorCode ? { code: result.errorCode } : {}),
+        operation_status: 'pending',
       }
     }
     const isAutoReject = result.status === 404 || result.status === 409
-    await supabase
+    // Executor-provided failure details (e.g. the Postgres message behind
+    // LINK_TX_DB_ERROR) are persisted and returned alongside the message so
+    // the approver sees WHY, not just that it failed.
+    const failureDetails =
+      result.data && Object.keys(result.data).length > 0 ? result.data : null
+    const { error: rejectWriteError } = await supabase
       .from('pending_operations')
       .update({
         status: 'rejected',
         resolved_at: new Date().toISOString(),
         result_data: isAutoReject
-          ? { auto_rejected: true, reason: result.error }
+          ? {
+              auto_rejected: true,
+              reason: result.error,
+              ...(result.errorCode ? { error_code: result.errorCode } : {}),
+              ...(failureDetails ? { details: failureDetails } : {}),
+            }
           : {
               error: result.error,
               http_status: result.status,
               ...(result.errorCode ? { error_code: result.errorCode } : {}),
+              ...(failureDetails ? { details: failureDetails } : {}),
             },
       })
       .eq('id', pendingOp.id)
+    if (rejectWriteError) {
+      // Same contract as the finalize branch below: the row stays in
+      // 'committing' and the daily recovery sweep
+      // (recover-stuck-committing.ts) resolves it; log loudly with the ids
+      // and the failure we could not persist so nothing is lost silently.
+      log.error('failed to mark pending_operation rejected (left in committing)', rejectWriteError, {
+        pendingOperationId: pendingOp.id,
+        operationType: pendingOp.operation_type,
+        companyId,
+        executorError: result.error,
+        executorErrorCode: result.errorCode ?? null,
+      })
+    }
     if (isAutoReject) {
       return {
         status: 'rejected',
         auto_rejected: true,
         error: result.error,
         http_status: result.status,
+        ...(result.errorCode ? { code: result.errorCode } : {}),
+        ...(failureDetails ? { data: failureDetails } : {}),
+        operation_status: 'rejected',
       }
     }
     return {
@@ -6432,6 +6746,8 @@ async function commitPendingOperationInner(
       error: result.error,
       http_status: result.status ?? 500,
       ...(result.errorCode ? { code: result.errorCode } : {}),
+      ...(failureDetails ? { data: failureDetails } : {}),
+      operation_status: 'rejected',
     }
   }
 
@@ -6468,5 +6784,6 @@ async function commitPendingOperationInner(
   return {
     status: 'committed',
     data: result.data,
+    operation_status: 'committed',
   }
 }

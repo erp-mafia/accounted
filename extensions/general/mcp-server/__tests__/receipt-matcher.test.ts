@@ -361,6 +361,7 @@ describe('MCP Receipt Matcher', () => {
       enqueueMany([
         { data: tx, error: null },           // fetch transaction (preview)
         { data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null },
+        { data: [], error: null }, // resolveSettlementAccount: no enabled cash accounts -> 1930
         { data: tx, error: null },            // fetch transaction for title
         { data: null, error: null },          // resolvePeriodStatusForDate: company_settings
         { data: null, error: null },          // resolvePeriodStatusForDate: fiscal_periods
@@ -404,6 +405,7 @@ describe('MCP Receipt Matcher', () => {
       enqueueMany([
         { data: tx, error: null },
         { data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null },
+        { data: [], error: null }, // resolveSettlementAccount: no enabled cash accounts -> 1930
         { data: tx, error: null },            // fetch transaction for title
         { data: null, error: null },          // resolvePeriodStatusForDate: company_settings
         { data: null, error: null },          // resolvePeriodStatusForDate: fiscal_periods

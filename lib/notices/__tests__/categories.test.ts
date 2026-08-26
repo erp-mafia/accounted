@@ -6,7 +6,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 const otherAccountHintMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/extensions/_generated/enabled-extensions', () => ({
-  ENABLED_EXTENSION_IDS: new Set(['cloud-backup']),
+  ENABLED_EXTENSION_IDS: new Set(['cloud-backup', 'skatteverket']),
 }))
 vi.mock('@/lib/company/other-account-hint', () => ({
   shouldShowOtherAccountHint: otherAccountHintMock,
@@ -18,6 +18,7 @@ import {
   detectExpiringBankConnections,
   detectOtherAccountHint,
   detectSkvDisconnected,
+  detectSkvUnexplained,
   expiringBankConnectionsFrom,
   skvAuthErrorNeedsReconnect,
   skvStatusNeedsReconnect,
@@ -426,5 +427,52 @@ describe('never-throws contract', () => {
     await expect(detectSkvDisconnected(throwing, USER, COMPANY, NOW)).resolves.toBeNull()
     await expect(detectBackupFailing(throwing, COMPANY)).resolves.toBeNull()
     await expect(detectOtherAccountHint(throwing, COMPANY)).resolves.toBeNull()
+  })
+})
+
+describe('detectSkvUnexplained', () => {
+  const latest = (unexplained: number | null, external: number | null = 1000) => ({
+    key: 'skattekonto_reconciliation_latest',
+    value: {
+      as_of: '2026-08-19T04:00:00Z',
+      computed_at: '2026-08-19T04:00:05Z',
+      external_balance: external,
+      ledger_balance: 900,
+      unexplained_difference: unexplained,
+      counts: { proposed: 0, unmatched_external: 1, unmatched_ledger: 0 },
+    },
+  })
+
+  it('returns null without a persisted summary or within tolerance', async () => {
+    enqueue({ data: [] })
+    await expect(detectSkvUnexplained(supabase, COMPANY)).resolves.toBeNull()
+    reset()
+    enqueue({ data: [latest(0.4)] })
+    await expect(detectSkvUnexplained(supabase, COMPANY)).resolves.toBeNull()
+  })
+
+  it('surfaces the unexplained amount with a whole-krona discriminator and the reconciliation link', async () => {
+    enqueue({ data: [latest(-1234.56)] })
+    const notice = await detectSkvUnexplained(supabase, COMPANY)
+    expect(notice).toMatchObject({
+      id: 'skv_unexplained:-1235',
+      category: 'skv_unexplained',
+      severity: 'warning',
+      messageKey: 'skv_unexplained',
+      actionKey: 'skv_unexplained_action',
+      actionHref: '/reconciliation?account=skattekonto',
+    })
+    expect(String(notice?.messageParams?.amount)).toMatch(/1.?234/)
+    expect(mockSupabase.from).toHaveBeenCalledWith('extension_data')
+  })
+
+  it('honours the configured drift tolerance', async () => {
+    enqueue({ data: [latest(40), { key: 'skattekonto_drift_tolerance', value: 50 }] })
+    await expect(detectSkvUnexplained(supabase, COMPANY)).resolves.toBeNull()
+  })
+
+  it('soft-fails to null on a query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(detectSkvUnexplained(supabase, COMPANY)).resolves.toBeNull()
   })
 })

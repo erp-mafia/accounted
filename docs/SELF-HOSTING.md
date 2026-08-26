@@ -199,7 +199,7 @@ Additionally, migration 048 schedules a `pg_cron` job inside the database that m
 
 ### AI Features
 
-All AI features (automatic interpretation of uploaded receipts and invoices via the `document-extraction` and `invoice-inbox` extensions, and the in-app AI assistant) run Claude. There are two ways to provide credentials; pick one.
+All AI features (automatic interpretation of uploaded receipts and invoices via the `document-extraction` and `invoice-inbox` extensions, and the in-app AI assistant) run on one configured backend. There are three ways to provide one; pick one. Note that the agent surface most integrations use, the MCP server, needs no AI backend at all: it is your own agent (Claude, Codex, a local model) talking to the ledger, so a deployment without any of the credentials below is still fully usable that way.
 
 The stock self-hosted image includes both extraction extensions, so these credentials cover emailed invoices and documents uploaded in the app.
 
@@ -219,22 +219,66 @@ AWS_REGION=eu-north-1   # default
 
 Set both static AWS keys explicitly. The AI assistant's client can fall back to the standard AWS credential provider chain (instance profile, IRSA) when they are absent, but document extraction requires `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and silently returns empty results without them.
 
-Optional model overrides, in either setup:
+**Option 3: any OpenAI-compatible endpoint.** Any server that implements the chat-completions API: a Swedish inference provider for a fully sovereign deployment, or a **local model** on the same machine (llama.cpp's `server`, Ollama's `/v1`, LM Studio, vLLM). Document extraction (receipts, invoices, HTML mail invoices), the assistant's question-and-answer (on both `/chat` and the docked assistant sheet, via `/api/agent/ask`), and one-tap transaction categorization run here on any provider. A set of specialized conversational flows still needs an Anthropic-family backend; see **What runs on any model** below.
 
 ```bash
-BEDROCK_MODEL_ID=claude-sonnet-5         # document extraction model
-BEDROCK_OPUS_MODEL_ID=...                # assistant model, heavy intents
-BEDROCK_SONNET_MODEL_ID=...              # assistant model, standard intents
-AI_PROVIDER=bedrock|anthropic            # force the backend (see below)
+AI_BASE_URL=http://localhost:11434/v1   # the endpoint's OpenAI-compatible base URL (here: a local Ollama)
+AI_MODEL=qwen3.8                        # a model id is required: there is no default for an arbitrary endpoint
+# AI_API_KEY=...                        # OPTIONAL: only when the endpoint needs auth. A local server usually
+#                                       #   has none, so leave it unset; a hosted provider gives you a key.
+# AI_EXTRACTION_MODEL=...               # optional: a vision model for document reading, if AI_MODEL is not one
 ```
 
-When both credential sets are present, Bedrock wins, so that adding an Anthropic key for an experiment cannot silently move production inference out of eu-north-1. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
+Three things about such endpoints are declared rather than probed, because the app cannot tell from the outside:
 
-Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted, and the AI assistant cannot answer.
+- `AI_VISION=false` says the configured model cannot read images. Images and PDFs are then skipped honestly (the inbox row lands with the empty skeleton and the "AI-tolkning kördes inte" hint) instead of failing with a 400 on every upload; HTML mail invoices still extract as text on any model.
+- `AI_PDF_MODE` defaults to `rasterize` here: most such endpoints have no PDF input, so the first `AI_PDF_MAX_PAGES` pages (default 4) are rendered to images with poppler's `pdftoppm`, which the self-host image installs (`apk add poppler-utils`, the only system package beyond the base image; page images are written to `/tmp`, a tmpfs in `docker-compose.yml`). If the binary is missing, PDFs are skipped with `pdf_rasterizer_missing` rather than failing; `AI_PDF_RASTERIZER_BIN` points at a non-standard install. A provider that accepts the OpenAI `file` content part can use `AI_PDF_MODE=native`.
+- `AI_STRICT_JSON=true` asks for `response_format: json_schema` on providers that enforce it. The default (JSON answered in prose, then parsed and validated) works on every model and is what hosted runs.
+
+#### What runs on any model
+
+Most AI surfaces run on any of the three backends above, an OpenAI-compatible or local model included:
+
+- **Document extraction**: receipts, invoices, and HTML mail invoices.
+- **The AI assistant's question-and-answer**, on both `/chat` and the docked assistant sheet (`/api/agent/ask`), including its read-only ledger tools.
+- **One-tap transaction categorization** (`/api/agent/categorize`): the deterministic-candidates then model-select cascade shown on the transactions page.
+
+A few **specialized conversational flows** still run on the older streaming runtime (`/api/agent/invoke`), which requires an Anthropic-family model (AWS Bedrock or the direct Anthropic API). On an OpenAI-compatible or local backend these specific actions return `503`; everything above keeps working. They are:
+
+- **Operation-staging flows** (they draft a change for you to approve): the invoice-inbox "Fraga assistenten" categorize, bulk-book, invoice draft, supplier-invoice review, and verifikat draft.
+- **Context-bound assistant helpers**: VAT review, KPI explanation, settings help, the bokslut step-through, and onboarding.
+
+Migrating these to the single-call surface, so a fully local deployment covers them too, is tracked in [#1800](https://github.com/erp-mafia/accounted/issues/1800).
+
+Optional model overrides, in any setup:
+
+```bash
+AI_MODEL=...                             # default model for every tier (OpenAI-compatible: required)
+AI_EXTRACTION_MODEL=...                  # document extraction model
+AI_HEAVY_MODEL=...                       # assistant model, heavy intents
+AI_ASSISTANT_MODEL=...                   # assistant model, standard intents
+AI_EXTRACTION_MAX_TOKENS=8192            # output cap for document extraction
+AI_PROVIDER=bedrock|anthropic|openai-compatible   # force the backend (see below)
+```
+
+The pre-existing names `BEDROCK_MODEL_ID`, `BEDROCK_OPUS_MODEL_ID`, `BEDROCK_SONNET_MODEL_ID` and `BEDROCK_MAX_TOKENS` keep working as the same overrides (extraction, heavy, standard, extraction cap) on every backend; the `AI_*` names take precedence when both are set. Claude deployments default every tier to `claude-sonnet-5`.
+
+When several credential sets are present, Bedrock wins, then the direct Anthropic API, then the OpenAI-compatible endpoint, so that adding a key for an experiment cannot silently move production inference out of eu-north-1. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
+
+Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted (the upload UI sees that immediately rather than waiting for a timeout), and the AI assistant answers `503 ai_unconfigured`.
 
 #### Verifying the setup
 
-`scripts/smoke-ai.ts` sends real traffic to whichever backend your environment resolves to, so a wrong key, an unavailable model or a rejected parameter surfaces here rather than in front of a user:
+`scripts/smoke-ai-provider.ts` is the "is AI wired up?" command. It works the same on every backend because it only talks to the app's AI service: it prints the resolved provider, the model per tier, the PDF mode (and whether `pdftoppm` is installed when PDFs are rasterized), then sends real traffic: one small text generation per tier model, one schema-shaped answer, and, when you pass a file, the exact document-extraction path an uploaded receipt takes. It exits non-zero if any step fails, so it works as a post-deploy check. Run it from a checkout next to the env file your deployment uses (`.env.local`, then `.env` are read):
+
+```bash
+npx tsx scripts/smoke-ai-provider.ts                 # provider, models, text + structured calls
+npx tsx scripts/smoke-ai-provider.ts ./receipt.pdf   # also runs document extraction end to end
+```
+
+A skipped extraction is reported as a failure with the reason: a text-only model (`ai_no_vision`, pick a vision model for `AI_EXTRACTION_MODEL`), a missing rasterizer (`pdf_rasterizer_missing`, install poppler-utils or set `AI_PDF_MODE=native`), or no credentials/model at all.
+
+On the Anthropic family, `scripts/smoke-ai.ts` additionally probes the in-app assistant's full parameter set (a streamed turn with a tool, adaptive thinking, effort and the prompt cache), which the assistant still sends through the Anthropic SDK directly:
 
 ```bash
 npx tsx scripts/smoke-ai.ts                  # credentials, models, chat loop
@@ -246,9 +290,7 @@ npx tsx scripts/smoke-ai.ts                  # credentials, models, chat loop
 npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
 ```
 
-It prints the resolved provider and model ids first, then exercises a plain request, a streamed turn carrying the assistant's full parameter set (adaptive thinking, effort, prompt caching and a tool), and finally extraction of the file you pass. It exits non-zero if any step fails, so it works as a post-deploy check.
-
-> **Note:** `OPENAI_API_KEY` from earlier versions is not read by any code path; there is no OpenAI route in the app. Pluggable providers beyond Claude are tracked in [#1406](https://github.com/erp-mafia/accounted/issues/1406).
+> **Note:** `OPENAI_API_KEY` from earlier versions is not read by any code path. To use OpenAI itself, point Option 3 at `https://api.openai.com/v1`; the app has no provider-specific OpenAI integration, only the OpenAI-compatible one. Background: [#1406](https://github.com/erp-mafia/accounted/issues/1406).
 
 ### Email (Invoice Sending and Reminders)
 

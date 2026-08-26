@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextRequest } from 'next/server'
+import { createServerClient } from '@supabase/ssr'
 
 const verifyOtp = vi.fn()
 const exchangeCodeForSession = vi.fn()
@@ -149,5 +150,92 @@ describe('GET /auth/callback: admin invite flow (type=invite)', () => {
     expect(response.status).toBe(307)
     expect(response.headers.get('location')).toBe('http://localhost:3000/reset-password')
     expect(response.headers.get('set-cookie') ?? '').not.toContain('gnubok-invite-token')
+  })
+})
+
+describe('GET /auth/callback: resuming an MCP OAuth consent flow (issue #1814)', () => {
+  // A signup that started from an MCP client's Connect popup confirms its
+  // e-mail (or completes Google OAuth) here. The consent page handles the
+  // zero-company state itself, so it is the one `next` this callback honours
+  // for a fresh session; anything else still lands on the dashboard.
+  const CONSENT = '/api/mcp-oauth/authorize?response_type=code&state=xyz'
+
+  function clientWithTeamMembership() {
+    const chain: Record<string, ReturnType<typeof vi.fn>> = {
+      select: vi.fn(() => chain),
+      eq: vi.fn(() => chain),
+      limit: vi.fn(() => chain),
+      maybeSingle: vi.fn().mockResolvedValue({ data: { team_id: 'team-1' }, error: null }),
+    }
+    return {
+      auth: {
+        verifyOtp,
+        exchangeCodeForSession,
+        getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
+        mfa: {
+          getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: null }),
+          listFactors: vi.fn().mockResolvedValue({ data: null }),
+        },
+      },
+      from: vi.fn(() => chain),
+      rpc: vi.fn(),
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(createServerClient).mockImplementation(() => clientWithTeamMembership() as never)
+  })
+
+  it('sends a confirmed signup back to the consent page when next targets it', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const request = new NextRequest(
+      `http://localhost:3000/auth/callback?token_hash=abc&type=signup&next=${encodeURIComponent(CONSENT)}`
+    )
+    const response = await GET(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(`http://localhost:3000${CONSENT}`)
+  })
+
+  it('carries the consent destination through the MFA verify step', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+    const client = clientWithTeamMembership()
+    client.auth.mfa.getAuthenticatorAssuranceLevel.mockResolvedValue({
+      data: { currentLevel: 'aal1', nextLevel: 'aal2' },
+    })
+    vi.mocked(createServerClient).mockImplementation(() => client as never)
+
+    const request = new NextRequest(
+      `http://localhost:3000/auth/callback?token_hash=abc&type=signup&next=${encodeURIComponent(CONSENT)}`
+    )
+    const response = await GET(request)
+
+    const location = new URL(response.headers.get('location')!)
+    expect(location.pathname).toBe('/mfa/verify')
+    expect(location.searchParams.get('returnTo')).toBe(CONSENT)
+  })
+
+  it('still lands on the dashboard for any other next', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?token_hash=abc&type=signup&next=%2Fsettings'
+    )
+    const response = await GET(request)
+
+    expect(response.headers.get('location')).toBe('http://localhost:3000/')
+  })
+
+  it('ignores an off-origin next that merely contains the consent path', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const request = new NextRequest(
+      `http://localhost:3000/auth/callback?token_hash=abc&type=signup&next=${encodeURIComponent('https://evil.example' + CONSENT)}`
+    )
+    const response = await GET(request)
+
+    expect(response.headers.get('location')).toBe('http://localhost:3000/')
   })
 })

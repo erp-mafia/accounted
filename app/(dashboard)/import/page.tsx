@@ -122,6 +122,7 @@ const AccountMappingStep = dynamic(() => import('@/components/import/AccountMapp
 const ImportReviewStep = dynamic(() => import('@/components/import/ImportReviewStep'), { loading: ImportStepLoading })
 const ImportResultStep = dynamic(() => import('@/components/import/ImportResultStep'), { loading: ImportStepLoading })
 const SIEImportHistory = dynamic(() => import('@/components/import/SIEImportHistory'), { loading: ImportStepLoading })
+const BankFileImportHistory = dynamic(() => import('@/components/import/BankFileImportHistory'), { loading: ImportStepLoading })
 const UnderlagImportWizard = dynamic(() => import('@/components/import/UnderlagImportWizard'), { loading: ImportStepLoading })
 
 // ============================================================
@@ -2325,6 +2326,7 @@ export default function ImportPage() {
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
   const [sieHistoryOpen, setSieHistoryOpen] = useState(false)
+  const [bankFileHistoryOpen, setBankFileHistoryOpen] = useState(false)
   const [userId, setUserId] = useState('')
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
   const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
@@ -2367,6 +2369,20 @@ export default function ImportPage() {
     const viewParam = searchParams.get('view')
     if (viewParam === 'export' || viewParam === 'import') {
       setView(viewParam)
+    }
+    // Deep link from surfaces where a bad import is discovered (e.g. the
+    // voucher list): /import?history=sie lands directly on the fold-open
+    // SIE import history so "Ångra import" is one click away.
+    if (searchParams.get('history') === 'sie') {
+      setView('import')
+      setSieHistoryOpen(true)
+      // The history table renders below ~8 import rows: scroll it into view
+      // (same pattern as the #cloud-backup hash deep link below).
+      setTimeout(() => {
+        document
+          .getElementById('sie-import-history')
+          ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      }, 80)
     }
   }, [isSandbox, searchParams])
 
@@ -2537,10 +2553,21 @@ export default function ImportPage() {
                   expanded={sieHistoryOpen}
                   onClick={() => setSieHistoryOpen((v) => !v)}
                 />
+                <ImportRow
+                  title={t('bankfile_history_title')}
+                  sub={t('bankfile_history_description')}
+                  expanded={bankFileHistoryOpen}
+                  onClick={() => setBankFileHistoryOpen((v) => !v)}
+                />
               </div>
               {sieHistoryOpen && (
-                <div className="mt-6">
+                <div className="mt-6" id="sie-import-history">
                   <SIEImportHistory />
+                </div>
+              )}
+              {bankFileHistoryOpen && (
+                <div className="mt-6">
+                  <BankFileImportHistory />
                 </div>
               )}
               <p className="mt-4 px-1 text-xs leading-5 text-muted-foreground">{t('pgnote')}</p>

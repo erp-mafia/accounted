@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `124`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `138`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -8,6 +8,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "DELETE /api/v1/companies/:companyId/dimensions/:id/values/:valueId",
   "DELETE /api/v1/companies/:companyId/employees/:id",
   "DELETE /api/v1/companies/:companyId/employees/:id/absence",
+  "DELETE /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links/:linkId",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
@@ -32,13 +33,19 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/invoices/:id/pdf",
   "GET /api/v1/companies/:companyId/journal-entries",
   "GET /api/v1/companies/:companyId/journal-entries/:id",
+  "GET /api/v1/companies/:companyId/reconciliation/accounts",
+  "GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey",
+  "GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/items",
+  "GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff",
   "GET /api/v1/companies/:companyId/reconciliation/bank/status",
   "GET /api/v1/companies/:companyId/reports/ar-ledger",
   "GET /api/v1/companies/:companyId/reports/avgifter-basis",
   "GET /api/v1/companies/:companyId/reports/balance-sheet",
+  "GET /api/v1/companies/:companyId/reports/balance-sheet/pdf",
   "GET /api/v1/companies/:companyId/reports/continuity-check",
   "GET /api/v1/companies/:companyId/reports/general-ledger",
   "GET /api/v1/companies/:companyId/reports/income-statement",
+  "GET /api/v1/companies/:companyId/reports/income-statement/pdf",
   "GET /api/v1/companies/:companyId/reports/journal-register",
   "GET /api/v1/companies/:companyId/reports/monthly-breakdown",
   "GET /api/v1/companies/:companyId/reports/salary-journal",
@@ -52,6 +59,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/salary-runs/:id/employees",
   "GET /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
   "GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/pdf",
+  "GET /api/v1/companies/:companyId/skatteverket/vat-declarations",
   "GET /api/v1/companies/:companyId/supplier-invoices",
   "GET /api/v1/companies/:companyId/supplier-invoices/:id",
   "GET /api/v1/companies/:companyId/suppliers",
@@ -73,6 +81,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PATCH /api/v1/companies/:companyId/supplier-invoices/:id",
   "PATCH /api/v1/companies/:companyId/suppliers/:id",
   "PATCH /api/v1/companies/:companyId/webhooks/:id",
+  "POST /api/v1/companies",
   "POST /api/v1/companies/:companyId/customers",
   "POST /api/v1/companies/:companyId/customers/bulk-create",
   "POST /api/v1/companies/:companyId/dimensions/:id/values",
@@ -98,6 +107,11 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/journal-entries/:id/correct",
   "POST /api/v1/companies/:companyId/journal-entries/:id/reverse",
   "POST /api/v1/companies/:companyId/journal-entries/batch-create",
+  "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/items/:itemId/ignore",
+  "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links",
+  "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/residual",
+  "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff",
+  "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff/:signoffId/reopen",
   "POST /api/v1/companies/:companyId/reconciliation/bank/run",
   "POST /api/v1/companies/:companyId/salary-runs",
   "POST /api/v1/companies/:companyId/salary-runs/:id/approve",
@@ -147,6 +161,9 @@ exports[`v1 spec snapshot > matches the recorded scope catalogue > endpoint-scop
   "payroll:read",
   "payroll:write",
   "public",
+  "reconciliation:read",
+  "reconciliation:signoff",
+  "reconciliation:write",
   "reports:read",
   "suppliers:read",
   "suppliers:write",

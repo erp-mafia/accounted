@@ -200,6 +200,21 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // invoice_payments row: sits next to link_invoice_voucher semantically;
   // both attach an existing booking to a different entity.
   link_transaction_journal_entry: 'medium',
+  // Account-keyed reconciliation (lib/reconciliation/actions.ts). A match
+  // pairs outside rows with existing verifikat across any reconcilable
+  // account (bank or skattekonto); it writes nothing to the ledger and is
+  // undone by reconciliation_unmatch, so 'medium' like its single-bank-tx
+  // sibling above. Unmatch only clears a pointer: 'low'.
+  reconciliation_match: 'medium',
+  reconciliation_unmatch: 'low',
+  // Sign-off writes the attestation row others rely on (overview, Hem, auditor)
+  // but nothing in the ledger, and reopen undoes it: 'medium'.
+  reconciliation_signoff: 'medium',
+  // Residual booking writes one small verifikat (bank fee / interest /
+  // rounding, capped at RESIDUAL_MAX_AMOUNT) against the bank account and
+  // links the selection: a typed, bounded booking like categorize_transaction,
+  // undone by storno + unmatch, so 'medium' rather than create_voucher's 'high'.
+  reconciliation_residual: 'medium',
 
   // ── Körjournal (mileage) ───────────────────────────────────────────
   // A trip row is pure travel documentation: no booking impact until a

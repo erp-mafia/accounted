@@ -35,7 +35,15 @@ export async function generateIncomeStatement(
     dimensions: options?.dimensions,
   })
 
-  return buildIncomeStatementFromRows(rows)
+  // With a fromDate after period start, the trial balance rolls all earlier
+  // activity (P&L accounts included) into the opening columns, so the closing
+  // columns hold year-to-date figures, not the requested window. A ranged
+  // resultaträkning must therefore sum period movements only: the same
+  // convention resultatrapport uses. Without a fromDate the closing columns
+  // equal the movements for P&L accounts and behavior is unchanged.
+  return buildIncomeStatementFromRows(rows, {
+    periodMovements: Boolean(options?.fromDate),
+  })
 }
 
 /**
@@ -47,8 +55,18 @@ export async function generateIncomeStatement(
  * above for why).
  */
 export function buildIncomeStatementFromRows(
-  rows: TrialBalanceRow[]
+  rows: TrialBalanceRow[],
+  buildOptions?: {
+    /**
+     * Sum period movements (period_debit/period_credit) instead of closing
+     * balances. Required whenever the rows were generated with a fromDate
+     * after period start: the roll-forward puts pre-range P&L activity into
+     * the opening columns and the closing columns become year-to-date.
+     */
+    periodMovements?: boolean
+  }
 ): IncomeStatementReport {
+  const periodMovements = buildOptions?.periodMovements ?? false
   // Filter to income/expense accounts (class 3-8)
   const incomeExpenseRows = rows.filter(
     (r) => r.account_class >= 3 && r.account_class <= 8
@@ -71,6 +89,7 @@ export function buildIncomeStatementFromRows(
     },
     'credit', // Revenue has credit normal balance
     'Övriga intäkter',
+    periodMovements,
   )
 
   // Expense sections (class 4-7)
@@ -118,6 +137,7 @@ export function buildIncomeStatementFromRows(
     },
     'debit', // Expenses have debit normal balance
     'Övriga kostnader',
+    periodMovements,
   )
 
   // Financial sections (class 8): exclude 8999 "Årets resultat".
@@ -141,6 +161,7 @@ export function buildIncomeStatementFromRows(
     },
     'mixed',
     'Övriga finansiella poster',
+    periodMovements,
   )
 
   const totalRevenue = revenueSections.reduce((sum, s) => sum + s.subtotal, 0)
@@ -173,16 +194,20 @@ function buildSections(
   rows: TrialBalanceRow[],
   groupLabels: Record<string, string>,
   normalBalance: 'debit' | 'credit' | 'mixed',
-  fallbackTitle: string
+  fallbackTitle: string,
+  periodMovements = false
 ): IncomeStatementSection[] {
   const makeSection = (title: string, groupRows: TrialBalanceRow[]): IncomeStatementSection => {
     const sectionRows = groupRows.map((r) => {
       // Expenses (debit) use debit - credit; revenue (credit) and financial
-      // (mixed) use credit - debit.
+      // (mixed) use credit - debit. Ranged reports sum the window's movements
+      // (period columns); full-period reports keep the closing columns.
+      const debit = periodMovements ? r.period_debit : r.closing_debit
+      const credit = periodMovements ? r.period_credit : r.closing_credit
       const amount =
         normalBalance === 'debit'
-          ? r.closing_debit - r.closing_credit
-          : r.closing_credit - r.closing_debit
+          ? debit - credit
+          : credit - debit
 
       return {
         account_number: r.account_number,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   X,
   Expand,
@@ -18,6 +18,8 @@ import AgentChat, {
   normalizeStoredMessages,
   type ChatMessage,
 } from './AgentChat'
+import AskConsole, { type AskConsoleMessage } from './AskConsole'
+import { CHAT_INTENT_ID } from '@/lib/agent/ask/persist'
 import type { AgentPanelFloatRect, StoredStagedOperation } from '@/types'
 import {
   DOCK_GUTTER,
@@ -39,6 +41,10 @@ import AgentSessionList from './AgentSessionList'
 import SandboxAgentPreview from './SandboxAgentPreview'
 import { useAgentSheet } from './AgentSheetProvider'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import {
+  clearAgentSheetSession,
+  writeAgentSheetSession,
+} from '@/lib/agent-panel/session-restore'
 import { cn } from '@/lib/utils'
 
 // Undimmed non-modal side sheet: sits above the page on a hairline border +
@@ -53,6 +59,9 @@ interface Props {
   intentArgs?: Record<string, unknown>
   contextRef?: string
   seedUserMessage?: string
+  // Open this existing thread on mount (a reload restore, see the provider)
+  // instead of starting a fresh one on the intent.
+  resumeConversationId?: string
   // Hidden (display:none) but still mounted so the conversation survives. The
   // provider keeps rendering this component; we just visually remove it.
   collapsed: boolean
@@ -203,6 +212,7 @@ export default function AgentSheet({
   intentArgs,
   contextRef,
   seedUserMessage,
+  resumeConversationId,
   collapsed,
   onStatus,
   onDockWidthChange,
@@ -225,7 +235,10 @@ export default function AgentSheet({
   // A past conversation the user picked from the list, hydrated for resume. When
   // set, it replaces the intent-driven fresh chat.
   const [loaded, setLoaded] = useState<LoadedConversation | null>(null)
-  const [loadingConversation, setLoadingConversation] = useState(false)
+  // Starts true on a restore so the first frame is the spinner, not a fresh
+  // chat on the intent: a fresh tool-loop chat fires its first turn on mount
+  // and would create a stray conversation before the restore replaced it.
+  const [loadingConversation, setLoadingConversation] = useState(!!resumeConversationId)
   const [loadError, setLoadError] = useState<string | null>(null)
   // Enlarge the panel IN PLACE (no navigation): the user stays on the current
   // page (e.g. /bookkeeping) with a wider reading/verifying surface. Transient
@@ -466,15 +479,9 @@ export default function AgentSheet({
     }
   }
 
-  // Resume a past conversation inline: fetch its messages, hydrate, and swap the
-  // sheet back to the chat view. Picking the one already open just closes the
-  // list (keeps its live in-memory state instead of re-hydrating it).
-  async function handleSelectConversation(id: string) {
-    if (id === activeConversationId) {
-      setView('chat')
-      return
-    }
-    setView('chat')
+  // Open a past conversation inline: fetch its messages and hydrate. Shared by
+  // the session list and the reload restore below.
+  const loadConversation = useCallback(async (id: string) => {
     setLoaded(null)
     setLoadingConversation(true)
     setLoadError(null)
@@ -512,10 +519,43 @@ export default function AgentSheet({
       })
       setConversationId(data.conversation.id)
     } catch {
-      if (seq === selectSeqRef.current) setLoadError('Kunde inte öppna konversationen.')
+      if (seq === selectSeqRef.current) {
+        setLoadError('Kunde inte öppna konversationen.')
+        // A thread that no longer opens must not be retried on every reload.
+        clearAgentSheetSession()
+      }
     } finally {
       if (seq === selectSeqRef.current) setLoadingConversation(false)
     }
+  }, [])
+
+  // Reload restore: the provider remounts the sheet on the thread this tab
+  // had open, and it is loaded here the same way a picked one is.
+  useEffect(() => {
+    if (resumeConversationId) void loadConversation(resumeConversationId)
+  }, [resumeConversationId, loadConversation])
+
+  // Remember the open thread for this tab so a reload brings it back (see
+  // lib/agent-panel/session-restore). Nothing to remember until the thread
+  // has an id: a fresh chat that never sent anything simply does not return.
+  const activeIntentId = loaded?.intentId ?? intentId
+  useEffect(() => {
+    if (!activeConversationId) return
+    writeAgentSheetSession({
+      conversationId: activeConversationId,
+      intentId: activeIntentId,
+      contextRef: activeContextRef,
+      collapsed,
+    })
+  }, [activeConversationId, activeIntentId, activeContextRef, collapsed])
+
+  // Resume a past conversation from the list and swap the sheet back to the
+  // chat view. Picking the one already open just closes the list (keeps its
+  // live in-memory state instead of re-hydrating it).
+  function handleSelectConversation(id: string) {
+    setView('chat')
+    if (id === activeConversationId) return
+    void loadConversation(id)
   }
 
   return (
@@ -756,14 +796,35 @@ export default function AgentSheet({
           </button>
         </div>
       ) : loaded ? (
-        <AgentChat
-          key={loaded.id}
-          intentId={loaded.intentId}
-          contextRef={loaded.contextRef ?? undefined}
-          initialConversationId={loaded.id}
-          initialMessages={loaded.messages}
-          onConversationIdChange={(id) => setConversationId(id)}
-          onStatus={onStatus}
+        loaded.intentId === CHAT_INTENT_ID ? (
+          // Resumed free-form thread: the single-call console (runs on a local
+          // model). Its turns are text-only, so drop any empty/tool rows.
+          <AskConsole
+            key={loaded.id}
+            initialConversationId={loaded.id}
+            initialMessages={loaded.messages
+              .filter((m) => m.text.trim().length > 0)
+              .map((m): AskConsoleMessage => ({ role: m.role, text: m.text }))}
+            contextRef={loaded.contextRef}
+          />
+        ) : (
+          <AgentChat
+            key={loaded.id}
+            intentId={loaded.intentId}
+            contextRef={loaded.contextRef ?? undefined}
+            initialConversationId={loaded.id}
+            initialMessages={loaded.messages}
+            onConversationIdChange={(id) => setConversationId(id)}
+            onStatus={onStatus}
+          />
+        )
+      ) : intentId === CHAT_INTENT_ID ? (
+        // Fresh free-form ask (the FAB's "Fråga min assistent" catch-all).
+        <AskConsole
+          seedUserMessage={seedUserMessage}
+          initialConversationId={null}
+          contextRef={contextRef ?? null}
+          onConversationCreated={(id) => setConversationId(id)}
         />
       ) : (
         <AgentChat

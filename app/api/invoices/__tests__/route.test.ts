@@ -625,6 +625,90 @@ describe('POST /api/invoices (create credit note)', () => {
     ])
   })
 
+  // Regression for issue #1820: a self-billed original has invoice_number
+  // null by design (its number lives in external_invoice_number), and the
+  // credit note used to be numbered the literal string 'KR-null' with notes
+  // saying 'Krediterar faktura null'.
+  it('numbers the credit note from the external number for a self-billed original', async () => {
+    const original = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      invoice_number: null as unknown as string,
+      external_invoice_number: 'SB-2026-17',
+      is_self_billed: true,
+      items: [
+        {
+          id: 'item-1',
+          invoice_id: VALID_UUID,
+          sort_order: 0,
+          description: 'Provision',
+          quantity: 1,
+          unit: 'st',
+          unit_price: 10000,
+          line_total: 10000,
+          vat_rate: 25,
+          vat_amount: 2500,
+          created_at: '2026-08-01T00:00:00Z',
+        },
+      ],
+    })
+    const creditNote = makeInvoice({
+      id: 'cn-sb',
+      credited_invoice_id: VALID_UUID,
+      status: 'draft',
+    })
+
+    // Fetch original invoice
+    enqueue({ data: original, error: null })
+    // No existing credit-note draft
+    enqueue({ data: null, error: null })
+    // Insert credit note
+    enqueue({ data: creditNote, error: null })
+    // Insert credit note items
+    enqueue({ data: null, error: null })
+    // Mark creation complete
+    enqueue({ data: null, error: null })
+    // Fetch complete credit note
+    enqueue({ data: { ...creditNote, items: [] }, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID },
+    })
+    const response = await POST(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const [invoiceInsert] = findCall('invoices', 'insert') ?? []
+    expect(invoiceInsert).toMatchObject({
+      invoice_number: 'KR-SB-2026-17',
+      notes: 'Krediterar faktura SB-2026-17',
+    })
+    expect((invoiceInsert as { invoice_number: string }).invoice_number).not.toContain('null')
+    expect((invoiceInsert as { notes: string }).notes).not.toContain('null')
+  })
+
+  // Defensive path: both numbers null cannot happen for an issued invoice
+  // (DB constraint), but a garbage 'KR-null' must never be minted.
+  it('returns a typed 400 when the original carries no number at all', async () => {
+    const original = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      invoice_number: null as unknown as string,
+    })
+    enqueue({ data: original, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NO_NUMBER')
+  })
+
   it('returns an existing credit-note draft instead of creating a duplicate', async () => {
     const original = makeInvoice({ id: VALID_UUID, status: 'sent' })
     const existing = makeInvoice({

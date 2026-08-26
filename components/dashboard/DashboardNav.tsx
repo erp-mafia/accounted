@@ -35,6 +35,7 @@ import {
   Sparkles,
   Percent,
   Landmark,
+  Scale,
   CalendarClock,
   CalendarRange,
   FileCheck,
@@ -44,6 +45,7 @@ import {
   PanelLeftClose,
   Library,
   BookCheck,
+  FolderArchive,
   ShoppingCart,
   Car,
 } from 'lucide-react'
@@ -118,6 +120,7 @@ type NavLabelKey =
   | 'suppliers'
   | 'review'
   | 'transactions'
+  | 'reconciliation'
   | 'bookkeeping'
   | 'chart_of_accounts'
   | 'dimensions'
@@ -132,6 +135,7 @@ type NavLabelKey =
   | 'deadlines'
   | 'periodiseringar'
   | 'year_end'
+  | 'bokslutsbilagor'
   | 'annual_report'
   | 'income_declaration'
   | 'help'
@@ -208,6 +212,7 @@ const navItems: NavItem[] = [
   { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'arbeta' },
   { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'arbeta', requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'] },
   { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
+  { href: '/reconciliation', labelKey: 'reconciliation', icon: Scale, group: 'arbeta' },
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   // Webshop orders: visible only for companies that actually have a webshop
@@ -244,6 +249,7 @@ const navItems: NavItem[] = [
   { href: '/deadlines', labelKey: 'deadlines', icon: CalendarClock, group: 'skatt' },
   { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt', fold: 'bokslut' },
   { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt', fold: 'bokslut' },
+  { href: '/reports/bokslutsbilagor', labelKey: 'bokslutsbilagor', icon: FolderArchive, group: 'skatt', fold: 'bokslut' },
   { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', fold: 'bokslut', entityOnly: 'aktiebolag' },
   { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', fold: 'bokslut', entityOnly: 'aktiebolag' },
   { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', fold: 'bokslut', entityOnly: 'enskild_firma' },

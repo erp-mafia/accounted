@@ -4,6 +4,21 @@ import type { ExtensionDefinition } from '../types'
 export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
   'general': [
     {
+          "slug": "calendar",
+          "name": "Kalender",
+          "sector": "general",
+          "category": "operations",
+          "icon": "Calendar",
+          "dataPattern": "core",
+          "description": "Fullständig kalendervy med månads-, vecko- och dagsvisning",
+          "longDescription": "Se alla fakturadatum och deadlines i en interaktiv kalender med månads-, vecko- och dagsvy.",
+          "readsCoreTables": [
+                "invoices",
+                "deadlines",
+                "customers"
+          ]
+    },
+    {
           "slug": "enable-banking",
           "name": "Bankintegration (PSD2)",
           "sector": "general",

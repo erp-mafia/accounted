@@ -38,6 +38,8 @@ export const V1_PUBLIC_ENDPOINTS: ReadonlyArray<string> = [
 export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Companies
   'GET /api/v1/companies': 'companies:read',
+  // Issue #1814: programmatic company creation (partner provisioning, agents).
+  'POST /api/v1/companies': 'companies:write',
   'GET /api/v1/companies/:companyId': 'companies:read',
   // Issue #1348: company-settings write (same field set as the MCP tool
   // gnubok_update_company_settings; direct write, no staging).
@@ -108,6 +110,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/fiscal-periods/:id/currency-revaluation': 'bookkeeping:write',
   // Compliance check (Accounted's defensible edge).
   'GET /api/v1/companies/:companyId/compliance/check': 'compliance:read',
+  // #1663: filed momsdeklaration read (SKV inlamnat/beslutat). Rides
+  // compliance:read, mirroring the MCP gnubok_vat_declaration_status mapping.
+  'GET /api/v1/companies/:companyId/skatteverket/vat-declarations': 'compliance:read',
   // Phase 4 PR-3: Documents (multipart).
   'POST /api/v1/companies/:companyId/documents': 'documents:write',
   'GET /api/v1/companies/:companyId/documents/:id/download': 'documents:read',
@@ -127,9 +132,22 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Writes: bulk
   'POST /api/v1/companies/:companyId/transactions/ingest': 'transactions:write',
   'POST /api/v1/companies/:companyId/transactions/batch-categorize': 'transactions:write',
-  // Reconciliation
+  // Reconciliation (legacy bank-only routes; kept as aliases of the
+  // account-keyed routes below, with their original scopes)
   'POST /api/v1/companies/:companyId/reconciliation/bank/run': 'transactions:write',
   'GET /api/v1/companies/:companyId/reconciliation/bank/status': 'transactions:read',
+  // Reconciliation, account-keyed (bank:<cash_account_id> | skattekonto):
+  // the account list, the bridge, the item buckets, links and ignore flags.
+  'GET /api/v1/companies/:companyId/reconciliation/accounts': 'reconciliation:read',
+  'GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey': 'reconciliation:read',
+  'GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/items': 'reconciliation:read',
+  'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links': 'reconciliation:write',
+  'DELETE /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links/:linkId': 'reconciliation:write',
+  'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/items/:itemId/ignore': 'reconciliation:write',
+  'GET /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff': 'reconciliation:read',
+  'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff': 'reconciliation:signoff',
+  'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff/:signoffId/reopen': 'reconciliation:signoff',
+  'POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/residual': 'transactions:write',
 
   // Phase 5 PR-3: Reports + import async. Reports are read-only over
   // existing lib/reports/* generators; imports are async over the Phase 4
@@ -143,6 +161,10 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/reports/trial-balance': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/balance-sheet': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/income-statement': 'reports:read',
+  // Binary reports: PDF exports of the two financial statements, sharing the
+  // dashboard's renderer (custom date ranges supported via query params).
+  'GET /api/v1/companies/:companyId/reports/balance-sheet/pdf': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/income-statement/pdf': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/general-ledger': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/journal-register': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/vat-declaration': 'reports:read',
