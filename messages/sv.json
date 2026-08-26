@@ -4919,7 +4919,13 @@
     "send": "Skicka",
     "sending": "Skickar...",
     "send_failed_title": "Kunde inte skicka",
-    "send_failed_fallback": "Försök igen."
+    "send_failed_fallback": "Försök igen.",
+    "attach_label": "Bifoga filer",
+    "attach_hint": "JPG, PNG, WEBP eller PDF. Max {count} filer, {limit} MB totalt.",
+    "attach_too_many": "Du kan bifoga max {count} filer",
+    "attach_too_large": "Bilagorna får väga max {limit} MB tillsammans",
+    "attach_unsupported": "Bara bilder (JPG, PNG, WEBP) och PDF kan bifogas",
+    "remove_attachment": "Ta bort bilaga"
   },
   "journal_list": {
     "import_attn": "Listan innehåller verifikat från en SIE-import. Blev något fel kan hela importen ångras.",
