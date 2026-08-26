@@ -379,16 +379,28 @@ async function updateSessionInner(
     }
 
     // MFA required but user has no factor enrolled yet → force enrollment
-    // Skip for users with no companies (still setting up)
-    const { companyId: companyIdForMfa } = await resolveCompanyOnce()
-    if (companyIdForMfa) {
-      const { data: factors } = await timed(timing, 'mfaMs', () =>
-        supabase.auth.mfa.listFactors(),
-      )
-      const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
+    // Skip for users with no companies (still setting up).
+    //
+    // Only worth asking when the session is NOT at AAL2: reaching AAL2
+    // requires having verified a challenge on a verified factor, so the
+    // factor list cannot be empty there. auth-js implements listFactors()
+    // as a getUser() network round trip, and running it here on every
+    // page, RSC and prefetch request for every MFA-verified user was the
+    // second Supabase Auth call per request (measured via mw-mfa, PR #1922).
+    // The narrow case this defers is a user who unenrols their last factor
+    // mid-session: the JWT keeps aal2 until the next token refresh, so the
+    // enrolment bounce lands on the refresh instead of the next click.
+    if (aal?.currentLevel !== 'aal2') {
+      const { companyId: companyIdForMfa } = await resolveCompanyOnce()
+      if (companyIdForMfa) {
+        const { data: factors } = await timed(timing, 'mfaMs', () =>
+          supabase.auth.mfa.listFactors(),
+        )
+        const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
 
-      if (!hasVerifiedFactor) {
-        return bounceToAuth(request, '/mfa/enroll')
+        if (!hasVerifiedFactor) {
+          return bounceToAuth(request, '/mfa/enroll')
+        }
       }
     }
   }
