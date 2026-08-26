@@ -34,7 +34,7 @@
     ]
   },
   "rawReferenceFetch": {
-    "count": 45,
+    "count": 35,
     "files": [
       "app/(dashboard)/assets/[id]/dispose/page.tsx",
       "app/(dashboard)/bookkeeping/year-end/page.tsx",
@@ -45,8 +45,6 @@
       "app/(dashboard)/invoices/page.tsx",
       "app/(dashboard)/pending/page.tsx",
       "app/(dashboard)/salary/employees/[id]/page.tsx",
-      "app/(dashboard)/salary/runs/[id]/page.tsx",
-      "app/(dashboard)/supplier-invoices/[id]/page.tsx",
       "components/articles/ArticleForm.tsx",
       "components/bookkeeping/ChartOfAccounts.tsx",
       "components/bookkeeping/ChartOfAccountsManager.tsx",
@@ -67,18 +65,10 @@
       "components/pending-operations/use-account-names.ts",
       "components/reports/SkatteverketPanel.tsx",
       "components/reports/views/index.tsx",
-      "components/salary/NewEmployeeDialog.tsx",
       "components/settings/BookingTemplatesPanel.tsx",
       "components/settings/FiscalPeriodEditor.tsx",
       "components/settings/FiscalYearsManager.tsx",
       "components/settings/InvoicePaymentAccountsSettings.tsx",
-      "components/supplier-invoices/use-supplier-invoice-data.ts",
-      "components/suppliers/SupplierForm.tsx",
-      "components/transactions/BulkBookDialog.tsx",
-      "components/transactions/DuplicateBookingDialog.tsx",
-      "components/transactions/InvoiceMatchDialog.tsx",
-      "components/transactions/MatchVoucherDialog.tsx",
-      "components/transactions/QuickReviewDialog.tsx",
       "components/transactions/TemplatePicker.tsx",
       "extensions/general/enable-banking/components/AccountPickerDialog.tsx"
     ]

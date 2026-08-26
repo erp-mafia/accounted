@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import {
   Dialog,
   DialogContent,
@@ -116,7 +117,8 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
   // Default dimensions bag ({sie_dim_no: object_code}) proposed on the
   // employee's salary-cost lines at booking. The fields render only when
   // company_settings.dimensions_enabled: same UI gate as the voucher form.
-  const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
+  const { settings: companySettings } = useCompanySettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const [dimensions, setDimensions] = useState<Record<string, string>>({})
   const [tax, setTax] = useState<EmployeeTaxValue>({
     f_skatt_status: 'a_skatt',
@@ -125,13 +127,6 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
     tax_column: 1,
     tax_municipality: '',
   })
-
-  useEffect(() => {
-    fetch('/api/settings')
-      .then((r) => r.json())
-      .then(({ data }) => setDimensionsEnabled(data?.dimensions_enabled === true))
-      .catch(() => {/* keep the dimension fields hidden */})
-  }, [])
 
   function setDimension(dimNo: string, code: string | null) {
     setDimensions((prev) => {

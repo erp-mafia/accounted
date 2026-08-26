@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
@@ -76,7 +77,13 @@ function CustomersPageInner() {
   // Company default payment terms (Inställningar → Fakturering). Prefilled
   // into the new-customer form so it opens on the company's own default
   // instead of a hardcoded 30.
-  const [companyDefaultTerms, setCompanyDefaultTerms] = useState<number | null>(null)
+  // Default payment terms from the session-cached settings row; the dialog
+  // falls back to 30 until (or unless) the company set one.
+  const { settings: companySettings } = useCompanySettings()
+  const companyDefaultTerms =
+    typeof companySettings?.invoice_default_days === 'number' && companySettings.invoice_default_days > 0
+      ? companySettings.invoice_default_days
+      : null
   const { toast } = useToast()
   const t = useTranslations('customers')
   const tCommon = useTranslations('common')
@@ -145,22 +152,6 @@ function CustomersPageInner() {
   useEffect(() => {
     fetchCustomers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
-    // Best-effort: the dialog falls back to 30 until (or unless) this lands.
-    let cancelled = false
-    fetch('/api/settings')
-      .then((response) => (response.ok ? response.json() : null))
-      .then((json) => {
-        if (cancelled) return
-        const days = json?.data?.invoice_default_days
-        if (typeof days === 'number' && days > 0) setCompanyDefaultTerms(days)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
   }, [])
 
   async function handleCreateCustomer(data: CreateCustomerInput) {
