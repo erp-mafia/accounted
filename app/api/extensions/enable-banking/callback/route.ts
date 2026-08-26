@@ -14,6 +14,7 @@ import {
 } from '@/lib/cash-accounts/service'
 import { fanOutSessionRenewal } from '@/extensions/general/enable-banking/lib/session-sharing'
 import { supersedeSiblingConnections } from '@/extensions/general/enable-banking/lib/supersede'
+import { getBankConnectionErrorMessage } from '@/lib/errors/get-error-message'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
 
 // This route emits bank_connection.consent_granted / .cash_account_mirror_failed
@@ -82,7 +83,11 @@ export async function GET(request: Request) {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 
   if (error) {
-    const errorMessage = errorDescription || error
+    // Swedish user-facing message carrying the underlying provider error; the
+    // raw code/description stays in the log lines and the audit event below.
+    // Previously the raw provider text was passed through verbatim, which
+    // gave a stuck user nothing to act on (issue #1716).
+    const userMessage = getBankConnectionErrorMessage(error, errorDescription)
     // access_denied is the user cancelling at the bank — an expected outcome,
     // not a runtime error. Only bank-side failures stay at error level.
     const isUserCancel =
@@ -104,7 +109,7 @@ export async function GET(request: Request) {
         // (which stays 'expired' during the round-trip) is also handled.
         const { data: pendingConn } = await supabase
           .from('bank_connections')
-          .select('id, user_id, bank_name, psu_type, status')
+          .select('id, user_id, company_id, bank_name, psu_type, status')
           .eq('oauth_state', state)
           .in('status', ['pending', 'expired', 'error'])
           .single()
@@ -142,8 +147,33 @@ export async function GET(request: Request) {
 
             await supabase
               .from('bank_connections')
-              .update({ status: isSessionExpiry ? 'expired' : 'error', error_message: errorMessage, oauth_state: null })
+              .update({ status: isSessionExpiry ? 'expired' : 'error', error_message: userMessage, oauth_state: null })
               .eq('id', pendingConn.id)
+          }
+
+          // Durable audit trail for the failed attempt (issue #1716): the
+          // fresh-connect row was just deleted and console logs expire, so
+          // event_log is the only place support can later see which attempt
+          // failed with which provider error.
+          try {
+            await eventBus.emit({
+              type: 'bank_connection.consent_denied',
+              payload: {
+                connectionId: pendingConn.id,
+                bankName: pendingConn.bank_name ?? null,
+                psuType: pendingConn.psu_type ?? null,
+                errorCode: error,
+                errorDescription: errorDescription ?? null,
+                priorStatus: pendingConn.status,
+                userId: pendingConn.user_id,
+                companyId: pendingConn.company_id,
+              },
+            })
+          } catch (emitError) {
+            log.error(AUDIT_EMIT_FAILED, emitError as Error, {
+              eventType: 'bank_connection.consent_denied',
+              connectionId: pendingConn.id,
+            })
           }
 
           // Include bank name, error code, and psu_type in the redirect so the
@@ -151,7 +181,7 @@ export async function GET(request: Request) {
           // access_denied, or the Handelsbanken corporate fullmakt steps on
           // server_error for a business connect).
           const params = new URLSearchParams({
-            bank_error: errorMessage,
+            bank_error: userMessage,
             ...(pendingConn.bank_name ? { bank_name: pendingConn.bank_name } : {}),
             bank_error_code: error,
             ...(pendingConn.psu_type ? { psu_type: pendingConn.psu_type } : {}),
@@ -164,18 +194,22 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.redirect(
-      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(errorMessage)}`
+      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(userMessage)}`
     )
   }
 
   if (!code || !state) {
-    return NextResponse.redirect(`${baseUrl}/settings/banking?bank_error=missing_parameters`)
+    return NextResponse.redirect(
+      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(getBankConnectionErrorMessage('missing_parameters'))}`
+    )
   }
 
   // Validate authorization code format
   const codePattern = /^[a-zA-Z0-9._~+\/-]{8,2048}$/
   if (!codePattern.test(code)) {
-    return NextResponse.redirect(`${baseUrl}/settings/banking?bank_error=invalid_code_format`)
+    return NextResponse.redirect(
+      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(getBankConnectionErrorMessage('invalid_code_format'))}`
+    )
   }
 
   const supabase = await createServiceClient()
@@ -201,7 +235,7 @@ export async function GET(request: Request) {
       hasCode: !!code,
     })
     return NextResponse.redirect(
-      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent('invalid_state')}`
+      `${baseUrl}/settings/banking?bank_error=${encodeURIComponent(getBankConnectionErrorMessage('invalid_state'))}`
     )
   }
 
@@ -214,13 +248,36 @@ export async function GET(request: Request) {
     try {
       return await finalizeConnection(supabase, pendingConnection, code)
     } catch (finalizeError) {
+      const reason =
+        finalizeError instanceof Error ? finalizeError.message : String(finalizeError)
       console.error('[enable-banking] Callback error', {
-        message: finalizeError instanceof Error ? finalizeError.message : String(finalizeError),
+        message: reason,
         stack: finalizeError instanceof Error ? finalizeError.stack : undefined,
         name: finalizeError instanceof Error ? finalizeError.name : undefined,
         state,
         connectionId: pendingConnection.id,
       })
+      // Durable audit trail (issue #1716): the fresh-connect row is deleted by
+      // the cleanup below and console logs expire, so event_log is the only
+      // place support can later see that this attempt failed and why.
+      try {
+        await eventBus.emit({
+          type: 'bank_connection.finalize_failed',
+          payload: {
+            connectionId: pendingConnection.id,
+            bankName: pendingConnection.bank_name ?? null,
+            reason,
+            priorStatus: pendingConnection.status,
+            userId: pendingConnection.user_id,
+            companyId: pendingConnection.company_id,
+          },
+        })
+      } catch (emitError) {
+        log.error(AUDIT_EMIT_FAILED, emitError as Error, {
+          eventType: 'bank_connection.finalize_failed',
+          connectionId: pendingConnection.id,
+        })
+      }
       return cleanupFailedFinalize(supabase, pendingConnection)
     }
   })()
