@@ -128,9 +128,11 @@ imports) return `202` with an operation id; poll `GET /api/v1/operations/{id}`
 until `status` is `succeeded`/`failed`. The response shape is identical
 whether the work ran inline or queued.
 
-**Versioning.** Dated versions (current: see `meta.api_version`). Pin with the
-`Gnubok-Version` request header; responses echo it. Additive changes ship
-without a version bump; see https://app.gnubok.se/docs/api/versioning.
+**Versioning.** Dated versions (current: see `meta.api_version`). Responses
+carry the `Gnubok-Version` header; request pinning via a `Gnubok-Version`
+request header is reserved for a future breaking change and is not read
+today. Additive changes ship without a version bump; see
+https://app.gnubok.se/docs/api/versioning.
 
 **Index badges.** Every operation line below carries machine-readable
 annotations from the spec: `scope:` (required key scope), `risk:` (low/medium/

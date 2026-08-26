@@ -294,20 +294,31 @@ describe('gnubok_get_payslip', () => {
 })
 
 describe('gnubok_get_vacation_balance', () => {
-  it('returns the open balance with qualified id and remaining days', async () => {
+  const BALANCE_ROW = {
+    id: 'vb-1',
+    employee_id: 'emp-1',
+    vacation_year_start: '2026-01-01',
+    entitled_days: 25,
+    accrued_days: 0,
+    taken_days: 10,
+    saved_days: { '2025': 5 },
+    forced_payout_days: 0,
+  }
+  // Procentregeln, 25 days, 35 000 kr/month: day value = 35000*12*0.12/25 = 2016.
+  const EMPLOYEE_ROW = {
+    vacation_rule: 'procentregeln',
+    vacation_days_per_year: 25,
+    salary_type: 'monthly',
+    monthly_salary: 35000,
+    hourly_rate: null,
+    hours_per_week: null,
+    workdays_per_week: null,
+  }
+
+  it('returns the open balance with qualified id, remaining days and the SEK estimate', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: {
-        id: 'vb-1',
-        employee_id: 'emp-1',
-        vacation_year_start: '2026-01-01',
-        entitled_days: 25,
-        accrued_days: 0,
-        taken_days: 10,
-        saved_days: { '2025': 5 },
-        forced_payout_days: 0,
-      },
-    })
+    enqueue({ data: BALANCE_ROW })
+    enqueue({ data: EMPLOYEE_ROW })
 
     const result = (await getVacationBalance.execute(
       { employee_id: 'emp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
@@ -317,6 +328,34 @@ describe('gnubok_get_vacation_balance', () => {
     expect(result.remaining_days).toBe(15)
     expect(result.saved_days).toEqual({ '2025': 5 })
     expect(result.id).toBeUndefined()
+    // (15 remaining + 5 saved) * 2016 kr: the same valuation the v1 route and
+    // the year-close use, so the description's promise is a real field.
+    expect(result.estimated_liability_sek).toBe(40320)
+    expect(getVacationBalance.outputSchema?.properties).toHaveProperty('estimated_liability_sek')
+  })
+
+  it('floors the SEK estimate at zero when the balance is overdrawn', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...BALANCE_ROW, entitled_days: 5, taken_days: 12, saved_days: {} } })
+    enqueue({ data: EMPLOYEE_ROW })
+
+    const result = (await getVacationBalance.execute(
+      { employee_id: 'emp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as Record<string, unknown>
+
+    expect(result.remaining_days).toBe(-7)
+    expect(result.estimated_liability_sek).toBe(0)
+  })
+
+  it('throws when the employee row is missing for the company', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: BALANCE_ROW })
+    enqueue({ data: null })
+    await expect(
+      getVacationBalance.execute(
+        { employee_id: 'emp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+      ),
+    ).rejects.toThrow(/Employee emp-1 not found/)
   })
 
   it('throws before the ledger has seeded', async () => {
