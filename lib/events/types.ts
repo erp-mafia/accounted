@@ -90,6 +90,35 @@ export type CoreEvent =
   // superseded_by pointing at the replacement, and its transactions are
   // re-pointed. connectionId is the SUPERSEDED (old) row, mirroring .revoked.
   | { type: 'bank_connection.superseded'; payload: { connectionId: string; supersededById: string; bankName: string | null; userId: string; companyId: string } }
+  // Emitted when the bank/provider redirects the OAuth callback back with an
+  // error instead of an authorization code: denied consent, a bank-side
+  // failure (e.g. Handelsbanken's missing corporate fullmakt), or an expired
+  // signing session. Durable failure trail (issue #1716): the pending row is
+  // deleted right after and console logs expire, so without this event
+  // support cannot answer which attempt failed, with which error, on whose
+  // side. connectionId may reference a row deleted by the same request.
+  | { type: 'bank_connection.consent_denied'; payload: {
+      connectionId: string
+      bankName: string | null
+      psuType: string | null
+      errorCode: string
+      errorDescription: string | null
+      priorStatus: string
+      userId: string
+      companyId: string
+    } }
+  // Emitted when the code-for-session exchange or connection finalization
+  // throws after the bank redirected back successfully. Same audit doctrine
+  // as consent_denied: the fresh-connect row is deleted by cleanup and the
+  // console log expires, leaving support nothing to answer from.
+  | { type: 'bank_connection.finalize_failed'; payload: {
+      connectionId: string
+      bankName: string | null
+      reason: string
+      priorStatus: string
+      userId: string
+      companyId: string
+    } }
   // Emitted when the PSD2 callback fails to mirror a returned account into
   // cash_accounts. ASVS V16 / ISO 27001 A.8.15: security-relevant failures
   // must land in a structured audit log (event_log, 30-day TTL) rather than
