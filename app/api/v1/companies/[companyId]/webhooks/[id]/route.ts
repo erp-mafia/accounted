@@ -4,8 +4,8 @@
  * GET   : return the full webhook row (no secret).
  * PATCH : update name, description, webhook_url, active. Cannot change
  *          event_type (immutable: would require re-pinning api_version).
- *          Cannot rotate the secret here (separate flow, deferred to
- *          Phase 6 follow-up).
+ *          Cannot rotate the secret here: that is POST .../rotate-secret
+ *          (see ./rotate-secret/route.ts).
  * DELETE: hard delete the webhook. The webhook_deliveries.webhook_id FK
  *          is ON DELETE SET NULL (declared in migration 20260515170000),
  *          so the delivery audit trail SURVIVES webhook deletion
@@ -124,7 +124,8 @@ registerEndpoint({
   description:
     'Update the URL, name, description, or active flag. event_type is immutable: delete and recreate to change it. Setting active=false manually pauses delivery without deleting; setting active=true clears any disabled_at/disabled_reason set by the auto-disable on HTTP 410.',
   useWhen: 'You need to point an existing webhook at a new URL or temporarily pause delivery.',
-  doNotUseFor: 'Rotating the signing secret (delete and recreate). Changing event_type.',
+  doNotUseFor:
+    'Rotating the signing secret: use POST /webhooks/{id}/rotate-secret, which issues a fresh secret in place and keeps the webhook id and delivery history. Changing event_type: delete and recreate.',
   pitfalls: [
     'Re-enabling a webhook (active: true) does NOT replay deliveries that went to dead status while it was disabled: those need POST /webhook-deliveries/{id}/retry.',
   ],
