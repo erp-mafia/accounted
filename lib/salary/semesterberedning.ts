@@ -118,7 +118,19 @@ function lastDayBefore(dateIso: string): string {
   return d.toISOString().slice(0, 10)
 }
 
-function dayValueSek(emp: EmployeeRosterRow): number {
+/** The employee master fields the day valuation reads. */
+export type DayValueEmployee = Pick<
+  EmployeeRosterRow,
+  'vacation_rule' | 'vacation_days_per_year' | 'salary_type' | 'monthly_salary' | 'hourly_rate' | 'hours_per_week' | 'workdays_per_week'
+>
+
+/**
+ * Simplified BFNAR 2016:10 value of one vacation day in SEK. Shared by the
+ * year-close and the MCP vacation-balance tool; the v1 vacation-balance
+ * route carries the same formula inline. All three must agree on the
+ * semesterlöneskuld estimate.
+ */
+export function dayValueSek(emp: DayValueEmployee): number {
   const rate = emp.vacation_days_per_year >= 30 ? 0.144 : 0.12
   if (emp.salary_type === 'hourly') {
     const annualBasis = (emp.hourly_rate || 0) * (emp.hours_per_week ?? 40) * 52

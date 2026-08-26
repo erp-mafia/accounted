@@ -15,10 +15,14 @@ export const GET = withRouteContext(
   async (_request, ctx) => {
     const { supabase, companyId, log, requestId } = ctx
 
+    // Archived rows (soft-deleted via the v1 API: archived_at + is_active=false)
+    // stay in the table for BFL retention but are not part of the roster.
+    // Same canonical "active" filter as the v1 list route.
     const { data, error } = await supabase
       .from('suppliers')
       .select('*')
       .eq('company_id', companyId)
+      .is('archived_at', null)
       .order('name', { ascending: true })
 
     if (error) {

@@ -13,6 +13,7 @@ import {
   API_KEY_SCOPES,
   DEFAULT_OAUTH_SCOPES,
   SCOPE_GROUPS,
+  scopeKind,
   validateScopes,
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
@@ -838,13 +839,10 @@ function renderScopeCheckboxes(
 
   for (const group of SCOPE_GROUPS) {
     const rows: string[] = []
-    if (group.read && ceiling.has(group.read)) {
-      rows.push(scopeRow(group.read, preChecked.has(group.read), 'read'))
-      renderedInGroups.add(group.read)
-    }
-    if (group.write && ceiling.has(group.write)) {
-      rows.push(scopeRow(group.write, preChecked.has(group.write), 'write'))
-      renderedInGroups.add(group.write)
+    for (const scope of group.scopes) {
+      if (!ceiling.has(scope)) continue
+      rows.push(scopeRow(scope, preChecked.has(scope), scopeKind(scope)))
+      renderedInGroups.add(scope)
     }
     if (rows.length > 0) {
       groups.push(
@@ -853,11 +851,11 @@ function renderScopeCheckboxes(
     }
   }
 
+  // Defense in depth: the catalogue test guarantees full group coverage, so
+  // this bucket is empty unless a scope ships without a group.
   const remaining = ALL_SCOPES.filter(s => ceiling.has(s) && !renderedInGroups.has(s))
   if (remaining.length > 0) {
-    const rows = remaining.map((s) =>
-      scopeRow(s, preChecked.has(s), s.endsWith(':write') || s.endsWith(':manage') || s.endsWith(':approve') ? 'write' : 'read')
-    )
+    const rows = remaining.map((s) => scopeRow(s, preChecked.has(s), scopeKind(s)))
     groups.push(
       `<div class="scope-group"><div class="scope-group-title">Övriga</div>${rows.join('')}</div>`
     )
