@@ -238,9 +238,13 @@ describe('tools/list payload size guard', () => {
     //     connect card, same one-click feel as bank/Skatteverket): the skill
     //     instructs calling it when the user names Fortnox/BL/Briox/Wint, so
     //     default catalog for the standing Claude.ai reason.
+    //   * 63K to 63.4K with gnubok_reconcile_match promoted to the default
+    //     catalog: the onboarding efterkontroll instructs matching bank rows
+    //     against SIE verifikat, and a search-only tool is uncallable on
+    //     Claude.ai (E2E #12 punted to the web app over it).
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(63_000)
+    expect(approxTokens).toBeLessThan(63_400)
   })
 })

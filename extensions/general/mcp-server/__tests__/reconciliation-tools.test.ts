@@ -1,6 +1,6 @@
 /**
  * The account-keyed reconciliation tools: status (account_key branch), items,
- * reconcile_match (stages; dry_run previews), reconcile_unmatch (search-only).
+ * reconcile_match (stages; dry_run previews; default catalog), reconcile_unmatch (search-only).
  * Service functions are mocked; the staging path runs for real in dry_run
  * mode (no insert), so the STAGED_OPERATION_SCHEMA contract is exercised.
  */
@@ -60,7 +60,9 @@ describe('reconciliation MCP tools', () => {
     expect(isDefaultCatalogTool(tool('gnubok_get_reconciliation_status'))).toBe(true)
     expect(isDefaultCatalogTool(tool('gnubok_list_reconciliation_items'))).toBe(true)
     // Writes sit behind search to respect the tools/list payload ceiling.
-    expect(isDefaultCatalogTool(tool('gnubok_reconcile_match'))).toBe(false)
+    // Default since E2E #12: the onboarding efterkontroll instructs the
+    // matching step and Claude.ai cannot call search-only tools.
+    expect(isDefaultCatalogTool(tool('gnubok_reconcile_match'))).toBe(true)
     expect(isDefaultCatalogTool(tool('gnubok_reconcile_unmatch'))).toBe(false)
     expect(isDefaultCatalogTool(tool('gnubok_link_transaction_to_journal_entry'))).toBe(false)
     expect(deriveToolMeta(tool('gnubok_reconcile_match'))).toMatchObject({
