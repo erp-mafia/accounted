@@ -166,8 +166,25 @@ export const CONNECT_CARD_HTML = `<!DOCTYPE html>
 
   function render(sc) {
     const isSkv = 'available' in sc;
+    const isMigration = 'provider_name' in sc;
     connectUrl = sc.connect_url || null;
-    el('title').textContent = isSkv ? 'Anslut Skatteverket' : 'Anslut din bank';
+    el('title').textContent = isSkv
+      ? 'Anslut Skatteverket'
+      : isMigration
+        ? 'Hämta från ' + sc.provider_name
+        : 'Anslut din bank';
+
+    if (isMigration) {
+      el('lede').textContent = sc.api_connected
+        ? 'Guiden loggar in hos ' + sc.provider_name + ' och hämtar bokföring, fakturor, kunder och underlag. Du behöver vara inloggad i Accounted i webbläsaren.'
+        : sc.provider_name + ' saknar API-export: importera SIE-filen här först; guiden kompletterar sedan med fakturor och kunder.';
+      if (connectUrl) {
+        el('url').textContent = connectUrl;
+        show('url');
+        show('actions');
+      }
+      return;
+    }
 
     if (isSkv && !sc.available) {
       el('lede').textContent = 'Skatteverket-kopplingen är inte aktiverad på den här installationen. Deklarationer kan fortfarande laddas ned som filer.';

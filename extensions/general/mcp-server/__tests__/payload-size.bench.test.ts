@@ -234,9 +234,13 @@ describe('tools/list payload size guard', () => {
     //     two SIE tools: the byte-exact upload path after a real 104 KB file
     //     dead-ended in chat (a model cannot reproduce 30k tokens verbatim
     //     without silent-truncation risk); skill-instructed, so default catalog.
+    //   * 62.4K to 63K with gnubok_connect_migration (the previous-system
+    //     connect card, same one-click feel as bank/Skatteverket): the skill
+    //     instructs calling it when the user names Fortnox/BL/Briox/Wint, so
+    //     default catalog for the standing Claude.ai reason.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(62_400)
+    expect(approxTokens).toBeLessThan(63_000)
   })
 })

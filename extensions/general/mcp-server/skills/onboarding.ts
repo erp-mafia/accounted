@@ -102,18 +102,19 @@ reaches far enough back anyway.
 
 1. Branch on WHICH system they name:
    - **Fortnox / Björn Lundén / Briox / Wint** (API-connected systems):
-     offer TWO paths and recommend by need. The FULL migration at
-     \`/import?mode=migration&provider=<fortnox|bjornlunden|briox|wint>\`
-     connects to the old system directly and fetches every fiscal year
-     PLUS invoices, customers, suppliers and documents: recommend it when
-     they have open fakturor or want underlag along. The QUICK path is a
-     SIE export dropped here (Fortnox: Register → Exportera → SIE 4):
-     ledger only, fastest. Either way the result lands in the same books.
+     offer TWO paths and recommend by need. The FULL migration: call
+     \`gnubok_connect_migration\` with the provider; it renders a connect
+     card (same feel as bank/Skatteverket) whose button opens the wizard
+     that logs into the old system and fetches every fiscal year PLUS
+     invoices, customers, suppliers and documents: recommend it when they
+     have open fakturor or want underlag along. The QUICK path is a SIE
+     export dropped here (Fortnox: Register → Exportera → SIE 4): ledger
+     only, fastest. Either way the result lands in the same books.
    - **Visma eEkonomi / Bokio**: no API export exists; ask for the SIE
      file (Visma: Bokföring → Export SIE; Bokio: Inställningar →
-     Exportera data → SIE) and use the drop card. The wizard at
-     \`/import?mode=migration&provider=<visma|bokio>\` can complement with
-     invoices and customers AFTER the SIE import.
+     Exportera data → SIE) and use the drop card FIRST. Then
+     \`gnubok_connect_migration\` with the provider renders the card that
+     complements with invoices and customers.
    - **Annat/okänt system**: every Swedish system exports SIE4
      (.se/.sie); ask them to export it and drop it here.
 2. As soon as SIE import is the next step, call
@@ -172,6 +173,7 @@ message instead of making them ask.
 - \`gnubok_sie_preflight\`: scan a shared SIE file, nothing written
 - \`gnubok_import_sie\`: staged import; use the preflight's mappings
 - \`gnubok_connect_bank\` / \`gnubok_connect_skatteverket\`: status + connect links
+- \`gnubok_connect_migration\`: connect card into the previous-system wizard
 - \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`: state checks
 - \`gnubok_list_uncategorized_transactions\`: the first real bookkeeping step
 
