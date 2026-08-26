@@ -44,6 +44,7 @@ import {
   applyDomainStatusFromWebhook,
 } from './lib/custom-domains'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
@@ -2151,14 +2152,15 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: settings } = await ctx.supabase
           .from('company_settings')
-          .select('accounting_method')
+          .select('accounting_method, defer_invoice_booking')
           .eq('company_id', ctx.companyId)
           .single()
 
-        const accountingMethod = settings?.accounting_method || 'accrual'
         let registrationJournalEntryId: string | null = null
 
-        if (accountingMethod === 'accrual') {
+        // #967: deferred companies register WITHOUT booking (same gate as
+        // POST /api/supplier-invoices); ekonomi books later via Bokför.
+        if (booksInvoicesOnIssue(settings)) {
           try {
             const journalEntry = await createSupplierInvoiceRegistrationEntry(
               ctx.supabase,
