@@ -326,6 +326,38 @@ describe('GET /api/extensions/enable-banking/sync/cron: session health probe', (
     await expect(response.json()).resolves.toMatchObject({ processed: 6 })
   })
 
+  it('never syncs two connections of the same company concurrently', async () => {
+    // The post-sync unattended sweep is company-scoped: two concurrent sweeps
+    // for one company can both read a journal entry as unlinked and claim it
+    // for different bank transactions. Same-company connections must serialize.
+    const started: string[] = []
+    const resolvers: (() => void)[] = []
+    mocks.syncAccountTransactions.mockImplementation((...args: unknown[]) => {
+      started.push(args[3] as string)
+      return new Promise(resolve => {
+        resolvers.push(() => resolve({ imported: 0, duplicates: 0, errors: 0 }))
+      })
+    })
+    state.active = [
+      connection({ id: 'same-a', company_id: 'company-shared' }),
+      connection({ id: 'same-b', company_id: 'company-shared' }),
+      connection({ id: 'other', company_id: 'company-other' }),
+    ]
+
+    const responsePromise = GET(cronRequest())
+
+    // First wave: one slot per company, so same-b must wait for same-a.
+    await vi.waitFor(() => expect(started).toContain('other'))
+    expect(started).toEqual(expect.arrayContaining(['same-a', 'other']))
+    expect(started).not.toContain('same-b')
+    resolvers.splice(0).forEach(resolve => resolve())
+    await vi.waitFor(() => expect(started).toContain('same-b'))
+    resolvers.splice(0).forEach(resolve => resolve())
+
+    const response = await responsePromise
+    await expect(response.json()).resolves.toMatchObject({ processed: 3 })
+  })
+
   it('isolates one failing connection inside a wave', async () => {
     mocks.syncAccountTransactions.mockImplementation((...args: unknown[]) => {
       if (args[3] === 'conn-1') return Promise.reject(new Error('ASPSP 500'))

@@ -382,15 +382,36 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     }
   }
 
-  // Waves of SYNC_CONCURRENCY: the budget check sits between waves, and each
-  // connection keeps its own try/catch above, so one slow or failing bank
-  // affects at most its own wave slot.
-  for (let offset = 0; offset < connections.length; offset += SYNC_CONCURRENCY) {
+  // Concurrency is per COMPANY, not per connection: the unattended sweep after
+  // an SIE-overlap sync is company-scoped (it reconciles every cash account of
+  // the company), so two connections of one company syncing concurrently would
+  // run two identical whole-company sweeps whose read-time "unlinked GL lines"
+  // snapshots race, and both can claim the same journal entry for different
+  // bank transactions. Grouping keeps one company's connections sequential
+  // while unrelated companies still fan out.
+  const companyGroups = new Map<string, typeof connections>()
+  for (const connection of connections) {
+    const group = companyGroups.get(connection.company_id)
+    if (group) group.push(connection)
+    else companyGroups.set(connection.company_id, [connection])
+  }
+  const groups = [...companyGroups.values()]
+
+  const syncCompanyGroup = async (group: typeof connections) => {
+    for (const connection of group) {
+      await syncConnection(connection)
+    }
+  }
+
+  // Waves of SYNC_CONCURRENCY company groups: the budget check sits between
+  // waves, and each connection keeps its own try/catch above, so one slow or
+  // failing bank affects at most its own wave slot.
+  for (let offset = 0; offset < groups.length; offset += SYNC_CONCURRENCY) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
       ctx.log.info('time budget reached', { processedSoFar: results.length })
       break
     }
-    await Promise.all(connections.slice(offset, offset + SYNC_CONCURRENCY).map(syncConnection))
+    await Promise.all(groups.slice(offset, offset + SYNC_CONCURRENCY).map(syncCompanyGroup))
   }
 
   // Health probe for connections this run did NOT prove alive by syncing them.
