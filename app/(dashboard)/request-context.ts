@@ -1,7 +1,9 @@
 import 'server-only'
 
 import { cache } from 'react'
+import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
+import { claimsPinned, userFromClaims } from '@/lib/auth/claims'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 
@@ -11,9 +13,27 @@ import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
  */
 export const getDashboardAuthContext = cache(async () => {
   const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  // Local JWT verification first (same pinning + mapping as requireAuth,
+  // lib/auth/claims.ts): the proxy already performed the per-request
+  // revocation check with getUser() before this layout runs, so a second
+  // network round trip to Supabase Auth on every hard load, refresh and
+  // router.refresh() bought nothing. getUser() stays as the authoritative
+  // fallback when claims are missing, unpinned or unverifiable.
+  let user: User | null = null
+  if (typeof supabase.auth.getClaims === 'function') {
+    try {
+      const { data } = await supabase.auth.getClaims()
+      if (data?.claims?.sub && claimsPinned(data.claims)) user = userFromClaims(data.claims)
+    } catch {
+      // Fall through to the network check.
+    }
+  }
+  if (!user) {
+    const {
+      data: { user: fetched },
+    } = await supabase.auth.getUser()
+    user = fetched
+  }
 
   return { supabase, user }
 })
