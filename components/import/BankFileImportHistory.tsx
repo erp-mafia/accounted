@@ -10,7 +10,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { getFormat } from '@/lib/import/bank-file/parser'
+import { getFormat } from '@/lib/import/bank-file/formats'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { cn, formatDate } from '@/lib/utils'
 

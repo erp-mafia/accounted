@@ -22,6 +22,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
 import { parseArticleHouseworkType, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 const ARTICLE_TYPE_KEY: Record<ArticleType, string> = {
   vara: 'type_vara',
@@ -198,11 +199,7 @@ export default function ArticleDetailPage({
   }
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    )
+    return <DetailPageSkeleton />
   }
 
   if (!article) return null

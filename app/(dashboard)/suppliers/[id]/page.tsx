@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -19,6 +18,7 @@ import SupplierForm from '@/components/suppliers/SupplierForm'
 import Link from 'next/link'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import type { Supplier, SupplierType, CreateSupplierInput, SupplierInvoice } from '@/types'
+import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -145,12 +145,7 @@ export default function SupplierDetailPage() {
   }
 
   if (isLoading) {
-    return (
-      <div className="space-y-8">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-48 w-full" />
-      </div>
-    )
+    return <DetailPageSkeleton />
   }
 
   if (!supplier) {
