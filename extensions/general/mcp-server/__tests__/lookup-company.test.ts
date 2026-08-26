@@ -86,6 +86,10 @@ describe('gnubok_lookup_company', () => {
     // accounting_method defaults by form in create_company (flagged in its
     // preview) and is deliberately not a question here.
     expect(ask.some((q) => q.startsWith('accounting_method'))).toBe(false)
+    // The two flow questions (E2E #5): bank for the direct consent link,
+    // previous system for the import-before-bank ordering.
+    expect(ask.some((q) => q.startsWith('bank ('))).toBe(true)
+    expect(ask.some((q) => q.startsWith('previous_system'))).toBe(true)
     // Registry facts are confirmed, never re-asked.
     expect(ask.some((q) => q.startsWith('entity_type'))).toBe(false)
     expect(ask.some((q) => q.startsWith('vat_registered'))).toBe(false)

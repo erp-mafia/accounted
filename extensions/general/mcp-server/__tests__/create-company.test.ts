@@ -118,6 +118,35 @@ describe('gnubok_create_company', () => {
     expect((result.next as Record<string, unknown>).tool).toBe('gnubok_load_skill')
   })
 
+  it('orders history import before the bank when the fiscal period started over 90 days ago', async () => {
+    // The default calendar-year setup starts 1 January: from February on the
+    // period has >90 days of history the bank cannot deliver, so the created
+    // result must point at SIE-first ordering. Frozen mid-year so the test
+    // does not flip in January.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(`${new Date().getFullYear()}-08-15T12:00:00Z`))
+    try {
+      const supabase = supabaseWithTeam(TEAM_ID)
+      mocks.createCompanyCore.mockImplementation(
+        async (_client: unknown, _input: unknown, createRow: () => Promise<{ data: unknown; error: unknown }>) => {
+          const { data } = await createRow()
+          return { companyId: data as string }
+        }
+      )
+      const result = (await tool.execute(
+        { ...setup, confirm: true },
+        '',
+        'user-1',
+        supabase as never
+      )) as Record<string, unknown>
+
+      expect(result.history_note).toContain('gnubok_sie_preflight')
+      expect(result.message).toContain('IN ORDER')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('refuses a VAT-registered company without a moms period before touching the database', async () => {
     const supabase = supabaseWithTeam(TEAM_ID)
     await expect(

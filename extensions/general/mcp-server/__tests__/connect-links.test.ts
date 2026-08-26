@@ -74,6 +74,18 @@ describe('onboarding connect-link tools', () => {
     expect(result.connect_url).toBe('https://app.example.test/import?mode=psd2')
   })
 
+  it('bank: nudges the agent to ask for the bank when none was passed, and not when one was', async () => {
+    const bare = (await bankTool.execute({}, COMPANY_ID, 'user-1', {
+      from: listClient([]).from,
+    } as never)) as Record<string, unknown>
+    expect(bare.instructions).toContain('BETTER LINK AVAILABLE')
+
+    const named = (await bankTool.execute({ bank: 'Swedbank' }, COMPANY_ID, 'user-1', {
+      from: listClient([]).from,
+    } as never)) as Record<string, unknown>
+    expect(named.instructions).not.toContain('BETTER LINK AVAILABLE')
+  })
+
   it('bank: reports an active connection', async () => {
     const { from } = listClient([
       { id: 'c1', bank_name: 'Swedbank', status: 'active', created_at: '2026-08-01T00:00:00Z' },
