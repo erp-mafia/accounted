@@ -3121,7 +3121,7 @@ export const tools: McpTool[] = [
       },
       required: ['connected', 'connections', 'connect_url', 'instructions'],
     },
-    catalogVisibility: 'search',
+    _meta: { ui: { resourceUri: 'ui://connect-card/app.html' } },
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -3151,7 +3151,7 @@ export const tools: McpTool[] = [
         instructions:
           active.length > 0
             ? 'At least one bank is connected and syncing. To add another bank, give the user the connect_url.'
-            : 'Give the user the connect_url to open in their browser (they must be logged in to Accounted there). They pick their bank and approve with BankID; consent lasts up to 180 days and the first transactions arrive within a minute. Tell them to come back here when done, then continue with gnubok_list_uncategorized_transactions.',
+            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there, pick their bank and approve with BankID; consent lasts up to 180 days and the first transactions arrive within a minute. Tell them to come back here when done, then continue with gnubok_list_uncategorized_transactions.',
       }
     },
   },
@@ -3177,7 +3177,7 @@ export const tools: McpTool[] = [
       },
       required: ['available', 'connected', 'token_expires_at', 'connect_url', 'instructions'],
     },
-    catalogVisibility: 'search',
+    _meta: { ui: { resourceUri: 'ui://connect-card/app.html' } },
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -3206,7 +3206,7 @@ export const tools: McpTool[] = [
           ? 'The Skatteverket integration is not enabled on this installation. Declarations can still be downloaded as files and filed manually at skatteverket.se.'
           : connected
             ? 'Skatteverket is connected. Skattekonto syncs automatically; momsdeklaration and AGI can be filed from here (each filing stages for approval).'
-            : 'Give the user the connect_url to open in their browser (logged in to Accounted). Skatteverket asks them to identify with BankID as firmatecknare and approve the access; they land back in Accounted afterwards. Tell them to come back here when done.',
+            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there; Skatteverket asks them to identify with BankID as firmatecknare and approve the access, then they land back in Accounted. Tell them to come back here when done.',
       }
     },
   },
