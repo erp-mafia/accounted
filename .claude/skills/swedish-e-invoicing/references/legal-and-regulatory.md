@@ -10,14 +10,14 @@ The operative statute. SFS 2018:1277, in force **1 April 2019**, amended SFS 202
 - **§2 Definition.** An e-invoice is an invoice issued, sent and received in a *structured electronic format that allows automatic and electronic processing*. **PDF and scanned paper are explicitly excluded.** Image-based formats fail the definition regardless of how they are transmitted.
 - **§4 Standard.** EN 16931 conformance via Commission Implementing Decision (EU) 2017/1870. Parties may bilaterally agree on alternative standards.
 - **§5 Reception duty.** Contracting authorities must receive and process EN 16931 invoices.
-- **§7 Sanctions.** **DIGG can issue *vitesföreläggande* (penalty injunctions)** against non-compliant suppliers. The amount is set discretionarily.
+- **§7 Sanctions.** **The supervising authority can issue *vitesföreläggande* (penalty injunctions)** against non-compliant suppliers (DIGG until 30 June 2026, Upphandlingsmyndigheten since 1 July 2026). The amount is set discretionarily.
 - **§8 Appeals.** Appeals go to allmän förvaltningsdomstol; prövningstillstånd required for kammarrätten.
 
 Source: https://www.riksdagen.se/sv/dokument-och-lagar/dokument/svensk-forfattningssamling/lag-20181277-om-elektroniska-fakturor-till_sfs-2018-1277/
 
 ### Förordning (2018:1486)
 
-Designates **DIGG (Myndigheten för digital förvaltning)** as supervising authority and Sweden's Peppol Authority. Source: https://www.digg.se/kunskap-och-stod/e-handel/lag-forordning-och-foreskrifter-for-e-handel
+Designated **DIGG (Myndigheten för digital förvaltning)** as supervising authority and Sweden's Peppol Authority. **Since 1 July 2026 both functions sit with Upphandlingsmyndigheten** (regeringsbeslut Fi2025/01826). Source: https://www.upphandlingsmyndigheten.se/digitalisering-och-e-handel/e-handel/regler-for-e-handel-och-e-faktura/
 
 ### MDFFS 2019:1 (Föreskrift om registrering i PEPPOL)
 
@@ -90,13 +90,13 @@ Binding dates relevant for Sweden:
 
 ## Swedish authorities
 
-### DIGG (Myndigheten för digital förvaltning)
+### Peppol Authority: Upphandlingsmyndigheten (DIGG until 30 June 2026)
 
 - Sweden's Peppol Authority.
 - Regulator under §7 of Lag 2018:1277.
 - Issues binding föreskrifter MDFFS 2019:1 and MDFFS 2021:1.
 - DIGG's own Peppol-ID: `0007:2021006883`.
-- **Reorganisation alert:** Per regeringsbeslut Fi2025/01826, DIGG's e-handel/Peppol functions transfer to **Upphandlingsmyndigheten on 1 July 2026**. DIGG itself is to be merged into PTS by 1 January 2027 forming a new digitalisation agency. Adjust regulatory monitoring accordingly.
+- **Handover completed:** per regeringsbeslut Fi2025/01826, DIGG's e-handel and Peppol functions moved to **Upphandlingsmyndigheten on 1 July 2026**. Peppol contact is now **peppol@uhmynd.se**. DIGG itself is to be merged into PTS by 1 January 2027 forming a new digitalisation agency.
 
 ### Skatteverket
 
@@ -132,7 +132,7 @@ The inquiry will determine:
 
 | Segment | Status (April 2026) | Format | Penalty |
 |---|---|---|---|
-| **B2G** (consequence of public procurement) | Mandatory since 1 April 2019 | EN 16931 / Peppol BIS Billing 3 | DIGG vitesföreläggande, discretionary fine; practical risk also: lost public-sector business |
+| **B2G** (consequence of public procurement) | Mandatory since 1 April 2019 | EN 16931 / Peppol BIS Billing 3 | Vitesföreläggande from the supervising authority (Upphandlingsmyndigheten since 1 July 2026), discretionary fine; practical risk also: lost public-sector business |
 | **B2G** (state-to-state, state-to-private with consent) | Mandatory | Peppol BIS Billing 3 | Internal compliance |
 | **B2B** | **Voluntary** | Free choice (Peppol BIS dominant; legacy Svefaktura tolerated bilaterally) | None |
 | **B2C** | Voluntary | Bank rails / Kivra (not Peppol) | None |
@@ -151,8 +151,8 @@ The inquiry will determine:
 
 - Lag (2018:1277): https://www.riksdagen.se/sv/dokument-och-lagar/dokument/svensk-forfattningssamling/lag-20181277-om-elektroniska-fakturor-till_sfs-2018-1277/
 - Bokföringslag (1999:1078): https://www.riksdagen.se/sv/dokument-och-lagar/dokument/svensk-forfattningssamling/bokforingslag-19991078_sfs-1999-1078/
-- DIGG e-handel laws and regs: https://www.digg.se/kunskap-och-stod/e-handel/lag-forordning-och-foreskrifter-for-e-handel
-- DIGG Peppol statistics: https://www.digg.se/digitala-tjanster/peppol/statistik-fran-peppolnatverket-
+- DIGG e-handel laws and regs: https://www.upphandlingsmyndigheten.se/digitalisering-och-e-handel/e-handel/regler-for-e-handel-och-e-faktura/
+- Swedish Peppol statistics: https://www.upphandlingsmyndigheten.se/digitalisering-och-e-handel/peppol/statistik-fran-peppolnatverket/
 - SFTI standards: https://sfti.se/sfti/standarder/peppolbisehandel/peppolbisbilling3.49021.html
 - Skatteverket e-faktura: https://skatteverket.se/omoss/varverksamhet/forleverantorer/efakturortillskatteverket.4.b1014b415f3321c0de2680.html
 - Skatteverket on transaction-based reporting: https://www.skatteverket.se/foretag/internationellt/transaktionsbaseradrapporteringochefakturering.4.386bd4b919276cc86c42b3f.html

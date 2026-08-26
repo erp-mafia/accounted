@@ -227,7 +227,7 @@ Validators to integrate:
 - **Storecove peppolvalidator.com**, https://peppolvalidator.com, error code lookup.
 - **EC DG GROW eInvoicing validator**, https://itb.ec.europa.eu/invoice, official EC validator.
 - **Norwegian validator**, https://anskaffelser.no/verktoy/validator (also useful for Sweden).
-- **DIGG testbädd**, https://www.digg.se/digitala-tjanster/peppol/peppol-testbadd
+- **SFTI Validex**, https://sfti.validex.net/ (DIGG's Peppol testbädd was discontinued in the 2026 handover)
 
 Validate at **three points** in your pipeline: (1) immediately after UBL generation locally; (2) before handoff to the Access Point; (3) on receive in your inbound flow before bookkeeping. Many AP rejections happen post-send when the receiver's MLR comes back hours later.
 
