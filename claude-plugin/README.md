@@ -2,7 +2,7 @@
 
 The official plugin for [Accounted](https://app.accounted.se), the open-source Swedish bookkeeping platform. Installing it gives Claude two things at once:
 
-1. **The connection**: the Accounted MCP server (90+ bookkeeping tools, resources, and loadable skills) via OAuth. No API key needed.
+1. **The connection**: the Accounted MCP server (150+ bookkeeping tools, resources, and loadable skills) via OAuth. No API key needed.
 2. **The flows**: seven short workflow skills that follow the Swedish bookkeeping rhythm. Each one grounds itself in your company's live data, loads the product's Swedish accounting knowledge when it needs it, and stages every write for your approval. Nothing is ever booked without you saying yes.
 
 ## Install

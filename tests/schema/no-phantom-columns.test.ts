@@ -98,6 +98,13 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * parent/legacy links). Writing the shapes as inline literals would need one
  * variant per key combination; the row shapes are covered by ingest.test.ts.
  *
+ * 2026-08-26 +2: the customer pickers in InvoiceEditor and
+ * NewRecurringScheduleDialog hide archived customers but must keep the one the
+ * draft already points at, which is a PostgREST logical filter
+ * `.or('archived_at.is.null,id.eq.<uuid>')`. The id is a runtime value, so the
+ * expression cannot be a literal; both columns are real and the filter is
+ * covered by the archived-counterparty tests.
+ *
  * 2026-08-17 +1: lib/import/skattekonto-file/import-service.ts inserts parsed
  * statement rows via a mapped batch (same shape as every other file importer);
  * the row shape is covered by the execute route tests and the pg-real suite.
@@ -107,7 +114,7 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  * routed / unrouted / converted / failed, all partial); the column set is
  * pinned by peppol-inbound.test.ts and the pg-real immutability test.
  */
-const UNRESOLVED_CEILING = 380
+const UNRESOLVED_CEILING = 382
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

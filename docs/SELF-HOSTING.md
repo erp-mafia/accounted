@@ -140,6 +140,8 @@ Verify the deployment:
 ```bash
 curl http://localhost:3000/api/health
 # {"status":"healthy","timestamp":"...","version":"1.0.0"}
+# `version` is the build commit SHA prefix when VERCEL_GIT_COMMIT_SHA or
+# NEXT_PUBLIC_BUILD_ID was set at build time, otherwise "1.0.0".
 ```
 
 > **Note:** The health check queries the database, so migrations must be applied before it returns healthy.

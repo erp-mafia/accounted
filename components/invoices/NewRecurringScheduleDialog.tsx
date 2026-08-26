@@ -178,13 +178,14 @@ function NewRecurringScheduleForm({
 
   useEffect(() => {
     if (!company) return
-    supabase
-      .from('customers')
-      .select('*')
-      .eq('company_id', company.id)
-      .order('name')
-      .then(({ data }) => setCustomers(data ?? []))
-  }, [company])
+    // Archived customers (v1 API soft-delete) are not offered in the picker,
+    // but a schedule being edited keeps its current customer visible.
+    const base = supabase.from('customers').select('*').eq('company_id', company.id)
+    const query = schedule?.customer_id
+      ? base.or(`archived_at.is.null,id.eq.${schedule.customer_id}`)
+      : base.is('archived_at', null)
+    query.order('name').then(({ data }) => setCustomers(data ?? []))
+  }, [company, schedule?.customer_id])
 
   async function onSubmit(data: FormData) {
     setIsSubmitting(true)
