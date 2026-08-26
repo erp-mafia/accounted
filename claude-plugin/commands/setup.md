@@ -14,7 +14,7 @@ Call `accounted_get_agent_briefing`.
 
 ## Step 2: set up the company
 
-Call `accounted_load_skill("onboarding")` and follow it. In short: ask for the facts (company form, organisationsnummer, F-skatt, fiscal year, VAT registration and moms period, accounting method), then call `accounted_create_company` **without** `confirm` to get a preview, read the preview back in plain Swedish, and only after an explicit "ja" call it again with `confirm: true`.
+Call `accounted_load_skill("onboarding")` and follow it. In short: ask for the **organisationsnummer** first and call `accounted_lookup_company`; the public registry answers most of the form (name, address, F-skatt, VAT status, legal form, fiscal year), so present those as facts to confirm and ask only what `still_to_ask` lists (typically the moms period and the accounting method). Then call `accounted_create_company` **without** `confirm` to get a preview, read the preview back in plain Swedish, and only after an explicit "ja" call it again with `confirm: true`.
 
 Rules the tool enforces, so do not argue with them: a VAT-registered company needs both an organisationsnummer and a moms period; F-skatt must be stated, never assumed; an enskild firma always runs on the calendar year.
 

@@ -216,15 +216,19 @@ describe('tools/list payload size guard', () => {
     //     trimmed to bare property names first (the two connect-link tools
     //     are search-only); headroom before the change was ~0 after the skatteverket_connection bump, so even the
     //     bare contract crossed by ~420.
-    //   * 60.7K to 60.8K with include_archived on gnubok_list_customers and
-    //     gnubok_list_suppliers: the v1 API soft-archives counterparties and
-    //     the MCP lists now hide them by default, mirroring the v1 flag. The
-    //     contract is a bare boolean (no property prose) and one clause in each
-    //     description; headroom before the change was ~6 tokens, so even that
-    //     crossed by ~30.
+    //   * 60.7K to 61.2K with the two connect-link tools moved into the default
+    //     catalog (issue #1814): Claude.ai can only CALL tools present in
+    //     tools/list, so catalogVisibility 'search' means discover-only there;
+    //     the onboarding flow dead-ended on client-side tool-not-found when
+    //     the skill pointed at them (SilverPark session, 2026-08-26).
+    //   * 61.2K to 61.5K with gnubok_lookup_company (org-number-first
+    //     onboarding): default-catalog for the same reason as the connect
+    //     tools; the onboarding skill's first instruction is to call it, and
+    //     a search-only tool is uncallable on Claude.ai. Descriptions were
+    //     trimmed first; the tool costs ~265 tokens against ~0 headroom.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(60_800)
+    expect(approxTokens).toBeLessThan(61_500)
   })
 })
