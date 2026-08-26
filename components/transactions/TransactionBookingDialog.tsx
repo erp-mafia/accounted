@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogVeil } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -158,6 +158,21 @@ export default function TransactionBookingDialog({
     return { bankAccount: account, bankAccountName: matched?.name ?? null }
   }, [transaction, cashAccounts, cashAccountsLoading])
 
+  // The dialog is non-modal (see the Dialog below), so Radix does not trap
+  // focus or inert the page. Restore page modality by hand: `inert` on the
+  // dash shell blocks pointer, keyboard, and AT access to the page behind
+  // (including the mobile bottom nav, which sits above the veil), while the
+  // agent sheet (outside the shell) stays live. Same as NewInvoiceDialog.
+  useEffect(() => {
+    if (!open) return
+    const shell = document.getElementById('dash-shell')
+    if (!shell) return
+    shell.inert = true
+    return () => {
+      shell.inert = false
+    }
+  }, [open])
+
   if (!transaction) return null
 
   const isIncome = transaction.amount > 0
@@ -262,7 +277,8 @@ export default function TransactionBookingDialog({
         // its text field must not count as outside-dismissal. A half-booked
         // transaction must also survive a stray Escape or backdrop click.
         // Closing is explicit: the header X. Same convention as
-        // NewInvoiceDialog / NewJournalEntryDialog.
+        // NewInvoiceDialog (which pairs non-modality with the inert effect
+        // above).
         onEscapeKeyDown={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
