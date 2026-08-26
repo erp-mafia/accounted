@@ -4,11 +4,7 @@ import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
 export interface SubmitFeedbackInput {
   message: string
   subject?: string
-  /**
-   * Screenshots or PDFs the user attached. Relayed on the support email only:
-   * they are never stored, and never ride along on the PostHog ticket, which
-   * carries text alone.
-   */
+  /** Screenshots or PDFs relayed on the support email only. */
   files?: File[]
 }
 
@@ -98,15 +94,13 @@ const TICKET_TIMEOUT_MS = 4000
  * the second is worth alerting on.
  */
 function noteInAnalytics(
-  { subject, files }: SubmitFeedbackInput,
+  { subject }: SubmitFeedbackInput,
   outcomes: { email: boolean; ticket: ChannelOutcome }
 ): void {
   if (!isAnalyticsEnabled()) return
   try {
     posthog.capture('support_feedback_submitted', {
       subject: subject ?? null,
-      // Count only. File names are user content, exactly like the message body.
-      attachment_count: files?.length ?? 0,
       // Kept for continuity: existing insights filter on `delivered`.
       delivered: outcomes.email,
       email: outcomes.email ? 'ok' : 'failed',

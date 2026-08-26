@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
-import { Mail, Loader2, Send, Paperclip, X, FileText } from 'lucide-react'
+import { FileText, Loader2, Mail, Paperclip, Send, X } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -22,10 +22,11 @@ import {
   SUPPORT_ATTACHMENT_ACCEPT,
   SUPPORT_MAX_ATTACHMENTS,
   SUPPORT_MAX_ATTACHMENT_TOTAL_BYTES,
+  SUPPORT_MAX_ATTACHMENT_TOTAL_MB,
   isSupportedAttachmentType,
 } from '@/lib/support/attachments'
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
-import { formatMegabytes, isShrinkableImage } from '@/lib/documents/upload-size'
+import { isShrinkableImage } from '@/lib/documents/upload-size'
 
 interface SupportLinkProps {
   variant?: 'inline' | 'muted'
@@ -34,14 +35,10 @@ interface SupportLinkProps {
   className?: string
 }
 
-/** An attachment plus the preview URL that has to be revoked when it goes. */
-interface PendingAttachment {
-  file: File
-  previewUrl: string | null
-}
+type AttachmentError = 'unsupported' | 'too_many' | 'too_large'
 
-function totalBytes(items: PendingAttachment[]): number {
-  return items.reduce((sum, item) => sum + item.file.size, 0)
+function totalBytes(files: File[]): number {
+  return files.reduce((sum, file) => sum + file.size, 0)
 }
 
 export function SupportLink({
@@ -53,140 +50,79 @@ export function SupportLink({
   const t = useTranslations('support_link')
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
-  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
-  const [isDragging, setIsDragging] = useState(false)
+  const [attachments, setAttachments] = useState<File[]>([])
   const [isPreparing, setIsPreparing] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [sent, setSent] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const attachmentGenerationRef = useRef(0)
   const { toast } = useToast()
   const companyCtx = useCompanyOptional()
 
-  // Object URLs outlive the render that made them. Removing a chip and
-  // closing the dialog revoke their own; this covers the last case, unmounting
-  // with attachments still pending. The ref is what makes the unmount cleanup
-  // see the current list instead of the empty one it closed over.
-  const attachmentsRef = useRef<PendingAttachment[]>([])
-  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Ingestion runs one batch at a time. Re-encoding a photo takes long enough
-  // that a paste can land mid-shrink, and two overlapping runs would both
-  // start from the pre-drop list and last-write-wins away one of the batches.
-  const queueRef = useRef<Promise<void>>(Promise.resolve())
-  useEffect(() => {
-    attachmentsRef.current = attachments
-  }, [attachments])
-  useEffect(() => {
-    return () => {
-      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
-      attachmentsRef.current.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl))
-    }
-  }, [])
-
   if (companyCtx?.isSandbox) return null
 
-  /**
-   * Shared by the file picker, drag-drop and paste. Paste is the one that
-   * matters most: a screenshot goes from Win+Shift+S straight into the
-   * message without ever becoming a file on disk.
-   */
-  function addFiles(incoming: File[]) {
-    if (!incoming.length || isSending) return queueRef.current
-    queueRef.current = queueRef.current.then(() => ingestFiles(incoming))
-    return queueRef.current
-  }
-
-  async function ingestFiles(incoming: File[]) {
-    // Send stays disabled for as long as this runs: submitting mid-shrink
-    // would mail the message without the file the user just watched land.
-    setIsPreparing(true)
-    const next = [...attachmentsRef.current]
-    let rejectedType = false
-    let rejectedCount = false
-    let rejectedSize = false
-
-    for (const raw of incoming) {
-      if (!isSupportedAttachmentType(raw.type)) {
-        rejectedType = true
-        continue
-      }
-      if (next.length >= SUPPORT_MAX_ATTACHMENTS) {
-        rejectedCount = true
-        break
-      }
-
-      // A phone photo is routinely several times the whole budget. Re-encode
-      // it to what is left rather than making the user shrink it themselves.
-      const remaining = SUPPORT_MAX_ATTACHMENT_TOTAL_BYTES - totalBytes(next)
-      const file = isShrinkableImage(raw.type)
-        ? await shrinkImageForUpload(raw, remaining)
-        : raw
-
-      if (file.size > remaining) {
-        rejectedSize = true
-        continue
-      }
-
-      next.push({
-        file,
-        previewUrl: file.type.startsWith('image/') ? URL.createObjectURL(file) : null,
-      })
-    }
-
-    if (rejectedType) {
+  function showAttachmentError(error: AttachmentError) {
+    if (error === 'unsupported') {
       toast({ title: t('attach_unsupported'), variant: 'destructive' })
+      return
     }
-    if (rejectedCount) {
+    if (error === 'too_many') {
       toast({
         title: t('attach_too_many', { count: SUPPORT_MAX_ATTACHMENTS }),
         variant: 'destructive',
       })
+      return
     }
-    if (rejectedSize) {
-      toast({
-        title: t('attach_too_large', {
-          limit: formatMegabytes(SUPPORT_MAX_ATTACHMENT_TOTAL_BYTES),
-        }),
-        variant: 'destructive',
-      })
-    }
-
-    attachmentsRef.current = next
-    setAttachments(next)
-    setIsPreparing(false)
+    toast({
+      title: t('attach_too_large', { limit: SUPPORT_MAX_ATTACHMENT_TOTAL_MB }),
+      variant: 'destructive',
+    })
   }
 
-  function removeAttachment(index: number) {
-    const target = attachmentsRef.current[index]
-    if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl)
-    const next = attachmentsRef.current.filter((_, i) => i !== index)
-    attachmentsRef.current = next
-    setAttachments(next)
+  async function addFiles(incoming: File[]) {
+    if (!incoming.length || isPreparing || isSending) return
+
+    const generation = attachmentGenerationRef.current
+    setIsPreparing(true)
+    try {
+      const next = [...attachments]
+      let firstError: AttachmentError | null = null
+
+      for (const original of incoming) {
+        if (!isSupportedAttachmentType(original.type)) {
+          firstError ??= 'unsupported'
+          continue
+        }
+        if (next.length >= SUPPORT_MAX_ATTACHMENTS) {
+          firstError ??= 'too_many'
+          break
+        }
+
+        const remaining = SUPPORT_MAX_ATTACHMENT_TOTAL_BYTES - totalBytes(next)
+        const file = original.size > remaining && isShrinkableImage(original.type)
+          ? await shrinkImageForUpload(original, remaining)
+          : original
+
+        if (file.size > remaining) {
+          firstError ??= 'too_large'
+          continue
+        }
+        next.push(file)
+      }
+
+      if (generation === attachmentGenerationRef.current) {
+        setAttachments(next)
+        if (firstError) showAttachmentError(firstError)
+      }
+    } finally {
+      setIsPreparing(false)
+    }
   }
 
   function resetAttachments() {
-    attachmentsRef.current.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl))
-    attachmentsRef.current = []
+    attachmentGenerationRef.current += 1
     setAttachments([])
-  }
-
-  function handlePaste(e: React.ClipboardEvent) {
-    const clipboard = e.clipboardData
-    const pasted = Array.from(clipboard?.files ?? [])
-    if (!pasted.length) return
-    // Copying from Excel or Outlook puts a rendered bitmap on the clipboard
-    // NEXT TO the text, so a file being present does not mean the user pasted
-    // one. Text wins: swallowing a pasted invoice row would be worse than
-    // making them use the attach button for that screenshot.
-    const types = Array.from(clipboard?.types ?? [])
-    if (types.includes('text/plain') || types.includes('text/html')) return
-    e.preventDefault()
-    void addFiles(pasted)
-  }
-
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault()
-    setIsDragging(false)
-    void addFiles(Array.from(e.dataTransfer?.files ?? []))
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -197,13 +133,13 @@ export function SupportLink({
     const result = await submitFeedback({
       subject,
       message: message.trim(),
-      files: attachments.map((a) => a.file),
+      files: attachments,
     })
     setIsSending(false)
 
     if (result.ok) {
       setSent(true)
-      closeTimerRef.current = setTimeout(() => {
+      setTimeout(() => {
         setOpen(false)
         setSent(false)
         setMessage('')
@@ -221,11 +157,8 @@ export function SupportLink({
   function handleOpenChange(next: boolean) {
     setOpen(next)
     if (!next) {
-      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
-      closeTimerRef.current = null
       setSent(false)
       setMessage('')
-      setIsDragging(false)
       resetAttachments()
     }
   }
@@ -273,20 +206,7 @@ export function SupportLink({
             <p className="text-sm font-medium">{t('thanks')}</p>
           </div>
         ) : (
-          <form
-            onSubmit={handleSubmit}
-            onPaste={handlePaste}
-            onDragOver={(e) => {
-              e.preventDefault()
-              setIsDragging(true)
-            }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={handleDrop}
-            className={cn(
-              'rounded-lg transition-colors',
-              isDragging && 'ring-2 ring-primary ring-offset-2 ring-offset-background'
-            )}
-          >
+          <form onSubmit={handleSubmit}>
             <Textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
@@ -300,53 +220,43 @@ export function SupportLink({
               {t('char_count', { count: message.length })}
             </p>
 
-            {attachments.length > 0 && (
-              <ul className="mt-3 flex flex-wrap gap-2">
-                {attachments.map((attachment, index) => (
+            {attachments.length > 0 ? (
+              <ul className="mt-3 space-y-2">
+                {attachments.map((file, index) => (
                   <li
-                    key={`${attachment.file.name}-${index}`}
-                    className="relative flex items-center gap-2 rounded-full border bg-muted/40 py-1 pl-1 pr-7 max-w-full"
+                    key={`${file.name}-${file.size}-${index}`}
+                    className="ph-no-capture flex min-w-0 items-center gap-2 rounded-lg border border-border px-3 py-1"
                   >
-                    {attachment.previewUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={attachment.previewUrl}
-                        alt=""
-                        className="h-8 w-8 rounded-full object-cover"
-                      />
-                    ) : (
-                      <FileText className="h-8 w-8 p-1.5 text-muted-foreground" aria-hidden />
-                    )}
-                    <span className="truncate text-xs max-w-[10rem]" title={attachment.file.name}>
-                      {attachment.file.name}
+                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate text-xs">
+                      {file.name}
                     </span>
-                    <span className="text-[10px] text-muted-foreground shrink-0">
-                      {formatMegabytes(attachment.file.size)}
-                    </span>
-                    <button
+                    <Button
                       type="button"
-                      onClick={() => removeAttachment(index)}
-                      disabled={isSending}
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setAttachments((current) => current.filter((_, i) => i !== index))}
+                      disabled={isSending || isPreparing}
                       aria-label={t('remove_attachment')}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-muted-foreground hover:text-foreground cursor-pointer"
+                      className="shrink-0"
                     >
-                      <X className="h-3 w-3" />
-                    </button>
+                      <X className="h-4 w-4" />
+                    </Button>
                   </li>
                 ))}
               </ul>
-            )}
+            ) : null}
 
-            <div className="mt-3 flex items-center gap-2">
+            <div className="mt-3 flex flex-col items-start gap-2 sm:flex-row sm:items-center">
               <input
                 ref={fileInputRef}
                 type="file"
                 multiple
                 accept={SUPPORT_ATTACHMENT_ACCEPT}
                 className="hidden"
+                disabled={isSending || isPreparing}
                 onChange={(e) => {
                   void addFiles(Array.from(e.target.files ?? []))
-                  // Reset so picking the same file twice still fires onChange.
                   e.target.value = ''
                 }}
               />
@@ -357,10 +267,19 @@ export function SupportLink({
                 disabled={isSending || isPreparing || attachments.length >= SUPPORT_MAX_ATTACHMENTS}
                 onClick={() => fileInputRef.current?.click()}
               >
-                <Paperclip className="mr-2 h-3.5 w-3.5" />
+                {isPreparing ? (
+                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Paperclip className="mr-2 h-3.5 w-3.5" />
+                )}
                 {t('attach_label')}
               </Button>
-              <span className="text-xs text-muted-foreground">{t('attach_hint')}</span>
+              <span className="text-xs text-muted-foreground">
+                {t('attach_hint', {
+                  count: SUPPORT_MAX_ATTACHMENTS,
+                  limit: SUPPORT_MAX_ATTACHMENT_TOTAL_MB,
+                })}
+              </span>
             </div>
 
             <DialogFooter className="mt-4">

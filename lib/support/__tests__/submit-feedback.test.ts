@@ -93,7 +93,6 @@ describe('submitFeedback', () => {
 
     expect(captureMock).toHaveBeenCalledWith('support_feedback_submitted', {
       subject: 'Hjälpsida',
-      attachment_count: 0,
       delivered: true,
       email: 'ok',
       ticket: 'ok',
@@ -273,14 +272,14 @@ describe('submitFeedback', () => {
       expect(JSON.stringify(captureMock.mock.calls)).not.toContain('hemlig fritext')
     })
 
-    it('counts attachments without naming them', async () => {
+    it('does not add attachment metadata to analytics', async () => {
       stubFetchOk()
       await submitFeedback({
         message: 'Se bilagan',
         files: [new File(['x'], 'kontoutdrag-privat.png', { type: 'image/png' })],
       })
       const props = captureMock.mock.calls[0][1] as Record<string, unknown>
-      expect(props.attachment_count).toBe(1)
+      expect(props).not.toHaveProperty('attachment_count')
       expect(JSON.stringify(captureMock.mock.calls)).not.toContain('kontoutdrag-privat')
     })
   })
@@ -318,17 +317,17 @@ describe('submitFeedback', () => {
         'fetch',
         vi.fn().mockResolvedValue({
           ok: false,
-          json: async () => ({ error: 'Du kan bifoga max 3 filer' }),
+          json: async () => ({ error: 'Du kan bifoga max 5 filer' }),
         })
       )
 
       const result = await submitFeedback({
-        message: 'Fyra bilder',
+        message: 'För många bilder',
         files: [new File(['x'], 'a.png', { type: 'image/png' })],
       })
 
       expect(result.ok).toBe(false)
-      expect(result.error).toBe('Du kan bifoga max 3 filer')
+      expect(result.error).toBe('Du kan bifoga max 5 filer')
     })
   })
 })

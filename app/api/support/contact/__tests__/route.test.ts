@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockSupabase } from '@/tests/helpers'
-import { SUPPORT_MAX_ATTACHMENT_TOTAL_BYTES } from '@/lib/support/attachments'
+import {
+  SUPPORT_MAX_ATTACHMENTS,
+  SUPPORT_MAX_ATTACHMENT_TOTAL_BYTES,
+} from '@/lib/support/attachments'
 
 const mockSupabase = createMockSupabase()
 const requireAuthMock = vi.fn()
@@ -104,7 +107,7 @@ describe('POST /api/support/contact', () => {
     )
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { sent: true, attachments: 1 } })
+    expect(await response.json()).toEqual({ data: { sent: true } })
 
     const sent = sendEmailMock.mock.calls[0][0]
     expect(sent.subject).toBe('[accounted support] Trasig vy')
@@ -126,11 +129,36 @@ describe('POST /api/support/contact', () => {
     expect(sendEmailMock.mock.calls[0][0].attachments[0].filename).toBe('passwd.png')
   })
 
-  it('rejects more attachments than the cap allows', async () => {
+  it('forces an attachment extension that matches the verified type', async () => {
+    await POST(
+      multipartRequest({
+        message: 'Se bilagan',
+        files: [pngFile('update.exe')],
+      })
+    )
+    expect(sendEmailMock.mock.calls[0][0].attachments[0].filename).toBe('update.png')
+  })
+
+  it('rejects an empty attachment instead of silently omitting it', async () => {
     const response = await POST(
       multipartRequest({
-        message: 'Fyra bilder',
-        files: [pngFile('a.png'), pngFile('b.png'), pngFile('c.png'), pngFile('d.png')],
+        message: 'Tom bild',
+        files: [new File([], 'tom.png', { type: 'image/png' })],
+      })
+    )
+    expect(response.status).toBe(400)
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects more attachments than the cap allows', async () => {
+    const files = Array.from(
+      { length: SUPPORT_MAX_ATTACHMENTS + 1 },
+      (_, index) => pngFile(`${index}.png`)
+    )
+    const response = await POST(
+      multipartRequest({
+        message: 'För många bilder',
+        files,
       })
     )
     expect(response.status).toBe(400)
@@ -164,6 +192,20 @@ describe('POST /api/support/contact', () => {
       multipartRequest({
         message: 'Utger sig för att vara en png',
         files: [new File(['not a png at all'], 'fake.png', { type: 'image/png' })],
+      })
+    )
+    expect(response.status).toBe(400)
+    expect(sendEmailMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects an executable-shaped PDF polyglot', async () => {
+    const bytes = new Uint8Array(64)
+    bytes.set([0x4d, 0x5a])
+    bytes.set([0x25, 0x50, 0x44, 0x46, 0x2d], 16)
+    const response = await POST(
+      multipartRequest({
+        message: 'Misstänkt PDF',
+        files: [new File([bytes], 'update.exe', { type: 'application/pdf' })],
       })
     )
     expect(response.status).toBe(400)

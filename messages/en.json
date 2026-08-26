@@ -4911,10 +4911,10 @@
     "sending": "Sending...",
     "send_failed_title": "Could not send",
     "send_failed_fallback": "Please try again.",
-    "attach_label": "Attach file",
-    "attach_hint": "Drag here, paste a screenshot or pick a file",
+    "attach_label": "Attach files",
+    "attach_hint": "JPG, PNG, WEBP or PDF. Up to {count} files, {limit} MB total.",
     "attach_too_many": "You can attach at most {count} files",
-    "attach_too_large": "Attachments may total at most {limit}",
+    "attach_too_large": "Attachments may total at most {limit} MB",
     "attach_unsupported": "Only images (JPG, PNG, WEBP) and PDF can be attached",
     "remove_attachment": "Remove attachment"
   },
