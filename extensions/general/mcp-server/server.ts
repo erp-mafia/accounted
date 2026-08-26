@@ -18983,7 +18983,13 @@ const JSONRPC_UNSUPPORTED_PROTOCOL_VERSION = -32022
 // change only on deploy; skills live in the DB and can change between
 // deploys; data resources are live ledger state and must never be cached.
 // Everything is served behind Authorization, so cacheScope stays private.
-const CACHE_STATIC = { ttlMs: 3_600_000, cacheScope: 'private' } as const
+// "Static" content (tools/list, widget HTML, prompts) is static only within
+// one deploy: every deploy can add tools and change widgets. The 1-hour hint
+// this used to carry made Claude.ai serve a pre-deploy catalog for up to an
+// hour after a release: a freshly shipped tool flapped in and out of the
+// connector's tool list depending on which fetch hit the client cache
+// (E2E #7/#8, 2026-08-26). 5 minutes bounds that window to one coffee sip.
+const CACHE_STATIC = { ttlMs: 300_000, cacheScope: 'private' } as const
 const CACHE_SKILLS = { ttlMs: 300_000, cacheScope: 'private' } as const
 const CACHE_LIVE = { ttlMs: 0, cacheScope: 'private' } as const
 
